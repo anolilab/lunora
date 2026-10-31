@@ -96,6 +96,8 @@ lunora shards prune [--tables <a,b>]    # drop empty shards from the shard regis
             [--dry-run] [--format json]
 lunora pause [status] [--reason <text>] # incident switch: refuse calls, hold jobs/crons/queues
 lunora resume                           # undo `lunora pause`; held jobs run at once
+lunora admin-token create|list|revoke   # named, revocable admin tokens (root token only)
+            [--expires-days n] [--format json]
 lunora workflow <create|send-event> ... # start a workflow instance / send it an event
             [--id <id>] [--params <json>] [--payload <json>] [--format json]
 lunora introspect [--url <u>] [--tables <t1,t2>]  # scaffold schema.ts from an
@@ -1510,6 +1512,23 @@ main instance has already changed, and running the same command again reaches th
 rest. A custom `schedulerInstanceName` must also be passed to `createScheduler` and
 `createWorkpool` as `primaryInstanceName`. HTTP actions and SSR pages behind `httpRouter`,
 and custom `routes` handlers, keep serving.
+
+### `lunora admin-token`
+
+Creates, lists and revokes named admin tokens. A named token works wherever the
+admin token does, except for root-only operations: token management, admin
+WebSocket sub-tokens, storage signed URLs, `runAs`, point-in-time restore and
+most auth admin writes. Each needs the root `LUNORA_ADMIN_TOKEN`.
+
+```bash
+lunora admin-token create ci-deploy --expires-days 90   # prints lnat.ci-deploy.<secret> once
+lunora admin-token list                                 # created / last used / expiry, never the secret
+lunora admin-token revoke ci-deploy                     # refused everywhere within 30 seconds
+```
+
+The secret is shown only at creation; the store keeps its SHA-256 digest.
+`--expires-days` must be a positive number. Revoking a token takes effect at once
+on the isolate that served the revoke and within 30 seconds on every other.
 
 ### `lunora workflow`
 

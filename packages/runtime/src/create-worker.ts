@@ -2,6 +2,7 @@ import { isLunoraError, toErrorBody } from "@lunora/errors";
 import type { HttpCacheLike } from "@lunora/platform";
 import { decodeWire, encodeArgsOrThrow, encodeWire } from "@lunora/wire";
 
+import { ADMIN_SIGNAL_HEADER, ADMIN_SIGNAL_MIN_TTL_MS, mintAdminSignal, parseAdminTokenHeader } from "../../../shared/admin-token";
 import type { AiRunBinding } from "../../../shared/ai-chat";
 import type { AiOptInLevel } from "../../../shared/ai-opt-in";
 import { asOptInLevel } from "../../../shared/ai-opt-in";
@@ -31,6 +32,9 @@ import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import { buildSystemDispatchHeaders, readForwardedDispatchIdentity } from "../../../shared/system-dispatch-headers";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
+import { createAdminRevocations } from "./admin-revocations";
+import { buildAdminTokenRoutes } from "./admin-token-routes";
+import { createAdminTokenVerifier } from "./admin-token-verifier";
 import type { AiChatRpcDeps } from "./ai-chat-rpc";
 import { AI_AVAILABLE_OP, AI_CHAT_OP, buildAiAvailable, buildAiChat, buildAiOneShotGate } from "./ai-chat-rpc";
 import { assertArgsObject } from "./assert-args-object";
@@ -68,7 +72,7 @@ import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
 import type { DispatchTraceContext } from "./otel-trace";
 import { beginDispatchTrace, injectTraceContext } from "./otel-trace";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
-import { createDefaultShardRegistry, createQueryCoordinator } from "./query-coordinator";
+import { createDefaultShardRegistry, createQueryCoordinator, refreshedShardHeaders, refreshShardHeadersPerCall } from "./query-coordinator";
 import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { applyJurisdiction, resolveShard } from "./resolve-shard";
 import { createResourceAttributeResolver } from "./resource-detect";
@@ -943,6 +947,14 @@ interface WorkerOptions {
      * than to a hostname. It is `undefined` when the host supplied no context.
      */
     adminGate?: (request: Request, context?: ExecutionContextLike) => boolean | Promise<boolean>;
+
+    /**
+     * The `AdminRevocationDO` namespace (`env.ADMIN_REVOCATIONS`). Records which named admin tokens
+     * were revoked outside the default shard's database, so a point-in-time restore of that shard
+     * cannot bring a revoked token back. Codegen binds it for every app; without it no named admin
+     * token can be created and any that exist are refused.
+     */
+    adminRevocations?: ShardNamespaceLike;
 
     /**
      * Admin bearer token expected by the export/import endpoints. When unset,
@@ -1971,6 +1983,9 @@ const CRON_JOBS_RUN_PATH = "/_lunora/admin/cron-jobs/run";
  * stays out of URLs/logs.
  */
 const ADMIN_WS_TOKEN_PATH = "/_lunora/admin/ws-token";
+
+const VERIFY_ADMIN_TOKEN_OP = "__lunora_admin__:verifyAdminToken";
+const LIST_ADMIN_TOKENS_OP = "__lunora_admin__:listAdminTokens";
 /** Prefix shared by every Studio admin route (`/_lunora/admin/*`). */
 const ADMIN_PATH_PREFIX = "/_lunora/admin/";
 /** Prefix shared by the whole reserved plane the worker owns — everything else on the origin belongs to the app. */
@@ -2281,9 +2296,9 @@ const queueNameOf = (batch: unknown): string => {
  * `Request` object — so an entry cannot outlive its request, cannot be read by a
  * different one, and needs no eviction policy.
  *
- * Unlike the per-worker `accessAdminGrants` WeakSet, this lives at **module**
+ * Unlike the per-worker `adminGrants` WeakMap, this lives at **module**
  * scope, because `resolveForwardContext` does. That is safe for the same reason
- * the WeakSet is — the key is a `Request` identity, which no two isolated
+ * the WeakMap is — the key is a `Request` identity, which no two isolated
  * requests share — but it does mean two composed workers in one isolate write to
  * the same map. The only way that matters is a re-entrant mount (an inner
  * `lunoraHandler` invoked without a context, for a request an outer worker
@@ -2774,6 +2789,13 @@ const setIdentityHeaders = (headers: Headers, forwardedHeaders: Record<string, s
 const isWebSocketUpgrade = (request: Request): boolean => request.headers.get("Upgrade")?.toLowerCase() === "websocket";
 
 /**
+ * Whether the request's bearer is a named admin token. A root token that happens
+ * to have the same shape is not: it is forwarded as the root bearer it is.
+ */
+const isNamedAdminBearer = (request: Request, rootToken: string | undefined): boolean =>
+    parseAdminTokenHeader(request.headers.get("authorization")) !== undefined && !checkBearerToken(request, rootToken);
+
+/**
  * Clone an upgrade request's headers with EVERY client-supplied `x-lunora-*`
  * header stripped, then the server-minted identity trio re-set.
  *
@@ -2786,7 +2808,7 @@ const isWebSocketUpgrade = (request: Request): boolean => request.headers.get("U
  * headers standing. The keys are snapshotted before deleting for exactly that
  * reason. Non-`x-lunora-` headers (crucially `Upgrade: websocket`) are preserved.
  */
-const buildUpgradeHeaders = (request: Request, forwardedHeaders: Record<string, string>): Headers => {
+const buildUpgradeHeaders = (request: Request, forwardedHeaders: Record<string, string>, rootToken: string | undefined): Headers => {
     const headers = new Headers(request.headers);
 
     // NOTE: the snapshot must stay in its own binding. Spreading inline in the
@@ -2798,6 +2820,11 @@ const buildUpgradeHeaders = (request: Request, forwardedHeaders: Record<string, 
         if (name.startsWith("x-lunora-")) {
             headers.delete(name);
         }
+    }
+
+    // A named admin token's secret stays at the worker; shards learn of it only through a signed signal.
+    if (isNamedAdminBearer(request, rootToken)) {
+        headers.delete("authorization");
     }
 
     setIdentityHeaders(headers, forwardedHeaders);
@@ -3122,13 +3149,105 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // requests and records the granted request here; the per-route gates consult it
     // through `requestIsAdmin`, so an Access-authorized request passes the same SYNC
     // gates the static bearer does — without threading async verification through
-    // every extracted admin-route builder. A `WeakSet` keyed by the request lets the
+    // every extracted admin-route builder. A `WeakMap` keyed by the request lets the
     // entry be collected with the request, and concurrent requests never alias.
-    const accessAdminGrants = new WeakSet<Request>();
+    // A named-token grant carries the token's name; an `adminGate` grant carries none.
+    const adminGrants = new WeakMap<Request, { tokenName?: string }>();
 
     // The unified admin predicate every `/_lunora/admin/*` gate routes through: the
-    // static bearer, OR a grant `handle` recorded from `options.adminGate`.
-    const requestIsAdmin = (request: Request): boolean => checkBearerToken(request, effectiveAdminToken()) || accessAdminGrants.has(request);
+    // static bearer, OR a grant `handle` recorded from `options.adminGate` or a
+    // named admin token.
+    const requestIsAdmin = (request: Request): boolean => checkBearerToken(request, effectiveAdminToken()) || adminGrants.has(request);
+
+    // Root authority: everything `requestIsAdmin` admits except a named token. Gates
+    // token management and the long-lived admin sockets, which would otherwise
+    // outlive a named token's revocation.
+    const requestIsRootAdmin = (request: Request): boolean => {
+        const grant = adminGrants.get(request);
+
+        return checkBearerToken(request, effectiveAdminToken()) || (grant !== undefined && grant.tokenName === undefined);
+    };
+
+    // The named-token store lives on the default shard; the worker asks it under
+    // the root token, which only the worker and the shards hold.
+    const callTokenStore = async (functionPath: string, args: Record<string, unknown>): Promise<unknown> => {
+        const root = effectiveAdminToken();
+
+        if (root === undefined) {
+            throw new LunoraError("named admin tokens require a configured LUNORA_ADMIN_TOKEN, which signs them", {
+                code: "ADMIN_TOKEN_NOT_CONFIGURED",
+                status: 400,
+            });
+        }
+
+        const response = await forwardToShard(
+            shardDO,
+            defaultShard,
+            shardRpcRequest(functionPath, args, { authorization: `Bearer ${root}`, "content-type": "application/json" }),
+        );
+        const body: { error?: { code?: string; message?: string }; result?: unknown } = await response.json();
+
+        if (!response.ok || body.error !== undefined) {
+            throw new LunoraError(body.error?.message ?? "admin token store unavailable", {
+                code: body.error?.code ?? "SHARD_UNAVAILABLE",
+                status: response.status,
+            });
+        }
+
+        return body.result;
+    };
+
+    // Revocations are recorded outside the default shard's database, which a point-in-time
+    // restore rewinds along with the token rows.
+    // Pinned like every other Durable Object this worker reaches: a revocation names a token and
+    // belongs inside the residency boundary the app asked for.
+    const adminRevocations =
+        options.adminRevocations === undefined
+            ? undefined
+            : createAdminRevocations(applyJurisdiction(options.adminRevocations, options.jurisdiction), effectiveAdminToken);
+
+    const adminTokenVerifier = createAdminTokenVerifier({
+        listNames: async () => {
+            const { tokens } = (await callTokenStore(LIST_ADMIN_TOKENS_OP, {})) as { tokens: { name: string }[] };
+
+            return tokens.map((token) => token.name);
+        },
+        lookup: async (name, digest) => {
+            try {
+                const answer = (await callTokenStore(VERIFY_ADMIN_TOKEN_OP, { digest, name })) as {
+                    createdAt?: unknown;
+                    expiresAt?: unknown;
+                    known?: unknown;
+                    ok?: unknown;
+                };
+
+                if (answer.ok !== true) {
+                    return { live: false, nameKnown: answer.known !== false };
+                }
+
+                // Either store saying "revoked" wins, so a restored row cannot revive a token.
+                // Without the outside store, or its answer, a named token fails closed.
+                if (adminRevocations === undefined || typeof answer.createdAt !== "number") {
+                    throw new LunoraError("the admin revocation store is not available", { code: "ADMIN_TOKEN_NOT_CONFIGURED", status: 400 });
+                }
+
+                if (await adminRevocations.isRevoked(name, answer.createdAt)) {
+                    return { live: false, nameKnown: true };
+                }
+
+                return typeof answer.expiresAt === "number" ? { expiresAt: answer.expiresAt, live: true } : { live: true };
+            } catch (error) {
+                // An unreachable store refuses rather than 500s (the root token still
+                // works), uncached so the token recovers with the store. Logged, or an
+                // outage reads exactly like a revoked token. Name and code only: the
+                // secret never reaches this function and the digest stays out of logs.
+                // eslint-disable-next-line no-console -- server-side diagnostic for a token-store outage
+                console.error(`[lunora] admin token store lookup for "${name}" failed: ${isLunoraError(error) ? error.code : String(error)}`);
+
+                return { live: false, nameKnown: true, transient: true };
+            }
+        },
+    });
 
     /**
      * Evaluate `options.adminGate` once for this request and record the grant
@@ -3143,7 +3262,19 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * already named one of them.
      */
     const recordAdminGrant = async (request: Request): Promise<void> => {
-        if (options.adminGate === undefined || accessAdminGrants.has(request)) {
+        if (adminGrants.has(request)) {
+            return;
+        }
+
+        const grant = isNamedAdminBearer(request, effectiveAdminToken()) ? await adminTokenVerifier.verify(request.headers.get("authorization")) : undefined;
+
+        if (grant !== undefined) {
+            adminGrants.set(request, { tokenName: grant.name });
+
+            return;
+        }
+
+        if (options.adminGate === undefined) {
             return;
         }
 
@@ -3153,7 +3284,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // a `Response`, or `{ ok: false }` would unlock every `/_lunora/admin/*`
             // route. `grants` requires the exact `true`.
             if (await grants(options.adminGate(request, executionContextByRequest.get(request)))) {
-                accessAdminGrants.add(request);
+                adminGrants.set(request, {});
             }
         } catch {
             // No grant recorded; `requestIsAdmin` still honours the static admin token.
@@ -3187,6 +3318,55 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         if (options.functions !== undefined) {
             resolved.headers[ORIGIN_PAYWALL_HEADER] = ORIGIN_PAYWALL_APPLIED;
+        }
+
+        // A named admin token's secret never leaves the worker. A verified one is
+        // replaced by a short-lived signal the shard checks with the root token;
+        // an unverified one is simply dropped, so the shard refuses it as it would
+        // any foreign bearer.
+        if (resolved.headers["authorization"] !== undefined && isNamedAdminBearer(request, effectiveAdminToken())) {
+            delete resolved.headers["authorization"];
+
+            const tokenName = adminGrants.get(request)?.tokenName;
+
+            if (tokenName !== undefined) {
+                // Every signal re-verifies the token first, so a revoke that landed
+                // since the grant (or between fan-out calls) stops it, and caps the
+                // signal at the token's validity. A token that no longer verifies
+                // gets no signal, and the shard refuses the call.
+                const authorization = request.headers.get("authorization");
+                const signal = async (): Promise<string | undefined> => {
+                    const key = effectiveAdminToken();
+                    const grant = key === undefined ? undefined : await adminTokenVerifier.verify(authorization);
+
+                    if (key === undefined || grant?.name !== tokenName) {
+                        return undefined;
+                    }
+
+                    // Not `grant.until` alone: that is the cache window's end, which a late hit
+                    // leaves too little of for the shard hop. The token's own expiry still caps it.
+                    const now = Date.now();
+
+                    return mintAdminSignal(
+                        key,
+                        tokenName,
+                        now,
+                        Math.min(Math.max(grant.until, now + ADMIN_SIGNAL_MIN_TTL_MS), grant.expiresAt ?? Number.POSITIVE_INFINITY),
+                    );
+                };
+                const first = await signal();
+
+                if (first !== undefined) {
+                    resolved.headers[ADMIN_SIGNAL_HEADER] = first;
+                }
+
+                // A fan-out can outlive one signal, so each shard call gets a fresh one.
+                refreshShardHeadersPerCall(resolved.headers, async ({ [ADMIN_SIGNAL_HEADER]: _stale, ...headers }) => {
+                    const fresh = await signal();
+
+                    return fresh === undefined ? headers : { ...headers, [ADMIN_SIGNAL_HEADER]: fresh };
+                });
+            }
         }
 
         return resolved;
@@ -3224,7 +3404,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const resolveAdminForwardContext = async (request: Request, env: unknown): Promise<ForwardContext> => {
         const context = await forwardContext(request, env, options.resolveIdentity);
 
-        if (accessAdminGrants.has(request) && context.headers["authorization"] === undefined) {
+        const grant = adminGrants.get(request);
+
+        if (grant !== undefined && grant.tokenName === undefined && context.headers["authorization"] === undefined) {
             const token = effectiveAdminToken();
 
             if (token !== undefined) {
@@ -3570,6 +3752,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
+    const assertRootAdmin = (request: Request): void => {
+        assertAdminAuthorized(request);
+
+        if (!requestIsRootAdmin(request)) {
+            throw new LunoraError("this admin endpoint requires the root admin token; named admin tokens cannot use it", {
+                code: "ADMIN_ROOT_REQUIRED",
+                status: 403,
+            });
+        }
+    };
+
     /** Assert admin auth, then assert a worker option is configured; return it (narrowed non-undefined). */
     const requireAdminOption = <T>(request: Request, value: T | undefined, notConfigured: NotConfiguredError): T => {
         assertAdminAuthorized(request);
@@ -3885,9 +4078,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     });
 
     // The auth jurisdiction-move ops (copy, purge): worker-served for the same reason —
-    // the auth objects are reached through the injected move, not a shard.
+    // the auth objects are reached through the injected move, not a shard. Root-only:
+    // a forced copy overwrites pinned auth rows and a purge drops auth tables, writes
+    // the named-token auth policy refuses everywhere else.
     const authJurisdictionMove = buildAuthJurisdictionMoveRpc({
-        assertAdmin: assertAdminAuthorized,
+        assertAdmin: assertRootAdmin,
         getMove: () => options.authJurisdictionMove,
     });
 
@@ -3897,6 +4092,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // admin dispatch. See `ai-chat-rpc.ts`.
     const aiRpcDeps: AiChatRpcDeps = {
         assertAdmin: assertAdminAuthorized,
+        resolveToolHeaders: refreshedShardHeaders,
         defaultShardKey: () => defaultShard,
 
         /*
@@ -3918,7 +4114,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
              * configured token is the credential to present; none configured means
              * nothing to present, and the header is dropped (fail closed).
              */
-            if (token === undefined) {
+            if (adminGrants.get(request)?.tokenName !== undefined) {
+                // A named token's calls keep exactly what `forwardContext` gave them: no bearer, and a
+                // signal that vouches for that token alone. Presenting the root bearer here would let a
+                // named token's tool calls pass every root-only gate on the shard.
+            } else if (token === undefined) {
                 delete context.headers["authorization"];
             } else {
                 context.headers["authorization"] = `Bearer ${token}`;
@@ -4100,7 +4300,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         resolveForwardContext: resolveAdminForwardContext,
         shardDO,
         prepareExportRows: async (headers, tables) => prepareExportRows(options, queryCoordinator, headers, tables, shardDO),
-        streamingImport: (request, headers, dryRun, onConflict) => streamingImport(request, options, queryCoordinator, headers, shardDO, dryRun, onConflict),
+        streamingImport: (request, resolveHeaders, dryRun, onConflict) =>
+            streamingImport(request, options, queryCoordinator, resolveHeaders, shardDO, dryRun, onConflict),
         syncGlobals: options.syncGlobals,
     });
 
@@ -4148,7 +4349,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the admin gate, scheduler-namespace requirement, and resolved stub through
     // injected deps (mirroring the other extracted clusters below).
     const scheduledAdminRoutes = buildScheduledAdminRoutes({
-        checkWsAdmin: async (request) => requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken()),
+        checkWsAdmin: async (request) => requestIsRootAdmin(request) || checkAdminWsToken(request, effectiveAdminToken()),
         requireSchedulerNamespace,
         resolveSchedulerStub,
         schedulerInstanceName: options.schedulerInstanceName ?? "default",
@@ -4169,6 +4370,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // option registry, and request helpers through injected deps.
     const storageAdminRoutes = buildStorageAdminRoutes({
         assertAdmin: assertAdminAuthorized,
+        assertRootAdmin,
         parsePaging,
         queryParameter,
         readBodyBytes: readBodyBytesWithLimit,
@@ -4195,6 +4397,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         readJsonBody: readJsonBodyWithLimit,
         requireAdminOption,
         vectorIntrospector: options.vectorIntrospector,
+    });
+
+    const adminTokenRoutes = buildAdminTokenRoutes({
+        assertRootAdmin,
+        callStore: callTokenStore,
+        evict: adminTokenVerifier.evict,
+        revocations: adminRevocations,
+        readJsonBody: readJsonBodyWithLimit,
     });
 
     const kvAdminRoutes = buildKvAdminRoutes({
@@ -4691,7 +4901,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // the credential per socket at upgrade AND on every write flush, so an
         // admin subscription dies with a rotated token, and the only other
         // admin-prefixed socket surface (`stream`) is refused outright there.
-        const adminUpgrade = requestIsAdmin(request) || (await checkAdminWsToken(request, effectiveAdminToken()));
+        const adminUpgrade = requestIsRootAdmin(request) || (await checkAdminWsToken(request, effectiveAdminToken()));
 
         await assertShardAuthorized(identity, shardKey, adminUpgrade);
 
@@ -4706,7 +4916,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // an anonymous caller could forge `x-lunora-userid` and, because the
         // resolved-anonymous path never overwrites it, spoof a verified identity on
         // the socket. Only an authenticated `resolveForwardContext` result may set them.
-        const upgradeHeaders = withoutBearerProtocol(buildUpgradeHeaders(request, forwardedHeaders), upgrade);
+        const upgradeHeaders = withoutBearerProtocol(buildUpgradeHeaders(request, forwardedHeaders, effectiveAdminToken()), upgrade);
 
         // Relay tier (plan 075 Phase 2): when the shard is promoted, route this NEW
         // connection to one of its relays so the owner sheds connection + fan-out
@@ -4879,7 +5089,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             guardUnauthenticatedShardAccess("shard");
         }
 
-        const upgradeHeaders = withoutBearerProtocol(buildUpgradeHeaders(request, forwardedHeaders), upgrade);
+        const upgradeHeaders = withoutBearerProtocol(buildUpgradeHeaders(request, forwardedHeaders, effectiveAdminToken()), upgrade);
 
         return selectLunoraProtocol(upgrade, await forwardToShard(namespace, threadKey, new Request(request, { headers: upgradeHeaders })));
     };
@@ -5236,6 +5446,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         if (reservedResponse !== undefined) {
             return reservedResponse;
+        }
+
+        // A named admin token is verified HERE, at the worker, so the shard is
+        // handed a signal rather than the secret. Only for an admin envelope,
+        // single-shard or fan-out: ordinary RPC traffic never pays for the lookup.
+        if (envelope.functionPath.startsWith("__lunora_admin__:")) {
+            await recordAdminGrant(request);
         }
 
         // Forward selected headers from the inbound request so the DO can
@@ -6097,7 +6314,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         [ADMIN_WS_TOKEN_PATH]: async (request) => {
             assertMethod(request, "POST", "ws-token");
 
-            assertAdminAuthorized(request);
+            assertRootAdmin(request);
 
             const signingSecret = effectiveAdminToken();
 
@@ -6125,6 +6342,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         ...backupAdminRoutes,
         ...vectorAdminRoutes,
         ...kvAdminRoutes,
+        ...adminTokenRoutes,
         ...logArchiveAdminRoutes,
         ...introspectionAdminRoutes,
         // `/_lunora/health` + `/_lunora/health/ready` — public (or admin-gated)
@@ -6139,6 +6357,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // `AuthAdmin` op, dispatched by the descriptor table in `./auth-admin-routes`.
         ...buildAuthAdminRoutes({
             assertAdmin: assertAdminAuthorized,
+            assertRootAdmin,
             getAuthAdmin: () => options.authAdmin,
             parsePaging,
             queryParameter,
@@ -6715,6 +6934,7 @@ const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
 export { composeWorker, createLunoraHandler, createWorker, defineRpcEnvelope, probeRelayCount, resolveLunoraOptions, withFrameworkWorker };
 export { type AiRunBinding } from "../../../shared/ai-chat";
 export { type AccessContextLike, type AccessIdentityLike, type ExecutionContextLike, NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
+export type { AdminTokenSummary, CreatedAdminToken } from "./admin-token-routes";
 export type {
     AuthAdmin,
     AuthCapabilities,
@@ -6734,16 +6954,6 @@ export type { AuthAuditEntry, AuthAuditReader } from "./auth-audit-rpc";
 export { GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
 export type { AuthJurisdictionMove } from "./auth-jurisdiction-move-rpc";
 export { COPY_AUTH_TO_JURISDICTION_OP, PURGE_UNPINNED_AUTH_OP } from "./auth-jurisdiction-move-rpc";
-// Identity-resolver layer lives in its own module; re-export the public names
-// here so `@lunora/runtime`'s import surface is unchanged.
-export type {
-    ComposeIdentityResolversErrorMode,
-    ComposeIdentityResolversOptions,
-    IdentityContractLike,
-    IdentityResolver,
-    IdentityValidation,
-    ResolvedIdentity,
-} from "./identity-resolvers";
 export type {
     AdminTableResolver,
     BackupStore,
@@ -6794,6 +7004,16 @@ export type {
     WorkerOptions,
 };
 
+// Identity-resolver layer lives in its own module; re-export the public names
+// here so `@lunora/runtime`'s import surface is unchanged.
+export type {
+    ComposeIdentityResolversErrorMode,
+    ComposeIdentityResolversOptions,
+    IdentityContractLike,
+    IdentityResolver,
+    IdentityValidation,
+    ResolvedIdentity,
+} from "./identity-resolvers";
 export { composeIdentityResolvers, routeIdentityResolvers } from "./identity-resolvers";
 export type { KvIntrospector, KvKeyEntry, KvKeyListResult, KvNamespaceSummary, KvValueResult } from "./kv-admin-routes";
 export type { BackupManifest } from "./scheduled-backup";

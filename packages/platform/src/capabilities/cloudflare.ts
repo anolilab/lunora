@@ -13,6 +13,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
     id: "cloudflare",
     name: "Cloudflare",
     features: {
+        adminTokenRevocation: {
+            level: "native",
+            note: "AdminRevocationDO (a small Durable Object, bound as ADMIN_REVOCATIONS and addressed through the ShardDirectory namespace seam like SchedulerDO) holds each named admin token's revocation, keyed by name and createdAt, outside the default shard's database. It is written before the token row is deleted and checked on every verify, so a pitrRestore of the default shard cannot revive a revoked token",
+        },
         shardedState: { level: "native", note: "Durable Objects with SQLite" },
         globalTables: {
             level: "native",

@@ -28,6 +28,7 @@ const ADMIN_FUNCTIONS: {
     readonly clearCapturedMail: "__lunora_admin__:clearCapturedMail";
     readonly clearQueueMessages: "__lunora_admin__:clearQueueMessages";
     readonly clearTable: "__lunora_admin__:clearTable";
+    readonly createAdminToken: "__lunora_admin__:createAdminToken";
     readonly createWorkflowInstance: "__lunora_admin__:createWorkflowInstance";
     readonly deleteRows: "__lunora_admin__:deleteRows";
     readonly describeTable: "__lunora_admin__:describeTable";
@@ -61,6 +62,7 @@ const ADMIN_FUNCTIONS: {
     readonly getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus";
     readonly ignoreIssue: "__lunora_admin__:ignoreIssue";
     readonly importShard: "__lunora_admin__:importShard";
+    readonly listAdminTokens: "__lunora_admin__:listAdminTokens";
     readonly listFlags: "__lunora_admin__:listFlags";
     readonly listReactors: "__lunora_admin__:listReactors";
     readonly listQueues: "__lunora_admin__:listQueues";
@@ -82,6 +84,7 @@ const ADMIN_FUNCTIONS: {
     readonly releaseShardRegistration: "__lunora_admin__:releaseShardRegistration";
     readonly replayQueueMessage: "__lunora_admin__:replayQueueMessage";
     readonly resolveIssue: "__lunora_admin__:resolveIssue";
+    readonly revokeAdminToken: "__lunora_admin__:revokeAdminToken";
     readonly rlsPolicies: "__lunora_admin__:rlsPolicies";
     readonly schemaHistory: "__lunora_admin__:schemaHistory";
     readonly schemaVersion: "__lunora_admin__:schemaVersion";
@@ -96,6 +99,7 @@ const ADMIN_FUNCTIONS: {
     readonly storageReferences: "__lunora_admin__:storageReferences";
     readonly storageRules: "__lunora_admin__:storageRules";
     readonly studioFeatures: "__lunora_admin__:studioFeatures";
+    readonly verifyAdminToken: "__lunora_admin__:verifyAdminToken";
     readonly writeRow: "__lunora_admin__:writeRow";
 };
 ```
@@ -104,6 +108,12 @@ const ADMIN_FUNCTIONS: {
 
 ```ts
 const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
+```
+
+### `ADMIN_TOKEN_TABLE` (const)
+
+```ts
+const ADMIN_TOKEN_TABLE = "__lunora_admin_tokens__";
 ```
 
 ### `AGGREGATE_SQL_FUNCTION` (const)
@@ -134,6 +144,17 @@ const AGG_VALUE: Name;
 
 ```ts
 const AUDIT_LOG_TABLE = "__lunora_audit__";
+```
+
+### `AdminTokenSummary` (interface)
+
+```ts
+interface AdminTokenSummary {
+    createdAt: number;
+    expiresAt?: number;
+    lastUsedAt?: number;
+    name: string;
+}
 ```
 
 ### `AdvisorProcedure` (interface)
@@ -3665,6 +3686,12 @@ interface WriteEvent {
 type WriteHook = (event: WriteEvent) => Promise<void> | void;
 ```
 
+### `adminTokenExists` (const)
+
+```ts
+const adminTokenExists: (sql: SqlExec, name: string) => boolean;
+```
+
 ### `advanceClientWatermark` (const)
 
 ```ts
@@ -4030,6 +4057,17 @@ const countLegacyRows: (sql: SqlExec, table: string, fields: ReadonlyArray<strin
 
 ```ts
 const coveringGeohashes: (center: GeoPoint, radiusMeters: number) => string[];
+```
+
+### `createAdminTokenRecord` (const)
+
+```ts
+const createAdminTokenRecord: (sql: SqlExec, record: {
+    createdAt: number;
+    digest: string;
+    expiresAt?: number;
+    name: string;
+}) => boolean;
 ```
 
 ### `createCompanionSync` (const)
@@ -4528,6 +4566,12 @@ const liftSourceId: (row: Record<string, unknown>, options?: {
 
 ```ts
 const lintReadonlySql: (sql: SqlExec, query: string) => SqlLintResult;
+```
+
+### `listAdminTokens` (const)
+
+```ts
+const listAdminTokens: (sql: SqlExec) => AdminTokenSummary[];
 ```
 
 ### `listReactorStates` (const)
@@ -5185,6 +5229,12 @@ const resolveRelationPredicates: (where: WhereInput | undefined, options: Resolv
 const resolveWith: (options: ResolveWithOptions) => Promise<void>;
 ```
 
+### `revokeAdminTokenRecord` (const)
+
+```ts
+const revokeAdminTokenRecord: (sql: SqlExec, name: string, createdAt: number) => boolean;
+```
+
 ### `rowToDocument` (const)
 
 ```ts
@@ -5500,6 +5550,15 @@ const uniqueIndexFields: (indexes: ReadonlyArray<{
 
 ```ts
 const validateImportRow: (schema: SchemaLike, table: string, record: Record<string, unknown>) => string | undefined;
+```
+
+### `verifyAdminTokenDigest` (const)
+
+```ts
+const verifyAdminTokenDigest: (sql: SqlExec, name: string, digest: string, now: number) => undefined | {
+    createdAt: number;
+    expiresAt?: number;
+};
 ```
 
 ### `verifySiblingBody` (const)

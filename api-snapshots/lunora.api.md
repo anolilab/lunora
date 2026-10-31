@@ -1619,6 +1619,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `AdminTokenSummary` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `ArgsOf` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1722,6 +1726,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ### `ConnectionStatus` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `CreatedAdminToken` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `CronJobInfo` (interface)
 
@@ -2690,6 +2698,14 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ## `lunorash/do`
+
+### `ADMIN_REVOCATION_DO_NAME` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `AdminRevocationDO` (class)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `AdvisorProcedure` (interface)
 
@@ -4491,6 +4507,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `AdminTokenSummary` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `AiRunBinding` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4580,6 +4600,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `CorsOptions` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `CreatedAdminToken` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 

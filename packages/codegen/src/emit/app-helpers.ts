@@ -25,6 +25,9 @@ interface EmitAppOptions {
     emailAgents?: ReadonlyArray<{ className: string; exportName: string }>;
     /** App depends on `@lunora/cloudflare-access` → emit `.access()` (wire the Cloudflare Access `resolveIdentity`, composed ahead of `@lunora/auth` when both are present). */
     hasAccess: boolean;
+    /** The target backs named admin tokens' revocation store → emit `.adminRevocations()`. Absent counts as true. */
+    hasAdminRevocations?: boolean;
+
     /** App depends on `@lunora/auth` → emit `.auth()` + the lazy build/migrate dance. */
     hasAuth: boolean;
 
@@ -39,6 +42,7 @@ interface EmitAppOptions {
     hasFramework: boolean;
     /** Schema declares **D1-backed** `.global()` tables → emit `.global()` (D1 ctx-db + studio introspector + cross-shard relations). */
     hasGlobal: boolean;
+
     /** Schema declares **Hyperdrive-backed** `.global({ backend: "hyperdrive" })` tables → emit `.hyperdriveGlobal()` (reactive Postgres/MySQL ctx-db over Hyperdrive). */
     hasHyperdriveGlobal: boolean;
 
@@ -55,6 +59,7 @@ interface EmitAppOptions {
     hasKvIntrospector: boolean;
     /** App declares `lunora/notify.ts` (`@lunora/notify`) → wire `options.notifySubscriptionStore` so the studio Notifications page can read registered devices. */
     hasNotify: boolean;
+
     /** App declares push queues (`defineQueue`) → wire `LUNORA_QUEUE_REGISTRY` into the worker's `queue()` consumer entry. */
     hasQueue: boolean;
 

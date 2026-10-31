@@ -45,6 +45,7 @@ import discoverWorkflowCalls from "./discover/workflow-calls";
 import discoverWorkflowEvents from "./discover/workflow-events";
 import {
     buildStorageColumns,
+    emitAdminRevocations,
     emitAgents,
     emitApi,
     emitCollections,
@@ -73,7 +74,7 @@ import { emitApp, emitAuthModule } from "./emit-app";
 import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type { AgentIR, FunctionIR, HttpRouteIR, MaskMetadataIR, MigrationIR, MutatorIR, ShapeIR, WorkflowIR } from "./ir";
 import { setStandardTypeResolver } from "./parse-validator";
-import { platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
+import { gateAdminTokenRevocation, platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
 import { readMergeDurableObjects } from "./project-config-file";
 import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged } from "./run-codegen-files";
 import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
@@ -752,6 +753,8 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const liveContent = emitLive(liveStreams, useUmbrella);
     const cronsContent = emitCrons(crons);
     const schedulerContent = emitScheduler(studioFeatures.scheduler);
+    const adminRevocationGate = gateAdminTokenRevocation(resolveCodegenTarget(options.projectRoot, options.target));
+    const adminRevocationsContent = adminRevocationGate.supported ? emitAdminRevocations(useUmbrella) : "";
     const shardRegistryContent = emitShardRegistry(schema.tables, useUmbrella, schema.jurisdiction);
     const durableObjectsContent = readMergeDurableObjects(options.projectRoot) ? emitDurableObjects(useUmbrella) : "";
     const vectorsContent = emitVectors(schema.vectorIndexes);
@@ -818,6 +821,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         liveStreams: platformGate.signals.liveStreams === true,
         liveStreamsWithheld: platformGate.liveStreamsWithheld,
         liveStreamDeclarations: liveStreams,
+        hasAdminRevocations: adminRevocationGate.supported,
         hasScheduler: studioFeatures.scheduler,
         // The same schema signal `emitShard` gates the shard config's source-client
         // field and the ingest poll on, so the builder method and the config field
@@ -929,6 +933,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: liveContent, kind: "optional", name: "live.ts" },
               { content: schedulerContent, kind: "optional", name: "scheduler.ts" },
               { content: shardRegistryContent, kind: "optional", name: "shardRegistry.ts" },
+              { content: adminRevocationsContent, kind: "optional", name: "adminRevocations.ts" },
               { content: durableObjectsContent, kind: "optional", name: "durableObjects.ts" },
               { content: seedContent, kind: "optional", name: "seed.ts" },
               // The `@lunora/auth` exports `app.ts` loads with `import()` on the first event.
@@ -1014,7 +1019,8 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         },
         migrations,
         outputDirectory,
-        platformDiagnostics: platformGate.diagnostics,
+        platformDiagnostics:
+            adminRevocationGate.diagnostic === undefined ? platformGate.diagnostics : [...platformGate.diagnostics, adminRevocationGate.diagnostic],
         queues,
         schemaSnapshot,
         schemaSnapshotPath,

@@ -20,6 +20,8 @@ export type {
     ImportShardResult,
 } from "./admin-export-import";
 export { exportShardRows, importShardRows, parseExportShardArgs, parseImportShardArgs, selectExportTables, validateImportRow } from "./admin-export-import";
+export type { AdminTokenSummary } from "./admin-tokens";
+export { ADMIN_TOKEN_TABLE, adminTokenExists, createAdminTokenRecord, listAdminTokens, revokeAdminTokenRecord, verifyAdminTokenDigest } from "./admin-tokens";
 export { AGGREGATE_SQL_FUNCTION, aggregateSqlFunction, matchesStaticWhere, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
 export type { AggregateTally } from "./aggregate-tally";
 export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally";

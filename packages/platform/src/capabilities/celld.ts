@@ -220,6 +220,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "`storage.setAlarm`/`getAlarm`/`deleteAlarm` and the `alarm()` handler, durable across a cell moving between nodes",
         },
+        adminTokenRevocation: {
+            level: "unsupported",
+            note: "Not yet provisioned or exercised on celld: nothing here binds the AdminRevocationDO namespace (createWorker adminRevocations), so no named admin token can be created and any that exist are refused (ADMIN_TOKEN_NOT_CONFIGURED); the root LUNORA_ADMIN_TOKEN is the only admin credential. celld has no bookmark API, so a restore cannot revive a revoked token",
+        },
         shardedState: {
             level: "native",
             note: "Cells are Durable Objects: single-writer, one SQLite database each, replicated to the fleet bucket through a write-behind log",

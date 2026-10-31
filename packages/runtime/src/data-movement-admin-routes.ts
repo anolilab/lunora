@@ -107,7 +107,7 @@ interface DataMovementAdminRouteDeps {
     /** Stream-parse + fan-out an NDJSON import body (bound to the worker options). */
     streamingImport: (
         request: Request,
-        headers: Record<string, string>,
+        resolveHeaders: () => Promise<Record<string, string>>,
         dryRun: boolean,
         onConflict: "replace" | "skip",
     ) => Promise<{
@@ -379,8 +379,6 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         assertAdmin(request);
 
-        const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
-
         const { searchParams } = new URL(request.url);
         // `?dryRun=true` checks the body and reports what it would reject, writing nothing.
         const dryRun = searchParams.get("dryRun") === "true";
@@ -391,7 +389,16 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             throw new LunoraError(`onConflict must be "skip" or "replace", got ${JSON.stringify(onConflictParameter)}`, { code: "BAD_REQUEST", status: 400 });
         }
 
-        const result = await streamingImport(request, forwardedHeaders, dryRun, onConflictParameter);
+        const result = await streamingImport(
+            request,
+            async () => {
+                const { headers } = await resolveForwardContext(request, env);
+
+                return headers;
+            },
+            dryRun,
+            onConflictParameter,
+        );
 
         // A client sends a dry run only to a worker that honours the flag, and an
         // older worker answers with the same body and writes. The echo is how it

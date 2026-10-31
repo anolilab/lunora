@@ -8,6 +8,7 @@ import { createShardDO } from "../../lunora/_generated/shard.js";
 import { app } from "../../lunora/http.js";
 
 interface Env {
+    ADMIN_REVOCATIONS: ShardNamespaceLike;
     SHARD: ShardNamespaceLike;
     STRIPE_SECRET_KEY: string;
     STRIPE_WEBHOOK_SECRET: string;
@@ -19,6 +20,9 @@ interface Env {
  * `ctx.db`. The demo's `authorize: () => true` is a stand-in — a real app ties
  * the referenceId to `ctx.auth.userId` (the default authorizer does exactly that).
  */
+// Records revoked named admin tokens where a restore of the shard cannot rewind them.
+export { AdminRevocationDO } from "../../lunora/_generated/adminRevocations.js";
+
 export const ShardDO = createShardDO({
     payment: (env) => {
         const environment = env as unknown as Env;
@@ -55,7 +59,7 @@ export default {
         // `httpRouter: app` mounts the `POST /payment/webhook` action; everything
         // else falls through to Lunora's RPC + reactive query surface. Built once
         // per isolate and reused.
-        worker ??= createWorker({ httpRouter: app, openApiSpec, shardDO: env.SHARD });
+        worker ??= createWorker({ httpRouter: app, openApiSpec, adminRevocations: env.ADMIN_REVOCATIONS, shardDO: env.SHARD });
 
         return worker.fetch(request, env, ctx);
     },

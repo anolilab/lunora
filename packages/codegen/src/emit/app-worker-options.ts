@@ -61,6 +61,19 @@ ${options.tables.map((table) => `            [${JSON.stringify(table.name)}, ${s
 ];
 
 /**
+ * The admin revocation store, when the builder was given one. Emitted for every
+ * app: named admin tokens are a runtime feature, so no schema signal gates it.
+ * Without it the worker refuses to create a named token and refuses any that exist.
+ */
+const ADMIN_REVOCATIONS_LINES = [
+    `        const adminRevocations = this.adminRevocationsSelector?.(env);
+
+        if (adminRevocations) {
+            options.adminRevocations = adminRevocations;
+        }`,
+];
+
+/**
  * One `liveStreamRouter` mount per declared stream, as the lines of an array literal. Each stream's module loads on its
  * first request, so a worker starts without evaluating the live modules.
  */
@@ -114,6 +127,7 @@ const buildFrameworkHostLine = (options: ResolvedAppOptions): string =>
 /** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
 const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
     ...buildTableShardingLines(options),
+    ...(options.hasAdminRevocations === false ? [] : ADMIN_REVOCATIONS_LINES),
     ...(options.hasScheduler
         ? [
               `        if (this.schedulerDeclaration) {

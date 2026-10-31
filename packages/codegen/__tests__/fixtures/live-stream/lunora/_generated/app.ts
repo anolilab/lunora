@@ -45,6 +45,7 @@ interface ComposedApp extends LunoraWorker {
  * first request so per-isolate singletons are built once.
  */
 class AppBuilder<Env extends object> {
+    private adminRevocationsSelector?: Selector<Env, ShardNamespaceLike>;
     private adminToken?: Selector<Env, string>;
     private cdcEnabled = false;
     private deliveryAuthorizationSelector?: ShardConfig["deliveryAuthorization"];
@@ -157,6 +158,13 @@ class AppBuilder<Env extends object> {
         return this;
     }
 
+    /** The `AdminRevocationDO` namespace (typically `env.ADMIN_REVOCATIONS`). Records revoked named admin tokens where a point-in-time restore of the default shard cannot rewind them. Without it no named admin token can be created and any that exist are refused. */
+    public adminRevocations(selector: Selector<Env, ShardNamespaceLike>): this {
+        this.adminRevocationsSelector = selector;
+
+        return this;
+    }
+
     /** Materialise the standalone Cloudflare worker + `ShardDO` class. */
     public build(): ComposedApp {
         return this.assemble();
@@ -243,6 +251,12 @@ class AppBuilder<Env extends object> {
 
         options.listSchemaTables = () => [...tableSharding.keys()];
         options.resolveTableSharding = (table) => tableSharding.get(table);
+
+        const adminRevocations = this.adminRevocationsSelector?.(env);
+
+        if (adminRevocations) {
+            options.adminRevocations = adminRevocations;
+        }
 
         const logArchive = resolveLogArchiveFromEnv(env);
 

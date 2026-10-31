@@ -5,6 +5,7 @@ import completionCommand from "@visulima/cerebro/command/completion";
 import versionCommand from "@visulima/cerebro/command/version";
 
 import { addCommand } from "./commands/add";
+import { adminTokenCommand } from "./commands/admin-token";
 import { advisorCommand } from "./commands/advisor";
 import { analyzeCommand } from "./commands/analyze";
 import { backupCommand } from "./commands/backup";
@@ -115,6 +116,7 @@ const CLI_COMMANDS = [
     shardsCommand,
     pauseCommand,
     resumeCommand,
+    adminTokenCommand,
     introspectCommand,
     backupCommand,
     evalCommand,

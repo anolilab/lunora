@@ -14,11 +14,13 @@
             { "name": "SHARD", "class_name": "ShardDO" },
             // The erasure tombstones, kept out of the shard so a point-in-time restore of the shard cannot delete them.
             { "name": "PRIVACY_TOMBSTONES", "class_name": "PrivacyTombstonesDO" },
+            { "name": "ADMIN_REVOCATIONS", "class_name": "AdminRevocationDO" },
         ],
     },
     "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
         { "tag": "v2", "new_sqlite_classes": ["PrivacyTombstonesDO"] },
+        { "tag": "v3", "new_sqlite_classes": ["AdminRevocationDO"] },
     ],
     "observability": {
         "enabled": true,

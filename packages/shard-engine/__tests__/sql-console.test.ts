@@ -451,3 +451,119 @@ describe("lintReadonlySql", () => {
         expect(result.diagnostics[0]?.message).toMatch(/no such table/u);
     });
 });
+
+describe("classifyStatement reserved storage", () => {
+    const TABLE = "__lunora_admin_tokens__";
+
+    it.each([
+        `SELECT digest FROM ${TABLE}`,
+        `SELECT digest FROM "${TABLE}"`,
+        `SELECT digest FROM "${TABLE.toUpperCase()}"`,
+        `SELECT digest FROM \`${TABLE}\``,
+        `SELECT digest FROM [${TABLE}]`,
+        `SELECT digest FROM main."${TABLE}"`,
+        `SELECT digest FROM main.${TABLE}`,
+        `SELECT digest FROM /* x */ "${TABLE}" -- y`,
+        `SELECT digest FROM "main"."${TABLE}"`,
+        `SELECT digest FROM '${TABLE}'`,
+        `SELECT 1 FROM notes, '${TABLE}'`,
+        `SELECT 1 FROM notes JOIN '${TABLE}'`,
+        `WITH t AS (SELECT digest FROM "${TABLE}") SELECT * FROM t`,
+        `SELECT * FROM (SELECT digest FROM [${TABLE}])`,
+        `SELECT (SELECT digest FROM \`${TABLE}\` LIMIT 1)`,
+        "SELECT * FROM pragma_table_info('notes')",
+        "SELECT * FROM \"pragma_table_info\"('notes')",
+        "SELECT * FROM [pragma_table_info]('notes')",
+        "SELECT * FROM `pragma_index_list`('notes')",
+        "SELECT * FROM PRAGMA_INFO('t')",
+        "SELECT * FROM dbstat",
+        'SELECT * FROM "dbstat"',
+        "SELECT * FROM [dbstat]",
+        "SELECT * FROM `DBSTAT`",
+        "SELECT * FROM sqlite_dbpage",
+        'SELECT * FROM "sqlite_dbpage"',
+        "SELECT * FROM main.dbstat",
+    ])("refuses a reference to reserved storage: %s", (query) => {
+        expect.assertions(1);
+
+        expect(classifyStatement(query)?.code).toBe("SQL_NOT_READONLY");
+    });
+
+    const positions = (name: string): string[] => [
+        `SELECT * FROM main.${name}`,
+        `SELECT * FROM a JOIN b ON 1, ${name}`,
+        `SELECT * FROM a JOIN b USING (x), ${name}`,
+        `SELECT * FROM a AS t, ${name}`,
+        `SELECT * FROM a INDEXED BY i, ${name}`,
+        `SELECT * FROM a, b ON 1, ${name}`,
+        `SELECT * FROM a WHERE 1, ${name}`,
+        `SELECT ${name}`,
+        `SELECT * FROM a WHERE x = ${name}`,
+    ];
+
+    it.each(
+        ["'__lunora_admin_tokens__'", "'dbstat'", "'sqlite_dbpage'", "'pragma_table_info'", "' DbStat '", "'PRAGMA_INDEX_LIST'"].flatMap((literal) =>
+            positions(literal),
+        ),
+    )("refuses a literal that is a reserved name wherever it stands: %s", (query) => {
+        expect.assertions(1);
+
+        expect(classifyStatement(query)?.code).toBe("SQL_NOT_READONLY");
+    });
+
+    it.each(
+        [
+            '"__lunora_admin_tokens__"',
+            "`__lunora_admin_tokens__`",
+            "[__lunora_admin_tokens__]",
+            '"dbstat"',
+            "[dbstat]",
+            "`pragma_table_info`",
+            '"pragma_table_info"',
+        ].flatMap((identifier) => positions(identifier).filter((query) => !query.startsWith("SELECT ") || query.includes("FROM"))),
+    )("refuses a quoted identifier in every table position: %s", (query) => {
+        expect.assertions(1);
+
+        expect(classifyStatement(query)?.code).toBe("SQL_NOT_READONLY");
+    });
+
+    it.each([
+        `SELECT digest FROM main.'${TABLE}'`,
+        `SELECT * FROM "main".'dbstat'`,
+        "SELECT * FROM main.'pragma_table_info'('notes')",
+        "SELECT * FROM 'pragma_table_info'('t')",
+        "SELECT * FROM `main`.'pragma_index_list'('t')",
+    ])("refuses a schema-qualified or called literal name: %s", (query) => {
+        expect.assertions(1);
+
+        expect(classifyStatement(query)?.code).toBe("SQL_NOT_READONLY");
+    });
+
+    it.each([
+        "SELECT * FROM a WHERE message LIKE '%pragma_%'",
+        "SELECT 'pragma_level is high' AS note",
+        "SELECT * FROM a WHERE x = 'dbstat is a table'",
+        "SELECT 'pragma_' AS prefix",
+    ])("still allows a substring mention: %s", (query) => {
+        expect.assertions(1);
+
+        expect(classifyStatement(query)).toBeUndefined();
+    });
+
+    it.each([
+        `SELECT 1 -- ${TABLE}`,
+        `/* pragma_table_info dbstat ${TABLE} */ SELECT 1`,
+        "SELECT * FROM notes WHERE body LIKE '%dbstat%'",
+        "SELECT 'it''s dbstat' AS note",
+    ])("allows a mention in a literal or a comment: %s", (query) => {
+        expect.assertions(1);
+
+        expect(classifyStatement(query)).toBeUndefined();
+    });
+
+    it("fails closed on an unterminated literal that hides a reference", () => {
+        expect.assertions(1);
+
+        expect(classifyStatement(`SELECT 1 FROM "${TABLE}`)?.code).toBe("SQL_NOT_READONLY");
+    });
+});
