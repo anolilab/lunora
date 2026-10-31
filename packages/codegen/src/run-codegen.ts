@@ -708,6 +708,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         flagKeys,
         hasFlags,
         hasNotify,
+        hasIpReaders: functions.some((definition) => definition.readsIp === true),
         hasRooms: roomsSupported && functions.some((definition) => definition.channel?.kind === "room"),
         hasSensitiveArgs: agents.length > 0 || functions.some((definition) => isSensitiveFunction(definition)),
         // The gate's verdict on the app-declared `requestSecretTool` import. `true` only

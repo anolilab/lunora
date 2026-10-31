@@ -8,6 +8,7 @@ import { sanitizeNamespace } from "../../paths";
 import { listLunoraSourceFiles, lunoraRelativePath } from "../ast";
 import { exportNamesByLocalOf, isAddressableExportName } from "../attribution";
 import { collectErasures, reportErasures } from "../erased-returns";
+import mayReadIp from "../ip-reads";
 import type { LifecycleMoment, ProcedureClassification } from "./classify-procedure-call";
 import { classifyProcedureCall } from "./classify-procedure-call";
 import { argsFromBuilderChain, outputFromBuilderChain, returnTypeFromBuilderCall, returnTypeFromCall } from "./internal/builder-chain";
@@ -257,6 +258,8 @@ const functionIrFromCall = (
         ...(discovered.output ? { output: discovered.output } : {}),
         visibility: discovered.visibility,
         ...(discovered.adminOnly ? { adminOnly: true as const } : {}),
+        // Only a query is ever resumed, so only a query needs the mark.
+        ...(discovered.kind === "query" && mayReadIp(call) ? { readsIp: true as const } : {}),
         ...(discovered.expose ? { expose: discovered.expose } : {}),
         ...(discovered.x402 ? { x402: discovered.x402 } : {}),
         ...(discovered.lifecycle ? { lifecycle: discovered.lifecycle } : {}),

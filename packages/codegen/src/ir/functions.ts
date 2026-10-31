@@ -74,6 +74,13 @@ export interface FunctionIR {
      * ts-morph cannot resolve the type (typically because the consuming
      * project lacks a tsconfig that can reach `@lunora/server`).
      */
+
+    /**
+     * Set on a query that may read `ctx.ip`, decided statically and failing closed: the shard never resumes it
+     * warm, whatever fingerprint a client presents, because its rows can depend on the address the cursor was read at.
+     */
+    readsIp?: true;
+
     returnType: string;
 
     /**
