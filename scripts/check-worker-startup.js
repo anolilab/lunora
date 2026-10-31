@@ -70,9 +70,39 @@ const kib = (bytes) => `${(bytes / 1024).toFixed(1)} KiB`;
 
 const PROCEDURES_PER_MODULE = 20;
 
-/** A module made only of `import` / `export … from` / `export { … }` statements. */
-const REEXPORT_ONLY =
-    /^(?:\s*(?:import\s*(?:type\s*)?(?:\{[^}]*\}|\*\s*as\s*[\w$]+|[\w$]+)\s*from\s*|export\s*(?:type\s*)?(?:\{[^}]*\}|\*(?:\s*as\s*[\w$]+)?)\s*(?:from\s*)?)(?:["'][^"']*["'])?\s*;?)*\s*$/u;
+/**
+ * One `import … from` / `export … from` / `export { … }` statement. Sticky, and applied one
+ * statement at a time by `isReexportOnly`: a single anchored regex repeating this pattern lets
+ * the whitespace between statements split between neighbours in exponentially many ways, so a
+ * barrel with one non-matching line at its end backtracks exponentially.
+ */
+const REEXPORT_STATEMENT =
+    /(?:import\s*(?:type\s*)?(?:\{[^}]*\}|\*\s*as\s*[\w$]+|[\w$]+)\s*from\s*|export\s*(?:type\s*)?(?:\{[^}]*\}|\*(?:\s*as\s*[\w$]+)?)\s*(?:from\s*)?)(?:["'][^"']*["'])?\s*;?/uy;
+
+const LEADING_WHITESPACE = /\s*/uy;
+
+/** Whether `source` is made only of `import` / `export … from` / `export { … }` statements. */
+const isReexportOnly = (source) => {
+    let index = 0;
+
+    for (;;) {
+        LEADING_WHITESPACE.lastIndex = index;
+        LEADING_WHITESPACE.test(source);
+        index = LEADING_WHITESPACE.lastIndex;
+
+        if (index === source.length) {
+            return true;
+        }
+
+        REEXPORT_STATEMENT.lastIndex = index;
+
+        if (!REEXPORT_STATEMENT.test(source) || REEXPORT_STATEMENT.lastIndex === index) {
+            return false;
+        }
+
+        index = REEXPORT_STATEMENT.lastIndex;
+    }
+};
 
 /**
  * `[owning package, SDK]` for each heavy SDK an app hands to a builder-wired integration. The
@@ -527,7 +557,7 @@ const eagerGraph = (appDirectory, outDirectory) => {
     const reexportOnly = (path) => {
         const source = join(appDirectory, path);
 
-        return existsSync(source) && REEXPORT_ONLY.test(readFileSync(source, "utf8").replaceAll(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gmu, ""));
+        return existsSync(source) && isReexportOnly(readFileSync(source, "utf8").replaceAll(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gmu, ""));
     };
     const evaluated = walk((path) => !emitted.has(path) && !reexportOnly(path));
     const forbidden = INTEGRATION_SDKS.flatMap(([, name]) => {
