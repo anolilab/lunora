@@ -358,6 +358,15 @@ const lockQuery = async (request: Request, database: string, sql: string, params
     };
 };
 
+/** Extra looks at the marker of a lock database that was just made by another run, and the first pause between them. */
+const MARKER_LOOKS = 4;
+const MARKER_PAUSE_MS = 50;
+
+const pause = async (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
+
 const OWNER_TABLE = "lunora_preview_lock_owner";
 const OWNER_MARKER = "lunora-preview-locks/v1";
 const CREATE_OWNER = `CREATE TABLE IF NOT EXISTS ${OWNER_TABLE} (marker TEXT NOT NULL)`;
@@ -405,10 +414,14 @@ const lockDatabase = async (request: Request): Promise<string> => {
         await lockQuery(request, id, CREATE_OWNER, []);
         await lockQuery(request, id, INSERT_OWNER, [OWNER_MARKER]);
     } else {
-        let owned = false;
+        // The creator writes the marker right after making the database. The milestone is that marker appearing: look,
+        // and while it is absent give the creator a growing moment between looks, a few times, then refuse.
+        let owned = await ownsLockDatabase(request, id);
 
-        for (let attempt = 0; attempt < 3 && !owned; attempt += 1) {
-            // eslint-disable-next-line no-await-in-loop -- a creator that is still writing its marker needs a moment
+        for (let attempt = 1; attempt <= MARKER_LOOKS && !owned; attempt += 1) {
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await pause(MARKER_PAUSE_MS * attempt);
+            // eslint-disable-next-line no-await-in-loop -- see above
             owned = await ownsLockDatabase(request, id);
         }
 
@@ -481,15 +494,22 @@ const keepLease = (
     onLost: () => void,
     everyMs = (LOCK_SECONDS * 1000) / 3,
 ): (() => void) => {
+    let lastRenewed = Date.now();
     const renew = async (): Promise<void> => {
         try {
             const result = await lockQuery(request, database, RENEW_LOCK, [LOCK_SECONDS, appId, slug, token]);
 
-            if (result?.changes !== 1) {
+            if (result?.changes === 1) {
+                lastRenewed = Date.now();
+            } else {
                 onLost();
             }
         } catch {
-            // A renewal that fails to reach D1 is tried again next time; only a row that is gone or taken means the hold is lost.
+            // A renewal that fails to reach D1 is tried again next time. But two in a row missed leaves the hold within a
+            // renewal of lapsing, after which another run may take it: from then on this one cannot say it still holds it.
+            if (Date.now() - lastRenewed >= 2 * everyMs) {
+                onLost();
+            }
         }
     };
     const timer = setInterval(() => {
@@ -538,13 +558,6 @@ const recordedResourceState = async (request: Request, resource: RecordedResourc
     const name = { d1: found.name, kv: found.title, r2: found.name }[resource.kind];
 
     return name === resource.name ? "present" : "changed";
-};
-
-/** The resource a pending entry stands for, with its id, or `undefined` when the create never happened. */
-const resolvePending = async (request: Request, resource: RecordedResource): Promise<RecordedResource | undefined> => {
-    const id = await findResource(request, resource.kind, resource.name);
-
-    return id === undefined ? undefined : { ...resource, id, pending: undefined };
 };
 
 /** The most deletes in flight at once while emptying a bucket: fast enough for a large one, gentle on the REST API's rate limit. */
@@ -696,7 +709,6 @@ export {
     recordKey,
     registryNamespace,
     releaseLease,
-    resolvePending,
     takeLease,
     workerMarker,
     workersSubdomain,

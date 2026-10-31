@@ -814,8 +814,7 @@ atomically (a second taker gets a constraint error), a hold older than 30
 minutes is taken over by an update that only one taker can win, and a run lets
 go by deleting its own row. Any other failure while taking the hold refuses the
 run. The record names each resource before it is created and confirms it after,
-so a resource whose confirming write failed is still found and removed by
-`delete`. `delete` also refuses to
+so a resource whose confirming write failed is taken back at once by the id its create returned. `delete` removes only what the record proves it made: a confirmed entry whose id still names a resource of the recorded name. An entry that is only claimed (a deploy was killed between creating it and confirming it) is never deleted by name, since whatever carries the name may be another actor's; it is reported and stays on record until you look. `delete` also refuses to
 report "no record" while the preview's Worker or a resource under its names is
 still in the account (a record this location has not seen yet, or an app id that
 differs from the one that deployed it), and exits `1` instead. A record is keyed by
@@ -844,7 +843,7 @@ Engine, the `analytics` (Analytics SQL) binding, which reads the account's datas
 another Worker's `script_name`, a singular `route`, an R2 bucket with a
 jurisdiction, a binding that exists only inside an `env.<name>` block when no `--env` is given (a preview is otherwise planned from the top-level config, which would lack it), or any binding kind the CLI does not know.
 
-`--env <name>` plans the preview from that Wrangler environment instead: the top-level config with `env.<name>` laid over it, as the app is deployed with `lunora deploy --env <name>`. The preview Worker is named from the environment's own `name` (else `<name>-<env>`), so a binding that lives only in `env.<name>` gets its own preview copy. An unknown name is refused with the list of valid ones. The environment is recorded with the preview, so `delete` needs no `--env` and removes exactly what was created. The scaffolded CI pipelines leave it unset. A `secrets.required`
+`--env <name>` plans the preview from that Wrangler environment instead, the way Wrangler builds it for `lunora deploy --env <name>`: the top level's settings (entry point, compatibility date and flags, assets, migrations) with the environment's own laid over them, and only the vars and bindings the environment declares, since an environment does not inherit those. The preview Worker is named from the environment's own `name` (else `<name>-<env>`), so a binding that lives only in `env.<name>` gets its own preview copy. An unknown name is refused with the list of valid ones. The environment is recorded with the preview, so `delete` needs no `--env` and removes exactly what was created. The scaffolded CI pipelines leave it unset. A `secrets.required`
 entry has to be passed with `--secret`; the preview refuses before creating
 anything otherwise. Copying any of these would point the preview
 at production's resource.

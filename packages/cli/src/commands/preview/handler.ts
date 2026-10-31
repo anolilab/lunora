@@ -62,7 +62,6 @@ import {
     recordKey,
     registryNamespace,
     releaseLease,
-    resolvePending,
     takeLease,
     workerMarker,
     workersSubdomain,
@@ -147,6 +146,8 @@ const summarize = (record: PreviewRecord): PreviewSummary => {
 interface PreviewContext {
     /** `lunora.appId` from `package.json`; `undefined` until one is minted. */
     appId: string | undefined;
+    /** The committed config as a whole: a `--env` preview is planned from one environment but must collide with none of it. */
+    committed?: PreviewConfig;
     config: PreviewConfig;
     cwd: string;
     wranglerPath: string;
@@ -275,23 +276,6 @@ const previewSecrets = async (
     return { adminToken: values[ADMIN_TOKEN_KEY] ?? "", missing, values };
 };
 
-/** The id of the resource a pending entry stands for once it exists: found by name, or `undefined` when its create never happened. */
-const confirmPending = async (request: Request, namespace: string, record: PreviewRecord, entry: RecordedResource): Promise<boolean> => {
-    const made = await resolvePending(request, entry);
-
-    if (made === undefined) {
-        return false;
-    }
-
-    // eslint-disable-next-line no-param-reassign -- the entry is the live copy of the record's resource, kept in step with what is written
-    entry.id = made.id;
-    // eslint-disable-next-line no-param-reassign -- see above
-    delete entry.pending;
-    await writeRecord(request, namespace, record);
-
-    return true;
-};
-
 /** A resource the record already lists: its id, once checked that the id still names that resource. */
 const reuseRecorded = async (request: Request, plan: PreviewPlan, recorded: RecordedResource, logger: Logger): Promise<string> => {
     const state = await recordedResourceState(request, recorded);
@@ -306,6 +290,40 @@ const reuseRecorded = async (request: Request, plan: PreviewPlan, recorded: Reco
     logger.info(`reusing preview ${recorded.kind} "${recorded.name}" for ${recorded.binding}`);
 
     return recorded.id;
+};
+
+/** How many times the confirming record write is tried before the resource just made is taken back. */
+const CONFIRM_ATTEMPTS = 3;
+
+/**
+ * Write the record with the new resource confirmed. If it cannot be written, the resource is removed again by the id its
+ * create returned: that id is the proof it is this run's, which a pending entry found by name afterwards is not.
+ */
+const confirmClaim = async (request: Request, namespace: string, record: PreviewRecord, claim: RecordedResource): Promise<void> => {
+    let failure: unknown;
+
+    for (let attempt = 1; attempt <= CONFIRM_ATTEMPTS; attempt += 1) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- a retry only after the previous write failed
+            await writeRecord(request, namespace, record);
+
+            return;
+        } catch (error) {
+            failure = error;
+        }
+    }
+
+    try {
+        await deleteResource(request, claim);
+        record.resources.splice(record.resources.indexOf(claim), 1);
+        await writeRecord(request, namespace, record).catch(() => undefined);
+    } catch {
+        // Stays pending; delete reports it rather than guessing.
+        // eslint-disable-next-line no-param-reassign -- the claim is the live copy of the record's entry
+        claim.pending = true;
+    }
+
+    throw new Error(`${reason(failure)}; the ${claim.kind} "${claim.name}" just made could not be recorded, so it was removed again`);
 };
 
 /**
@@ -331,7 +349,7 @@ const createClaimed = async (request: Request, namespace: string, record: Previe
 
     claim.id = await createResource(request, planned.kind, planned.name);
     delete claim.pending;
-    await writeRecord(request, namespace, record);
+    await confirmClaim(request, namespace, record, claim);
     logger.success(`created preview ${planned.kind} "${planned.name}" for ${planned.binding}`);
 
     return claim.id;
@@ -349,20 +367,40 @@ const ensureOne = async (
     record: PreviewRecord,
     planned: PlannedResource,
     logger: Logger,
+    check: () => void,
 ): Promise<string> => {
     const recorded = record.resources.find((resource) => resource.kind === planned.kind && resource.binding === planned.binding);
     // A claim whose create happened is confirmed now; one whose create did not is made below.
-    const made = recorded?.pending === true ? await confirmPending(request, namespace, record, recorded) : recorded !== undefined;
+    check();
 
-    return recorded !== undefined && made ? reuseRecorded(request, plan, recorded, logger) : createClaimed(request, namespace, record, planned, logger);
+    if (recorded?.pending === true) {
+        // The record only claims it. Whatever carries the name now may be a leftover of an interrupted deploy of this
+        // preview, or something another actor made since; nothing tells them apart, so it is never adopted.
+        if ((await findResource(request, planned.kind, planned.name)) !== undefined) {
+            throw new Error(
+                `a ${planned.kind} resource named "${planned.name}" exists, but the record only claims it (a deploy was interrupted between creating it and confirming it), so nothing shows it is this preview's and it is left alone. If it is, delete it by hand, then deploy again`,
+            );
+        }
+
+        return createClaimed(request, namespace, record, planned, logger);
+    }
+
+    return recorded === undefined ? createClaimed(request, namespace, record, planned, logger) : reuseRecorded(request, plan, recorded, logger);
 };
 
-const ensureResources = async (request: Request, namespace: string, plan: PreviewPlan, record: PreviewRecord, logger: Logger): Promise<ResourceIds> => {
+const ensureResources = async (
+    request: Request,
+    namespace: string,
+    plan: PreviewPlan,
+    record: PreviewRecord,
+    logger: Logger,
+    check: () => void,
+): Promise<ResourceIds> => {
     const ids = new Map<string, string>();
 
     for (const planned of plan.resources) {
         // eslint-disable-next-line no-await-in-loop -- one resource at a time, each claimed in the record before it is made
-        ids.set(resourceKey(planned.kind, planned.binding), await ensureOne(request, namespace, plan, record, planned, logger));
+        ids.set(resourceKey(planned.kind, planned.binding), await ensureOne(request, namespace, plan, record, planned, logger, check));
     }
 
     return ids;
@@ -505,9 +543,24 @@ const holdLost = (logger: Logger, slug: string, result: PreviewCommandResult): P
     return { ...result, code: result.code === EXIT_CODE.SUCCESS ? EXIT_CODE.FAILURE : result.code, error };
 };
 
+/** Whether this run still holds its preview; the renewal timer clears it when it cannot say so any more. */
+interface Hold {
+    lost: boolean;
+}
+
+/** Stop before the next step, not after the last one, once the hold cannot be vouched for. */
+const checkHeld = (hold: Hold, slug: string): void => {
+    if (hold.lost) {
+        throw new Error(
+            `the hold on preview "${slug}" can no longer be vouched for, so this run stopped before changing anything more; check it with \`lunora preview list\`, then run again`,
+        );
+    }
+};
+
 /** What a deploy has settled before it creates anything: the secrets, the workers.dev subdomain, the registry and its hold on this preview. */
 interface ShipPrerequisites {
     appId: string;
+    hold: Hold;
     namespace: string;
     secrets: { adminToken: string; values: Record<string, string> };
     subdomain: string;
@@ -523,7 +576,7 @@ const shipHeld = async (
 ): Promise<PreviewCommandResult> => {
     const { config, cwd, wranglerPath } = context;
     const { logger } = options;
-    const { appId, namespace, secrets, subdomain } = prerequisites;
+    const { appId, hold, namespace, secrets, subdomain } = prerequisites;
 
     let record: PreviewRecord;
     let ids: ResourceIds;
@@ -546,6 +599,17 @@ const shipHeld = async (
             return fail(logger, refusal.error, refusal.code);
         }
 
+        // Before anything is created or written: a resource this preview already owns that production now points at is a
+        // refusal, not something to find out after more storage was made beside it.
+        const owned = productionCollisions(context.committed ?? config, [
+            plan.worker,
+            ...(existing?.resources ?? []).flatMap((resource) => [resource.id, resource.name]),
+        ]);
+
+        if (owned.length > 0) {
+            return fail(logger, `preview "${plan.slug}" would bind production's ${owned.join(", ")}; refusing to deploy, nothing was created`);
+        }
+
         record = existing ?? {
             createdAt: now,
             environment: plan.environment,
@@ -559,12 +623,14 @@ const shipHeld = async (
             worker: plan.worker,
         };
         await writeRecord(request, namespace, record);
-        ids = await ensureResources(request, namespace, plan, record, logger);
+        ids = await ensureResources(request, namespace, plan, record, logger, () => {
+            checkHeld(hold, plan.slug);
+        });
     } catch (error) {
         return fail(logger, `preview "${plan.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
     }
 
-    const collisions = productionCollisions(config, [...ids.values()]);
+    const collisions = productionCollisions(context.committed ?? config, [...ids.values()]);
 
     if (collisions.length > 0) {
         return fail(logger, `preview "${plan.slug}" would bind production's ${collisions.join(", ")}; refusing to deploy`);
@@ -580,6 +646,8 @@ const shipHeld = async (
     });
 
     try {
+        checkHeld(hold, plan.slug);
+
         const deployed = await runDeployCommand({
             // A preview starts from its own data; production's schema baseline does not describe it.
             allowSchemaDrift: true,
@@ -690,18 +758,24 @@ const shipPreview = async (
         return fail(logger, `preview "${plan.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
     }
 
-    const hold = { lost: false };
+    const hold: Hold = { lost: false };
     const stop = keepLease(request, database, appId, plan.slug, token, () => {
         hold.lost = true;
     });
+    // An interrupt skips the `finally` below: the hold is also let go of there, or the preview stays locked for its lifetime.
+    const disarm = guardCleanup(async () => {
+        stop();
+        await releaseLease(request, database, appId, plan.slug, token);
+    });
 
     try {
-        const result = await shipHeld(context, plan, variables, options, request, { appId, namespace, secrets, subdomain });
+        const result = await shipHeld(context, plan, variables, options, request, { appId, hold, namespace, secrets, subdomain });
 
         return hold.lost ? holdLost(logger, plan.slug, result) : result;
     } finally {
         stop();
         await releaseLease(request, database, appId, plan.slug, token);
+        disarm();
     }
 };
 
@@ -815,7 +889,7 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
         }
 
         const { plan } = planned;
-        const collisions = productionCollisions(config, [plan.worker, ...plan.resources.map((resource) => resource.name)]);
+        const collisions = productionCollisions(committed, [plan.worker, ...plan.resources.map((resource) => resource.name)]);
 
         if (collisions.length > 0) {
             return fail(logger, `preview "${plan.slug}" names collide with production's ${collisions.join(", ")}; name the preview differently`);
@@ -839,27 +913,48 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
             return fail(logger, access.error, EXIT_CODE.AUTH);
         }
 
-        return await shipPreview({ ...context, config, appId: identified.appId }, plan, variables, options, access.request);
+        return await shipPreview({ ...context, committed, config, appId: identified.appId }, plan, variables, options, access.request);
     } finally {
         putBack();
         disarm();
     }
 };
 
-/** Delete one recorded resource, looking up the id of one the record only claimed. False when it could not be deleted. */
-const removeRecorded = async (request: Request, claimed: RecordedResource, logger: Logger): Promise<boolean> => {
+/**
+ * Delete one recorded resource, but only what the record proves this preview made: a confirmed entry whose id still names
+ * a resource of the recorded name. An entry that was only claimed is never deleted by name, since whatever carries the name
+ * may be another actor's; it is reported and stays on record. False when the resource is still there.
+ */
+const removeRecorded = async (request: Request, entry: RecordedResource, logger: Logger): Promise<boolean> => {
     try {
-        // A claim whose create never happened names nothing in the account: there is nothing to remove.
-        const resource = claimed.pending === true ? await resolvePending(request, claimed) : claimed;
+        if (entry.pending === true) {
+            if ((await findResource(request, entry.kind, entry.name)) === undefined) {
+                return true;
+            }
 
-        if (resource !== undefined) {
-            await deleteResource(request, resource);
-            logger.success(`deleted ${resource.kind} "${resource.name}"`);
+            logger.error(
+                `${entry.kind} "${entry.name}" exists, but the record only claims it (a deploy was interrupted before confirming it), so nothing shows it is this preview's: it was left alone. If it is, delete it by hand, then run \`lunora preview delete\` again`,
+            );
+
+            return false;
+        }
+
+        const state = await recordedResourceState(request, entry);
+
+        if (state === "changed") {
+            logger.error(`${entry.kind} "${entry.name}" (${entry.id}): the recorded id now names a different resource, so it was left alone`);
+
+            return false;
+        }
+
+        if (state === "present") {
+            await deleteResource(request, entry);
+            logger.success(`deleted ${entry.kind} "${entry.name}"`);
         }
 
         return true;
     } catch (error) {
-        logger.error(`deleting ${claimed.kind} "${claimed.name}" failed (${reason(error)}); it stays on record for the next \`lunora preview delete\``);
+        logger.error(`deleting ${entry.kind} "${entry.name}" failed (${reason(error)}); it stays on record for the next \`lunora preview delete\``);
 
         return false;
     }
@@ -875,8 +970,11 @@ const removePreview = async (
     record: PreviewRecord,
     planned: PreviewPlan | undefined,
     logger: Logger,
+    check: () => void,
 ): Promise<PreviewCommandResult> => {
     try {
+        check();
+
         const worker = await workerMarker(request, record.worker, PREVIEW_MARKER_VAR);
 
         // A Worker by that name without this preview's marker was not deployed by it: deleting it would destroy someone else's.
@@ -896,6 +994,8 @@ const removePreview = async (
     const remaining = [];
 
     for (const claimed of record.resources) {
+        check();
+
         // eslint-disable-next-line no-await-in-loop -- one at a time keeps the log in record order
         if (!(await removeRecorded(request, claimed, logger))) {
             remaining.push(claimed);
@@ -953,7 +1053,7 @@ const plannedAs = (config: PreviewConfig, record: PreviewRecord): PreviewPlan | 
 const deleteRecorded = async (
     context: PreviewContext,
     options: PreviewCommandOptions,
-    { names, namespace, request }: { names: PreviewNames; namespace: string | undefined; request: Request },
+    { hold, names, namespace, request }: { hold: Hold; names: PreviewNames; namespace: string | undefined; request: Request },
 ): Promise<PreviewCommandResult> => {
     const { config } = context;
     const { logger } = options;
@@ -1031,7 +1131,9 @@ const deleteRecorded = async (
         return { code: EXIT_CODE.SUCCESS, data: { plan: summarize(record) } };
     }
 
-    return removePreview(request, namespace, record, plannedAs(config, record), logger);
+    return removePreview(request, namespace, record, plannedAs(config, record), logger, () => {
+        checkHeld(hold, record.name);
+    });
 };
 
 const deletePreview = async (context: PreviewContext, options: PreviewCommandOptions, name: string): Promise<PreviewCommandResult> => {
@@ -1062,16 +1164,17 @@ const deletePreview = async (context: PreviewContext, options: PreviewCommandOpt
 
     // A delete and a deploy of one preview never overlap: either could otherwise write back a record for what the other removed.
     if (context.appId === undefined || namespace === undefined || options.dryRun === true) {
-        return deleteRecorded(context, options, { names, namespace, request });
+        return deleteRecorded(context, options, { hold: { lost: false }, names, namespace, request });
     }
 
+    const { appId } = context;
     let database: string;
     let token: string;
 
     try {
         database = await lockDatabase(request);
 
-        const lease = await takeLease(request, database, context.appId, names.slug);
+        const lease = await takeLease(request, database, appId, names.slug);
 
         if (lease.held !== undefined) {
             return fail(logger, heldMessage(names.slug, lease.held));
@@ -1082,18 +1185,25 @@ const deletePreview = async (context: PreviewContext, options: PreviewCommandOpt
         return fail(logger, `preview "${names.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
     }
 
-    const hold = { lost: false };
-    const stop = keepLease(request, database, context.appId, names.slug, token, () => {
+    const hold: Hold = { lost: false };
+    const stop = keepLease(request, database, appId, names.slug, token, () => {
         hold.lost = true;
+    });
+    const disarm = guardCleanup(async () => {
+        stop();
+        await releaseLease(request, database, appId, names.slug, token);
     });
 
     try {
-        const result = await deleteRecorded(context, options, { names, namespace, request });
+        const result = await deleteRecorded(context, options, { hold, names, namespace, request });
 
         return hold.lost ? holdLost(logger, names.slug, result) : result;
+    } catch (error) {
+        return fail(logger, `preview "${names.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
     } finally {
         stop();
-        await releaseLease(request, database, context.appId, names.slug, token);
+        await releaseLease(request, database, appId, names.slug, token);
+        disarm();
     }
 };
 

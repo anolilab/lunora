@@ -86,6 +86,9 @@ const SETTINGS_KEYS = new Set([
  */
 const COPIED_KEYS = ["ai", "browser", "define", "images", "media", "secrets", "vars", "version_metadata", "worker_loaders"] as const;
 
+/** Settings the preview block sets for itself, so a source environment's values for them are not copied. */
+const SETTINGS_KEPT_BY_BLOCK = new Set(["name", "routes", "triggers", "workers_dev"]);
+
 /** Non-inheritable keys left out: a preview's logs do not go to production's tail Workers. */
 const DROPPED_KEYS = new Set(["tail_consumers"]);
 
@@ -209,8 +212,8 @@ const isPreviewBlock = (_config: PreviewConfig, key: string, block: PreviewConfi
 };
 
 /**
- * The config a preview of Wrangler environment `envName` is planned from: the top level with `env.<envName>` laid over
- * it, as the app is deployed with `--env <envName>`. The Worker is named as Wrangler names it: the environment's own
+ * The config a preview of Wrangler environment `envName` is planned from: the top level's settings with `env.<envName>`
+ * laid over them, as the app is deployed with `--env <envName>` (bindings and vars are not inherited by an environment). The Worker is named as Wrangler names it: the environment's own
  * `name`, else `<name>-<envName>`. An unknown environment is an error that lists the valid ones.
  */
 const environmentConfig = (config: PreviewConfig, envName: string): { config: PreviewConfig; error?: never } | { config?: never; error: string } => {
@@ -225,7 +228,11 @@ const environmentConfig = (config: PreviewConfig, envName: string): { config: Pr
 
     const top = typeof config.name === "string" ? config.name : "";
 
-    return { config: { ...config, ...found, name: typeof found.name === "string" ? found.name : `${top}-${envName}` } };
+    // Wrangler inherits only the settings into an environment; vars and bindings are the environment's own, so the top
+    // level's are not carried over (a preview must not receive a production var the environment never had).
+    const inherited = Object.fromEntries(Object.entries(config).filter(([key]) => SETTINGS_KEYS.has(key)));
+
+    return { config: { ...inherited, ...found, env: config.env, name: typeof found.name === "string" ? found.name : `${top}-${envName}` } };
 };
 
 /** The name of the resource a preview Worker owns for `binding`. */
@@ -236,14 +243,31 @@ const previewResourceName = (worker: string, binding: string): string => bounded
  * `env.<name>` (an app that deploys with `--env production`) would be missing from it, leaving a working-looking
  * preview with no database or storage.
  */
+const declaredNames = (key: string, value: unknown): Set<string> => {
+    const entries = key === "durable_objects" ? entriesOf((value as { bindings?: unknown } | undefined)?.bindings) : entriesOf(value);
+
+    return new Set(entries.map((entry) => String(key === "durable_objects" ? entry.name : entry.binding)));
+};
+
 const envOnlyRefusals = (config: PreviewConfig): string[] =>
     Object.entries(config.env ?? {}).flatMap(([envName, block]) =>
         isPreviewBlock(config, envName, block)
             ? []
             : Object.entries(block as Record<string, unknown>).flatMap(([key, value]) => {
-                  const binds = key in ISOLATED_KEYS || key === "durable_objects" || refusalFor(key, value) !== undefined;
+                  const top = (config as Record<string, unknown>)[key];
 
-                  return binds && isPresent(value) && !isPresent((config as Record<string, unknown>)[key])
+                  if (key in ISOLATED_KEYS || key === "durable_objects") {
+                      const known = declaredNames(key, top);
+                      const added = [...declaredNames(key, value)].filter((binding) => !known.has(binding));
+
+                      return added.length === 0
+                          ? []
+                          : [
+                                `"env.${envName}.${key}": binding ${added.map((binding) => `"${binding}"`).join(", ")} is declared only in this environment, and a preview is planned from the top-level config, which lacks it; pass --env ${envName} to preview that environment`,
+                            ];
+                  }
+
+                  return refusalFor(key, value) !== undefined && isPresent(value) && !isPresent(top)
                       ? [
                             `"env.${envName}.${key}": declared only in this environment, and a preview is planned from the top-level config, which has none; pass --env ${envName} to preview that environment`,
                         ]
@@ -328,6 +352,23 @@ const isolatedEntry = (kind: PreviewResourceKind, entry: Entry, plan: PreviewPla
 };
 
 /**
+ * A new environment inherits the top level's settings. Planned from another environment, the settings that environment
+ * resolved (entry point, compatibility date and flags, assets, migrations, ...) are the ones the preview must run with.
+ */
+const copySourceSettings = (source: Record<string, unknown>, block: Entry, plan: PreviewPlan): void => {
+    if (plan.sourceEnv === undefined) {
+        return;
+    }
+
+    for (const [key, value] of Object.entries(source)) {
+        if (SETTINGS_KEYS.has(key) && !(key in block) && !SETTINGS_KEPT_BY_BLOCK.has(key) && isPresent(value)) {
+            // eslint-disable-next-line no-param-reassign -- the block is being built by the caller
+            block[key] = value;
+        }
+    }
+};
+
+/**
  * The `env.<preview>` block. `routes: []` overrides production's inheritable routes and custom domains, empty
  * `triggers` keep production's crons from firing once per open preview, and `workers_dev` gives the preview its URL; `name` is set so wrangler's `<name>-<env>` default never applies.
  */
@@ -359,6 +400,8 @@ const previewEnvironmentBlock = (
     }
 
     block.vars = { ...inherited, ...overrides, ...marker };
+
+    copySourceSettings(source, block, plan);
 
     if (isPresent(config.durable_objects)) {
         block.durable_objects = config.durable_objects;

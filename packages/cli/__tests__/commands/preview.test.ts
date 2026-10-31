@@ -106,7 +106,7 @@ const ACCOUNT_PREFIX = /^\/client\/v4\/accounts\/[^/]+/u;
  * deploy that has not yet seen another's create would.
  */
 const fakeAccount = (
-    options: { foreignLockDatabase?: boolean; hiddenKvListings?: number; keysPageSize?: number; noSubdomain?: boolean } = {},
+    options: { foreignLockDatabase?: boolean; hiddenKvListings?: number; keysPageSize?: number; lateMarker?: number; noSubdomain?: boolean } = {},
 ): {
     calls: { method: string; path: string }[];
     d1: Map<string, string>;
@@ -131,6 +131,7 @@ const fakeAccount = (
     const staleReads = new Map<string, string>();
     const locks = new Map<string, { expires: number; owner: string }>();
     const statements: { database: string; sql: string }[] = [];
+    let markerLooks = 0;
     // What each database holds, so a database the tooling did not make can be told from one it did.
     const databases = new Map<string, { marker?: string; tables: Set<string> }>();
     const workers = new Map<string, string | undefined>();
@@ -156,6 +157,14 @@ const fakeAccount = (
         const reply = (results: unknown[], changes: number): Response => envelope([{ meta: { changes }, results, success: true }]);
 
         if (sql.startsWith("SELECT name FROM sqlite_master")) {
+            markerLooks += 1;
+
+            // The run that made the database writes its marker a moment after the first look of a racing run.
+            if (options.lateMarker !== undefined && markerLooks === options.lateMarker) {
+                state.tables.add("lunora_preview_lock_owner");
+                state.marker = "lunora-preview-locks/v1";
+            }
+
             return reply(state.tables.has(String(params[0])) ? [{ name: params[0] }] : [], 0);
         }
 
@@ -513,6 +522,11 @@ const fakeAccount = (
         databases.set("d1-foreign", { tables: new Set(["users"]) });
     }
 
+    if (options.lateMarker !== undefined) {
+        d1.set("lunora-preview-locks", "d1-late");
+        databases.set("d1-late", { tables: new Set() });
+    }
+
     return { calls, d1, fetch, kv, kvValues, locks, r2, r2Objects, staleReads, statements, workers };
 };
 
@@ -698,6 +712,66 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(environmentConfig(envOnly, "nope").error).toMatch(/no environment "nope"; the environments are: staging, production/u);
         });
 
+        it("refuses a binding that only an environment adds, even when the top level declares others of the same kind", () => {
+            expect.assertions(2);
+
+            const added = {
+                ...production,
+                env: {
+                    ...production.env,
+                    production: {
+                        d1_databases: [
+                            { binding: "DB", database_id: "x", database_name: "x" },
+                            { binding: "ENVDB", database_id: "y", database_name: "y" },
+                        ],
+                    },
+                },
+            } as unknown as PreviewConfig;
+            const { error } = planPreview(added, "42");
+
+            expect(error).toMatch(/"env\.production\.d1_databases": binding "ENVDB" is declared only in this environment/u);
+            // The binding both declare is the ordinary override, and is not named.
+            expect(error).not.toMatch(/"DB"/u);
+        });
+
+        it("plans --env the way Wrangler builds that environment: its settings, its vars and bindings, and none of the top level's", () => {
+            expect.assertions(6);
+
+            const top = {
+                ...production,
+                compatibility_flags: ["nodejs_compat"],
+                main: "src/index.ts",
+                vars: { PROD_ONLY: "https://prod.example.com", PUBLIC_FLAG: "on" },
+            } as unknown as PreviewConfig;
+            const withEnv = {
+                ...top,
+                env: {
+                    ...top.env,
+                    production: {
+                        compatibility_flags: ["nodejs_compat", "enable_request_signal"],
+                        d1_databases: [{ binding: "DB", database_id: "e", database_name: "e" }],
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        main: "src/production.ts",
+                        name: "lunora-app-prod",
+                        vars: { PUBLIC_FLAG: "off" },
+                    },
+                },
+            } as unknown as PreviewConfig;
+            const merged = environmentConfig(withEnv, "production").config as PreviewConfig;
+            const plan = planPreview(merged, "42", "production").plan as PreviewPlan;
+            const ids = new Map(plan.resources.map((resource) => [resourceKey(resource.kind, resource.binding), `<${resource.name}>`]));
+            const block = previewEnvironmentBlock(merged, plan, ids, {}, "https://p.example") as Record<string, unknown> & { vars: Record<string, string> };
+
+            // The environment's own settings win over the top level's, as Wrangler resolves them.
+            expect(block.compatibility_flags).toStrictEqual(["nodejs_compat", "enable_request_signal"]);
+            expect(block.main).toBe("src/production.ts");
+            // Vars and bindings are not inherited by an environment, so a top-level one never reaches the preview.
+            expect(block.vars.PROD_ONLY).toBeUndefined();
+            expect(block.vars.PUBLIC_FLAG).toBe("off");
+            expect(JSON.stringify(block)).not.toContain("prod.example.com");
+            expect(plan.resources.map((resource) => resource.kind)).toStrictEqual(["d1"]);
+        });
+
         it("refuses an app whose bindings exist only inside an environment, which a preview planned from the top level would lack", () => {
             expect.assertions(2);
 
@@ -708,7 +782,7 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             } as unknown as PreviewConfig;
             const { error } = planPreview(onlyInEnv, "42");
 
-            expect(error).toMatch(/"env\.production\.kv_namespaces": declared only in this environment/u);
+            expect(error).toMatch(/"env\.production\.kv_namespaces": binding "SESSIONS" is declared only in this environment/u);
             // Overriding a binding that the top level also declares is the ordinary case and stays previewable.
             expect(planPreview(production, "42").error).toBeUndefined();
         });
@@ -1525,6 +1599,21 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(deploys).toHaveLength(0);
         });
 
+        it("waits for the marker of a lock database another run has just made, instead of failing the first run", async () => {
+            expect.assertions(3);
+
+            // The other run's marker lands on the third look: the first looks find the database empty.
+            const account = fakeAccount({ lateMarker: 3 });
+            const { spawner } = wranglerAt(workdir, account.workers);
+
+            const result = await deployWith(account, spawner);
+
+            expect(result.code).toBe(0);
+            // It looked, waited, and only wrote once the marker was there.
+            expect(account.statements.filter((statement) => statement.sql.startsWith("SELECT name FROM sqlite_master")).length).toBeGreaterThanOrEqual(3);
+            expect(account.statements.some((statement) => statement.sql.startsWith("CREATE TABLE IF NOT EXISTS lunora_preview_locks"))).toBe(true);
+        });
+
         it("marks the lock database it makes, and uses it again on the next run", async () => {
             expect.assertions(3);
 
@@ -1603,6 +1692,48 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             }
         });
 
+        it("reports a hold it can no longer vouch for once renewals keep failing, before the hold could lapse", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            try {
+                const account = fakeAccount();
+                const broken = (async (input: RequestInfo | URL, init?: RequestInit) =>
+                    (input as string).endsWith("/query") && (init?.body as string).startsWith('{"params":[1800,')
+                        ? new Response("{}", { status: 403 })
+                        : account.fetch(input, init)) as typeof globalThis.fetch;
+                const request = async (path: string, init?: RequestInit): ReturnType<typeof cloudflareRestRequest> =>
+                    cloudflareRestRequest({ accountId: "acct", apiToken: "token", fetch: broken, init: init ?? {}, path });
+                const database = await lockDatabase(request);
+                const mine = await takeLease(request, database, APP_ID, "42");
+                let lost = false;
+                const stop = keepLease(
+                    request,
+                    database,
+                    APP_ID,
+                    "42",
+                    mine.token ?? "",
+                    () => {
+                        lost = true;
+                    },
+                    600_000,
+                );
+
+                // One missed renewal still leaves two thirds of the hold.
+                await vi.advanceTimersByTimeAsync(600_000);
+
+                expect(lost).toBe(false);
+
+                await vi.advanceTimersByTimeAsync(600_000);
+                stop();
+
+                expect(lost).toBe(true);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
         it("records and migrates against the URL built from the Worker's name, not one printed by wrangler", async () => {
             expect.assertions(4);
 
@@ -1646,14 +1777,18 @@ describe("lunora preview", { timeout: 120_000 }, () => {
         });
 
         it("puts the config back, removes the secrets file and frees the lock when interrupted mid-deploy", async () => {
-            expect.assertions(5);
+            expect.assertions(7);
 
             const account = fakeAccount();
             const { spawner: inner } = wranglerAt(workdir, account.workers);
-            const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-            const saved = (["SIGINT", "SIGTERM"] as const).map((signal) => [signal, process.rawListeners(signal)] as const);
-            const seen = { config: "", lock: true, secrets: true };
+            const seen = { config: "", holds: -1, lock: true, secrets: true };
             const exitCodes: unknown[] = [];
+            const exit = vi.spyOn(process, "exit").mockImplementation(((code: number) => {
+                // Judged when the process would end: by then an interrupted run must have let go of its preview.
+                seen.holds = account.locks.size;
+                exitCodes.push(code);
+            }) as never);
+            const saved = (["SIGINT", "SIGTERM"] as const).map((signal) => [signal, process.rawListeners(signal)] as const);
             const interrupted: Spawner = async (descriptor) => {
                 if (descriptor.args.includes("deploy") && descriptor.args.includes("--env")) {
                     const secretsPath = descriptor.args[descriptor.args.indexOf("--secrets-file") + 1] ?? "";
@@ -1687,7 +1822,6 @@ describe("lunora preview", { timeout: 120_000 }, () => {
                     subcommand: "deploy",
                 });
             } finally {
-                exitCodes.push(...exit.mock.calls.map(([code]) => code));
                 exit.mockRestore();
 
                 for (const [signal, listeners] of saved) {
@@ -1699,11 +1833,17 @@ describe("lunora preview", { timeout: 120_000 }, () => {
                 }
             }
 
+            // The exit follows the asynchronous cleanup; wait for that milestone rather than a clock.
+            await vi.waitFor(() => {
+                expect(exitCodes).toContain(143);
+            });
+
             // Judged at the moment of the interrupt, before any normal cleanup could have run.
             expect(seen.config).toBe(PRODUCTION_WRANGLER);
             expect(seen.lock).toBe(false);
             expect(seen.secrets).toBe(false);
             expect(exitCodes).toContain(143);
+            expect(seen.holds).toBe(0);
             expect(process.listenerCount("SIGTERM")).toBe(saved[1]?.[1].length);
         });
 
@@ -1984,18 +2124,18 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(account.workers.has("lunora-app-preview-42")).toBe(false);
         });
 
-        it("removes a resource whose create succeeded but whose confirming record write failed, because the record named it first", async () => {
-            expect.assertions(6);
+        it("takes a resource back by the id its create returned when the confirming record write keeps failing", async () => {
+            expect.assertions(4);
 
             const account = fakeAccount();
             const { deploys, spawner } = wranglerAt(workdir, account.workers);
             let writes = 0;
             const flaky = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                // 1: the empty record, 2: the claim on the first resource; every later write fails.
                 if (init?.method === "PUT" && (input as string).includes(encodeURIComponent(`${APP_ID}/42`))) {
                     writes += 1;
 
-                    // 1: the empty record, 2: the claim on the first resource, 3: its confirmation.
-                    if (writes === 3) {
+                    if (writes > 2) {
                         return new Response("{}", { status: 403 });
                     }
                 }
@@ -2015,15 +2155,53 @@ describe("lunora preview", { timeout: 120_000 }, () => {
                 subcommand: "deploy",
             });
 
-            expect(failed.code).not.toBe(0);
+            expect(failed.error).toMatch(/could not be recorded, so it was removed again/u);
             expect(deploys).toHaveLength(0);
-            // Created in the account, but the record only has the claim.
-            expect(previewDatabases(account).length + account.r2.size + account.kv.size - 1).toBeGreaterThan(0);
+            // Nothing is left that only the account knows about.
+            expect(previewDatabases(account).length + account.r2.size + account.kv.size - 1).toBe(0);
+            expect(leaseKeys(account)).toStrictEqual([]);
+        });
+
+        it("never deletes a resource that the record only claims, since whatever carries the name may be another actor's", async () => {
+            expect.assertions(5);
+
+            const account = await deployed();
+            const values = registryValues(account);
+            const record = JSON.parse(values.get(`${APP_ID}/42`) ?? "{}") as {
+                resources: { binding: string; id: string; kind: string; name: string; pending?: boolean }[];
+            };
+
+            // The record says a D1 database was being made; what carries that name was made by someone else.
+            const database = record.resources.find((resource) => resource.kind === "d1");
+
+            expect(database).toBeDefined();
+
+            Object.assign(database ?? {}, { id: "", pending: true });
+
+            values.set(`${APP_ID}/42`, JSON.stringify(record));
+
+            const { result } = await run(account, "delete");
+
+            expect(result.code).not.toBe(0);
+            expect(account.d1.has("lunora-app-preview-42-db")).toBe(true);
+            // The rest of the preview is gone; the claim stays on record until a person looks.
+            expect(account.workers.has("lunora-app-preview-42")).toBe(false);
+            expect(registryValues(account).has(`${APP_ID}/42`)).toBe(true);
+        });
+
+        it("lets a claim whose resource never came to exist go", async () => {
+            expect.assertions(2);
+
+            const account = await deployed();
+            const values = registryValues(account);
+            const record = JSON.parse(values.get(`${APP_ID}/42`) ?? "{}") as { resources: Record<string, unknown>[] };
+
+            record.resources.push({ binding: "GONE", id: "", kind: "kv", name: "lunora-app-preview-42-gone", pending: true });
+            values.set(`${APP_ID}/42`, JSON.stringify(record));
 
             const { result } = await run(account, "delete");
 
             expect(result.code).toBe(0);
-            expect(previewDatabases(account).length + account.r2.size + account.kv.size - 1).toBe(0);
             expect(registryValues(account).has(`${APP_ID}/42`)).toBe(false);
         });
 
@@ -2064,7 +2242,7 @@ describe("lunora preview", { timeout: 120_000 }, () => {
                 join(workdir, "wrangler.jsonc"),
                 PRODUCTION_WRANGLER.replace(
                     '"env": {',
-                    '"env": {\n        "production": { "name": "lunora-app-prod", "d1_databases": [{ "binding": "DB", "database_name": "env-main", "database_id": "prod-main-uuid" }, { "binding": "ENVDB", "database_name": "env-db", "database_id": "prod-env-uuid" }] },',
+                    '"env": {\n        "production": { "name": "lunora-app-prod", "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] }, "d1_databases": [{ "binding": "DB", "database_name": "env-main", "database_id": "prod-main-uuid" }, { "binding": "ENVDB", "database_name": "env-db", "database_id": "prod-env-uuid" }] },',
                 ),
                 "utf8",
             );
@@ -2131,6 +2309,32 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(result.error).toMatch(/no environment "nope"; the environments are: production, staging/u);
             expect(changes(account, "POST", "PUT")).toHaveLength(0);
             expect(deploys).toHaveLength(0);
+        });
+
+        it("refuses a redeploy that production now points at the preview's own storage, before making any more", async () => {
+            expect.assertions(3);
+
+            const account = await deployed();
+            const record = JSON.parse(registryValues(account).get(`${APP_ID}/42`) ?? "{}") as { resources: { id: string; kind: string }[] };
+            const kvId = record.resources.find((resource) => resource.kind === "kv")?.id ?? "";
+            const text = readFileSync(join(workdir, "wrangler.jsonc"), "utf8");
+
+            // Production's config now uses the preview's namespace, and the app has gained a bucket binding.
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                text
+                    .replace('"id": "prod-kv-id"', `"id": "${kvId}"`)
+                    .replace('"r2_buckets": [', '"r2_buckets": [{ "binding": "EXTRA", "bucket_name": "extra-prod" }, '),
+                "utf8",
+            );
+
+            const buckets = account.r2.size;
+            const { spawner } = wranglerAt(workdir, account.workers);
+            const { result } = await run(account, "deploy", { spawner });
+
+            expect(result.error).toMatch(/would bind production's .*nothing was created/u);
+            expect(account.r2.size).toBe(buckets);
+            expect(leaseKeys(account)).toStrictEqual([]);
         });
 
         it("refuses to delete while another run holds the preview, deleting nothing", async () => {

@@ -243,7 +243,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "Who changed what",
         ],
         id: "concepts/environments",
-        summary: "Running staging next to production, deploying an isolated environment, checking pull requests with a dry run, and rolling traffic back when ",
+        summary: "Running staging next to production, deploying an isolated environment, checking pull requests with a dry run, an isolated preview per pull r",
         title: "Environments & releases",
     },
     {
