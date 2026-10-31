@@ -270,7 +270,11 @@ const materialize = (appDirectory, { procedures, tables }) => {
     // The integration SDKs, each from the package that declares it as its peer.
     for (const [owner, name] of INTEGRATION_SDKS) {
         mkdirSync(dirname(join(modules, name)), { recursive: true });
-        symlinkSync(join(rootDir, "packages", owner, "node_modules", name), join(modules, name));
+
+        // The host already provides it (a host that depends on the SDK itself): a second link to the same name would throw EEXIST.
+        if (!existsSync(join(modules, name))) {
+            symlinkSync(join(rootDir, "packages", owner, "node_modules", name), join(modules, name));
+        }
     }
 
     mkdirSync(join(modules, ".bin"), { recursive: true });
