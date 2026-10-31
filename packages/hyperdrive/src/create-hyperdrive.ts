@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import { lazyValue } from "../../../shared/lazy-value";
 import toMysqlParams from "./mysql-params";
 import type { HyperdriveConnection, HyperdriveLike, Mysql2Like, NodePgLike, PostgresJsLike, SqlClient } from "./types";
@@ -86,13 +88,16 @@ export const fromPostgresJs = (load: () => Promise<PostgresJsLike> | PostgresJsL
 
             return rows as Row[];
         },
-        // Always present: whether the driver has `begin` is only known once it is loaded. A driver without it
-        // (a test double) runs `work` on the same client, one statement at a time, as an absent `transaction` would.
+        // Always present: whether the driver has `begin` is only known once it is loaded. The store treats a present
+        // `transaction` as atomic, so a driver without `begin` fails loudly instead of committing statement by statement.
         transaction: async <T>(work: (tx: SqlClient) => Promise<T>): Promise<T> => {
             const { begin } = await client();
 
             if (begin === undefined) {
-                return await work(wrapped);
+                throw new LunoraError(
+                    "INTERNAL",
+                    "@lunora/hyperdrive: the postgres.js client has no `begin`, so a .global() write cannot commit its row and companions together.",
+                );
             }
 
             // `begin` hands back what `work` resolved to.
