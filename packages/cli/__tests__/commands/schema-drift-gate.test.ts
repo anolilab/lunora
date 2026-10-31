@@ -70,12 +70,12 @@ const introduceBreakingDrift = (): void => {
 const CONVERTING_UP = "(doc) => ({ ...doc, name: Number(doc.name) })";
 
 /** Write `lunora/migrations.ts` with one `defineMigration`, so a NEW migration id is discovered. */
-const addMigration = (id: string, table = "users", up = CONVERTING_UP): void => {
+const addMigration = (id: string, table = "users", up = CONVERTING_UP, covers?: string): void => {
     const migrationsPath = join(workdir, "lunora", "migrations.ts");
 
     writeFileSync(
         migrationsPath,
-        `import { defineMigration } from "@lunora/server";\n\nexport const fix = defineMigration({\n    id: "${id}",\n    table: "${table}",\n    up: ${up},\n});\n`,
+        `import { defineMigration } from "@lunora/server";\n\nexport const fix = defineMigration({\n    id: "${id}",\n    table: "${table}",\n${covers === undefined ? "" : `    covers: ${covers},\n`}    up: ${up},\n});\n`,
         "utf8",
     );
 };
@@ -475,8 +475,8 @@ describe("schema-drift gate", () => {
             expect(warns.join("\n")).toContain("could not be counted");
         });
 
-        it("a shard-mode flip stays blocked and names the migration path, and a migration on that table clears it", async () => {
-            expect.assertions(5);
+        it("a shard-mode flip stays blocked and names what to declare; only a migration whose `covers` names it clears it", async () => {
+            expect.assertions(7);
 
             await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
             flipShardMode();
@@ -486,13 +486,24 @@ describe("schema-drift gate", () => {
 
             expect(blocked.schemaDrift?.blocked).toBe(true);
             expect(errors.join("\n")).toContain("lunora export --tables messages --out messages.ndjson");
-            expect(errors.join("\n")).toContain('defineMigration({ id: "rehome_messages", table: "messages"');
+            expect(errors.join("\n")).toContain('covers: { shardMode: "root", table: "messages" }');
 
+            // A real transform on the table that does not name the change, and one naming the wrong mode, both keep the block.
             addMigration("rehome_messages", "messages", "(doc) => ({ ...doc, tenant: 'default' })");
+
+            const unrelated = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            addMigration("rehome_messages", "messages", "(doc) => ({ ...doc, tenant: 'default' })", '{ shardMode: "global", table: "messages" }');
+
+            const wrongMode = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            addMigration("rehome_messages", "messages", "(doc) => ({ ...doc, tenant: 'default' })", '{ shardMode: "root", table: "messages" }');
 
             const { calls, spawner } = createRecordingSpawner();
             const cleared = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner });
 
+            expect(unrelated.schemaDrift?.blocked).toBe(true);
+            expect(wrongMode.schemaDrift?.blocked).toBe(true);
             expect(cleared.code).toBe(0);
             expect(calls.length).toBeGreaterThan(0);
         });

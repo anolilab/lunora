@@ -333,45 +333,96 @@ describe("schema-drift", () => {
 
             expect(decision.blocked).toBe(true);
             expect(decision.reason).toContain("lunora export --tables users --out users.ndjson");
-            expect(decision.reason).toContain('defineMigration({ id: "rehome_users", table: "users"');
+            expect(decision.reason).toContain(
+                'defineMigration({ id: "rehome_users", table: "users", covers: { shardMode: "shardBy:tenantId", table: "users" }',
+            );
             expect(decision.reason).toContain("lunora import users.ndjson");
-            expect(decision.reason).toContain("returns the document unchanged covers nothing");
+            expect(decision.reason).toContain('covers: { shardMode: "shardBy:tenantId", table: "users" }');
         });
 
-        it("a shard-mode change clears once a new non-identity migration on that table accompanies it, not an identity one or another table's", () => {
-            expect.assertions(4);
+        it("a shard-mode flip needs a migration whose `covers` names that table and the mode it moves to", () => {
+            expect.assertions(6);
 
             const current = buildSchemaSnapshot(schema([table("users", { name: stringField }, { shardMode: { field: "tenantId", kind: "shardBy" } })]), [
                 "rehome-users",
             ]);
+            const covering = { id: "rehome-users", table: "users" };
+            const run = (migration: Partial<{ covers: Record<string, unknown>; identity: true; table: string }>) =>
+                evaluateSchemaDrift({ baseline, current, migrations: [{ ...covering, ...migration }] });
 
-            expect(evaluateSchemaDrift({ baseline, current, migrations: [{ id: "rehome-users", table: "users" }] }).blocked).toBe(false);
-            expect(evaluateSchemaDrift({ baseline, current, migrations: [{ id: "rehome-users", identity: true, table: "users" }] }).blocked).toBe(true);
-            expect(evaluateSchemaDrift({ baseline, current, migrations: [{ id: "rehome-users", table: "messages" }] }).blocked).toBe(true);
-            expect(evaluateSchemaDrift({ baseline, current, migrations: [{ id: "rehome-users", table: "" }] }).blocked).toBe(true);
+            expect(run({}).blocked).toBe(true);
+            expect(run({ covers: { shardMode: "shardBy:tenantId", table: "users" } }).blocked).toBe(false);
+            // An unrelated migration on the table, a wrong mode, a wrong table and an identity `up` all keep the block.
+            expect(run({ covers: { shardMode: "global", table: "users" } }).blocked).toBe(true);
+            expect(run({ covers: { shardMode: "shardBy:tenantId", table: "messages" } }).blocked).toBe(true);
+            expect(run({ covers: { shardMode: "shardBy:tenantId", table: "users" }, identity: true }).blocked).toBe(true);
+            expect(run({ covers: { shardMode: "shardBy:tenantId", table: "users" }, table: "messages" }).blocked).toBe(true);
         });
 
-        it("a jurisdiction change stays blocked until a new non-identity migration accompanies it", () => {
+        it("the blocked message names what the migration must declare, with a one-line example", () => {
             expect.assertions(3);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField }, { shardMode: "global" })]), []);
+            const { reason } = evaluateSchemaDrift({ baseline, current, migrations: [] });
+
+            expect(reason).toContain('covers: { shardMode: "global:d1", table: "users" }');
+            expect(reason).toContain("lunora export --tables users --out users.ndjson");
+            expect(reason).toContain('defineMigration({ id: "rehome_users", table: "users", covers: { shardMode: "global:d1", table: "users" }');
+        });
+
+        it("`global` in covers matches a global table whichever backend it moves to", () => {
+            expect.assertions(2);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField }, { shardMode: "global" })]), ["g"]);
+            const decision = (shardMode: string) =>
+                evaluateSchemaDrift({ baseline, current, migrations: [{ covers: { shardMode, table: "users" }, id: "g", table: "users" }] });
+
+            expect(decision("global").blocked).toBe(false);
+            expect(decision("global:hyperdrive").blocked).toBe(true);
+        });
+
+        it("a jurisdiction change is cleared only by a migration whose `covers` names the jurisdiction it moves to", () => {
+            expect.assertions(5);
 
             const before = buildSchemaSnapshot({ jurisdiction: "eu", tables: [table("users", { name: stringField })], vectorIndexes: [] }, []);
             const after = buildSchemaSnapshot({ jurisdiction: "us", tables: [table("users", { name: stringField })], vectorIndexes: [] }, ["move-region"]);
+            const run = (migration: Record<string, unknown>) =>
+                evaluateSchemaDrift({ baseline: before, current: after, migrations: [{ id: "move-region", table: "users", ...migration }] });
 
             expect(evaluateSchemaDrift({ baseline: before, current: after, migrations: [] }).blocked).toBe(true);
-            expect(evaluateSchemaDrift({ baseline: before, current: after, migrations: [{ id: "move-region", identity: true, table: "users" }] }).blocked).toBe(
-                true,
-            );
-            expect(evaluateSchemaDrift({ baseline: before, current: after, migrations: [{ id: "move-region", table: "users" }] }).blocked).toBe(false);
+            // An unrelated migration, even a real transform on a table, does not clear it.
+            expect(run({}).blocked).toBe(true);
+            expect(run({ covers: { jurisdiction: "eu" } }).blocked).toBe(true);
+            expect(run({ covers: { jurisdiction: "us" } }).blocked).toBe(false);
+            // No table is involved, so an identity `up` is no obstacle: `covers` alone is the acknowledgement.
+            expect(run({ covers: { jurisdiction: "us" }, identity: true }).blocked).toBe(false);
         });
 
-        it("a table turning .memory() stays blocked until a migration covers it", () => {
+        it('removing the jurisdiction is covered by `jurisdiction: "none"`', () => {
             expect.assertions(2);
+
+            const before = buildSchemaSnapshot({ jurisdiction: "eu", tables: [table("users", { name: stringField })], vectorIndexes: [] }, []);
+            const after = buildSchemaSnapshot({ tables: [table("users", { name: stringField })], vectorIndexes: [] }, ["m"]);
+
+            expect(
+                evaluateSchemaDrift({ baseline: before, current: after, migrations: [{ covers: { jurisdiction: "none" }, id: "m", table: "" }] }).blocked,
+            ).toBe(false);
+            expect(
+                evaluateSchemaDrift({ baseline: before, current: after, migrations: [{ covers: { jurisdiction: "us" }, id: "m", table: "" }] }).blocked,
+            ).toBe(true);
+        });
+
+        it("a table turning .memory() needs a migration whose `covers` says so, on that table", () => {
+            expect.assertions(3);
 
             const plain = buildSchemaSnapshot(schema([table("users", { name: stringField }, { memory: false })]), []);
             const memory = buildSchemaSnapshot(schema([table("users", { name: stringField }, { memory: true })]), ["wipe-ok"]);
+            const run = (migration: Record<string, unknown>) =>
+                evaluateSchemaDrift({ baseline: plain, current: memory, migrations: [{ id: "wipe-ok", table: "users", ...migration }] });
 
-            expect(evaluateSchemaDrift({ baseline: plain, current: memory, migrations: [] }).blocked).toBe(true);
-            expect(evaluateSchemaDrift({ baseline: plain, current: memory, migrations: [{ id: "wipe-ok", table: "users" }] }).blocked).toBe(false);
+            expect(run({}).blocked).toBe(true);
+            expect(run({ covers: { table: "users" } }).blocked).toBe(true);
+            expect(run({ covers: { memory: true, table: "users" } }).blocked).toBe(false);
         });
 
         it("a dropped table passes, with a warning that says its rows are left in place", () => {

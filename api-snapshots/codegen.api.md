@@ -254,6 +254,7 @@ interface DriftChange {
             field: string;
         };
     };
+    coverage?: DriftCoverage;
     index?: string;
     uniqueOn?: ReadonlyArray<string>;
     type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedCommitOrdering" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedMemoryMode" | "changedShardMode" | "changedTtlPolicy" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
@@ -600,6 +601,12 @@ interface MaskProcedureIR {
 
 ```ts
 interface MigrationIR {
+    covers?: {
+        jurisdiction?: string;
+        memory?: true;
+        shardMode?: string;
+        table?: string;
+    };
     exportName: string;
     filePath: string;
     id: string;
@@ -1549,7 +1556,7 @@ const evaluateSchemaDrift: (options: {
     command?: string;
     current: SchemaSnapshot;
     indexReferences?: ReadonlyArray<IndexReference>;
-    migrations: ReadonlyArray<Pick<MigrationIR, "id" | "identity" | "table">>;
+    migrations: ReadonlyArray<Pick<MigrationIR, "covers" | "id" | "identity" | "table">>;
 }) => SchemaDriftDecision;
 ```
 
@@ -2558,6 +2565,17 @@ interface CountReadIR {
     line: number;
     scope: CallSiteScope;
     table: string;
+}
+```
+
+### `DriftCoverage` (interface)
+
+```ts
+interface DriftCoverage {
+    jurisdiction?: string;
+    memory?: true;
+    shardMode?: string;
+    table?: string;
 }
 ```
 

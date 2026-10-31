@@ -55,8 +55,11 @@ diffs the schema against the committed `lunora/.lunora-schema.json`.
 - **Moves data, blocks until a migration accompanies it:** changing a table's
   shard mode (root ↔ `.shardBy()` ↔ `.global()`, or the `.global()` backend), turning
   on `.memory()`, or changing the jurisdiction. Move the rows with export → import,
-  and declare a migration on the table (`up` gives each row what its new home
-  needs, e.g. its shard key); one that returns the document unchanged covers nothing.
+  then declare a migration whose literal `covers` names the change
+  (`covers: { table: "users", shardMode: "shardBy:tenantId" }`, `{ table, memory: true }`
+  or `{ jurisdiction: "eu" }`). An unrelated migration clears nothing. Where a table is
+  involved its `up` must rewrite rows (give each what its new home needs, e.g. its
+  shard key); one that returns the document unchanged covers nothing.
 - **Never blocks, may warn:** a dropped table (its rows stay in place, unreachable),
   a dropped relation, a TTL added, moved or shortened (rows past the cutoff go on the
   next sweep, counted when `lunora deploy` can read the worker), `.commitOrdered()`

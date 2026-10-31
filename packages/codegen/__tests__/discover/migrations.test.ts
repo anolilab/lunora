@@ -122,6 +122,33 @@ describe("discover/migrations", () => {
             });
         });
 
+        it("reads a literal `covers` declaration, and ignores one it cannot read", () => {
+            expect.assertions(1);
+
+            writeSource(
+                "migrations.ts",
+                `
+            import { defineMigration } from "@lunora/server";
+            const MODE = "global";
+            export const a = defineMigration({ id: "mode", table: "t", covers: { shardMode: "global", table: "t" }, up: (doc) => ({ ...doc }) });
+            export const b = defineMigration({ id: "region", table: "t", covers: { jurisdiction: "eu" }, up: (doc) => doc });
+            export const c = defineMigration({ id: "memory", table: "t", covers: { memory: true, table: "t" }, up: (doc) => ({ ...doc }) });
+            export const d = defineMigration({ id: "dynamic", table: "t", covers: { shardMode: MODE, table: "t" }, up: (doc) => ({ ...doc }) });
+            export const e = defineMigration({ id: "none", table: "t", up: (doc) => ({ ...doc }) });
+        `,
+            );
+
+            const result = discoverMigrations(newProject(), workdir);
+
+            expect(Object.fromEntries(result.map((migration) => [migration.id, migration.covers]))).toStrictEqual({
+                dynamic: { table: "t" },
+                memory: { memory: true, table: "t" },
+                mode: { shardMode: "global", table: "t" },
+                none: undefined,
+                region: { jurisdiction: "eu" },
+            });
+        });
+
         it("detects an aliased import — `import { defineMigration as dm }`", () => {
             expect.assertions(2);
 

@@ -369,11 +369,33 @@ const summarize = (changes: ReadonlyArray<DriftChange>): string => changes.map((
  */
 const isBackfillable = (change: DriftChange): change is DriftChange & { table: string } => change.remediation === "backfill" && change.table !== undefined;
 
+/** Whether a declared shard mode names the one a table moves to; `global` stands for either global backend. */
+const shardModeMatches = (declared: string | undefined, wanted: string): boolean =>
+    declared === wanted || (declared === "global" && wanted.startsWith("global:"));
+
 /**
- * Whether a new migration can accompany a change to clear it: a backfill (the migration rewrites the rows) or a rehome (the rows are
- * moved by an export/import round trip, and the migration gives each what its new home needs, and records that this was handled).
+ * Whether `migration` declares exactly the change `change.coverage` describes. A table is only covered by a non-identity migration
+ * that iterates that table and names it; a jurisdiction change has no table, so its `covers` alone is the acknowledgement. A missing
+ * or different `covers` covers nothing, however well the migration's table matches.
  */
-const isCoverable = (change: DriftChange): boolean => change.remediation === "backfill" || change.remediation === "rehome";
+const migrationCovers = (migration: Pick<MigrationIR, "covers" | "identity" | "table">, change: DriftChange): boolean => {
+    const wanted = change.coverage;
+    const declared = migration.covers;
+
+    if (wanted === undefined || declared === undefined) {
+        return false;
+    }
+
+    if (wanted.table !== undefined && (declared.table !== wanted.table || migration.table !== wanted.table || migration.identity === true)) {
+        return false;
+    }
+
+    return (
+        (wanted.jurisdiction === undefined || declared.jurisdiction === wanted.jurisdiction) &&
+        (wanted.memory !== true || declared.memory === true) &&
+        (wanted.shardMode === undefined || shardModeMatches(declared.shardMode, wanted.shardMode))
+    );
+};
 
 /** An index a query still names is breaking: the shard drops it and the next request through that query throws. */
 const promoteReferencedRemoval = (change: DriftChange, references: ReadonlyArray<IndexReference>): DriftChange => {
@@ -477,16 +499,24 @@ const blockedReason = (
         );
     }
 
-    const rehomed = uncovered.filter((change) => change.remediation === "rehome");
+    for (const change of uncovered.filter((entry) => entry.remediation === "rehome")) {
+        const { coverage } = change;
 
-    if (rehomed.length > 0) {
-        const example = rehomed.find((change) => change.table !== undefined)?.table ?? "users";
+        if (coverage === undefined) {
+            continue;
+        }
+
+        const example = coverage.table ?? uncovered.find((entry) => entry.table !== undefined)?.table ?? "users";
+        const declaration = `{ ${Object.entries(coverage)
+            .toSorted(([first], [second]) => first.localeCompare(second))
+            .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+            .join(", ")} }`;
+        const iterates = coverage.table === undefined ? "" : ` and iterates \`${coverage.table}\` with an \`up\` that rewrites rows`;
 
         fixLines.push(
-            "  • These changes move or empty data, so they stay blocked until a new migration on the affected table accompanies them, once the rows are moved. " +
-                `Example for \`${example}\`: export the rows (\`lunora export --tables ${example} --out ${example}.ndjson\`), deploy, load them back (\`lunora import ${example}.ndjson\`), and declare in lunora/ ` +
-                `\`defineMigration({ id: "rehome_${example}", table: "${example}", up: (doc) => ({ ...doc, tenantId: doc.tenantId ?? "default" }) })\` (give each row whatever its new home needs, here a shard key). ` +
-                "A migration whose `up` returns the document unchanged covers nothing.\n",
+            `  • "${change.summary.split(" — ")[0] ?? ""}" moves or empties data, so it stays blocked until a new migration declares \`covers: ${declaration}\`${iterates}. ` +
+                `Move the rows first (\`lunora export --tables ${example} --out ${example}.ndjson\`, deploy, \`lunora import ${example}.ndjson\`), then declare: ` +
+                `\`defineMigration({ id: "rehome_${example}", table: "${coverage.table ?? example}", covers: ${declaration}, up: (doc) => ({ ...doc, tenantId: doc.tenantId ?? "default" }) })\`.\n`,
         );
     }
 
@@ -536,7 +566,7 @@ const evaluateSchemaDrift = (options: {
     /** The `.withIndex` reads the application makes, so a dropped index a query still names is refused. */
     indexReferences?: ReadonlyArray<IndexReference>;
     /** This run's declared migrations, so a new one is matched to the table it iterates. */
-    migrations: ReadonlyArray<Pick<MigrationIR, "id" | "identity" | "table">>;
+    migrations: ReadonlyArray<Pick<MigrationIR, "covers" | "id" | "identity" | "table">>;
 }): SchemaDriftDecision => {
     const { allowDrift = false, baseline, command, current, indexReferences = [], migrations } = options;
     const drift = { changes: diffSchemaSnapshots(baseline, current).changes.map((change) => promoteReferencedRemoval(change, indexReferences)) };
@@ -577,19 +607,29 @@ const evaluateSchemaDrift = (options: {
     // either — letting a same-table migration excuse one would ship a deploy whose
     // callers still fail at runtime. Both are resolved by fixing the code or
     // accepting the shape, which is what the message says.
-    // A change with no table (a jurisdiction change re-homes every Durable Object) is covered by any new migration that rewrites rows.
-    const uncovered = breaking.filter(
-        (change) => !isCoverable(change) || !(change.table === undefined ? coveredTables.size > 0 : coveredTables.has(change.table)),
-    );
+    // A backfill is covered by a new migration on its table. A change that moves or empties data is covered only by a new migration
+    // whose `covers` names exactly that change; every other breaking change is not coverable at all.
+    const isCovered = (change: DriftChange): boolean => {
+        if (change.coverage !== undefined) {
+            return newMigrations.some((migration) => migrationCovers(migration, change));
+        }
+
+        return isBackfillable(change) && coveredTables.has(change.table);
+    };
+    const uncovered = breaking.filter((change) => !isCovered(change));
 
     if (uncovered.length === 0) {
         // Name the migrations that actually covered something, not every new id —
         // counting ids indiscriminately is the habit this gate exists to break. A
         // migration on a table with no breaking drift covered nothing.
-        const driftedTables = new Set(breaking.map((change) => change.table));
-        const schemaWide = breaking.some((change) => change.table === undefined);
         const covering = newMigrations
-            .filter((migration) => migration.identity !== true && migration.table !== "" && (schemaWide || driftedTables.has(migration.table)))
+            .filter((migration) =>
+                breaking.some((change) =>
+                    change.coverage === undefined
+                        ? isBackfillable(change) && migration.identity !== true && change.table === migration.table
+                        : migrationCovers(migration, change),
+                ),
+            )
             .map((migration) => migration.id);
 
         return decide(

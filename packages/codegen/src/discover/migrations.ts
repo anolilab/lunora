@@ -62,6 +62,37 @@ const stringProperty = (object: ObjectLiteralExpression, name: string): string |
     return initializer && Node.isStringLiteral(initializer) ? initializer.getLiteralValue() : undefined;
 };
 
+/**
+ * The `covers: { … }` a migration declares, when every value is a literal of the kind it takes. A `covers` that cannot be read this
+ * way yields `undefined`, so the migration covers nothing: the gate cannot match a declaration it cannot see.
+ */
+const coversOf = (object: ObjectLiteralExpression): MigrationIR["covers"] => {
+    const property = findObjectProperty(object, "covers");
+    const value = Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
+
+    if (value === undefined || !Node.isObjectLiteralExpression(value)) {
+        return undefined;
+    }
+
+    const covers: NonNullable<MigrationIR["covers"]> = {};
+
+    for (const key of ["jurisdiction", "shardMode", "table"] as const) {
+        const text = stringProperty(value, key);
+
+        if (text !== undefined) {
+            covers[key] = text;
+        }
+    }
+
+    const memory = findObjectProperty(value, "memory");
+
+    if (Node.isPropertyAssignment(memory) && memory.getInitializer()?.getKind() === SyntaxKind.TrueKeyword) {
+        covers.memory = true;
+    }
+
+    return Object.keys(covers).length === 0 ? undefined : covers;
+};
+
 /** `node` with any wrapping parentheses removed. */
 const unparenthesized = (node: Node): Node => (Node.isParenthesizedExpression(node) ? unparenthesized(node.getExpression()) : node);
 
@@ -196,7 +227,10 @@ const migrationFromDeclaration = (declaration: VariableDeclaration, relativePath
         );
     }
 
+    const covers = coversOf(argument);
+
     return {
+        ...(covers === undefined ? {} : { covers }),
         exportName,
         filePath: relativePath,
         id,

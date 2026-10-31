@@ -375,9 +375,11 @@ do to stored data, so none of them is left needing the flag:
   worker). A dropped index is refused only while a function still names it through
   `withIndex`.
 - A shard-mode flip, a table turned `.memory()` and a jurisdiction change still block,
-  because they move or empty data. They clear once a new migration on the table (any
-  new migration, for a jurisdiction change) accompanies them; the blocked message shows
-  an export/import example. The full list is in
+  because they move or empty data. They clear only when a new migration names the
+  change in a literal `covers` declaration (`covers: { table: "users", shardMode: "global" }`,
+  `covers: { table: "cache", memory: true }` or `covers: { jurisdiction: "eu" }`); an
+  unrelated migration clears nothing. Where a table is involved the migration must also
+  iterate it with an `up` that rewrites rows. The blocked message names what to declare. The full list is in
   [Migrations](/docs/concepts/migrations).
 
 **Migration:** drop the flag from scripts and CI. When every change is verified, or

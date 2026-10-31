@@ -379,6 +379,11 @@ export interface ExposeCacheIR {
  * tables with breaking drift, so a migration left at `""` covers nothing.
  */
 export interface MigrationIR {
+    /**
+     * The change this migration declares it accounts for, read from `covers: { … }` when every value is a literal. The drift gate
+     * clears a shard-mode flip, a table turned `.memory()` or a jurisdiction change only for a migration naming exactly that change.
+     */
+    covers?: { jurisdiction?: string; memory?: true; shardMode?: string; table?: string };
     /** Export binding name, used to reference the module member in generated imports. */
     exportName: string;
     /** Path relative to `<projectRoot>/lunora/` without extension, e.g. "migrations". */

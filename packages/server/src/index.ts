@@ -75,7 +75,15 @@ export type {
 export { defineLiveStream, liveStreamRouter } from "./live-stream";
 export type { MaskColumns, MaskContext, MaskFn, MaskOptions, MaskPolicies, MaskRegistry, MaskStrategy } from "./mask/index";
 export { buildMaskRegistry, mask } from "./mask/index";
-export type { MigrationCtx, MigrationDefinition, MigrationDocument, MigrationReader, MigrationTransform, RegisteredMigration } from "./migration";
+export type {
+    MigrationCovers,
+    MigrationCtx,
+    MigrationDefinition,
+    MigrationDocument,
+    MigrationReader,
+    MigrationTransform,
+    RegisteredMigration,
+} from "./migration";
 export { defineMigration } from "./migration";
 export type { ModuleConfig, ModuleDefinition } from "./module";
 export { defineModule } from "./module";

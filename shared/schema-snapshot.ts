@@ -198,6 +198,18 @@ type DriftScope = "schema" | "table";
  */
 type DriftRemediation = "backfill" | "code" | "none" | "rehome";
 
+/**
+ * What a migration's `covers` must say for it to clear a change that moves or empties data: the table (when one is involved) and the
+ * target of the change. A `shardMode` is the snapshot's spelling (`root`, `global:d1`, `global:hyperdrive`, `shardBy:<field>`) and
+ * `global` stands for any global backend; a `jurisdiction` is the one the schema moves to, `none` when it is removed.
+ */
+interface DriftCoverage {
+    jurisdiction?: string;
+    memory?: true;
+    shardMode?: string;
+    table?: string;
+}
+
 /** One classified structural change between two snapshots. */
 interface DriftChange {
     /** What fixes this change — see {@link DriftRemediation}. `"none"` for every `safe` change. */
@@ -227,6 +239,11 @@ interface DriftChange {
     warning?: true;
     /** The TTL a change installs, and the one it replaces, so a caller that can read rows can count what the next sweep deletes. */
     expiry?: { after?: number; field: string; previous?: { after?: number; field: string } };
+    /**
+     * Set on a change that moves or empties data (a shard-mode flip, a table turned `.memory()`, a jurisdiction change): the `covers`
+     * a new migration must declare to clear it. Absent when no migration can name the change.
+     */
+    coverage?: DriftCoverage;
     /** The index a change is about, set on a removed index so a caller can check whether a query still names it. */
     index?: string;
     /**
@@ -1062,6 +1079,7 @@ const shardModeChange = (tableName: string, baseline: string, current: string): 
         table: tableName,
         scope: "table",
         type: "changedShardMode",
+        ...(current === UNRESOLVED_SHARD_MODE ? {} : { coverage: { shardMode: current, table: tableName } }),
     };
 };
 
@@ -1188,6 +1206,7 @@ const diffTableFlags = (tableName: string, baseline: TableSnapshot, current: Tab
                       summary: `table ${tableName} became a .memory() table — every row is deleted in every shard on the next Durable Object cold start, and no data migration survives that; export the rows first if they must be kept, or revert`,
                       table: tableName,
                       type: "changedMemoryMode",
+                      coverage: { memory: true, table: tableName },
                   }
                 : {
                       remediation: "none",
@@ -1306,8 +1325,9 @@ const diffSchemaSnapshots = (baseline: SchemaSnapshot | undefined, current: Sche
             remediation: "rehome",
             scope: "schema",
             severity: "breaking",
-            summary: `Durable Object jurisdiction changed from ${from} to ${to} — this re-homes every DO and strands all existing shard, scheduler, and session-DO data in the old region (no in-place migration; export then import to move it). Revert the change, or override the gate to proceed intentionally.`,
+            summary: `Durable Object jurisdiction changed from ${from} to ${to} — this re-homes every DO and strands all existing shard, scheduler, and session-DO data in the old region (export then import to move it). Revert the change, or declare a migration with covers: { jurisdiction: "${current.jurisdiction ?? "none"}" } once the data is moved.`,
             type: "changedJurisdiction",
+            coverage: { jurisdiction: current.jurisdiction ?? "none" },
         });
     }
 
@@ -1327,6 +1347,7 @@ export {
 };
 export type {
     DriftChange,
+    DriftCoverage,
     DriftRemediation,
     DriftScope,
     FieldSnapshot,

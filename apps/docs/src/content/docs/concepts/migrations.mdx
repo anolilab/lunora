@@ -118,24 +118,33 @@ real transform, so it is trusted to cover.
 
 Every change is classified by what it can do to the stored data:
 
-| Change                                                                          | Effect on stored data                           | How it clears                                                                                                                                 |
-| ------------------------------------------------------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| New optional field, new table, new index, new relation                          | none                                            | Does not block                                                                                                                                |
-| Field made optional or nullable, constraint relaxed, TTL lengthened or dropped  | none                                            | Does not block                                                                                                                                |
-| New required field, optional made required, type or shape change, dropped field | rows can become invalid                         | `lunora deploy` reads the rows and passes if all fit; otherwise a migration on the table                                                      |
-| New unique index, index made unique, field made `.unique()`                     | duplicate values would break the index          | `lunora deploy` reads the rows and passes if no value repeats (naming the repeats otherwise); otherwise a migration that de-duplicates        |
-| No longer nullable, gained a refinement, `.commitOrdered()` turned on           | rows can become invalid or lack a sequence      | A migration on the table                                                                                                                      |
-| Dropped index, unique or not                                                    | none                                            | Does not block, unless a query still names it through `withIndex`: the deploy is refused naming the function; point the query elsewhere first |
-| Dropped table                                                                   | rows are left in place, unreachable             | Does not block; warns. Export the shard if the data must be kept, or declare the table again                                                  |
-| Dropped relation                                                                | foreign-key values stay; its `onDelete` stops   | Does not block; warns                                                                                                                         |
-| TTL added, moved to another column, or shortened                                | the next sweep deletes rows now past the cutoff | Does not block; warns, with the number of rows that will go when `lunora deploy` can read the worker                                          |
-| `.commitOrdered()` turned off                                                   | none; a `_commitSeq` changefeed stops advancing | Does not block; warns                                                                                                                         |
-| [Shard-mode flip](/docs/concepts/sharding#migrating-a-populated-table)          | rows move to other storage                      | Blocks until a new migration on the table accompanies it, after the rows are moved by an export/import round trip                             |
-| Table turned `.memory()`                                                        | every row is deleted on the next cold start     | Blocks until a new migration on the table accompanies it; export the rows first if they must be kept                                          |
-| [Jurisdiction change](/docs/concepts/data-residency)                            | every Durable Object is re-homed                | Blocks until a new migration accompanies it, after the data is exported and imported into the new region                                      |
+| Change                                                                          | Effect on stored data                           | How it clears                                                                                                                                                           |
+| ------------------------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New optional field, new table, new index, new relation                          | none                                            | Does not block                                                                                                                                                          |
+| Field made optional or nullable, constraint relaxed, TTL lengthened or dropped  | none                                            | Does not block                                                                                                                                                          |
+| New required field, optional made required, type or shape change, dropped field | rows can become invalid                         | `lunora deploy` reads the rows and passes if all fit; otherwise a migration on the table                                                                                |
+| New unique index, index made unique, field made `.unique()`                     | duplicate values would break the index          | `lunora deploy` reads the rows and passes if no value repeats (naming the repeats otherwise); otherwise a migration that de-duplicates                                  |
+| No longer nullable, gained a refinement, `.commitOrdered()` turned on           | rows can become invalid or lack a sequence      | A migration on the table                                                                                                                                                |
+| Dropped index, unique or not                                                    | none                                            | Does not block, unless a query still names it through `withIndex`: the deploy is refused naming the function; point the query elsewhere first                           |
+| Dropped table                                                                   | rows are left in place, unreachable             | Does not block; warns. Export the shard if the data must be kept, or declare the table again                                                                            |
+| Dropped relation                                                                | foreign-key values stay; its `onDelete` stops   | Does not block; warns                                                                                                                                                   |
+| TTL added, moved to another column, or shortened                                | the next sweep deletes rows now past the cutoff | Does not block; warns, with the number of rows that will go when `lunora deploy` can read the worker                                                                    |
+| `.commitOrdered()` turned off                                                   | none; a `_commitSeq` changefeed stops advancing | Does not block; warns                                                                                                                                                   |
+| [Shard-mode flip](/docs/concepts/sharding#migrating-a-populated-table)          | rows move to other storage                      | Blocks until a new migration declares `covers: { table, shardMode }` naming the table and the mode it moves to, after the rows are moved by an export/import round trip |
+| Table turned `.memory()`                                                        | every row is deleted on the next cold start     | Blocks until a new migration declares `covers: { table, memory: true }`; export the rows first if they must be kept                                                     |
+| [Jurisdiction change](/docs/concepts/data-residency)                            | every Durable Object is re-homed                | Blocks until a new migration declares `covers: { jurisdiction }` naming the jurisdiction it moves to (`none` when removed), after the data is moved                     |
 
-For the changes that move data, the message gives a concrete example. For a
-`users` table moving to `.shardBy("tenantId")`:
+For the changes that move data, a migration clears the gate only when it **names the
+change** in `covers`, so an unrelated migration never does. `covers` is read
+statically, so its values must be literals: `table`, `shardMode` (`root`, `global`,
+`global:d1`, `global:hyperdrive` or `shardBy:<field>`; `global` matches either global
+backend), `memory: true`, or `jurisdiction` (`eu`, `fedramp`, `us`, or `none`). It must
+match the change exactly: the table and the mode the table moves to, or the
+jurisdiction the schema moves to. Where a table is involved the migration must also
+iterate that table with an `up` that rewrites rows (one that returns the document
+unchanged covers nothing); a jurisdiction change has no table, so `covers` alone is the
+acknowledgement. A missing, different or unreadable `covers` keeps the block, and the
+message names what to declare. For a `users` table moving to `.shardBy("tenantId")`:
 
 ```bash
 lunora export --tables users --out users.ndjson   # before the deploy
@@ -147,17 +156,18 @@ lunora import users.ndjson                         # rows route to their new hom
 export const rehomeUsers = defineMigration({
     id: "rehome_users",
     table: "users",
+    covers: { shardMode: "shardBy:tenantId", table: "users" },
     // give every row what its new home needs, here its shard key
     up: (doc) => ({ ...doc, tenantId: doc.tenantId ?? "default" }),
 });
 ```
 
-The gate cannot see that the rows were moved: declaring the migration is how you
-tell it. A dropped index a query still names is the one drop that blocks, because
-the shard drops the index and the next request through that query would throw.
-The gate reads the `.withIndex("name")` calls in your functions; a call whose
-index name is not a string literal makes it refuse every dropped index of that
-table.
+A jurisdiction change reads `covers: { jurisdiction: "eu" }`. The gate cannot see that
+the rows were moved: declaring the migration is how you tell it. A dropped index a
+query still names is the one drop that blocks, because the shard drops the index and
+the next request through that query would throw. The gate reads the
+`.withIndex("name")` calls in your functions; a call whose index name is not a string
+literal makes it refuse every dropped index of that table.
 
 A new unique index, an index that becomes unique, or a field that becomes `.unique()`
 is checked against the stored rows: `lunora deploy` refuses while two rows repeat a
