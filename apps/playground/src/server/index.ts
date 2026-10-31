@@ -16,6 +16,8 @@ import { defineApp } from "../../lunora/_generated/app.js";
 import { internal } from "../../lunora/_generated/internal.js";
 import { rememberIssuedJob, wasJobIssued } from "./issued-jobs";
 
+// Records revoked named admin tokens where a restore of the shard cannot rewind them.
+export { AdminRevocationDO } from "../../lunora/_generated/adminRevocations.js";
 // The registry of which shards hold `.shardBy()` rows — `.shardRegistry(...)`
 // below points at it, and cross-shard export / CDC sync fan out to what it lists.
 export { ShardRegistryDO } from "../../lunora/_generated/shardRegistry.js";
@@ -25,6 +27,7 @@ export { ChannelWelcomeWorkflow } from "../../lunora/_generated/workflows.js";
 export { SchedulerDO } from "./scheduler-do.js";
 
 interface Env extends Record<string, unknown> {
+    ADMIN_REVOCATIONS: ShardNamespaceLike;
     AUTH_SECRET?: string;
     /** Base URL the auth handler resolves callback URLs against. */
     AUTH_URL?: string;
@@ -171,6 +174,7 @@ const authOptions = (env: Env): LunoraAuthOptions => {
  */
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    .adminRevocations((env) => env.ADMIN_REVOCATIONS)
     .shardRegistry((env) => env.SHARD_REGISTRY)
     // Required by `lunora/shapes.ts`: a shard-local `defineShape` replicates out
     // of `__cdc_log`, so without this the subscribe is refused. It used to be

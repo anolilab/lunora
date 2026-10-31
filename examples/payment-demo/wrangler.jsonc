@@ -7,9 +7,15 @@
     "durable_objects": {
         // Payment state rides the app's ShardDO via `ctx.db` — there is NO separate
         // payment Durable Object. `paymentExtension` merges its tables into `lunora/schema.ts`.
-        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "ADMIN_REVOCATIONS", "class_name": "AdminRevocationDO" },
+        ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["AdminRevocationDO"] },
+    ],
     "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
     // Secrets are NOT declared here — `vars` ship in the deployed config and are
     // visible in the dashboard. `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET`

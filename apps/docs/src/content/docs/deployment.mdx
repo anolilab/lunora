@@ -23,9 +23,14 @@ separate API service, no platform sign-up.
         "bindings": [
             { "name": "SHARD", "class_name": "ShardDO" },
             { "name": "SCHEDULER", "class_name": "SchedulerDO" },
+            // Remembers revoked named admin tokens where a restore of the shard cannot rewind them.
+            { "name": "ADMIN_REVOCATIONS", "class_name": "AdminRevocationDO" },
         ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["AdminRevocationDO"] },
+    ],
     "d1_databases": [{ "binding": "DB", "database_name": "my-lunora-app", "database_id": "<from-wrangler-d1-create>" }],
     "r2_buckets": [{ "binding": "FILES", "bucket_name": "my-lunora-files" }],
     // Required whenever a SchedulerDO is declared. The DO reads its dispatch
@@ -357,8 +362,8 @@ Cloudflare caps an account at
 [**100 Durable Object classes on Workers Free and 500 on Workers Paid**](https://developers.cloudflare.com/durable-objects/platform/limits/).
 Every Worker that binds a class spends its own, so each environment of an app
 (production, staging, previews) counts separately. A Lunora app spends up to
-three framework classes: `ShardDO` always, `SchedulerDO` with a scheduler, and
-`ShardRegistryDO` with `.shardBy()` tables. Each container and voice agent adds
+four framework classes: `ShardDO` and `AdminRevocationDO` always, `SchedulerDO`
+with a scheduler, and `ShardRegistryDO` with `.shardBy()` tables. Each container and voice agent adds
 one more.
 
 `lunora doctor` reports how close the account is (`do-class-budget-*`), and
@@ -367,7 +372,7 @@ Cloudflare API only when `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` (or
 `account_id` in `wrangler.jsonc`) are set. The API does not say which plan an
 account is on, so the check judges the count against both caps.
 
-To spend one class instead of three, merge the framework classes **before the
+To spend one class instead of four, merge the framework classes **before the
 app's first deploy**:
 
 ```ts
@@ -378,8 +383,8 @@ export default {
 ```
 
 Codegen then writes `_generated/durableObjects.ts`, and the generated worker
-entry exports one `LunoraDO` class that hosts the shard, the scheduler and the
-shard registry. Only the `SHARD` binding remains, bound to `LunoraDO`. The
+entry exports one `LunoraDO` class that hosts the shard, the scheduler, the
+shard registry and the admin revocation store. Only the `SHARD` binding remains, bound to `LunoraDO`. The
 scheduler and registry instances live in the same namespace under the reserved
 `__lunora_do__:` name prefix, which a client-chosen shard key cannot use.
 
@@ -402,6 +407,7 @@ import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import type { ShardNamespaceLike } from "@lunora/runtime";
 
 import { defineApp } from "./lunora/_generated/app";
+import { AdminRevocationDO } from "./lunora/_generated/adminRevocations";
 import { mergeDurableObjects, roleNamespace } from "./lunora/_generated/durableObjects";
 import { SchedulerDO } from "./lunora/_generated/scheduler";
 import { ShardRegistryDO } from "./lunora/_generated/shardRegistry";
@@ -413,11 +419,17 @@ interface Env {
 
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    .adminRevocations((env) => roleNamespace(env.SHARD, "adminRevocations"))
     .scheduler({ namespace: (env) => roleNamespace(env.SHARD, "scheduler") })
     .shardRegistry((env) => roleNamespace(env.SHARD, "shardRegistry"))
     .build();
 
-export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO, scheduler: SchedulerDO, shardRegistry: ShardRegistryDO });
+export const LunoraDO = mergeDurableObjects({
+    shard: app.ShardDO,
+    adminRevocations: AdminRevocationDO,
+    scheduler: SchedulerDO,
+    shardRegistry: ShardRegistryDO,
+});
 export default app;
 ```
 

@@ -1,3 +1,4 @@
+export { ADMIN_REVOCATION_DO_NAME, AdminRevocationDO } from "./admin-revocation-do";
 export type { DeliveryAuthorization, DeliveryAuthorizationRequest, DeliveryPermit } from "./delivery-authorization";
 export { installDeliveryFence } from "./delivery-authorization";
 export type { DurableObjectHandlers, MergedDurableObject, MergedRole, MergedRoles, RoleClass, RoleNamespaceTarget } from "./merge-durable-objects";

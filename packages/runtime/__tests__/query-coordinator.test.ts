@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { LunoraError } from "../src/errors";
 import type { ExportFanOutRequest, FanOutRequest, MigrationFanOutRequest, RankFanOutRequest, ShardRegistry } from "../src/query-coordinator";
-import { createDefaultShardRegistry, createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator";
+import { createDefaultShardRegistry, createQueryCoordinator, createStaticShardRegistry, refreshShardHeadersPerCall } from "../src/query-coordinator";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 interface ShardCall {
@@ -531,6 +531,32 @@ describe("error handling", () => {
             expect(result.errors[0]?.shardKey).toBe("slow");
             expect(result.errors[0]?.timedOut).toBe(true);
             expect(result.data).toEqual([{ from: "fast" }]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("times out a shard call whose header refresh hangs", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        try {
+            const coordinator = createQueryCoordinator({ perShardTimeoutMs: 100, registry: createStaticShardRegistry({ messages: ["s1"] }) });
+            const spy = createShardSpy(async (shardKey) => json([{ from: shardKey }]));
+            const headers = { "x-lunora-admin-signal": "stale" };
+
+            // A token-store lookup that never answers.
+            refreshShardHeadersPerCall(headers, async () => new Promise<Record<string, string>>(() => {}));
+
+            const pending = coordinator.fanOut(spy.namespace, buildRequest({ headers }));
+
+            await vi.advanceTimersByTimeAsync(200);
+
+            const result = await pending;
+
+            expect(result.errors[0]?.timedOut).toBe(true);
+            expect(spy.calls).toHaveLength(0);
         } finally {
             vi.useRealTimers();
         }

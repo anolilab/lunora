@@ -189,14 +189,18 @@ const SERVER_ENTRY = `import type { ShardNamespaceLike } from "lunorash/runtime"
 import { defineApp } from "../lunora/_generated/app.js";
 
 interface Env extends Record<string, unknown> {
+    ADMIN_REVOCATIONS: ShardNamespaceLike;
     SHARD: ShardNamespaceLike;
 }
 
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    .adminRevocations((env) => env.ADMIN_REVOCATIONS)
     .build();
 
 export const ShardDO = app.ShardDO;
+// Records revoked named admin tokens where a restore of the shard cannot rewind them.
+export { AdminRevocationDO } from "../lunora/_generated/adminRevocations.js";
 export default app;
 `;
 
@@ -217,9 +221,15 @@ const WRANGLER = `{
     "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
-        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "ADMIN_REVOCATIONS", "class_name": "AdminRevocationDO" },
+        ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["AdminRevocationDO"] },
+    ],
     "observability": ${OBSERVABILITY_JSONC},
 }
 `;

@@ -76,6 +76,7 @@ interface AuthDeclaration<Env> {
 /** Builder instance fields (private state recorded by the fluent methods). */
 const buildFieldLines = (options: ResolvedAppOptions): string[] => [
     ...(options.hasAccess ? [`    private accessSelector?: Selector<Env, CreateAccessResolverOptions | undefined>;`] : []),
+    `    private adminRevocationsSelector?: Selector<Env, ShardNamespaceLike>;`,
     `    private adminToken?: Selector<Env, string>;`,
     ...(options.hasAuth ? [`    private authDeclaration?: AuthDeclaration<Env>;`] : []),
     `    private cdcEnabled = false;`,
@@ -274,6 +275,12 @@ const buildMethodBlocks = (options: ResolvedAppOptions): string[] => [
     `    /** The shard Durable Object namespace (typically \`env.SHARD\`) — required: every app routes RPC + WebSocket traffic through it. */
     public shard(selector: Selector<Env, ShardNamespaceLike>): this {
         this.shardSelector = selector;
+
+        return this;
+    }`,
+    `    /** The \`AdminRevocationDO\` namespace (typically \`env.ADMIN_REVOCATIONS\`). Records revoked named admin tokens where a point-in-time restore of the default shard cannot rewind them. Without it no named admin token can be created and any that exist are refused. */
+    public adminRevocations(selector: Selector<Env, ShardNamespaceLike>): this {
+        this.adminRevocationsSelector = selector;
 
         return this;
     }`,

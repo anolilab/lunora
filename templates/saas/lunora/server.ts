@@ -12,6 +12,7 @@ import http from "./http.js";
 import { entitlementsFromPlans, PLANS } from "./plans.js";
 
 interface Env extends Record<string, unknown> {
+    ADMIN_REVOCATIONS: ShardNamespaceLike;
     BETTER_AUTH_SECRET: string;
     BETTER_AUTH_URL?: string;
     // Typed rather than `unknown`: `.global(...)` takes the binding itself, so an
@@ -183,6 +184,7 @@ http.all("*", async (c) => ssr.fetch(c.req.raw));
  */
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    .adminRevocations((env) => env.ADMIN_REVOCATIONS)
     // The D1 writer behind the `.global()` `saas_organizations` table. Omit it and
     // the shard has no global backend, so every admin list and every slug lookup
     // throws INTERNAL ("requires a globalDb writer") at runtime — with types that
@@ -258,4 +260,6 @@ const app = defineApp<Env>()
     .build();
 
 export const ShardDO = app.ShardDO;
+// Records revoked named admin tokens where a restore of the shard cannot rewind them.
+export { AdminRevocationDO } from "./_generated/adminRevocations.js";
 export default app;

@@ -5,14 +5,20 @@
     "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
-        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "ADMIN_REVOCATIONS", "class_name": "AdminRevocationDO" },
+        ],
     },
     "d1_databases": [
         // better-auth identity + sessions live in D1. Create the database with
         // `wrangler d1 create lunora-expo-example` and paste the id below.
         { "binding": "DB", "database_name": "lunora-expo-example", "database_id": "<replace-with-d1-create-id>" },
     ],
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["AdminRevocationDO"] },
+    ],
     "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
     // `AUTH_SECRET` is a secret: `.dev.vars` locally (see `.dev.vars.example`),
     // `wrangler secret put AUTH_SECRET` in production.

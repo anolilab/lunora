@@ -116,6 +116,7 @@ profiles: defineTable({ userId: v.string(), name: v.string() }).global().index("
 ```ts
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    .adminRevocations((env) => env.ADMIN_REVOCATIONS)
     .global({ d1: (env) => env.DB })
     .auth({ d1: (env) => env.DB, options: authOptions })
     .storage({ bucket: (env) => env.FILES, signingSecret: (env) => env.STORAGE_SECRET })

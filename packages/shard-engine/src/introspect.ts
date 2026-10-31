@@ -74,6 +74,7 @@ const ADMIN_FUNCTIONS = {
     clearCapturedMail: "__lunora_admin__:clearCapturedMail",
     clearQueueMessages: "__lunora_admin__:clearQueueMessages",
     clearTable: "__lunora_admin__:clearTable",
+    createAdminToken: "__lunora_admin__:createAdminToken",
     createWorkflowInstance: "__lunora_admin__:createWorkflowInstance",
     deleteRows: "__lunora_admin__:deleteRows",
     describeTable: "__lunora_admin__:describeTable",
@@ -108,6 +109,7 @@ const ADMIN_FUNCTIONS = {
     getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus",
     ignoreIssue: "__lunora_admin__:ignoreIssue",
     importShard: "__lunora_admin__:importShard",
+    listAdminTokens: "__lunora_admin__:listAdminTokens",
     listFlags: "__lunora_admin__:listFlags",
     listReactors: "__lunora_admin__:listReactors",
     listQueues: "__lunora_admin__:listQueues",
@@ -129,6 +131,7 @@ const ADMIN_FUNCTIONS = {
     releaseShardRegistration: "__lunora_admin__:releaseShardRegistration",
     replayQueueMessage: "__lunora_admin__:replayQueueMessage",
     resolveIssue: "__lunora_admin__:resolveIssue",
+    revokeAdminToken: "__lunora_admin__:revokeAdminToken",
     rlsPolicies: "__lunora_admin__:rlsPolicies",
     schemaHistory: "__lunora_admin__:schemaHistory",
     schemaVersion: "__lunora_admin__:schemaVersion",
@@ -143,6 +146,7 @@ const ADMIN_FUNCTIONS = {
     storageReferences: "__lunora_admin__:storageReferences",
     storageRules: "__lunora_admin__:storageRules",
     studioFeatures: "__lunora_admin__:studioFeatures",
+    verifyAdminToken: "__lunora_admin__:verifyAdminToken",
     writeRow: "__lunora_admin__:writeRow",
 } as const;
 

@@ -9,6 +9,21 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/do`
 
+### `ADMIN_REVOCATION_DO_NAME` (const)
+
+```ts
+const ADMIN_REVOCATION_DO_NAME = "__lunora_admin_revocations__";
+```
+
+### `AdminRevocationDO` (class)
+
+```ts
+class AdminRevocationDO {
+    constructor(state: AdminRevocationDOState, env: unknown);
+    fetch(request: Request): Promise<Response>;
+}
+```
+
 ### `AdvisorProcedure` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -111,6 +126,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ```ts
 const MERGED_ROLES: readonly [
+    "adminRevocations",
     "scheduler",
     "shardRegistry"
 ];
@@ -983,6 +999,19 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `AdminRevocationDOState` (interface)
+
+```ts
+interface AdminRevocationDOState {
+    storage: {
+        list: <T = unknown>(options: {
+            prefix: string;
+        }) => Promise<Map<string, T>>;
+        put: (key: string, value: unknown) => Promise<void>;
+    };
+}
+```
 
 ### `ClientMutationClass` (type)
 

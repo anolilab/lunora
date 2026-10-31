@@ -75,6 +75,8 @@ Configuration comes from the environment, so the spawn config stays a plain
   `lunora_run_*` call all hit admin-gated `/_lunora/admin/*` routes, so a
   least-privilege token returns `ADMIN_FORBIDDEN` on the first tool call. The
   binary refuses to start without it rather than advertising tools that can only 403.
+  A named admin token (`lunora admin-token create mcp`) works here too and can
+  be revoked on its own without rotating the root token.
 - `LUNORA_MCP_ALLOW_WRITES` (optional): set to `1`/`true`/`yes`/`on` to expose
   the mutation/action run tools. Default: **read-only** (writes disabled).
 - `LUNORA_MCP_ALLOW_OBSERVABILITY` (optional): set to `1`/`true`/`yes`/`on` to

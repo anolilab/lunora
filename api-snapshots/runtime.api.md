@@ -38,6 +38,17 @@ interface AccessIdentityLike {
 type AdminTableResolver = (table: string) => ShardingInfo | undefined;
 ```
 
+### `AdminTokenSummary` (interface)
+
+```ts
+interface AdminTokenSummary {
+    createdAt: number;
+    expiresAt?: number;
+    lastUsedAt?: number;
+    name: string;
+}
+```
+
 ### `AiRunBinding` (interface)
 
 ```ts
@@ -489,6 +500,17 @@ interface CorsOptions {
     allowedMethods?: string[];
     allowedOrigins: string[] | ((origin: string) => boolean);
     maxAge?: number;
+}
+```
+
+### `CreatedAdminToken` (interface)
+
+```ts
+interface CreatedAdminToken {
+    createdAt: number;
+    expiresAt?: number;
+    name: string;
+    token: string;
 }
 ```
 
@@ -2325,6 +2347,7 @@ interface WebhookSinkOptions extends OnlyErrorsOption {
 ```ts
 interface WorkerOptions {
     adminGate?: (request: Request, context?: ExecutionContextLike) => boolean | Promise<boolean>;
+    adminRevocations?: ShardNamespaceLike;
     adminToken?: string;
     aiChatBinding?: AiRunBinding;
     aiOptInLevel?: AiOptInLevel;

@@ -66,6 +66,8 @@ const LOG_ARCHIVE_PATH = "/_lunora/admin/logs/archive";
 
 const KV_NAMESPACES_PATH = "/_lunora/admin/kv/namespaces";
 
+const ADMIN_TOKENS_PATH = "/_lunora/admin/tokens";
+
 const KV_KEYS_PATH = "/_lunora/admin/kv/keys";
 
 const KV_VALUE_PATH = "/_lunora/admin/kv/value";
@@ -178,6 +180,7 @@ const GET_SESSION_PATH = "/get-session";
 const WS_KEEPALIVE_PING = "lunora-ping";
 
 export {
+    ADMIN_TOKENS_PATH,
     ARCHITECTURE_PATH,
     AUTH_ACCOUNTS_PATH,
     AUTH_ADD_MEMBER_PATH,

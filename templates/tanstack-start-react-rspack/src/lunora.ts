@@ -11,4 +11,5 @@ const app = lunora.build();
 export const ShardDO = app.ShardDO;
 // Tracks which shards hold `.shardBy()` rows, for cross-shard export / CDC sync.
 export { ShardRegistryDO } from "../lunora/_generated/shardRegistry.js";
+export { AdminRevocationDO } from "../lunora/_generated/adminRevocations.js";
 export default app;

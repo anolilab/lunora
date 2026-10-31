@@ -148,6 +148,7 @@ import type {
 import {
     ADMIN_FUNCTION_PREFIX,
     ADMIN_FUNCTIONS,
+    adminTokenExists,
     advanceClientWatermark,
     appendAuditEntry,
     armRestore,
@@ -166,6 +167,7 @@ import {
     clearQueueMessages,
     CompanionMemo,
     ConflictError,
+    createAdminTokenRecord,
     createDependencyTracker,
     createFanoutCounters,
     createGlobalPollCounters,
@@ -195,6 +197,7 @@ import {
     isDevEnvironment,
     isLossyBody,
     isTtlExpired,
+    listAdminTokens,
     listReactorStates,
     listTables,
     MAX_PAGE_SIZE,
@@ -239,6 +242,7 @@ import {
     RELATION_FUNCTION_PREFIX,
     RELAY_SIGNATURE_HEADER,
     RelayMember,
+    revokeAdminTokenRecord,
     runSocketPool,
     SCAN_DEP,
     selectExpiredIds,
@@ -258,6 +262,7 @@ import {
     trySendFrame,
     UNVOUCHABLE_DEP,
     VECTOR_BACKFILL_MAX_PAGES,
+    verifyAdminTokenDigest,
     verifySiblingBody,
     writeGlobalShapeSnapshot,
     writeIdempotent,
@@ -270,6 +275,7 @@ import { decodeWire, encodeWire, isPlainObject, needsWireEncoding } from "@lunor
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
+import { ADMIN_SIGNAL_HEADER, isValidAdminTokenName, verifyAdminSignal } from "../../../shared/admin-token";
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
@@ -419,6 +425,29 @@ interface RegistryWriter {
     register: (table: string, shardKey: string) => Promise<void>;
     unregister: (table: string, shardKey: string) => Promise<void>;
 }
+
+/**
+ * A named admin token cannot manage tokens (or it could mint its own successor),
+ * rewind a shard to before its revocation, or act as an arbitrary user. The
+ * `record*` ops are the framework's own telemetry sinks, called under the root
+ * token; a named token could only use them to forge auth or delivery history.
+ * Its writes cannot reach the token table either way: every admin write goes
+ * through the schema-aware writer, and a `__` table can never be declared.
+ */
+const ROOT_ONLY_ADMIN_OPS: ReadonlySet<string> = new Set([
+    ADMIN_FUNCTIONS.createAdminToken,
+    ADMIN_FUNCTIONS.listAdminTokens,
+    ADMIN_FUNCTIONS.pitrRestore,
+    ADMIN_FUNCTIONS.recordAuthEvent,
+    ADMIN_FUNCTIONS.recordContainerEvent,
+    ADMIN_FUNCTIONS.recordMail,
+    ADMIN_FUNCTIONS.recordQueueMessage,
+    ADMIN_FUNCTIONS.revokeAdminToken,
+    ADMIN_FUNCTIONS.runAs,
+    ADMIN_FUNCTIONS.verifyAdminToken,
+]);
+
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/u;
 
 /**
  * Client→server text frame the runtime answers with {@link WS_KEEPALIVE_PONG}
@@ -2509,6 +2538,14 @@ abstract class ShardDO {
      * next request.
      */
     private currentRequestUserId: string | undefined;
+
+    /**
+     * The named token each in-flight admin call was authorized with, keyed by the
+     * call's own decoded `args` object — fresh per request, so concurrent calls
+     * interleaving at awaits can never read each other's. A shared field cannot
+     * be used here: the admin plane never re-pins its scope after an await.
+     */
+    private readonly adminCallTokens = new WeakMap<Record<string, unknown>, string>();
 
     /**
      * Per-request caller IP forwarded from the runtime via the
@@ -9601,7 +9638,7 @@ abstract class ShardDO {
         let permit: DeliveryPermit | undefined;
         try {
             permit = await this.authorizeDelivery(identity, functionPath, args, "rpc", {
-                admin: functionPath.startsWith(ADMIN_FUNCTION_PREFIX) && this.isAdminAuthorized(request),
+                admin: functionPath.startsWith(ADMIN_FUNCTION_PREFIX) && (await this.adminCaller(request)) !== undefined,
                 system: request.headers.get("x-lunora-system") === "1",
             });
         } catch (error) {
@@ -10880,7 +10917,10 @@ abstract class ShardDO {
                     applied += 1;
                 });
 
-                this.recordAudit(isClear ? "clearTable" : "deleteRows", { table: parsed.table, detail: { deleted: result.count, hasMore: result.hasMore } });
+                this.recordAudit(args, isClear ? "clearTable" : "deleteRows", {
+                    table: parsed.table,
+                    detail: { deleted: result.count, hasMore: result.hasMore },
+                });
 
                 return adminResponse(result);
             }
@@ -10913,7 +10953,10 @@ abstract class ShardDO {
             );
 
             // Field NAMES only — the patched values are operator data.
-            this.recordAudit("patchRows", { table: parsed.table, detail: { fields: Object.keys(parsed.doc), hasMore: result.hasMore, patched: result.count } });
+            this.recordAudit(args, "patchRows", {
+                table: parsed.table,
+                detail: { fields: Object.keys(parsed.doc), hasMore: result.hasMore, patched: result.count },
+            });
 
             return adminResponse(result);
         } catch (error) {
@@ -10922,7 +10965,7 @@ abstract class ShardDO {
             // record — otherwise a batch that wrote 200 rows and then failed leaves
             // no trace at all.
             if (applied > 0) {
-                this.recordAudit("bulkRowOpFailed", { table: typeof args["table"] === "string" ? args["table"] : undefined, detail: { applied } });
+                this.recordAudit(args, "bulkRowOpFailed", { table: typeof args["table"] === "string" ? args["table"] : undefined, detail: { applied } });
             }
 
             throw error;
@@ -10958,11 +11001,26 @@ abstract class ShardDO {
         // flush so live subscribers re-run.
         await this.flushChangedTables();
 
-        this.recordAudit("importShard", {
+        this.recordAudit(args, "importShard", {
             detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted, replaced: result.replaced },
         });
 
         return adminResponse(result);
+    }
+
+    /** Admit an admin call (its caller) or answer its 403. Root-only ops refuse a named token. */
+    private async authorizeAdminCall(request: Request, functionPath: string): Promise<Response | { tokenName?: string }> {
+        const caller = await this.adminCaller(request);
+
+        if (caller === undefined) {
+            return jsonResponse({ error: { code: "ADMIN_FORBIDDEN", message: "admin introspection is disabled or the bearer token is invalid" } }, 403);
+        }
+
+        if (caller.tokenName !== undefined && ROOT_ONLY_ADMIN_OPS.has(functionPath)) {
+            return jsonResponse({ error: { code: "ADMIN_ROOT_REQUIRED", message: `${functionPath} requires the root admin token` } }, 403);
+        }
+
+        return caller;
     }
 
     /**
@@ -10974,12 +11032,18 @@ abstract class ShardDO {
      * upgrade gate, which defaults open for local dev.
      */
     private async handleAdminRpc(request: Request, functionPath: string, rawArgs: Record<string, unknown>): Promise<Response> {
-        if (!this.isAdminAuthorized(request)) {
-            return jsonResponse({ error: { code: "ADMIN_FORBIDDEN", message: "admin introspection is disabled or the bearer token is invalid" } }, 403);
+        const caller = await this.authorizeAdminCall(request, functionPath);
+
+        if (caller instanceof Response) {
+            return caller;
         }
 
         try {
             const args = decodeAdminArgs(rawArgs);
+
+            if (caller.tokenName !== undefined) {
+                this.adminCallTokens.set(args, caller.tokenName);
+            }
 
             // Read-only introspection ops share their logic with the WS
             // subscription bridge (see readAdminOp / executeAdminSubscription),
@@ -10999,7 +11063,7 @@ abstract class ShardDO {
                 // the new values. No-op on a dryRun (nothing was written).
                 await this.flushChangedTables();
 
-                this.recordAudit("runMigration", {
+                this.recordAudit(args, "runMigration", {
                     id: parsed.id,
                     detail: { changed: result.changed, direction: result.direction, dryRun: result.dryRun, processed: result.processed },
                 });
@@ -11034,7 +11098,7 @@ abstract class ShardDO {
                 // table; flush so live subscribers re-run against the new value.
                 await this.flushChangedTables();
 
-                this.recordAudit("writeRow", { table: parsed.table, id: result.id ?? parsed.id, detail: { op: result.op } });
+                this.recordAudit(args, "writeRow", { table: parsed.table, id: result.id ?? parsed.id, detail: { op: result.op } });
 
                 return adminResponse(result);
             }
@@ -11078,7 +11142,7 @@ abstract class ShardDO {
 
                 await this.flushChangedTables();
 
-                this.recordAudit("applyCdc", { detail: { applied: result.applied } });
+                this.recordAudit(args, "applyCdc", { detail: { applied: result.applied } });
 
                 return adminResponse(result);
             }
@@ -11188,7 +11252,7 @@ abstract class ShardDO {
         this.recordChangedTable(ISSUE_STATE_TABLE);
         await this.flushChangedTables();
 
-        this.recordAudit(functionPath.slice(ADMIN_FUNCTION_PREFIX.length), { detail: { ...patch, hash } });
+        this.recordAudit(args, functionPath.slice(ADMIN_FUNCTION_PREFIX.length), { detail: { ...patch, hash } });
 
         return adminResponse({ state });
     }
@@ -11244,7 +11308,7 @@ abstract class ShardDO {
 
         const result = this.runShardSearchBackfill(budget);
 
-        this.recordAudit("backfillSearch", { detail: { done: result.done, pages: result.pages } });
+        this.recordAudit(args, "backfillSearch", { detail: { done: result.done, pages: result.pages } });
 
         return adminResponse(result);
     }
@@ -11312,7 +11376,7 @@ abstract class ShardDO {
             this.vectorBackfillRunning = false;
         }
 
-        this.recordAudit("backfillVectors", {
+        this.recordAudit(args, "backfillVectors", {
             detail: { done: result.done, error: result.error, failed: result.failed, pages: result.pages, restart: rawRestart === true, rows: result.rows },
         });
 
@@ -11414,7 +11478,7 @@ abstract class ShardDO {
      * observes that user instead of the admin caller.
      *
      * SECURITY. This op is reachable only after `handleAdminRpc`'s
-     * `isAdminAuthorized` bearer check (the `LUNORA_ADMIN_TOKEN` gate), so an
+     * `adminCaller` bearer check (the `LUNORA_ADMIN_TOKEN` gate), so an
      * unauthenticated caller can never forge an identity. The inbound
      * `x-lunora-userid`/`x-lunora-identity` headers the runtime sets are
      * overwritten here for the duration of the dispatch and restored after, so
@@ -11449,7 +11513,7 @@ abstract class ShardDO {
         // the normal `/rpc` dispatch path.
         await this.flushChangedTables();
 
-        this.recordAudit("runAs", { detail: { functionPath: parsed.functionPath, runAsUserId: parsed.userId } });
+        this.recordAudit(args, "runAs", { detail: { functionPath: parsed.functionPath, runAsUserId: parsed.userId } });
 
         return adminResponse(result);
     }
@@ -11498,7 +11562,7 @@ abstract class ShardDO {
         const snapshot = await instance.status();
         const result: CreateWorkflowInstanceResult = { id: instance.id, status: toWorkflowInstanceState(snapshot.status) };
 
-        this.recordAudit("createWorkflowInstance", { id: instance.id, detail: { exportName: parsed.exportName } });
+        this.recordAudit(args, "createWorkflowInstance", { id: instance.id, detail: { exportName: parsed.exportName } });
 
         return adminResponse(result);
     }
@@ -11570,7 +11634,7 @@ abstract class ShardDO {
 
         // The event is already delivered; a failed audit write must not read as a failed send, or a retry would deliver it twice.
         try {
-            this.recordAudit("sendWorkflowEvent", { id: parsed.id, detail: { exportName: parsed.exportName, type: parsed.type } });
+            this.recordAudit(args, "sendWorkflowEvent", { id: parsed.id, detail: { exportName: parsed.exportName, type: parsed.type } });
         } catch (error: unknown) {
             // eslint-disable-next-line no-console -- server-side diagnostic: the event was delivered, only its audit entry was lost
             console.error("[@lunora/do] sendWorkflowEvent audit write failed; the event was delivered:", error);
@@ -11956,10 +12020,10 @@ abstract class ShardDO {
      * marker, with the index undeclared or declared differently there, leaves a
      * marker that still matches on roll-forward. Admin-gated by the caller.
      */
-    private handleRebuildCompanions(): Response {
+    private handleRebuildCompanions(args: Record<string, unknown>): Response {
         clearCompanionSignatures(this.shardHost.sql);
         this.invalidateCompanionMemo();
-        this.recordAudit("rebuildCompanions");
+        this.recordAudit(args, "rebuildCompanions");
 
         return adminResponse({ ok: true });
     }
@@ -11990,7 +12054,7 @@ abstract class ShardDO {
             sent = parsed.batch.length;
         }
 
-        this.recordAudit("sendQueueMessage", { detail: { count: sent, exportName: parsed.exportName } });
+        this.recordAudit(args, "sendQueueMessage", { detail: { count: sent, exportName: parsed.exportName } });
 
         return adminResponse({ sent });
     }
@@ -12012,9 +12076,9 @@ abstract class ShardDO {
         const result = await explainIssue(await this.aiBinding(), args);
 
         if (!result.degraded) {
-            this.recordAudit("explainIssue", { detail: { groundedId: result.groundedId, model: result.model } });
+            this.recordAudit(args, "explainIssue", { detail: { groundedId: result.groundedId, model: result.model } });
         } else if (result.reason !== "no-ai-binding") {
-            this.recordAudit("explainIssue", { detail: { groundedId: result.groundedId, reason: result.reason } });
+            this.recordAudit(args, "explainIssue", { detail: { groundedId: result.groundedId, reason: result.reason } });
         }
 
         return adminResponse(result);
@@ -12047,12 +12111,12 @@ abstract class ShardDO {
 
         if (result.degraded) {
             if (result.reason !== "no-ai-binding") {
-                this.recordAudit("aiGenerateSql", { detail: { reason: result.reason } });
+                this.recordAudit(args, "aiGenerateSql", { detail: { reason: result.reason } });
             }
         } else {
             // The statement itself is recorded: it is what the operator is about
             // to be handed, and an audit trail that omits it explains nothing.
-            this.recordAudit("aiGenerateSql", { detail: { sql: result.sql } });
+            this.recordAudit(args, "aiGenerateSql", { detail: { sql: result.sql } });
         }
 
         return adminResponse(result);
@@ -12081,21 +12145,90 @@ abstract class ShardDO {
             [ADMIN_FUNCTIONS.findRelated]: (args) => this.handleFindRelated(args),
             [ADMIN_FUNCTIONS.clearCapturedMail]: () => this.handleClearCapturedMail(),
             [ADMIN_FUNCTIONS.clearQueueMessages]: () => this.handleClearQueueMessages(),
+            [ADMIN_FUNCTIONS.createAdminToken]: (args) => this.handleCreateAdminToken(args),
             [ADMIN_FUNCTIONS.createWorkflowInstance]: (args) => this.handleCreateWorkflowInstance(args),
             [ADMIN_FUNCTIONS.explainIssue]: (args) => this.handleExplainIssue(args),
             [ADMIN_FUNCTIONS.getWorkflowInstanceStatus]: (args) => this.handleGetWorkflowInstanceStatus(args),
+            [ADMIN_FUNCTIONS.listAdminTokens]: () => adminResponse({ tokens: listAdminTokens(this.shardHost.sql) }),
             [ADMIN_FUNCTIONS.listFlags]: (args) => this.handleListFlags(args),
-            [ADMIN_FUNCTIONS.rebuildCompanions]: () => this.handleRebuildCompanions(),
+            [ADMIN_FUNCTIONS.rebuildCompanions]: (args) => this.handleRebuildCompanions(args),
             [ADMIN_FUNCTIONS.recordAuthEvent]: (args) => this.handleRecordAuthEvent(args),
             [ADMIN_FUNCTIONS.recordContainerEvent]: (args) => this.handleRecordContainerEvent(args),
             [ADMIN_FUNCTIONS.recordMail]: (args) => this.handleRecordMail(args),
             [ADMIN_FUNCTIONS.recordQueueMessage]: (args) => this.handleRecordQueueMessage(args),
             [ADMIN_FUNCTIONS.releaseShardRegistration]: (args) => this.handleReleaseShardRegistration(args),
             [ADMIN_FUNCTIONS.replayQueueMessage]: (args) => this.handleReplayQueueMessage(args),
+            [ADMIN_FUNCTIONS.revokeAdminToken]: (args) => this.handleRevokeAdminToken(args),
             [ADMIN_FUNCTIONS.sendQueueMessage]: (args) => this.handleSendQueueMessage(args),
             [ADMIN_FUNCTIONS.sendTestMail]: (args) => this.handleSendTestMail(args),
             [ADMIN_FUNCTIONS.sendWorkflowEvent]: (args) => this.handleSendWorkflowEvent(args),
+            [ADMIN_FUNCTIONS.verifyAdminToken]: (args) => this.handleVerifyAdminToken(args),
         };
+    }
+
+    /** Store a named token's digest. The worker generated the secret; it never reaches this shard. */
+    private handleCreateAdminToken(args: Record<string, unknown>): Response {
+        const { digest, expiresAt, name } = args;
+
+        if (typeof name !== "string" || !isValidAdminTokenName(name) || typeof digest !== "string" || !SHA256_HEX_RE.test(digest)) {
+            throw new LunoraError("BAD_REQUEST", "createAdminToken: expected { name: /^[a-z0-9][a-z0-9_-]{0,63}$/, digest: <sha-256 hex> }", { status: 400 });
+        }
+
+        if (expiresAt !== undefined && (typeof expiresAt !== "number" || !Number.isFinite(expiresAt))) {
+            throw new LunoraError("BAD_REQUEST", "createAdminToken: `expiresAt` must be an epoch-ms number", { status: 400 });
+        }
+
+        // The worker picks the issuance's identity so it can place it past every revoked one; a direct
+        // root call without one is stamped now.
+        const createdAt = typeof args.createdAt === "number" && Number.isSafeInteger(args.createdAt) ? args.createdAt : Date.now();
+
+        if (!createAdminTokenRecord(this.shardHost.sql, { createdAt, digest, expiresAt, name })) {
+            throw new LunoraError("ADMIN_TOKEN_EXISTS", `an admin token named "${name}" already exists — revoke it first`, { status: 409 });
+        }
+
+        this.recordAuditAfterTokenChange(args, "createAdminToken", name);
+
+        return adminResponse({ createdAt, name, ...(expiresAt === undefined ? {} : { expiresAt }) });
+    }
+
+    /**
+     * The token row is already written when this runs. Failing the call now would
+     * lose a new token's only copy of its secret (and its name stays taken), or
+     * skip the worker's cache eviction for a revoke, so a lost audit row is logged
+     * instead.
+     */
+    private recordAuditAfterTokenChange(args: Record<string, unknown>, op: string, name: string): void {
+        try {
+            this.recordAudit(args, op, { id: name });
+        } catch (error: unknown) {
+            // eslint-disable-next-line no-console -- server-side diagnostic: the token change committed, only its audit entry was lost
+            console.error(`[@lunora/do] ${op} audit write failed for "${name}"; the change was applied:`, error);
+        }
+    }
+
+    private handleRevokeAdminToken(args: Record<string, unknown>): Response {
+        if (typeof args.name !== "string" || typeof args.createdAt !== "number") {
+            throw new LunoraError("BAD_REQUEST", "revokeAdminToken: expected { name, createdAt }", { status: 400 });
+        }
+
+        const revoked = revokeAdminTokenRecord(this.shardHost.sql, args.name, args.createdAt);
+
+        if (revoked) {
+            this.recordAuditAfterTokenChange(args, "revokeAdminToken", args.name);
+        }
+
+        return adminResponse({ revoked });
+    }
+
+    private handleVerifyAdminToken(args: Record<string, unknown>): Response {
+        const { digest, name } = args;
+        const live = typeof name === "string" && typeof digest === "string" ? verifyAdminTokenDigest(this.shardHost.sql, name, digest, Date.now()) : undefined;
+
+        if (live !== undefined) {
+            return adminResponse({ ok: true, ...live });
+        }
+
+        return adminResponse({ known: typeof name === "string" && adminTokenExists(this.shardHost.sql, name), ok: false });
     }
 
     /** The AI-assistant admin writes, keyed by function path. */
@@ -12122,7 +12255,7 @@ abstract class ShardDO {
         const result = await generateQueryName(await this.aiBinding(), args);
 
         if (result.degraded && result.reason !== "no-ai-binding") {
-            this.recordAudit("aiNameQuery", { detail: { reason: result.reason } });
+            this.recordAudit(args, "aiNameQuery", { detail: { reason: result.reason } });
         }
 
         return adminResponse(result);
@@ -12142,7 +12275,7 @@ abstract class ShardDO {
         const result = await generateCron(await this.aiBinding(), args);
 
         if (result.degraded && result.reason !== "no-ai-binding") {
-            this.recordAudit("aiCronExpression", { detail: { reason: result.reason } });
+            this.recordAudit(args, "aiCronExpression", { detail: { reason: result.reason } });
         }
 
         return adminResponse(result);
@@ -12175,7 +12308,7 @@ abstract class ShardDO {
         const result = await generateFilter(await this.aiBinding(), args, columns, physical, kinds);
 
         if (result.degraded && result.reason !== "no-ai-binding") {
-            this.recordAudit("aiTableFilter", { detail: { reason: result.reason, table } });
+            this.recordAudit(args, "aiTableFilter", { detail: { reason: result.reason, table } });
         }
 
         return adminResponse(result);
@@ -12231,7 +12364,7 @@ abstract class ShardDO {
         const result = await generateChart(await this.aiBinding(), args, { columns, rowCount, types });
 
         if (result.degraded && result.reason !== "no-ai-binding") {
-            this.recordAudit("aiChartConfig", { detail: { reason: result.reason } });
+            this.recordAudit(args, "aiChartConfig", { detail: { reason: result.reason } });
         }
 
         return adminResponse(result);
@@ -12279,7 +12412,7 @@ abstract class ShardDO {
 
         await binding.send(row.body);
 
-        this.recordAudit("replayQueueMessage", { detail: { messageId: row.messageId, target }, id: parsed.id });
+        this.recordAudit(args, "replayQueueMessage", { detail: { messageId: row.messageId, target }, id: parsed.id });
 
         return adminResponse({ sent: 1, target });
     }
@@ -12328,15 +12461,21 @@ abstract class ShardDO {
 
     /**
      * Append one durable audit entry for a state-changing admin op that just
-     * succeeded, folding the acting user (from `getCurrentUserId`) into `detail`.
+     * succeeded, folding the acting user (from `getCurrentUserId`) and the named
+     * admin token the call (`call` is its decoded args) was authorized with into
+     * `detail`.
      * Called only on the success path, so a rejected/validated op leaves no
      * trace. Best-effort: the write happens after the op's own commit, so it
      * never blocks or fails the response.
      */
-    private recordAudit(op: string, fields: { detail?: Record<string, unknown>; id?: string; table?: string } = {}): void {
+    private recordAudit(call: Record<string, unknown>, op: string, fields: { detail?: Record<string, unknown>; id?: string; table?: string } = {}): void {
         const sql = this.shardHost.sql as unknown as SqlExec;
         const userId = this.getCurrentUserId();
-        const detail = userId === undefined ? fields.detail : { ...fields.detail, userId };
+        const adminToken = this.adminCallTokens.get(call);
+        const detail =
+            userId === undefined && adminToken === undefined
+                ? fields.detail
+                : { ...fields.detail, ...(userId === undefined ? {} : { userId }), ...(adminToken === undefined ? {} : { adminToken }) };
 
         appendAuditEntry(sql, { detail, id: fields.id, op, table: fields.table, ts: Date.now() });
     }
@@ -12572,7 +12711,7 @@ abstract class ShardDO {
             this.bumpCdcEpochUncached();
         }
 
-        this.recordAudit("pitrRestore", { detail: { restart, restoredTo: armed.restoredTo, undoBookmark: armed.undoBookmark } });
+        this.recordAudit(args, "pitrRestore", { detail: { restart, restoredTo: armed.restoredTo, undoBookmark: armed.undoBookmark } });
 
         const response = adminResponse({ ...armed, restarted: restart });
 
@@ -13221,21 +13360,30 @@ abstract class ShardDO {
     }
 
     /**
-     * Constant-time bearer check against `env.LUNORA_ADMIN_TOKEN`. Returns
-     * `false` (closed) when the token is unset so admin introspection is
-     * opt-in rather than exposed by default.
+     * Who is calling the admin plane: the root `env.LUNORA_ADMIN_TOKEN` bearer
+     * (constant-time compared) yields `{}`, a worker-minted admin signal yields
+     * the named token it vouches for, anything else `undefined`. Closed when the
+     * root token is unset, so admin introspection is opt-in rather than exposed
+     * by default — and the root token is also the signal's key, so named tokens
+     * go dark with it.
      */
-    private isAdminAuthorized(request: Request): boolean {
-        const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string };
-        const token = env.LUNORA_ADMIN_TOKEN;
+    private async adminCaller(request: Request): Promise<undefined | { tokenName?: string }> {
+        const token = ((this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string }).LUNORA_ADMIN_TOKEN;
 
         if (!token || token.length === 0) {
-            return false;
+            return undefined;
         }
 
         const supplied = extractBearerToken(request.headers.get("authorization"));
 
-        return supplied !== undefined && constantTimeEqual(supplied, token);
+        if (supplied !== undefined && constantTimeEqual(supplied, token)) {
+            return {};
+        }
+
+        const signal = request.headers.get(ADMIN_SIGNAL_HEADER);
+        const tokenName = signal === null ? undefined : await verifyAdminSignal(token, signal);
+
+        return tokenName === undefined ? undefined : { tokenName };
     }
 
     /**
@@ -13734,7 +13882,7 @@ abstract class ShardDO {
         });
 
         if (!dryRun && result.released.length > 0) {
-            this.recordAudit("releaseShardRegistration", { detail: { released: result.released } });
+            this.recordAudit(args, "releaseShardRegistration", { detail: { released: result.released } });
         }
 
         return adminResponse(result);
@@ -16782,7 +16930,7 @@ abstract class ShardDO {
      *
      * The master token in `?token=` is never admitted: the query string is exactly
      * where it leaks (access logs / history / `Referer`). Closed (resolves `false`)
-     * when the admin token is unset, mirroring `isAdminAuthorized` for the HTTP
+     * when the admin token is unset, mirroring `adminCaller` for the HTTP
      * path so admin streaming is opt-in rather than exposed by default.
      */
     private async isAdminSocket(request: Request): Promise<boolean> {
@@ -16834,7 +16982,7 @@ abstract class ShardDO {
      * The upgrade gate runs once and the socket then lives for hours, so the
      * stamped `admin` flag alone is an authorization that can never be revoked:
      * clearing or rotating `LUNORA_ADMIN_TOKEN` shuts the HTTP admin plane on
-     * the next request (`isAdminAuthorized` fails closed) and used to shut
+     * the next request (`adminCaller` fails closed) and used to shut
      * nothing here — a 60-second sub-token bought 60 seconds to OPEN a socket
      * that then served `runSql`/`readTablePage`/`getLogs` output for its whole
      * life. Re-deriving the fingerprint from `env` makes rotation a revocation

@@ -9,11 +9,13 @@
             { "name": "SHARD", "class_name": "ShardDO" },
             { "name": "SCHEDULER", "class_name": "SchedulerDO" },
             { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" },
+            { "name": "ADMIN_REVOCATIONS", "class_name": "AdminRevocationDO" },
         ],
     },
     "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] },
         { "tag": "v2", "new_sqlite_classes": ["ShardRegistryDO"] },
+        { "tag": "v3", "new_sqlite_classes": ["AdminRevocationDO"] },
     ],
     "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
     // Cloudflare Workflows are NOT Durable Objects — they are declared in

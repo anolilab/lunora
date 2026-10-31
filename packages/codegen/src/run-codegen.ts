@@ -45,6 +45,7 @@ import discoverWorkflowCalls from "./discover/workflow-calls";
 import discoverWorkflowEvents from "./discover/workflow-events";
 import {
     buildStorageColumns,
+    emitAdminRevocations,
     emitAgents,
     emitApi,
     emitCollections,
@@ -752,6 +753,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const liveContent = emitLive(liveStreams, useUmbrella);
     const cronsContent = emitCrons(crons);
     const schedulerContent = emitScheduler(studioFeatures.scheduler);
+    const adminRevocationsContent = emitAdminRevocations(useUmbrella);
     const shardRegistryContent = emitShardRegistry(schema.tables, useUmbrella, schema.jurisdiction);
     const durableObjectsContent = readMergeDurableObjects(options.projectRoot) ? emitDurableObjects(useUmbrella) : "";
     const vectorsContent = emitVectors(schema.vectorIndexes);
@@ -928,6 +930,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: liveContent, kind: "optional", name: "live.ts" },
               { content: schedulerContent, kind: "optional", name: "scheduler.ts" },
               { content: shardRegistryContent, kind: "optional", name: "shardRegistry.ts" },
+              { content: adminRevocationsContent, kind: "always", name: "adminRevocations.ts" },
               { content: durableObjectsContent, kind: "optional", name: "durableObjects.ts" },
               { content: seedContent, kind: "optional", name: "seed.ts" },
               // The `@lunora/auth` exports `app.ts` loads with `import()` on the first event.

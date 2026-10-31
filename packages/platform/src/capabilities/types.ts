@@ -37,7 +37,7 @@
  * `scheduler`, `secretValues`, `secrets`, `services`, `topics`, `vectorStore`, `workerLoaders`, `workflowRollback`,
  * `workflowSchedules`, `workflows`.
  *
- * Every other key here — `authJurisdictionMove`, `conditionalWrites`, `deliveryAuthorization`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
+ * Every other key here — `adminTokenRevocation`, `authJurisdictionMove`, `conditionalWrites`, `deliveryAuthorization`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
  * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
  * `objectColumnPaths`, `objectStorageBackups`, `objectStorageCdcArchive`, `pointInTimeRecovery`, `queryExplain`,
  * `serverReactors`,
@@ -134,6 +134,22 @@ export interface Capability {
 export interface PlatformCapabilities {
     /** Feature-level capabilities. */
     features: {
+        /**
+         * Where a named admin token's revocation is recorded so a point-in-time restore of
+         * the default shard, which brings the token row back, cannot revive the token: a
+         * small Durable Object (`AdminRevocationDO`, bound as `ADMIN_REVOCATIONS`) outside
+         * that database, written FIRST on revoke and consulted on every verify.
+         *
+         * Carried by the same `ShardDirectory` namespace seam the scheduler and shard
+         * registry use (`createWorker({ adminRevocations })`). A host that does not bind one
+         * fails closed: no named token can be created and any that exist are refused, so the
+         * root `LUNORA_ADMIN_TOKEN` is the only admin credential there.
+         *
+         * Advisory for codegen by nature — an app declares no named tokens; they are created
+         * at runtime. The module is emitted for every app and the builder always has the method.
+         */
+        adminTokenRevocation?: Capability;
+
         /**
          * Durable agents — a `defineAgent` export in `lunora/agents.ts`.
          *
