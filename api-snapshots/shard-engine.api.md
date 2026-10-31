@@ -2670,8 +2670,8 @@ interface SchedulableWorkflowReferenceLike {
 interface ScheduleOutbox {
     admit: (target: string) => number | undefined;
     forget: (id: string) => void;
-    handOff?: (id: string, run: () => Promise<unknown>) => Promise<void>;
-    record: (id: string, envelope: ScheduleOutboxEnvelope) => void;
+    handOff?: (id: string, run: () => Promise<unknown>, token?: string) => Promise<void>;
+    record: (id: string, envelope: ScheduleOutboxEnvelope) => string | undefined;
     wake: () => void;
 }
 ```
@@ -5072,6 +5072,7 @@ const readScheduleOutbox: (sql: SqlExec, limit: number, cursor?: string) => {
 
 ```ts
 const readScheduleOutboxState: (sql: SqlExec, id: string) => {
+    createdAt: number;
     parked: boolean;
     version: string;
 } | undefined;

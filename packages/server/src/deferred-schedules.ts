@@ -90,6 +90,9 @@ import { encodeArgsOrThrow } from "@lunora/wire";
 interface PendingSchedule {
     id: string;
     run: () => Promise<unknown>;
+
+    /** What `record` answered for this call, so its hand-off can be told apart from another call under the same id. */
+    token: string | undefined;
 }
 
 /**
@@ -128,7 +131,7 @@ interface ScheduleOutbox {
      * operator who drops the entry while the call is still awaiting the scheduler is seen, and the
      * job is taken back out when it lands. When absent the facade runs the call and `forget`s the id.
      */
-    handOff?: (id: string, run: () => Promise<unknown>) => Promise<void>;
+    handOff?: (id: string, run: () => Promise<unknown>, token?: string) => Promise<void>;
 
     /**
      * Take custody of one buffered call. Runs INSIDE the transaction, so a throw
@@ -139,7 +142,7 @@ interface ScheduleOutbox {
      * replayed after an hour in custody would fire an hour late, and the retry has
      * to reproduce the fire time the caller asked for, not the wait.
      */
-    record: (id: string, envelope: { args: unknown; options: Record<string, unknown> | undefined; target: unknown; when: number }) => void;
+    record: (id: string, envelope: { args: unknown; options: Record<string, unknown> | undefined; target: unknown; when: number }) => string | undefined;
     /** Ask the host to wake its retry loop — called when a dispatch left entries behind. */
     wake: () => void;
 }
@@ -247,9 +250,9 @@ const deferredWhen = (method: "runAfter" | "runAt", when: number, deferredTo: nu
  * is a job the caller was told it had and the scheduler does not, which the retry loop is for.
  * An outbox with `handOff` runs the call itself so a concurrent drop is seen.
  */
-const handOffDeferred = async (outbox: ScheduleOutbox | undefined, id: string, run: () => Promise<unknown>): Promise<void> => {
+const handOffDeferred = async (outbox: ScheduleOutbox | undefined, { id, run, token }: PendingSchedule): Promise<void> => {
     if (outbox?.handOff !== undefined) {
-        await outbox.handOff(id, run);
+        await outbox.handOff(id, run, token);
 
         return;
     }
@@ -322,7 +325,7 @@ export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S, out
         // doing it at settle time made that refusal land AFTER the commit, on a
         // mutation that had already succeeded. Encoded here it rolls the mutation
         // back, which is the answer a caller can act on.
-        queue.outbox?.record(id, {
+        const token = queue.outbox?.record(id, {
             args: encodeArgsOrThrow(`ctx.scheduler.${method}`, scheduleTargetLabel(target), args),
             options,
             target,
@@ -334,7 +337,7 @@ export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S, out
 
         // Buffered against the window that is innermost RIGHT NOW, so it is
         // dropped only if THAT transaction rolls back.
-        open.pending.push({ id, run: async () => call(method, due, target, args, { ...options, id }) });
+        open.pending.push({ id, run: async () => call(method, due, target, args, { ...options, id }), token });
 
         return Promise.resolve(id);
     };
@@ -458,10 +461,10 @@ export const beginDeferredSchedules = (context: DeferredScheduleContext): ((comm
 
         const failures: unknown[] = [];
 
-        for (const { id, run } of draining) {
+        for (const pendingSchedule of draining) {
             try {
                 // eslint-disable-next-line no-await-in-loop -- declaration order is the contract: `runAfter(0, a)` then `runAfter(0, b)` must enqueue a before b
-                await handOffDeferred(queue.outbox, id, run);
+                await handOffDeferred(queue.outbox, pendingSchedule);
             } catch (error) {
                 failures.push(error);
             }

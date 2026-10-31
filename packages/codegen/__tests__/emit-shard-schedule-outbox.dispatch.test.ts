@@ -1014,6 +1014,29 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 0, id: "dup-id" }]);
     });
 
+    it("skips the queued call of a dropped schedule even after another mutation reuses its id, and hands that one off", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+        const { entered, release } = harness.hold();
+        const first = harness.shard.handleRpc("outbox:sameId", {});
+
+        // The first mutation's first call is awaiting the scheduler; its second call is still queued.
+        await entered;
+        await harness.drop("dup-id");
+
+        // A second mutation reuses the id after the drop: new custody, never covered by that drop.
+        await harness.shard.handleRpc("outbox:sameId", {});
+        release();
+        await first;
+
+        // First mutation: one call (it landed and was cancelled); the dropped second call never went out.
+        // Second mutation: both of its calls.
+        expect(harness.received).toHaveLength(3);
+        expect(harness.cancelOutcomes).toContain(true);
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
     it("does not hand a dropped entry to the scheduler when it was already queued in the same batch", async () => {
         expect.assertions(3);
 

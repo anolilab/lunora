@@ -121,7 +121,7 @@ interface ScheduleOutbox {
      * operator who drops the entry while the call is still awaiting the scheduler is seen, and the
      * job is taken back out when it lands. When absent the facade runs the call and `forget`s the id.
      */
-    handOff?: (id: string, run: () => Promise<unknown>) => Promise<void>;
+    handOff?: (id: string, run: () => Promise<unknown>, token?: string) => Promise<void>;
 
     /**
      * Take custody of one buffered call. Runs INSIDE the transaction, so a throw
@@ -132,7 +132,7 @@ interface ScheduleOutbox {
      * replayed after an hour in custody would fire an hour late, and the retry has
      * to reproduce the fire time the caller asked for, not the wait.
      */
-    record: (id: string, envelope: ScheduleOutboxEnvelope) => void;
+    record: (id: string, envelope: ScheduleOutboxEnvelope) => string | undefined;
     /** Ask the host to wake its retry loop — called when a dispatch left entries behind. */
     wake: () => void;
 }
@@ -400,13 +400,13 @@ const readScheduleOutbox = (sql: SqlExec, limit: number, cursor?: string): { ent
  * An id alone cannot say "the same entry": a mutation may schedule a new job under the same explicit
  * id while a drop is awaiting, and `INSERT OR REPLACE` gives that row a new `created_at` and envelope.
  */
-const readScheduleOutboxState = (sql: SqlExec, id: string): { parked: boolean; version: string } | undefined => {
+const readScheduleOutboxState = (sql: SqlExec, id: string): { createdAt: number; parked: boolean; version: string } | undefined => {
     const row = runDrizzle<{ created_at: number; dead: number; envelope_json: string }>(
         sql,
         dsql`SELECT created_at, envelope_json, dead FROM ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)} WHERE id = ${id}`,
     ).toArray()[0];
 
-    return row === undefined ? undefined : { parked: row.dead === 1, version: `${String(row.created_at)}:${row.envelope_json}` };
+    return row === undefined ? undefined : { createdAt: row.created_at, parked: row.dead === 1, version: `${String(row.created_at)}:${row.envelope_json}` };
 };
 
 const hasScheduleOutboxEntry = (sql: SqlExec, id: string): boolean =>

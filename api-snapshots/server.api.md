@@ -7354,13 +7354,13 @@ interface SchedulableWorkflowReference {
 interface ScheduleOutbox {
     admit: (target: string) => number | undefined;
     forget: (id: string) => void;
-    handOff?: (id: string, run: () => Promise<unknown>) => Promise<void>;
+    handOff?: (id: string, run: () => Promise<unknown>, token?: string) => Promise<void>;
     record: (id: string, envelope: {
         args: unknown;
         options: Record<string, unknown> | undefined;
         target: unknown;
         when: number;
-    }) => void;
+    }) => string | undefined;
     wake: () => void;
 }
 ```
