@@ -127,7 +127,7 @@ const buildFrameworkHostLine = (options: ResolvedAppOptions): string =>
 /** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
 const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
     ...buildTableShardingLines(options),
-    ...ADMIN_REVOCATIONS_LINES,
+    ...(options.hasAdminRevocations === false ? [] : ADMIN_REVOCATIONS_LINES),
     ...(options.hasScheduler
         ? [
               `        if (this.schedulerDeclaration) {

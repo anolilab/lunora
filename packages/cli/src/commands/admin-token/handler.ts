@@ -40,6 +40,8 @@ interface TokenRow {
     expiresAt?: number;
     lastUsedAt?: number;
     name: string;
+    /** Revoked, but the row still holds the name: revoke again to clear it. */
+    revoked?: boolean;
 }
 
 const failure = (logger: Logger, error: string, code: number): AdminTokenCommandResult => {
@@ -85,7 +87,9 @@ const report = (logger: Logger, subcommand: (typeof SUBCOMMANDS)[number], data: 
     }
 
     for (const row of tokens) {
-        logger.info(`${row.name}  created ${when(row.createdAt, "?")}  last used ${when(row.lastUsedAt, "never")}  expires ${when(row.expiresAt, "never")}`);
+        logger.info(
+            `${row.name}  created ${when(row.createdAt, "?")}  last used ${when(row.lastUsedAt, "never")}  expires ${when(row.expiresAt, "never")}${row.revoked === true ? "  revoked (its row still holds the name: revoke it again to free it)" : ""}`,
+        );
     }
 };
 

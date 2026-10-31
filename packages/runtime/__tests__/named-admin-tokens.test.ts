@@ -74,6 +74,8 @@ interface SeenRequest {
  */
 interface ShardHooks {
     down?: boolean;
+    /** Deleting a token row fails, after the revocation was already recorded. */
+    failRevoke?: boolean;
     /** Runs when a non-token admin op reaches a shard, before it is answered. */
     onAdminOp?: (functionPath: string) => Promise<void>;
 }
@@ -136,6 +138,10 @@ const fakeShards = (
                 });
             }
             case "__lunora_admin__:revokeAdminToken": {
+                if (hooks?.failRevoke === true) {
+                    return new Response("shard unavailable", { status: 503 });
+                }
+
                 // Honours createdAt like the real shard: only the named issuance goes.
                 const stored = store.get(String(args.name));
 
@@ -236,7 +242,7 @@ describe("a revocation that outlives a restore of the token store", () => {
         ).resolves.toBeDefined();
     });
 
-    it("does not list a revoked token whose row a restore brought back, and still lets it be cleaned up", async () => {
+    it("lists a revoked token whose row a restore brought back as revoked, and still lets it be cleaned up", async () => {
         expect.assertions(4);
 
         const { namespace, store } = fakeShards();
@@ -252,7 +258,8 @@ describe("a revocation that outlives a restore of the token store", () => {
 
         const listed = await call(worker, TOKENS, ROOT);
 
-        await expect(listed.json()).resolves.toStrictEqual({ tokens: [] });
+        // Not shown as live: it is flagged revoked, row still pending cleanup.
+        await expect(listed.json()).resolves.toStrictEqual({ tokens: [{ createdAt: expect.any(Number), name: "ci", revoked: true }] });
 
         // The name is still held by the revived row, so revoking it again must clear it and free the name.
         await expect(status(call(worker, `${TOKENS}?name=ci`, ROOT, { method: "DELETE" }))).resolves.toBe(200);
@@ -433,6 +440,43 @@ describe("a revocation that outlives a restore of the token store", () => {
 
         expect(revoked.status).toBe(200);
         expect(pinned).toContain("eu");
+    });
+
+    it("keeps a half-revoked token visible as revoked, so its name can be freed", async () => {
+        expect.assertions(5);
+
+        const hooks: ShardHooks = {};
+        const { namespace, store } = fakeShards(hooks);
+        const worker = createWorker({ adminToken: ROOT, functions: REGISTRY, shardDO: namespace });
+
+        await call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "ci" }), method: "POST" });
+
+        // The revocation lands in the outside store, then deleting the row fails.
+        hooks.failRevoke = true;
+
+        await expect(status(call(worker, `${TOKENS}?name=ci`, ROOT, { method: "DELETE" }))).resolves.toBeGreaterThanOrEqual(500);
+
+        const listed = await call(worker, TOKENS, ROOT);
+
+        await expect(listed.json()).resolves.toStrictEqual({ tokens: [{ createdAt: expect.any(Number), name: "ci", revoked: true }] });
+
+        // Retried once the shard answers again: the row goes and the name is free.
+        hooks.failRevoke = false;
+
+        await expect(status(call(worker, `${TOKENS}?name=ci`, ROOT, { method: "DELETE" }))).resolves.toBe(200);
+        expect(store.has("ci")).toBe(false);
+        await expect(status(call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "ci" }), method: "POST" }))).resolves.toBe(201);
+    });
+
+    it("says so when no revocation store is bound instead of listing tokens as live", async () => {
+        expect.assertions(2);
+
+        const { namespace } = fakeShards();
+        const worker = createBareWorker({ adminToken: ROOT, functions: REGISTRY, shardDO: namespace });
+        const listed = await call(worker, TOKENS, ROOT);
+
+        expect(listed.status).toBe(400);
+        await expect(listed.json()).resolves.toMatchObject({ error: { code: "ADMIN_TOKEN_NOT_CONFIGURED" } });
     });
 
     it("refuses to create a token when no revocation store is bound", async () => {

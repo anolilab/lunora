@@ -1064,6 +1064,7 @@ const MESSAGE_IDS = [
     "Impersonate",
     "Impersonation token",
     "Revoke",
+    "Revoked",
     "Revoke all sessions",
     "Delete user",
     "Confirm delete",

@@ -218,7 +218,11 @@ const AdminTokensCard = (): ReactElement => {
                         <TableBody>
                             {tokens.map((token) => (
                                 <TableRow data-testid="set-admin-token-row" key={token.name}>
-                                    <TableCell className="font-mono text-xs">{token.name}</TableCell>
+                                    <TableCell className="font-mono text-xs">
+                                        {token.name}
+                                        {/* Refused already; the row only still holds the name until a revoke clears it. */}
+                                        {token.revoked === true && <span className="pl-2 text-destructive">{t("Revoked")}</span>}
+                                    </TableCell>
                                     <TableCell className="text-xs">{formatTimestamp(token.createdAt)}</TableCell>
                                     <TableCell className="text-xs">{formatTimestamp(token.lastUsedAt, "—")}</TableCell>
                                     <TableCell className="text-xs">{formatTimestamp(token.expiresAt, t("Never"))}</TableCell>

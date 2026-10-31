@@ -46,6 +46,12 @@ interface AdminTokenSummary {
     /** Epoch ms of the last verified use, refreshed at most once a minute. */
     lastUsedAt?: number;
     name: string;
+
+    /**
+     * Present and `true` when the token is revoked but its row is still stored, so it still holds the
+     * name: revoke it again to clear the row. A revoked token is refused regardless.
+     */
+    revoked?: boolean;
 }
 
 /** The answer to `POST /_lunora/admin/tokens` — the only response that ever carries the secret. */
@@ -108,21 +114,33 @@ const buildAdminTokenRoutes = (deps: AdminTokenRouteDeps): Record<string, (reque
         return Response.json({ ...stored, token }, { headers: NO_STORE, status: 201 });
     };
 
-    // A restore of the token store can bring a revoked row back; the revocation store still knows it
-    // is revoked, so the list must not present it as live.
+    // A token the revocation store holds is refused whatever its row says. It stays listed, flagged, because
+    // its row can outlive the revocation (a restore brought it back, or deleting it failed after the
+    // revocation was recorded) and still holds the name until a revoke clears it.
     const list = async (): Promise<Response> => {
-        const { tokens } = (await deps.callStore(LIST_ADMIN_TOKENS_OP, {})) as { tokens: AdminTokenSummary[] };
         const { revocations } = deps;
-        const checked = await Promise.all(
-            tokens.map(async (token) => {
-                const revoked = revocations === undefined ? [] : await revocations.revokedAt(token.name);
 
-                return revoked.includes(token.createdAt) ? undefined : token;
+        // Without the store every named token is refused, so a plain list would show unusable tokens as live.
+        if (revocations === undefined) {
+            throw new LunoraError(
+                "no admin revocation store is bound, so named admin tokens are refused; export AdminRevocationDO and bind ADMIN_REVOCATIONS",
+                {
+                    code: "ADMIN_TOKEN_NOT_CONFIGURED",
+                    status: 400,
+                },
+            );
+        }
+
+        const { tokens } = (await deps.callStore(LIST_ADMIN_TOKENS_OP, {})) as { tokens: AdminTokenSummary[] };
+        const checked = await Promise.all(
+            tokens.map(async (token): Promise<AdminTokenSummary> => {
+                const revoked = await revocations.revokedAt(token.name);
+
+                return revoked.includes(token.createdAt) ? { ...token, revoked: true } : token;
             }),
         );
-        const live = checked.filter((token) => token !== undefined);
 
-        return Response.json({ tokens: live }, { headers: NO_STORE });
+        return Response.json({ tokens: checked }, { headers: NO_STORE });
     };
 
     const revoke = async (request: Request): Promise<Response> => {
