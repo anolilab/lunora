@@ -48,6 +48,11 @@ const CLOUDFLARE_TOOLCHAIN: DriverToolchain = {
             args.push("--dry-run");
         }
 
+        // The path goes on argv, never the values: the file holds them.
+        if (request.secretsFile !== undefined) {
+            args.push("--secrets-file", request.secretsFile);
+        }
+
         // `--metafile` rides with `--outdir`: the esbuild metafile is what makes
         // the emitted bundle inspectable for CI artifacting.
         if (request.outDir !== undefined) {

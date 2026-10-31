@@ -62,6 +62,9 @@ lunora deploy [--env <name>]            # codegen, validate wrangler, then wrang
               [--prebuilt] [--dry-run]  #   --dry-run validates + bundles, never publishes
               [--temporary]             #   --temporary deploys with no account (~60min, then claim)
               [--health-check]          #   --health-check probes /_lunora/health/ready after deploying
+lunora preview deploy <name>            # isolated copy: own Worker, Durable Objects, D1, KV, R2
+               [--seed] [--secret <KEY>] [--var <KEY=VALUE>] [--dry-run]
+lunora preview list | delete <name> [--env <name>]  # previews on record (--env: that environment's account)
 lunora link --url <url> [--env <name>]  # link this checkout to its deployed worker
 lunora verify [--api-spec <spec>]       # dry-run codegen + tsc --noEmit (no files written)
               [--no-typecheck] [--lazy-functions]
@@ -218,7 +221,7 @@ Additional flags:
 
 - `--add <list>`: add features non-interactively after scaffolding — a comma-separated list of the values in the [`lunora add` table](#lunora-add), each applied with its shipped defaults. Bypasses the interactive picker and its sub-prompts.
 - `--dry-run`: walk every step (prompts and output included) without writing files, installing, or running git.
-- `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch **and** a `lunora deploy --dry-run` check on every pull / merge request. Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables (on GitLab mark every one, `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN` included, Masked **and Protected** with Environment scope `production`: protected variables reach only protected branches and tags, so a merge-request pipeline, which runs your project's code, gets none of them, and only the `deploy` job declares `environment: production`), and after the first deploy `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN`, which let the production deploy's drift gate read the stored rows. That read only happens for a custom domain on a declared route: a `*.workers.dev` URL needs a project link, and `.lunora/` is not committed, so on `*.workers.dev` a tightening in CI still needs a migration or `--allow-schema-drift`.
+- `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch, a [`lunora preview deploy <number>`](#lunora-preview) on every pull / merge request, and a `lunora preview delete <number>` once it is closed or merged (a fork's or Dependabot's pull request, and a fork's merge request, gets a `lunora deploy --dry-run` check instead, since it receives no secrets). Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables, and on GitHub a separate `CLOUDFLARE_PREVIEW_API_TOKEN` that only the `lunora preview` steps receive (on GitLab mark every production one, `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN` included, Masked **and Protected** with Environment scope `production`: protected variables reach only protected branches and tags, so a merge-request pipeline, which runs your project's code, gets none of them, and only the `deploy` job declares `environment: production`). On GitLab, previews need their own `CLOUDFLARE_API_TOKEN` (Workers Scripts, D1, KV and R2 edit; never the production token) and `CLOUDFLARE_ACCOUNT_ID`, Masked but not Protected, with Environment scope `preview/*`, which only the preview jobs receive. After the first deploy set `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN`, which let the production deploy's drift gate read the stored rows. That read only happens for a custom domain on a declared route: a `*.workers.dev` URL needs a project link, and `.lunora/` is not committed, so on `*.workers.dev` a tightening in CI still needs a migration or `--allow-schema-drift`.
 
 ### `lunora add`
 
@@ -674,8 +677,8 @@ link, since that account is gone in an hour.
 
 `--preview` is refused. Cloudflare gives a Worker that implements a Durable
 Object no version preview URL, and a version shares production's Durable
-Objects, D1 and R2. Deploy an isolated copy with `--env <name>` instead (see
-[Environments](/docs/concepts/environments#preview-deployments)).
+Objects, D1 and R2. Deploy an isolated copy with
+[`lunora preview deploy <name>`](#lunora-preview) instead.
 
 #### Cloudflare CLI (`cf`)
 
@@ -753,6 +756,125 @@ fi
 
 curl -fsS "$url/api/smoke"
 ```
+
+### `lunora preview`
+
+An isolated copy of the app per pull request, and the way to remove it.
+
+```bash
+lunora preview deploy 123                         # deploy, migrate, print the URL
+lunora preview deploy 123 --seed                  # …then fill it with `lunora seed` data
+lunora preview deploy 123 --secret RESEND_API_KEY # give it a secret from the environment
+lunora preview deploy 123 --var AUTH_URL=https://my-app-preview-123.acme.workers.dev
+lunora preview deploy 123 --dry-run               # show the Worker, resources and env block, no API call
+lunora preview delete 123 --dry-run               # read the record, show what would go, change nothing
+lunora preview list
+lunora preview delete 123
+```
+
+`deploy <name>` deploys a separate Worker, `<worker>-preview-<name>` (the name
+is lowercased to letters, digits and dashes, and shortened with a hash past 63
+characters), so it gets its own Durable Object namespace. Every D1 database,
+KV namespace and R2 bucket the app binds gets a preview-owned one, named
+`<preview-worker>-<binding>`. The deploy is the normal `lunora deploy`
+pipeline under a transient `env.preview-<name>` block that clears production's
+`routes`, custom domains and cron triggers and turns on `workers_dev`. The block is removed
+from `wrangler.jsonc` when the command ends. The pipeline's data migrations run
+against the preview, and `--seed` runs `lunora seed` against it afterwards. The
+preview never touches the project link, the schema baseline, or the
+architecture baseline.
+
+Vars: production's `vars` and `define` are copied as they are. A value that
+must differ in the preview, such as an auth base URL or a CORS origin, is set
+with `--var KEY=VALUE` (repeatable). The preview's URL is known before the
+deploy: `https://<preview-worker>.<your-subdomain>.workers.dev`.
+
+Secrets: the preview gets a minted value for every secret Lunora can generate
+(its own `LUNORA_ADMIN_TOKEN`, `AUTH_SECRET`, …), uploaded with the deploy.
+Cloudflare secrets cannot be read back, so each deploy mints new values, which
+signs out a preview's sessions. Set `LUNORA_PREVIEW_SECRET_SEED` to any long
+random string and the values are derived from it, the preview Worker and the
+key instead, so they stay the same across deploys. A provider key is copied
+only when you name it with `--secret KEY`, and the value is read from the
+environment variable of the same name. Production's values are never read.
+The scaffolded GitHub job passes the seed to the step that builds a pull
+request's code. That job already holds `CLOUDFLARE_API_TOKEN`, which can
+redeploy any preview with any secrets, and it runs only for pull requests from
+the same repository (never forks), so the seed gives that code no access it
+lacks. Do not run previews for untrusted pull requests: anyone whose code runs
+in the job controls the account's previews.
+
+What a preview owns is recorded in the account, in a KV namespace called
+`lunora-preview-registry`, one record per preview, written as soon as each
+resource exists. That way a fresh CI runner can delete it. A `deploy` and a
+`delete` of one preview never overlap, wherever they run: each takes a hold,
+a row in a small D1 database called `lunora-preview-locks` that the preview
+commands create on first use and use for nothing else. The row is inserted
+atomically (a second taker gets a constraint error), a hold older than 30
+minutes is taken over by an update that only one taker can win, and a run lets
+go by deleting its own row. Any other failure while taking the hold refuses the
+run. The record names each resource before it is created and confirms it after,
+so a resource whose confirming write failed is taken back at once by the id its create returned. `delete` removes only what the record proves it made: a confirmed entry whose id still names a resource of the recorded name. An entry that is only claimed (a deploy was killed between creating it and confirming it) is never deleted by name, since whatever carries the name may be another actor's; it is reported and stays on record until you look. `delete` also refuses to
+report "no record" while the preview's Worker or a resource under its names is
+still in the account (a record this location has not seen yet, or an app id that
+differs from the one that deployed it), and exits `1` instead. A record is keyed by
+the project's id, `lunora.appId` in `package.json`, not by the Worker's
+name: the first local `lunora preview deploy` writes the id (commit it), a CI run refuses to
+mint one because its checkout is discarded, and two apps that share a Worker
+name never see each other's previews. Renaming the Worker leaves existing
+previews findable, and `delete` removes them under the name they were made
+with. A preview recorded under the Worker name, from before projects had an id,
+is re-keyed the next time you `deploy` or `delete` it (not by `delete --dry-run`, which changes nothing) (`list` shows it with a
+note); without an id in `package.json` that is refused with the line to add. `delete <name>`
+deletes the preview Worker (with its Durable Objects) and then each recorded
+resource. It refuses a preview with no record, a record whose Worker is not the
+derived preview name, a record that names any id or name production's config
+(any environment) uses, and a record whose ids no longer name the resources it
+lists. A deploy never adopts an existing resource that
+has a preview name but no record. The preview Worker carries a `LUNORA_PREVIEW`
+var (`<worker>/<name>`): a deploy refuses to replace a Worker with the preview's
+name that lacks it, and `delete` refuses to remove one. An R2 bucket is emptied before it is
+deleted. A resource that cannot be deleted stays on record for the next
+`delete`.
+
+An app that binds anything a preview cannot isolate yet is refused with the
+list: Hyperdrive, service bindings, queues, workflows, Vectorize, Analytics
+Engine, the `analytics` (Analytics SQL) binding, which reads the account's datasets, `send_email`, which would send mail through production's sender, containers, Artifacts, `lunora.config` services, a Durable Object on
+another Worker's `script_name`, a singular `route`, an R2 bucket with a
+jurisdiction, a binding that exists only inside an `env.<name>` block when no `--env` is given (a preview is otherwise planned from the top-level config, which would lack it), or any binding kind the CLI does not know.
+
+`--env <name>` plans the preview from that Wrangler environment instead, the way Wrangler builds it for `lunora deploy --env <name>`: the top level's settings (entry point, compatibility date and flags, assets, migrations) with the environment's own laid over them, and only the vars and bindings the environment declares, since an environment does not inherit those. The preview Worker is named from the environment's own `name` (else `<name>-<env>`), so a binding that lives only in `env.<name>` gets its own preview copy. An unknown name is refused with the list of valid ones. The environment is recorded with the preview, so `delete` removes exactly what was created. Only the account it is looked up in is not recorded: when an environment names an `account_id` other than the top level's, pass the same `--env <name>` to `list` and `delete` (or set `CLOUDFLARE_ACCOUNT_ID`); without either they refuse rather than guess the account. The scaffolded CI pipelines leave it unset. A `secrets.required`
+entry has to be passed with `--secret`; the preview refuses before creating
+anything otherwise. Copying any of these would point the preview
+at production's resource.
+
+A preview name that needed cleaning (`foo_bar`, `Foo-Bar`) gets a short hash
+of the original appended, so it never shares a Worker, record or resources with
+`foo-bar`; a name already in the alphabet, such as a pull request number, is
+used as it is. A production `LUNORA_ORIGIN_URL` var is replaced by the
+preview's own URL (the scheduler dispatches to it); `--var` still overrides. The
+URL the preview is recorded and migrated under is built from its Worker name
+and your workers.dev subdomain, never read from wrangler's output. The
+`lunora-preview-locks` database is only used when it carries a marker table
+the preview commands write when they make it; a database of that name that
+did not come from them is refused and never written to. A hold is renewed while
+a run works, an interrupt (Ctrl-C, a cancelled CI job) puts the config back and
+removes the secrets file before the process exits, and `delete` empties a
+bucket of any size, refusing (and keeping the bucket on record) an object whose
+key has a `.` or `..` segment, since that cannot be addressed without leaving the bucket.
+
+It needs `CLOUDFLARE_API_TOKEN` with Workers Scripts, D1, Workers KV Storage
+and Workers R2 Storage edit permissions, plus `CLOUDFLARE_ACCOUNT_ID` (or
+`account_id`), and a registered workers.dev subdomain. For CI, create a custom
+token (My Profile > API Tokens > Create Custom Token) with only those four
+Account permissions and Account Resources limited to the one account, never the
+production token. Cloudflare cannot limit a token to the preview-named
+resources, so on GitLab, where the token is Masked but not Protected and so
+readable by anyone who can push a branch, that person can edit or delete every
+Worker, D1 database, KV namespace and R2 bucket on the account. If production
+shares the account, give previews an account of their own. It works on Cloudflare
+only. celld has no Wrangler environments, so deploy a separate config with its
+own `CELLD_BUCKET` instead. The Node target has no deploy.
 
 ### `lunora build`
 

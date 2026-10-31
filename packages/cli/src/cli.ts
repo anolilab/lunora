@@ -29,6 +29,7 @@ import { mcpCommand } from "./commands/mcp";
 import { migrateCommand } from "./commands/migrate";
 import { pauseCommand, resumeCommand } from "./commands/pause";
 import { prepareCommand } from "./commands/prepare";
+import { previewCommand } from "./commands/preview";
 import { profileCommand } from "./commands/profile";
 import { registryCommand } from "./commands/registry/command";
 import { resetCommand } from "./commands/reset";
@@ -58,6 +59,7 @@ const COMMANDS = [
     "build",
     "deploy",
     "prepare",
+    "preview",
     "link",
     "cloudflare",
     "logs",
@@ -101,6 +103,7 @@ const CLI_COMMANDS = [
     buildCommand,
     deployCommand,
     prepareCommand,
+    previewCommand,
     linkCommand,
     cloudflareCommand,
     logsCommand,

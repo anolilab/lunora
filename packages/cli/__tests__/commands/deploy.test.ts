@@ -689,6 +689,7 @@ describe("lunora deploy", () => {
             it.each([
                 ["--skip-services", { skipServices: true }, "--skip-services"],
                 ["--temporary", { temporary: true }, "--temporary deploys the app to a throwaway account"],
+                ["an isolated preview", { isolatedPreview: true }, "a preview never deploys services: they are production's Workers"],
             ] as const)("deploys no service on %s, and says why", async (_label, extra, reason) => {
                 expect.assertions(2);
 
@@ -1123,7 +1124,7 @@ describe("lunora deploy", () => {
 
             const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, preview: true, spawner });
 
-            expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/--preview is not supported.*--env <name>/u) });
+            expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/--preview is not supported.*lunora preview deploy <name>/u) });
             expect(calls).toHaveLength(0);
             expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
         });
