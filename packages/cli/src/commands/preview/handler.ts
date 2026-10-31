@@ -608,14 +608,17 @@ interface Hold {
     verify: () => Promise<void>;
 }
 
-/** Whether a Worker by this name is in the account; a lookup that fails counts as no, since it only decides whether to record a URL. */
-const workerPublished = async (request: Request, worker: string): Promise<boolean> => {
+/**
+ * What the account says about the preview's Worker after a deploy: `present` when it was deployed as this preview,
+ * `absent` when there is none (or one this preview did not deploy), `unknown` when the lookup failed, which decides nothing.
+ */
+const workerState = async (request: Request, worker: string, marker: string): Promise<"absent" | "present" | "unknown"> => {
     try {
         const found = await workerMarker(request, worker, PREVIEW_MARKER_VAR);
 
-        return found.exists;
+        return found.exists && found.marker === marker ? "present" : "absent";
     } catch {
-        return false;
+        return "unknown";
     }
 };
 
@@ -747,10 +750,13 @@ const shipHeld = async (
         // seed carries the preview's admin token, which must only go where the migrations went. Recorded only for a Worker
         // that is there: a deploy that failed before publishing leaves nothing at it, but one that published and then failed
         // its health check does, and `preview list` should point at it.
-        const published = deployed.code === 0 || (await workerPublished(request, plan.worker));
+        const worker = deployed.code === 0 ? "present" : await workerState(request, plan.worker, previewMarker(plan));
 
-        if (published) {
+        if (worker === "present") {
             record.url = url;
+        } else if (worker === "absent") {
+            // A URL stored by an earlier deploy points at a Worker that is no longer there.
+            delete record.url;
         }
 
         record.updatedAt = new Date().toISOString();
@@ -950,13 +956,17 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
     }
 
     const putBack = (): void => {
-        restore();
-        lock.release();
+        try {
+            restore();
 
-        if (baselineBefore === undefined) {
-            rmSync(baselinePath, { force: true });
-        } else if (!baselineBefore.equals(existsSync(baselinePath) ? readFileSync(baselinePath) : Buffer.alloc(0))) {
-            writeFileSync(baselinePath, baselineBefore);
+            if (baselineBefore === undefined) {
+                rmSync(baselinePath, { force: true });
+            } else if (!baselineBefore.equals(existsSync(baselinePath) ? readFileSync(baselinePath) : Buffer.alloc(0))) {
+                writeFileSync(baselinePath, baselineBefore);
+            }
+        } finally {
+            // Last: another run that takes the lock earlier would read this run's temporary baseline as the checkout's own.
+            lock.release();
         }
     };
     // A killed process runs no `finally`: an interrupt must also leave the config as it found it and let go of the lock.

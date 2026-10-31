@@ -21,6 +21,23 @@ import type { Logger } from "../../src/util/logger";
 import type { Spawner } from "../../src/util/spawn";
 
 const here = dirname(fileURLToPath(import.meta.url));
+// Lets a test see, when the baseline is put back, whether the checkout lock is still held.
+const removals = vi.hoisted(() => {
+    return { observe: undefined as ((path: string) => void) | undefined };
+});
+
+vi.mock(import("node:fs"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return {
+        ...actual,
+        rmSync: (path: Parameters<typeof actual.rmSync>[0], options?: Parameters<typeof actual.rmSync>[1]) => {
+            removals.observe?.(String(path));
+            actual.rmSync(path, options);
+        },
+    };
+});
+
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
 
 /** Every production identity below; none may reach a preview's env block. */
@@ -880,6 +897,30 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             } as PreviewConfig;
 
             expect(planPreview(twoDatabases, "42").error).toMatch(/two bindings would share the preview resource name "lunora-app-preview-42-db"/u);
+        });
+
+        it("lets bindings of different kinds share a name, since each kind has its own namespace in the account", () => {
+            expect.assertions(2);
+
+            const mixed = {
+                ...production,
+                d1_databases: [{ binding: "DB", database_id: "prod-d1-uuid", database_name: "prod-db" }],
+                kv_namespaces: [{ binding: "db", id: "prod-kv-id" }],
+            } as PreviewConfig;
+            const planned = planPreview(mixed, "42");
+
+            expect(planned.error).toBeUndefined();
+            expect(planned.plan?.resources.map((resource) => resource.kind).toSorted()).toStrictEqual(["d1", "kv", "r2"]);
+        });
+
+        it("refuses an isolated-resource entry that has no binding, before planning any resource for it", () => {
+            expect.assertions(2);
+
+            const unbound = { name: "lunora-app", d1_databases: [{ database_id: "prod-d1-uuid", database_name: "prod-db" }] } as PreviewConfig;
+            const planned = planPreview(unbound, "42");
+
+            expect(planned.plan).toBeUndefined();
+            expect(planned.error).toMatch(/"d1_databases": every entry needs a non-empty "binding"/u);
         });
 
         it("copies the build-time constants, which wrangler does not inherit into an environment", () => {
@@ -1847,6 +1888,112 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(result.code).not.toBe(0);
             expect(result.error).toMatch(/does not name this project and preview/u);
             expect(registry.has(`${APP_ID}/7`)).toBe(false);
+        });
+
+        it("records no URL for a Worker of that name that this preview did not deploy", async () => {
+            expect.assertions(2);
+
+            const account = fakeAccount();
+            const { spawner: inner } = wranglerAt(workdir, account.workers);
+            const racing: Spawner = async (descriptor) => {
+                if (descriptor.args.includes("deploy") && descriptor.args.includes("--env")) {
+                    // Someone else's Worker takes the name while the deploy fails.
+                    account.workers.set("lunora-app-preview-42", "another-app/42");
+
+                    return { code: 1, stdout: "" };
+                }
+
+                return inner(descriptor);
+            };
+
+            const result = await deployWith(account, racing);
+            const record = JSON.parse(registryValues(account).get(`${APP_ID}/42`) ?? "{}") as { url?: string };
+
+            expect(result.code).not.toBe(0);
+            expect(record.url).toBeUndefined();
+        });
+
+        it("clears the stored URL when a failed redeploy finds the Worker gone, and keeps it when the lookup itself fails", async () => {
+            expect.assertions(3);
+
+            const account = fakeAccount();
+            const { spawner: inner } = wranglerAt(workdir, account.workers);
+
+            await deployWith(account, inner);
+
+            const urlOf = (): string | undefined => (JSON.parse(registryValues(account).get(`${APP_ID}/42`) ?? "{}") as { url?: string }).url;
+
+            expect(urlOf()).toBe(PREVIEW_URL);
+
+            // The deploy fails, and the settings lookup after it fails too: unknown is not absent.
+            let deployFailed = false;
+            const failingSpawner: Spawner = async (descriptor) => {
+                if (descriptor.args.includes("deploy") && descriptor.args.includes("--env")) {
+                    deployFailed = true;
+
+                    return { code: 1, stdout: "" };
+                }
+
+                return inner(descriptor);
+            };
+            const brokenLookup = (async (input: RequestInfo | URL, init?: RequestInit) =>
+                deployFailed && /\/workers\/scripts\//u.test(new URL(input as string).pathname)
+                    ? new Response("{}", { status: 500 })
+                    : account.fetch(input, init)) as typeof globalThis.fetch;
+
+            await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: brokenLookup,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner: failingSpawner,
+                subcommand: "deploy",
+            });
+
+            expect(urlOf()).toBe(PREVIEW_URL);
+
+            // The Worker was removed outside the CLI and the redeploy failed before publishing it again.
+            account.workers.clear();
+            await deployWith(account, failingSpawner);
+
+            expect(urlOf()).toBeUndefined();
+        });
+
+        it("keeps the checkout lock until the schema baseline is put back", async () => {
+            expect.assertions(2);
+
+            const baselinePath = join(workdir, "lunora", ".lunora-schema.json");
+            const lockPath = join(workdir, ".lunora", "preview.lock");
+
+            rmSync(baselinePath, { force: true });
+
+            const lockedWhenRemoved: boolean[] = [];
+
+            removals.observe = (path) => {
+                if (path === baselinePath) {
+                    lockedWhenRemoved.push(existsSync(lockPath));
+                }
+            };
+
+            try {
+                await runPreviewCommand({
+                    cwd: workdir,
+                    dryRun: true,
+                    environment: CREDENTIALS,
+                    fetch: fakeAccount().fetch,
+                    logger: silentLogger().logger,
+                    name: "42",
+                    subcommand: "deploy",
+                });
+            } finally {
+                removals.observe = undefined;
+            }
+
+            expect(lockedWhenRemoved).toStrictEqual([true]);
+            expect(existsSync(lockPath)).toBe(false);
         });
 
         it("marks the lock database it makes, and uses it again on the next run", async () => {

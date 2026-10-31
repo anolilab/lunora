@@ -325,10 +325,20 @@ const planPreview = (config: PreviewConfig, name: string, fromEnv?: string): { e
         return { error: `this app cannot be previewed in isolation yet:\n  - ${refusals.join("\n  - ")}` };
     }
 
+    // A missing `binding` would be planned as the string "undefined", and its resource made before the config is rejected.
+    const unbound = Object.keys(ISOLATED_KEYS).find((key) =>
+        entriesOf((config as Record<string, unknown>)[key]).some((entry) => typeof entry.binding !== "string" || entry.binding === ""),
+    );
+
+    if (unbound !== undefined) {
+        return { error: `"${unbound}": every entry needs a non-empty "binding"` };
+    }
+
     const resources = previewResources(config, worker);
 
-    // Binding names are case-sensitive but resource names are lowercase, so `DB` and `db` would share one.
-    const shared = resources.find((resource, index) => resources.findIndex((other) => other.name === resource.name) !== index);
+    // Binding names are case-sensitive but resource names are lowercase, so `DB` and `db` would share one. A D1 database, a KV
+    // namespace and an R2 bucket live in separate namespaces of the account, so only the same kind collides.
+    const shared = resources.find((resource, index) => resources.findIndex((other) => other.kind === resource.kind && other.name === resource.name) !== index);
 
     if (shared !== undefined) {
         return {
