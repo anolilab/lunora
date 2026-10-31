@@ -2159,7 +2159,7 @@ const GLOBAL_READER_TERMINALS: ReadonlyMap<PropertyKey, GlobalResultShape> = new
  * string the local meter sizes, so it is serialised once with `estimateBytes` (the same UTF-16 unit
  * local reads and writes use) and charged once per transaction by its `_id`.
  */
-const chargeGlobalDocument = (document: unknown, headroom: TransactionHeadroomTracker): void => {
+const chargeGlobalDocument = (document: unknown, table: string, headroom: TransactionHeadroomTracker): void => {
     if (typeof document !== "object" || document === null) {
         return;
     }
@@ -2173,7 +2173,7 @@ const chargeGlobalDocument = (document: unknown, headroom: TransactionHeadroomTr
     const id = (document as Record<string, unknown>)["_id"];
 
     if (typeof id === "string") {
-        headroom.recordDocumentRead(`global\u0000${id}`, bytes);
+        headroom.recordDocumentRead(`global\u0000${table}\u0000${id}`, bytes);
     } else {
         headroom.recordReadBytes(bytes);
     }
@@ -2184,7 +2184,7 @@ const chargeGlobalDocument = (document: unknown, headroom: TransactionHeadroomTr
  * happens to have a `page`, `row` or `document` field is sized whole. Rows are charged one at a time, so
  * a result over the ceiling throws part-way, as a local `toArray()` does.
  */
-const chargeGlobalResult = (result: unknown, shape: GlobalResultShape, headroom: TransactionHeadroomTracker): void => {
+const chargeGlobalResult = (result: unknown, shape: GlobalResultShape, table: string, headroom: TransactionHeadroomTracker): void => {
     if (typeof result !== "object" || result === null) {
         return;
     }
@@ -2193,20 +2193,20 @@ const chargeGlobalResult = (result: unknown, shape: GlobalResultShape, headroom:
 
     switch (shape) {
         case "lookup": {
-            chargeGlobalDocument(record["row"], headroom);
+            chargeGlobalDocument(record["row"], typeof record["tableName"] === "string" ? record["tableName"] : table, headroom);
 
             return;
         }
         case "page": {
             for (const document of (record["page"] as unknown[] | undefined) ?? []) {
-                chargeGlobalDocument(document, headroom);
+                chargeGlobalDocument(document, table, headroom);
             }
 
             return;
         }
         case "rows": {
             for (const document of Array.isArray(result) ? result : [result]) {
-                chargeGlobalDocument(document, headroom);
+                chargeGlobalDocument(document, table, headroom);
             }
 
             return;
@@ -2214,13 +2214,13 @@ const chargeGlobalResult = (result: unknown, shape: GlobalResultShape, headroom:
         default: {
             // "scored": hits wrap the document
             for (const hit of Array.isArray(result) ? result : []) {
-                chargeGlobalDocument((hit as Record<string, unknown>)["document"], headroom);
+                chargeGlobalDocument((hit as Record<string, unknown>)["document"], table, headroom);
             }
         }
     }
 };
 
-const meterGlobalReader = <Reader extends object>(reader: Reader, headroom: TransactionHeadroomTracker): Reader =>
+const meterGlobalReader = <Reader extends object>(reader: Reader, table: string, headroom: TransactionHeadroomTracker): Reader =>
     new Proxy(reader, {
         get: (target, property) => {
             const member: unknown = Reflect.get(target, property, target);
@@ -2232,7 +2232,7 @@ const meterGlobalReader = <Reader extends object>(reader: Reader, headroom: Tran
             if (property === Symbol.asyncIterator) {
                 return async function* chargedDocuments(): AsyncGenerator {
                     for await (const document of Reflect.apply(member, target, []) as AsyncIterable<unknown>) {
-                        chargeGlobalDocument(document, headroom);
+                        chargeGlobalDocument(document, table, headroom);
 
                         yield document;
                     }
@@ -2246,13 +2246,13 @@ const meterGlobalReader = <Reader extends object>(reader: Reader, headroom: Tran
 
                 if (shape !== undefined) {
                     return Promise.resolve(result).then((rows) => {
-                        chargeGlobalResult(rows, shape, headroom);
+                        chargeGlobalResult(rows, shape, table, headroom);
 
                         return rows;
                     });
                 }
 
-                return typeof result === "object" && result !== null && !(result instanceof Promise) ? meterGlobalReader(result, headroom) : result;
+                return typeof result === "object" && result !== null && !(result instanceof Promise) ? meterGlobalReader(result, table, headroom) : result;
             };
         },
     });
@@ -2272,7 +2272,7 @@ const meterGlobalDatabase = (global: DatabaseWriterLike | undefined, headroom: T
             }
 
             if (property === "query") {
-                return (...args: unknown[]): unknown => meterGlobalReader(Reflect.apply(member, target, args) as object, headroom);
+                return (...args: unknown[]): unknown => meterGlobalReader(Reflect.apply(member, target, args) as object, String(args[0]), headroom);
             }
 
             const shape = GLOBAL_ROW_READS.get(property);
@@ -2284,7 +2284,7 @@ const meterGlobalDatabase = (global: DatabaseWriterLike | undefined, headroom: T
             return async (...args: unknown[]): Promise<unknown> => {
                 const result: unknown = await Reflect.apply(member, target, args);
 
-                chargeGlobalResult(result, shape, headroom);
+                chargeGlobalResult(result, shape, String(args[0]), headroom);
 
                 return result;
             };

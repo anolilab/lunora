@@ -425,6 +425,33 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
                 ).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
             });
 
+            it("charges equal ids held by two global tables separately", async () => {
+                expect.assertions(1);
+
+                const twoGlobals: SchemaLike = {
+                    tables: {
+                        a: { ...globalSchema.tables["shared"]! },
+                        b: { ...globalSchema.tables["shared"]! },
+                    },
+                };
+                const tracker = new TransactionHeadroomTracker();
+                const writer = createShardContextDatabase({
+                    clock: () => 1_700_000_000_000,
+                    globalDb: { get: async () => rows[0] } as unknown as DatabaseWriterLike,
+                    headroom: tracker,
+                    schema: twoGlobals,
+                    sql,
+                });
+
+                await writer.get("a", "g0");
+
+                const once = tracker.headroom().readBytes;
+
+                await writer.get("b", "g0");
+
+                expect(tracker.headroom().readBytes).toBe(once * 2);
+            });
+
             it("charges a global row once however often it is read", async () => {
                 expect.assertions(3);
 
