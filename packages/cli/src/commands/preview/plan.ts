@@ -235,6 +235,13 @@ const environmentConfig = (config: PreviewConfig, envName: string): { config: Pr
     return { config: { ...inherited, ...found, env: config.env, name: typeof found.name === "string" ? found.name : `${top}-${envName}` } };
 };
 
+/** The user's environments that name an `account_id` other than the top level's: previews made with `--env` there live in another account. */
+const accountsOfEnvironments = (config: PreviewConfig): string[] =>
+    Object.entries(config.env ?? {})
+        .filter(([key, block]) => !isPreviewBlock(config, key, block))
+        .filter(([, block]) => typeof block.account_id === "string" && block.account_id !== "" && block.account_id !== config.account_id)
+        .map(([key]) => key);
+
 /** The name of the resource a preview Worker owns for `binding`. */
 const previewResourceName = (worker: string, binding: string): string => boundedName(`${worker}-${binding}`, NAME_LIMIT);
 
@@ -453,6 +460,7 @@ const productionCollisions = (config: PreviewConfig, candidates: ReadonlyArray<s
 
 export type { PlannedResource, PreviewConfig, PreviewNames, PreviewPlan, PreviewResourceKind, ResourceIds };
 export {
+    accountsOfEnvironments,
     environmentConfig,
     planPreview,
     PREVIEW_MARKER_VAR,

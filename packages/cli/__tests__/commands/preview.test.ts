@@ -2357,6 +2357,102 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(account.workers.has("lunora-app-prod-preview-42")).toBe(false);
         });
 
+        describe("account of an environment", () => {
+            const TOKEN_ONLY = { CLOUDFLARE_API_TOKEN: "token" };
+
+            const inOtherAccount = (): void => {
+                withEnvironment();
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    readFileSync(join(workdir, "wrangler.jsonc"), "utf8")
+                        .replace('"name": "lunora-app",', '"name": "lunora-app",\n    "account_id": "acct-top",')
+                        .replace('"production": { "name": "lunora-app-prod",', '"production": { "account_id": "acct-env", "name": "lunora-app-prod",'),
+                    "utf8",
+                );
+            };
+
+            const attempt = async (
+                account: ReturnType<typeof fakeAccount>,
+                subcommand: "delete" | "list",
+                extra: { env?: string; environment?: Record<string, string> } = {},
+            ): Promise<{ result: Awaited<ReturnType<typeof runPreviewCommand>>; urls: string[] }> => {
+                const urls: string[] = [];
+                const result = await runPreviewCommand({
+                    cwd: workdir,
+                    environment: extra.environment ?? TOKEN_ONLY,
+                    ...(extra.env === undefined ? {} : { env: extra.env }),
+                    fetch: async (input, init) => {
+                        urls.push(new Request(input).url);
+
+                        return account.fetch(input, init);
+                    },
+                    logger: silentLogger().logger,
+                    name: "42",
+                    subcommand,
+                });
+
+                return { result, urls };
+            };
+
+            const deployToEnvAccount = async (): Promise<ReturnType<typeof fakeAccount>> => {
+                inOtherAccount();
+
+                const account = fakeAccount();
+                const { spawner } = wranglerAt(workdir, account.workers);
+                const deploy = await runPreviewCommand({
+                    adminFetch: adminRecorder().fetch,
+                    cwd: workdir,
+                    env: "production",
+                    environment: TOKEN_ONLY,
+                    fetch: account.fetch,
+                    healthFetch: healthy,
+                    logger: silentLogger().logger,
+                    name: "42",
+                    spawner,
+                    subcommand: "deploy",
+                });
+
+                expect(deploy.code).toBe(0);
+
+                return account;
+            };
+
+            it("looks up delete and list in the --env account, as deploy does", async () => {
+                expect.assertions(8);
+
+                const account = await deployToEnvAccount();
+                const listed = await attempt(account, "list", { env: "production" });
+                const deleted = await attempt(account, "delete", { env: "production" });
+
+                expect(listed.result.code).toBe(0);
+                expect(listed.urls.every((url) => url.includes("/accounts/acct-env/"))).toBe(true);
+                expect(listed.urls.length).toBeGreaterThan(0);
+                expect(deleted.result.code).toBe(0);
+                expect(deleted.urls.every((url) => url.includes("/accounts/acct-env/"))).toBe(true);
+                expect(deleted.urls.length).toBeGreaterThan(0);
+                expect(account.workers.has("lunora-app-prod-preview-42")).toBe(false);
+            });
+
+            it("refuses to guess the account for delete and list when an environment names another one", async () => {
+                expect.assertions(8);
+
+                const account = await deployToEnvAccount();
+                const listed = await attempt(account, "list");
+                const deleted = await attempt(account, "delete");
+
+                for (const refused of [listed, deleted]) {
+                    expect(refused.result.code).toBe(EXIT_CODE.AUTH);
+                    expect(refused.result.error).toMatch(/--env <name>.*CLOUDFLARE_ACCOUNT_ID/u);
+                    expect(refused.urls).toStrictEqual([]);
+                }
+
+                // CLOUDFLARE_ACCOUNT_ID is an explicit choice, so it is not refused.
+                const chosen = await attempt(account, "list", { environment: { ...TOKEN_ONLY, CLOUDFLARE_ACCOUNT_ID: "acct-top" } });
+
+                expect(chosen.result.error).toBeUndefined();
+            });
+        });
+
         it("does not call an env-based preview gone when its record cannot be read but its Worker is still there", async () => {
             expect.assertions(3);
 

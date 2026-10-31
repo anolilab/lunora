@@ -64,7 +64,7 @@ lunora deploy [--env <name>]            # codegen, validate wrangler, then wrang
               [--health-check]          #   --health-check probes /_lunora/health/ready after deploying
 lunora preview deploy <name>            # isolated copy: own Worker, Durable Objects, D1, KV, R2
                [--seed] [--secret <KEY>] [--var <KEY=VALUE>] [--dry-run]
-lunora preview list | delete <name>     # previews on record; delete removes everything recorded
+lunora preview list | delete <name> [--env <name>]  # previews on record (--env: that environment's account)
 lunora link --url <url> [--env <name>]  # link this checkout to its deployed worker
 lunora verify [--api-spec <spec>]       # dry-run codegen + tsc --noEmit (no files written)
               [--no-typecheck] [--lazy-functions]
@@ -843,7 +843,7 @@ Engine, the `analytics` (Analytics SQL) binding, which reads the account's datas
 another Worker's `script_name`, a singular `route`, an R2 bucket with a
 jurisdiction, a binding that exists only inside an `env.<name>` block when no `--env` is given (a preview is otherwise planned from the top-level config, which would lack it), or any binding kind the CLI does not know.
 
-`--env <name>` plans the preview from that Wrangler environment instead, the way Wrangler builds it for `lunora deploy --env <name>`: the top level's settings (entry point, compatibility date and flags, assets, migrations) with the environment's own laid over them, and only the vars and bindings the environment declares, since an environment does not inherit those. The preview Worker is named from the environment's own `name` (else `<name>-<env>`), so a binding that lives only in `env.<name>` gets its own preview copy. An unknown name is refused with the list of valid ones. The environment is recorded with the preview, so `delete` needs no `--env` and removes exactly what was created. The scaffolded CI pipelines leave it unset. A `secrets.required`
+`--env <name>` plans the preview from that Wrangler environment instead, the way Wrangler builds it for `lunora deploy --env <name>`: the top level's settings (entry point, compatibility date and flags, assets, migrations) with the environment's own laid over them, and only the vars and bindings the environment declares, since an environment does not inherit those. The preview Worker is named from the environment's own `name` (else `<name>-<env>`), so a binding that lives only in `env.<name>` gets its own preview copy. An unknown name is refused with the list of valid ones. The environment is recorded with the preview, so `delete` removes exactly what was created. Only the account it is looked up in is not recorded: when an environment names an `account_id` other than the top level's, pass the same `--env <name>` to `list` and `delete` (or set `CLOUDFLARE_ACCOUNT_ID`); without either they refuse rather than guess the account. The scaffolded CI pipelines leave it unset. A `secrets.required`
 entry has to be passed with `--secret`; the preview refuses before creating
 anything otherwise. Copying any of these would point the preview
 at production's resource.

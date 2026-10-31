@@ -113,8 +113,10 @@ other's. `delete` acts only on that record, and refuses a record that names anyt
 production's config uses. An app whose bindings live only inside `env.<name>` is previewed with
 `lunora preview deploy <number> --env <name>`, which plans from that
 environment (the top level with `env.<name>` laid over it); without it such an
-app is refused. The environment is recorded with the preview, so `delete` needs
-no flag. An app binding something a preview cannot isolate
+app is refused. The environment is recorded with the preview, so `delete` removes
+exactly what was created; if the environment names an `account_id` other than the
+top level's, pass the same `--env <name>` to `list` and `delete` (or set
+`CLOUDFLARE_ACCOUNT_ID`), which otherwise refuse rather than guess the account. An app binding something a preview cannot isolate
 yet (Hyperdrive, service bindings, queues, workflows, Vectorize, …) is refused
 with the list. See [`lunora preview`](/docs/packages/cli#lunora-preview) for
 the details and the API token permissions it needs.

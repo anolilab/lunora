@@ -98,7 +98,9 @@ lunora preview delete 123             # Worker + every resource on its record
   `lunora preview deploy` writes it; commit it, CI cannot mint one), so a Worker rename does not
   lose a preview. Old Worker-name keys are re-keyed on the next deploy/delete.
 - `--env <name>` plans from that Wrangler environment (top level plus `env.<name>`)
-  for an app whose bindings live only there; recorded, so `delete` needs no flag.
+  for an app whose bindings live only there; recorded, so `delete` needs no flag for the
+  resources. If that environment names a different `account_id`, pass the same `--env` to
+  `list`/`delete` (or set `CLOUDFLARE_ACCOUNT_ID`); they refuse rather than guess.
   Without it, env-only bindings are refused. CI leaves it unset.
 - Resources are named `<worker>-preview-<name>-<binding>` and recorded in the
   account's `lunora-preview-registry` KV namespace; `delete` only removes what a

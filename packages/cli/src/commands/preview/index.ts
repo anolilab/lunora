@@ -18,6 +18,7 @@ const previewCommand: Command = {
         ["lunora preview deploy 123 --env production", "Plan the preview from env.production's bindings, for an app that declares them only there"],
         ["lunora preview deploy 123 --dry-run", "Show the Worker, resources and env block a deploy would use"],
         ["lunora preview list", "List the previews on record"],
+        ["lunora preview delete 123 --env production", "Delete a preview made with --env production, in that environment's account"],
         ["lunora preview delete 123", "Delete the preview Worker and every resource recorded for it"],
     ],
     group: "Deploy",
@@ -34,7 +35,7 @@ const previewCommand: Command = {
         },
         {
             description:
-                "deploy: plan the preview from this Wrangler environment (the top level with env.<name> laid over it), for an app whose bindings live in env.<name>",
+                "deploy: plan the preview from this Wrangler environment (the top level with env.<name> laid over it), for an app whose bindings live in env.<name>. delete, list: look in that environment's account_id; required (or CLOUDFLARE_ACCOUNT_ID) when an environment names an account other than the top level's",
             name: "env",
             type: String,
         },

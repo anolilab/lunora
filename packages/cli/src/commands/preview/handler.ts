@@ -18,7 +18,7 @@ import { applyModify, findWranglerFile, readWranglerJsonc } from "@lunora/config
 import { cloudflareRestRequest } from "../../../../../shared/cloudflare-rest";
 import { acquireCheckoutLock } from "../../util/checkout-lock";
 import type { CloudflareEnvironment } from "../../util/cloudflare-credentials";
-import { resolveCloudflareCredentials } from "../../util/cloudflare-credentials";
+import { nonEmpty, resolveCloudflareCredentials } from "../../util/cloudflare-credentials";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { resolveTargetOrError } from "../../util/deploy-target-resolve";
@@ -37,6 +37,7 @@ import { mintAppId, readAppId } from "./app-id";
 import type { PreviewOptions } from "./index";
 import type { PlannedResource, PreviewConfig, PreviewNames, PreviewPlan, ResourceIds } from "./plan";
 import {
+    accountsOfEnvironments,
     environmentConfig,
     planPreview,
     PREVIEW_MARKER_VAR,
@@ -175,6 +176,27 @@ const loadContext = (options: PreviewCommandOptions): { context: PreviewContext;
     }
 
     return { context: { config, cwd, appId: readAppId(cwd), wranglerPath } };
+};
+
+/**
+ * The config whose `account_id` `delete` and `list` use: `--env`'s environment, as `deploy` does, since that is where the
+ * preview was made. Without `--env`, an environment that names another account makes the answer ambiguous, and guessing
+ * would look for the registry in the wrong account.
+ */
+const accountConfig = (config: PreviewConfig, options: PreviewCommandOptions): { config: PreviewConfig; error?: never } | { config?: never; error: string } => {
+    if (options.env !== undefined) {
+        return environmentConfig(config, options.env);
+    }
+
+    const elsewhere = accountsOfEnvironments(config);
+
+    if (elsewhere.length > 0 && nonEmpty((options.environment ?? process.env).CLOUDFLARE_ACCOUNT_ID) === undefined) {
+        return {
+            error: `environment(s) ${elsewhere.join(", ")} name an account_id other than the top level's, so the account to look in is not clear: pass --env <name> to use that environment's account, or set CLOUDFLARE_ACCOUNT_ID`,
+        };
+    }
+
+    return { config };
 };
 
 /** The REST caller for the account, or why there is none. Every preview call needs it: the record lives in the account. */
@@ -1201,7 +1223,13 @@ const deletePreview = async (context: PreviewContext, options: PreviewCommandOpt
     }
 
     const { names } = named;
-    const access = accountRequest(options, config);
+    const account = accountConfig(config, options);
+
+    if (account.error !== undefined) {
+        return fail(logger, account.error, options.env === undefined ? EXIT_CODE.AUTH : EXIT_CODE.USAGE);
+    }
+
+    const access = accountRequest(options, account.config);
 
     if (access.error !== undefined) {
         return fail(logger, access.error, EXIT_CODE.AUTH);
@@ -1274,7 +1302,13 @@ const listPreviews = async (context: PreviewContext, options: PreviewCommandOpti
     const { config } = context;
     const { logger } = options;
     const production = typeof config.name === "string" ? config.name : "";
-    const access = accountRequest(options, config);
+    const account = accountConfig(config, options);
+
+    if (account.error !== undefined) {
+        return fail(logger, account.error, options.env === undefined ? EXIT_CODE.AUTH : EXIT_CODE.USAGE);
+    }
+
+    const access = accountRequest(options, account.config);
 
     if (access.error !== undefined) {
         return fail(logger, access.error, EXIT_CODE.AUTH);
