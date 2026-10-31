@@ -151,16 +151,22 @@ const projectSlidingWindow = (
  * The division behind an estimate can land a hair short in floating point, so the refill projected at
  * `now + estimate` is a fraction below `needed` and a caller who waits exactly that long is refused again. The wait is
  * checked with the same projection the admit test uses and stepped forward. Floating-point error is under a
- * millisecond at normal magnitudes, so a few steps suffice; the bound, and the stop once a step no longer changes the
- * number (around 2 ** 53), keep this from spinning.
+ * millisecond at normal magnitudes, so a few steps suffice. Past 2 ** 53 a millisecond no longer changes the number, so
+ * the step becomes the gap to the next representable wait; the bound keeps this from spinning, and a wait never steps
+ * past the largest finite number.
  */
 const correctedWait = (config: RateLimitConfig, state: RateLimitValue | undefined, now: number, needed: number, estimate: number): number => {
     let wait = estimate;
 
     for (let step = 0; step < MAX_RETRY_AFTER_CORRECTIONS; step += 1) {
-        const next = wait + 1;
+        if (projectTokenBucket(config, state, now + wait).available >= needed) {
+            break;
+        }
 
-        if (projectTokenBucket(config, state, now + wait).available >= needed || next === wait) {
+        const byMillisecond = wait + 1;
+        const next = byMillisecond === wait ? wait + 2 ** (Math.floor(Math.log2(wait)) - 52) : byMillisecond;
+
+        if (!Number.isFinite(next) || next === wait) {
             break;
         }
 
