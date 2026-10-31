@@ -12161,11 +12161,13 @@ abstract class ShardDO {
 
             if (awaiting === undefined || awaiting.size === 0) {
                 dropScheduleOutbox(sql, id);
-                this.markScheduleOutboxDropped(id);
             } else {
                 this.parkLiveScheduleOutboxEntry(sql, id);
             }
 
+            // Also when an attempt is in flight: once it cancels and releases the row, a sibling call
+            // with the same explicit id must find the drop recorded, not an empty slot.
+            this.markScheduleOutboxDropped(id);
             this.recordAudit("dropOutboxEntry", { id, detail: { outcome: "applied" } });
 
             return adminResponse({ dropped: true });
@@ -12187,9 +12189,14 @@ abstract class ShardDO {
         const retried = !this.scheduleOutboxDropping.has(id) && requeueScheduleOutbox(this.sql as SqlExec, id, now);
 
         if (retried) {
+            // The operator wants the job after all: an attempt still carrying an earlier drop must
+            // not cancel it or delete the requeued row when it lands.
             for (const attempt of this.scheduleOutboxAttempts.get(id) ?? []) {
                 attempt.stale = true;
+                attempt.dropped = false;
             }
+
+            this.scheduleOutboxDropped.delete(id);
 
             // The in-memory alarm time may name a wake the host never delivered (an init
             // that kept failing before the alarm handler cleared it), and `scheduleGlobalPoll`

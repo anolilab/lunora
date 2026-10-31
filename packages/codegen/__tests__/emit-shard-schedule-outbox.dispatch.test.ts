@@ -860,6 +860,49 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         expect(harness.received).toHaveLength(2);
     });
 
+    it("does not undo a Retry now with the drop that an in-flight attempt still carries", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+        const { entered, release } = harness.hold();
+        const rpc = harness.shard.handleRpc("outbox:orderPlaced", {});
+
+        await entered;
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+
+        await harness.drop(id);
+
+        await expect(harness.shard.requeue(id).then(async (response) => response.json())).resolves.toStrictEqual({ result: { retried: true } });
+
+        harness.cancelOutcomes.length = 0;
+        release();
+        await rpc;
+
+        // The operator asked for the job after all: the landed job must stand, and the entry is released normally.
+        expect(harness.scheduled.map((job) => job.id)).toContain(id);
+        expect(harness.cancelOutcomes).not.toContain(true);
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("does not let a sibling call with the same id reschedule a job dropped while in flight", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+        const { entered, release } = harness.hold();
+        const rpc = harness.shard.handleRpc("outbox:sameId", {});
+
+        await entered;
+        await harness.drop("dup-id");
+        release();
+        await rpc;
+
+        // The first call landed and was cancelled; the second is the same dropped job and must not start it again.
+        expect(harness.received).toHaveLength(1);
+        expect(harness.cancelOutcomes.at(-1)).toBe(true);
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
     it("does not hand a dropped entry to the scheduler when it was already queued in the same batch", async () => {
         expect.assertions(3);
 
