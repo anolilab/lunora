@@ -1,3 +1,17 @@
+## @lunora/hyperdrive [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.220...@lunora/hyperdrive@1.0.0-alpha.221) (2026-10-31)
+
+### Features
+
+* **sql-store:** atomic .global() writes, statement deadlines, fewer round trips ([#1395](https://github.com/anolilab/lunora/issues/1395)) ([1d7524c](https://github.com/anolilab/lunora/commit/1d7524c8bc1a2b3b5bec345cfab861c4bd310f68))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/platform:** upgraded to 1.0.0-alpha.77
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.178
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.226
+
 ## @lunora/hyperdrive [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.219...@lunora/hyperdrive@1.0.0-alpha.220) (2026-10-30)
 
 ### Bug Fixes
