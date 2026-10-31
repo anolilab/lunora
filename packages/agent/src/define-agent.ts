@@ -1,8 +1,8 @@
 import { LunoraError } from "@lunora/errors";
 
-import { approvalTimeoutMs } from "./agent-loop";
 import { collectAgenticMemoryTools } from "./agentic-memory";
 import { agentAsTool } from "./as-tool";
+import { approvalTimeoutMs } from "./component-shared";
 import { isInjectedMemorySource } from "./memory";
 import isPositiveInteger from "./positive-integer";
 import { RESERVED_SKILL_NAME, SKILL_NAME_PATTERN } from "./skill";

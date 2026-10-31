@@ -147,7 +147,7 @@ export const agents: AgentsRef = {
 ${objectMembers}
 };
 `;
-        importLines.push(`import type { AgentRunInput } from "@lunora/agent";\n`);
+        importLines.push(`import type { AgentRunInput } from "@lunora/agent/core";\n`);
     }
 
     return { block, importLine: importLines.join("") };
