@@ -318,6 +318,51 @@ describe(checkStoredRows, () => {
             });
         });
 
+        it("treats true and 1 (and false and 0) as one value, as SQLite's index does", async () => {
+            expect.assertions(2);
+
+            const flags = table("flags", { on: { kind: "any" } });
+            const rows = (first: unknown, second: unknown) =>
+                target([
+                    { doc: { _id: "f1", on: first }, table: "flags" },
+                    { doc: { _id: "f2", on: second }, table: "flags" },
+                ]);
+
+            await expect(checkStoredRows({ changes: [unique("flags", ["on"])], tables: [flags], target: rows(true, 1) })).resolves.toMatchObject({
+                kind: "fails",
+            });
+            await expect(checkStoredRows({ changes: [unique("flags", ["on"])], tables: [flags], target: rows("1", 1) })).resolves.toMatchObject({
+                kind: "conforms",
+            });
+        });
+
+        it("does not confuse two distinct composite keys whose joined text would be equal", async () => {
+            expect.assertions(1);
+
+            const pairs = table("pairs", { a: { kind: "string" }, b: { kind: "string" } });
+            const verdict = await checkStoredRows({
+                changes: [unique("pairs", ["a", "b"])],
+                tables: [pairs],
+                target: target([
+                    { doc: { _id: "p1", a: "a\u0000string:b", b: "c" }, table: "pairs" },
+                    { doc: { _id: "p2", a: "a", b: "b\u0000string:c" }, table: "pairs" },
+                ]),
+            });
+
+            expect(verdict).toMatchObject({ kind: "conforms" });
+        });
+
+        it("lets a missing required v.any() field pass, because the runtime accepts undefined for it", async () => {
+            expect.assertions(1);
+
+            const loose = table("loose", { payload: { kind: "any" } });
+            const changed: DriftChange = { ...change("loose", "payload", "addedRequiredField") };
+
+            await expect(
+                checkStoredRows({ changes: [changed], tables: [loose], target: target([{ doc: { _id: "l1" }, table: "loose" }]) }),
+            ).resolves.toMatchObject({ kind: "conforms" });
+        });
+
         it("checks a field that became unique the same way", async () => {
             expect.assertions(1);
 

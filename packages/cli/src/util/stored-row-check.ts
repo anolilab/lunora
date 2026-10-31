@@ -202,11 +202,12 @@ const mismatch = (value: unknown, validator: ValidatorIR, path: string): Mismatc
         return value === undefined || validator.inner === undefined ? undefined : mismatch(value, validator.inner, path);
     }
 
-    if (value === undefined) {
-        return [path, "required, but missing"];
-    }
-
     const scalar = SCALAR_CHECKS[validator.kind];
+
+    // `v.any()` accepts an absent value, as the runtime parser does; every other scalar rejects it in its own check.
+    if (value === undefined) {
+        return scalar?.(value) === true ? undefined : [path, "required, but missing"];
+    }
 
     if (scalar !== undefined) {
         return scalarMismatch(value, validator, path, scalar);
@@ -316,15 +317,16 @@ const rowMismatch = (plan: TablePlan, document: Record<string, unknown>): Mismat
 
 /** One value of a stored field as it takes part in a uniqueness key: tagged by type so `1` and `"1"` differ. */
 const keyPart = (value: unknown): string => {
-    if (typeof value === "string") {
-        return `string:${value}`;
+    // SQLite's index extracts `true` as 1 and `false` as 0, and a number or bigint of the same value as one value.
+    if (typeof value === "boolean") {
+        return value ? "n:1" : "n:0";
     }
 
-    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-        return `${typeof value}:${value.toString()}`;
+    if (typeof value === "number" || typeof value === "bigint") {
+        return `n:${value.toString()}`;
     }
 
-    return `other:${JSON.stringify(value)}`;
+    return typeof value === "string" ? `s:${value}` : `j:${JSON.stringify(value)}`;
 };
 
 /**
@@ -343,7 +345,8 @@ const repeatedRow = (plan: TablePlan, document: Record<string, unknown>, seen: M
             continue;
         }
 
-        const key = [plan.table.name, fields.join("\u0001"), shard, ...values.map((value) => keyPart(value))].join("\u0000");
+        // A typed tuple in JSON, so no value can imitate a separator and make two distinct keys equal.
+        const key = JSON.stringify([plan.table.name, fields, shard, values.map((value) => keyPart(value))]);
         const first = seen.get(key);
 
         if (first === undefined) {
@@ -508,5 +511,63 @@ const describeFailures = (verdict: Extract<StoredRowVerdict, { kind: "fails" }>)
         ...verdict.failures.map((failure) => `  - ${failure.table} ${failure.id}: ${failure.field} ${failure.reason}`),
     ].join("\n");
 
+/** Whether a row's TTL column holds a numeric instant earlier than `cutoff`, as the shard's sweep reads it. */
+const expiredBefore = (document: Record<string, unknown>, field: string, cutoff: number): boolean => {
+    const value = document[field];
+
+    return typeof value === "number" && value < cutoff;
+};
+
+/**
+ * How many stored rows of each table a new TTL policy deletes on the next sweep that the old one would have kept, from the same
+ * read the stored-row check makes. A string says why the rows could not be counted. Best-effort: it informs a warning, never a verdict.
+ */
+const countExpiringRows = async (options: {
+    changes: ReadonlyArray<DriftChange>;
+    now: number;
+    target: ExportTarget | undefined;
+}): Promise<ReadonlyMap<string, number> | string> => {
+    const policies = new Map<string, NonNullable<DriftChange["expiry"]>>();
+
+    for (const change of options.changes) {
+        if (change.table !== undefined && change.expiry !== undefined) {
+            policies.set(change.table, change.expiry);
+        }
+    }
+
+    if (options.target === undefined) {
+        return "no deployed worker to read the stored rows from";
+    }
+
+    const counts = new Map([...policies.keys()].map((name): [string, number] => [name, 0]));
+
+    try {
+        await forEachExportedRow(
+            options.target,
+            [...policies.keys()].toSorted((a, b) => a.localeCompare(b)),
+            (row) => {
+                const policy = policies.get(row.table);
+
+                if (policy === undefined || !expiredBefore(row.doc, policy.field, options.now - (policy.after ?? 0))) {
+                    return undefined;
+                }
+
+                const { previous } = policy;
+                const alreadyExpiring = previous !== undefined && expiredBefore(row.doc, previous.field, options.now - (previous.after ?? 0));
+
+                if (!alreadyExpiring) {
+                    counts.set(row.table, (counts.get(row.table) ?? 0) + 1);
+                }
+
+                return undefined;
+            },
+        );
+    } catch (error: unknown) {
+        return error instanceof Error ? error.message : String(error);
+    }
+
+    return counts;
+};
+
 export type { StoredRowVerdict };
-export { checkStoredRows, describeFailures, isRowCheckable };
+export { checkStoredRows, countExpiringRows, describeFailures, isRowCheckable };
