@@ -314,6 +314,34 @@ describe("schedulerDO job lifecycle", () => {
         await expect(getJob(second, "ran")).resolves.toMatchObject({ completedAt: 1_700_000_000_000, state: "succeeded" });
     });
 
+    it("leaves a rescheduled job alone when a stale repair marker names the same id", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const state = createFakeState();
+        const first = new AlwaysSucceeding(state, env);
+
+        await first.fetch(post("/schedule", { args: {}, functionPath: "jobs.run", id: "ran", scheduledFor: Date.now() + 60_000 }));
+
+        // A marker left for an earlier job of the same id.
+        const header = state.storageMap.get("id:ran") as Record<string, unknown>;
+
+        state.storageMap.set("repair:ran", { ...header, completedAt: 1_699_999_000_000, enqueuedAt: 1, state: "succeeded" });
+        setNow(1_700_000_005_000);
+        // The previous instance died dirty: no clean marker, so the successor walks.
+        state.storageMap.delete("meta:clean");
+
+        const second = new AlwaysSucceeding(state, env);
+
+        await second.fetch(new Request("https://scheduler.internal/list"));
+
+        // The new job keeps its rows and has no outcome yet.
+        expect(state.storageMap.has("id:ran")).toBe(true);
+        expect(state.storageMap.has("done:ran")).toBe(false);
+        expect(state.storageMap.has("repair:ran")).toBe(false);
+        await expect(getJob(second, "ran")).resolves.toMatchObject({ state: "pending" });
+    });
+
     it("answers cancelled when the job was removed even if writing its outcome fails", async () => {
         expect.hasAssertions();
 

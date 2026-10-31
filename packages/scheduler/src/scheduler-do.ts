@@ -2639,19 +2639,22 @@ class SchedulerDO {
      */
     private async recordCronRun(run: CronRunRecord, superseded?: string): Promise<void> {
         const prefix = `${CRON_RUN_PREFIX}${encodePoolName(run.name)}:`;
+        const write = this.state.storage.put(SchedulerDO.cronRunKey(run), run);
 
-        await this.state.storage.put(SchedulerDO.cronRunKey(run), run);
+        // A row this write replaces (a skip streak moved to its new key) goes in the
+        // same synchronous run, which storage commits as one: a failed delete must
+        // not leave both copies of the streak behind.
+        await Promise.all([write, superseded === undefined ? undefined : this.state.storage.delete(superseded)]);
 
         // Each write adds one row, so the overflow past the limit is a handful
-        // at most and one bounded page reaches all of it. A row this write replaces
-        // (a skip streak moved to its new key) is dropped with it and never counts
-        // toward the limit, or it would evict one real run.
+        // at most and one bounded page reaches all of it (more only for a history a
+        // larger limit once wrote), deleted in the batches the host accepts.
         const rows = await this.state.storage.list({ limit: CRON_HISTORY_LIMIT + MAX_STORAGE_BATCH + 1, prefix });
-        const live = [...rows.keys()].filter((key) => key !== superseded);
-        const stale = [...(superseded === undefined ? [] : [superseded]), ...live.slice(CRON_HISTORY_LIMIT)];
+        const stale = [...rows.keys()].filter((key) => key !== superseded).slice(CRON_HISTORY_LIMIT);
 
-        if (stale.length > 0) {
-            await this.state.storage.delete(stale);
+        for (let start = 0; start < stale.length; start += MAX_STORAGE_BATCH) {
+            // eslint-disable-next-line no-await-in-loop -- bounded batches of local Durable Object storage writes
+            await this.state.storage.delete(stale.slice(start, start + MAX_STORAGE_BATCH));
         }
     }
 
@@ -2798,6 +2801,16 @@ class SchedulerDO {
      * (the id was reused and finished again); the marker goes either way.
      */
     private async restoreOutcome(row: TerminalRecord): Promise<void> {
+        // A header that is not this job's belongs to a later job of the same id: it
+        // keeps its rows, and the old outcome must not shadow it.
+        const header = await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${row.id}`);
+
+        if (header !== undefined && header.enqueuedAt !== row.enqueuedAt) {
+            await this.state.storage.delete(`${REPAIR_PREFIX}${row.id}`);
+
+            return;
+        }
+
         if ((await this.state.storage.get(`${DONE_PREFIX}${row.id}`)) === undefined) {
             await this.writeTerminal(row, "succeeded", row.completedAt);
         }

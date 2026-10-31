@@ -17,6 +17,11 @@ export const createFakeState = (): SchedulerDOState & {
         storage: {
             delete: async (keyOrKeys: string | string[]) => {
                 const keys = Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys];
+
+                // The host's limit: one call deletes at most 128 keys.
+                if (keys.length > 128) {
+                    throw new Error("storage.delete accepts at most 128 keys");
+                }
                 let count = 0;
 
                 for (const key of keys) {

@@ -217,6 +217,80 @@ describe("schedulerDO cron runs", () => {
         expect(recorded[1]).toMatchObject({ endedAt: 1_700_000_060_000, startedAt: 1_700_000_001_000 });
     });
 
+    it("trims a history far past its limit in batches the host accepts", async () => {
+        expect.hasAssertions();
+
+        pinClock(1_700_000_000_000);
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, env);
+        const row = (index: number): CronRunRecord => {
+            return {
+                durationMs: 1,
+                endedAt: 1_600_000_000_000 + index,
+                name: "digest",
+                runId: `old-${String(index)}`,
+                skipped: 0,
+                startedAt: 1_600_000_000_000 + index,
+                status: "succeeded",
+            };
+        };
+
+        // A history left over from a build with a larger limit.
+        for (let index = 0; index < 179; index += 1) {
+            const old = row(index);
+
+            state.storageMap.set((SchedulerDO as unknown as { cronRunKey: (run: CronRunRecord) => string }).cronRunKey(old), old);
+        }
+
+        const runId = await acquire(scheduler, "digest");
+
+        await expect(end(scheduler, { name: "digest", runId, status: "succeeded" })).resolves.toStrictEqual({ recorded: true });
+        await expect(runs(scheduler)).resolves.toMatchObject({ runs: expect.arrayContaining([expect.objectContaining({ runId })]) });
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("cr:")).length).toBeLessThanOrEqual(129);
+    });
+
+    it("moves a skip streak to its new key in one commit, so no stale copy survives a failed delete", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, env);
+
+        await acquire(scheduler, "digest");
+        setNow(1_700_000_001_000);
+        await begin(scheduler, "digest");
+
+        // The next fold moves the streak: its put and the old key's delete must overlap.
+        const put = state.storage.put.bind(state.storage) as (...arguments_: unknown[]) => Promise<void>;
+        const remove = state.storage.delete.bind(state.storage);
+        const pending = { delete: 0, put: 0 };
+        let overlapped = false;
+        const slow = async (kind: "delete" | "put"): Promise<void> => {
+            pending[kind] += 1;
+            overlapped ||= pending.delete > 0 && pending.put > 0;
+            await new Promise<void>((resolve) => {
+                setTimeout(resolve, 0);
+            });
+            pending[kind] -= 1;
+        };
+
+        vi.spyOn(state.storage, "put").mockImplementation(async (...arguments_: unknown[]) => {
+            await slow("put");
+
+            return put(...arguments_);
+        });
+        vi.spyOn(state.storage, "delete").mockImplementation(async (keys: string | string[]) => {
+            await slow("delete");
+
+            return remove(keys);
+        });
+        setNow(1_700_000_002_000);
+        await begin(scheduler, "digest");
+
+        expect(overlapped).toBe(true);
+    });
+
     it("keeps every real run when folding a skipped tick into a full history", async () => {
         expect.hasAssertions();
 
@@ -374,7 +448,9 @@ describe("schedulerDO cron runs", () => {
         await scheduler.fetch(post("/pause", { paused: true }));
         await begin(scheduler, "digest");
         setNow(1_700_000_001_000);
+        // The fold's put and the old key's delete commit as one group: when the group fails, both do.
         vi.spyOn(state.storage, "put").mockRejectedValueOnce(new Error("storage unavailable"));
+        vi.spyOn(state.storage, "delete").mockRejectedValueOnce(new Error("storage unavailable"));
         await begin(scheduler, "digest");
 
         await expect(runs(scheduler)).resolves.toMatchObject({ runs: [{ reason: "paused", skipped: 1, status: "skipped" }] });
