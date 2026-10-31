@@ -278,6 +278,7 @@ interface EmitAppOptions {
         exportName: string;
     }>;
     hasAccess: boolean;
+    hasAdminRevocations?: boolean;
     hasAuth: boolean;
     hasDeliveryAuthorization?: boolean;
     hasFramework: boolean;
