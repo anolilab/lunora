@@ -6691,6 +6691,15 @@ interface GroupByArgs$1 {
 }
 ```
 
+### `HeadroomScope` (interface)
+
+```ts
+interface HeadroomScope {
+    getStore: () => TransactionHeadroomTracker | undefined;
+    run: <R>(store: TransactionHeadroomTracker, body: () => R) => R;
+}
+```
+
 ### `HrTime` (type)
 
 ```ts
