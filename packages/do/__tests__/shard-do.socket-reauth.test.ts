@@ -211,6 +211,24 @@ describe("socket re-authentication", () => {
         expect(ws.attachment?.expiresAt).toBe(NOW + HOUR);
     });
 
+    it.each([
+        ["an earlier expiry", NOW + HOUR - 1],
+        ["no expiry (a cookie session)", undefined],
+    ])("closes a socket whose claims changed even when the refresh carries %s", async (_name, expiresAt) => {
+        expect.assertions(3);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const { shard, ws } = open();
+        const response = await reauth(shard, { claims: { role: "admin" }, expiresAt, userId: "user-1" });
+        const body: { error: { code: string } } = await response.json();
+
+        // The changed claims decide, not the credential's age: a stale-looking refresh must not leave the old claims open.
+        expect(body.error.code).toBe("IDENTITY_CHANGED");
+        expect(response.status).toBe(409);
+        expect(ws.closes[0]).toBe(4005);
+    });
+
     it("answers a null body with 400", async () => {
         expect.assertions(1);
 

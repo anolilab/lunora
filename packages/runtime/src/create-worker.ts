@@ -4765,14 +4765,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         const shardKey = url.searchParams.get("shard") ?? defaultShard;
-        const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity, {
-            executionContext: context ?? executionContextByRequest.get(request),
-            url,
-        });
-
         // The admin credential an admin socket upgraded with, checked exactly as the upgrade checks it (the master
         // bearer, or the short-lived sub-token in `?token=`, whose verify is constant-time). A rotated one fails here.
         const adminReauth = requestIsAdmin(request) || (await checkAdminWsToken(request, effectiveAdminToken()));
+        const resolved = await forwardContext(request, env, publicResolveIdentity, {
+            executionContext: context ?? executionContextByRequest.get(request),
+            url,
+        });
+        // A lapsed session beside a valid admin credential is ignored, as on the admin upgrade; without one it is refused.
+        const { headers: forwardedHeaders, identity } = adminReauth ? withoutLapsedCredential(resolved) : assertLiveCredential(resolved);
 
         if (identity === null && !adminReauth) {
             throw new LunoraError("re-authenticating a socket requires a credential", { code: "UNAUTHENTICATED", status: 401 });

@@ -17051,16 +17051,16 @@ abstract class ShardDO {
             return jsonResponse({ error: { code: "TOKEN_EXPIRED", message: "authentication token expired" } }, 401);
         }
 
-        // A credential without an expiry (a cookie session, say) cannot lift the one the socket holds: the socket
-        // would outlive both its bearer and the session.
-        if (attachment.expiresAt !== undefined && (identityExpiry === undefined || identityExpiry < attachment.expiresAt)) {
-            return jsonResponse({ error: { code: "STALE_CREDENTIAL", message: "the socket already holds a later credential" } }, 409);
-        }
-
         if (credentialClaimsKey(attachment.identity) !== credentialClaimsKey(identity)) {
             this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, IDENTITY_CHANGED_CLOSE_REASON);
 
             return jsonResponse({ error: { code: "IDENTITY_CHANGED", message: "the credential's claims differ from the socket's; reconnect" } }, 409);
+        }
+
+        // A credential without an expiry (a cookie session, say) cannot lift the one the socket holds: the socket
+        // would outlive both its bearer and the session.
+        if (attachment.expiresAt !== undefined && (identityExpiry === undefined || identityExpiry < attachment.expiresAt)) {
+            return jsonResponse({ error: { code: "STALE_CREDENTIAL", message: "the socket already holds a later credential" } }, 409);
         }
 
         const next: SocketAttachment = { ...attachment };

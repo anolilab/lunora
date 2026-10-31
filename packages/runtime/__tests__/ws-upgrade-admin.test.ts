@@ -285,6 +285,27 @@ describe("createWorker — the socket re-auth route accepts the admin credential
         expect(seen[0]?.headers.get("x-lunora-userid")).toBeNull();
     });
 
+    it("accepts a valid admin credential beside a lapsed session cookie, forwarding no user", async () => {
+        expect.assertions(3);
+
+        const { namespace, seen } = forwardingShard();
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            authorizeShard: () => false,
+            resolveIdentity: () => {
+                return { exp: Math.floor(Date.now() / 1000) - 60, userId: "user_1" };
+            },
+            shardDO: namespace,
+        });
+        const minted = await mintWsAdminToken(ADMIN_TOKEN);
+        const response = await worker.fetch(reauth(`?token=${encodeURIComponent(minted.token)}`), {}, fakeContext);
+
+        // As the admin upgrade does, the lapsed cookie is ignored rather than refusing the admin credential.
+        expect(response.status).toBe(200);
+        expect(seen[0]?.headers.get("x-lunora-admin-reauth")).toBe("1");
+        expect(seen[0]?.headers.get("x-lunora-userid")).toBeNull();
+    });
+
     it("refuses a rotated or forged admin credential, forwarding nothing", async () => {
         expect.assertions(3);
 
