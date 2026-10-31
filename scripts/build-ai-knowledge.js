@@ -47,7 +47,8 @@ const capSummary = (text) => {
         return text;
     }
 
-    const cut = text.slice(0, SUMMARY_CAP - 1);
+    // A cut through an astral character leaves its high half, which JSON.stringify writes as a lone surrogate.
+    const cut = text.slice(0, SUMMARY_CAP - 1).replace(/[\uD800-\uDBFF]$/u, "");
     const boundary = cut.lastIndexOf(" ");
 
     return `${(boundary > 0 ? cut.slice(0, boundary) : cut).replace(/[\s,;:]+$/u, "")}…`;
