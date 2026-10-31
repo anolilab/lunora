@@ -17,6 +17,7 @@ import type {
 } from "@lunora/server";
 import { withDeferredSchedules } from "@lunora/server";
 import { createInProcessRuntime, registeredFunctionKind, resolveInProcessIdentity, runRegisteredFunction } from "@lunora/server/in-process";
+import type { TransactionHeadroomTracker } from "@lunora/shard-engine";
 
 import type { RecordedWideEvent } from "./context-fakes";
 import { createRecordingSpan, noopLog, noopMetrics, passthroughTrace, servicesContext, stubProxy } from "./context-fakes";
@@ -396,6 +397,9 @@ type HarnessMutationContext = MutationCtx & NotifySurfaces & QueueSurface & Topi
 /** The clock the current top-level harness call reads through `ctx.now`. */
 const runClock = new AsyncLocalStorage<number>();
 
+/** Each top-level dispatch's resource budget, so overlapping queries and actions never share one. */
+const dispatchBudget = new AsyncLocalStorage<TransactionHeadroomTracker>();
+
 const buildSubscribe = (
     runRegistered: RunRegisteredFunction,
     queryContext: QueryCtx,
@@ -750,8 +754,9 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     // mid-handler throw rolls back every write it made and the jobs it scheduled,
     // matching production; a mutation's own `ctx.run*` composition rides the
     // already-open span through `runInternal` instead.
-    const { createWriters, resetHeadroom, runInTransaction } = createInProcessRuntime(schema, {
+    const { createWriters, runInTransaction, runWithBudget } = createInProcessRuntime(schema, {
         enforceRls: options?.enforceRls,
+        headroomScope: dispatchBudget,
         scheduler,
         sql,
     });
@@ -922,19 +927,15 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
                 return runInTransaction(() => runRegisteredFunction("mutation", reference as never, context, args, true)).then(notifyAfter);
             }
 
-            resetHeadroom();
-
-            return runInternal("action", reference, context, args);
+            return runWithBudget(() => runInternal("action", reference, context, args));
         };
 
         const query = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
-            resetHeadroom();
-
             if (registeredFunctionKind(referenceOrInline)) {
-                return runRegisteredFunction("query", referenceOrInline as never, queryContext, args, false);
+                return runWithBudget(() => runRegisteredFunction("query", referenceOrInline as never, queryContext, args, false));
             }
 
-            return Promise.resolve((referenceOrInline as InlineQueryFunction<unknown>)(queryContext));
+            return runWithBudget(() => Promise.resolve((referenceOrInline as InlineQueryFunction<unknown>)(queryContext)));
         }) as TestHarness["query"];
 
         const mutation = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
@@ -946,23 +947,17 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         }) as TestHarness["mutation"];
 
         const action = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
-            resetHeadroom();
-
             if (registeredFunctionKind(referenceOrInline)) {
-                return runRegisteredFunction("action", referenceOrInline as never, actionContext, args, false);
+                return runWithBudget(() => runRegisteredFunction("action", referenceOrInline as never, actionContext, args, false));
             }
 
-            return Promise.resolve((referenceOrInline as InlineActionFunction<unknown>)(actionContext));
+            return runWithBudget(() => Promise.resolve((referenceOrInline as InlineActionFunction<unknown>)(actionContext)));
         }) as TestHarness["action"];
 
         // A subscription re-run is its own top-level dispatch (production re-dispatches
         // the query), so it gets a fresh budget rather than accumulating onto the last one.
         const subscribe = buildSubscribe(
-            (...parameters) => {
-                resetHeadroom();
-
-                return runRegisteredFunction(...parameters);
-            },
+            (...parameters) => runWithBudget(() => runRegisteredFunction(...parameters)),
             queryContext,
             mutationListeners,
             () => options?.now ?? Date.now(),

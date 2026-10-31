@@ -1925,6 +1925,11 @@ const MESSAGE_IDS: readonly [
     "Jobs that exhaust their retry budget are parked here instead of being dropped.",
     "last tried",
     "max concurrency",
+    "mean lag (ms)",
+    "runs",
+    "max lag (ms)",
+    "last lag (ms)",
+    "Start lag per job on this shard since it last woke; the series reset when the shard hibernates.",
     "No dead-letter jobs.",
     "No finished jobs.",
     "Jobs that succeed, fail or are cancelled stay here for seven days.",
@@ -3048,6 +3053,7 @@ interface SavedQuery {
 
 ```ts
 interface SchedulePanelProps {
+    readonly initialShardKey?: string;
     readonly loadCronJobs?: CronTriggersPanelProps["loadCronJobs"];
     readonly scheduledCancel?: ScheduledJobsProps["cancelJob"];
     readonly scheduledLoad?: ScheduledJobsProps["loadJobs"];

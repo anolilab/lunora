@@ -594,7 +594,7 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
                 // reach it; \`onConnect\`/\`onDisconnect\` carry a verified identity and
                 // stay guarded like any request.
                 enforceRls: options.trusted !== true,
-                headroom: options.headroom ?? this.transactionHeadroom(),
+                headroom: options.headroom ?? this.transactionHeadroom(options.functionPath),
                 // A live predicate, not a flag: the transaction opens AFTER this ctx
                 // is built (a mutation dispatch wraps the handler), so only a call-time
                 // read reports the truth. \`_commitSeq\` reuses one sequence across
@@ -1127,7 +1127,7 @@ ${lazyFunctions ? '            const requestScope = this.captureRequestScope();\
             this.ensureServable();
 
             const footprint = createReadFootprint();
-            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, replayKey: false, trusted: true });
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath), onRead: footprint.onRead, onReadRange: footprint.onReadRange, replayKey: false, trusted: true });
             const outcome = (await this.runMutationTransaction(ctx, async () =>
                 registered.handler(ctx, { previousDigest } as unknown as Record<string, unknown>),
             )) as {

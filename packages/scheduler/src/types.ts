@@ -158,6 +158,15 @@ export interface ScheduleRecord {
     error?: string;
 
     /**
+     * The due time a pooled job had when its full pool first turned it away.
+     * Each backpressure re-arm moves {@link ScheduleRecord.scheduledFor}, so the
+     * dispatch reports this one as the job's due time and the lag metric counts
+     * the wait for a slot. Absent until the first re-arm; cleared by a retry,
+     * which measures its own attempt's lateness.
+     */
+    firstDueAt?: number;
+
+    /**
      * The `ns:fn` path of the function to dispatch on fire. Absent when the job
      * targets a durable workflow/agent instead — see {@link ScheduleRecord.workflow}.
      * Exactly one of `functionPath` / `workflow` is set.

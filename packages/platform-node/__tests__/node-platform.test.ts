@@ -222,4 +222,116 @@ describe("createNodePlatform", () => {
 
         expect(platform.shard.shardKey).toBe("tenant-42");
     });
+
+    describe("scheduled job delivery", () => {
+        const received = (): { promise: Promise<Request>; settle: (request: Request) => void } => {
+            let settle!: (request: Request) => void;
+            const promise = new Promise<Request>((resolve) => {
+                settle = resolve;
+            });
+
+            return { promise, settle };
+        };
+
+        it("dispatches a due job to the shard with its due time, so scheduler lag can be measured", async () => {
+            expect.assertions(3);
+
+            const arrived = received();
+
+            using platform = createNodePlatform({
+                dispatch: { adminToken: "token" },
+                onFetch: (request) => {
+                    arrived.settle(request);
+
+                    return new Response("{}");
+                },
+            });
+
+            const before = Date.now();
+
+            await platform.scheduler.schedule("jobs:run", { n: 1 }, { delayMs: 0 });
+
+            const request = await arrived.promise;
+
+            expect(Number(request.headers.get("x-lunora-scheduled-for"))).toBeGreaterThanOrEqual(before);
+            await expect(request.json()).resolves.toStrictEqual({ args: { n: 1 }, functionPath: "jobs:run" });
+            expect(new URL(request.url).pathname).toBe("/rpc");
+        });
+
+        it("runs a due job on the shard the platform serves, not always the root", async () => {
+            expect.assertions(1);
+
+            let arrived!: (key: string) => void;
+            const shardKey = new Promise<string>((resolve) => {
+                arrived = resolve;
+            });
+
+            using platform = createNodePlatform({
+                dispatch: { adminToken: "token" },
+                onFetch: (_request, shard) => {
+                    arrived(shard.shardKey);
+
+                    return new Response("{}");
+                },
+                shardKey: "tenant-1",
+            });
+
+            await platform.scheduler.schedule("jobs:run", {}, { delayMs: 0 });
+
+            await expect(shardKey).resolves.toBe("tenant-1");
+        });
+
+        it("gives every cron tick its own idempotency key so the shard runs each one", async () => {
+            expect.assertions(2);
+
+            const keys: (null | string)[] = [];
+            let secondTick!: () => void;
+            const reached = new Promise<void>((resolve) => {
+                secondTick = resolve;
+            });
+
+            using platform = createNodePlatform({
+                dispatch: { adminToken: "token" },
+                onFetch: (request) => {
+                    keys.push(request.headers.get("x-lunora-mutation-id"));
+
+                    if (keys.length === 2) {
+                        secondTick();
+                    }
+
+                    return new Response("{}");
+                },
+            });
+
+            await platform.scheduler.cron?.("* * * * * *", "jobs:tick");
+            await reached;
+
+            expect(keys).toHaveLength(2);
+            expect(new Set(keys).size).toBe(2);
+        });
+
+        it("leaves delivery to an embedder's onDispatch and does not also dispatch the job", async () => {
+            expect.assertions(2);
+
+            const delivered = received();
+            let shardCalls = 0;
+
+            using platform = createNodePlatform({
+                onDispatch: (functionPath) => {
+                    delivered.settle(new Request(`https://example.test/${functionPath}`));
+                },
+                onFetch: () => {
+                    shardCalls += 1;
+
+                    return new Response("{}");
+                },
+            });
+
+            await platform.scheduler.schedule("jobs:run", {}, { delayMs: 0 });
+            await delivered.promise;
+
+            expect(delivered).toBeDefined();
+            expect(shardCalls).toBe(0);
+        });
+    });
 });

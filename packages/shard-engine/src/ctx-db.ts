@@ -85,8 +85,11 @@ import {
     serializeSqlValue,
     tableColumns,
     tryRowToDocument,
+    unwrapSql,
+    WRAPPED_SQL,
 } from "./do-sql";
 import { renderSql, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
+import { estimateBytes } from "./estimate-bytes";
 import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
 import { NotFoundError } from "./not-found-error";
 import { assertPatchAllowed, operatorFields, readPatchField, resolvePatch } from "./patch-operators";
@@ -1275,8 +1278,9 @@ const buildReader = (
         // isolate, so a warm DO would otherwise index one page and then stop —
         // a large table stays permanently half-indexed, serving partial results
         // with no error and no signal. The page is bounded and a completed
-        // index costs one indexed state lookup, so reads pay almost nothing.
-        backfillSearchIndexesForTable(sql, tableName, tableDefinition);
+        // index costs one indexed state lookup, so reads pay almost nothing —
+        // and it is not the caller's read, so it bypasses the read-byte meter.
+        backfillSearchIndexesForTable(unwrapSql(sql), tableName, tableDefinition);
 
         // Relevance order means the engine read is always bounded: the caller's
         // limit when there is one, `MAX_SEARCH_SCAN` otherwise — including when an
@@ -2000,9 +2004,323 @@ const deriveSoftDeleteFields = (schema: SchemaLike): ReadonlyMap<string, string>
     return fields;
 };
 
+const tablePatterns = new WeakMap<object, RegExp | undefined>();
+
+/**
+ * The schema tables a query names, as `"table"` identifiers. A document is charged by (table, id) so a
+ * patch that resizes it is not charged again; a query that names no table, or more than one, cannot say
+ * which table its rows came from and falls back to id plus length, which only ever over-charges.
+ */
+const queryTable = (query: string, schema: SchemaLike): string | undefined => {
+    let pattern = tablePatterns.get(schema.tables);
+
+    if (!tablePatterns.has(schema.tables)) {
+        const names = Object.keys(schema.tables).map((name) => name.replaceAll(/[$()*+.?[\\\]^{|}]/gu, String.raw`\$&`));
+
+        pattern = names.length === 0 ? undefined : new RegExp(`"(${names.join("|")})"`, "gu");
+        tablePatterns.set(schema.tables, pattern);
+    }
+
+    if (pattern === undefined) {
+        return undefined;
+    }
+
+    const found = new Set<string>();
+
+    for (const match of query.matchAll(pattern)) {
+        found.add(match[1] as string);
+    }
+
+    return found.size === 1 ? [...found][0] : undefined;
+};
+
+/** Charge each stored document in `rows`, read off the JSON column the row store already returned. */
+const chargeDocuments = (rows: ReadonlyArray<unknown>, headroom: TransactionHeadroomTracker, table: string | undefined): void => {
+    for (const row of rows) {
+        const record = row as Record<string, unknown> | undefined;
+        const raw = record?.[DOC_COLUMN];
+
+        if (typeof raw === "string") {
+            const id = record?.["id"];
+
+            if (typeof id !== "string") {
+                headroom.recordReadBytes(raw.length);
+            } else if (table === undefined) {
+                headroom.recordDocumentRead(`${id}\u0000${String(raw.length)}`, raw.length);
+            } else {
+                headroom.recordDocumentRead(`${table}\u0000${id}`, raw.length);
+            }
+        }
+    }
+};
+
+/**
+ * Charge every stored document this writer materializes against the read-byte
+ * ceiling.
+ *
+ * Wrapped at the SQL handle rather than at each reader because a document
+ * reaches the isolate through a dozen paths — by-id probes, keyset pages,
+ * search and geo candidates, rank pages, relation loads — and a byte cap that
+ * one of them skips is no cap. The stored JSON is already a string in hand, so
+ * its length costs nothing; nothing is re-serialized. Each document is charged
+ * once per transaction (see `recordDocumentRead`), wherever it is first loaded.
+ *
+ * `toArray()` is drained through the cursor's iterator, charging each row as it
+ * arrives, so a runaway candidate set stops at the ceiling instead of being
+ * built in full first. `one()` and iteration are charged too; `one()` is
+ * wrapped so a host that builds it on its own iterator does not charge twice.
+ */
+const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | undefined, schema?: SchemaLike): SqlExec => {
+    if (headroom === undefined) {
+        return sql;
+    }
+
+    const exec = <Row = Record<string, unknown>>(query: string, ...params: unknown[]): SqlCursor<Row> => {
+        const cursor = sql.exec<Row>(query, ...params);
+        const one = cursor.one.bind(cursor);
+        const iterate = cursor[Symbol.iterator].bind(cursor);
+        const table = schema === undefined ? undefined : queryTable(query, schema);
+        let materializing = false;
+        const charge = (rows: ReadonlyArray<unknown>): void => {
+            chargeDocuments(rows, headroom, table);
+        };
+
+        cursor.toArray = () => {
+            const rows: Row[] = [];
+
+            for (const row of { [Symbol.iterator]: iterate }) {
+                charge([row]);
+                rows.push(row);
+            }
+
+            return rows;
+        };
+        cursor.one = () => {
+            materializing = true;
+
+            try {
+                const row = one();
+
+                charge([row]);
+
+                return row;
+            } finally {
+                materializing = false;
+            }
+        };
+        cursor[Symbol.iterator] = function* chargedRows() {
+            for (const row of { [Symbol.iterator]: iterate }) {
+                if (!materializing) {
+                    charge([row]);
+                }
+
+                yield row;
+            }
+        };
+
+        return cursor;
+    };
+
+    // A proxy rather than `{ exec }` so any other member of the host's handle
+    // (`databaseSize`, a test double's extras) still reads through.
+    return new Proxy(sql, {
+        get: (target, property) => {
+            if (property === "exec") {
+                return exec;
+            }
+
+            return property === WRAPPED_SQL ? target : (Reflect.get(target, property, target) as unknown);
+        },
+    });
+};
+
+/** Reads on a global (D1) writer that hand back documents, and the terminals of its query builder. */
+/** How a global read wraps its documents: none, a page, a lookup result or scored hits. */
+type GlobalResultShape = "lookup" | "page" | "rows" | "scored";
+
+const GLOBAL_ROW_READS: ReadonlyMap<PropertyKey, GlobalResultShape> = new Map([
+    ["findFirst", "rows"],
+    ["findFirstOrThrow", "rows"],
+    ["findMany", "page"],
+    ["get", "rows"],
+    ["lookupById", "lookup"],
+]);
+const GLOBAL_READER_TERMINALS: ReadonlyMap<PropertyKey, GlobalResultShape> = new Map([
+    ["collect", "rows"],
+    ["collectWithScores", "scored"],
+    ["first", "rows"],
+    ["paginate", "page"],
+    ["take", "rows"],
+    ["unique", "rows"],
+]);
+
+/**
+ * Charge one decoded global document. A row comes back from D1 as an object, not as the stored JSON
+ * string the local meter sizes, so it is serialised once with `estimateBytes` (the same UTF-16 unit
+ * local reads and writes use) and charged once per transaction by its `_id`.
+ */
+const chargeGlobalDocument = (document: unknown, table: string, headroom: TransactionHeadroomTracker): void => {
+    if (typeof document !== "object" || document === null) {
+        return;
+    }
+
+    const bytes = estimateBytes(document);
+
+    if (bytes === undefined) {
+        return;
+    }
+
+    const id = (document as Record<string, unknown>)["_id"];
+
+    if (typeof id === "string") {
+        headroom.recordDocumentRead(`global\u0000${table}\u0000${id}`, bytes);
+    } else {
+        headroom.recordReadBytes(bytes);
+    }
+};
+
+/**
+ * Charge what a global read returned. The method decides which envelope to unwrap, so a document that
+ * happens to have a `page`, `row` or `document` field is sized whole. Rows are charged one at a time, so
+ * a result over the ceiling throws part-way, as a local `toArray()` does.
+ */
+const chargeGlobalResult = (result: unknown, shape: GlobalResultShape, table: string, headroom: TransactionHeadroomTracker): void => {
+    if (typeof result !== "object" || result === null) {
+        return;
+    }
+
+    const record = result as Record<string, unknown>;
+
+    switch (shape) {
+        case "lookup": {
+            chargeGlobalDocument(record["row"], typeof record["tableName"] === "string" ? record["tableName"] : table, headroom);
+
+            return;
+        }
+        case "page": {
+            for (const document of (record["page"] as unknown[] | undefined) ?? []) {
+                chargeGlobalDocument(document, table, headroom);
+            }
+
+            return;
+        }
+        case "rows": {
+            for (const document of Array.isArray(result) ? result : [result]) {
+                chargeGlobalDocument(document, table, headroom);
+            }
+
+            return;
+        }
+        default: {
+            // "scored": hits wrap the document
+            for (const hit of Array.isArray(result) ? result : []) {
+                chargeGlobalDocument((hit as Record<string, unknown>)["document"], table, headroom);
+            }
+        }
+    }
+};
+
+const meterGlobalReader = <Reader extends object>(reader: Reader, table: string, headroom: TransactionHeadroomTracker): Reader =>
+    new Proxy(reader, {
+        get: (target, property) => {
+            const member: unknown = Reflect.get(target, property, target);
+
+            if (typeof member !== "function") {
+                return member;
+            }
+
+            if (property === Symbol.asyncIterator) {
+                return async function* chargedDocuments(): AsyncGenerator {
+                    for await (const document of Reflect.apply(member, target, []) as AsyncIterable<unknown>) {
+                        chargeGlobalDocument(document, table, headroom);
+
+                        yield document;
+                    }
+                };
+            }
+
+            const shape = GLOBAL_READER_TERMINALS.get(property);
+
+            return (...args: unknown[]): unknown => {
+                const result: unknown = Reflect.apply(member, target, args);
+
+                if (shape !== undefined) {
+                    return Promise.resolve(result).then((rows) => {
+                        chargeGlobalResult(rows, shape, table, headroom);
+
+                        return rows;
+                    });
+                }
+
+                return typeof result === "object" && result !== null && !(result instanceof Promise) ? meterGlobalReader(result, table, headroom) : result;
+            };
+        },
+    });
+
+/** Byte-meter a global writer's document reads; every other member reads through untouched. */
+const meterGlobalDatabase = (global: DatabaseWriterLike | undefined, headroom: TransactionHeadroomTracker | undefined): DatabaseWriterLike | undefined => {
+    if (global === undefined || headroom === undefined) {
+        return global;
+    }
+
+    return new Proxy(global, {
+        get: (target, property) => {
+            const member: unknown = Reflect.get(target, property, target);
+
+            if (typeof member !== "function") {
+                return member;
+            }
+
+            if (property === "query") {
+                return (...args: unknown[]): unknown => meterGlobalReader(Reflect.apply(member, target, args) as object, String(args[0]), headroom);
+            }
+
+            const shape = GLOBAL_ROW_READS.get(property);
+
+            if (shape === undefined) {
+                return member;
+            }
+
+            return async (...args: unknown[]): Promise<unknown> => {
+                const result: unknown = await Reflect.apply(member, target, args);
+
+                chargeGlobalResult(result, shape, String(args[0]), headroom);
+
+                return result;
+            };
+        },
+    });
+};
+
+/** A writer and its unmetered twin allocate from one commit sequence, keyed by the twin's options. */
+const commitSequences = new WeakMap<CtxDbOptions, { value: number | undefined }>();
+
 const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { baselineSeq, onStalePatchDropped } = options;
-    const { sql } = options;
+    const { headroom } = options;
+
+    /**
+     * The unmetered twin of this writer, for the one primitive that is unbounded by design: `deleteAll`
+     * (an erasure that stops at a ceiling leaves data behind). It is a second writer over the same
+     * handle with no headroom, rather than a flag on this one: a flag is shared by whatever else runs on
+     * the writer while the erase awaits, so an overlapping read would have escaped the ceiling too. The
+     * twin shares this writer's commit sequence so the rows the erase marks still sort with the rest of
+     * the transaction. A trigger fired by an erased row runs on the twin, so it is unmetered as well,
+     * bounded by one row's side effects per iteration.
+     */
+    const commitSequence = commitSequences.get(options) ?? { value: undefined };
+    let erasureWriter: DatabaseWriterLike | undefined;
+    const unmeteredWriter = (): DatabaseWriterLike => {
+        if (erasureWriter === undefined) {
+            const twinOptions: CtxDbOptions = { ...options, enforceRls: false, headroom: undefined };
+
+            commitSequences.set(twinOptions, commitSequence);
+            erasureWriter = createShardCtxDb(twinOptions);
+        }
+
+        return erasureWriter;
+    };
+    const sql = meterReadBytes(options.sql, headroom, options.schema);
     const { schema } = options;
     const broadcast = options.broadcast ?? (() => undefined);
 
@@ -2082,7 +2400,6 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * compares equal. Allocating per row instead would break the one property
      * consumers depend on — that rows committed together sort together.
      */
-    let commitSeq: number | undefined;
 
     /**
      * Is an atomic write boundary open right now? Absent option ⇒ `false`, so a
@@ -2125,11 +2442,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return {};
         }
 
-        if (commitSeq === undefined || !inTransaction()) {
-            commitSeq = allocateCommitSeq(sql);
+        if (commitSequence.value === undefined || !inTransaction()) {
+            commitSequence.value = allocateCommitSeq(sql);
         }
 
-        return { [COMMIT_SEQ_FIELD]: commitSeq };
+        return { [COMMIT_SEQ_FIELD]: commitSequence.value };
     };
 
     /**
@@ -2169,54 +2486,6 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         }
 
         return entries.length > 0 ? entries : undefined;
-    };
-
-    const { headroom } = options;
-
-    /**
-     * Scoped bypass for every headroom charge below, usable ONLY by primitives
-     * that are deliberately unbounded by design — today, only `deleteAll` (see
-     * its docstring: "Deliberately uncapped… erasure primitive"). Not exported,
-     * so user code (a mutation handler, a trigger function) has no way to reach
-     * it directly; the only caller is `deleteAll`'s own implementation below.
-     *
-     * Closure-scoped to THIS writer instance rather than a bare top-level
-     * `let`: every dispatch builds a fresh `createShardCtxDb(...)` writer (see
-     * the generated `buildCtx`), so this flag can never leak across a
-     * CONCURRENT dispatch on a different writer instance — each has its own.
-     * Within one writer, though, the exemption is WRITER-WIDE for the
-     * duration of `deleteAll`'s await chain, not scoped to `deleteAll`'s own
-     * calls: `meterExempt` is a single boolean every hook on this writer
-     * reads, so any OTHER write that gets interleaved into that chain — e.g.
-     * a sibling `await Promise.all([ctx.db.deleteAll("a"),
-     * ctx.db.insertMany("b", big)])` — sees `meterExempt === true` too and is
-     * silently exempted alongside it. This is a known, low-severity
-     * limitation rather than a correctness bug: the meter is a resource
-     * bound, and parallelizing a bulk erase with other writes on the same
-     * writer is an unusual pattern to begin with.
-     *
-     * Gating the SHARED `onRead`/`onWrite` hooks (rather than only the two call
-     * sites `deleteAll` itself makes) means a trigger's own writes, fired as a
-     * side effect of the row `deleteAll` is erasing, are ALSO exempt for that
-     * one row's pipeline — there is no separate metering surface to gate
-     * instead, since triggers run against this same writer. That is bounded by
-     * "one row's worth of side effects" per iteration, not by "however many
-     * rows deleteAll erases", so it does not reopen the isolate-exhaustion gap
-     * the meter exists to close.
-     */
-    let meterExempt = false;
-
-    /** Run `run` with every headroom charge below suppressed. See `meterExempt`. */
-    const runUnmetered = async <T>(run: () => Promise<T>): Promise<T> => {
-        const previous = meterExempt;
-
-        meterExempt = true;
-
-        try {
-            return await run();
-        } finally {
-            meterExempt = previous;
-        }
     };
 
     const reportRead = options.onRead ?? (() => undefined);
@@ -2277,7 +2546,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * instead (see `meterRows` in `buildReader`).
      */
     const onRead: ReadHook = (table, idOrScan, exact) => {
-        if (idOrScan !== undefined && idOrScan !== SCAN_DEP && !meterExempt) {
+        if (idOrScan !== undefined && idOrScan !== SCAN_DEP) {
             headroom?.recordRead(1);
         }
 
@@ -2305,8 +2574,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      */
 
     /**
-     * Charge one written document against the transaction meter, unless this
-     * writer is running unmetered (see `meterExempt`).
+     * Charge one written document against the transaction meter.
      *
      * Named rather than inlined because the `.global()` branches cannot reach
      * `onWrite` — they return before it — so each one has to charge itself, and
@@ -2315,9 +2583,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * absence.
      */
     const meterWrite = (row: unknown): void => {
-        if (!meterExempt) {
-            headroom?.recordWrite(row);
-        }
+        headroom?.recordWrite(row);
     };
 
     const onWrite: WriteHook = async (event) => {
@@ -2329,7 +2595,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
     const scheduler = options.scheduler ?? throwingScheduler;
-    const { globalDb } = options;
+    const globalDb = meterGlobalDatabase(options.globalDb, headroom);
     // Resolved request auth for `.serverDefault(fn)` column factories; defaults
     // to the anonymous slice so server-trusted columns stamp `null` when the
     // generated writer is built without a caller identity.
@@ -2541,11 +2807,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * `charge` is `false` when the caller already charged this row — today
      * `insertMany`, which pre-charges the whole batch so a mid-loop breach
      * cannot leave earlier rows committed in a backend the DO transaction
-     * cannot roll back. A parameter rather than `runUnmetered`, deliberately:
-     * `meterExempt` is writer-wide for the duration of its await, so a routine
-     * `Promise.all([ctx.db.insertMany("<global>", rows), ctx.db.insert(…)])`
-     * would silently exempt the sibling write too. `deleteAll` accepts that
-     * trade for an unusual pattern; a global `insertMany` is ordinary.
+     * cannot roll back.
      */
     const insertGlobal = async (
         global: DatabaseWriterLike,
@@ -3420,6 +3682,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
+            // Metered writers hand the erase to their unmetered twin (see `unmeteredWriter`).
+            if (headroom !== undefined) {
+                return (unmeteredWriter().deleteAll as NonNullable<DatabaseWriterLike["deleteAll"]>)(tableName, allOptions);
+            }
+
             const chunkSize = Math.max(1, allOptions?.chunkSize ?? DEFAULT_BATCH_LIMIT);
             const deleteOptions = allOptions?.hard === undefined ? undefined : { hard: allOptions.hard };
             // A global table's ids never live in this DO, so they skip the local probe
@@ -3428,42 +3695,40 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             let deleted = 0;
 
             // Resolve-then-delete in chunks until the table is empty. Deliberately
-            // uncapped AND METER-EXEMPT: this is the erasure primitive, so
+            // uncapped AND UNMETERED: this is the erasure primitive, so
             // stopping at DEFAULT_BATCH_LIMIT — or at the transaction headroom's
             // read/write ceilings — would leave data behind, the opposite of the
             // guarantee the caller needs (a GDPR/tenant-erasure "this table is
             // now empty" claim that quietly stops at 50k rows is not that
             // guarantee). The bound on this primitive is the table's own size,
-            // not `TransactionLimits` — `runUnmetered` (see its definition
-            // above) is what makes that true for both halves: the paging
+            // not `TransactionLimits` — running on the unmetered twin (see
+            // `unmeteredWriter`) is what makes that true for both halves: the paging
             // `findMany` reads AND the per-row `writer.delete` writes below. On
             // a `.softDelete()` table the default flips the marker (so the loop
             // must not re-read the same rows forever); `{ hard: true }` removes
             // them physically.
-            await runUnmetered(async () => {
-                for (;;) {
-                    // eslint-disable-next-line no-await-in-loop -- chunked by design: one page of ids at a time, single-threaded SQLite
-                    const page = await writer.findMany(tableName, { limit: chunkSize });
-                    const ids = page.page.map((row) => String(row["_id"]));
+            for (;;) {
+                // eslint-disable-next-line no-await-in-loop -- chunked by design: one page of ids at a time, single-threaded SQLite
+                const page = await writer.findMany(tableName, { limit: chunkSize });
+                const ids = page.page.map((row) => String(row["_id"]));
 
-                    if (ids.length === 0) {
-                        break;
-                    }
-
-                    for (const id of ids) {
-                        // eslint-disable-next-line no-await-in-loop -- sequential by design: each row reuses the full delete pipeline (triggers, cascades, CDC, broadcast)
-                        await (global === undefined ? writer.delete(tableName, id, deleteOptions) : deleteGlobalByIds(global, tableName, [id], deleteOptions));
-                        deleted += 1;
-                    }
-
-                    // A short page means the table is drained. This also makes the
-                    // soft-delete case terminate: `findMany` hides soft-deleted rows, so
-                    // each pass sees only rows still to erase, never the ones just marked.
-                    if (ids.length < chunkSize) {
-                        break;
-                    }
+                if (ids.length === 0) {
+                    break;
                 }
-            });
+
+                for (const id of ids) {
+                    // eslint-disable-next-line no-await-in-loop -- sequential by design: each row reuses the full delete pipeline (triggers, cascades, CDC, broadcast)
+                    await (global === undefined ? writer.delete(tableName, id, deleteOptions) : deleteGlobalByIds(global, tableName, [id], deleteOptions));
+                    deleted += 1;
+                }
+
+                // A short page means the table is drained. This also makes the
+                // soft-delete case terminate: `findMany` hides soft-deleted rows, so
+                // each pass sees only rows still to erase, never the ones just marked.
+                if (ids.length < chunkSize) {
+                    break;
+                }
+            }
 
             return { deleted };
         },
@@ -3575,7 +3840,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // rows this call materialized. Charge them here. Predicated reads are
             // charged by their per-row stamps below, so they must not be charged
             // twice.
-            if (isFullScan && !meterExempt) {
+            if (isFullScan) {
                 headroom?.recordRead(rows.length);
             }
 
@@ -4156,8 +4421,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // The loop then forwards each row through `insertGlobal` with the
             // charge suppressed, or every row would be charged twice: once here
             // and once on its way out. Suppressing it per call rather than with
-            // the writer-wide `runUnmetered` keeps a concurrent write on this
-            // same writer metered (see `insertGlobal`'s `charge` parameter).
+            // the charge parameter keeps this write metered (see `insertGlobal`).
             // Shard-local batches keep the per-row charge untouched, since the DO
             // transaction rewinds them and there is nothing to pre-empt.
             const global = globalWriterFor(tableName, "insert");
@@ -4470,9 +4734,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     }
                 },
                 (count) => {
-                    if (!meterExempt) {
-                        headroom?.recordRead(count);
-                    }
+                    headroom?.recordRead(count);
                 },
             );
         },
@@ -4892,7 +5154,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         : writer;
 };
 
-export { assertStorableRowId, assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };
+export { assertStorableRowId, assertValidClientId, createShardCtxDb, meterReadBytes, normalizeIdStructurally, NotUniqueError };
 export type { SearchBackfillProgress } from "./ctx-db-backfill";
 export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes } from "./ctx-db-backfill";
 export type { CdcChange, CdcChangeKey } from "./ctx-db-cdc";

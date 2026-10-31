@@ -165,6 +165,32 @@ describe("schedulerDO — workpool concurrency", () => {
         expect(poolRow.inFlight).toBe(1);
     });
 
+    it("keeps a queued job's first due time across backpressure re-arms", async () => {
+        expect.assertions(1);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const dueAt = Date.now() - 1000;
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "job", maxConcurrency: 1, pool: "p", scheduledFor: dueAt }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "job", maxConcurrency: 1, pool: "p", scheduledFor: dueAt }));
+
+        await scheduler.alarm();
+        await scheduler.fetch(post("/complete", { id: scheduler.dispatched[0]?.id, pool: "p" }));
+
+        for (const key of [...state.storageMap.keys()].filter((k) => k.startsWith("t:"))) {
+            const recordId = state.storageMap.get(key);
+
+            state.storageMap.delete(key);
+            state.storageMap.set(`t:${"0".padStart(15, "0")}:${String(recordId)}`, recordId);
+        }
+
+        await scheduler.alarm();
+
+        // The job the full pool turned away carries its original due time; the first never waited.
+        expect(scheduler.dispatched.map((record) => record.firstDueAt)).toStrictEqual([undefined, dueAt]);
+    });
+
     it("releases the slot immediately when the dispatch kick fails", async () => {
         expect.assertions(2);
 

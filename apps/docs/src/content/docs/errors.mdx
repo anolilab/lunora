@@ -942,6 +942,8 @@ Narrow the read with an index (`.withIndex(...)`) instead of scanning the table,
 
 The ceilings are deliberately conservative — they exist to stop one request taking down the whole shard. A deployment that genuinely needs bigger transactions can raise them by overriding the `transactionLimits()` seam on its generated shard class.
 
+A transaction that reaches 80% of a ceiling without crossing it logs one `warn` line (event `lunora.transaction.near_limit`) naming the limit, so a function that only gets close on development data shows up before production data pushes it over. A single read or write that jumps past the ceiling from below 80% fails without that warning.
+
 ### `UNAUTHENTICATED`
 
 `401` — Unauthenticated

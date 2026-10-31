@@ -617,17 +617,23 @@ abstract class ShardDO {
     protected invalidateCompanionMemo(): void;
     protected isCacheableQuery(_functionPath: string): boolean;
     protected transactionLimits(): Partial<TransactionLimits>;
-    protected transactionHeadroom(): TransactionHeadroomTracker;
-    protected subscriptionHeadroom(): TransactionHeadroomTracker;
+    protected transactionHeadroom(functionPath?: string): TransactionHeadroomTracker;
+    protected subscriptionHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker;
+    protected streamHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker;
+    protected windowStreamReads(headroom: TransactionHeadroomTracker, frames: AsyncIterable<unknown>): AsyncIterable<unknown>;
     protected alarmHeadroom(): TransactionHeadroomTracker;
     protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;
     protected flushMigrationProgress(): Promise<void>;
-    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor, error?: ErrorDetail | undefined): void;
+    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor, error?: ErrorDetail | undefined, pinned?: {
+        trace: TraceAnchor | undefined;
+        userId: string | undefined;
+    }): void;
     protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>, scope?: SensitiveScope): ContextLogger;
     protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor, scope?: SensitiveScope): ContextTracer;
     protected resolveDispatchAnchor(identityScoped: boolean): TraceAnchor;
     protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): T;
     protected instrumentSql<T extends SqlClientLike>(client: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): T;
+    protected watchActionWork(functionPath: string, context: unknown): () => void;
     protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): ContextFetch;
     protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): SpanHandle;
     protected makeMetrics(functionPath: string, sink?: TelemetrySink, scope?: SensitiveScope): ContextMetrics;

@@ -138,8 +138,12 @@ interface NodeSchedulerHostOptions {
      * precise failure plan 267 caught. Supply one in anything real; the
      * conformance host supplies one purely so the TCK can tell a delivery apart
      * from an expired timer.
+     *
+     * `job.scheduledFor` is the due time (a cron tick's planned fire time).
+     * Forwarding it as the dispatch body's `scheduledFor` is what lets the shard
+     * record the `scheduler.lag_ms` metric, as the Worker dispatch path does.
      */
-    onDispatch?: (functionPath: string, args: Record<string, unknown>, job: { attempts: number; id: string }) => Promise<void> | void;
+    onDispatch?: (functionPath: string, args: Record<string, unknown>, job: { attempts: number; id: string; scheduledFor: number }) => Promise<void> | void;
 }
 
 /**
@@ -525,7 +529,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         const claim = holdClaim(id, now);
 
         try {
-            await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, { attempts, id });
+            await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, { attempts, id, scheduledFor: row.scheduled_for });
             await outsideForeignTransaction();
 
             if (isOpen() && !inTransaction()) {
@@ -615,7 +619,12 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
             (async (): Promise<void> => {
                 try {
-                    await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, { attempts: 0, id: row.key });
+                    await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, {
+                        attempts: 0,
+                        // Per tick: a shard dedups replays on this id, so a constant one would run only the first tick of each day.
+                        id: `${row.key}:${String(nextAt)}`,
+                        scheduledFor: nextAt,
+                    });
                 } catch {
                     // See the docstring: a dropped tick must not stop the schedule.
                 }

@@ -139,6 +139,7 @@ import type {
     SubscriptionsResult,
     TableIndexInfo,
     TransactionLimits,
+    TransactionLimitWarning,
     TransactionSqlLike,
     TtlSweepSpec,
     VectorBackfillProgress,
@@ -311,6 +312,7 @@ import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
+import { SCHEDULED_FOR_HEADER } from "../../../shared/system-dispatch-headers";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { adminSocketBinding, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import {
@@ -413,6 +415,7 @@ import { isRegistryNamespace, isRegistryRpc, registerShardKey, SHARD_REGISTRY_DO
 import type { SubscriptionMemo } from "./socket-table-index";
 import { SocketTableIndex } from "./socket-table-index";
 import SubscriptionFailureLatch from "./subscription-backoff";
+import watchPendingWork from "./unawaited-work";
 
 /** The registry writes a shard makes, whether they reach a namespace or an entrypoint. */
 interface RegistryWriter {
@@ -2635,6 +2638,15 @@ abstract class ShardDO {
      * the first ctx is.
      */
     private lastTelemetrySink: TelemetrySink | undefined;
+
+    /**
+     * `functionPath` + limit kind of every live-query re-run that already warned
+     * near a limit. Each re-run gets a fresh tracker, so without this a query that
+     * sits past 80% would warn once per subscriber per write. Bounded by the
+     * app's query paths; it clears when the instance hibernates, so a query that
+     * stays near a limit warns again after a wake.
+     */
+    private readonly rerunNearLimitWarned = new Set<string>();
 
     /**
      * Client-issued idempotency key for the in-flight mutation, forwarded via the
@@ -6667,7 +6679,7 @@ abstract class ShardDO {
      * TTL, so an idle TTL table does not wake the shard. A write that adds an
      * expiring row re-arms through {@link ShardDO.armTtlSweepAfterWrite}.
      *
-     * One {@link ShardDO.alarmHeadroom} tracker covers the WHOLE sweep pass (every
+     * One tracker (built like {@link ShardDO.alarmHeadroom}, minus its warning) covers the WHOLE sweep pass (every
      * spec, every batch) — not per-row or per-spec — because the ceiling exists to
      * bound one alarm tick's total isolate cost, not any single table's. A
      * `TRANSACTION_LIMIT_EXCEEDED` mid-batch is "batch full", not a genuine
@@ -6687,7 +6699,8 @@ abstract class ShardDO {
 
         const sql = this.sql as SqlExec;
         const now = Date.now();
-        const headroom = this.alarmHeadroom();
+        // No near-limit callback: a sweep runs until the meter fills by design, so "the transaction will fail" would be false.
+        const headroom = new TransactionHeadroomTracker(this.transactionLimits());
 
         for (const spec of specs) {
             let batches = 0;
@@ -7526,8 +7539,8 @@ abstract class ShardDO {
      * for the same reason — an ambient field says "a dispatch is in flight", not
      * "this caller is that dispatch".
      */
-    protected transactionHeadroom(): TransactionHeadroomTracker {
-        return new TransactionHeadroomTracker(this.transactionLimits());
+    protected transactionHeadroom(functionPath = "transaction"): TransactionHeadroomTracker {
+        return this.mintHeadroom(functionPath, { trace: this.currentRequestTrace, userId: this.getCurrentUserId() });
     }
 
     /**
@@ -7546,25 +7559,47 @@ abstract class ShardDO {
      * background: a concurrent `/rpc` dispatch building its `ctx.db` during the
      * drain would take the refresh branch and lose its own ceiling entirely.
      */
-    protected subscriptionHeadroom(): TransactionHeadroomTracker {
-        return new TransactionHeadroomTracker(this.transactionLimits());
+    protected subscriptionHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker {
+        // A re-run has no dispatch of its own; the shared trace belongs to whichever
+        // write triggered it, so its warning carries the subscriber and no trace.
+        return this.mintHeadroom(functionPath, { trace: undefined, userId: identity?.userId }, this.rerunNearLimitWarned);
+    }
+
+    /**
+     * A stream's budget, held for its whole life. Rows stay capped over the life,
+     * as before; bytes are capped per frame by {@link ShardDO.windowStreamReads}.
+     */
+    protected streamHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker {
+        // Not the shared re-run set: that would silence every later stream of this function. The tracker
+        // itself warns once per limit for the stream's life, windows included.
+        return this.mintHeadroom(functionPath, { trace: undefined, userId: identity?.userId });
+    }
+
+    /** Pass `frames` through, opening a fresh read-byte window after each one. */
+    // eslint-disable-next-line class-methods-use-this, generator-star-spacing -- a hook the generated executeStream calls through `this`; prettier owns the `async *` spacing
+    protected async *windowStreamReads(headroom: TransactionHeadroomTracker, frames: AsyncIterable<unknown>): AsyncIterable<unknown> {
+        for await (const frame of frames) {
+            yield frame;
+            headroom.beginReadWindow();
+        }
     }
 
     /**
      * A fresh budget for one alarm-driven work item — one external-source
-     * table's tick, or one TTL sweep pass.
+     * table's tick.
      *
      * Alarm work runs with no client waiting and no `/rpc` dispatch in flight,
      * so `transactionHeadroom()`'s per-dispatch tracker is `undefined` there —
-     * leaving external-source ingest and TTL sweeps completely unmetered, the
-     * exact isolate-exhaustion class the meter exists to bound. Handed to the
+     * leaving external-source ingest completely unmetered, the exact
+     * isolate-exhaustion class the meter exists to bound. Handed to the
      * writer BY VALUE, the same pattern as `subscriptionHeadroom()` and for the
      * same reason: an ambient instance-field flag would race a concurrently
      * in-flight `/rpc` dispatch, or a sibling alarm work item, clearing or
-     * substituting the wrong tracker mid-flight.
+     * substituting the wrong tracker mid-flight. A TTL sweep builds its own
+     * tracker instead, without the near-limit warning (see `pollTtlSweeps`).
      */
     protected alarmHeadroom(): TransactionHeadroomTracker {
-        return new TransactionHeadroomTracker(this.transactionLimits());
+        return this.mintHeadroom("alarm", { trace: undefined, userId: undefined });
     }
 
     /**
@@ -7634,6 +7669,10 @@ abstract class ShardDO {
         // the Error sat in a `with()` bound field, which `fields` has already
         // stringified by the time it gets here.
         error: ErrorDetail | undefined = findLoggedError(fields === undefined ? args : [...args, fields]),
+        // Trace AND user pinned by a caller that runs after the handler's awaits,
+        // for the same reason as `anchor`. Taken as given — an absent trace or
+        // user stays absent rather than falling back to the shared fields.
+        pinned?: { trace: TraceAnchor | undefined; userId: string | undefined },
     ): void {
         // Correlate the line to its dispatch span. Read from the resolved anchor
         // rather than re-parsing the inbound `traceparent`, so a dispatch that
@@ -7645,7 +7684,7 @@ abstract class ShardDO {
         // An explicit `anchor` pins the trace for a caller that runs AFTER the
         // handler's awaits — the dispatch `finally` emitting the wide event —
         // where the shared field may already belong to an interleaved dispatch.
-        const trace = anchor ?? this.currentRequestTrace;
+        const trace = pinned === undefined ? (anchor ?? this.currentRequestTrace) : pinned.trace;
 
         // One canonical event built once, fed to all three destinations. Only the
         // console event drops raw `args` (see emitLogEvent); the buffer and sink
@@ -7663,7 +7702,7 @@ abstract class ShardDO {
             spanId: trace?.rootSpanId,
             traceId: trace?.traceId,
             ts: Date.now(),
-            userId: this.getCurrentUserId(),
+            userId: pinned === undefined ? this.getCurrentUserId() : pinned.userId,
         };
 
         this.logs.push({ fields, functionPath, level, message, timestamp: event.ts, traceId: event.traceId });
@@ -7862,6 +7901,41 @@ abstract class ShardDO {
         const deps = this.databaseTelemetryDeps("sql", functionPath, anchor, sink, scope);
 
         return deps === undefined ? client : instrumentSqlClient(client, deps);
+    }
+
+    /**
+     * Count the I/O an action starts through `ctx`. The returned function, called
+     * once the handler has returned, restores `ctx` and logs one `warn` line
+     * naming every call still in flight. On Workers that work can be cancelled
+     * silently after the response; the line is how a developer finds out before
+     * production does. Nothing is awaited on the handler's behalf.
+     */
+    protected watchActionWork(functionPath: string, context: unknown): () => void {
+        const finish = watchPendingWork(context as Record<string, unknown>);
+        // Pinned now: `finish` runs after the handler's awaits, when the shared fields
+        // may already belong to an interleaved dispatch.
+        const pinned = { trace: this.currentRequestTrace, userId: this.getCurrentUserId() };
+        // `buildCtx` has just registered this dispatch's sink; read later, the field may hold another's.
+        const { lastTelemetrySink: sink } = this;
+
+        return () => {
+            const pending = finish();
+
+            if (pending.length > 0) {
+                this.recordUserLog(
+                    functionPath,
+                    "warn",
+                    [],
+                    `action returned while ${pending.join(", ")} was still running; await it, or it may be cancelled once the response is sent`,
+                    { pending },
+                    sink,
+                    "lunora.action.unawaited_work",
+                    undefined,
+                    undefined,
+                    pinned,
+                );
+            }
+        };
     }
 
     /**
@@ -8731,7 +8805,9 @@ abstract class ShardDO {
         // Stash the inbound D1 bookmark and identity headers for the
         // duration of the handler call so getters return the right
         // values. Cleared on exit so the next request starts fresh.
-        const { dispatchAttribution, dispatchBookmark, dispatchHeadroom, dispatchStartedAt, dispatchTrace } = this.beginDispatch(request);
+        const { dispatchAttribution, dispatchBookmark, dispatchHeadroom, dispatchStartedAt, dispatchTrace } = this.beginDispatch(request, payload.functionPath);
+
+        this.recordSchedulerLag(request, payload.functionPath, dispatchStartedAt);
 
         // Outcome of the dispatch, for the synthetic root span recorded in the
         // `finally` below. A sentinel rather than a boolean so the `catch` can
@@ -15869,6 +15945,76 @@ abstract class ShardDO {
     }
 
     /**
+     * Record how late a scheduled job started: `scheduler.lag_ms` is the gap
+     * between its due time and this dispatch. A queue that cannot keep up shows
+     * as a climbing lag long before jobs fail, and nothing else measures it.
+     * Only a system dispatch may carry the due time; a client-sent header is
+     * ignored rather than trusted to write the operator's metrics.
+     */
+    private recordSchedulerLag(request: Request, functionPath: string, startedAt: number): void {
+        const header = request.headers.get(SCHEDULED_FOR_HEADER);
+        const scheduledFor = header === null ? Number.NaN : Number(header);
+
+        if (!this.currentRequestSystem || !Number.isFinite(scheduledFor)) {
+            return;
+        }
+
+        this.recordMetric(
+            {
+                // The series folds on (name, kind, attributes), so the job's path is
+                // an attribute: without it every job would share one series.
+                attributes: { function: functionPath },
+                functionPath,
+                kind: "histogram",
+                name: "scheduler.lag_ms",
+                shardKey: this.runner.shardKey,
+                ts: startedAt,
+                value: Math.max(0, startedAt - scheduledFor),
+            },
+            this.lastTelemetrySink,
+        );
+    }
+
+    /**
+     * A fresh budget that reports crossing 80% of any ceiling as a `warn` line.
+     * Local data is usually a fraction of production's, so the transaction that
+     * fails after deploy is the one that only ever got close here — the line is
+     * how a developer sees it coming. `functionPath` names the work; callers
+     * without one pass the kind of work instead.
+     *
+     * The warning fires mid-handler, after awaits an interleaved dispatch can
+     * use to re-set the shared trace and user, so both are pinned here. A `trace` of `undefined` files the line under no trace rather than
+     * borrowing an unrelated one.
+     */
+    private mintHeadroom(
+        functionPath: string,
+        pin: { trace: TraceAnchor | undefined; userId: string | undefined },
+        warnedBefore?: Set<string>,
+    ): TransactionHeadroomTracker {
+        return new TransactionHeadroomTracker(this.transactionLimits(), (warning: TransactionLimitWarning) => {
+            const key = `${functionPath}\u0000${warning.kind}`;
+
+            if (warnedBefore?.has(key)) {
+                return;
+            }
+
+            warnedBefore?.add(key);
+            this.recordUserLog(
+                functionPath,
+                "warn",
+                [],
+                `transaction reached ${String(Math.round((warning.used / warning.limit) * 100))}% of its ${warning.kind} limit (${String(warning.used)} of ${String(warning.limit)}); past it the transaction fails with TRANSACTION_LIMIT_EXCEEDED`,
+                { ...warning },
+                this.lastTelemetrySink,
+                "lunora.transaction.near_limit",
+                undefined,
+                undefined,
+                pin,
+            );
+        });
+    }
+
+    /**
      * Stamp everything one RPC dispatch needs off its request, and reset every
      * per-request capture the handler will fill.
      *
@@ -15887,7 +16033,10 @@ abstract class ShardDO {
      * under another request's trace (see the comments inside).
      * @returns this dispatch's trace anchor and its transaction-headroom tracker
      */
-    private beginDispatch(request: Request): {
+    private beginDispatch(
+        request: Request,
+        functionPath: string,
+    ): {
         dispatchAttribution: QueryAttribution;
         dispatchBookmark: DispatchBookmark;
         dispatchHeadroom: TransactionHeadroomTracker;
@@ -15970,7 +16119,7 @@ abstract class ShardDO {
         // VALUE (see its docstring), so this dispatch's ctx-build never depends
         // on a shared field still pointing at THIS tracker by the time an
         // `await`-interleaved concurrent dispatch's `finally` runs.
-        const dispatchHeadroom = new TransactionHeadroomTracker(this.transactionLimits());
+        const dispatchHeadroom = this.mintHeadroom(functionPath, { trace: dispatchTrace, userId: this.getCurrentUserId() });
 
         // Collect the declared indexes this dispatch exercises (stamped by
         // the ctx-db index-use hook) so `recordFunctionCall` can persist the

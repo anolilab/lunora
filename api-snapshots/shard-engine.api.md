@@ -3423,7 +3423,9 @@ interface ThroughRelationWriteInfo extends RelationWriteBase {
 
 ```ts
 interface TransactionHeadroom {
+    readBytes: number;
     readRows: number;
+    remainingReadBytes: number;
     remainingReadRows: number;
     remainingWrittenBytes: number;
     remainingWrittenRows: number;
@@ -3436,10 +3438,29 @@ interface TransactionHeadroom {
 
 ```ts
 class TransactionHeadroomTracker {
-    constructor(limits?: Partial<TransactionLimits>);
+    constructor(limits?: Partial<TransactionLimits>, onNearLimit?: (warning: TransactionLimitWarning) => void);
     recordRead(count: number): void;
+    recordReadBytes(bytes: number): void;
+    recordDocumentRead(key: string, bytes: number): void;
+    beginReadWindow(): void;
     recordWrite(row: unknown): void;
     headroom(): TransactionHeadroom;
+}
+```
+
+### `TransactionLimitKind` (type)
+
+```ts
+type TransactionLimitKind = "readBytes" | "readRows" | "writtenBytes" | "writtenRows";
+```
+
+### `TransactionLimitWarning` (interface)
+
+```ts
+interface TransactionLimitWarning {
+    kind: TransactionLimitKind;
+    limit: number;
+    used: number;
 }
 ```
 
@@ -3447,6 +3468,7 @@ class TransactionHeadroomTracker {
 
 ```ts
 interface TransactionLimits {
+    maxReadBytes: number;
     maxReadRows: number;
     maxWrittenBytes: number;
     maxWrittenRows: number;
@@ -4440,7 +4462,7 @@ const isDevEnvironment: (rawEnv: unknown) => boolean;
 ### `isFtsAvailable` (const)
 
 ```ts
-const isFtsAvailable: (sql: SqlExec) => boolean;
+const isFtsAvailable: (wrapper: SqlExec) => boolean;
 ```
 
 ### `isInternalTableName` (const)
