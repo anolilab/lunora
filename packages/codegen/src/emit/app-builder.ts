@@ -76,7 +76,7 @@ interface AuthDeclaration<Env> {
 /** Builder instance fields (private state recorded by the fluent methods). */
 const buildFieldLines = (options: ResolvedAppOptions): string[] => [
     ...(options.hasAccess ? [`    private accessSelector?: Selector<Env, CreateAccessResolverOptions | undefined>;`] : []),
-    `    private adminRevocationsSelector?: Selector<Env, ShardNamespaceLike>;`,
+    ...(options.hasAdminRevocations === false ? [] : [`    private adminRevocationsSelector?: Selector<Env, ShardNamespaceLike>;`]),
     `    private adminToken?: Selector<Env, string>;`,
     ...(options.hasAuth ? [`    private authDeclaration?: AuthDeclaration<Env>;`] : []),
     `    private cdcEnabled = false;`,
@@ -278,12 +278,16 @@ const buildMethodBlocks = (options: ResolvedAppOptions): string[] => [
 
         return this;
     }`,
-    `    /** The \`AdminRevocationDO\` namespace (typically \`env.ADMIN_REVOCATIONS\`). Records revoked named admin tokens where a point-in-time restore of the default shard cannot rewind them. Without it no named admin token can be created and any that exist are refused. */
+    ...(options.hasAdminRevocations === false
+        ? []
+        : [
+              `    /** The \`AdminRevocationDO\` namespace (typically \`env.ADMIN_REVOCATIONS\`). Records revoked named admin tokens where a point-in-time restore of the default shard cannot rewind them. Without it no named admin token can be created and any that exist are refused. */
     public adminRevocations(selector: Selector<Env, ShardNamespaceLike>): this {
         this.adminRevocationsSelector = selector;
 
         return this;
     }`,
+          ]),
     ...(hasShardedTables(options)
         ? [
               `    /** The \`ShardRegistryDO\` namespace (typically \`env.SHARD_REGISTRY\`). Each shard registers itself for the \`.shardBy()\` tables it writes, and cross-shard export, CDC sync and migrations fan out to the shards it lists. Without it they refuse a \`.shardBy()\` table. */

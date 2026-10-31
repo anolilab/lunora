@@ -312,4 +312,23 @@ describe("adminTokensCard", () => {
         expect(screen.queryByText("ci")).toBeNull();
         expect(screen.getByTestId("set-admin-tokens-error").textContent).toContain("token table write failed");
     });
+
+    it("labels a revoked token whose row is still stored, and still offers to clear it", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({});
+
+        mock.listAdminTokens.mockResolvedValue([{ createdAt: 1, name: "ci", revoked: true }]);
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <AdminTokensCard />
+            </LunoraProvider>,
+        );
+
+        const row = await screen.findByTestId("set-admin-token-row");
+
+        expect(row.textContent).toContain("Revoked");
+        expect(screen.getByTestId("set-admin-token-revoke-ci")).toBeDefined();
+    });
 });

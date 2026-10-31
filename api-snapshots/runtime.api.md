@@ -46,6 +46,7 @@ interface AdminTokenSummary {
     expiresAt?: number;
     lastUsedAt?: number;
     name: string;
+    revoked?: boolean;
 }
 ```
 

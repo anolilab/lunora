@@ -2381,6 +2381,7 @@ const MESSAGE_IDS: readonly [
     "Impersonate",
     "Impersonation token",
     "Revoke",
+    "Revoked",
     "Revoke all sessions",
     "Delete user",
     "Confirm delete",

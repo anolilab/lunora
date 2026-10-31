@@ -9,8 +9,19 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CapabilityKey } from "../src/capabilities";
 import type { FeatureUsage } from "../src/discover/feature-usage";
 import { readProjectTarget, resolveCodegenTarget } from "../src/platform-target";
-import { runCodegen } from "../src/run-codegen";
+import { runCodegen as runCodegenWithAdminTokens } from "../src/run-codegen";
 import emittedJsonData from "./emitted-json-data";
+
+/**
+ * `runCodegen` with the admin-token revocation diagnostic left out. Node and celld rate that surface
+ * unsupported, so every run on them carries it; it is asserted once in `emit-admin-revocations.test.ts`,
+ * and these tests are about the features an app declares.
+ */
+const runCodegen = (options: Parameters<typeof runCodegenWithAdminTokens>[0]): ReturnType<typeof runCodegenWithAdminTokens> => {
+    const result = runCodegenWithAdminTokens(options);
+
+    return { ...result, platformDiagnostics: result.platformDiagnostics.filter((diagnostic) => !diagnostic.message.includes("named admin token")) };
+};
 
 const ALL_OFF: FeatureUsage = {
     access: false,

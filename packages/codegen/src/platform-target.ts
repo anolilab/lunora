@@ -722,6 +722,39 @@ const gatePlatformFeatures = (usage: FeatureUsage, target: string, signals: Plat
 };
 
 /**
+ * Whether the target backs named admin tokens' revocation store, which every app carries, so the
+ * rating decides whether codegen emits the surface (`_generated/adminRevocations.ts` and the
+ * builder's `.adminRevocations()`). Derived rather than declared by the app, so it sits beside the
+ * gate instead of in its signal loop. A warning, not an error: the app runs without it and the root
+ * admin token still works. An unrated key fails closed like every other; an unregistered target
+ * keeps the full surface, as `gatePlatformFeatures` does.
+ */
+const gateAdminTokenRevocation = (target: string): { diagnostic?: PlatformDiagnostic; supported: boolean } => {
+    const matrix = PLATFORM_MATRICES[target];
+
+    if (matrix === undefined) {
+        return { supported: true };
+    }
+
+    const level = matrix.features.adminTokenRevocation?.level;
+
+    if (level !== undefined && level !== "unsupported") {
+        return { supported: true };
+    }
+
+    return {
+        diagnostic: {
+            level: "warn",
+            message: `${matrix.name} ${level === undefined ? "does not declare a support level for" : "does not support"} named admin tokens, so codegen omits the admin revocation store (\`_generated/adminRevocations.ts\` and the builder's \`.adminRevocations()\`). The root LUNORA_ADMIN_TOKEN is the only admin credential here.`,
+            name: level === undefined ? "platform_undeclared_feature" : "platform_unsupported_feature",
+            remediation: `Use the root admin token, or deploy to a target whose capability matrix marks "adminTokenRevocation" as native or emulated.`,
+            target,
+        },
+        supported: false,
+    };
+};
+
+/**
  * The target's identity plus the feature keys its matrix rates `unsupported`,
  * for the generated `studioFeatures()` payload — how a separately-hosted studio
  * learns which host it is talking to and which pages that host cannot serve.
@@ -748,6 +781,7 @@ export type { PlatformDiagnostic, PlatformGateResult, PlatformSignals };
 export {
     CAPABILITY_TO_FEATURE,
     DEFAULT_TARGET,
+    gateAdminTokenRevocation,
     gateAgainstMatrix,
     gatePlatformFeatures,
     liveStreamsDeliveryAuthorizationDiagnostic,

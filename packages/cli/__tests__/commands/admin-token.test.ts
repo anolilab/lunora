@@ -117,4 +117,28 @@ describe("lunora admin-token", () => {
         expect(lines.some((line) => line.includes("did not include the created token"))).toBe(true);
         expect(lines).not.toContain("info undefined");
     });
+
+    it("marks a listed token whose row outlived its revocation", async () => {
+        expect.assertions(2);
+
+        const { lines, logger } = capturingLogger();
+        const result = await runAdminTokenCommand({
+            ...BASE,
+            fetchImpl: answering(
+                {
+                    tokens: [
+                        { createdAt: 1, name: "ci", revoked: true },
+                        { createdAt: 2, name: "deploy" },
+                    ],
+                },
+                200,
+                [],
+            ),
+            logger,
+            subcommand: "list",
+        });
+
+        expect(result.code).toBe(0);
+        expect(lines.filter((line) => line.includes("ci ") && line.includes("revoked"))).toHaveLength(1);
+    });
 });

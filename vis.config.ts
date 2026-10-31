@@ -60,6 +60,9 @@ export default defineConfig({
         codegen: {
             cache: true,
             dependsOn: ["^build"],
+            // Declared so a cache HIT restores the generated dirs too. Without it a hit replays the log and
+            // leaves the checkout without them: the playground's tests import its gitignored `_generated`.
+            outputs: ["{projectRoot}/lunora/_generated", "{projectRoot}/.source"],
         },
         // fallow (codebase-intelligence CLI) is pure static analysis over each
         // project's source — no dist needed, so no ^build dependency. health and
