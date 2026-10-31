@@ -331,6 +331,7 @@ const deployRequestFor = (cwd: string, options: DeployCommandOptions): DeployReq
         entry: resolveComposedWorkerEntry(cwd),
         environment: options.env,
         outDir: options.outDir,
+        outFile: options.outFile,
         preview: options.preview,
         temporary: options.temporary,
     };

@@ -35,6 +35,7 @@ describe("celld deploy driver", () => {
         [{ preview: true }, /no preview versions/u],
         [{ temporary: true }, /no short-lived accounts/u],
         [{ outDir: "dist" }, /does not write its bundle/u],
+        [{ outFile: "worker.bundle" }, /does not write its upload artifact/u],
         [{ entry: "src/worker.ts" }, /composed framework entry/u],
     ])("refuses the deploy option %o it has no equivalent for", (request, message) => {
         expect.assertions(1);

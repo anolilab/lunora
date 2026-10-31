@@ -150,6 +150,9 @@ interface DeployCommandOptions {
      */
     outDir?: string;
 
+    /** Also write the upload form (`wrangler deploy --outfile`) here; `lunora build` profiles its startup. */
+    outFile?: string;
+
     /**
      * Upload a preview version (`wrangler versions upload`) instead of a live
      * `wrangler deploy`. Codegen + the drift gate + validation still run, but
