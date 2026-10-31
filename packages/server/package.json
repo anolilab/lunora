@@ -1,6 +1,6 @@
 {
     "name": "@lunora/server",
-    "version": "1.0.0-alpha.260",
+    "version": "1.0.0-alpha.261",
     "description": "Server primitives for Lunora: defineSchema, defineTable, query, mutation, and action",
     "keywords": [
         "backend",
@@ -88,9 +88,9 @@
     },
     "dependencies": {
         "@lunora/errors": ">=1.0.0-alpha.77 <2.0.0-0",
-        "@lunora/scheduler": "1.0.0-alpha.162",
-        "@lunora/shard-engine": "1.0.0-alpha.179",
-        "@lunora/values": "1.0.0-alpha.89",
+        "@lunora/scheduler": "1.0.0-alpha.163",
+        "@lunora/shard-engine": "1.0.0-alpha.180",
+        "@lunora/values": "1.0.0-alpha.90",
         "@lunora/wire": "1.0.0-alpha.6",
         "drizzle-orm": "catalog:drizzle",
         "hono": "catalog:http"
@@ -99,9 +99,9 @@
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/observability": "1.0.0-alpha.193",
+        "@lunora/observability": "1.0.0-alpha.194",
         "@lunora/search-core": "workspace:*",
-        "@lunora/storage": "1.0.0-alpha.165",
+        "@lunora/storage": "1.0.0-alpha.166",
         "@opentelemetry/api": "catalog:otel",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

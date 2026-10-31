@@ -1,6 +1,6 @@
 {
     "name": "@lunora/platform-cloudflare",
-    "version": "1.0.0-alpha.117",
+    "version": "1.0.0-alpha.118",
     "description": "Cloudflare implementation of the Lunora platform contracts: ShardHost, SocketHost, ShardDirectory, ShardKvStore over Durable Objects",
     "keywords": [
         "cloudflare",

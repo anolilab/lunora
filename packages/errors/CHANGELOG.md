@@ -1,3 +1,238 @@
+## @lunora/errors [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.80...@lunora/errors@1.0.0-alpha.81) (2026-10-31)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** a socket admitted with an admin credential that also carries a user is now
+re-authenticated with that credential. The worker's `/_lunora/ws/reauth` accepts the admin
+credential (master bearer or the `?token=` ticket) with the same check as the upgrade and
+exempts it from the per-shard user gate; the shard keeps such a socket only when its admin
+binding still matches the current admin token and the worker verified an admin credential on
+the request. Otherwise it closes the socket with 4005 (`IDENTITY_STALE`), and a user that is
+gone or changed closes it with `identity_changed`, so the socket reconnects holding only what
+the admin credential grants. The client presents a freshly minted ticket on re-auth for a
+socket that upgraded with one. An admin client that does not present the credential loses an
+admin socket that carries a user at its first window.
+
+Before this, a Studio session on a shard its cookie user was not authorized for was refused
+on every re-auth and reconnected every half window.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(do): keep re-auth from closing sockets it should not
+
+- An admin socket is closed by a re-auth only when the request is the socket's owner or the
+  worker verified an admin credential on it; any other caller gets the 404 it would for a
+  socket it does not own, and cannot close the socket or learn it is an admin socket.
+- A re-auth is refused for a passed revalidation window only. A passed credential expiry is
+  what a same-user refresh exists to move, so it no longer drops the socket with 4001.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(do): refuse table-only subscribes on a socket that carries claims
+* **do:** on a socket that carries a user or claims, a `subscribe` with no
+`functionPath` (the legacy raw-delta path) is refused with `SUBSCRIPTION_FUNCTION_REQUIRED`
+(400) before anything is stored or sent. Raw table deltas are not claim-scoped and nothing
+can seed or reset such a view when the socket's claims change, so a legacy table client
+could keep rows read under claims it no longer holds. An anonymous socket keeps accepting
+table-only subscribes. `@lunora/client` always names the function and is unaffected.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(client): bound the ticket mint on re-auth and blank follower tabs on a claims change
+
+- A ticketed socket's re-auth stops waiting for a ticket that never mints, within the same
+  budget as opening the socket, so the request still goes out.
+- When the claims change, the leader tells follower tabs to drop the values it relayed under
+  the old claims; a refused re-subscribe relays only an error and would leave them the rows.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(do): decide changed claims before a stale credential on re-auth
+
+A same-user re-auth with changed claims and an earlier or missing expiry was answered
+STALE_CREDENTIAL and left the socket open under its old claims. Changed claims are decided
+first, so the socket is closed whatever the refresh's age. An admin re-auth with a valid
+admin credential now ignores a lapsed session cookie, as the admin upgrade does, instead of
+refusing the admin credential.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(shard-engine): drop a lapsed relay seed, and make the lapse check cheap on fan-out
+
+- A relay's shape seed re-checks the socket after the owner round trip and the drain, and
+  sends nothing to one that lapsed meanwhile; the conformance suite gains a case where the
+  host reports one subscriber lapsed and only the others are poked.
+- The lapse check returns at once for a socket with no expiry, no window and no user, and a
+  fan-out reads the clock once for all its sockets instead of once per socket. The gate is
+  unchanged: no frame goes to a lapsed socket.
+
+On the whisper fan-out bench (best time per call) this takes 128 members from about 0.0100 ms
+to 0.0082 ms and 1024 members from about 0.072 ms to 0.058 ms, level with no check at all.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(runtime): a claims fingerprint route, so follower tabs can compare claims
+
+A cross-tab follower has no socket and so no fingerprint of its own, and a same-user tab with
+other claims (another scope or tenant) could show data the leader read under its claims.
+`POST /_lunora/claims` answers the caller, resolved as a re-auth is, with the fingerprint of
+its own claims, from the same function and forwarded headers the shard uses for a socket's
+identity frame, and nothing else. A follower fetches it lazily, drops leader data and cached
+values stamped with other claims, and shows nothing claims-stamped until it knows its own;
+frames with no claims behave as before. A tab with no credential has no claims to differ from.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(do): close the queued-work, table-only and durable-run gaps
+
+- A room join or message that waited in the room queue runs no handler once the socket's
+  credential or window has lapsed; a leave still runs so its cleanup is not skipped.
+- A table-only subscription persisted before the refusal is not served raw deltas on a socket
+  that carries claims, since those deltas are not claim-scoped.
+- A durable stream run is keyed by the caller's claims fingerprint as well as its user id, so a
+  socket is never attached to a run produced under other claims of the same user.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(protocol): describe the claims fingerprint route; tidy the follower fetch
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(client): re-baseline the client size budget for claims checks
+
+The growth is the follower claims-fingerprint check, an intentional security feature: a tab
+fetches its own claims fingerprint and drops leader data read under other claims, on top of
+the claims-aware resume, re-auth and cache ordering this PR adds.
+
+react gzip 54,950 -> 56,167 bytes (53.7 -> 54.9 KiB); the other apps grow by 1.1-1.2 KiB.
+The allowance stays 1,024 bytes.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(errors): regenerate the error reference after the rebase
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(client): close the follower-tab gaps in the claims checks
+
+- A follower presents the bearer only when the leader's socket does, so the two fingerprints
+  describe the same credential; an unchanged token no longer discards the answer it awaits.
+- When a follower learns its own claims it also forgets the seeded entries it handed out, the
+  durable copy (removed in order behind writes in flight) and waiting writes, and a returned
+  seed read under other claims no longer passes the hydrated-cache gate.
+- A settled frame read under other claims no longer moves a follower's resume cursor.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(do): recheck lapse after a whisper authorizer, carry a relayed deadline, keep IP queries cold
+
+- A whisper whose authorizer outlasted the sender's window is not relayed.
+- A relay forwards the socket's credential and window deadlines with a room event, so the owner
+  can refuse one whose credential has since expired.
+- A query seen reading ctx.ip is never resumed warm: the fingerprint leaves the address out, so
+  that a reconnect from a new network keeps warm resume for every query that does not read it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(codegen): mark queries that may read ctx.ip, so the shard never resumes them warm
+
+The shard keeps warm resume for a query across a reconnect from a new address, because the
+claims fingerprint leaves the address out. It only learned which queries read ctx.ip when one
+first ran, so a first resubscribe after an address change could still resume one.
+
+Codegen now decides this from the source and fails closed. A query is marked when it names
+`ip` anywhere, destructures a rest, indexes the ctx by a computed key, hands the ctx to another
+function or onto another caller (ctx.run*), or is built with a `.use()` middleware that is not
+a framework one known not to key on the address. The marked paths are emitted as
+LUNORA_IP_READER_PATHS and seeded into the shard's address-keyed set in its constructor; the
+runtime-learned set stays as the backstop for what the analysis cannot see.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(codegen): update the api snapshot for the ip-reader marking
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(do): recheck lapse before room and settled sends
+
+A room handler awaits, so the sender's revalidation deadline can pass while it runs; its queued
+broadcasts then still reached the other members. The deadline is now rechecked before they are
+flushed (a leave still tells the room). The settled frame sent when a refresh is proven unchanged
+moves the client's cursor and watermark, so it likewise checks the lapse after the awaited
+delivery authorization.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(client): keep follower claims current across a claims change
+
+- A leader frame stamped with a fingerprint other than the follower's known one now makes the
+  follower verify its own once per fingerprint, instead of dropping every relayed frame until
+  reload after an org switch or role change.
+- Resetting the tab's claims takes claims-stamped values off the follower's views and restores
+  them if the answer shows the same claims, so a token refresh does not blank the tab.
+- A failed claims request is retried with bounded backoff while frames are held; close() cancels it.
+- A held settled frame is replayed with its own arguments once the claims are known.
+- The leader stamps a subscription error with the claims it ran under, and a follower holding
+  other claims ignores it rather than taking it as its own answer.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(client): withhold unstamped rows, and re-auth ticketed sockets with their bearer
+
+- A follower holding a claims fingerprint no longer shows rows from a leader frame with no claims
+  stamp: it verifies its own once and drops them. A tab with no fingerprint, and blank reset
+  frames, are accepted as before.
+- A follower that does not yet know its claims is not seeded from a claims-stamped cache entry.
+- A socket admitted by a single-use wsToken is re-authenticated with the bearer it was minted
+  from, never as a cookie socket; without a bearer no request is sent and the server closes the
+  socket at the end of the window.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(codegen): mark by-reference handlers and bracket .use() as possible ctx.ip readers
+
+A query whose handler is passed by reference has a body the scan never sees, and a middleware
+added through `["use"]` was not recognised as a .use() call. Both now count as possible address
+readers, so the shard never resumes such a query warm.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(codegen): mark shapes that may read ctx.ip so the shard never resumes them warm
+
+A shape's where() runs under a context the shard cannot learn address reads from, so a shape
+checkpoint read at one address could be resumed at another and keep rows only the old address saw.
+Shapes are now marked statically, failing closed, by the same rules as queries (a direct read, a
+helper handed the context, a where passed by reference or a renamed context that is used). The
+marked shape names are emitted in LUNORA_IP_READER_PATHS, which the generated shard seeds its
+address-keyed set from, so a marked shape is cold-seeded whatever fingerprint is presented.
+
+ShapeIR gains an optional readsIp; the codegen and client api snapshots are updated (the latter for
+the claims stamp on the subscription-error frame).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(studio): re-baseline the studio first-load size
+
+The first load is 319.8 KiB gzipped against a 319.3 KiB ceiling. Current
+alpha already measures 318.0 KiB, so 8.7 KiB of the 10 KiB allowance was
+used before this change. This change adds 1.8 KiB for the client's claims
+checks and the socket re-authentication.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(client): hold unstamped rows until a follower knows whether it has a fingerprint
+
+A follower whose own claims were still being fetched (first load, after a token change) took
+unknown as "no fingerprint" and applied a leader frame carrying rows with no claims stamp. Unknown
+is now told apart from known-none: such a frame is held and replayed once the answer arrives, and
+is accepted only when the server answered with no fingerprint at all.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **do:** revalidate the identity of open subscription sockets ([#1422](https://github.com/anolilab/lunora/issues/1422)) ([c6b947c](https://github.com/anolilab/lunora/commit/c6b947c765bf451abb679cc17bb28f05222bdd9c))
+
 ## @lunora/errors [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.79...@lunora/errors@1.0.0-alpha.80) (2026-10-31)
 
 ### ⚠ BREAKING CHANGES
