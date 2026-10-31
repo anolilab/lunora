@@ -174,9 +174,10 @@ interface DeployCommandOptions {
     smokeLauncher?: DevProcessSpawner;
 
     /**
-     * Evaluate every lazy function module in workerd before shipping, so a module that throws on
-     * load fails the deploy instead of its first caller. Nothing to check for an eager
-     * registry; `false` (`--no-smoke-load`) skips it. Default on.
+     * Evaluate every module the Worker loads on demand in workerd before shipping (lazy function
+     * modules, and in any build the auth module and spec documents the generated app loads with
+     * `import()`), so a module that throws on load fails the deploy instead of its first request.
+     * Nothing to check when there is none; `false` (`--no-smoke-load`) skips it. Default on.
      */
     smokeLoad?: boolean;
     spawner?: Spawner;

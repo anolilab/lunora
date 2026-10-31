@@ -55,7 +55,7 @@ interface BuildCommandOptions {
     outDir?: string;
     /** Starts the smoke check's `wrangler dev`; the deploy command's `smokeLauncher` option, passed through unchanged. */
     smokeLauncher?: DevProcessSpawner;
-    /** `false` skips evaluating lazy function modules before the bundle is written. */
+    /** `false` skips evaluating the deferred modules (lazy functions, auth, spec documents) before the bundle is written. */
     smokeLoad?: boolean;
     spawner?: Spawner;
 
