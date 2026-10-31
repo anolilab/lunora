@@ -12158,7 +12158,13 @@ abstract class ShardDO {
             if (after?.version !== before.version) {
                 // The entry this drop was cancelling is gone, replaced by a new schedule under the same
                 // id (or released by its own hand-off). Whatever is there now is not this drop's to
-                // delete, mark or cancel.
+                // delete, mark or park. But a refused cancel still means the old job may be running.
+                if (cancelError !== undefined) {
+                    this.recordAudit("dropOutboxEntry", { id, detail: { outcome: "failed" } });
+
+                    throw cancelError;
+                }
+
                 this.recordAudit("dropOutboxEntry", { id, detail: { outcome: "applied" } });
 
                 return adminResponse({ dropped: true });
@@ -16028,6 +16034,12 @@ abstract class ShardDO {
         // `retryOutboxEntry` reset the row while this attempt was awaiting the
         // scheduler; writing this attempt's count and backoff would undo that.
         if (attempt.stale) {
+            return;
+        }
+
+        // The row was recorded anew under the same id while this attempt was awaiting: its backoff
+        // or park state would land on a different schedule.
+        if (readScheduleOutboxState(sql, id)?.version !== attempt.version) {
             return;
         }
 

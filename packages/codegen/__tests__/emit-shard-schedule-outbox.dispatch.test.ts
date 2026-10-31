@@ -964,6 +964,56 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 1, id }]);
     });
 
+    it("reports a drop as failed when its cancel failed, even if the entry was replaced meanwhile", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        const { entered, release } = harness.holdCancel();
+        const drop = harness.drop("dup-id");
+
+        await entered;
+        harness.failCancel(new Error("cancel refused"));
+        harness.setReachable(true);
+        await harness.shard.handleRpc("outbox:sameId", {});
+        release();
+
+        // The old job may still run (its cancel was refused); the replacement is a different schedule and stays untouched.
+        await expect(drop).rejects.toThrow("cancel refused");
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("does not defer or park a replacement row when the attempt it replaced fails afterwards", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        const { entered, release } = harness.hold();
+
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await entered;
+
+        // Scheduled anew under the same id while the old attempt is awaiting the scheduler.
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        release();
+        await attempt;
+
+        // The old attempt's failure says nothing about the new row.
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 0, id: "dup-id" }]);
+    });
+
     it("does not hand a dropped entry to the scheduler when it was already queued in the same batch", async () => {
         expect.assertions(3);
 
