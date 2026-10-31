@@ -2252,6 +2252,7 @@ type TraceTrustSignal = "mtls";
 
 ```ts
 interface TriggerTrace {
+    holdSeconds?: number;
     traceparent: string;
 }
 ```

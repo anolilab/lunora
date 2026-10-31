@@ -94,6 +94,8 @@ lunora seed [--table <t>] [--count n]   # deterministic fake data from schema.ts
             [--seed n] [--dry-run] [--reset] [--format json]
 lunora shards prune [--tables <a,b>]    # drop empty shards from the shard registry
             [--dry-run] [--format json]
+lunora pause [status] [--reason <text>] # incident switch: refuse calls, hold jobs/crons/queues
+lunora resume                           # undo `lunora pause`; held jobs run at once
 lunora workflow <create|send-event> ... # start a workflow instance / send it an event
             [--id <id>] [--params <json>] [--payload <json>] [--format json]
 lunora introspect [--url <u>] [--tables <t1,t2>]  # scaffold schema.ts from an
@@ -1467,6 +1469,47 @@ Each shard checks its own rows, so a shard written during the prune keeps (or
 regains) its entry. A shard the prune cannot reach keeps its entry too, and the
 command exits `1` so you can re-run it. Needs a registry: an app without
 `.shardRegistry(...)` gets a `400`. See [Sharding](/docs/concepts/sharding#the-shard-registry).
+
+### `lunora pause` / `lunora resume`
+
+The incident switch. `lunora pause` stops the deployment doing work without a
+redeploy, and `lunora resume` starts it again:
+
+```bash
+lunora pause --reason "bad migration, rolling back" # pause the dev server
+lunora pause status                                  # running, or paused since … — reason
+lunora pause --prod --url https://app.example.com    # pause production
+lunora resume --prod --url https://app.example.com
+```
+
+While paused, app function calls (`/_lunora/rpc`, batches, REST routes) and new
+WebSocket, socket-route and voice connections answer `503 DEPLOYMENT_PAUSED`
+with a `Retry-After` and a fixed message; the `--reason` note is shown only to
+operators (`lunora pause status`, Studio). A realtime socket opened before the pause keeps serving its
+subscriptions until it reconnects; writes go over HTTP, so they are refused. Scheduled jobs stay where they are, with their attempt budgets
+untouched, and run when you resume. Cron ticks are skipped and recorded as such,
+and a raw `crons` handler is skipped too; the built-in scheduled backup still runs.
+Queue messages are re-sent as delayed copies every five minutes with their
+attempt budgets intact, so no pause length sends them to the dead-letter queue. A
+message that cannot be copied (no producer binding or admin token, or a send that
+fails or is too large) is retried with the same delay instead, which does spend
+one of the consumer's `max_retries`. A Workers-for-Platforms tenant answers forwarded batches with
+every message marked for retry. Calls carrying the admin token or an `adminGate`
+grant keep working, so Studio, the CLI and health checks stay usable. Studio shows a banner on every page while
+paused, and the Schedule tab has the switch.
+
+A pause reaches every isolate within five seconds. The flag lives in the
+deployment's `SchedulerDO` instance, which every app with a scheduler or a cron
+has. An app without one gets `400 PAUSE_NOT_CONFIGURED`. Jobs scheduled through
+a separately named scheduler instance (a tenant scheduler, a workpool with its
+own `instanceName`) are held too: each named instance registers with the main one
+the first time it is used, `pause` and `resume` reach every registered instance,
+and an instance first used during a pause starts paused. If some instance cannot
+be reached the command fails with `PAUSE_INSTANCES_FAILED` and names them; the
+main instance has already changed, and running the same command again reaches the
+rest. A custom `schedulerInstanceName` must also be passed to `createScheduler` and
+`createWorkpool` as `primaryInstanceName`. HTTP actions and SSR pages behind `httpRouter`,
+and custom `routes` handlers, keep serving.
 
 ### `lunora workflow`
 

@@ -853,6 +853,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobView` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `Scheduler` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1719,7 +1727,27 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `CronRunInFlight` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `CronRunRecord` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `CronRunStatus` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `CronRunsResult` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `DEFAULT_MAX_BUFFER` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `DeploymentPauseStatus` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -1988,6 +2016,18 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `ScheduleRetryPolicy` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ScheduledHistoryPage` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ScheduledJobView` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -4128,6 +4168,14 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `ScheduledJob` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ScheduledJobRecord` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ScheduledJobState` (type)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
@@ -6302,6 +6350,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `ScheduledJob` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobView` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -8576,6 +8632,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `ScheduledJob` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobView` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

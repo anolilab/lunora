@@ -800,6 +800,54 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
+            it("reports a job pending, then its terminal outcome once it leaves the pending set", async (context) => {
+                await withHost(async (host) => {
+                    if (host.scheduler?.get === undefined || host.awaitJobDispatched === undefined) {
+                        context.skip(`${name} does not implement SchedulerHost.get with an awaitJobDispatched hook`);
+
+                        return;
+                    }
+
+                    expect.assertions(4);
+
+                    const delivered = await host.scheduler.schedule("tasks/remind", {}, { delayMs: 30 });
+                    const cancelled = await host.scheduler.schedule("tasks/remind", {}, { delayMs: 10_000 });
+
+                    await expect(host.scheduler.get(cancelled.id)).resolves.toMatchObject({ id: cancelled.id, state: "pending" });
+
+                    await host.scheduler.cancel(cancelled.id);
+                    await host.awaitJobDispatched(delivered.id);
+
+                    // Leaving `list` must not read as "never existed": that is
+                    // the one answer a caller polling for completion cannot act on.
+                    await expect(host.scheduler.get(cancelled.id)).resolves.toMatchObject({ state: "canceled" });
+                    await expect(host.scheduler.get(delivered.id)).resolves.toMatchObject({ state: "succeeded" });
+                    await expect(host.scheduler.get("never-scheduled")).resolves.toBeNull();
+                });
+            });
+
+            it("reports a dead-lettered job as failed", async (context) => {
+                await withHost(async (host) => {
+                    if (host.scheduler?.get === undefined || host.simulateDeadLetter === undefined) {
+                        context.skip(`${name} does not implement SchedulerHost.get with a simulateDeadLetter hook`);
+
+                        return;
+                    }
+
+                    expect.assertions(2);
+
+                    const job = await host.scheduler.schedule("tasks/remind", {}, { delayMs: 10_000 });
+
+                    await host.simulateDeadLetter(job.id);
+
+                    const record = await host.scheduler.get(job.id);
+
+                    expect(record).toMatchObject({ state: "failed" });
+                    // A terminal state carries when it was reached.
+                    expect(record?.completedAt).toStrictEqual(expect.any(Number));
+                });
+            });
+
             it("lists a pending job with a zero attempt count", async (context) => {
                 await withHost(async (host) => {
                     if (host.scheduler?.list === undefined) {

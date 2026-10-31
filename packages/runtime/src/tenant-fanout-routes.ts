@@ -59,6 +59,9 @@ interface TenantFanoutRouteDeps {
      */
     dispatchScheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;
 
+    /** Whether the deployment is paused; a paused tenant hands every forwarded message back for retry. */
+    isPaused: () => Promise<boolean>;
+
     /** The app's forwarded-batch handler, off `WorkerOptions`. Absent when the app declares no queues. */
     queueHandler?: QueueForwardHandler;
 }
@@ -67,7 +70,7 @@ interface TenantFanoutRouteDeps {
 const buildTenantFanoutRoutes = (
     deps: TenantFanoutRouteDeps,
 ): Record<string, (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response>> => {
-    const { assertAdmin, dispatchScheduled, queueHandler } = deps;
+    const { assertAdmin, dispatchScheduled, isPaused, queueHandler } = deps;
 
     /**
      * `POST /_lunora/scheduled` — run a cron expression's jobs over HTTP, the
@@ -140,6 +143,10 @@ const buildTenantFanoutRoutes = (
             .map((message) => {
                 return { body: (message as { body?: unknown }).body, id: (message as { id: string }).id };
             });
+
+        if (await isPaused()) {
+            return Response.json({ retry: messages.map((message) => message.id) });
+        }
 
         const result = await queueHandler({ messages, queue }, env, context);
 

@@ -16,6 +16,7 @@ import { createContext, lazy, Suspense, use, useEffect } from "react";
 
 import { AssistantProvider, useAssistant } from "../components/assistant-provider";
 import BrandMark from "../components/brand-mark";
+import { DeploymentPauseBanner } from "../components/deployment-pause";
 import { ErrorBoundary } from "../components/error-boundary";
 import { OperationConsoleProvider, useOperationConsole } from "../components/operation-console-provider";
 import RulesBanner from "../components/rules-banner";
@@ -982,6 +983,8 @@ const StudioLayoutShell = (): ReactElement => {
                     <StudioHeader domain={groupLabel[activeGroup.key]} onOpenCommandPalette={openCommandPalette} page={tabLabel[current]} />
 
                     {chrome?.rulesInstalled === false && <RulesBanner />}
+                    {/* Bare studio: the injected client brings its own credentials. With app chrome, wait for a token. */}
+                    {(chrome === null || connected) && <DeploymentPauseBanner />}
 
                     <div
                         aria-labelledby={`dash-tab-${current}`}

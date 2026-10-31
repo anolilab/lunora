@@ -240,10 +240,64 @@ type ConnectionStatus = "connected" | "connecting" | "idle" | "offline" | "polli
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `CronRunInFlight` (interface)
+
+```ts
+interface CronRunInFlight {
+    name: string;
+    renewedAt?: number;
+    runId: string;
+    skipped: number;
+    startedAt: number;
+}
+```
+
+### `CronRunRecord` (interface)
+
+```ts
+interface CronRunRecord {
+    durationMs: number;
+    endedAt: number;
+    error?: string;
+    name: string;
+    reason?: "in-flight" | "paused";
+    runId: string;
+    skipped: number;
+    startedAt: number;
+    status: CronRunStatus;
+}
+```
+
+### `CronRunStatus` (type)
+
+```ts
+type CronRunStatus = "failed" | "skipped" | "succeeded";
+```
+
+### `CronRunsResult` (interface)
+
+```ts
+interface CronRunsResult {
+    inFlight: CronRunInFlight[];
+    runs: CronRunRecord[];
+}
+```
+
 ### `DEFAULT_MAX_BUFFER` (const)
 
 ```ts
 const DEFAULT_MAX_BUFFER = 1024;
+```
+
+### `DeploymentPauseStatus` (interface)
+
+```ts
+interface DeploymentPauseStatus {
+    paused: boolean;
+    pausedAt?: number;
+    reason?: string;
+    supported: boolean;
+}
 ```
 
 ### `FunctionArgumentDescriptor` (interface)
@@ -1066,6 +1120,7 @@ interface ScheduleRecord {
     args: Record<string, unknown>;
     attempts?: number;
     enqueuedAt: number;
+    error?: string;
     functionPath?: string;
     id: string;
     instanceName?: string;
@@ -1085,6 +1140,30 @@ interface ScheduleRetryPolicy {
     baseMs?: number;
     maxAttempts?: number;
     maxMs?: number;
+}
+```
+
+### `ScheduledHistoryPage` (interface)
+
+```ts
+interface ScheduledHistoryPage {
+    cursor?: string;
+    records: ScheduledJobView[];
+}
+```
+
+### `ScheduledJobState` (type)
+
+```ts
+type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+```
+
+### `ScheduledJobView` (interface)
+
+```ts
+interface ScheduledJobView extends ScheduleRecord {
+    completedAt?: number;
+    state: ScheduledJobState;
 }
 ```
 
@@ -1677,8 +1756,15 @@ const subscribeLiveTopic: (options: SubscribeLiveTopicOptions) => (() => void);
 ```ts
 class LunoraAdminClient extends LunoraClient {
     shardTraffic(table: string): Promise<ShardTrafficResult>;
+    getDeploymentPause(): Promise<DeploymentPauseStatus>;
+    setDeploymentPause(paused: boolean, reason?: string): Promise<DeploymentPauseStatus>;
     listScheduledJobs(): Promise<ScheduleRecord[]>;
     schedulerStatus(): Promise<SchedulerStatus>;
+    getScheduledJob(id: string): Promise<ScheduledJobView | null>;
+    listScheduledHistory(options?: {
+        cursor?: string;
+    }): Promise<ScheduledHistoryPage>;
+    listCronRuns(): Promise<CronRunsResult>;
     cancelScheduledJob(id: string): Promise<{
         cancelled: boolean;
     }>;

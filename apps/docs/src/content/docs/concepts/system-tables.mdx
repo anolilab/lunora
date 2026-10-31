@@ -69,6 +69,12 @@ One row per pending invocation:
 | `enqueuedAt`   | `number`                  | When it was enqueued (epoch ms)                                                  |
 | `attempts`     | `number \| undefined`     | Dispatch attempts so far; absent until a retry                                   |
 | `shardKey`     | `string \| undefined`     | Routing hint so dispatch lands on the right shard                                |
+| `state`        | `string \| undefined`     | `get()` only: `pending`, `running`, `succeeded`, `failed` or `canceled`          |
+| `completedAt`  | `number \| undefined`     | `get()` only: when a finished job ended (epoch ms)                               |
+| `error`        | `string \| undefined`     | `get()` only: why a `failed` job was dead-lettered                               |
+
+`query().collect()` lists pending jobs. `get(table, id)` also answers for a job
+that finished within the last seven days, with its outcome in `state`.
 
 ## `_storage`
 

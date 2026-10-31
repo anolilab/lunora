@@ -47,6 +47,40 @@ interface CronJobsBuilder {
 }
 ```
 
+### `CronRunInFlight` (interface)
+
+```ts
+interface CronRunInFlight {
+    name: string;
+    renewedAt?: number;
+    runId: string;
+    skipped: number;
+    startedAt: number;
+}
+```
+
+### `CronRunRecord` (interface)
+
+```ts
+interface CronRunRecord {
+    durationMs: number;
+    endedAt: number;
+    error?: string;
+    name: string;
+    reason?: "in-flight" | "paused";
+    runId: string;
+    skipped: number;
+    startedAt: number;
+    status: CronRunStatus;
+}
+```
+
+### `CronRunStatus` (type)
+
+```ts
+type CronRunStatus = "failed" | "skipped" | "succeeded";
+```
+
 ### `CronScheduleKind` (type)
 
 ```ts
@@ -88,6 +122,16 @@ interface CronTriggerSnippet {
 interface DailySchedule {
     hourUTC: number;
     minuteUTC: number;
+}
+```
+
+### `DeploymentPauseState` (interface)
+
+```ts
+interface DeploymentPauseState {
+    paused: boolean;
+    pausedAt?: number;
+    reason?: string;
 }
 ```
 
@@ -188,6 +232,7 @@ interface LunoraSchedulerOptions {
     instanceName?: string;
     jurisdiction?: DurableObjectJurisdiction;
     namespace: DurableObjectNamespaceLike;
+    primaryInstanceName?: string;
 }
 ```
 
@@ -354,6 +399,7 @@ interface ScheduleRecord {
     args: Record<string, unknown>;
     attempts?: number;
     enqueuedAt: number;
+    error?: string;
     functionPath?: string;
     id: string;
     instanceName?: string;
@@ -362,6 +408,21 @@ interface ScheduleRecord {
     scheduledFor: number;
     shardKey?: string;
     workflow?: string;
+}
+```
+
+### `ScheduledJobState` (type)
+
+```ts
+type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+```
+
+### `ScheduledJobView` (interface)
+
+```ts
+interface ScheduledJobView extends ScheduleRecord {
+    completedAt?: number;
+    state: ScheduledJobState;
 }
 ```
 
@@ -374,7 +435,7 @@ interface Scheduler {
     }>;
     dead: () => Promise<ScheduleRecord[]>;
     deadRetry: (id: string) => Promise<boolean>;
-    get: (id: string) => Promise<ScheduleRecord | null>;
+    get: (id: string) => Promise<ScheduledJobView | null>;
     list: () => Promise<ScheduleRecord[]>;
     runAfter: <T extends CronTarget>(delayMs: number, target: T, args: ScheduleTargetArgs<T>, options?: RunOptions) => Promise<string>;
     runAt: <T extends CronTarget>(date: Date | number, target: T, args: ScheduleTargetArgs<T>, options?: RunOptions) => Promise<string>;
@@ -458,6 +519,12 @@ interface SchedulerStatus {
     inFlight: number;
     pools: SchedulerPoolStatus[];
 }
+```
+
+### `TERMINAL_RETENTION_MS` (const)
+
+```ts
+const TERMINAL_RETENTION_MS = 6048e5;
 ```
 
 ### `WeeklySchedule` (interface)

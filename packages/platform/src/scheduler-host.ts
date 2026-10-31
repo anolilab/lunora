@@ -59,6 +59,16 @@ export interface ScheduledJobStatus extends ScheduledJob {
     functionPath: string;
 }
 
+/** Where a job is in its life. See {@link SchedulerHost.get}. */
+export type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+
+/** {@link ScheduledJobStatus} plus the lifecycle state {@link SchedulerHost.get} reports. */
+export interface ScheduledJobRecord extends ScheduledJobStatus {
+    /** When the job reached a terminal state (ms since epoch). Absent while `pending`/`running`. */
+    completedAt?: number;
+    state: ScheduledJobState;
+}
+
 /**
  * The scheduler host contract. One instance per scheduler namespace.
  */
@@ -116,6 +126,21 @@ export interface SchedulerHost {
         list: () => Promise<ScheduledJobStatus[]>;
         requeue: (id: string) => Promise<boolean>;
     };
+
+    /**
+     * Resolve one job with its lifecycle state, or `null` for an id the host
+     * never scheduled or has forgotten.
+     *
+     * The point is the terminal half: without it a delivered job and one that
+     * never existed look the same once it leaves {@link SchedulerHost.list}.
+     * A host MUST keep `succeeded` and `canceled` for a bounded retention window
+     * it chooses, MUST report a parked job as `failed` for as long as it stays
+     * parked (until requeued or purged), and MUST NOT report a cancelled job as
+     * delivered. `running` means a delivery is in flight.
+     *
+     * Optional for the same reason `list` is; the suite reports the gap.
+     */
+    get?: (id: string) => Promise<ScheduledJobRecord | null>;
 
     /**
      * List the jobs currently pending — scheduled and not yet delivered,

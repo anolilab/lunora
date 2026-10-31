@@ -1,4 +1,4 @@
-import type { CronJobInfo } from "@lunora/client";
+import type { CronJobInfo, CronRunsResult } from "@lunora/client";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -8,9 +8,11 @@ import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useClientQuery } from "../../hooks/use-admin-query";
+import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
-import { errorMessage, fireAndForget } from "../../lib/internal";
+import { errorCode, errorMessage, fireAndForget } from "../../lib/internal";
+import { CronLastRun, CronRunHistory } from "./cron-run-history";
 import CronScheduleAssistant from "./cron-schedule-assistant";
 
 interface CronTriggersPanelProps {
@@ -22,6 +24,13 @@ interface CronTriggersPanelProps {
      * source triggers from elsewhere (e.g. tests).
      */
     readonly loadCronJobs?: () => Promise<CronJobInfo[]>;
+
+    /**
+     * Load the cron run history (in-flight runs and recorded fires). Defaults to
+     * `client.listCronRuns` when the triggers also come from the client; a custom
+     * {@link CronTriggersPanelProps.loadCronJobs} without one shows no history.
+     */
+    readonly loadCronRuns?: () => Promise<CronRunsResult>;
 
     /**
      * Manually fire one cron job by name. Defaults to `client.runCronJob`, which
@@ -37,6 +46,11 @@ interface CronTriggersPanelProps {
 type RunState = { kind: "error"; message: string } | { kind: "idle" } | { kind: "ok" } | { kind: "running" };
 
 const IDLE: RunState = { kind: "idle" };
+
+// The code the worker answers when it has no `schedulerDO` namespace: no history exists to show.
+const SCHEDULER_NOT_CONFIGURED = "SCHEDULER_NOT_CONFIGURED";
+
+const NO_RUNS: CronRunsResult = { inFlight: [], runs: [] };
 
 /**
  * Read-only view of the **static cron triggers** — the `cronJobs()` map compiled
@@ -62,7 +76,7 @@ const cronRunner = (
 };
 
 /** How to run a trigger, or `undefined` when the panel is read-only: the host's runner wins; otherwise the client can run what it also lists. A custom loader without a runner stays read-only. */
-export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPanelProps = {}): ReactElement => {
+export const CronTriggersPanel = ({ loadCronJobs, loadCronRuns, runCronJob }: CronTriggersPanelProps = {}): ReactElement => {
     const client = useStudioClient();
     const t = useT();
 
@@ -74,6 +88,27 @@ export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPane
     // default `client.getCronJobs()` cache entry under one `QueryClient`.
     const jobsQuery = useClientQuery(["lunora-cron-jobs", loadCronJobs ? "custom" : "default"], () => (loadCronJobs ?? (() => client.getCronJobs()))());
     const { data: jobs, error } = jobsQuery;
+
+    // History is secondary to the trigger list: a worker without a scheduler simply
+    // shows none. Any other failure is shown, and the query keeps the last runs it
+    // read, so a transient error neither blanks the table nor passes for "never ran".
+    const runsImpl = loadCronRuns ?? (loadCronJobs === undefined ? () => client.listCronRuns() : undefined);
+    const runsQuery = useClientQuery(["lunora-cron-runs", loadCronRuns ? "custom" : "default"], async () => {
+        if (runsImpl === undefined) {
+            return NO_RUNS;
+        }
+
+        return runsImpl().catch((error_: unknown) => {
+            if (errorCode(error_) === SCHEDULER_NOT_CONFIGURED) {
+                return NO_RUNS;
+            }
+
+            throw error_;
+        });
+    });
+    const cronRuns = runsQuery.data ?? NO_RUNS;
+
+    useAutoRefresh(() => runsQuery.poll(), runsImpl !== undefined);
 
     // Running is available when the host supplies a runner, or when the panel is
     // sourcing triggers from the client (then the client can run them too). A
@@ -100,6 +135,7 @@ export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPane
             // is reflected (the list itself is static, but this matches the
             // post-action refetch model used across the scheduler panels).
             jobsQuery.refetch();
+            runsQuery.refetch();
         } catch (error_) {
             setRunStates((previous) => {
                 return { ...previous, [name]: { kind: "error", message: errorMessage(error_) } };
@@ -120,6 +156,12 @@ export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPane
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="cron-error" role="alert">
                     {error}
+                </p>
+            )}
+
+            {runsQuery.error !== null && (
+                <p className="text-sm text-destructive" data-testid="cron-runs-error" role="alert">
+                    {runsQuery.error}
                 </p>
             )}
 
@@ -155,6 +197,7 @@ export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPane
                                     <TableHead>{t("schedule")}</TableHead>
                                     <TableHead>{t("target")}</TableHead>
                                     <TableHead>{t("shard")}</TableHead>
+                                    <TableHead>{t("last run")}</TableHead>
                                     {runImpl !== undefined && <TableHead aria-label={t("Actions")} />}
                                 </TableRow>
                             </TableHeader>
@@ -177,6 +220,12 @@ export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPane
                                                 </span>
                                             </TableCell>
                                             <TableCell>{job.shardKey ?? ""}</TableCell>
+                                            <TableCell data-testid={`cron-last-run-${job.name}`}>
+                                                <CronLastRun
+                                                    inFlight={cronRuns.inFlight.find((lease) => lease.name === job.name)}
+                                                    last={cronRuns.runs.find((entry) => entry.name === job.name)}
+                                                />
+                                            </TableCell>
                                             {runImpl !== undefined && (
                                                 <TableCell className="text-right">
                                                     <span className="flex items-center justify-end gap-2">
@@ -211,6 +260,8 @@ export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPane
                     </CardContent>
                 </Card>
             )}
+
+            <CronRunHistory runs={cronRuns.runs} />
         </div>
     );
 };

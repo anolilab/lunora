@@ -80,7 +80,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         cronTriggers: {
             level: "native",
-            note: "`triggers.crons` is a supported Wrangler key and celld schedules durably fleet-wide: one handler per occurrence across the whole fleet, one at a time per script, a failure retried with doubling backoff (giving up after six, or on `noRetry()`) without ever delaying the next occurrence, and one catch-up run of the most recent missed occurrence after downtime. Two parser gaps: celld rejects a descending range (`SAT-SUN`, `NOV-FEB`) and `*` inside a list (`1,*`)",
+            note: "`triggers.crons` is a supported Wrangler key and celld schedules durably fleet-wide: one handler per occurrence across the whole fleet, one at a time per script, a failure retried with doubling backoff (giving up after six, or on `noRetry()`) without ever delaying the next occurrence, and one catch-up run of the most recent missed occurrence after downtime. Two parser gaps: celld rejects a descending range (`SAT-SUN`, `NOV-FEB`) and `*` inside a list (`1,*`). The runtime's SchedulerDO-held per-job lease and run history apply unchanged (the lease is redundant with celld's one-at-a-time-per-script delivery, and harmless)",
         },
         crossShardFanout: {
             level: "emulated",
@@ -179,6 +179,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         requestOrigin: {
             level: "emulated",
             note: "celld does not terminate TLS or front a CDN: request.url's hostname comes from the Host header unless a trusted proxy is declared (`--trust-forwarded-headers`, which then reads X-Forwarded-Host / -Proto). Pin the host at the ingress proxy, or configure a base (publicBaseUrl) rather than trusting the request",
+        },
+        deploymentPause: {
+            level: "emulated",
+            note: "The same SchedulerDO-held flag as on Cloudflare, on cell storage and alarms: jobs are held by the alarm, the worker's router, cron and queue checks are unchanged. A queue message held while paused is re-sent as a delayed copy with a fresh attempt budget, and the registry of named scheduler instances a pause fans out to lives in the same SchedulerDO storage, so no extra host contract is needed",
         },
         scheduler: {
             level: "emulated",

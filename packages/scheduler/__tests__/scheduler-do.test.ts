@@ -639,8 +639,8 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         // the time-index deletion alone, so no `dispatched:` key should ever
         // appear, and a successful fire leaves nothing behind.
         expect([...state.storageMap.keys()].filter((key) => key.startsWith("dispatched:"))).toHaveLength(0);
-        // Only the store's own "nothing is unindexed" marker remains.
-        expect([...state.storageMap.keys()]).toStrictEqual(["meta:clean"]);
+        // Only the store's own "nothing is unindexed" marker and the job's terminal history remain.
+        expect([...state.storageMap.keys()].filter((key) => !key.startsWith("done:") && !key.startsWith("dt:"))).toStrictEqual(["meta:clean"]);
     });
 
     it("deletes a dangling time-index entry whose id: header is missing instead of busy-looping", async () => {

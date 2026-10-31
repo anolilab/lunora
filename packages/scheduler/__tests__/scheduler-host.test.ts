@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { SchedulerDO } from "../src/scheduler-do";
 import { createSchedulerHost } from "../src/scheduler-host";
+import { createFakeState } from "./fake-state";
 
 /**
  * The `SchedulerHost` adapter — `@lunora/platform`'s neutral scheduling
@@ -66,6 +68,22 @@ describe("createSchedulerHost", () => {
         // Within the test's own runtime window — the point is "now + 30s", not
         // an exact clock value.
         expect(Number(ns.sent[0]?.scheduledFor)).toBeGreaterThanOrEqual(before + 30_000);
+    });
+
+    it("reports a job's lifecycle state through get, against a real SchedulerDO", async () => {
+        expect.assertions(3);
+
+        const durableObject = new SchedulerDO(createFakeState(), { LUNORA_ORIGIN_URL: "https://app.test" });
+        const stub = { fetch: async (url: string, init?: RequestInit) => durableObject.fetch(new Request(url, init)) };
+        const host = createSchedulerHost({ namespace: { get: () => stub, idFromName: (name: string) => name } as never });
+        const job = await host.schedule("jobs:cleanup", {}, { delayMs: 60_000 });
+
+        await expect(host.get?.(job.id)).resolves.toMatchObject({ attempts: 0, functionPath: "jobs:cleanup", id: job.id, state: "pending" });
+
+        await host.cancel(job.id);
+
+        await expect(host.get?.(job.id)).resolves.toMatchObject({ state: "canceled" });
+        await expect(host.get?.("never-scheduled")).resolves.toBeNull();
     });
 
     it("maps cancel onto the client and returns the bare boolean", async () => {

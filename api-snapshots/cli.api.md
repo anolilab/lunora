@@ -67,6 +67,8 @@ const COMMANDS: readonly [
     "import",
     "seed",
     "shards",
+    "pause",
+    "resume",
     "backup",
     "eval",
     "verify",
