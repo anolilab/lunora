@@ -543,6 +543,7 @@ abstract class ShardDO {
     protected persistIdempotentResult(encodedResult: unknown): void;
     protected isCustomMutator(_functionPath: string): boolean;
     protected prepareFunction(_functionPath: string, _reason: "rpc" | "subscription" | "stream" | "reactor"): void | Promise<void>;
+    protected holdShardWhileLoading(load: () => Promise<unknown>): Promise<void>;
     protected isMutationFunction(_functionPath: string): boolean;
     protected classifyClientMutation(): ClientMutationClass | undefined;
     protected rejectNonNextMutation(functionPath: string, mutatorClass: ClientMutationClass | undefined, dispatchStartedAt: number): Response | undefined;
