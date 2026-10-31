@@ -34,6 +34,7 @@ describe("celld deploy driver", () => {
         [{ environment: "staging" }, /no Wrangler environments/u],
         [{ temporary: true }, /no short-lived accounts/u],
         [{ outDir: "dist" }, /does not write its bundle/u],
+        [{ secretsFile: "secrets.json" }, /no secret store/u],
         [{ entry: "src/worker.ts" }, /composed framework entry/u],
     ])("refuses the deploy option %o it has no equivalent for", (request, message) => {
         expect.assertions(1);

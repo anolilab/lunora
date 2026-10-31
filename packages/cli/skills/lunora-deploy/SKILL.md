@@ -1,6 +1,6 @@
 ---
 name: lunora-deploy
-description: Deploys a Lunora app to Cloudflare Workers + Durable Objects and gets wrangler.jsonc, remote resources and secrets to line up. Covers `lunora deploy` (and `--env`, `--dry-run`, `--migrate`), the `lunora doctor` / `lunora verify` / `lunora prepare` preflights, Durable Object bindings (SHARD, SHARD_REGISTRY, SCHEDULER), the `DB` D1 binding and its placeholder id, R2 buckets, production secrets (`lunora env push`, `wrangler secret put`) versus `.dev.vars`, the schema-drift gate, the architecture diff, and rollback with `lunora cloudflare deployments`. Use when the user asks to "deploy", "ship to production", "set up a staging environment", wire CI deploys, or when a deploy fails on a binding, a placeholder `database_id`, an unexported Durable Object class, a missing secret, or "schema drift gate blocked deploy".
+description: Deploys a Lunora app to Cloudflare Workers + Durable Objects and gets wrangler.jsonc, remote resources and secrets to line up. Covers `lunora deploy` (and `--env`, `--dry-run`, `--migrate`), isolated per-PR previews (`lunora preview deploy | list | delete`), the `lunora doctor` / `lunora verify` / `lunora prepare` preflights, Durable Object bindings (SHARD, SHARD_REGISTRY, SCHEDULER), the `DB` D1 binding and its placeholder id, R2 buckets, production secrets (`lunora env push`, `wrangler secret put`) versus `.dev.vars`, the schema-drift gate, the architecture diff, and rollback with `lunora cloudflare deployments`. Use when the user asks to "deploy", "ship to production", "set up a staging environment", wire CI deploys, or when a deploy fails on a binding, a placeholder `database_id`, an unexported Durable Object class, a missing secret, or "schema drift gate blocked deploy".
 ---
 
 # Lunora Deploy
@@ -45,8 +45,9 @@ In order, stopping at the first failure:
 7. **Secrets gate** — lists the secrets the app's packages need and checks
    which are set on the worker. Interactive runs offer to mint and push the
    generatable ones (`BETTER_AUTH_SECRET`, `LUNORA_ADMIN_TOKEN`, …). In CI a
-   missing required secret aborts the deploy. Skipped for `--dry-run`, and
-   when the worker doesn't exist yet.
+   missing required secret aborts the deploy. Skipped for `--dry-run`, for
+   `lunora preview` (it uploads its own secrets), and when the worker doesn't
+   exist yet.
 8. **Services, then `wrangler deploy`** — services declared in
    `lunora.config` deploy first (`--skip-services` to skip), then the app.
 9. **After a successful deploy** — records the URL as the project link
@@ -80,6 +81,41 @@ whole deploy:
 ```bash
 lunora deploy --migrate --migrate-yes --migrate-url https://app.example.com
 ```
+
+## Per-PR previews
+
+`lunora deploy --preview` is refused: a Worker version shares production's
+Durable Objects, D1 and R2, and gets no preview URL. Use `lunora preview`:
+
+```bash
+lunora preview deploy 123 --seed      # own Worker + DO namespace + D1/KV/R2, migrated, seeded
+lunora preview deploy 123 --dry-run   # the plan and env block, no API call
+lunora preview list
+lunora preview delete 123             # Worker + every resource on its record
+```
+
+- Records are keyed by `lunora.appId` in `package.json` (the first local
+  `lunora preview deploy` writes it; commit it, CI cannot mint one), so a Worker rename does not
+  lose a preview. Old Worker-name keys are re-keyed on the next deploy/delete.
+- `--env <name>` plans from that Wrangler environment (top level plus `env.<name>`)
+  for an app whose bindings live only there; recorded, so `delete` needs no flag for the
+  resources. If that environment names a different `account_id`, pass the same `--env` to
+  `list`/`delete` (or set `CLOUDFLARE_ACCOUNT_ID`); they refuse rather than guess.
+  Without it, env-only bindings are refused. CI leaves it unset.
+- Resources are named `<worker>-preview-<name>-<binding>` and recorded in the
+  account's `lunora-preview-registry` KV namespace; `delete` only removes what a
+  record lists, and refuses anything production's config names.
+- Mintable secrets are minted per deploy, or derived from
+  `LUNORA_PREVIEW_SECRET_SEED` when set (stable across deploys); a provider key
+  reaches the preview only via `--secret KEY` (value from the environment).
+- Production `vars` are copied; override one with `--var KEY=VALUE` (e.g. an
+  auth base URL pointing at the preview's workers.dev URL).
+- Refused (with the list) when the app binds Hyperdrive, services, queues,
+  workflows, Vectorize or another binding a preview cannot isolate yet.
+- Token needs Workers Scripts, D1, Workers KV Storage and Workers R2 Storage:
+  Edit. Cloudflare only; celld and Node refuse.
+- `lunora init --ci github|gitlab` scaffolds the deploy-on-PR and
+  delete-on-close jobs.
 
 ## Preflight
 

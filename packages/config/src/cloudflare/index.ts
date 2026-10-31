@@ -30,6 +30,8 @@ export type { WithheldBinding } from "./dev-config";
 export { describeWithheld, withheldBindings } from "./dev-config";
 export type { LocalHyperdrive } from "./local-hyperdrive";
 export { bindingsNeedingDatabase, startLocalHyperdrive } from "./local-hyperdrive";
+export type { Manifest } from "./lunora-manifest";
+export { readManifest, recordManifestKey } from "./lunora-manifest";
 export { HYPERDRIVE_PLACEHOLDER_ID } from "./placeholder-ids";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
 export { collectExportGaps, reconcileWranglerBindings } from "./reconcile-bindings";

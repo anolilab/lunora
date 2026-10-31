@@ -409,7 +409,8 @@ const checkVariablesForSecrets = async (cwd: string, options: DeployCommandOptio
  * BEFORE the deploy spawn so the new version boots with the secrets present.
  */
 const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, interactive: boolean, driver: DeployDriver): Promise<MissingSecretsOutcome> => {
-    if (options.dryRun === true) {
+    // A preview uploads the secrets it was given with the deploy itself.
+    if (options.dryRun === true || options.isolatedPreview === true) {
         return {};
     }
 
@@ -499,4 +500,4 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     return {};
 };
 
-export { offerMissingSecrets, warnDevVariablesNotPushed };
+export { offerMissingSecrets, resolveRequiredSecretKeys, warnDevVariablesNotPushed };

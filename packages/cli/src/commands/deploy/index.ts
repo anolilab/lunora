@@ -90,7 +90,8 @@ const deployCommand: Command = {
             type: Boolean,
         },
         {
-            description: "Refused: a Worker version shares production state and gets no preview URL — deploy an isolated copy with --env <name>",
+            description:
+                "Refused: a Worker version shares production state and gets no preview URL — deploy an isolated copy with `lunora preview deploy <name>`",
             name: "preview",
             type: Boolean,
         },

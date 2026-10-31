@@ -102,6 +102,13 @@ interface DeployCommandOptions {
     healthSleep?: (ms: number) => Promise<void>;
     /** Set to `false` to disable interactive spinners (test injection). */
     interactive?: boolean;
+
+    /**
+     * Set by `lunora preview deploy`: this run ships an isolated preview copy under its own `--env`. It leaves
+     * production's records alone (the project link, the schema baseline, the architecture baseline) and skips the
+     * missing-secret gate, because the preview passes its own secrets in {@link DeployCommandOptions.secretsFile}.
+     */
+    isolatedPreview?: boolean;
     /** Opt into per-module lazy function imports. */
     lazyFunctions?: boolean;
 
@@ -158,6 +165,8 @@ interface DeployCommandOptions {
     secretConfirm?: (message: string) => Promise<boolean>;
     /** Remote-secret lister for the missing-secret offer; injected in tests. Defaults to `wrangler secret list`. */
     secretLister?: (inputs: ListRemoteSecretsInputs) => Promise<ListRemoteSecretsResult>;
+    /** A JSON file of secrets uploaded with the deployment (`wrangler deploy --secrets-file`). */
+    secretsFile?: string;
     skipCodegen?: boolean;
     /** Deploy only the app, leaving the `lunora.config` services it binds as they are (`--skip-services`). */
     skipServices?: boolean;
