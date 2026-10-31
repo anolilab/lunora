@@ -16725,6 +16725,11 @@ abstract class ShardDO {
         if (memo === undefined || !this.allowsSubscriptionOutcome(ws, subId, permit, stamp.generation)) {
             return false;
         }
+        // A settlement moves the client's cursor and watermark, so a socket that lapsed during the awaited
+        // authorization gets none, as it would get no rows.
+        if (this.dropIfLapsed(ws)) {
+            return false;
+        }
         if (
             advanceOnly &&
             (stamp.cursor === undefined || (stamp.cursor === memo.cursor && stamp.epoch === memo.epoch)) &&
@@ -18400,17 +18405,8 @@ abstract class ShardDO {
 
         // The receive-time check ran when the frame arrived; the event may have waited since for its authorization or
         // the events ahead of it. A lapsed identity runs no handler. A leave still runs: its cleanup must not be skipped.
-        if (kind !== "leave") {
-            const current = this.readAttachment(ws);
-
-            if (isIdentityExpired(current.expiresAt) || isIdentityExpired(current.revalidateAt)) {
-                // A relayed event's stand-in has no socket to close; the relay closes the real one.
-                if (typeof (ws as { close?: unknown }).close === "function") {
-                    this.dropIfLapsed(ws, current);
-                }
-
-                return false;
-            }
+        if (kind !== "leave" && this.roomSenderLapsed(ws)) {
+            return false;
         }
 
         // Checked here, not at receive: a queued event runs only once the events ahead of it have settled.
@@ -18472,7 +18468,28 @@ abstract class ShardDO {
             this.failedRoomJoins.get(ws)?.delete(topic);
         }
 
+        // The handler awaited: the sender's deadline may have passed meanwhile. What it committed stays, but a
+        // lapsed identity does not reach the other members. A leave is cleanup and still tells them.
+        if (kind !== "leave" && this.roomSenderLapsed(ws)) {
+            return false;
+        }
+
         this.broadcastPending(ws, topic, functionPath, kind, pending);
+
+        return true;
+    }
+
+    /** Whether the sender's credential has lapsed. A local socket is dropped; a relayed event's stand-in has none to close. */
+    private roomSenderLapsed(ws: ShardSocketLike): boolean {
+        const current = this.readAttachment(ws);
+
+        if (!isIdentityExpired(current.expiresAt) && !isIdentityExpired(current.revalidateAt)) {
+            return false;
+        }
+
+        if (typeof (ws as { close?: unknown }).close === "function") {
+            this.dropIfLapsed(ws, current);
+        }
 
         return true;
     }
