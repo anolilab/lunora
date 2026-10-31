@@ -172,4 +172,49 @@ describe(rowCheckTargetRefusal, () => {
 
         expect(rowCheckTargetRefusal(cwd, undefined, "https://api.acme.com")).toBeUndefined();
     });
+
+    // eslint-disable-next-line sonarjs/no-clear-text-protocols -- the URL is a private address, only ever reached over plain http
+    it.each(["http://[fe80::1]", "http://[fe90::1]", "http://[fea0::1]", "http://[febf::1]"])("treats the link-local address %s as private", (url) => {
+        expect.assertions(1);
+
+        expect(rowCheckTargetRefusal(cwd, undefined, url)).toContain("local or private address");
+    });
+
+    it("does not inherit the top level's routes into an env that declares an empty routes list", () => {
+        expect.assertions(2);
+
+        wrangler({ env: { staging: { routes: [] } }, name: "app", routes: ["api.acme.com/*"] });
+
+        expect(rowCheckTargetRefusal(cwd, "staging", "https://api.acme.com")).toContain("wrangler routes it to production");
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://api.acme.com")).toBeUndefined();
+    });
+
+    it("tells the top level from an env.production: a route on env.production refuses a top-level deploy of that URL", () => {
+        expect.assertions(2);
+
+        wrangler({ env: { production: { routes: ["example.com/preview/*"] } }, name: "app", routes: ["example.com/*"] });
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://example.com/preview/x")).toContain("wrangler routes it to --env production");
+        expect(rowCheckTargetRefusal(cwd, "production", "https://example.com/preview/x")).toBeUndefined();
+    });
+
+    it("picks the most specific route: a URL under /staging/ is staging's even though production routes example.com/*", () => {
+        expect.assertions(3);
+
+        wrangler({ env: { staging: { routes: ["example.com/staging/*"] } }, name: "app", routes: ["example.com/*"] });
+
+        expect(rowCheckTargetRefusal(cwd, "staging", "https://example.com/staging/api")).toBeUndefined();
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://example.com/staging/api")).toContain("wrangler routes it to --env staging");
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://example.com/other")).toBeUndefined();
+    });
+
+    it("lets a production --migrate-url through when only staging is linked at another path of the same host", () => {
+        expect.assertions(2);
+
+        wrangler({ env: { staging: { routes: ["example.com/staging/*"] } }, name: "app", routes: ["example.com/prod/*"] });
+        link("https://example.com/staging", "staging");
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://example.com/prod")).toBeUndefined();
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://example.com/staging/api")).toContain("links it to --env staging");
+    });
 });

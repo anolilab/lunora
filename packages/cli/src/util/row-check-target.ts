@@ -22,7 +22,9 @@ interface WranglerNames extends WranglerTarget {
 /** Host suffixes and exact names that only ever reach this machine or a private network. */
 const PRIVATE_NAMES = new Set(["0.0.0.0", "[::1]", "[::]", "localhost"]);
 const PRIVATE_SUFFIXES = [".local", ".localhost"];
-const PRIVATE_IPV6_PREFIXES = ["[fc", "[fd", "[fe80:"];
+const PRIVATE_IPV6_PREFIXES = ["[fc", "[fd"];
+/** `fe80::/10`: link-local covers `fe80` through `febf`, not just `fe80`. */
+const IPV6_LINK_LOCAL = /^\[fe[89ab][0-9a-f]:/u;
 const URL_SCHEME = /^[a-z]+:\/\//u;
 
 /** Whether a dotted IPv4 address is loopback, link-local or in an RFC 1918 range. */
@@ -94,6 +96,7 @@ const isPrivateHost = (host: string): boolean => {
         PRIVATE_NAMES.has(lower) ||
         PRIVATE_SUFFIXES.some((suffix) => lower.endsWith(suffix)) ||
         PRIVATE_IPV6_PREFIXES.some((prefix) => lower.startsWith(prefix)) ||
+        IPV6_LINK_LOCAL.test(lower) ||
         isPrivateIpv4(lower)
     );
 };
@@ -124,10 +127,6 @@ const deployedWorkerName = (parsed: WranglerNames | undefined, environment: stri
     return name === undefined ? undefined : `${name}-${environment}`;
 };
 
-/**
- * A route pattern as `host` plus the path prefix it is scoped to (`example.com/*` → `example.com`, `example.com/prod/*` →
- * `example.com/prod/`). Two environments can share a host and differ only by path, so the path is part of the route.
- */
 /** `text` without any run of `char` at its end. */
 const trimEnd = (text: string, char: string): string => {
     let end = text.length;
@@ -139,6 +138,10 @@ const trimEnd = (text: string, char: string): string => {
     return text.slice(0, end);
 };
 
+/**
+ * A route pattern as `host` plus the path prefix it is scoped to (`example.com/*` → `example.com`, `example.com/prod/*` →
+ * `example.com/prod/`). Two environments can share a host and differ only by path, so the path is part of the route.
+ */
 const routeKey = (pattern: string): string => {
     const bare = pattern.replace(URL_SCHEME, "");
     const slash = bare.indexOf("/");
@@ -159,48 +162,78 @@ const routeHosts = (block: WranglerTarget | undefined): string[] => {
     });
 };
 
-/** Whether `host` falls under a route host, where a leading `*` matches any prefix as Cloudflare's route patterns do. */
-const matchesRouteHost = (host: string, urlPath: string, route: string): boolean => {
+/**
+ * How well a route covers a URL: `undefined` when it does not, else a score that ranks the most specific route highest, as
+ * Cloudflare picks one (a longer path prefix wins, then an exact host over a wildcard one, then the longer host).
+ * A leading `*` in the host matches any prefix, and a path-scoped route covers a URL under that path only: `/prod/*` covers
+ * `/prod` and `/prod/api`, not `/production`.
+ */
+const routeScore = (host: string, urlPath: string, route: string): number | undefined => {
     const slash = route.indexOf("/");
     const routeHost = slash === -1 ? route : route.slice(0, slash);
     const routePath = slash === -1 ? "" : route.slice(slash);
-    const hostMatches = routeHost.startsWith("*") ? host.endsWith(routeHost.slice(1)) || `.${host}` === routeHost.slice(1) : host === routeHost;
+    const wildcard = routeHost.startsWith("*");
+    const hostMatches = wildcard ? host.endsWith(routeHost.slice(1)) || `.${host}` === routeHost.slice(1) : host === routeHost;
 
-    // A route scoped to a path covers a URL under that path only; `/prod/*` covers `/prod` and `/prod/api`, not `/production`.
-    return hostMatches && (routePath === "" || `${trimEnd(urlPath, "/")}/`.startsWith(routePath));
+    if (!hostMatches || (routePath !== "" && !`${trimEnd(urlPath, "/")}/`.startsWith(routePath))) {
+        return undefined;
+    }
+
+    return routePath.length * 1_000_000 + (wildcard ? 0 : 500_000) + routeHost.length;
 };
+
+/** One config block (the top level, or an `env.<name>`) and the routes it deploys to. */
+interface RouteBlock {
+    id: string;
+    /** How a refusal names this block: the top level is `production`, an env is `--env <name>`. */
+    label: string;
+    routes: string[];
+}
+
+/** Whether a block declares `route` or `routes` at all, an empty list included: Wrangler then does not inherit the top level's. */
+const declaresRoutes = (block: WranglerTarget | undefined): boolean => block !== undefined && (Object.hasOwn(block, "route") || Object.hasOwn(block, "routes"));
 
 /**
- * The route hosts `environment` deploys to. Routes are inheritable in Wrangler, so an env block
- * without its own takes the top-level ones.
+ * Every block that deploys somewhere: the top level, each named env, and the env being deployed even when the config has no block for
+ * it. An env that declares no routes of its own inherits the top level's. The top level and an `env.production` are different blocks.
  */
-const ownRouteHosts = (parsed: WranglerNames | undefined, environment: string | undefined): string[] => {
-    if (environment !== undefined) {
-        const own = routeHosts(parsed?.env?.[environment]);
+const routeBlocks = (parsed: WranglerNames | undefined, environment: string | undefined): RouteBlock[] => {
+    const top = routeHosts(parsed);
+    const names = new Set([...Object.keys(parsed?.env ?? {}), ...(environment === undefined ? [] : [environment])]);
+    const environments = [...names].map((name): RouteBlock => {
+        const block = parsed?.env?.[name];
 
-        if (own.length > 0) {
-            return own;
-        }
-    }
+        return { id: `env:${name}`, label: `--env ${name}`, routes: declaresRoutes(block) ? routeHosts(block) : top };
+    });
 
-    return routeHosts(parsed);
+    return [{ id: "top", label: "production", routes: top }, ...environments];
 };
 
-/** The other environment (`--env` name, or `production` for the top level) that declares a route `host` matches. */
-const otherEnvironmentRoutingTo = (parsed: WranglerNames | undefined, environment: string | undefined, host: string, urlPath: string): string | undefined => {
-    const blocks: [string, WranglerTarget | undefined][] = [["production", parsed], ...Object.entries(parsed?.env ?? {})];
-    const own = new Set(ownRouteHosts(parsed, environment));
+/** Which block the most specific route covering `host` + `urlPath` belongs to, relative to the one being deployed. */
+const routingOf = (
+    parsed: WranglerNames | undefined,
+    environment: string | undefined,
+    host: string,
+    urlPath: string,
+): { kind: "none" } | { kind: "other"; label: string } | { kind: "own" } => {
+    const deployId = environment === undefined ? "top" : `env:${environment}`;
+    const matches = routeBlocks(parsed, environment).flatMap((block) =>
+        block.routes.flatMap((route) => {
+            const score = routeScore(host, urlPath, route);
 
-    for (const [label, block] of blocks) {
-        if (
-            label !== (environment ?? "production") &&
-            routeHosts(block).some((routeHost) => !own.has(routeHost) && matchesRouteHost(host, urlPath, routeHost))
-        ) {
-            return label;
-        }
+            return score === undefined ? [] : [{ block, score }];
+        }),
+    );
+
+    if (matches.length === 0) {
+        return { kind: "none" };
     }
 
-    return undefined;
+    const best = Math.max(...matches.map((match) => match.score));
+    const winners = matches.filter((match) => match.score === best);
+
+    // The same pattern in two blocks (an env inheriting the top level's) cannot tell them apart: it is this deploy's when it is among them.
+    return winners.some((match) => match.block.id === deployId) ? { kind: "own" } : { kind: "other", label: winners[0]?.block.label ?? "production" };
 };
 
 /** Origin plus path without a trailing slash: the admin routes hang off the whole base URL, so two paths on one host may be two Workers. */
@@ -220,7 +253,10 @@ const linkRefusal = (cwd: string, environment: string | undefined, parsed: URL, 
         return deploymentKey(linked) === deploymentKey(parsed) ? null : `${refused}: this checkout is linked to ${deploymentKey(linked)}${scope}`;
     }
 
-    if (linked.origin !== parsed.origin) {
+    // Another env's link only vouches for the URL it names and what lies under it: a different path on the same host may be this deploy's.
+    const linkedPath = `${trimEnd(linked.pathname, "/")}/`;
+
+    if (linked.origin !== parsed.origin || !`${trimEnd(parsed.pathname, "/")}/`.startsWith(linkedPath)) {
         return undefined;
     }
 
@@ -229,7 +265,7 @@ const linkRefusal = (cwd: string, environment: string | undefined, parsed: URL, 
     return `${refused}: this checkout links it to ${owner}, not this deploy${scope}`;
 };
 
-/** Why the config rules out a custom domain: another env's route, or not one of the routes this env deploys to. */
+/** Why the config rules out a custom domain: the most specific route covering it is another env's, or this env deploys to none like it. */
 const customDomainRefusal = (
     wrangler: WranglerNames | undefined,
     environment: string | undefined,
@@ -238,22 +274,24 @@ const customDomainRefusal = (
     refused: string,
     scope: string,
 ): string | undefined => {
-    const other = otherEnvironmentRoutingTo(wrangler, environment, host, urlPath);
+    const routing = routingOf(wrangler, environment, host, urlPath);
 
-    if (other !== undefined) {
-        return `${refused}: wrangler routes it to ${other === "production" ? "production" : `--env ${other}`}, not this deploy${scope}`;
+    if (routing.kind === "other") {
+        return `${refused}: wrangler routes it to ${routing.label}, not this deploy${scope}`;
     }
 
-    const own = ownRouteHosts(wrangler, environment);
-
-    if (own.some((route) => matchesRouteHost(host, urlPath, route))) {
+    if (routing.kind === "own") {
         return undefined;
     }
+
+    const blocks = routeBlocks(wrangler, environment);
 
     // Only a project that declares no routes anywhere has nothing to compare a custom domain with.
-    if (own.length === 0 && Object.values(wrangler?.env ?? {}).every((block) => routeHosts(block).length === 0)) {
+    if (blocks.every((block) => block.routes.length === 0)) {
         return undefined;
     }
+
+    const own = blocks.find((block) => block.id === (environment === undefined ? "top" : `env:${environment}`))?.routes ?? [];
 
     return `${refused}: this deploy${scope} routes to ${own.length === 0 ? "no declared route" : own.join(", ")}, not ${host}`;
 };
