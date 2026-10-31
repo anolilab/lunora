@@ -74,6 +74,10 @@ const PREVIEW_SUBCOMMANDS = ["deploy", "list", "delete"] as const;
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
+/** How often a rate-limited (429) call is repeated, and the first wait, which doubles each time. */
+const RATE_LIMIT_RETRIES = 5;
+const RATE_LIMIT_BACKOFF_MS = 1000;
+
 const ADMIN_TOKEN_KEY = "LUNORA_ADMIN_TOKEN";
 
 /** When set, minted secrets are derived from it per preview Worker, so they survive a redeploy. */
@@ -107,6 +111,8 @@ interface PreviewCommandOptions {
     secrets?: ReadonlyArray<string>;
     /** Run `lunora seed` against the preview once it is up. */
     seed?: boolean;
+    /** Waits between retries of a rate-limited Cloudflare call; defaults to a timer. */
+    sleep?: (ms: number) => Promise<void>;
     spawner?: Spawner;
     subcommand: string | undefined;
     target?: string;
@@ -209,15 +215,35 @@ const accountRequest = (options: PreviewCommandOptions, config: PreviewConfig): 
         };
     }
 
+    const sleep =
+        options.sleep ??
+        (async (ms: number) =>
+            new Promise<void>((resolve) => {
+                setTimeout(resolve, ms);
+            }));
+
     return {
-        request: async (path, init) =>
-            cloudflareRestRequest({
-                accountId,
-                apiToken: token,
-                ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-                init: { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
-                path,
-            }),
+        // KV takes about one write per second to a key, and a deploy writes its record several times in a row. A 429 means
+        // the call was not applied, so any method may be repeated; the wait doubles so a busy account is not hammered.
+        request: async (path, init) => {
+            for (let attempt = 0; ; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- a retry only after the previous call was rate-limited
+                const outcome = await cloudflareRestRequest({
+                    accountId,
+                    apiToken: token,
+                    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+                    init: { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+                    path,
+                });
+
+                if (outcome.ok || outcome.status !== 429 || attempt === RATE_LIMIT_RETRIES) {
+                    return outcome;
+                }
+
+                // eslint-disable-next-line no-await-in-loop -- see above
+                await sleep(RATE_LIMIT_BACKOFF_MS * 2 ** attempt);
+            }
+        },
     };
 };
 

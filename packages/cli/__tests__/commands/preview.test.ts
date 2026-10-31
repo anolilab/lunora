@@ -2283,6 +2283,49 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(account.workers.has("lunora-app-preview-42")).toBe(false);
         });
 
+        it("retries a record write that Cloudflare rate-limits, waiting on the injected clock rather than the wall clock", async () => {
+            expect.assertions(4);
+
+            const account = fakeAccount();
+            const { spawner } = wranglerAt(workdir, account.workers);
+            const waits: number[] = [];
+            // KV allows one write per second to a key: virtual time moves only when the command sleeps.
+            let now = 0;
+            let lastWrite = Number.NEGATIVE_INFINITY;
+            const limited = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                if (init?.method === "PUT" && (input as string).includes(encodeURIComponent(`${APP_ID}/42`))) {
+                    if (now - lastWrite < 1000) {
+                        return new Response("{}", { status: 429 });
+                    }
+
+                    lastWrite = now;
+                }
+
+                return account.fetch(input, init);
+            }) as typeof globalThis.fetch;
+
+            const result = await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: limited,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                sleep: async (ms) => {
+                    waits.push(ms);
+                    now += ms;
+                },
+                spawner,
+                subcommand: "deploy",
+            });
+
+            expect(result.code).toBe(0);
+            expect(waits.length).toBeGreaterThan(0);
+            expect(waits.every((ms) => ms > 0)).toBe(true);
+            expect(registryValues(account).get(`${APP_ID}/42`)).not.toContain('"pending"');
+        });
+
         it("takes a resource back by the id its create returned when the confirming record write keeps failing", async () => {
             expect.assertions(4);
 
