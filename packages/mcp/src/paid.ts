@@ -365,13 +365,15 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
             }
 
             const callArguments = request.params.arguments ?? {};
-            const rejection = await argumentsRejection(entry, request.params.name, callArguments);
-
-            if (rejection !== undefined) {
-                return rejection;
-            }
 
             try {
+                // Inside the `try`: a schema the validator cannot compile or run is a tool error, not a protocol error.
+                const rejection = await argumentsRejection(entry, request.params.name, callArguments);
+
+                if (rejection !== undefined) {
+                    return rejection;
+                }
+
                 return await entry.handler(callArguments);
             } catch (error: unknown) {
                 // An `isError` result, not a rejection — the SDK turns a handler
