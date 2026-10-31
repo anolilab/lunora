@@ -60,9 +60,13 @@ diffs the schema against the committed `lunora/.lunora-schema.json`.
   or `{ jurisdiction: "eu" }`). An unrelated migration clears nothing. Where a table is
   involved its `up` must rewrite rows (give each what its new home needs, e.g. its
   shard key); one that returns the document unchanged covers nothing.
+- **Also blocks until a migration names it:** a TTL added, moved to another column or
+  shortened (`covers: { table, ttl: { field, after } }`), because the next sweep deletes
+  every row already past the cutoff; the blocked message counts those rows when
+  `lunora deploy` can read the worker. Refresh the column on the rows that must survive
+  in `up`.
 - **Never blocks, may warn:** a dropped table (its rows stay in place, unreachable),
-  a dropped relation, a TTL added, moved or shortened (rows past the cutoff go on the
-  next sweep, counted when `lunora deploy` can read the worker), `.commitOrdered()`
+  a dropped relation, a TTL lengthened or removed (every row stays), `.commitOrdered()`
   turned off, and a dropped index. A dropped index is refused only while a function
   still names it through `.withIndex("name")`; point the query elsewhere first.
 

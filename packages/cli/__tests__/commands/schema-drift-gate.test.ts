@@ -440,39 +440,52 @@ describe("schema-drift gate", () => {
             expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).not.toBe(baselineBefore);
         });
 
-        it("gaining a TTL passes, and the warning counts the stored rows the next sweep deletes", async () => {
-            expect.assertions(3);
+        it("gaining a TTL blocks, says how many stored rows the next sweep would delete, and a migration naming it clears it", async () => {
+            expect.assertions(5);
 
             setSessionsTtl(false);
             await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
             setSessionsTtl(true);
 
-            const worker = deployedWorker([
+            const rows = [
                 { doc: { _id: "s1", expiresAt: 1, token: "a" }, table: "sessions" },
                 { doc: { _id: "s2", expiresAt: 1, token: "b" }, table: "sessions" },
                 { doc: { _id: "s3", expiresAt: Date.now() + 1e12, token: "c" }, table: "sessions" },
                 { doc: { _id: "s4", token: "d" }, table: "sessions" },
-            ]);
-            const { logger, warns } = silentLogger();
-            const result = await runDeployCommand({ ...TARGET, cwd: workdir, fetchImpl: worker.fetchImpl, logger, spawner: createRecordingSpawner().spawner });
+            ];
+            const { errors, logger } = silentLogger();
+            const blocked = await runDeployCommand({
+                ...TARGET,
+                cwd: workdir,
+                fetchImpl: deployedWorker(rows).fetchImpl,
+                logger,
+                spawner: createRecordingSpawner().spawner,
+            });
 
-            expect(result.code).toBe(0);
-            expect(warns.join("\n")).toContain("gained a TTL policy");
-            expect(warns.join("\n")).toContain("2 stored row(s) are past the new cutoff");
+            expect(blocked.schemaDrift?.blocked).toBe(true);
+            expect(errors.join("\n")).toContain("Next sweep would delete 2 stored row(s) of sessions");
+            expect(errors.join("\n")).toContain('covers: { table: "sessions", ttl: { field: "expiresAt" } }');
+
+            addMigration("keep_sessions", "sessions", "(doc) => ({ ...doc, touched: true })", '{ table: "sessions", ttl: { field: "expiresAt" } }');
+
+            const cleared = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            expect(cleared.code).toBe(0);
+            expect(cleared.schemaDrift?.blocked).not.toBe(true);
         });
 
-        it("gaining a TTL still passes when the rows cannot be read, and says they were not counted", async () => {
+        it("a blocked TTL says the rows could not be counted when the worker cannot be read", async () => {
             expect.assertions(2);
 
             setSessionsTtl(false);
             await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
             setSessionsTtl(true);
 
-            const { logger, warns } = silentLogger();
+            const { errors, logger } = silentLogger();
             const result = await runDeployCommand({ cwd: workdir, logger, spawner: createRecordingSpawner().spawner });
 
-            expect(result.code).toBe(0);
-            expect(warns.join("\n")).toContain("could not be counted");
+            expect(result.schemaDrift?.blocked).toBe(true);
+            expect(errors.join("\n")).toContain("could not be counted");
         });
 
         it("a shard-mode flip stays blocked and names what to declare; only a migration whose `covers` names it clears it", async () => {

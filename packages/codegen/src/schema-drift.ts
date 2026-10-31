@@ -391,6 +391,7 @@ const migrationCovers = (migration: Pick<MigrationIR, "covers" | "identity" | "t
     }
 
     return (
+        (wanted.ttl === undefined || (declared.ttl?.field === wanted.ttl.field && (declared.ttl.after ?? 0) === (wanted.ttl.after ?? 0))) &&
         (wanted.jurisdiction === undefined || declared.jurisdiction === wanted.jurisdiction) &&
         (wanted.memory !== true || declared.memory === true) &&
         (wanted.shardMode === undefined || shardModeMatches(declared.shardMode, wanted.shardMode))
@@ -453,7 +454,9 @@ const blockedReason = (
     command: string | undefined,
 ): string => {
     const { identity: identityMigrationIds, unresolved: unresolvedMigrationIds } = migrationNotes;
-    const owedTables = [...new Set(uncovered.filter((change) => isBackfillable(change)).map((change) => change.table))];
+    const owedTables = [
+        ...new Set(uncovered.filter((change) => isBackfillable(change) && change.coverage === undefined).flatMap((change) => change.table ?? [])),
+    ];
     const fixLines: string[] = [];
 
     if (owedTables.length > 0) {
@@ -485,7 +488,7 @@ const blockedReason = (
 
     // The scaffold's placeholder used to clear the gate the moment it existed, so a
     // forgotten `up` shipped the change with no backfill behind it.
-    if (identityMigrationIds.length > 0) {
+    if (identityMigrationIds.length > 0 && uncovered.some((change) => change.identityRewrites !== true)) {
         fixLines.push(
             `  • Migration(s) ${identityMigrationIds.join(", ")} return each document unchanged, so they rewrite no row and cover nothing. Fill in \`up\`.\n`,
         );
@@ -499,7 +502,7 @@ const blockedReason = (
         );
     }
 
-    for (const change of uncovered.filter((entry) => entry.remediation === "rehome")) {
+    for (const change of uncovered) {
         const { coverage } = change;
 
         if (coverage === undefined) {
@@ -509,14 +512,27 @@ const blockedReason = (
         const example = coverage.table ?? uncovered.find((entry) => entry.table !== undefined)?.table ?? "users";
         const declaration = `{ ${Object.entries(coverage)
             .toSorted(([first], [second]) => first.localeCompare(second))
-            .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+            .map(
+                ([key, value]) =>
+                    `${key}: ${
+                        typeof value === "object"
+                            ? `{ ${Object.entries(value as Record<string, unknown>)
+                                  .map(([name, inner]) => `${name}: ${JSON.stringify(inner)}`)
+                                  .join(", ")} }`
+                            : JSON.stringify(value)
+                    }`,
+            )
             .join(", ")} }`;
         const iterates = coverage.table === undefined ? "" : ` and iterates \`${coverage.table}\` with an \`up\` that rewrites rows`;
+        const name = change.summary.split(" — ")[0] ?? "";
+        const how =
+            coverage.ttl === undefined
+                ? `Move the rows first (\`lunora export --tables ${example} --out ${example}.ndjson\`, deploy, \`lunora import ${example}.ndjson\`), then declare: `
+                : `Decide which rows must survive and refresh \`${coverage.ttl.field}\` on them in \`up\`, then declare: `;
 
         fixLines.push(
-            `  • "${change.summary.split(" — ")[0] ?? ""}" moves or empties data, so it stays blocked until a new migration declares \`covers: ${declaration}\`${iterates}. ` +
-                `Move the rows first (\`lunora export --tables ${example} --out ${example}.ndjson\`, deploy, \`lunora import ${example}.ndjson\`), then declare: ` +
-                `\`defineMigration({ id: "rehome_${example}", table: "${coverage.table ?? example}", covers: ${declaration}, up: (doc) => ({ ...doc, tenantId: doc.tenantId ?? "default" }) })\`.\n`,
+            `  • "${name}" moves, empties or deletes data, so it stays blocked until a new migration declares \`covers: ${declaration}\`${iterates}. ` +
+                `${how}\`defineMigration({ id: "rehome_${example}", table: "${coverage.table ?? example}", covers: ${declaration}, up: (doc) => ({ ...doc, tenantId: doc.tenantId ?? "default" }) })\`.\n`,
         );
     }
 
@@ -614,6 +630,11 @@ const evaluateSchemaDrift = (options: {
             return newMigrations.some((migration) => migrationCovers(migration, change));
         }
 
+        // Rewriting a row is what stamps its commit sequence, so a migration returning it unchanged does the backfill.
+        if (change.identityRewrites === true && change.table !== undefined) {
+            return newMigrations.some((migration) => migration.table === change.table);
+        }
+
         return isBackfillable(change) && coveredTables.has(change.table);
     };
     const uncovered = breaking.filter((change) => !isCovered(change));
@@ -626,7 +647,7 @@ const evaluateSchemaDrift = (options: {
             .filter((migration) =>
                 breaking.some((change) =>
                     change.coverage === undefined
-                        ? isBackfillable(change) && migration.identity !== true && change.table === migration.table
+                        ? isBackfillable(change) && (migration.identity !== true || change.identityRewrites === true) && change.table === migration.table
                         : migrationCovers(migration, change),
                 ),
             )

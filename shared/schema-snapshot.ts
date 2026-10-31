@@ -208,6 +208,8 @@ interface DriftCoverage {
     memory?: true;
     shardMode?: string;
     table?: string;
+    /** The TTL policy a table moves to: the column and the offset (`after`, milliseconds; absent is 0). */
+    ttl?: { after?: number; field: string };
 }
 
 /** One classified structural change between two snapshots. */
@@ -237,6 +239,8 @@ interface DriftChange {
      * no longer describes, or which rows a new TTL will sweep. The gate logs it as a warning when the run proceeds.
      */
     warning?: true;
+    /** Set on a change whose backfill a migration returning each row unchanged performs, because rewriting the row is what does it. */
+    identityRewrites?: true;
     /** The TTL a change installs, and the one it replaces, so a caller that can read rows can count what the next sweep deletes. */
     expiry?: { after?: number; field: string; previous?: { after?: number; field: string } };
     /**
@@ -1099,6 +1103,10 @@ const recordsTableModifiers = (table: TableSnapshot): boolean => table.memory !=
 /** A TTL policy's offset. Absent ⇒ the column IS the absolute expiry, which `selectExpiredIds` treats as an offset of zero. */
 const ttlOffset = (ttl: TtlSnapshot): number => ttl.after ?? 0;
 
+/** A TTL policy as the `ttl` of a migration's `covers`. */
+const describeCoveredTtl = (ttl: TtlSnapshot): string =>
+    ttl.after === undefined ? `{ field: "${ttl.field}" }` : `{ after: ${String(ttl.after)}, field: "${ttl.field}" }`;
+
 /** Render a TTL policy the way it was declared. */
 const describeTtl = (ttl: TtlSnapshot): string => (ttl.after === undefined ? `.ttl("${ttl.field}")` : `.ttl("${ttl.field}", { after: ${String(ttl.after)} })`);
 
@@ -1114,51 +1122,53 @@ const describeTtl = (ttl: TtlSnapshot): string => (ttl.after === undefined ? `.t
  * all widen the match over rows already on disk, and the alarm removes them on
  * its next tick with nothing to announce it.
  *
- * Neither direction blocks a deploy, because the schema cannot make a stored row
- * invalid. The widening direction is a warning that carries the policy
- * (`expiry`), so a caller that can read the table counts the rows it will delete.
+ * The widening direction blocks until a migration declares it in `covers` (it
+ * deletes rows that exist today), and carries the policy (`expiry`) so a caller that
+ * can read the table counts the rows the next sweep deletes. The narrowing direction
+ * keeps every row and only warns.
  */
 const diffTtl = (tableName: string, baseline: TtlSnapshot | undefined, current: TtlSnapshot | undefined): DriftChange | undefined => {
     if (baseline === undefined && current === undefined) {
         return undefined;
     }
 
-    // Never blocks: the rows stay where they are and the schema cannot make one invalid. What a wider policy does is delete rows on
-    // the next alarm sweep, so it is a warning that carries the policy, for a caller that can read the rows to count them.
+    // A wider policy (added, moved to another column, shortened) deletes rows already on disk on the next alarm sweep, so it blocks until
+    // a migration declares it in `covers`; the change carries the policy so a caller that can read the rows can count what goes.
     const widening = (summary: string, next: TtlSnapshot): DriftChange => {
         return {
+            coverage: { table: tableName, ttl: { ...(next.after === undefined ? {} : { after: next.after }), field: next.field } },
             expiry: {
                 ...(next.after === undefined ? {} : { after: next.after }),
                 field: next.field,
                 ...(baseline === undefined ? {} : { previous: { ...(baseline.after === undefined ? {} : { after: baseline.after }), field: baseline.field } }),
             },
-            remediation: "none",
+            remediation: "backfill",
             scope: "table",
-            severity: "safe",
+            severity: "breaking",
             summary,
             table: tableName,
             type: "changedTtlPolicy",
-            warning: true,
         };
     };
+    // Narrower or gone: every row stays, so it only warns.
     const safe = (summary: string): DriftChange => {
-        return { remediation: "none", scope: "table", severity: "safe", summary, table: tableName, type: "changedTtlPolicy" };
+        return { remediation: "none", scope: "table", severity: "safe", summary, table: tableName, type: "changedTtlPolicy", warning: true };
     };
 
     if (current === undefined) {
-        return safe(`table ${tableName} dropped its TTL policy — its rows are no longer swept`);
+        return safe(`table ${tableName} dropped its TTL policy — its rows are no longer swept, so they stay until something else deletes them`);
     }
 
     if (baseline === undefined) {
         return widening(
-            `table ${tableName} gained a TTL policy ${describeTtl(current)} — every row already past the cutoff is deleted on the next alarm sweep; refresh or clear "${current.field}" on the rows that must survive before this deploys`,
+            `table ${tableName} gained a TTL policy ${describeTtl(current)} — every row already past the cutoff is deleted on the next alarm sweep; refresh or clear "${current.field}" on the rows that must survive, then declare a migration with covers: { table: "${tableName}", ttl: ${describeCoveredTtl(current)} }`,
             current,
         );
     }
 
     if (baseline.field !== current.field) {
         return widening(
-            `table ${tableName} moved its TTL to a different column: ${describeTtl(baseline)} → ${describeTtl(current)} — rows are now expired by a column they were never written against; populate "${current.field}" on the rows that must survive before this deploys`,
+            `table ${tableName} moved its TTL to a different column: ${describeTtl(baseline)} → ${describeTtl(current)} — rows are now expired by a column they were never written against; populate "${current.field}" on the rows that must survive, then declare a migration with covers: { table: "${tableName}", ttl: ${describeCoveredTtl(current)} }`,
             current,
         );
     }
@@ -1168,12 +1178,16 @@ const diffTtl = (tableName: string, baseline: TtlSnapshot | undefined, current: 
 
     if (after < before) {
         return widening(
-            `table ${tableName} shortened its TTL: ${describeTtl(baseline)} → ${describeTtl(current)} — rows that were not expired under the old offset are deleted on the next alarm sweep; refresh "${current.field}" on the rows that must survive before this deploys`,
+            `table ${tableName} shortened its TTL: ${describeTtl(baseline)} → ${describeTtl(current)} — rows that were not expired under the old offset are deleted on the next alarm sweep; refresh "${current.field}" on the rows that must survive, then declare a migration with covers: { table: "${tableName}", ttl: ${describeCoveredTtl(current)} }`,
             current,
         );
     }
 
-    return after > before ? safe(`table ${tableName} lengthened its TTL: ${describeTtl(baseline)} → ${describeTtl(current)}`) : undefined;
+    return after > before
+        ? safe(
+              `table ${tableName} lengthened its TTL: ${describeTtl(baseline)} → ${describeTtl(current)} — every row stays, and expires later than it would have`,
+          )
+        : undefined;
 };
 
 /**
@@ -1229,6 +1243,7 @@ const diffTableFlags = (tableName: string, baseline: TableSnapshot, current: Tab
                       summary: `table ${tableName} became .commitOrdered() — rows written before it carry no _commitSeq, so a \`_commitSeq > cursor\` changefeed never offers them; add a data migration over the table to stamp them (the rewrite allocates a sequence)`,
                       table: tableName,
                       type: "changedCommitOrdering",
+                      identityRewrites: true,
                   }
                 : {
                       remediation: "none",

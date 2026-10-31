@@ -163,20 +163,21 @@ describe("schema-drift — table modifiers", () => {
             expect(snapshotOf().tables.rows?.ttl).toBeUndefined();
         });
 
-        it("reports a newly declared TTL as a warning that carries the policy, not a block", () => {
-            expect.assertions(5);
+        it("reports a newly declared TTL as breaking, carrying the policy and the `covers` that clears it", () => {
+            expect.assertions(6);
 
             const change = soleChange({}, ttl("expiresAt", 1000));
 
             expect(change.type).toBe("changedTtlPolicy");
-            expect(change.severity).toBe("safe");
-            // The schema cannot make a stored row invalid; the next sweep deleting rows is something to hear about.
-            expect(change.warning).toBe(true);
+            expect(change.severity).toBe("breaking");
+            // The next sweep deletes the rows already past the cutoff, so a migration has to declare it.
+            expect(change.coverage).toStrictEqual({ table: "rows", ttl: { after: 1000, field: "expiresAt" } });
             expect(change.expiry).toStrictEqual({ after: 1000, field: "expiresAt" });
+            expect(change.warning).toBeUndefined();
         });
 
-        it("warns about a SHORTENED `after` and stays silent about a LENGTHENED one; neither blocks", () => {
-            expect.assertions(7);
+        it("blocks on a SHORTENED `after` and only warns about a LENGTHENED one", () => {
+            expect.assertions(6);
 
             /*
              * `selectExpiredIds` computes `cutoff = now - after`, so a larger
@@ -187,11 +188,10 @@ describe("schema-drift — table modifiers", () => {
             const shortened = soleChange(ttl("expiresAt", 60_000), ttl("expiresAt", 1000));
             const lengthened = soleChange(ttl("expiresAt", 1000), ttl("expiresAt", 60_000));
 
-            expect(shortened.severity).toBe("safe");
-            expect(shortened.warning).toBe(true);
+            expect(shortened.severity).toBe("breaking");
             expect(shortened.expiry?.previous).toStrictEqual({ after: 60_000, field: "expiresAt" });
             expect(lengthened.severity).toBe("safe");
-            expect(lengthened.warning).toBeUndefined();
+            expect(lengthened.warning).toBe(true);
         });
 
         it("treats an absent `after` as a zero offset rather than as a different policy", () => {
@@ -203,16 +203,16 @@ describe("schema-drift — table modifiers", () => {
             expect(soleChange(ttl("expiresAt"), ttl("expiresAt", 1000)).severity).toBe("safe");
         });
 
-        it("warns about a repointed expiry column, and a dropped policy is silent; neither blocks", () => {
+        it("blocks on a repointed expiry column, and only warns about a dropped policy", () => {
             expect.assertions(6);
 
             const repointed = soleChange(ttl("expiresAt", 1000), ttl("purgeAt", 1000));
             const dropped = soleChange(ttl("expiresAt", 1000), {});
 
-            expect(repointed.severity).toBe("safe");
-            expect(repointed.warning).toBe(true);
+            expect(repointed.severity).toBe("breaking");
+            expect(repointed.remediation).toBe("backfill");
             expect(dropped.severity).toBe("safe");
-            expect(dropped.warning).toBeUndefined();
+            expect(dropped.warning).toBe(true);
         });
     });
 

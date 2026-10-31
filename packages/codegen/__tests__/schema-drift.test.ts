@@ -461,23 +461,96 @@ describe("schema-drift", () => {
             expect(decision.changes.find((change) => change.type === "removedRelation")?.summary).toContain("stay in place");
         });
 
-        it.each([
-            ["gaining", undefined, { after: 1000, field: "expiresAt" }, true],
-            ["shortening", { after: 5000, field: "expiresAt" }, { after: 1000, field: "expiresAt" }, true],
-            ["moving to another column", { after: 1000, field: "expiresAt" }, { after: 1000, field: "endsAt" }, true],
-            ["lengthening", { after: 1000, field: "expiresAt" }, { after: 5000, field: "expiresAt" }, false],
-            ["dropping", { after: 1000, field: "expiresAt" }, undefined, false],
-        ])("%s a TTL passes; a widening one warns and carries the policy so rows can be counted", (_label, from, to, widens) => {
+        describe("a TTL", () => {
+            const withTtl = (ttl: { after?: number; field: string } | undefined, migrationIds: string[] = []) =>
+                buildSchemaSnapshot(
+                    schema([table("sessions", { endsAt: numberField, expiresAt: numberField }, ttl === undefined ? {} : { ttl })]),
+                    migrationIds,
+                );
+            const covering = (covers: Record<string, unknown>, identity = false) => [
+                { covers, id: "ttl-ok", ...(identity ? { identity: true as const } : {}), table: "sessions" },
+            ];
+
+            it.each([
+                ["a new TTL", undefined, { after: 1000, field: "expiresAt" }],
+                ["a shorter TTL", { after: 5000, field: "expiresAt" }, { after: 1000, field: "expiresAt" }],
+                ["a TTL moved to another column", { after: 1000, field: "expiresAt" }, { after: 1000, field: "endsAt" }],
+            ])("%s blocks, carrying the policy so the rows it would delete can be counted", (_label, from, to) => {
+                expect.assertions(4);
+
+                const decision = evaluateSchemaDrift({ baseline: withTtl(from), current: withTtl(to), migrations: [] });
+                const change = decision.uncovered.find((entry) => entry.type === "changedTtlPolicy");
+
+                expect(decision.blocked).toBe(true);
+                expect(change?.expiry?.field).toBe(to.field);
+                expect(decision.reason).toContain(
+                    `covers: { table: "sessions", ttl: { ${"after" in to ? `after: ${String(to.after)}, ` : ""}field: "${to.field}" } }`,
+                );
+                expect(decision.reason).toContain("refresh");
+            });
+
+            it("is cleared by a migration whose `covers` names that table and TTL, and by nothing else", () => {
+                expect.assertions(6);
+
+                const run = (covers: Record<string, unknown>, identity = false) =>
+                    evaluateSchemaDrift({
+                        baseline: withTtl(undefined),
+                        current: withTtl({ after: 1000, field: "expiresAt" }, ["ttl-ok"]),
+                        migrations: covering(covers, identity),
+                    }).blocked;
+
+                expect(run({ table: "sessions", ttl: { after: 1000, field: "expiresAt" } })).toBe(false);
+                // Unrelated, a different offset, a different column and an identity `up` all keep the block.
+                expect(run({ table: "sessions" })).toBe(true);
+                expect(run({ table: "sessions", ttl: { after: 2000, field: "expiresAt" } })).toBe(true);
+                expect(run({ table: "sessions", ttl: { after: 1000, field: "endsAt" } })).toBe(true);
+                expect(run({ table: "sessions", ttl: { after: 1000, field: "expiresAt" } }, true)).toBe(true);
+                expect(run({ table: "events", ttl: { after: 1000, field: "expiresAt" } })).toBe(true);
+            });
+
+            it("treats an absent `after` as 0 when matching `covers`", () => {
+                expect.assertions(1);
+
+                const decision = evaluateSchemaDrift({
+                    baseline: withTtl(undefined),
+                    current: withTtl({ field: "expiresAt" }, ["ttl-ok"]),
+                    migrations: covering({ table: "sessions", ttl: { after: 0, field: "expiresAt" } }),
+                });
+
+                expect(decision.blocked).toBe(false);
+            });
+
+            it.each([
+                ["a longer TTL", { after: 1000, field: "expiresAt" }, { after: 5000, field: "expiresAt" }],
+                ["a removed TTL", { after: 1000, field: "expiresAt" }, undefined],
+            ])("%s keeps every row, so it passes with a warning", (_label, from, to) => {
+                expect.assertions(2);
+
+                const decision = evaluateSchemaDrift({ baseline: withTtl(from), current: withTtl(to), migrations: [] });
+
+                expect(decision.blocked).toBe(false);
+                expect(decision.changes.find((entry) => entry.type === "changedTtlPolicy")?.warning).toBe(true);
+            });
+        });
+
+        it("turning .commitOrdered() on is backfilled by a migration that returns each row unchanged, because rewriting stamps the sequence", () => {
             expect.assertions(3);
 
-            const withTtl = (ttl: { after?: number; field: string } | undefined) =>
-                buildSchemaSnapshot(schema([table("sessions", { endsAt: numberField, expiresAt: numberField }, ttl === undefined ? {} : { ttl })]), []);
-            const decision = evaluateSchemaDrift({ baseline: withTtl(from), current: withTtl(to), migrations: [] });
-            const change = decision.changes.find((entry) => entry.type === "changedTtlPolicy");
+            const off = buildSchemaSnapshot(schema([table("rows", { n: numberField }, { commitOrdered: false })]), []);
+            const on = buildSchemaSnapshot(schema([table("rows", { n: numberField }, { commitOrdered: true })]), ["stamp"]);
+            const run = (migration: Record<string, unknown>) =>
+                evaluateSchemaDrift({ baseline: off, current: on, migrations: [{ id: "stamp", table: "rows", ...migration }] });
 
-            expect(decision.blocked).toBe(false);
-            expect(change?.warning === true).toBe(widens);
-            expect(change?.expiry?.field).toBe(widens ? to?.field : undefined);
+            expect(run({ identity: true }).blocked).toBe(false);
+            expect(run({ identity: true, table: "other" }).blocked).toBe(true);
+            // The placeholder is not called a no-op when it is exactly the backfill that is owed.
+            expect(
+                evaluateSchemaDrift({
+                    baseline: off,
+                    current: buildSchemaSnapshot(schema([table("rows", { n: numberField }, { commitOrdered: true })]), []),
+                    migrations: [],
+                }).reason,
+            ).not.toContain("cover nothing");
         });
 
         it("a dropped index is refused while a query still names it, naming the function, and passes once nothing does", () => {

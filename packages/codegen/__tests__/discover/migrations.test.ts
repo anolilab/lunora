@@ -135,6 +135,9 @@ describe("discover/migrations", () => {
             export const c = defineMigration({ id: "memory", table: "t", covers: { memory: true, table: "t" }, up: (doc) => ({ ...doc }) });
             export const d = defineMigration({ id: "dynamic", table: "t", covers: { shardMode: MODE, table: "t" }, up: (doc) => ({ ...doc }) });
             export const e = defineMigration({ id: "none", table: "t", up: (doc) => ({ ...doc }) });
+            export const f = defineMigration({ id: "ttl", table: "t", covers: { table: "t", ttl: { after: 1000, field: "expiresAt" } }, up: (doc) => ({ ...doc }) });
+            export const g = defineMigration({ id: "ttl-no-after", table: "t", covers: { table: "t", ttl: { field: "expiresAt" } }, up: (doc) => ({ ...doc }) });
+            export const h = defineMigration({ id: "ttl-dynamic", table: "t", covers: { table: "t", ttl: { after: OFFSET, field: "expiresAt" } }, up: (doc) => ({ ...doc }) });
         `,
             );
 
@@ -146,6 +149,9 @@ describe("discover/migrations", () => {
                 mode: { shardMode: "global", table: "t" },
                 none: undefined,
                 region: { jurisdiction: "eu" },
+                ttl: { table: "t", ttl: { after: 1000, field: "expiresAt" } },
+                "ttl-dynamic": { table: "t" },
+                "ttl-no-after": { table: "t", ttl: { field: "expiresAt" } },
             });
         });
 

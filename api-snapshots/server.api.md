@@ -1449,6 +1449,10 @@ interface MigrationCovers {
     readonly memory?: true;
     readonly shardMode?: "global" | "global:d1" | "global:hyperdrive" | "root" | `shardBy:${string}`;
     readonly table?: string;
+    readonly ttl?: {
+        readonly after?: number;
+        readonly field: string;
+    };
 }
 ```
 

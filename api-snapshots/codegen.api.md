@@ -246,6 +246,7 @@ interface DriftChange {
     field?: string;
     table?: string;
     warning?: true;
+    identityRewrites?: true;
     expiry?: {
         after?: number;
         field: string;
@@ -606,6 +607,10 @@ interface MigrationIR {
         memory?: true;
         shardMode?: string;
         table?: string;
+        ttl?: {
+            after?: number;
+            field: string;
+        };
     };
     exportName: string;
     filePath: string;
@@ -2576,6 +2581,10 @@ interface DriftCoverage {
     memory?: true;
     shardMode?: string;
     table?: string;
+    ttl?: {
+        after?: number;
+        field: string;
+    };
 }
 ```
 

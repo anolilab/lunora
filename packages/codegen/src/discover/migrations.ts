@@ -62,6 +62,25 @@ const stringProperty = (object: ObjectLiteralExpression, name: string): string |
     return initializer && Node.isStringLiteral(initializer) ? initializer.getLiteralValue() : undefined;
 };
 
+/** The `ttl: { field, after? }` of a `covers`, when `field` is a string literal and `after` (if present) a numeric literal. */
+const ttlOf = (property: Node | undefined): { after?: number; field: string } | undefined => {
+    const value = Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
+
+    if (value === undefined || !Node.isObjectLiteralExpression(value)) {
+        return undefined;
+    }
+
+    const field = stringProperty(value, "field");
+    const after = findObjectProperty(value, "after");
+    const afterValue = Node.isPropertyAssignment(after) ? after.getInitializer() : undefined;
+
+    if (field === undefined || (after !== undefined && !(afterValue !== undefined && Node.isNumericLiteral(afterValue)))) {
+        return undefined;
+    }
+
+    return { ...(afterValue !== undefined && Node.isNumericLiteral(afterValue) ? { after: afterValue.getLiteralValue() } : {}), field };
+};
+
 /**
  * The `covers: { … }` a migration declares, when every value is a literal of the kind it takes. A `covers` that cannot be read this
  * way yields `undefined`, so the migration covers nothing: the gate cannot match a declaration it cannot see.
@@ -82,6 +101,12 @@ const coversOf = (object: ObjectLiteralExpression): MigrationIR["covers"] => {
         if (text !== undefined) {
             covers[key] = text;
         }
+    }
+
+    const ttl = ttlOf(findObjectProperty(value, "ttl"));
+
+    if (ttl !== undefined) {
+        covers.ttl = ttl;
     }
 
     const memory = findObjectProperty(value, "memory");

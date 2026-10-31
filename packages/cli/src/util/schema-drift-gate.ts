@@ -141,6 +141,32 @@ const expiryNote = (count: number | undefined, counts: ReadonlyMap<string, numbe
     return canCount ? "" : " (the affected rows are counted by `lunora deploy`, which reads the deployed worker)";
 };
 
+/** For a block over a TTL: how many stored rows the next sweep would delete, or why that is not known. */
+const ttlBlockNote = async (uncovered: SchemaDriftDecision["uncovered"], context: GateContext): Promise<string> => {
+    const ttlChanges = uncovered.filter((change) => change.expiry !== undefined);
+
+    if (ttlChanges.length === 0) {
+        return "";
+    }
+
+    if (context.readOnly || context.countExpiringRows === undefined) {
+        return `\n\nThe rows the next sweep would delete were not counted: \`lunora ${context.command ?? "prepare"}\` does not read a deployment; \`lunora deploy\` counts them.`;
+    }
+
+    const counts = await context.countExpiringRows(ttlChanges);
+
+    if (typeof counts === "string") {
+        return `\n\nThe rows the next sweep would delete could not be counted: ${counts}.`;
+    }
+
+    return `\n\n${ttlChanges
+        .map(
+            (change) =>
+                `Next sweep would delete ${String(counts.get(change.table ?? "") ?? 0)} stored row(s) of ${change.table ?? "?"}, which are past the new cutoff.`,
+        )
+        .join("\n")}`;
+};
+
 /**
  * Say, for a run that goes ahead, what it leaves behind or sweeps: a dropped table's rows left in place, a removed relation's
  * behaviour, a TTL that now expires rows already on disk (counted when the deployment can be read).
@@ -222,7 +248,7 @@ const blockedDecisionResult = async (decision: SchemaDriftDecision, context: Gat
         return { blocked: false, changes: decision.changes, reason: decision.reason, rebless: context.rebless };
     }
 
-    const reason = `${decision.reason}${verdictNote(verdict)}`;
+    const reason = `${decision.reason}${verdictNote(verdict)}${await ttlBlockNote(decision.uncovered, context)}`;
 
     if (!context.readOnly) {
         context.logger.error(reason);
