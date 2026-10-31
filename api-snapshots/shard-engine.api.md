@@ -662,6 +662,7 @@ interface DatabaseWriterLike {
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
     delete: (table: string, id: string, options?: {
         hard?: boolean;
+        skipOnDelete?: boolean;
     }) => Promise<void>;
     deleteAll?: (tableName: string, options?: {
         chunkSize?: number;
@@ -1241,13 +1242,22 @@ interface ImportError {
 }
 ```
 
+### `ImportRow` (interface)
+
+```ts
+interface ImportRow extends ExportRow {
+    op?: string;
+}
+```
+
 ### `ImportShardAdminArgs` (interface)
 
 ```ts
 interface ImportShardAdminArgs {
+    deletes: boolean;
     dryRun: boolean;
     onConflict: ImportConflictMode;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 ```
@@ -1256,9 +1266,10 @@ interface ImportShardAdminArgs {
 
 ```ts
 interface ImportShardArgs {
+    deletes?: boolean;
     dryRun?: boolean;
     onConflict?: ImportConflictMode;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 ```
@@ -1268,6 +1279,7 @@ interface ImportShardArgs {
 ```ts
 interface ImportShardResult {
     conflicts: number;
+    deleted: number;
     errors: ImportError[];
     inserted: Record<string, number>;
     replaced: number;

@@ -134,8 +134,8 @@ export { findProjectConfigFile, loadProjectConfig, PROJECT_CONFIG_FILENAMES, rea
 export { findCodegenConfigFile, projectConfigCandidatePaths } from "./project-config-path";
 export type { CodegenOptions, CodegenResult } from "./run-codegen";
 export { createCodegenProject, findTsconfig, refreshCodegenProject, runCodegen, SCHEMA_SNAPSHOT_FILENAME, tsconfigFingerprint } from "./run-codegen";
-export type { SchemaDriftDecision } from "./schema-drift";
-export { buildSchemaSnapshot, evaluateSchemaDrift, parseSchemaSnapshot, SchemaSnapshotParseError } from "./schema-drift";
+export type { IndexReference, SchemaDriftDecision } from "./schema-drift";
+export { buildSchemaSnapshot, evaluateSchemaDrift, indexReferencesOf, parseSchemaSnapshot, SchemaSnapshotParseError } from "./schema-drift";
 export { default as fingerprintSchemaSources } from "./schema-fingerprint";
 export { schemaFromIr } from "./schema-from-ir";
 export { LUNORA_ERROR_CODES, validatorIrToJsonSchema } from "./schema-ir";

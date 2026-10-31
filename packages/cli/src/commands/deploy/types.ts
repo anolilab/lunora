@@ -8,7 +8,7 @@ import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import type { ListRemoteSecretsInputs, ListRemoteSecretsResult } from "../../util/wrangler-secrets";
-import type { FetchLike } from "../run/handler";
+import type { StreamingFetchLike } from "../data-transfer/shared";
 import type { PreDeployCommand } from "./checks";
 
 interface DeployCommandOptions {
@@ -74,8 +74,8 @@ interface DeployCommandOptions {
     emitBindings?: string;
     env?: string;
 
-    /** Fetch implementation injected in tests for `--migrate` RPC calls. */
-    fetchImpl?: FetchLike;
+    /** Fetch implementation injected in tests for `--migrate` RPC calls and the drift gate's stored-row read. */
+    fetchImpl?: StreamingFetchLike;
 
     /** Output format: `pretty` (default) or `json`. */
     format?: OutputFormat;
@@ -150,12 +150,7 @@ interface DeployCommandOptions {
      */
     outDir?: string;
 
-    /**
-     * Upload a preview version (`wrangler versions upload`) instead of a live
-     * `wrangler deploy`. Codegen + the drift gate + validation still run, but
-     * the post-deploy finalize (migrations, baseline re-bless, auto-link, the
-     * production summary) is skipped — a preview never shifts live traffic.
-     */
+    /** Refused on every target (see `PREVIEW_REFUSAL` in the handler); kept as an option so the refusal can say why. */
     preview?: boolean;
     /** Railpack-availability probe injected in tests. Defaults to a real `railpack --version` + `BUILDKIT_HOST` check. */
     railpackAvailable?: DockerProbe;
@@ -210,15 +205,13 @@ interface DeployCommandOptions {
      * global API key), so we pass the flag straight through without guarding.
      */
     temporary?: boolean;
-    /** Re-bless the committed schema baseline with the current shape (accepts breaking drift). */
-    updateSchemaBaseline?: boolean;
 }
 
 /**
  * What this run put where — the identity of the thing that was just deployed.
  *
  * Present on every run that reached (and completed) the wrangler invocation,
- * including `--dry-run` and `--preview`, so a consumer can tell "nothing went
+ * including `--dry-run`, so a consumer can tell "nothing went
  * live" from "went live" without inferring it from a missing `url`. A dry run
  * publishes nothing and therefore never carries a `url`.
  *
@@ -235,8 +228,6 @@ interface DeployedIdentity {
     dryRun: boolean;
     /** The Cloudflare environment this run targeted, when `--env` named one. */
     env?: string;
-    /** True when `--preview` uploaded a version instead of shifting live traffic. */
-    preview: boolean;
     /** The URL wrangler reported publishing to; absent on a dry run, or when the output carried no URL. */
     url?: string;
     /** The Worker name from the project's wrangler config. */

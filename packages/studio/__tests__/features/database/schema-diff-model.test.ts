@@ -71,7 +71,8 @@ describe("buildSchemaDiffModel", () => {
         // Its columns still render — otherwise the most consequential change in a
         // migration would be the one thing the canvas cannot show.
         expect(model.tables.find((entry) => entry.name === "legacy")?.columns).toHaveLength(1);
-        expect(model.breakingCount).toBeGreaterThan(0);
+        // A removed table no longer blocks the deploy: its rows are left in place.
+        expect(model.breakingCount).toBe(0);
     });
 
     it("labels per-field status for the row glyphs", () => {

@@ -380,6 +380,44 @@ const parseResolvedShape = (expression: Expression): Record<string, ValidatorIR>
     }
 };
 
+/**
+ * Whether `parseResolvedShape` read every member of the shape `expression` names.
+ * It reads `{}` for a shape it could not resolve, which is indistinguishable from
+ * a real empty shape; a consumer that must not mistake one for the other (the
+ * deploy-time stored-row check) reads this instead.
+ */
+const isCompleteShape = (expression: Expression, visiting: Set<ObjectLiteralExpression> = new Set()): boolean => {
+    const literal = resolveObjectLiteral(expression);
+
+    if (literal === undefined || visiting.has(literal)) {
+        return false;
+    }
+
+    visiting.add(literal);
+
+    try {
+        return literal
+            .getProperties()
+            .every((property) =>
+                Node.isSpreadAssignment(property)
+                    ? isCompleteShape(property.getExpression(), visiting)
+                    : Node.isPropertyAssignment(property) || Node.isShorthandPropertyAssignment(property),
+            );
+    } finally {
+        visiting.delete(literal);
+    }
+};
+
+const parseObjectValidator = (argument: Node | undefined): ValidatorIR => {
+    if (argument === undefined || !Node.isExpression(argument)) {
+        return { kind: "object", shape: {}, unresolvedShape: true };
+    }
+
+    const shape = parseResolvedShape(argument);
+
+    return isCompleteShape(argument) ? { kind: "object", shape } : { kind: "object", shape, unresolvedShape: true };
+};
+
 const unresolvableKey = (nameNode: Node): never => {
     throw diagnosticAt(nameNode, `computed property name ${nameNode.getText()} must be a string literal — codegen resolves object keys statically.`);
 };
@@ -543,7 +581,7 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>, call: Cal
         }
 
         case "object": {
-            return { kind: "object", shape: first && Node.isExpression(first) ? parseResolvedShape(first) : {} };
+            return parseObjectValidator(first);
         }
 
         case "optional": {

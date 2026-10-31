@@ -77,7 +77,7 @@ import { platformFeatureAvailable, resolveCodegenTarget } from "./platform-targe
 import { readMergeDurableObjects } from "./project-config-file";
 import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged } from "./run-codegen-files";
 import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
-import { buildSchemaSnapshot } from "./schema-drift";
+import { buildSchemaSnapshot, indexReferencesOf } from "./schema-drift";
 import { buildSpecArtifacts } from "./spec-artifacts";
 
 /**
@@ -532,6 +532,10 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
                   workflowCalls: discoverWorkflowCalls(project, lunoraDirectory),
               };
 
+    // The drift gate refuses to drop an index a query still names, so these are read on every run: they do not hang off the
+    // advisory opt-out. A run that already walked the queries reuses them.
+    const indexReferences = indexReferencesOf(callSites?.queries ?? discoverQueries(project, lunoraDirectory, functions));
+
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
     // fields, filter-without-index, …). Cheap, derived from the schema + the
     // discovered query reads, and run here so a problem surfaces at codegen time
@@ -673,10 +677,10 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // Structural schema snapshot for the pre-deploy drift gate. Built from the
     // discovered schema + the declared migration ids; the CLI gate diffs the
     // CURRENT snapshot against the committed baseline. Always computed (cheap,
-    // pure) and returned in `CodegenResult`; the baseline file is (re-)blessed
-    // only when it is absent (first capture) or `updateSchemaBaseline` is set —
-    // so a routine codegen run never silently moves the goalposts the gate
-    // measures against.
+    // pure) and returned in `CodegenResult`; codegen writes the baseline file only
+    // when it is absent (first capture). Advancing it is the deploy gate's job, on
+    // success — so a routine codegen run never silently moves the goalposts the
+    // gate measures against.
     const schemaSnapshot = buildSchemaSnapshot(
         schema,
         migrations.map((migration) => migration.id),
@@ -957,10 +961,9 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               },
           ]);
 
-    // Bless the schema baseline on first capture (so a project gets a committed snapshot the
-    // moment it runs codegen) or when explicitly asked to refresh it. The CLI gate reads the
-    // existing baseline BEFORE calling codegen, so re-blessing here never hides drift from that run.
-    if (!options.dryRun && (!schemaSnapshotExists || options.updateSchemaBaseline === true)) {
+    // Bless the schema baseline on first capture, so a project gets a committed snapshot the
+    // moment it runs codegen. The CLI gate reads the existing baseline BEFORE calling codegen.
+    if (!options.dryRun && !schemaSnapshotExists) {
         writeIfChanged(schemaSnapshotPath, serializeSchemaSnapshot(schemaSnapshot));
     }
 
@@ -1016,8 +1019,10 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         outputDirectory,
         platformDiagnostics: platformGate.diagnostics,
         queues,
+        indexReferences,
         schemaSnapshot,
         schemaSnapshotPath,
+        schemaTables: schema.tables,
         workflows,
         writtenFiles,
     };

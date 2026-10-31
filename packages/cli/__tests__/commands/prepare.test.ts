@@ -292,12 +292,10 @@ export default crons;
         expect(errors).toBeInstanceOf(Array);
     });
 
-    // `--update-schema-baseline` is the documented way to refresh a stale
-    // `lunora/.lunora-schema.json`, and nothing exercised it end to end: the
-    // gate's unit tests stop at the `rebless` thunk, so a break anywhere between
-    // the flag and the file on disk went unnoticed by this suite.
-    it("re-blesses a stale schema baseline that would otherwise block, under --update-schema-baseline", async () => {
-        expect.assertions(4);
+    // The gate's unit tests stop at the `rebless` thunk, so a break anywhere between
+    // the gate and the file on disk would go unnoticed without this end-to-end run.
+    it("will not re-bless a stale baseline when only stored rows could confirm it", async () => {
+        expect.assertions(3);
 
         writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
@@ -320,10 +318,8 @@ export default crons;
         expect(blocked.code).toBe(EXIT_CODE.USAGE);
         expect(blocked.schemaDrift?.blocked).toBe(true);
 
-        const reblessed = await runPrepareCommand({ cwd: workdir, logger, updateSchemaBaseline: true });
-
-        expect(reblessed.code).toBe(0);
-        expect(JSON.parse(readFileSync(baselinePath, "utf8")).tables.users.fields.role).toBeDefined();
+        // A required field's presence is a question about stored rows, which prepare cannot read: the baseline stays where it was.
+        expect(JSON.parse(readFileSync(baselinePath, "utf8")).tables.users.fields.role).toBeUndefined();
     });
 
     describe("advisory gate", () => {

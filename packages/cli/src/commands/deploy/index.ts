@@ -27,7 +27,7 @@ const deployCommand: Command = {
         },
         {
             description:
-                "Override the schema-drift gate for this run (deploy even with breaking schema drift and no migration; the committed baseline is not advanced — use --update-schema-baseline to accept the new shape)",
+                "Override the schema-drift gate for this run (deploy even with breaking schema drift and no migration; nothing is checked and the committed baseline is not advanced)",
             name: "allow-schema-drift",
             type: Boolean,
         },
@@ -90,7 +90,7 @@ const deployCommand: Command = {
             type: Boolean,
         },
         {
-            description: "Upload a preview version (wrangler versions upload) instead of going live — prints a preview URL; doesn't shift production traffic",
+            description: "Refused: a Worker version shares production state and gets no preview URL — deploy an isolated copy with --env <name>",
             name: "preview",
             type: Boolean,
         },
@@ -111,11 +111,6 @@ const deployCommand: Command = {
             description:
                 "Deploy to a temporary Cloudflare account when unauthenticated (wrangler deploy --temporary; live ~60min, then claim or it's deleted). Wrangler errors if you're already authenticated.",
             name: "temporary",
-            type: Boolean,
-        },
-        {
-            description: "Re-bless the committed schema baseline (lunora/.lunora-schema.json) with the current shape",
-            name: "update-schema-baseline",
             type: Boolean,
         },
     ],
@@ -145,5 +140,4 @@ export type DeployOptions = CreateOptions<{
     "strict-advisories": boolean | undefined;
     target: string | undefined;
     temporary: boolean | undefined;
-    "update-schema-baseline": boolean | undefined;
 }>;

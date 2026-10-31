@@ -32,7 +32,6 @@ describe("celld deploy driver", () => {
     // rather than drop the flag.
     it.each([
         [{ environment: "staging" }, /no Wrangler environments/u],
-        [{ preview: true }, /no preview versions/u],
         [{ temporary: true }, /no short-lived accounts/u],
         [{ outDir: "dist" }, /does not write its bundle/u],
         [{ entry: "src/worker.ts" }, /composed framework entry/u],

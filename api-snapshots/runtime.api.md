@@ -826,11 +826,13 @@ type GlobalImportFunction = (request: {
     rows: ReadonlyArray<{
         doc: Record<string, unknown>;
         line: number;
+        op?: "delete";
         table: string;
     }>;
     startLine?: number;
 }) => Promise<{
     conflicts: number;
+    deleted?: number;
     errors: ReadonlyArray<{
         code: string;
         line: number;
@@ -1046,11 +1048,13 @@ interface ImportFanOutRequest {
     batches: ReadonlyArray<{
         rows: ReadonlyArray<{
             doc: Record<string, unknown>;
+            op?: "delete";
             table: string;
         }>;
         shardKey: string;
         startLine?: number;
     }>;
+    deletes?: boolean;
     dryRun?: boolean;
     headers?: Record<string, string>;
     onConflict?: "replace" | "skip";
@@ -1062,6 +1066,7 @@ interface ImportFanOutRequest {
 ```ts
 interface ImportFanOutResult {
     conflicts: number;
+    deleted: number;
     errors: ReadonlyArray<{
         code: string;
         line: number;
@@ -1998,6 +2003,7 @@ interface ShardImportOutcome {
     };
     result?: {
         conflicts: number;
+        deleted: number;
         errors: ReadonlyArray<{
             code: string;
             line: number;
@@ -2356,6 +2362,7 @@ interface WorkerOptions {
     httpRouter?: HttpRouterLike;
     identity?: IdentityContractLike;
     importGlobals?: GlobalImportFunction;
+    importGlobalsSupportsDelete?: boolean;
     importGlobalsSupportsDryRun?: boolean;
     importGlobalsSupportsReplace?: boolean;
     jurisdiction?: DurableObjectJurisdiction;

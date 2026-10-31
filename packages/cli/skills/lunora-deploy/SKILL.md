@@ -1,6 +1,6 @@
 ---
 name: lunora-deploy
-description: Deploys a Lunora app to Cloudflare Workers + Durable Objects and gets wrangler.jsonc, remote resources and secrets to line up. Covers `lunora deploy` (and `--env`, `--dry-run`, `--preview`, `--migrate`), the `lunora doctor` / `lunora verify` / `lunora prepare` preflights, Durable Object bindings (SHARD, SHARD_REGISTRY, SCHEDULER), the `DB` D1 binding and its placeholder id, R2 buckets, production secrets (`lunora env push`, `wrangler secret put`) versus `.dev.vars`, the schema-drift gate, the architecture diff, and rollback with `lunora cloudflare deployments`. Use when the user asks to "deploy", "ship to production", "set up a staging environment", wire CI deploys, or when a deploy fails on a binding, a placeholder `database_id`, an unexported Durable Object class, a missing secret, or "schema drift gate blocked deploy".
+description: Deploys a Lunora app to Cloudflare Workers + Durable Objects and gets wrangler.jsonc, remote resources and secrets to line up. Covers `lunora deploy` (and `--env`, `--dry-run`, `--migrate`), the `lunora doctor` / `lunora verify` / `lunora prepare` preflights, Durable Object bindings (SHARD, SHARD_REGISTRY, SCHEDULER), the `DB` D1 binding and its placeholder id, R2 buckets, production secrets (`lunora env push`, `wrangler secret put`) versus `.dev.vars`, the schema-drift gate, the architecture diff, and rollback with `lunora cloudflare deployments`. Use when the user asks to "deploy", "ship to production", "set up a staging environment", wire CI deploys, or when a deploy fails on a binding, a placeholder `database_id`, an unexported Durable Object class, a missing secret, or "schema drift gate blocked deploy".
 ---
 
 # Lunora Deploy
@@ -45,8 +45,8 @@ In order, stopping at the first failure:
 7. **Secrets gate** — lists the secrets the app's packages need and checks
    which are set on the worker. Interactive runs offer to mint and push the
    generatable ones (`BETTER_AUTH_SECRET`, `LUNORA_ADMIN_TOKEN`, …). In CI a
-   missing required secret aborts the deploy. Skipped for `--dry-run` /
-   `--preview`, and when the worker doesn't exist yet.
+   missing required secret aborts the deploy. Skipped for `--dry-run`, and
+   when the worker doesn't exist yet.
 8. **Services, then `wrangler deploy`** — services declared in
    `lunora.config` deploy first (`--skip-services` to skip), then the app.
 9. **After a successful deploy** — records the URL as the project link
@@ -60,16 +60,14 @@ take `--env`.
 
 Flags worth knowing:
 
-| Flag                       | Effect                                                                          |
-| -------------------------- | ------------------------------------------------------------------------------- |
-| `--env <name>`             | Deploy a wrangler environment; checks read that env's (non-inherited) bindings. |
-| `--dry-run`                | Run every gate and bundle without publishing; `wrangler.jsonc` edits roll back. |
-| `--preview`                | Upload a version (`wrangler versions upload`) with a preview URL; no traffic.   |
-| `--health-check`           | Probe `/_lunora/health/ready` on the new version; fail if it never answers.     |
-| `--prebuilt`               | Skip codegen and the drift gate when `lunora prepare` already ran in this job.  |
-| `--migrate`                | Run every declared data migration (`up` is idempotent) against the live worker. |
-| `--allow-schema-drift`     | Deploy despite blocked drift; the baseline is not advanced.                     |
-| `--update-schema-baseline` | Accept the current schema as the new baseline.                                  |
+| Flag                   | Effect                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------- |
+| `--env <name>`         | Deploy a wrangler environment; checks read that env's (non-inherited) bindings. |
+| `--dry-run`            | Run every gate and bundle without publishing; `wrangler.jsonc` edits roll back. |
+| `--health-check`       | Probe `/_lunora/health/ready` on the new version; fail if it never answers.     |
+| `--prebuilt`           | Skip codegen and the drift gate when `lunora prepare` already ran in this job.  |
+| `--migrate`            | Run every declared data migration (`up` is idempotent) against the live worker. |
+| `--allow-schema-drift` | Deploy despite blocked drift; checks nothing, the baseline is not advanced.     |
 
 `--migrate` is checked before wrangler runs, so a missing requirement aborts the
 whole deploy:
@@ -162,9 +160,12 @@ and every machine gate against the same shape. It is advanced only after a
 successful deploy, so a failed deploy never moves it past a change that didn't
 ship.
 
-Reach for `--allow-schema-drift` / `--update-schema-baseline` only when you know
-existing data is compatible. Otherwise stage the change with
-`lunora-migration-helper`.
+When the stored rows already fit a tightening, `lunora deploy` notices on its own:
+it reads the affected tables from the deployed worker (`--migrate-url` or the
+project link, plus `LUNORA_ADMIN_TOKEN`) and lets the change through, naming any
+row that does not fit otherwise. A new unique index is checked the same way, for repeated values.
+`--allow-schema-drift` skips the gate for one run without checking. Otherwise
+stage the change with `lunora-migration-helper`.
 
 ## `.global()` table DDL
 
@@ -190,7 +191,7 @@ lunora cloudflare deployments rollback --yes              # previous version
 lunora cloudflare deployments promote <version-id> --yes  # send 100% of traffic to a version
 ```
 
-A partial rollout (`--percent N --from <live-version-id> --confirm-shared-state`) runs two versions against one Durable Object database. Nothing in `promote` compares the two versions' schemas, so confirm them yourself before using it. Two facts bound the risk: `lunora deploy --preview` runs the schema-drift gate before it uploads, so a version uploaded that way passed it unless `--prebuilt` skipped the gate or `--allow-schema-drift` overrode it; and `wrangler versions upload` refuses a version with a pending Durable Object migration, so that migration reaches traffic only through `deploy`, at 100%. A split whose live version predates a migration the target relies on is not detected by either check.
+A partial rollout (`--percent N --from <live-version-id> --confirm-shared-state`) runs two versions against one Durable Object database. Nothing in `promote` compares the two versions' schemas, so confirm them yourself before using it. Two facts bound the risk: `lunora deploy --preview` is refused, so a version that never carried traffic was uploaded outside Lunora with `wrangler versions upload`, which never ran the schema-drift gate, while a superseded version that `lunora deploy` once shipped passed it against the schema of its own time, unless that deploy used `--prebuilt` or `--allow-schema-drift`, which skip or override the gate; and `wrangler versions upload` refuses a version with a pending Durable Object migration, so that migration reaches traffic only through `deploy`, at 100%. A split whose live version predates a migration the target relies on is not detected by either check.
 
 Rolling back code does not roll back data migrations or D1 DDL.
 

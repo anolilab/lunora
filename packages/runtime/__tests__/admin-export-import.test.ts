@@ -118,7 +118,7 @@ describe("createWorker — admin export endpoint", () => {
     });
 
     it("streams NDJSON from orchestrateExport", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const orchestrateExport = vi.fn<(namespace: unknown, request: { tables: ReadonlyArray<string> }) => Promise<unknown>>(async (_namespace, _request) => {
             return {
@@ -169,8 +169,10 @@ describe("createWorker — admin export endpoint", () => {
         const text = await response.text();
         const lines = text.trim().split("\n");
 
-        expect(lines).toHaveLength(2);
+        expect(lines).toHaveLength(3);
         expect(JSON.parse(lines[0]!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
+        // The terminal frame is what lets a reader tell this from an export cut on a row boundary.
+        expect(JSON.parse(lines[2]!)).toEqual({ end: true, rows: 2 });
     });
 
     it("answers 502 when a shard's export failed instead of serving a short snapshot", async () => {
@@ -256,7 +258,15 @@ describe("createWorker — admin export endpoint", () => {
 
         const text = await response.text();
 
-        expect(JSON.parse(text.trim())).toEqual({ doc: { _id: "u1" }, table: "users" });
+        expect(
+            text
+                .trim()
+                .split("\n")
+                .map((line) => JSON.parse(line)),
+        ).toEqual([
+            { doc: { _id: "u1" }, table: "users" },
+            { end: true, rows: 1 },
+        ]);
         expect(shardKeys).toEqual(["__root__"]);
     });
 
@@ -288,7 +298,7 @@ describe("createWorker — admin export endpoint", () => {
     });
 
     it("streams D1 globals when exportGlobals is configured", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const orchestrateExport = vi.fn<(namespace: unknown, request: { tables: ReadonlyArray<string> }) => Promise<unknown>>(async (_namespace, _request) => {
             return {
@@ -336,8 +346,9 @@ describe("createWorker — admin export endpoint", () => {
         const text = await response.text();
         const lines = text.trim().split("\n");
 
-        expect(lines).toHaveLength(2);
+        expect(lines).toHaveLength(3);
         expect(JSON.parse(lines[0]!)).toMatchObject({ table: "settings" });
+        expect(JSON.parse(lines[2]!)).toEqual({ end: true, rows: 2 });
     });
 });
 
@@ -557,6 +568,67 @@ describe("createWorker — admin import endpoint", () => {
         const shardKeys = captured!.batches.map((batch) => batch.shardKey).toSorted((a, b) => a.localeCompare(b));
 
         expect(shardKeys).toEqual(["__root__", "c1", "c2"]);
+    });
+
+    describe("export end marker", () => {
+        const importBody = async (lines: ReadonlyArray<unknown>): Promise<{ body: { inserted?: Record<string, number> }; status: number }> => {
+            const worker = createWorker({
+                adminToken: ADMIN_TOKEN,
+                queryCoordinator: {
+                    fanOut: vi.fn<() => never>(),
+                    orchestrateApplyCdc: vi.fn<() => never>(),
+                    orchestrateCdcSync: vi.fn<() => never>(),
+                    orchestrateExport: vi.fn<() => never>(),
+                    orchestrateImport: orchestrateImport as never,
+                    orchestrateMigration: vi.fn<() => never>(),
+                    orchestrateRank: vi.fn<() => never>(),
+                    orchestrateRankPage: vi.fn<() => never>(),
+                    orchestrateShardTraffic: vi.fn<() => never>(),
+                    registry: {} as never,
+                },
+                resolveTableSharding: (): ShardingInfo => {
+                    return { mode: { kind: "root" } };
+                },
+                shardDO: noopNamespace,
+            });
+            const response = await worker.fetch(
+                new Request("https://app.example/_lunora/admin/import", {
+                    body: lines.map((line) => JSON.stringify(line)).join("\n"),
+                    headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            return { body: await response.json(), status: response.status };
+        };
+        const row = (id: string): unknown => {
+            return { doc: { _id: id }, table: "users" };
+        };
+
+        it("imports a body whose end marker matches the rows read, without counting the marker as a row", async () => {
+            expect.assertions(3);
+
+            const { body, status } = await importBody([row("u1"), row("u2"), { end: true, rows: 2 }]);
+
+            expect(status).toBe(200);
+            expect(body.inserted).toEqual({ users: 2 });
+            expect(orchestrateImport).toHaveBeenCalledTimes(1);
+        });
+
+        it.each([
+            ["a count that does not match the rows read", [row("u1"), { end: true, rows: 2 }]],
+            ["a row after the marker", [row("u1"), { end: true, rows: 1 }, row("u2")]],
+            ["a marker with a count that is not a number", [row("u1"), { end: true, rows: "1" }]],
+        ])("refuses %s before writing anything", async (_label, lines) => {
+            expect.assertions(2);
+
+            const { status } = await importBody(lines);
+
+            expect(status).toBe(400);
+            expect(orchestrateImport).not.toHaveBeenCalled();
+        });
     });
 
     it("imports without a configured queryCoordinator", async () => {
@@ -1031,6 +1103,124 @@ describe("createWorker — admin import endpoint", () => {
             expect(status).toBe(400);
         });
     });
+
+    describe('op: "delete" rows', () => {
+        const deleteImport = async (
+            lines: ReadonlyArray<Record<string, unknown>>,
+            workerOptions: { importGlobalsSupportsDelete?: boolean },
+            query = "?deletes=true",
+        ): Promise<{ body: Record<string, unknown>; importGlobals: ReturnType<typeof vi.fn>; status: number }> => {
+            const importGlobals = vi.fn<(request: { rows: ReadonlyArray<{ op?: string }> }) => Promise<unknown>>(async (request) => {
+                return { conflicts: 0, deleted: request.rows.filter((row) => row.op === "delete").length, errors: [], inserted: {} };
+            });
+            const worker = createWorker({
+                adminToken: ADMIN_TOKEN,
+                importGlobals: importGlobals as never,
+                queryCoordinator: {
+                    fanOut: vi.fn<() => never>(),
+                    orchestrateApplyCdc: vi.fn<() => never>(),
+                    orchestrateCdcSync: vi.fn<() => never>(),
+                    orchestrateExport: vi.fn<() => never>(),
+                    orchestrateImport: orchestrateImport as never,
+                    orchestrateMigration: vi.fn<() => never>(),
+                    orchestrateRank: vi.fn<() => never>(),
+                    orchestrateRankPage: vi.fn<() => never>(),
+                    orchestrateShardTraffic: vi.fn<() => never>(),
+                    registry: {} as never,
+                },
+                resolveTableSharding: (table: string): ShardingInfo | undefined =>
+                    table === "settings" ? { mode: { kind: "global" } } : { mode: { field: "orgId", kind: "shardBy" } },
+                shardDO: noopNamespace,
+                ...workerOptions,
+            });
+            const response = await worker.fetch(
+                new Request(`https://app.example/_lunora/admin/import${query}`, {
+                    body: lines.map((line) => JSON.stringify(line)).join("\n"),
+                    headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            return { body: await response.json(), importGlobals, status: response.status };
+        };
+
+        it("routes a delete to the shard its doc names and carries the op to both planes", async () => {
+            expect.assertions(4);
+
+            const { body, importGlobals } = await deleteImport(
+                [
+                    { doc: { _id: "u1", orgId: "acme" }, op: "delete", table: "users" },
+                    { doc: { _id: "g1" }, op: "delete", table: "settings" },
+                ],
+                { importGlobalsSupportsDelete: true },
+            );
+
+            expect(captured?.batches).toStrictEqual([
+                { rows: [{ doc: { _id: "u1", orgId: "acme" }, op: "delete", table: "users" }], shardKey: "acme", startLine: 1 },
+            ]);
+            expect(importGlobals).toHaveBeenCalledWith(expect.objectContaining({ rows: [{ doc: { _id: "g1" }, line: 2, op: "delete", table: "settings" }] }));
+            expect(body).toMatchObject({ deleted: 1, errors: [] });
+            // The shard refuses delete rows unless the fan-out says the request opted in.
+            expect(orchestrateImport).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ deletes: true }));
+        });
+
+        it("does not tell the shards the request opted into deletes when it did not", async () => {
+            expect.assertions(1);
+
+            await deleteImport([{ doc: { _id: "u1", orgId: "acme" }, table: "users" }], {}, "");
+
+            expect(orchestrateImport).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ deletes: false }));
+        });
+
+        it("refuses the whole import (400) when global deletes meet an importer that cannot delete, before any shard is pruned", async () => {
+            expect.assertions(3);
+
+            const { importGlobals, status } = await deleteImport(
+                [
+                    { doc: { _id: "u1", orgId: "acme" }, op: "delete", table: "users" },
+                    { doc: { _id: "g1" }, op: "delete", table: "settings" },
+                ],
+                {},
+            );
+
+            expect(status).toBe(400);
+            expect(importGlobals).not.toHaveBeenCalled();
+            expect(orchestrateImport).not.toHaveBeenCalled();
+        });
+
+        it("refuses a delete row on a request that did not ask for deletes, and deletes nothing", async () => {
+            expect.assertions(3);
+
+            const { body, importGlobals } = await deleteImport(
+                [
+                    { doc: { _id: "u1", orgId: "acme" }, op: "delete", table: "users" },
+                    { doc: { _id: "g1" }, op: "delete", table: "settings" },
+                ],
+                { importGlobalsSupportsDelete: true },
+                "",
+            );
+
+            expect(body).toMatchObject({
+                deleted: 0,
+                errors: [
+                    { code: "BAD_ROW", line: 1 },
+                    { code: "BAD_ROW", line: 2 },
+                ],
+            });
+            expect(importGlobals).not.toHaveBeenCalled();
+            expect(orchestrateImport).not.toHaveBeenCalled();
+        });
+
+        it("rejects an unknown op as a bad row", async () => {
+            expect.assertions(1);
+
+            const { body } = await deleteImport([{ doc: { _id: "u1", orgId: "acme" }, op: "merge", table: "users" }], {});
+
+            expect(body["errors"]).toStrictEqual([{ code: "BAD_ROW", line: 1, message: 'row `op` must be "delete" when set, got "merge"', table: "users" }]);
+        });
+    });
 });
 
 /**
@@ -1308,7 +1498,8 @@ describe("import streaming — large body", () => {
         // Count any trailing (newline-less) final line without an `if`.
         lineCount += Number(buffer.trim().length > 0);
 
-        expect(lineCount).toBe(10_000);
+        // 10,000 rows plus the terminal end marker.
+        expect(lineCount).toBe(10_001);
     });
 });
 

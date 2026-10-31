@@ -262,7 +262,7 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
             errors.push(advisoryError);
         }
 
-        const gate = runSchemaDriftGate({ allowDrift: options.allowSchemaDrift === true, codegen, command: "verify", logger, readOnly: true });
+        const gate = await runSchemaDriftGate({ allowDrift: options.allowSchemaDrift === true, codegen, command: "verify", logger, readOnly: true });
 
         if (gate.blocked) {
             errors.push(gate.reason);

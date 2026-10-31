@@ -37,6 +37,8 @@ on:
 # Set these repository secrets (Settings → Secrets and variables → Actions):
 #   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
+#   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
+#   LUNORA_ADMIN_TOKEN     — the production worker's admin token
 env:
   CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
   CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -58,13 +60,20 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Codegen + wrangler validation gate (no deploy) — fails fast on drift.
-      - run: pnpm exec lunora prepare
-      - run: pnpm exec lunora deploy
+      # When a schema change tightens a table, the drift gate reads that table's
+      # stored rows from this worker and lets the change ship if every row fits.
+      # Unset (a first deploy), the gate blocks as before. A *.workers.dev URL is
+      # only trusted when the project is linked and .lunora/ is not committed, so
+      # CI has no link: there the gate stays blocked, and a tightening needs a
+      # migration or --allow-schema-drift. A custom domain on a declared route works.
+      - run: pnpm exec lunora deploy --migrate-url "\${{ secrets.LUNORA_DEPLOY_URL }}"
+        env:
+          LUNORA_ADMIN_TOKEN: \${{ secrets.LUNORA_ADMIN_TOKEN }}
 
-  # Preview version on every pull request — uploads a versioned preview URL;
-  # production traffic is untouched.
-  preview:
+  # Every pull request runs the full deploy pipeline, bundle included, and
+  # publishes nothing. A Worker version would share production's Durable
+  # Objects and D1, so a PR never uploads one.
+  check:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -79,7 +88,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec lunora deploy --preview
+      - run: pnpm exec lunora deploy --dry-run
 `;
 
 const ORIGINAL_PNPM_GITLAB = `stages:
@@ -89,9 +98,17 @@ const ORIGINAL_PNPM_GITLAB = `stages:
 # (below) requires it — run \`pnpm install\` locally and commit the lockfile
 # before pushing, or the first pipeline fails.
 #
-# Set these as masked CI/CD variables (Settings → CI/CD → Variables):
+# Set these as CI/CD variables (Settings → CI/CD → Variables), each Masked AND
+# Protected, with Environment scope "production":
 #   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
+#   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
+#   LUNORA_ADMIN_TOKEN     — the production worker's admin token
+# Protected variables reach only pipelines on protected branches and tags, so a
+# merge-request pipeline from a feature branch, which runs the project's own
+# code, gets none of them. Keep your default branch protected (it is by default).
+# The "production" scope reaches only jobs that declare environment: production,
+# which is the deploy job alone; the check job below uses none of these.
 .lunora_base:
   image: node:22
   stage: deploy
@@ -102,21 +119,28 @@ const ORIGINAL_PNPM_GITLAB = `stages:
 # Production deploy on the default branch.
 deploy:
   extends: .lunora_base
+  environment:
+    name: production
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   script:
-    # Codegen + wrangler validation gate (no deploy) — fails fast on drift.
-    - pnpm exec lunora prepare
-    - pnpm exec lunora deploy
+    # When a schema change tightens a table, the drift gate reads that table's
+    # stored rows from this worker and lets the change ship if every row fits.
+    # Unset (a first deploy), the gate blocks as before. A *.workers.dev URL is
+    # only trusted when the project is linked and .lunora/ is not committed, so
+    # CI has no link: there the gate stays blocked, and a tightening needs a
+    # migration or --allow-schema-drift. A custom domain on a declared route works.
+    - pnpm exec lunora deploy --migrate-url "$LUNORA_DEPLOY_URL"
 
-# Preview version on every merge request (versioned preview URL; production
-# traffic is untouched).
-preview:
+# Every merge request runs the full deploy pipeline, bundle included, and
+# publishes nothing. A Worker version would share production's Durable Objects
+# and D1, so an MR never uploads one.
+check:
   extends: .lunora_base
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   script:
-    - pnpm exec lunora deploy --preview
+    - pnpm exec lunora deploy --dry-run
 `;
 
 const MANAGERS: ReadonlyArray<PackageManager> = ["npm", "pnpm", "yarn", "bun"];
@@ -157,7 +181,7 @@ describe("ci-workflow", () => {
         const github = buildContent("github", "pnpm");
 
         expect(github).toContain("      - uses: pnpm/action-setup@v4\n        with:\n          version: latest\n");
-        // Both jobs (deploy + preview) get it, not just the first.
+        // Both jobs (deploy + check) get it, not just the first.
         expect(github.match(/pnpm\/action-setup@v4\n {8}with:\n {10}version: latest\n/gu) ?? []).toHaveLength(2);
     });
 
@@ -200,8 +224,29 @@ describe("ci-workflow", () => {
         expect(gitlab).toContain("commit your pnpm-lock.yaml");
     });
 
-    it("both providers include a preview job running `lunora deploy --preview`", () => {
-        expect.assertions(4);
+    it("gitlab keeps production secrets out of merge-request pipelines: protected, production-scoped, deploy job only", () => {
+        expect.assertions(9);
+
+        writeCiWorkflow(workdir, "gitlab", "pnpm");
+
+        const yaml = readFileSync(join(workdir, ".gitlab-ci.yml"), "utf8");
+        const deploy = yaml.slice(yaml.indexOf("\ndeploy:"), yaml.indexOf("\ncheck:"));
+        const check = yaml.slice(yaml.indexOf("\ncheck:"));
+
+        expect(yaml).toContain("Masked AND");
+        expect(yaml).toContain("Protected");
+        expect(yaml).toContain('Environment scope "production"');
+        expect(deploy).toContain("environment:\n    name: production");
+        expect(deploy).toContain("$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH");
+        expect(check).not.toContain("environment:");
+
+        for (const name of ["LUNORA_ADMIN_TOKEN", "LUNORA_DEPLOY_URL", "CLOUDFLARE_API_TOKEN"]) {
+            expect(check).not.toContain(name);
+        }
+    });
+
+    it("both providers check every pull/merge request with `lunora deploy --dry-run`, never a version upload", () => {
+        expect.assertions(6);
 
         writeCiWorkflow(workdir, "github", "pnpm");
         writeCiWorkflow(workdir, "gitlab", "pnpm");
@@ -210,9 +255,11 @@ describe("ci-workflow", () => {
         const gitlab = readFileSync(join(workdir, ".gitlab-ci.yml"), "utf8");
 
         expect(github).toContain("pull_request");
-        expect(github).toContain("lunora deploy --preview");
+        expect(github).toContain("lunora deploy --dry-run");
+        expect(github).not.toContain("--preview");
         expect(gitlab).toContain('$CI_PIPELINE_SOURCE == "merge_request_event"');
-        expect(gitlab).toContain("lunora deploy --preview");
+        expect(gitlab).toContain("lunora deploy --dry-run");
+        expect(gitlab).not.toContain("--preview");
     });
 
     it("skips an existing pipeline unless overwrite is set", () => {
@@ -261,8 +308,8 @@ describe("ci-workflow", () => {
 
             expect(yaml).toContain(PM_CI_PROFILES[manager].installCmd);
             expect(yaml).toContain(`commit your ${PM_CI_PROFILES[manager].lockfile}`);
-            expect(yaml).toContain("lunora prepare");
-            expect(yaml).toContain("lunora deploy");
+            expect(yaml).toContain("lunora deploy --migrate-url");
+            expect(yaml).toContain("LUNORA_ADMIN_TOKEN: ${{ secrets.LUNORA_ADMIN_TOKEN }}");
         });
 
         it("produces a gitlab pipeline with a provision/install before_script and an exec script", () => {
@@ -271,8 +318,8 @@ describe("ci-workflow", () => {
             const yaml = buildContent("gitlab", manager);
 
             expect(yaml).toContain(PM_CI_PROFILES[manager].installCmd);
-            expect(yaml).toContain("lunora prepare");
-            expect(yaml).toContain("lunora deploy --preview");
+            expect(yaml).toContain('lunora deploy --migrate-url "$LUNORA_DEPLOY_URL"');
+            expect(yaml).toContain("lunora deploy --dry-run");
         });
 
         it("round-trips through writeCiWorkflow onto disk", () => {

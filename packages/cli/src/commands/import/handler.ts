@@ -4,6 +4,7 @@ import { EXIT_CODE } from "../../util/exit-code";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import type { ImportCommandData } from "../data-transfer/import";
 import { runImportCommand } from "../data-transfer/import";
+import { IMPORT_MODES, parseImportMode } from "../data-transfer/import-plan";
 import type { ImportSourceName } from "../data-transfer/import-source";
 import { IMPORT_SOURCE_NAMES } from "../data-transfer/import-source";
 import type { ImportOptions } from "./index";
@@ -32,15 +33,26 @@ const execute: CommandHandler<ImportOptions> = defineHandler<ImportOptions, Impo
         return { code: EXIT_CODE.USAGE, error };
     }
 
+    const mode = parseImportMode(options.mode, "append");
+
+    if (mode === undefined) {
+        const error = `--mode ${String(options.mode)} is not a known mode. Expected one of: ${IMPORT_MODES.join(", ")}.`;
+
+        logger.error(error);
+
+        return { code: EXIT_CODE.USAGE, error };
+    }
+
     return runImportCommand({
         batchSize: options.batchSize,
         cwd,
+        dryRun: options.dryRun === true,
         file,
         format,
         from: options.from as ImportSourceName | undefined,
         logger,
+        mode,
         prod: options.prod === true,
-        replace: options.replace === true,
         scan: options.scan === true,
         storageDir: options.storageDir,
         table: options.table,

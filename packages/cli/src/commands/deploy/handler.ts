@@ -31,6 +31,8 @@ import {
 } from "@lunora/config/cloudflare";
 import { Spinner } from "@visulima/spinner";
 
+import { resolveAdminBearer } from "../../util/admin-token";
+import { adminFetch, resolveAdminBaseUrl } from "../../util/admin-url";
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -52,12 +54,16 @@ import { runPostCodegenHook } from "../../util/post-codegen-hook";
 import projectRootFor from "../../util/project-root";
 import { buildRailpackImages } from "../../util/railpack";
 import { resolveWorkerUrl } from "../../util/resolve-target";
+import rowCheckTargetRefusal from "../../util/row-check-target";
+import type { ExpiringRowCounter, StoredRowChecker } from "../../util/schema-drift-gate";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
+import { checkStoredRows, countExpiringRows } from "../../util/stored-row-check";
 import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import { validateWrangler } from "../../util/wrangler-validator";
 import { clientBuildRefusal, clientBuildRuns, pluginBuildRuns, runClientBuild } from "../build/framework-build";
+import type { ExportTarget } from "../data-transfer/export-rows";
 import type { PreDeployCommand } from "./checks";
 import { resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
 import { generatedConfigPath, provisionDeployHyperdrive } from "./hyperdrive";
@@ -319,6 +325,17 @@ const runCodegenStep = async (
 };
 
 /**
+ * Why `--preview` is refused. Cloudflare generates no version preview URL for a
+ * Worker that implements a Durable Object, which every Lunora app does, and an
+ * uploaded version runs against production's Durable Objects, D1 and R2 — so a
+ * per-PR "preview" was unreachable, and promoting one shared production data.
+ */
+const PREVIEW_REFUSAL =
+    "--preview is not supported: Cloudflare gives a Worker that implements a Durable Object no version preview URL, and a version shares " +
+    "production's Durable Objects, D1 and R2. Deploy an isolated copy with `--env <name>` (its own Worker name, so its own Durable Object " +
+    "namespace, plus the env's own D1/R2 bindings), or validate without publishing with `--dry-run`.";
+
+/**
  * The neutral deploy request these options describe. The projection's
  * `configPath` is added when the command is planned
  * ({@link planToolchainInvocation}).
@@ -331,7 +348,6 @@ const deployRequestFor = (cwd: string, options: DeployCommandOptions): DeployReq
         entry: resolveComposedWorkerEntry(cwd),
         environment: options.env,
         outDir: options.outDir,
-        preview: options.preview,
         temporary: options.temporary,
     };
 };
@@ -339,7 +355,7 @@ const deployRequestFor = (cwd: string, options: DeployCommandOptions): DeployReq
 /**
  * Plan the target's deploy command without writing anything. The argv builder
  * is where a host refuses an option it has no equivalent for (celld has no
- * `--env`, `--preview`, …), so the pre-deploy pipeline plans once up front — a
+ * `--env`, `--temporary`, …), so the pre-deploy pipeline plans once up front — a
  * refusal then stops the deploy before codegen or provisioning has touched a
  * file — and {@link buildDeployCommand} plans again, against the provisioned
  * config, to run it.
@@ -465,7 +481,7 @@ const reportWranglerProblems = (validation: { problems: ReadonlyArray<string>; r
 const buildDeploySpawn = (cwd: string, options: DeployCommandOptions, driver: DeployDriver): SpawnDescriptor => {
     const jsonFormat = options.format === "json";
     // Read the deployed URL off wrangler's stdout on EVERY publishing run — a
-    // preview and a `--format json` deploy need to report where the thing went
+    // `--format json` deploy needs to report where the thing went
     // just as much as a first pretty deploy does, and a re-deploy is how a
     // CHANGED url gets noticed.
     const publishes = options.dryRun !== true;
@@ -510,10 +526,6 @@ type PreDeployPipelineResult =
 const serviceDeploySkipReason = (options: DeployCommandOptions): string | undefined => {
     if (options.skipServices === true) {
         return "--skip-services";
-    }
-
-    if (options.preview === true) {
-        return "--preview uploads the app version only";
     }
 
     // A temporary account is the app's alone: services deployed with the real
@@ -652,7 +664,13 @@ const preflightDeploy = (
         return { kind: "refused", error: message, validation: NO_VALIDATION };
     }
 
-    // An option the target refuses (celld has no `--env`, `--preview`, …) has to
+    if (options.preview === true) {
+        options.logger.error(PREVIEW_REFUSAL);
+
+        return { kind: "refused", code: EXIT_CODE.USAGE, error: PREVIEW_REFUSAL, validation: NO_VALIDATION };
+    }
+
+    // An option the target refuses (celld has no `--env`, `--temporary`, …) has to
     // stop the deploy HERE, before codegen rewrites `_generated/*` and
     // provisioning writes `wrangler.jsonc` — not at the deploy step, after both.
     try {
@@ -722,6 +740,56 @@ const celldToolchainError = async (options: DeployCommandOptions, target: string
 
     return probe.errors.length > 0 ? probe.errors.join("; ") : undefined;
 };
+
+/**
+ * The drift gate's stored-row read for `lunora deploy`: the deployed worker the
+ * env-guarded `--migrate-url` (or the project link) names, under the admin
+ * bearer. No URL means no target — never the localhost default, which would
+ * judge a production schema change by an empty dev database.
+ */
+/** The deployed worker the gate reads rows from, or why there is none. */
+const rowReadTarget = (cwd: string, options: DeployCommandOptions): { reason: string } | { target: ExportTarget | undefined } => {
+    // An empty `--migrate-url` is unset, and the link recorded for this `--env` stands in for a missing one.
+    const url = resolveWorkerUrl({ cwd, env: options.env, url: options.migrateUrl });
+    const refusal = url === undefined ? undefined : rowCheckTargetRefusal(cwd, options.env, url);
+
+    if (refusal !== undefined) {
+        return { reason: refusal };
+    }
+
+    const baseUrl = url === undefined ? undefined : resolveAdminBaseUrl(url, options.logger, cwd);
+    const token = baseUrl === undefined ? undefined : resolveAdminBearer({ cwd, token: options.migrateToken, url: baseUrl }).token;
+
+    return { target: baseUrl === undefined || !token ? undefined : { baseUrl, fetchImpl: options.fetchImpl ?? adminFetch, token } };
+};
+
+const storedRowChecker =
+    (cwd: string, options: DeployCommandOptions, codegen: CodegenResult): StoredRowChecker =>
+    async (changes) => {
+        const read = rowReadTarget(cwd, options);
+
+        return "reason" in read
+            ? { kind: "inconclusive", reason: read.reason }
+            : checkStoredRows({ changes, tables: codegen.schemaTables, target: read.target });
+    };
+
+/** The count behind a TTL warning: how many stored rows the next sweep deletes. Best-effort, from the same target as the row check. */
+const expiringRowCounter =
+    (cwd: string, options: DeployCommandOptions): ExpiringRowCounter =>
+    async (changes) => {
+        const read = rowReadTarget(cwd, options);
+
+        return "reason" in read ? read.reason : countExpiringRows({ changes, now: Date.now(), target: read.target });
+    };
+
+/** The gate's readers of the deployed worker's rows: only `lunora deploy` has one. */
+const rowReaders = (
+    command: string,
+    cwd: string,
+    options: DeployCommandOptions,
+    codegen: CodegenResult,
+): { checkStoredRows?: StoredRowChecker; countExpiringRows?: ExpiringRowCounter } =>
+    command === "deploy" ? { checkStoredRows: storedRowChecker(cwd, options, codegen), countExpiringRows: expiringRowCounter(cwd, options) } : {};
 
 /**
  * Everything both `lunora prepare` and `lunora deploy` must do before anything
@@ -801,12 +869,12 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     let reblessSchemaBaseline: (() => void) | undefined;
 
     if (codegen !== undefined) {
-        const gate = runSchemaDriftGate({
+        const gate = await runSchemaDriftGate({
             allowDrift: options.allowSchemaDrift === true,
+            ...rowReaders(command, cwd, options, codegen),
             codegen,
             command,
             logger: options.logger,
-            updateBaseline: options.updateSchemaBaseline === true,
         });
 
         if (gate.blocked) {
@@ -1422,10 +1490,9 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     }
 
     // Vercel-style summary block after a successful real deploy. Skipped on
-    // failure, on dry runs, and on previews (nothing went live; wrangler already
-    // printed the preview URL), and never in json mode (the early return above)
-    // where it would corrupt the document on stdout.
-    if (result.code === 0 && options.dryRun !== true && options.preview !== true) {
+    // failure and on dry runs (nothing went live), and never in json mode (the
+    // early return above) where it would corrupt the document on stdout.
+    if (result.code === 0 && options.dryRun !== true) {
         renderDeploySummary({
             cwd: options.cwd ?? process.cwd(),
             env: options.env,
@@ -1436,10 +1503,6 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
             // stale (or absent on a first deploy), and this run knows the truth.
             url: result.deployment?.url,
         });
-    } else if (result.code === 0 && options.preview === true) {
-        const previewUrl = result.deployment?.url;
-
-        options.logger.success(previewUrl === undefined ? "preview version uploaded" : `preview version uploaded — ${previewUrl}`);
     }
 
     return result;
@@ -1480,7 +1543,6 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
         strictAdvisories: options.strictAdvisories,
         target: options.target,
         temporary: options.temporary === true,
-        updateSchemaBaseline: options.updateSchemaBaseline === true,
     });
 
     return {

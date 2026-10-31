@@ -9,6 +9,9 @@ import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { rename, unlink } from "node:fs/promises";
 
+import { LunoraError } from "@lunora/errors";
+
+import { exportEndRows } from "../../../../../shared/export-end";
 import { resolveAdminBearer } from "../../util/admin-token";
 import { adminFetch, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { Refusal } from "../../util/exit-code";
@@ -105,6 +108,15 @@ const writeWithBackpressure = async (sink: NodeJS.WritableStream, line: string):
     }
 };
 
+/** A line's JSON, or `undefined` when it is not valid JSON. */
+const parseLine = (line: string): unknown => {
+    try {
+        return JSON.parse(line);
+    } catch {
+        return undefined;
+    }
+};
+
 /**
  * Drain the worker's NDJSON response into the sink, counting bytes and rows.
  * Pipes straight through so a 10M-row export never materialises in memory.
@@ -115,6 +127,7 @@ const streamNdjsonToSink = async (body: ReadableStream<Uint8Array>, sink: NodeJS
     let bytes = 0;
     let rows = 0;
     let leftover = "";
+    let lastLine = "";
     let done = false;
 
     try {
@@ -135,7 +148,8 @@ const streamNdjsonToSink = async (body: ReadableStream<Uint8Array>, sink: NodeJS
 
             while (newlineIndex !== -1) {
                 rows += 1;
-                const line = `${leftover.slice(0, newlineIndex)}\n`;
+                lastLine = leftover.slice(0, newlineIndex);
+                const line = `${lastLine}\n`;
 
                 // eslint-disable-next-line no-await-in-loop -- backpressure is intentionally sequential
                 await writeWithBackpressure(sink, line);
@@ -146,10 +160,20 @@ const streamNdjsonToSink = async (body: ReadableStream<Uint8Array>, sink: NodeJS
 
         if (leftover.length > 0) {
             rows += 1;
+            lastLine = leftover;
             await writeWithBackpressure(sink, `${leftover}\n`);
         }
 
-        return { bytes, rows };
+        // A response cut on a row boundary is still valid NDJSON, so the dump is only complete when its last line is the end
+        // marker and the marker's count is the rows before it. The marker stays in the file: `lunora import` checks it again.
+        if (rows === 0 || exportEndRows(parseLine(lastLine)) !== rows - 1) {
+            throw new LunoraError(
+                "INTERNAL",
+                "export failed: the response has no end marker with a matching row count, so it may have been cut short; nothing was kept",
+            );
+        }
+
+        return { bytes, rows: rows - 1 };
     } finally {
         // Release the body lock even on a thrown write/decode error so the
         // response stream isn't left locked.

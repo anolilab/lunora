@@ -136,7 +136,7 @@ describe("createWorker (workerd)", () => {
     });
 
     it("scheduled() backup streams an NDJSON snapshot + manifest into the real R2 bucket", async () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         // 2026-06-03T12:00:00.000Z — drives the deterministic backup id/key.
         const scheduledTime = Date.UTC(2026, 5, 3, 12, 0, 0);
@@ -160,8 +160,10 @@ describe("createWorker (workerd)", () => {
         const ndjsonText = await ndjsonObject!.text();
         const lines = ndjsonText.trim().split("\n");
 
-        expect(lines).toHaveLength(2);
+        // Two rows, then the end marker that lets a reader tell a complete export from a truncated one.
+        expect(lines).toHaveLength(3);
         expect(JSON.parse(lines[0]!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
+        expect(JSON.parse(lines[2]!)).toEqual({ end: true, rows: 2 });
 
         const manifest: { cron: string; rows: number } = await manifestObject!.json();
 

@@ -2887,7 +2887,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         global: DatabaseWriterLike,
         expectedTable: string,
         ids: ReadonlyArray<string>,
-        deleteOptions?: { hard?: boolean },
+        deleteOptions?: { hard?: boolean; skipOnDelete?: boolean },
         batch?: { options: { limit?: number } | undefined },
     ): Promise<{ deleted: number }> => {
         for (let charged = 0; charged < ids.length; charged += 1) {
@@ -3308,23 +3308,25 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // The callbacks pass through `routeForHolder` so a holder living
             // on a global (`.global()`) table is reached through the supplied
             // D1-backed `globalDb` writer, not this DO's local SQLite.
-            await applyOnDelete({
-                deletedId: id,
-                deletedReference: (references) => existing[references],
-                findHolders: async (holderTable, field, value, page) => {
-                    const holders = await routeForHolder(holderTable).findMany(holderTable, { ...page, includeDeleted: hard, where: { [field]: value } });
+            if (deleteOptions?.skipOnDelete !== true) {
+                await applyOnDelete({
+                    deletedId: id,
+                    deletedReference: (references) => existing[references],
+                    findHolders: async (holderTable, field, value, page) => {
+                        const holders = await routeForHolder(holderTable).findMany(holderTable, { ...page, includeDeleted: hard, where: { [field]: value } });
 
-                    return holders.page;
-                },
-                onCascade: (holderTable, holderId) => routeForHolder(holderTable).delete(holderTable, holderId, deleteOptions),
-                onRestrict: (message) => {
-                    throw new ConflictError(message, "restrict");
-                },
-                // eslint-disable-next-line unicorn/no-null -- `set null` onDelete: the FK column is set to SQL NULL, the documented semantics of the action
-                onSetNull: (holderTable, holderId, field) => routeForHolder(holderTable).patch(holderTable, holderId, { [field]: null }),
-                schema,
-                tableName,
-            });
+                        return holders.page;
+                    },
+                    onCascade: (holderTable, holderId) => routeForHolder(holderTable).delete(holderTable, holderId, deleteOptions),
+                    onRestrict: (message) => {
+                        throw new ConflictError(message, "restrict");
+                    },
+                    // eslint-disable-next-line unicorn/no-null -- `set null` onDelete: the FK column is set to SQL NULL, the documented semantics of the action
+                    onSetNull: (holderTable, holderId, field) => routeForHolder(holderTable).patch(holderTable, holderId, { [field]: null }),
+                    schema,
+                    tableName,
+                });
+            }
 
             ensureBackfilledForTable(tableName);
             ensureRankBackfilledForTable(tableName);

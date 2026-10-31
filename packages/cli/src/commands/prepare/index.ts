@@ -43,11 +43,6 @@ const prepareCommand: Command = {
             type: Boolean,
         },
         TARGET_OPTION,
-        {
-            description: "Re-bless the committed schema baseline (lunora/.lunora-schema.json) with the current shape",
-            name: "update-schema-baseline",
-            type: Boolean,
-        },
     ],
 };
 
@@ -60,5 +55,4 @@ export type PrepareOptions = CreateOptions<{
     "smoke-load": boolean | undefined;
     "strict-advisories": boolean | undefined;
     target: string | undefined;
-    "update-schema-baseline": boolean | undefined;
 }>;

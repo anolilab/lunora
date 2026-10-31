@@ -81,6 +81,7 @@
         "@lunora/mcp": "1.0.0-alpha.281",
         "@lunora/runtime": "1.0.0-alpha.265",
         "@lunora/seed": "1.0.0-alpha.274",
+        "@lunora/wire": "1.0.0-alpha.6",
         "@visulima/cerebro": "catalog:cli",
         "@visulima/error": "catalog:prod",
         "@visulima/fs": "catalog:cli",
@@ -103,7 +104,6 @@
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/testing": "1.0.0-alpha.323",
-        "@lunora/wire": "1.0.0-alpha.6",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/semver": "catalog:types",

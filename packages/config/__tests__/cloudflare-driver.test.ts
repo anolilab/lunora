@@ -31,14 +31,6 @@ describe("cLOUDFLARE_DRIVER toolchain", () => {
         ]);
     });
 
-    // A preview must never take production traffic, so it maps to a different
-    // wrangler subcommand rather than a flag on `deploy`.
-    it("maps a preview deploy onto versions upload", () => {
-        expect.assertions(1);
-
-        expect(toolchain?.deploy({ preview: true }).args).toStrictEqual(["versions", "upload"]);
-    });
-
     it("builds tail argv with the worker positional before flags", () => {
         expect.assertions(1);
 

@@ -3707,32 +3707,34 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // D1 writer — same-backend (D1 → D1) cascades work, and shard
             // holders simply won't have rows here so cascades are no-ops.
             // For the explicit shardBy case we'd want a hard error; deferred.
-            await applyOnDelete({
-                deletedId: id,
-                deletedReference: (references) => existing?.[references],
-                findHolders: async (holderTable, field, value, page) => {
-                    if (schema.tables[holderTable]?.shardMode?.kind === "shardBy") {
-                        throw new LunoraError(
-                            "INTERNAL",
-                            `cross-backend cascade from global '${tableName}' into shardBy '${holderTable}' is not supported — would require Query Coordinator fan-out across shards`,
-                        );
-                    }
+            if (deleteOptions?.skipOnDelete !== true) {
+                await applyOnDelete({
+                    deletedId: id,
+                    deletedReference: (references) => existing?.[references],
+                    findHolders: async (holderTable, field, value, page) => {
+                        if (schema.tables[holderTable]?.shardMode?.kind === "shardBy") {
+                            throw new LunoraError(
+                                "INTERNAL",
+                                `cross-backend cascade from global '${tableName}' into shardBy '${holderTable}' is not supported — would require Query Coordinator fan-out across shards`,
+                            );
+                        }
 
-                    // A hard delete must see soft-deleted holders to remove them; a
-                    // soft delete skips already-deleted holders.
-                    const holders = await writer.findMany(holderTable, { ...page, includeDeleted: hard, where: { [field]: value } });
+                        // A hard delete must see soft-deleted holders to remove them; a
+                        // soft delete skips already-deleted holders.
+                        const holders = await writer.findMany(holderTable, { ...page, includeDeleted: hard, where: { [field]: value } });
 
-                    return holders.page;
-                },
-                onCascade: (holderTable, holderId) => writer.delete(holderTable, holderId, deleteOptions),
-                onRestrict: (message) => {
-                    throw new ConflictError(message, "restrict");
-                },
-                // eslint-disable-next-line unicorn/no-null -- onSetNull writes a SQL NULL into the holder column; that is the literal value being persisted.
-                onSetNull: (holderTable, holderId, field) => writer.patch(holderTable, holderId, { [field]: null }),
-                schema,
-                tableName,
-            });
+                        return holders.page;
+                    },
+                    onCascade: (holderTable, holderId) => writer.delete(holderTable, holderId, deleteOptions),
+                    onRestrict: (message) => {
+                        throw new ConflictError(message, "restrict");
+                    },
+                    // eslint-disable-next-line unicorn/no-null -- onSetNull writes a SQL NULL into the holder column; that is the literal value being persisted.
+                    onSetNull: (holderTable, holderId, field) => writer.patch(holderTable, holderId, { [field]: null }),
+                    schema,
+                    tableName,
+                });
+            }
 
             await ensureBackfilledForTable(tableName);
             await ensureRankBackfilledForTable(tableName);
@@ -3798,11 +3800,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 cdcStatements(tableName, id, "delete"),
             );
 
-            await syncSearch(tableName, id, undefined);
+            // The row is gone from here on: a failure below is reported as such (see `afterBaseRowCommitted`).
+            await afterBaseRowCommitted(tableName, id, async () => {
+                await syncSearch(tableName, id, undefined);
 
-            if (hasMatchingTrigger(tableName, "after", "delete")) {
-                await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
-            }
+                if (hasMatchingTrigger(tableName, "after", "delete")) {
+                    await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+                }
+            });
         },
 
         async findFirst(tableName, args = {}) {

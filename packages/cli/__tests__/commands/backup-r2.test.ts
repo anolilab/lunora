@@ -15,6 +15,7 @@ import { join, posix, win32 } from "node:path";
 import { decodeWire, encodeWire } from "@lunora/wire";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { exportEndLine } from "../../../../shared/export-end";
 import { runBackupCommand } from "../../src/commands/backup/handler";
 import { temporaryFileName } from "../../src/commands/backup/r2-destination";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
@@ -45,7 +46,7 @@ const DOCUMENTS = [
 ];
 
 /** Exactly what the admin export endpoint streams: wire-encoded envelopes, one per line. */
-const NDJSON = `${DOCUMENTS.map((document_) => JSON.stringify(encodeWire({ doc: document_, table: "users" }))).join("\n")}\n`;
+const NDJSON = `${DOCUMENTS.map((document_) => JSON.stringify(encodeWire({ doc: document_, table: "users" }))).join("\n")}\n${exportEndLine(DOCUMENTS.length)}`;
 
 const sha256 = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex");
 
@@ -295,6 +296,7 @@ describe("lunora backup --bucket", () => {
                 cwd: workDir,
                 fetchImpl: worker.fetchImpl,
                 logger,
+                mode: "append",
                 subcommand: "restore",
                 target: "2026-06-03T12:00:00.000Z",
                 token: "t",
@@ -333,6 +335,7 @@ describe("lunora backup --bucket", () => {
             cwd: workDir,
             fetchImpl: worker.fetchImpl,
             logger,
+            mode: "append",
             subcommand: "restore",
             target: "2026-06-03T12:00:00.000Z",
             token: "t",
@@ -353,6 +356,7 @@ describe("lunora backup --bucket", () => {
             cwd: workDir,
             fetchImpl: worker.fetchImpl,
             logger,
+            mode: "append",
             subcommand: "restore",
             target: "2026-06-03T12:00:00.000Z",
             token: "t",
@@ -462,6 +466,7 @@ describe("lunora backup --bucket", () => {
             cwd: workDir,
             fetchImpl: worker.fetchImpl,
             logger,
+            mode: "append",
             subcommand: "restore",
             target: "2026-06-02T03:00:00.000Z",
             token: "t",

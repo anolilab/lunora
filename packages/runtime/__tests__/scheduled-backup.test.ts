@@ -136,7 +136,7 @@ const BACKUP_CRON = "0 3 * * *";
 
 describe("createWorker — scheduled backup", () => {
     it("writes an NDJSON snapshot + manifest sidecar when the backup cron fires", async () => {
-        expect.assertions(6);
+        expect.assertions(7);
 
         const store = memoryBackupStore();
         const worker = createWorker({
@@ -161,8 +161,9 @@ describe("createWorker — scheduled backup", () => {
         const ndjson = store.objects.get(ndjsonKey) ?? "";
         const lines = ndjson.trim().split("\n");
 
-        expect(lines).toHaveLength(2);
+        expect(lines).toHaveLength(3);
         expect(JSON.parse(lines[0] ?? "")).toStrictEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
+        expect(JSON.parse(lines[2] ?? "")).toStrictEqual({ end: true, rows: 2 });
 
         const manifest = JSON.parse(store.objects.get(manifestKey) ?? "") as BackupManifest;
 
@@ -195,6 +196,30 @@ describe("createWorker — scheduled backup", () => {
         // Handed to R2 as well, which verifies it on write and reports it later.
         expect(store.checksums.get(ndjsonKey)).toBe(expected);
         expect(store.checksums.has(`${ndjsonKey}.manifest.json`)).toBe(false);
+    });
+
+    it("counts the end marker against the size cap, so a snapshot that only fits without it is not written", async () => {
+        expect.assertions(2);
+
+        const store = memoryBackupStore();
+        const cap = 24 * 1_048_576;
+        const empty = JSON.stringify({ doc: { _id: "p1", blob: "" }, table: "plans" });
+        // One row whose line ends 5 bytes under the cap: the marker (more than 5 bytes) is what pushes it over.
+        const blob = "x".repeat(cap - 5 - empty.length - 1);
+        const exportGlobals: WorkerOptions["exportGlobals"] = async function* () {
+            yield { doc: { _id: "p1", blob }, table: "plans" };
+        };
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupStore: store,
+            exportGlobals,
+            queryCoordinator: coordinatorWithExport([]),
+            shardDO: noopNamespace,
+        });
+
+        await expect(fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME })).rejects.toThrow(/past the \d+-byte limit/u);
+        expect(store.objects.size).toBe(0);
     });
 
     it("refuses a snapshot past the size limit, mid-export, without writing anything", async () => {

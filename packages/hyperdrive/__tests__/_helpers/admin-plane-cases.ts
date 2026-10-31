@@ -89,7 +89,7 @@ const roundTripCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
 
     const result = await importHyperdriveGlobalRows({ cdc: false, engine: target.engine, exec: target.exec, rows: exported, schema });
 
-    expect(result).toStrictEqual({ conflicts: 0, errors: [], inserted: { assets: 2 }, replaced: 0 });
+    expect(result).toStrictEqual({ conflicts: 0, deleted: 0, errors: [], inserted: { assets: 2 }, replaced: 0 });
     expect([await writer.get("assets", "a1"), await writer.get("assets", "a2")]).toStrictEqual(before);
     expect(decodeWire(exported[0]?.doc)).toMatchObject({ big: 12_345_678_901_234_567_890n });
 };
@@ -129,7 +129,7 @@ const conflictCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
         schema,
     });
 
-    expect(result).toStrictEqual({ conflicts: 1, errors: [], inserted: { extras: 1 }, replaced: 0 });
+    expect(result).toStrictEqual({ conflicts: 1, deleted: 0, errors: [], inserted: { extras: 1 }, replaced: 0 });
     await expect(writer.get("extras", "x1")).resolves.toMatchObject({ label: "target" });
 };
 
@@ -148,7 +148,7 @@ const sameIdOtherTableCase = (target: AdminPlaneTarget) => async (): Promise<voi
         schema,
     });
 
-    expect(result).toStrictEqual({ conflicts: 0, errors: [], inserted: { extras: 1 }, replaced: 0 });
+    expect(result).toStrictEqual({ conflicts: 0, deleted: 0, errors: [], inserted: { extras: 1 }, replaced: 0 });
     await expect(writer.get("extras", "x1")).resolves.toMatchObject({ label: "elsewhere" });
     await expect(writer.get("assets", "x1")).resolves.toMatchObject({ _id: "x1" });
 };
@@ -167,7 +167,7 @@ const replaceCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
         schema,
     });
 
-    expect(result).toStrictEqual({ conflicts: 0, errors: [], inserted: {}, replaced: 1 });
+    expect(result).toStrictEqual({ conflicts: 0, deleted: 0, errors: [], inserted: {}, replaced: 1 });
     await expect(writer.get("extras", "x1")).resolves.toStrictEqual({ _creationTime: CLOCK - 5, _id: "x1", label: "changed on the source" });
 
     // Recorded in the changelog like any other write, so a downstream consumer sees the overwrite.
@@ -177,6 +177,28 @@ const replaceCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
         ["insert", "x1"],
         ["update", "x1"],
     ]);
+};
+
+const deleteCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
+    const writer = writerFor(target);
+
+    await writer.insert("extras", { _id: "x1", label: "stale" }, { allowExplicitId: true });
+    await writer.insert("extras", { _id: "x2", label: "kept" }, { allowExplicitId: true });
+
+    const prune = async (): Promise<Awaited<ReturnType<typeof importHyperdriveGlobalRows>>> =>
+        importHyperdriveGlobalRows({
+            cdc: false,
+            engine: target.engine,
+            exec: target.exec,
+            rows: [{ doc: { _id: "x1" }, op: "delete", table: "extras" }],
+            schema,
+        });
+
+    await expect(prune()).resolves.toStrictEqual({ conflicts: 0, deleted: 1, errors: [], inserted: {}, replaced: 0 });
+    await expect(writer.get("extras", "x1")).resolves.toBeNull();
+    await expect(writer.get("extras", "x2")).resolves.toMatchObject({ label: "kept" });
+    // Already gone, so a re-run removes nothing and reports nothing wrong.
+    await expect(prune()).resolves.toStrictEqual({ conflicts: 0, deleted: 0, errors: [], inserted: {}, replaced: 0 });
 };
 
 const neverWrittenCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
@@ -383,6 +405,7 @@ const adminPlaneCases = (target: AdminPlaneTarget): [string, () => Promise<void>
     ["reports an existing _id as a conflict and leaves the stored row unchanged", conflictCase(target)],
     ["imports an _id another global table already holds into the row's own table, even under replace", sameIdOtherTableCase(target)],
     ['overwrites an existing _id under onConflict: "replace", keeping the snapshot _creationTime and recording CDC', replaceCase(target)],
+    ['removes the row an op: "delete" row names, and removes nothing on a re-run', deleteCase(target)],
     ["exports a never-written table as empty instead of failing", neverWrittenCase(target)],
     ["exports only the allowlisted tables", allowlistCase(target)],
     ["keyset-pages an export past one batch", pagingCase(target)],

@@ -1441,6 +1441,21 @@ interface MiddlewareNext<ContextIn> {
 }
 ```
 
+### `MigrationCovers` (interface)
+
+```ts
+interface MigrationCovers {
+    readonly jurisdiction?: "eu" | "fedramp" | "none" | "us";
+    readonly memory?: true;
+    readonly shardMode?: "global" | "global:d1" | "global:hyperdrive" | "root" | `shardBy:${string}`;
+    readonly table?: string;
+    readonly ttl?: {
+        readonly after?: number;
+        readonly field: string;
+    };
+}
+```
+
 ### `MigrationCtx` (interface)
 
 ```ts
@@ -1454,6 +1469,7 @@ interface MigrationCtx {
 ```ts
 interface MigrationDefinition {
     readonly batchSize?: number;
+    readonly covers?: MigrationCovers;
     readonly down?: MigrationTransform;
     readonly id: string;
     readonly table: string;

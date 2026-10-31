@@ -551,7 +551,9 @@ interface ImportFanOutRequest {
      * `rows` arg of `__lunora_admin__:importShard`. The shard's
      * starting-line-number for error attribution is carried in `startLine`.
      */
-    batches: ReadonlyArray<{ rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; shardKey: string; startLine?: number }>;
+    batches: ReadonlyArray<{ rows: ReadonlyArray<{ doc: Record<string, unknown>; op?: "delete"; table: string }>; shardKey: string; startLine?: number }>;
+    /** Let rows tagged `op: "delete"` remove stored rows. Off unless set: the shard refuses those rows. */
+    deletes?: boolean;
     /** Check the rows and return their shape errors without writing. Off unless set: a write is the default. */
     dryRun?: boolean;
     headers?: Record<string, string>;
@@ -563,6 +565,7 @@ interface ShardImportOutcome {
     error?: { message: string; timedOut: boolean };
     result?: {
         conflicts: number;
+        deleted: number;
         errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
         inserted: Record<string, number>;
         replaced: number;
@@ -573,6 +576,8 @@ interface ShardImportOutcome {
 interface ImportFanOutResult {
     /** Total conflicts (skipped `_id`s) across shards. */
     conflicts: number;
+    /** Total stored rows removed by `op: "delete"` rows across shards. */
+    deleted: number;
     /** Errors merged across all per-shard outcomes. */
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     failed: number;
@@ -1142,6 +1147,7 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
     const inserted: Record<string, number> = {};
     const errors: { code: string; line: number; message: string; table: string }[] = [];
     let conflicts = 0;
+    let deleted = 0;
     let replaced = 0;
     let ok = 0;
     let failed = 0;
@@ -1159,6 +1165,7 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
             | undefined
             | {
                   conflicts?: number;
+                  deleted?: number;
                   errors?: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
                   inserted?: Record<string, number>;
                   replaced?: number;
@@ -1176,11 +1183,13 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
         }
 
         conflicts += payload?.conflicts ?? 0;
+        deleted += payload?.deleted ?? 0;
         replaced += payload?.replaced ?? 0;
 
         shards.push({
             result: {
                 conflicts: payload?.conflicts ?? 0,
+                deleted: payload?.deleted ?? 0,
                 errors: payload?.errors ?? [],
                 inserted: shardInserted,
                 replaced: payload?.replaced ?? 0,
@@ -1189,7 +1198,7 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
         });
     }
 
-    return { conflicts, errors, failed, inserted, ok, replaced, shards };
+    return { conflicts, deleted, errors, failed, inserted, ok, replaced, shards };
 };
 
 interface ShardRpcOk {
@@ -1962,6 +1971,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                 }
 
                 return importOnShard(batch.shardKey, {
+                    deletes: request.deletes === true,
                     dryRun: request.dryRun === true,
                     onConflict: request.onConflict ?? "skip",
                     rows: [...batch.rows],

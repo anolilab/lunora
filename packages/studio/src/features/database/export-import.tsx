@@ -1,8 +1,9 @@
 import { LunoraError } from "@lunora/errors";
 import { decodeWire, encodeWire } from "@lunora/wire";
 import type { ChangeEvent, ReactElement } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
+import { createExportEndTracker, exportEndLine } from "../../../../../shared/export-end";
 import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
@@ -42,27 +43,19 @@ type Translate = ReturnType<typeof useT>;
  * `v.bytes()` column as an `ArrayBuffer` (which flattens to `{}` — the export
  * "succeeds" and the bytes are gone). The wire codec is identity for pure JSON,
  * so an ordinary table's NDJSON is byte-identical to before, and
- * {@link parseNdjsonLine} decodes symmetrically so the round trip restores types.
+ * {@link rowFromJson} decodes symmetrically so the round trip restores types.
  */
 const toNdjson = (rows: ExportRow[]): string => rows.map((row) => JSON.stringify(encodeWire(row))).join("\n");
 
 /**
- * Parse one NDJSON line into an export row, or `undefined` for a blank line.
- * Throws on a line that is not a valid `{table, doc}` object so the operator
- * gets a precise failure instead of a partial import.
+ * An export row from one parsed NDJSON line. Throws on a line that is not a valid `{table, doc}` object so the operator gets a precise
+ * failure instead of a partial import.
  *
- * The line is `decodeWire`d — the inverse of {@link toNdjson} — so a bigint /
- * bytes cell is a native value again before `client.query` re-encodes it for the
- * wire. Decoding is identity for pure JSON, so hand-written NDJSON still imports.
+ * The line is `decodeWire`d, the inverse of {@link toNdjson}, so a bigint / bytes cell is a native value again before `client.query`
+ * re-encodes it for the wire. Decoding is identity for pure JSON.
  */
-const parseNdjsonLine = (rawLine: string, lineNumber: number): ExportRow | undefined => {
-    const line = rawLine.trim();
-
-    if (line === "") {
-        return undefined;
-    }
-
-    const parsed = decodeWire(JSON.parse(line));
+const rowFromJson = (json: unknown, lineNumber: number): ExportRow => {
+    const parsed = decodeWire(json);
 
     if (typeof parsed !== "object" || parsed === null) {
         throw new LunoraError("INTERNAL", `line ${lineNumber.toString()}: expected a { table, doc } object`);
@@ -143,12 +136,30 @@ interface ImportEntry {
 type ImportSource = () => AsyncIterable<ImportEntry> | Iterable<ImportEntry>;
 
 const ndjsonEntries = async function* (file: Blob): AsyncGenerator<ImportEntry> {
-    for await (const { line, lineNumber } of fileLines(file)) {
-        const row = parseNdjsonLine(line, lineNumber);
+    // An export ends with a marker carrying its row count. A file cut on a row boundary still parses as a smaller export, so the file
+    // is only complete when the marker is there and agrees; the check pass reads the whole file first, so nothing is written otherwise.
+    const end = createExportEndTracker();
 
-        if (row !== undefined) {
-            yield { line: lineNumber, row };
+    for await (const { line, lineNumber } of fileLines(file)) {
+        const trimmed = line.trim();
+
+        if (trimmed === "") {
+            continue;
         }
+
+        const json: unknown = JSON.parse(trimmed);
+
+        if (!end.read(json)) {
+            continue;
+        }
+
+        yield { line: lineNumber, row: rowFromJson(json, lineNumber) };
+    }
+
+    const problem = end.problem();
+
+    if (problem !== undefined) {
+        throw new LunoraError("INTERNAL", problem);
     }
 };
 
@@ -447,6 +458,260 @@ interface ImportFailure {
 /** The rows a shard reported as written, summed over its tables. */
 const insertedRowCount = (inserted: Record<string, number>): number => Object.values(inserted).reduce((sum, count) => sum + count, 0);
 
+/** How an import treats the rows the shard already holds; the same four modes as `lunora import --mode`. */
+type ImportMode = "append" | "replace" | "require-empty" | "upsert";
+
+/** Delete rows as import entries, numbered from 1: a delete names the `_id` to remove, and the shard is already addressed. */
+const deleteEntries = (deletions: ReadonlyArray<ExportRow>): ImportEntry[] =>
+    deletions.map((row, index) => {
+        return { line: index + 1, row };
+    });
+
+/** The file's rows per table: how many, which `_id`s, how many repeat one, and how many carry none. */
+const indexSource = async (
+    entries: AsyncIterable<ImportEntry> | Iterable<ImportEntry>,
+): Promise<Map<string, { duplicates: number; ids: Set<string>; rows: number; unkeyed: number }>> => {
+    const source = new Map<string, { duplicates: number; ids: Set<string>; rows: number; unkeyed: number }>();
+
+    for await (const { row } of entries) {
+        const entry = source.get(row.table) ?? { duplicates: 0, ids: new Set<string>(), rows: 0, unkeyed: 0 };
+        const id = row.doc["_id"];
+
+        source.set(row.table, entry);
+        entry.rows += 1;
+
+        if (typeof id === "string") {
+            if (entry.ids.has(id)) {
+                entry.duplicates += 1;
+            }
+
+            entry.ids.add(id);
+        } else {
+            entry.unkeyed += 1;
+        }
+    }
+
+    return source;
+};
+
+/**
+ * What an import would do to the shard: per table the rows it adds, the stored rows its `_id`s match, and, under `replace`, the stored
+ * rows it deletes. Reads the shard's rows for the file's tables, one table per call.
+ */
+const planShardImport = async (
+    client: ImportClient,
+    shardKey: string,
+    entries: AsyncIterable<ImportEntry> | Iterable<ImportEntry>,
+    mode: ImportMode,
+): Promise<{ deletions: ExportRow[]; lines: string[]; tables: { stored: number; table: string }[] }> => {
+    const source = await indexSource(entries);
+
+    // A row with no `_id` is written under a fresh one, so a replace could never match it to what a previous run stored: the prune would
+    // delete the earlier copy and the write recreate it under a different id, on every run.
+    const unkeyed = mode === "replace" ? [...source].find(([, entry]) => entry.unkeyed > 0) : undefined;
+
+    if (unkeyed !== undefined) {
+        throw new LunoraError("INTERNAL", `Replace needs every row to carry an _id: ${unkeyed[1].unkeyed.toString()} row(s) of ${unkeyed[0]} have none`);
+    }
+
+    const deletions: ExportRow[] = [];
+    const lines: string[] = [];
+    const tables: { stored: number; table: string }[] = [];
+
+    for (const [table, entry] of [...source].toSorted(([a], [b]) => a.localeCompare(b))) {
+        // eslint-disable-next-line no-await-in-loop -- one table per call, so a large shard is never one response
+        const { rows } = (await client.query(EXPORT_SHARD, { tables: [table] }, callOptions(shardKey))) as { rows: ExportRow[] };
+        let add = entry.rows - entry.duplicates;
+        let existing = entry.duplicates;
+        let toDelete = 0;
+
+        for (const stored of rows) {
+            const id = stored.doc["_id"];
+
+            if (typeof id === "string" && entry.ids.has(id)) {
+                existing += 1;
+                add -= 1;
+            } else if (mode === "replace" && typeof id === "string") {
+                toDelete += 1;
+                deletions.push({ doc: { _id: id }, op: "delete", table } as unknown as ExportRow);
+            }
+        }
+
+        tables.push({ stored: rows.length, table });
+        lines.push(
+            `${table}: ${entry.rows.toString()} in file, ${rows.length.toString()} stored — ${add.toString()} to add, ${existing.toString()} existing, ${toDelete.toString()} to delete`,
+        );
+    }
+
+    return { deletions, lines, tables };
+};
+
+/**
+ * The part of an import that depends on what the shard already holds: the plan, `require-empty`'s refusal, and the check of the deletes a
+ * `replace` would make. A failure comes back with the totals to show; otherwise the deletions to send after the file's rows.
+ */
+const decideFromPlan = async (options: {
+    client: ImportClient;
+    mode: ImportMode;
+    onConflict: "replace" | "skip";
+    planOnly: boolean;
+    shardKey: string;
+    source: ImportSource;
+    t: Translate;
+}): Promise<{ deletions: ExportRow[]; plan?: string[] } | { failure: ImportFailure; plan?: string[]; total?: ImportShardResult }> => {
+    const { client, mode, onConflict, planOnly, shardKey, source, t } = options;
+
+    // `replace` and `require-empty` need the plan to decide; `upsert` and `append` only show it on request, since it costs a read of
+    // every stored row of the file's tables.
+    if (mode !== "replace" && mode !== "require-empty" && !planOnly) {
+        return { deletions: [] };
+    }
+
+    let planned: Awaited<ReturnType<typeof planShardImport>>;
+
+    try {
+        planned = await planShardImport(client, shardKey, source(), mode);
+    } catch (error_) {
+        return { failure: { message: errorMessage(error_), rows: 0 } };
+    }
+
+    const occupied = planned.tables.find((entry) => entry.stored > 0);
+
+    if (mode === "require-empty" && occupied !== undefined) {
+        return {
+            failure: {
+                message: t("Nothing was sent: --mode require-empty needs the file's tables to hold no rows, and {table} already holds {count}.", {
+                    count: occupied.stored,
+                    table: occupied.table,
+                }),
+                rows: 0,
+            },
+            plan: planned.lines,
+        };
+    }
+
+    // The deletes are checked before the first row is written, so a shard that would refuse them leaves the data as it was.
+    const refused: ImportShardResult = { conflicts: 0, errors: [], inserted: {} };
+
+    if (!planOnly && planned.deletions.length > 0) {
+        try {
+            await forEachRowChunk(deleteEntries(planned.deletions), async (rows, startLine) => {
+                const result = (await client.query(
+                    IMPORT_SHARD,
+                    { deletes: true, dryRun: true, onConflict, rows, startLine },
+                    callOptions(shardKey),
+                )) as ImportShardResult;
+
+                refused.errors.push(...result.errors);
+            });
+        } catch (error_) {
+            return { failure: { message: errorMessage(error_), rows: 0 } };
+        }
+
+        if (refused.errors.length > 0) {
+            return {
+                failure: { message: t("Nothing was written, because some deletes would be refused. Fix the rows listed below and import again."), rows: 0 },
+                total: refused,
+            };
+        }
+    }
+
+    return { deletions: planned.deletions, plan: planned.lines };
+};
+
+/**
+ * Remove the stored rows a `replace` found the file lacks. Runs after every file row is written and clean, so a failed run never leaves
+ * fewer rows than before, and a re-run converges.
+ */
+const pruneStored = async (options: {
+    client: ImportClient;
+    deletions: ReadonlyArray<ExportRow>;
+    onConflict: "replace" | "skip";
+    onProgress: (text: string) => void;
+    shardKey: string;
+    t: Translate;
+    total: ImportShardResult;
+}): Promise<void> => {
+    const { client, deletions, onConflict, onProgress, shardKey, t, total } = options;
+
+    await forEachRowChunk(deleteEntries(deletions), async (rows, startLine) => {
+        onProgress(t("Deleting {count} stored rows the file lacks…", { count: deletions.length }));
+
+        const result = (await client.query(
+            IMPORT_SHARD,
+            { deletes: true, dryRun: false, onConflict, rows, startLine },
+            callOptions(shardKey),
+        )) as ImportShardResult;
+
+        total.deleted = (total.deleted ?? 0) + (result.deleted ?? 0);
+        total.errors.push(...result.errors);
+    });
+
+    if (total.errors.length > 0) {
+        throw new Error(total.errors[0]?.message ?? "a delete was refused");
+    }
+};
+
+/** The confirmation on the Import button: what this mode will do to the shard's stored rows. */
+const importConfirmLabel = (mode: ImportMode, t: Translate): string => {
+    if (mode === "replace") {
+        return t("Import (overwrites rows and may delete rows)?");
+    }
+
+    return mode === "upsert" ? t("Import (overwrites rows)?") : t("Import (writes rows)?");
+};
+
+/** Why the shard cannot honour the import, read from its answer to the empty probe, or `undefined` when it can. */
+const probeRefusal = (probe: DryRunAnswer, mode: ImportMode, onConflict: "replace" | "skip", t: Translate): string | undefined => {
+    if (probe.dryRun !== true) {
+        return t("This shard predates import checks, so it would write the file while checking it. Nothing was sent. Update the app and import again.");
+    }
+
+    // A shard built before replace imports ignores the mode and would report every existing row as a conflict; one that has it
+    // always answers with a `replaced` count, even for no rows.
+    if (onConflict === "replace" && typeof probe.replaced !== "number") {
+        return t("This shard cannot overwrite existing rows. Nothing was sent. Update the app and import again.");
+    }
+
+    // A shard built before delete rows ignores the flag and the rows; one that has them always answers with a `deleted` count.
+    return mode === "replace" && typeof probe.deleted !== "number"
+        ? t("This shard cannot delete rows. Nothing was sent. Update the app and import again.")
+        : undefined;
+};
+
+/** What a finished import shows: the counts (when any row was written or refused) and the message to put beside them. */
+const importOutcome = (failure: ImportFailure | undefined, total: ImportShardResult, t: Translate): { error?: string; result?: ImportShardResult } => {
+    if (failure === undefined) {
+        return { result: total };
+    }
+
+    if (failure.unknownFrom === undefined && (failure.refused === true || failure.rows === 0)) {
+        // A refusal names its bad rows and its message already says how many rows were written, so it is shown as it is. So is a
+        // failure before any chunk was sent, where nothing was written.
+        return { error: failure.message, ...(total.errors.length > 0 ? { result: total } : {}) };
+    }
+
+    if (failure.unknownFrom === undefined) {
+        // The file could not be read for the next chunk, so no request is in doubt but the chunks before it are written.
+        return {
+            error: t(
+                "Import stopped after {rows} rows: {message}. The counts below cover those rows. Rows from line {line} onward were not sent: do not import the whole file again, import from that line onward, or delete the written rows first and then import the whole file.",
+                { line: failure.nextLine, message: failure.message, rows: failure.rows },
+            ),
+            result: total,
+        };
+    }
+
+    // A request that never answered: its chunk may have written rows, whatever the completed chunks reported.
+    return {
+        error: t(
+            "Import stopped after {rows} rows: {message}. The counts below cover completed chunks only. The chunk from line {line} may have written rows: check the table for rows from line {line} onward before importing again, or delete the written rows first and then import the whole file.",
+            { line: failure.unknownFrom, message: failure.message, rows: failure.rows },
+        ),
+        result: total,
+    };
+};
+
 /**
  * Stream a file into the shard. Resolves `undefined` when every chunk landed; otherwise the message to show, how many rows the completed
  * chunks sent, and, when a chunk's request failed without an answer, the line that chunk starts at: its rows may have been written. The file
@@ -461,9 +726,11 @@ const sendImport = async (
     onProgress: (text: string) => void,
     file: File,
     csvTable: null | string,
-    onConflict: "replace" | "skip",
-): Promise<{ failure: ImportFailure | undefined; total: ImportShardResult }> => {
-    const total: ImportShardResult = { conflicts: 0, errors: [], inserted: {}, replaced: 0 };
+    mode: ImportMode,
+    planOnly: boolean,
+): Promise<{ failure: ImportFailure | undefined; plan?: string[]; total: ImportShardResult }> => {
+    const onConflict = mode === "upsert" || mode === "replace" ? "replace" : "skip";
+    const total: ImportShardResult = { conflicts: 0, deleted: 0, errors: [], inserted: {}, replaced: 0 };
     let prepared: { rows: number; source: ImportSource };
 
     // A CSV cell is coerced to its column's kind, so the kinds must be read first. Without them the file cannot be checked, and it is
@@ -508,25 +775,10 @@ const sendImport = async (
         // echoes `dryRun: true` in its answer.
         const probe = (await client.query(IMPORT_SHARD, { dryRun: true, onConflict, rows: [], startLine: 1 }, callOptions(shardKey))) as DryRunAnswer;
 
-        if (probe.dryRun !== true) {
-            return {
-                failure: {
-                    message: t(
-                        "This shard predates import checks, so it would write the file while checking it. Nothing was sent. Update the app and import again.",
-                    ),
-                    rows: 0,
-                },
-                total,
-            };
-        }
+        const unsupported = probeRefusal(probe, mode, onConflict, t);
 
-        // A shard built before replace imports ignores the mode and would report every existing row as a conflict; one that has it
-        // always answers with a `replaced` count, even for no rows.
-        if (onConflict === "replace" && typeof probe.replaced !== "number") {
-            return {
-                failure: { message: t("This shard cannot overwrite existing rows. Nothing was sent. Update the app and import again."), rows: 0 },
-                total,
-            };
+        if (unsupported !== undefined) {
+            return { failure: { message: unsupported, rows: 0 }, total };
         }
 
         await forEachRowChunk(source(), async (rows, startLine) => {
@@ -544,6 +796,18 @@ const sendImport = async (
             total: check,
         };
     }
+
+    const planned = await decideFromPlan({ client, mode, onConflict, planOnly, shardKey, source, t });
+
+    if ("failure" in planned) {
+        return { failure: planned.failure, plan: planned.plan, total: planned.total ?? total };
+    }
+
+    if (planOnly) {
+        return { failure: undefined, plan: planned.plan, total };
+    }
+
+    const { deletions } = planned;
 
     let sent = 0;
     let nextLine = 1;
@@ -567,6 +831,7 @@ const sendImport = async (
 
         pending.startLine = undefined;
         total.conflicts += result.conflicts;
+        total.deleted = (total.deleted ?? 0) + (result.deleted ?? 0);
         total.replaced = (total.replaced ?? 0) + (result.replaced ?? 0);
         total.errors.push(...result.errors);
 
@@ -609,6 +874,26 @@ const sendImport = async (
     try {
         await forEachRowChunk(source(), sendChunk);
 
+        try {
+            await pruneStored({ client, deletions, onConflict, onProgress, shardKey, t, total });
+        } catch (error_) {
+            // Every file row is written; only the removal of the rows the file lacks failed, and a delete may have landed. The file-row
+            // resumption text would send the operator to a line that was already sent.
+            return {
+                failure: {
+                    message: t(
+                        "Every file row is written, but removing the stored rows the file lacks failed: {message}. Import again to finish the deletes.",
+                        {
+                            message: errorMessage(error_),
+                        },
+                    ),
+                    refused: true,
+                    rows: sent,
+                },
+                total,
+            };
+        }
+
         return { failure: undefined, total };
     } catch (error_) {
         // A refusal clears `pending` before it throws, so only a request that never answered leaves it set. `rows` counts the rows of the
@@ -624,8 +909,9 @@ const ImportResultSummary = ({ result }: { readonly result: ImportShardResult })
     return (
         <div className="flex flex-col gap-2" data-testid="ei-import-result">
             <p className="text-sm text-muted-foreground">
-                {t("Inserted {inserted}, replaced {replaced}, {conflicts} conflicts, {errors} errors.", {
+                {t("Inserted {inserted}, replaced {replaced}, deleted {deleted}, {conflicts} conflicts, {errors} errors.", {
                     conflicts: result.conflicts,
+                    deleted: result.deleted ?? 0,
                     errors: result.errors.length,
                     inserted: insertedRowCount(result.inserted),
                     replaced: result.replaced ?? 0,
@@ -645,6 +931,104 @@ const ImportResultSummary = ({ result }: { readonly result: ImportShardResult })
                 </ul>
             )}
         </div>
+    );
+};
+
+interface ImportCardProps {
+    readonly busy: boolean;
+    readonly csvFile: boolean;
+    readonly csvTarget: string;
+    readonly importReady: boolean;
+    readonly importResult: ImportShardResult | null;
+    readonly mode: ImportMode;
+    readonly onCsvTableChange: (table: string) => void;
+    readonly onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
+    readonly onModeChange: (event: ChangeEvent<HTMLSelectElement>) => void;
+    readonly plan: null | string[];
+    readonly progress: null | string;
+    readonly runImport: () => void;
+    readonly runPlan: () => void;
+    readonly shardKey: string;
+}
+
+/** The import half of the panel: the file, the mode, the plan and the result. State stays in {@link ExportImportPanel}. */
+const ImportCard = ({
+    busy,
+    csvFile,
+    csvTarget,
+    importReady,
+    importResult,
+    mode,
+    onCsvTableChange,
+    onFileChange,
+    onModeChange,
+    plan,
+    progress,
+    runImport,
+    runPlan,
+    shardKey,
+}: ImportCardProps): ReactElement => {
+    const t = useT();
+
+    return (
+        <Card className="gap-0 py-0 rounded-xl border border-border bg-card shadow-xs">
+            <header className="border-b border-border px-4 py-3">
+                <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Import")}</span>
+            </header>
+            <CardContent className="flex flex-col gap-3 p-4">
+                <input
+                    accept=".ndjson,.jsonl,.csv,application/x-ndjson,text/csv"
+                    aria-label={t("Import file")}
+                    className="text-sm"
+                    data-testid="ei-file"
+                    onChange={onFileChange}
+                    type="file"
+                />
+
+                {csvFile && <CsvTablePicker onChange={onCsvTableChange} shardKey={shardKey} value={csvTarget} />}
+
+                <Label className="flex flex-col gap-1 text-xs font-normal text-muted-foreground" htmlFor="ei-mode">
+                    {t("Import mode")}
+                    <select
+                        className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground"
+                        data-testid="ei-mode"
+                        id="ei-mode"
+                        onChange={onModeChange}
+                        value={mode}
+                    >
+                        <option value="append">{t("Append: rows whose _id already exists are left unchanged and counted as conflicts")}</option>
+                        <option value="upsert">
+                            {t("Upsert: new _id values are inserted, rows whose _id already exists are overwritten, nothing is deleted")}
+                        </option>
+                        <option value="replace">{t("Replace: overwrite, then delete this shard's rows of the file's tables that the file lacks")}</option>
+                        <option value="require-empty">{t("Require empty: refuse unless the file's tables hold no rows in this shard")}</option>
+                    </select>
+                </Label>
+
+                <div className="flex flex-wrap items-center gap-2">
+                    <ConfirmButton confirmLabel={importConfirmLabel(mode, t)} disabled={busy || !importReady} onConfirm={runImport} testId="ei-import">
+                        {t("Import")}
+                    </ConfirmButton>
+                    <Button data-testid="ei-plan" disabled={busy || !importReady} onClick={runPlan} type="button" variant="outline">
+                        {t("Show plan")}
+                    </Button>
+                </div>
+
+                {progress !== null && (
+                    <p className="text-sm text-muted-foreground" data-testid="ei-progress" role="status">
+                        {progress}
+                    </p>
+                )}
+
+                {plan !== null && (
+                    <pre className="whitespace-pre-wrap text-xs text-muted-foreground" data-testid="ei-plan-result">
+                        {[t("Import plan"), ...plan.map((line) => `  ${line}`)].join("\n")}
+                    </pre>
+                )}
+
+                {importResult !== null && <ImportResultSummary result={importResult} />}
+            </CardContent>
+        </Card>
     );
 };
 
@@ -678,7 +1062,10 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
     const [importResult, setImportResult] = useState<ImportShardResult | null>(null);
     const [progress, setProgress] = useState<null | string>(null);
     const [exported, setExported] = useState<ExportedShard | null>(null);
-    const [replace, setReplace] = useState<boolean>(false);
+    const [mode, setMode] = useState<ImportMode>("append");
+    const [plan, setPlan] = useState<null | string[]>(null);
+    // Bumped whenever an input a plan depends on changes, so a plan that settles late can tell it is out of date.
+    const selectionVersion = useRef(0);
 
     const csvFile = importFile !== null && isCsvFile(importFile);
     const csvTarget = csvPick !== null && csvPick.shardKey === shardKey ? csvPick.table : "";
@@ -716,6 +1103,9 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                 }
             }
 
+            // The marker is what lets an import tell this file from one cut short.
+            blob = new Blob([blob, exportEndLine(count)], { type: NDJSON_MIME });
+
             recordShard(exportedShardKey);
             setExported({ blob, count, preview: preview.join("\n"), shardKey: exportedShardKey });
         } catch (error_) {
@@ -723,51 +1113,38 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         }
     };
 
-    const importShard = async (file: File, csvTable: null | string): Promise<void> => {
+    const importShard = async (file: File, csvTable: null | string, planOnly = false): Promise<void> => {
         setBusy(true);
         setError(null);
         setImportResult(null);
         setExported(null);
+        setPlan(null);
 
-        const { failure, total } = await sendImport(client, t, shardKey, setProgress, file, csvTable, replace ? "replace" : "skip");
+        const selection = selectionVersion.current;
+        const { failure, plan: planned, total } = await sendImport(client, t, shardKey, setProgress, file, csvTable, mode, planOnly);
+
+        // The mode, shard, file or CSV table may have changed while this ran; a plan made for the old selection is not shown for the new one.
+        if (planned !== undefined && selection === selectionVersion.current) {
+            setPlan(planned);
+        }
+
+        if (failure === undefined && planOnly) {
+            // A plan writes nothing, so there is nothing to record or invalidate.
+            return;
+        }
 
         if (failure === undefined) {
             recordShard(shardKey);
-            setImportResult(total);
-        } else if (failure.unknownFrom === undefined && (failure.refused === true || failure.rows === 0)) {
-            // A refusal names its bad rows and its message already says how many rows were written, so it is shown as it is. So is a
-            // failure before any chunk was sent, where nothing was written.
-            if (total.errors.length > 0) {
-                setImportResult(total);
-            }
+        }
 
-            setError(failure.message);
-        } else if (failure.unknownFrom === undefined) {
-            // The file could not be read for the next chunk, so no request is in doubt but the chunks before it are written.
-            setImportResult(total);
-            setError(
-                t(
-                    "Import stopped after {rows} rows: {message}. The counts below cover those rows. Rows from line {line} onward were not sent: do not import the whole file again, import from that line onward, or delete the written rows first and then import the whole file.",
-                    {
-                        line: failure.nextLine,
-                        message: failure.message,
-                        rows: failure.rows,
-                    },
-                ),
-            );
-        } else {
-            // A request that never answered: its chunk may have written rows, whatever the completed chunks reported.
-            setImportResult(total);
-            setError(
-                t(
-                    "Import stopped after {rows} rows: {message}. The counts below cover completed chunks only. The chunk from line {line} may have written rows: check the table for rows from line {line} onward before importing again, or delete the written rows first and then import the whole file.",
-                    {
-                        line: failure.unknownFrom,
-                        message: failure.message,
-                        rows: failure.rows,
-                    },
-                ),
-            );
+        const outcome = importOutcome(failure, total, t);
+
+        if (outcome.result !== undefined) {
+            setImportResult(outcome.result);
+        }
+
+        if (outcome.error !== undefined) {
+            setError(outcome.error);
         }
 
         // The import wrote rows to this shard (possibly only some chunks), so the data
@@ -797,24 +1174,49 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         }
     };
 
+    const runPlan = (): void => {
+        if (importFile !== null && importReady) {
+            fireAndForget(
+                importShard(importFile, csvFile ? csvTarget : null, true).finally(() => {
+                    setProgress(null);
+                    setBusy(false);
+                }),
+            );
+        }
+    };
+
     const download = (): void => {
         if (exported !== null) {
             downloadFile(`${exported.shardKey.trim() === "" ? "shard" : exported.shardKey.trim()}.ndjson`, exported.blob, NDJSON_MIME);
         }
     };
 
+    const changeSelection = (): void => {
+        selectionVersion.current += 1;
+        setPlan(null);
+    };
+
     const onFileChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setImportFile(event.target.files?.[0] ?? null);
+        changeSelection();
         // A replacement file has its own rows, so the table picked for the previous one must not carry over to it.
         setCsvPick(null);
     };
 
     const onCsvTableChange = (table: string): void => {
         setCsvPick({ shardKey, table });
+        changeSelection();
     };
 
-    const onReplaceChange = (event: ChangeEvent<HTMLInputElement>): void => {
-        setReplace(event.target.checked);
+    // A plan is made for one file, one shard and one mode, so changing any of them drops it.
+    const onModeChange = (event: ChangeEvent<HTMLSelectElement>): void => {
+        setMode(event.target.value as ImportMode);
+        changeSelection();
+    };
+
+    const onShardChange = (value: string): void => {
+        setShardKey(value);
+        changeSelection();
     };
 
     return (
@@ -825,7 +1227,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                 </header>
                 <CardContent className="flex flex-col gap-3 p-4">
                     <div className="flex flex-wrap items-center gap-2">
-                        <ShardInput onChange={setShardKey} testId="ei-shard-input" value={shardKey} />
+                        <ShardInput onChange={onShardChange} testId="ei-shard-input" value={shardKey} />
                         <Button data-testid="ei-export" disabled={busy} onClick={runExport} type="button">
                             {t("Export")}
                         </Button>
@@ -854,49 +1256,22 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                 </CardContent>
             </Card>
 
-            <Card className="gap-0 py-0 rounded-xl border border-border bg-card shadow-xs">
-                <header className="border-b border-border px-4 py-3">
-                    <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Import")}</span>
-                </header>
-                <CardContent className="flex flex-col gap-3 p-4">
-                    <input
-                        accept=".ndjson,.jsonl,.csv,application/x-ndjson,text/csv"
-                        aria-label={t("Import file")}
-                        className="text-sm"
-                        data-testid="ei-file"
-                        onChange={onFileChange}
-                        type="file"
-                    />
-
-                    {csvFile && <CsvTablePicker onChange={onCsvTableChange} shardKey={shardKey} value={csvTarget} />}
-
-                    <Label className="flex items-center gap-2 text-xs font-normal text-muted-foreground" htmlFor="ei-replace">
-                        <input
-                            checked={replace}
-                            className="size-4 accent-primary"
-                            data-testid="ei-replace"
-                            id="ei-replace"
-                            onChange={onReplaceChange}
-                            type="checkbox"
-                        />
-                        {t("Overwrite rows whose _id already exists (otherwise they are left unchanged and counted as conflicts)")}
-                    </Label>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                        <ConfirmButton confirmLabel={t("Import (writes rows)?")} disabled={busy || !importReady} onConfirm={runImport} testId="ei-import">
-                            {t("Import")}
-                        </ConfirmButton>
-                    </div>
-
-                    {progress !== null && (
-                        <p className="text-sm text-muted-foreground" data-testid="ei-progress" role="status">
-                            {progress}
-                        </p>
-                    )}
-
-                    {importResult !== null && <ImportResultSummary result={importResult} />}
-                </CardContent>
-            </Card>
+            <ImportCard
+                busy={busy}
+                csvFile={csvFile}
+                csvTarget={csvTarget}
+                importReady={importReady}
+                importResult={importResult}
+                mode={mode}
+                onCsvTableChange={onCsvTableChange}
+                onFileChange={onFileChange}
+                onModeChange={onModeChange}
+                plan={plan}
+                progress={progress}
+                runImport={runImport}
+                runPlan={runPlan}
+                shardKey={shardKey}
+            />
 
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="ei-error" role="alert">

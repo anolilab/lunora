@@ -296,10 +296,13 @@ type GlobalImportFunction = (request: {
     dryRun?: boolean;
     /** `"replace"` overwrites a row whose `_id` already exists; `"skip"` (the default) reports it as a conflict and leaves it unchanged. */
     onConflict?: "replace" | "skip";
-    rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>;
+    /** `op: "delete"` removes the stored row whose `_id` the doc carries; see {@link WorkerOptions.importGlobalsSupportsDelete}. */
+    rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; op?: "delete"; table: string }>;
     startLine?: number;
 }) => Promise<{
     conflicts: number;
+    /** Stored rows removed by `op: "delete"` rows. */
+    deleted?: number;
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     inserted: Record<string, number>;
     /** Existing rows overwritten under `onConflict: "replace"`. */
@@ -1312,6 +1315,14 @@ interface WorkerOptions {
      * rows targeting global tables are reported as hard errors.
      */
     importGlobals?: GlobalImportFunction;
+
+    /**
+     * Set when `importGlobals` honours a row's `op: "delete"`. An import that
+     * carries global delete rows is refused unless this is set: an importer that
+     * ignores the op would read the row as an insert, report its `_id` as a
+     * conflict and keep the row the caller asked to remove.
+     */
+    importGlobalsSupportsDelete?: boolean;
 
     /**
      * Set when `importGlobals` honours `dryRun` and writes nothing for it. A dry

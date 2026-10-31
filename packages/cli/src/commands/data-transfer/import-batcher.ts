@@ -42,6 +42,7 @@ interface ImportShardFailure {
 /** The admin import endpoint's response body. */
 interface AdminImportResponse {
     conflicts?: number;
+    deleted?: number;
     errors?: ImportRowError[];
     /** Shards the fan-out never reached — non-empty means the endpoint answered 207. */
     failed?: ImportShardFailure[];
@@ -54,12 +55,14 @@ interface AdminImportResponse {
 /** Everything a run accumulated across its batches. */
 interface ImportTotals {
     conflicts: number;
+    /** Stored rows removed by delete rows (the prune pass of `--mode replace`). */
+    deleted: number;
     errors: ImportRowError[];
     /** Shards no batch could reach. Non-empty means rows are missing, not merely rejected. */
     failed: ImportShardFailure[];
     inserted: Record<string, number>;
     received: number;
-    /** Existing rows overwritten under `--replace`. */
+    /** Existing rows overwritten under `--mode upsert` / `--mode replace`. */
     replaced: number;
     warnings: string[];
 }
@@ -83,7 +86,7 @@ interface ImportBatcher {
 }
 
 const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
-    const totals: ImportTotals = { conflicts: 0, errors: [], failed: [], inserted: {}, received: 0, replaced: 0, warnings: [] };
+    const totals: ImportTotals = { conflicts: 0, deleted: 0, errors: [], failed: [], inserted: {}, received: 0, replaced: 0, warnings: [] };
     let batch: string[] = [];
     let batchBytes = 0;
 
@@ -96,6 +99,7 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
         totals.errors.push(...(json.errors ?? []));
         totals.failed.push(...(json.failed ?? []));
         totals.conflicts += json.conflicts ?? 0;
+        totals.deleted += json.deleted ?? 0;
         totals.received += json.received ?? 0;
         totals.replaced += json.replaced ?? 0;
 

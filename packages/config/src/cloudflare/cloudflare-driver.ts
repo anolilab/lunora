@@ -24,9 +24,7 @@ const CLOUDFLARE_TOOLCHAIN: DriverToolchain = {
     prebuildsContainerImages: true,
 
     deploy: (request) => {
-        // `versions upload` publishes a new Version with a preview URL instead
-        // of taking production traffic.
-        const args: string[] = request.preview === true ? ["versions", "upload"] : ["deploy"];
+        const args: string[] = ["deploy"];
 
         // Framework composition deploys a wrapper entry that overrides the
         // adapter-owned `main` in wrangler.jsonc.

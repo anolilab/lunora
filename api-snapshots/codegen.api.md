@@ -104,7 +104,6 @@ interface CodegenOptions {
     project?: Project;
     projectRoot: string;
     target?: string;
-    updateSchemaBaseline?: boolean;
     wranglerQueueProducers: ReadonlyArray<WranglerQueueProducerIR>;
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
 }
@@ -146,12 +145,14 @@ interface CodegenResult {
         vectors: string;
         workflows: string;
     };
+    indexReferences: ReadonlyArray<IndexReference>;
     migrations: ReadonlyArray<MigrationIR>;
     outputDirectory: string;
     platformDiagnostics: ReadonlyArray<PlatformDiagnostic>;
     queues: ReadonlyArray<QueueIR>;
     schemaSnapshot: SchemaSnapshot;
     schemaSnapshotPath: string;
+    schemaTables: ReadonlyArray<TableIR>;
     workflows: ReadonlyArray<WorkflowIR>;
     writtenFiles: ReadonlyArray<string>;
 }
@@ -242,7 +243,21 @@ interface DriftChange {
     scope: DriftScope;
     severity: "breaking" | "safe";
     summary: string;
+    field?: string;
     table?: string;
+    warning?: true;
+    identityRewrites?: true;
+    expiry?: {
+        after?: number;
+        field: string;
+        previous?: {
+            after?: number;
+            field: string;
+        };
+    };
+    coverage?: DriftCoverage;
+    index?: string;
+    uniqueOn?: ReadonlyArray<string>;
     type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedCommitOrdering" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedMemoryMode" | "changedShardMode" | "changedTtlPolicy" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
 }
 ```
@@ -416,6 +431,18 @@ interface IndexIR {
 }
 ```
 
+### `IndexReference` (interface)
+
+```ts
+interface IndexReference {
+    file: string;
+    function: string;
+    index: string | undefined;
+    line: number;
+    table: string;
+}
+```
+
 ### `IndexSnapshot` (interface)
 
 ```ts
@@ -575,9 +602,20 @@ interface MaskProcedureIR {
 
 ```ts
 interface MigrationIR {
+    covers?: {
+        jurisdiction?: string;
+        memory?: true;
+        shardMode?: string;
+        table?: string;
+        ttl?: {
+            after?: number;
+            field: string;
+        };
+    };
     exportName: string;
     filePath: string;
     id: string;
+    identity?: true;
     table: string;
 }
 ```
@@ -874,6 +912,7 @@ interface SchemaDriftDecision {
     changes: ReadonlyArray<DriftChange>;
     newMigrationIds: ReadonlyArray<string>;
     reason: string;
+    uncovered: ReadonlyArray<DriftChange>;
 }
 ```
 
@@ -1090,6 +1129,7 @@ interface ValidatorIR {
     tableName?: string;
     tsType?: string;
     unmodelledRefinement?: boolean;
+    unresolvedShape?: boolean;
     valueType?: ValidatorIR;
 }
 ```
@@ -1520,7 +1560,8 @@ const evaluateSchemaDrift: (options: {
     baseline: SchemaSnapshot | undefined;
     command?: string;
     current: SchemaSnapshot;
-    migrations: ReadonlyArray<Pick<MigrationIR, "id" | "table">>;
+    indexReferences?: ReadonlyArray<IndexReference>;
+    migrations: ReadonlyArray<Pick<MigrationIR, "covers" | "id" | "identity" | "table">>;
 }) => SchemaDriftDecision;
 ```
 
@@ -1567,6 +1608,12 @@ const formatAdvisories: (findings: ReadonlyArray<Finding>) => string;
 ### `generateSdk` (const)
 
 Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
+
+### `indexReferencesOf` (const)
+
+```ts
+const indexReferencesOf: (queries: ReadonlyArray<QueryReadIR>) => IndexReference[];
+```
 
 ### `isD1GlobalTable` (const)
 
@@ -2523,6 +2570,21 @@ interface CountReadIR {
     line: number;
     scope: CallSiteScope;
     table: string;
+}
+```
+
+### `DriftCoverage` (interface)
+
+```ts
+interface DriftCoverage {
+    jurisdiction?: string;
+    memory?: true;
+    shardMode?: string;
+    table?: string;
+    ttl?: {
+        after?: number;
+        field: string;
+    };
 }
 ```
 
