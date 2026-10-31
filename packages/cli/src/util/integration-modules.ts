@@ -85,7 +85,8 @@ const mapSubpathImport = (cwd: string, specifier: string): string | undefined =>
             }
 
             if (key.includes("*") && specifier.startsWith(prefix) && specifier.endsWith(suffix) && specifier.length >= key.length - 1) {
-                return mapped.replace("*", specifier.slice(prefix.length, specifier.length - suffix.length));
+                // Node substitutes every `*` in the target, not only the first.
+                return mapped.replaceAll("*", specifier.slice(prefix.length, specifier.length - suffix.length));
             }
         }
     }

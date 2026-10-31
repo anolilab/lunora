@@ -5,6 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { DevProcess, DevProcessOptions, DevProcessSpawner, DriverToolchain } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import literal from "../../src/util/js-literal";
 import runLazySmokeLoad from "../../src/util/lazy-smoke-load";
 
 const startDevProcess = vi.hoisted(() => vi.fn<(options: DevProcessOptions) => Promise<DevProcess>>());
@@ -352,8 +353,8 @@ describe(runLazySmokeLoad, () => {
 
             await run({ environment: "production" });
 
-            expect(entry.read().content).toContain(join(cwd, "src", "prod.ts"));
-            expect(entry.read().content).not.toContain(join(cwd, "src", "index.ts"));
+            expect(entry.read().content).toContain(literal(join(cwd, "src", "prod.ts")));
+            expect(entry.read().content).not.toContain(literal(join(cwd, "src", "index.ts")));
         });
 
         it("stubs the bound classes against the source config, instead of the entry, once a Vite build has redirected wrangler", async () => {

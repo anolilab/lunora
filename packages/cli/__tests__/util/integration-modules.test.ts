@@ -75,6 +75,17 @@ describe(collectIntegrationModules, () => {
         expect(collectIntegrationModules(cwd, "src/server/index.ts", "lunora")).toStrictEqual(["stripe"]);
     });
 
+    it("substitutes every * in a subpath import target, as Node does", () => {
+        expect.assertions(1);
+
+        install("stripe");
+        write("package.json", JSON.stringify({ imports: { "#features/*": "./features/*/*.ts" } }));
+        write("src/server/index.ts", 'import { payment } from "#features/payment";\nexport default payment;\n');
+        write("features/payment/payment.ts", 'export const payment = { client: () => import("stripe") };\n');
+
+        expect(collectIntegrationModules(cwd, "src/server/index.ts", "lunora")).toStrictEqual(["stripe"]);
+    });
+
     it("leaves out files the Worker never loads, runtime modules, generated output and uninstalled packages", () => {
         expect.assertions(1);
 

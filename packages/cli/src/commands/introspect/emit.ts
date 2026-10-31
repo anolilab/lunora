@@ -15,6 +15,7 @@
  * can reach — though not the cost of every operator over them, since `contains`
  * and the negative operators are non-sargable whatever the column.
  */
+import literal from "../../util/js-literal";
 import type { IntrospectedColumn, IntrospectedDatabase, IntrospectedTable, SqlDialect } from "./model";
 import { RESERVED_COLUMNS, validatorForColumn } from "./model";
 
@@ -52,38 +53,6 @@ const LEADING_DIGITS = /^\d+/;
  * `.`, so no `..` segment can survive — is folded to `_`.
  */
 const PATH_UNSAFE = /[^\w-]/g;
-
-/**
- * Characters `JSON.stringify` leaves raw that are still unsafe once the emitted
- * source travels: `<` / `>` / `/` can close a host `</script>` if the file is
- * ever inlined into HTML (a code viewer, a docs page), and U+2028 / U+2029 are
- * line terminators that older tooling treats as breaking the literal. Their
- * escaped forms denote the identical string, so this costs nothing.
- */
-const LITERAL_UNSAFE = /[\u003C\u003E\u002F\u2028\u2029]/g;
-
-const LITERAL_UNSAFE_ESCAPES: Readonly<Record<string, string>> = {
-    "\u002F": String.raw`\u002F`,
-    "\u2028": String.raw`\u2028`,
-    "\u2029": String.raw`\u2029`,
-    "\u003C": String.raw`\u003C`,
-    "\u003E": String.raw`\u003E`,
-};
-
-/**
- * Emit `value` as a TypeScript string literal.
- *
- * EVERY identifier read out of the source database must go through this. Table,
- * column, and index names are attacker-adjacent input — they're legal to quote in
- * both Postgres and MySQL, so they can contain `"`, `\`, or a newline — and the
- * output of this emitter is TypeScript the developer subsequently runs. Splicing
- * a raw name into a quoted literal is a code-injection hole, not a cosmetic bug.
- *
- * `JSON.stringify` handles quotes, backslashes, and control characters;
- * {@link LITERAL_UNSAFE} covers the rest, so the result is safe both as TypeScript
- * and in any downstream context the generated file gets embedded in.
- */
-const literal = (value: string): string => JSON.stringify(value).replaceAll(LITERAL_UNSAFE, (character) => LITERAL_UNSAFE_ESCAPES[character] ?? character);
 
 /** Quote an object key when it isn't a bare JS identifier, so a `user-id` column still emits valid source. */
 const key = (name: string): string => (IDENTIFIER.test(name) ? name : literal(name));

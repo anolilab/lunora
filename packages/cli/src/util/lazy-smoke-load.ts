@@ -15,6 +15,7 @@ import { sanitizeNamespace } from "../../../../shared/dispatch-namespace";
 import { generatedConfigPath } from "../commands/deploy/hyperdrive";
 import { findAvailablePort } from "./free-port";
 import collectIntegrationModules from "./integration-modules";
+import literal from "./js-literal";
 import type { Logger } from "./logger";
 
 /** First port tried for the throwaway worker; clear of wrangler's own 8787 range so it never collides with `lunora dev`. */
@@ -698,7 +699,7 @@ const createRunDirectory = (cwd: string): string => {
 /** The top of the smoke entry: the project's entry re-exported, or a stub for each class the config binds. */
 const smokeBaseSource = (cwd: string, base: SmokeBase): string => {
     if ("main" in base) {
-        return `export * from ${JSON.stringify(resolve(cwd, base.main))};`;
+        return `export * from ${literal(resolve(cwd, base.main))};`;
     }
 
     const { durableObjects, workflows } = base.stubs;
@@ -737,17 +738,17 @@ const prepareSmokeProcess = async (input: {
         const runId = randomUUID();
 
         // Each integration module gets a literal `import()`, so the bundler resolves and bundles it as the app's own does.
-        const loaders = integrationModules.map((specifier) => `    [${JSON.stringify(specifier)}, () => import(${JSON.stringify(specifier)})],`).join("\n");
+        const loaders = integrationModules.map((specifier) => `    [${literal(specifier)}, () => import(${literal(specifier)})],`).join("\n");
 
         writeFileSync(
             entry,
             `${smokeBaseSource(cwd, base)}
-${functionsFile === undefined ? "" : `import { loadAllFunctions } from ${JSON.stringify(functionsFile)};\n`}
+${functionsFile === undefined ? "" : `import { loadAllFunctions } from ${literal(functionsFile)};\n`}
 const runId = ${JSON.stringify(runId)};
 
 // Deferred event modules, evaluated one per request so a module that throws on import blocks like a function module does.
 const deferred = [
-${deferred.map((module) => `    () => import(${JSON.stringify(module.file)}),`).join("\n")}
+${deferred.map((module) => `    () => import(${literal(module.file)}),`).join("\n")}
 ];
 
 const integrationLoaders = new Map<string, () => Promise<unknown>>([
