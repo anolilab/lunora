@@ -283,6 +283,7 @@ export const onFollowerSubscriptionSettled = (
     lastMutationId: number | undefined,
     clientId: string | undefined,
     identity: string | null | undefined,
+    claims?: string,
 ): void => {
     if (isForeignStamp(identity, host.identityFingerprint())) {
         return;
@@ -292,6 +293,15 @@ export const onFollowerSubscriptionSettled = (
 
     if (!state) {
         return;
+    }
+
+    // A position read under claims this tab does not hold must not move the cursor it would resume from.
+    if (claims !== undefined) {
+        const own = host.ownClaims(key, () => undefined);
+
+        if (own === undefined || (own !== null && own !== claims)) {
+            return;
+        }
     }
 
     host.ackAndAdvanceCursor(state, cursor, epoch);

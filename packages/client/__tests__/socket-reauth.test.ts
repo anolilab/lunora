@@ -1049,3 +1049,87 @@ describe("a follower tab's own claims fingerprint", () => {
         client.close();
     });
 });
+
+describe("a follower tab's claims request", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    const follower = (options: { authTokenOnUpgrade: boolean }) => {
+        const { WebSocket } = createSocketHarness();
+        const fetchMock = vi.fn<typeof fetch>(async (input) =>
+            (input as string).includes("/_lunora/claims") ? jsonResponse({ claims: "fp-mine" }) : jsonResponse({ result: { ok: true } }),
+        );
+        const client = new LunoraClient({ ...options, fetch: fetchMock, heartbeatIntervalMs: 0, url: "http://app.test", WebSocket });
+        const internals = client as unknown as {
+            applyOwnClaims: (claims: string) => void;
+            cacheSeededQueries: Map<string, unknown>;
+            followerClaims: (key: string, retry: () => void) => null | string | undefined;
+            hydratedQueryCache: Map<string, unknown>;
+        };
+        const claimsCalls = () => fetchMock.mock.calls.filter(([input]) => (input as string).includes("/_lunora/claims"));
+
+        return { claimsCalls, client, internals };
+    };
+
+    it("presents the bearer only when the leader's socket does, so the two fingerprints describe the same credential", async () => {
+        expect.assertions(2);
+
+        const cookie = follower({ authTokenOnUpgrade: false });
+
+        cookie.client.setAuthToken("token-1", "user-1");
+        cookie.internals.followerClaims("k", () => undefined);
+        await settle();
+
+        expect(cookie.claimsCalls()[0]?.[1]?.headers).not.toHaveProperty("authorization");
+
+        const bearer = follower({ authTokenOnUpgrade: true });
+
+        bearer.client.setAuthToken("token-1", "user-1");
+        bearer.internals.followerClaims("k", () => undefined);
+        await settle();
+
+        expect((bearer.claimsCalls()[0]?.[1]?.headers as Record<string, string> | undefined)?.authorization).toBe("Bearer token-1");
+
+        cookie.client.close();
+        bearer.client.close();
+    });
+
+    it("keeps the answer it is waiting for when the credential is set again unchanged", async () => {
+        expect.assertions(2);
+
+        const { claimsCalls, client, internals } = follower({ authTokenOnUpgrade: true });
+        const retry = vi.fn<() => void>();
+
+        client.setAuthToken("token-1", "user-1");
+        internals.followerClaims("k", retry);
+        client.setAuthToken("token-1", "user-1");
+        await settle();
+
+        expect(retry).toHaveBeenCalledTimes(1);
+        expect(claimsCalls()).toHaveLength(1);
+
+        client.close();
+    });
+
+    it("forgets, everywhere it could be shown again, what was read under other claims once its own are known", async () => {
+        expect.assertions(2);
+
+        const { client, internals } = follower({ authTokenOnUpgrade: true });
+        const entry = { claims: "fp-theirs", identity: null, ts: 0, value: ["row"] };
+
+        internals.cacheSeededQueries.set("k", entry);
+        internals.hydratedQueryCache.set("k2", entry);
+        internals.applyOwnClaims("fp-mine");
+
+        // A seed handed back on unsubscribe would otherwise land in the hydrated cache and be shown again.
+        expect(internals.cacheSeededQueries.size).toBe(0);
+        expect(internals.hydratedQueryCache.size).toBe(0);
+
+        client.close();
+    });
+});

@@ -1414,7 +1414,7 @@ class TabCoordinator {
     get isRunning(): boolean;
     broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string): void;
     broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null): void;
-    broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null): void;
+    broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null, claims?: string): void;
     broadcastConnectionStatus(status: ConnectionStatus, identity?: string | null): void;
 }
 ```
@@ -2951,7 +2951,7 @@ interface TabCoordinatorOptions {
     onStopBeingLeader?: () => void;
     onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void;
     onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null) => void;
-    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void;
+    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null, claims?: string) => void;
 }
 ```
 

@@ -108,7 +108,15 @@ interface TabCoordinatorOptions {
      * `identity` is the leader's `identityFingerprint()` — see
      * `onConnectionStatus`'s docblock for the drop rule (identical here).
      */
-    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void;
+    onSubscriptionSettled?: (
+        key: string,
+        cursor?: number,
+        epoch?: string,
+        lastMutationId?: number,
+        clientId?: string,
+        identity?: string | null,
+        claims?: string,
+    ) => void;
 }
 
 type WsFollowerMessage =
@@ -135,6 +143,7 @@ type WsLeaderMessage =
     | SubscriptionDataMessage
     | { error: SubscriptionError; identity?: string | null; key: string; tabId: string; type: "subscription-error" }
     | {
+          claims?: string;
           clientId?: string;
           cursor?: number;
           epoch?: string;
@@ -206,7 +215,8 @@ class TabCoordinator {
     private readonly onLeaderClaimAnswered: (() => void) | undefined;
     private readonly onSubscriptionError: ((key: string, error: SubscriptionError, identity?: string | null) => void) | undefined;
     private readonly onSubscriptionSettled:
-        ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void) | undefined;
+        | ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null, claims?: string) => void)
+        | undefined;
 
     public constructor(options: TabCoordinatorOptions = {}) {
         // A random UUID suffix makes `tabId` globally unique across tabs/realms,
@@ -439,6 +449,7 @@ class TabCoordinator {
         lastMutationId?: number,
         clientId?: string,
         identity?: string | null,
+        claims?: string,
     ): void {
         if (!this.leader) {
             return;
@@ -453,6 +464,7 @@ class TabCoordinator {
             ...(lastMutationId === undefined ? {} : { lastMutationId }),
             ...(clientId === undefined ? {} : { clientId }),
             ...(identity === undefined ? {} : { identity }),
+            ...(claims === undefined ? {} : { claims }),
         });
     }
 
@@ -594,7 +606,15 @@ class TabCoordinator {
                     break;
                 }
 
-                this.onSubscriptionSettled?.(message.key, message.cursor, message.epoch, message.lastMutationId, message.clientId, message.identity);
+                this.onSubscriptionSettled?.(
+                    message.key,
+                    message.cursor,
+                    message.epoch,
+                    message.lastMutationId,
+                    message.clientId,
+                    message.identity,
+                    message.claims,
+                );
 
                 break;
             }

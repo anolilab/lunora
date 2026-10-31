@@ -1395,8 +1395,12 @@ class LunoraClient {
      * none) reconnects the sockets, cold, so the upgrade presents it.
      */
     public setAuthToken(token: string | null, subject?: string | null): void {
-        this.resetOwnClaims();
         const tokenChanged = this.authToken !== token;
+
+        if (tokenChanged) {
+            this.resetOwnClaims();
+        }
+
         // Compare the IDENTITY (subject when supplied, else token hash), not the
         // raw token, so a same-subject refresh doesn't trip the identity-change
         // drain. Capture the old fingerprint before mutating the inputs.
@@ -4301,8 +4305,8 @@ class LunoraClient {
             onSubscriptionError: (key, error, identity) => {
                 onFollowerSubscriptionError(leadership, key, error, identity);
             },
-            onSubscriptionSettled: (key, cursor, epoch, lastMutationId, clientId, identity) => {
-                onFollowerSubscriptionSettled(leadership, key, cursor, epoch, lastMutationId, clientId, identity);
+            onSubscriptionSettled: (key, cursor, epoch, lastMutationId, clientId, identity, claims) => {
+                onFollowerSubscriptionSettled(leadership, key, cursor, epoch, lastMutationId, clientId, identity, claims);
             },
         });
     }
@@ -7665,6 +7669,13 @@ class LunoraClient {
     private resetOwnClaims(): void {
         this.ownClaimsValue = undefined;
         this.ownClaimsFetch = undefined;
+
+        // Frames held for the discarded answer would otherwise wait for the next one.
+        if (this.heldLeaderFrames.size > 0) {
+            queueMicrotask(() => {
+                this.fetchOwnClaims();
+            });
+        }
     }
 
     /** Take `claims` as this tab's own: drop what a leader committed under others, from memory and the restored cache, and run the held frames. */
@@ -7680,11 +7691,7 @@ class LunoraClient {
             }
         }
 
-        for (const [key, entry] of this.hydratedQueryCache) {
-            if (entry.claims !== undefined && entry.claims !== claims) {
-                this.hydratedQueryCache.delete(key);
-            }
-        }
+        this.dropClaimedEntries(claims);
 
         const held = [...this.heldLeaderFrames.values()];
 
@@ -7692,6 +7699,26 @@ class LunoraClient {
 
         for (const apply of held) {
             apply();
+        }
+    }
+
+    /** Remove what was read under claims other than `claims` from every cache a subscription could be seeded from. */
+    private dropClaimedEntries(claims: string): void {
+        // A seed handed to a subscription is handed back to the hydrated cache when it unsubscribes, so both go, with
+        // the durable copy (removed in order behind any write already in flight) and any write still waiting.
+        for (const cache of [this.hydratedQueryCache, this.cacheSeededQueries]) {
+            for (const [key, entry] of cache) {
+                if (entry.claims !== undefined && entry.claims !== claims) {
+                    cache.delete(key);
+                    this.pendingCacheWrites.delete(key);
+
+                    const { queryCache } = this;
+
+                    if (queryCache) {
+                        this.queryCacheChain = this.queryCacheChain.then(async () => queryCache.remove(key)).catch(() => undefined);
+                    }
+                }
+            }
         }
     }
 
@@ -7706,7 +7733,9 @@ class LunoraClient {
             fetchImpl,
             joinUrl(this.url, CLAIMS_FINGERPRINT_PATH),
             "{}",
-            authToken === null ? { "content-type": "application/json" } : { authorization: `Bearer ${authToken}`, "content-type": "application/json" },
+            authToken === null || !this.authTokenOnUpgrade
+                ? { "content-type": "application/json" }
+                : { authorization: `Bearer ${authToken}`, "content-type": "application/json" },
         )
             .then(({ text }) => {
                 const { claims } = JSON.parse(text) as { claims?: string };
@@ -7826,6 +7855,7 @@ class LunoraClient {
                 state.lastMutationId,
                 this.clientId,
                 this.identityFingerprint(),
+                state.serverClaims,
             );
         }
     }
@@ -8341,6 +8371,11 @@ class LunoraClient {
         // before any socket frame. Cases 2 and 3 need a credential this client
         // holds, which it does not have here either.
         if (this.identityFingerprint() === null && this.identityUnresolved()) {
+            return false;
+        }
+
+        // Read under claims this tab has since found are not its own.
+        if (entry.claims !== undefined && this.ownClaimsValue !== undefined && entry.claims !== this.ownClaimsValue) {
             return false;
         }
 

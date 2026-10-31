@@ -356,6 +356,21 @@ describe("onFollowerSubscriptionData", () => {
             expect(state.serverBase).toStrictEqual([{ id: "a" }]);
         });
 
+        it("does not advance a cursor on a settled frame read under other claims", () => {
+            expect.assertions(2);
+
+            const state = liveSubscription();
+            const { host } = fakeHost({ ownClaims: () => "fp-mine", subscription: () => state });
+
+            onFollowerSubscriptionSettled(host, "s1", 9, "e1", undefined, undefined, "subj:a", "fp-theirs");
+
+            expect(host.ackAndAdvanceCursor).not.toHaveBeenCalled();
+
+            onFollowerSubscriptionSettled(host, "s1", 9, "e1", undefined, undefined, "subj:a", "fp-mine");
+
+            expect(host.ackAndAdvanceCursor).toHaveBeenCalledTimes(1);
+        });
+
         it("keeps today's behaviour for a frame that carries no claims", () => {
             expect.assertions(1);
 
