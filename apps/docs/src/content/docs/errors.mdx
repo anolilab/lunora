@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 203 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 205 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -897,6 +897,10 @@ Without it a bucket-backed `lunora backup restore --bucket` cannot read the snap
 ### `STREAM_TOO_LONG`
 
 `507` — Durable stream exceeded its chunk ceiling
+
+### `SUBSCRIPTION_FUNCTION_REQUIRED`
+
+`400` — Subscription needs a function path
 
 ### `SUBSCRIPTION_PERSIST_FAILED`
 
