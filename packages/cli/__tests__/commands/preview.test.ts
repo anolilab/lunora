@@ -899,6 +899,15 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(planPreview(twoDatabases, "42").error).toMatch(/two bindings would share the preview resource name "lunora-app-preview-42-db"/u);
         });
 
+        it("does not take a preview resource for production's when only another kind of resource shares its name", () => {
+            expect.assertions(2);
+
+            const config = { ...production, r2_buckets: [{ binding: "FILES", bucket_name: "shared-name" }] } as PreviewConfig;
+
+            expect(productionCollisions(config, [{ kind: "d1", value: "shared-name" }])).toStrictEqual([]);
+            expect(productionCollisions(config, [{ kind: "r2", value: "shared-name" }])).toStrictEqual(["shared-name"]);
+        });
+
         it("lets bindings of different kinds share a name, since each kind has its own namespace in the account", () => {
             expect.assertions(2);
 
@@ -966,7 +975,7 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             } as PreviewConfig;
 
             expect(planPreview(foreign, "42").error).toMatch(/already declares "env.preview-42"/u);
-            expect(productionCollisions(marked, ["qa-d1-uuid"])).toStrictEqual(["qa-d1-uuid"]);
+            expect(productionCollisions(marked, [{ kind: "d1", value: "qa-d1-uuid" }])).toStrictEqual(["qa-d1-uuid"]);
         });
 
         it.each([
@@ -1979,21 +1988,54 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             };
 
             try {
-                await runPreviewCommand({
-                    cwd: workdir,
-                    dryRun: true,
-                    environment: CREDENTIALS,
-                    fetch: fakeAccount().fetch,
-                    logger: silentLogger().logger,
-                    name: "42",
-                    subcommand: "deploy",
-                });
+                const account = fakeAccount();
+                const { spawner } = wranglerAt(workdir, account.workers);
+
+                await deployWith(account, spawner);
             } finally {
                 removals.observe = undefined;
             }
 
             expect(lockedWhenRemoved).toStrictEqual([true]);
             expect(existsSync(lockPath)).toBe(false);
+        });
+
+        it("keeps a schema baseline another process wrote while the preview ran, removing only the one its own deploy left", async () => {
+            expect.assertions(2);
+
+            const baselinePath = join(workdir, "lunora", ".lunora-schema.json");
+
+            rmSync(baselinePath, { force: true });
+
+            const account = fakeAccount();
+            const { spawner } = wranglerAt(workdir, account.workers);
+            const { logger: inner } = silentLogger();
+            // After the deploy pipeline has finished and before the preview lets go of the checkout.
+            const logger: Logger = {
+                ...inner,
+                success: (message) => {
+                    inner.success(message);
+
+                    if (message.includes("is live")) {
+                        writeFileSync(baselinePath, '{"concurrent":true}\n', "utf8");
+                    }
+                },
+            };
+
+            const result = await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                healthFetch: healthy,
+                logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+            });
+
+            expect(result.code).toBe(0);
+            expect(readFileSync(baselinePath, "utf8")).toBe('{"concurrent":true}\n');
         });
 
         it("marks the lock database it makes, and uses it again on the next run", async () => {
@@ -2411,14 +2453,14 @@ describe("lunora preview", { timeout: 120_000 }, () => {
     });
 
     describe("delete", () => {
-        const deployed = async (): Promise<ReturnType<typeof fakeAccount>> => {
+        const deployed = async (environment: Record<string, string> = CREDENTIALS): Promise<ReturnType<typeof fakeAccount>> => {
             const account = fakeAccount();
             const { spawner } = wranglerAt(workdir, account.workers);
 
             await runPreviewCommand({
                 adminFetch: adminRecorder().fetch,
                 cwd: workdir,
-                environment: CREDENTIALS,
+                environment,
                 fetch: account.fetch,
                 healthFetch: healthy,
                 logger: silentLogger().logger,
@@ -3235,11 +3277,14 @@ describe("lunora preview", { timeout: 120_000 }, () => {
                 };
             };
 
-            const deleteWithHead = async (account: ReturnType<typeof fakeAccount>, headDir: string) => {
+            /** The CI run for pull request 42 of this repository: what the deploy records and the closing job checks. */
+            const CI = { ...CREDENTIALS, GITHUB_REPOSITORY: "acme/app" };
+
+            const deleteWithHead = async (account: ReturnType<typeof fakeAccount>, headDir: string, environment: Record<string, string> = CI) => {
                 const { logger, warns } = silentLogger();
                 const result = await runPreviewCommand({
                     cwd: workdir,
-                    environment: CREDENTIALS,
+                    environment,
                     fetch: account.fetch,
                     headDir,
                     logger,
@@ -3260,7 +3305,7 @@ describe("lunora preview", { timeout: 120_000 }, () => {
                 writeFileSync(join(workdir, "package.json"), head["package.json"] ?? "", "utf8");
                 writeFileSync(join(workdir, "wrangler.jsonc"), head["wrangler.jsonc"] ?? "", "utf8");
 
-                const account = await deployed();
+                const account = await deployed(CI);
 
                 writeFileSync(join(workdir, "package.json"), base.manifest, "utf8");
                 writeFileSync(join(workdir, "wrangler.jsonc"), base.wrangler, "utf8");
@@ -3304,6 +3349,84 @@ describe("lunora preview", { timeout: 120_000 }, () => {
                 expect(warns.join("\n")).toMatch(/head/u);
             });
 
+            it.each([
+                ["another repository's pull request", { ...CREDENTIALS, GITHUB_REPOSITORY: "acme/other" }],
+                ["a local run, which records no origin", CREDENTIALS],
+            ])("refuses, and deletes nothing, a record under the head's identity made by %s", async (_label, deployedBy) => {
+                expect.assertions(4);
+
+                // Another project's preview of the same number, in the same account, named by this pull request's files.
+                const head = renamedFiles(HEAD_APP_ID);
+
+                writeFileSync(join(workdir, "package.json"), head["package.json"] ?? "", "utf8");
+                writeFileSync(join(workdir, "wrangler.jsonc"), head["wrangler.jsonc"] ?? "", "utf8");
+
+                const account = await deployed(deployedBy);
+
+                writeFileSync(join(workdir, "package.json"), APP_MANIFEST, "utf8");
+                writeFileSync(join(workdir, "wrangler.jsonc"), PRODUCTION_WRANGLER, "utf8");
+                account.calls.length = 0;
+
+                const { result } = await deleteWithHead(account, headFiles(head));
+
+                expect(result.code).toBe(EXIT_CODE.FAILURE);
+                expect(result.error).toMatch(/was not made by a deploy of this pull request in this repository/u);
+                expect(changes(account, "DELETE")).toHaveLength(0);
+                expect(account.workers.has("renamed-app-preview-42")).toBe(true);
+            });
+
+            it("reports success when the checkout's identity only sees the head's Worker as left over and the head's identity deletes it", async () => {
+                expect.assertions(2);
+
+                // The pull request changed only the app id: the Worker keeps its name, so the base identity finds it but no record.
+                const head = { "package.json": APP_MANIFEST.replace(APP_ID, HEAD_APP_ID), "wrangler.jsonc": PRODUCTION_WRANGLER };
+
+                writeFileSync(join(workdir, "package.json"), head["package.json"], "utf8");
+
+                const account = await deployed(CI);
+
+                writeFileSync(join(workdir, "package.json"), APP_MANIFEST, "utf8");
+
+                const { result } = await deleteWithHead(account, headFiles(head));
+
+                expect(result.code).toBe(0);
+                expect(account.workers.has("lunora-app-preview-42")).toBe(false);
+            });
+
+            it("looks in the head's account when the head config names one and the environment names none", async () => {
+                expect.assertions(1);
+
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    PRODUCTION_WRANGLER.replace('"name": "lunora-app",', '"name": "lunora-app", "account_id": "acct-base",'),
+                    "utf8",
+                );
+
+                const account = fakeAccount();
+                const accounts = new Set<string>();
+                const spying = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                    accounts.add(/\/accounts\/([^/]+)/u.exec(new URL(input as string).pathname)?.[1] ?? "");
+
+                    return account.fetch(input, init);
+                }) as typeof globalThis.fetch;
+                const head = {
+                    "package.json": APP_MANIFEST.replace(APP_ID, HEAD_APP_ID),
+                    "wrangler.jsonc": PRODUCTION_WRANGLER.replace('"name": "lunora-app",', '"name": "lunora-app", "account_id": "acct-head",'),
+                };
+
+                await runPreviewCommand({
+                    cwd: workdir,
+                    environment: { CLOUDFLARE_API_TOKEN: "token", GITHUB_REPOSITORY: "acme/app" },
+                    fetch: spying,
+                    headDir: headFiles(head),
+                    logger: silentLogger().logger,
+                    name: "42",
+                    subcommand: "delete",
+                });
+
+                expect([...accounts].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["acct-base", "acct-head"]);
+            });
+
             it("fails, never throws, when the head's wrangler config cannot be read", async () => {
                 expect.assertions(2);
 
@@ -3321,7 +3444,7 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             it("still deletes under the base identity when the head's cannot be read", async () => {
                 expect.assertions(2);
 
-                const account = await deployed();
+                const account = await deployed(CI);
                 const { result } = await deleteWithHead(account, headFiles({}));
 
                 expect(result.code).toBe(0);
@@ -3331,7 +3454,7 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             it("refuses to delete a resource the head's config binds in production, as the base config's would", async () => {
                 expect.assertions(3);
 
-                const account = await deployed();
+                const account = await deployed(CI);
                 const databaseId = recordOf(account).value.resources.find((resource) => resource.kind === "d1")?.id ?? "";
                 const head = renamedFiles(HEAD_APP_ID);
 

@@ -134,7 +134,11 @@ closes. It runs on the base branch, so it first copies the pull request's
 `package.json` and wrangler config out with `git` and passes them as
 `--head-dir`: the CLI reads them as data (nothing from the pull request is
 installed or run) to find a preview made under a `lunora.appId` or Worker name
-the pull request changed. If those differ from the base's, or cannot be read,
+the pull request changed, in the account the head's config names. A preview is deleted
+through the head's identity only if its record says this pull request's own CI
+deploy made it (the repository and pull request number, taken from
+`GITHUB_REPOSITORY` or `CI_PROJECT_PATH`): a record from another project, a
+local deploy or an older CLI is refused and the job fails. If those differ from the base's, or cannot be read,
 and no record exists under the base's, the job fails instead of passing. A
 pull request that changed both identifiers more than once leaves the preview of
 an intermediate commit behind, which no later identity can name: delete it with

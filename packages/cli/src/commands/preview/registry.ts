@@ -36,6 +36,11 @@ interface RecordedResource {
     pending?: true;
 }
 
+interface PreviewOrigin {
+    pullRequest: string;
+    repository: string;
+}
+
 interface PreviewRecord {
     /** The project the preview belongs to; its records are keyed by it. Absent on a record from before app ids. */
     appId?: string;
@@ -43,6 +48,8 @@ interface PreviewRecord {
     environment: string;
     /** The preview's slug. */
     name: string;
+    /** The pull or merge request this preview was deployed for, from the CI run that deployed it; absent for a local run. */
+    origin?: PreviewOrigin;
     production: string;
     resources: RecordedResource[];
     /** The Wrangler environment the preview was planned from (`--env`), when it was: `delete` plans from it too. */
@@ -172,6 +179,12 @@ const isRecordedResource = (worker: string, value: unknown): value is RecordedRe
     );
 };
 
+const isOrigin = (value: unknown): value is PreviewOrigin => {
+    const candidate = value as Partial<PreviewOrigin> | null;
+
+    return typeof candidate === "object" && candidate !== null && typeof candidate.repository === "string" && typeof candidate.pullRequest === "string";
+};
+
 const isRecord = (value: unknown): value is PreviewRecord => {
     const candidate = value as Partial<PreviewRecord> | null;
 
@@ -183,6 +196,7 @@ const isRecord = (value: unknown): value is PreviewRecord => {
         typeof candidate.production === "string" &&
         (candidate.appId === undefined || typeof candidate.appId === "string") &&
         (candidate.sourceEnv === undefined || typeof candidate.sourceEnv === "string") &&
+        (candidate.origin === undefined || isOrigin(candidate.origin)) &&
         Array.isArray(candidate.resources) &&
         candidate.resources.every((resource) => isRecordedResource(candidate.worker as string, resource))
     );
@@ -701,7 +715,7 @@ const workersSubdomain = async (request: Request): Promise<string> => {
     return subdomain;
 };
 
-export type { PreviewRecord, RecordedResource, Request };
+export type { PreviewOrigin, PreviewRecord, RecordedResource, Request };
 export {
     createResource,
     deleteRecord,

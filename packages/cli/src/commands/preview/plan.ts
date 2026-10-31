@@ -455,13 +455,28 @@ const IDENTITY_FIELDS: Record<string, ReadonlyArray<string>> = {
     vectorize: ["index_name"],
 };
 
-/** The resource identities and Worker name one config block points at. */
+/** What an identity names. A D1 database, a KV namespace and an R2 bucket live in separate namespaces, so equal values of different kinds are different things. */
+type IdentityKind = "worker" | PreviewResourceKind | (string & {});
+
+interface IdentityCandidate {
+    kind: IdentityKind;
+    value: string;
+}
+
+/** The kind a production config key names; keys of resources a preview never makes keep their own name. */
+const KIND_OF_KEY: Readonly<Record<string, IdentityKind>> = { d1_databases: "d1", kv_namespaces: "kv", r2_buckets: "r2" };
+
+const identityKey = (kind: IdentityKind, value: string): string => `${kind}:${value}`;
+
+/** The resource identities and Worker name one config block points at, each tagged with its kind. */
 const identitiesOf = (block: Record<string, unknown>): string[] => {
     const fieldValues = Object.entries(IDENTITY_FIELDS).flatMap(([key, fields]) =>
-        entriesOf(block[key]).flatMap((entry) => fields.map((field) => entry[field])),
+        entriesOf(block[key]).flatMap((entry) => fields.map((field) => [KIND_OF_KEY[key] ?? key, entry[field]] as const)),
     );
 
-    return [block.name, ...fieldValues].filter((value): value is string => typeof value === "string" && value !== "");
+    return [["worker", block.name] as const, ...fieldValues].flatMap(([kind, value]) =>
+        typeof value === "string" && value !== "" ? [identityKey(kind, value)] : [],
+    );
 };
 
 /** Every resource identity and Worker name production's config (top level and every environment) points at. */
@@ -472,20 +487,30 @@ const productionIdentities = (config: PreviewConfig): Set<string> =>
         ),
     );
 
-/** The production identities a preview name or id collides with; a preview may touch none of them. */
-const productionCollisions = (config: PreviewConfig, candidates: ReadonlyArray<string>): string[] => {
+/** The identities a preview Worker `worker` and its `resources` (ids and names) would hold, to check against production's. */
+const previewIdentities = (worker: string, resources: ReadonlyArray<{ id?: string; kind: PreviewResourceKind; name: string }>): IdentityCandidate[] => [
+    { kind: "worker", value: worker },
+    ...resources.flatMap((resource) => [
+        ...(resource.id === undefined ? [] : [{ kind: resource.kind, value: resource.id }]),
+        { kind: resource.kind, value: resource.name },
+    ]),
+];
+
+/** The production identities a preview name or id collides with, by kind; a preview may touch none of them. */
+const productionCollisions = (config: PreviewConfig, candidates: ReadonlyArray<IdentityCandidate>): string[] => {
     const identities = productionIdentities(config);
 
-    return candidates.filter((candidate) => identities.has(candidate));
+    return candidates.filter((candidate) => identities.has(identityKey(candidate.kind, candidate.value))).map((candidate) => candidate.value);
 };
 
-export type { PlannedResource, PreviewConfig, PreviewNames, PreviewPlan, PreviewResourceKind, ResourceIds };
+export type { IdentityCandidate, PlannedResource, PreviewConfig, PreviewNames, PreviewPlan, PreviewResourceKind, ResourceIds };
 export {
     accountsOfEnvironments,
     environmentConfig,
     planPreview,
     PREVIEW_MARKER_VAR,
     previewEnvironmentBlock,
+    previewIdentities,
     previewMarker,
     previewNames,
     previewResourceName,

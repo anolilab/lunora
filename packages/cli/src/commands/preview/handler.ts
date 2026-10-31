@@ -42,6 +42,7 @@ import {
     planPreview,
     PREVIEW_MARKER_VAR,
     previewEnvironmentBlock,
+    previewIdentities,
     previewMarker,
     previewNames,
     previewResources,
@@ -49,7 +50,7 @@ import {
     productionCollisions,
     resourceKey,
 } from "./plan";
-import type { PreviewRecord, RecordedResource, Request } from "./registry";
+import type { PreviewOrigin, PreviewRecord, RecordedResource, Request } from "./registry";
 import {
     createResource,
     deleteRecord,
@@ -154,15 +155,68 @@ const summarize = (record: PreviewRecord): PreviewSummary => {
     return { environment: record.environment, name: record.name, resources: record.resources, url: record.url, worker: record.worker };
 };
 
+/** Brackets the deploy pipeline, so cleanup removes what that pipeline left at the baseline path and nothing another process put there. */
+interface BaselineWatch {
+    begin: () => void;
+    end: () => void;
+}
+
+const watchBaseline = async <T>(watch: BaselineWatch | undefined, run: () => Promise<T>): Promise<T> => {
+    if (watch === undefined) {
+        return run();
+    }
+
+    watch.begin();
+
+    try {
+        return await run();
+    } finally {
+        watch.end();
+    }
+};
+
+/** The pull or merge request a CI run is for, when the environment says; a local run has none. */
+const ciOrigin = (environment: Readonly<Record<string, string | undefined>>, pullRequest: string): PreviewOrigin | undefined => {
+    const repository = nonEmpty(environment["GITHUB_REPOSITORY"]) ?? nonEmpty(environment["CI_PROJECT_PATH"]);
+
+    return repository === undefined ? undefined : { pullRequest, repository };
+};
+
+/** Whether `record` was deployed for the pull request `current` names, in the same repository. */
+const madeByThisRun = (record: PreviewRecord, current: PreviewOrigin | undefined): boolean =>
+    current !== undefined && record.origin?.repository === current.repository && record.origin.pullRequest === current.pullRequest;
+
+const ORIGIN_REFUSAL = (slug: string): string =>
+    `the record for preview "${slug}" was not made by a deploy of this pull request in this repository, so the identity the pull request's files name cannot be used to delete it; nothing was deleted`;
+
+/** What a record lists that production's config (this checkout's, and the pull request head's when it was read) also points at. */
+const recordCollisions = (context: PreviewContext, record: PreviewRecord): string[] => {
+    const identities = previewIdentities(record.worker, record.resources);
+
+    return [
+        ...productionCollisions(context.config, identities),
+        ...(context.alsoProduction === undefined ? [] : productionCollisions(context.alsoProduction, identities)),
+    ];
+};
+
+/** Which pull request this deploy is for: a delete that acts on an identity a pull request's files name needs it. */
+const stampOrigin = (record: PreviewRecord, options: PreviewCommandOptions, slug: string): void => {
+    Object.assign(record, { origin: ciOrigin(options.environment ?? process.env, slug) ?? record.origin });
+};
+
 interface PreviewContext {
     /** A second config whose production bindings a delete also refuses to touch: the pull request head's, when it is read. */
     alsoProduction?: PreviewConfig;
     /** `lunora.appId` from `package.json`; `undefined` until one is minted. */
     appId: string | undefined;
+    /** The schema baseline as this run sees it: whether the deploy pipeline is running, and what it left behind. */
+    baseline?: BaselineWatch;
     /** The committed config as a whole: a `--env` preview is planned from one environment but must collide with none of it. */
     committed?: PreviewConfig;
     config: PreviewConfig;
     cwd: string;
+    /** A delete that acts on an identity named by a pull request's files deletes only a record this pull request's own deploy made. */
+    requireOrigin?: boolean;
     wranglerPath: string;
 }
 
@@ -677,10 +731,7 @@ const shipHeld = async (
 
         // Before anything is created or written: a resource this preview already owns that production now points at is a
         // refusal, not something to find out after more storage was made beside it.
-        const owned = productionCollisions(context.committed ?? config, [
-            plan.worker,
-            ...(existing?.resources ?? []).flatMap((resource) => [resource.id, resource.name]),
-        ]);
+        const owned = productionCollisions(context.committed ?? config, previewIdentities(plan.worker, existing?.resources ?? []));
 
         if (owned.length > 0) {
             return fail(logger, `preview "${plan.slug}" would bind production's ${owned.join(", ")}; refusing to deploy, nothing was created`);
@@ -698,6 +749,8 @@ const shipHeld = async (
             version: 1,
             worker: plan.worker,
         };
+        stampOrigin(record, options, plan.slug);
+
         // The lookups above may have outlasted the hold: another run may own the record by now, and this write must not undo it.
         await hold.verify();
         await writeRecord(request, namespace, record);
@@ -708,7 +761,12 @@ const shipHeld = async (
         return fail(logger, `preview "${plan.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
     }
 
-    const collisions = productionCollisions(context.committed ?? config, [...ids.values()]);
+    const collisions = productionCollisions(
+        context.committed ?? config,
+        [...ids].map(([key, value]) => {
+            return { kind: key.slice(0, key.indexOf(":")), value };
+        }),
+    );
 
     if (collisions.length > 0) {
         return fail(logger, `preview "${plan.slug}" would bind production's ${collisions.join(", ")}; refusing to deploy`);
@@ -726,27 +784,29 @@ const shipHeld = async (
     try {
         checkHeld(hold, plan.slug);
 
-        const deployed = await runDeployCommand({
-            // A preview starts from its own data; production's schema baseline does not describe it.
-            allowSchemaDrift: true,
-            cwd,
-            env: plan.environment,
-            fetchImpl: options.adminFetch,
-            format: options.format,
-            healthCheck: true,
-            healthFetch: options.healthFetch,
-            healthSleep: options.healthSleep,
-            interactive: false,
-            isolatedPreview: true,
-            logger,
-            migrate: true,
-            migrateToken: secrets.adminToken,
-            migrateUrl: url,
-            migrateYes: true,
-            secretsFile: secretsFile.path,
-            spawner: options.spawner,
-            target: "cloudflare",
-        });
+        const deployed = await watchBaseline(context.baseline, async () =>
+            runDeployCommand({
+                // A preview starts from its own data; production's schema baseline does not describe it.
+                allowSchemaDrift: true,
+                cwd,
+                env: plan.environment,
+                fetchImpl: options.adminFetch,
+                format: options.format,
+                healthCheck: true,
+                healthFetch: options.healthFetch,
+                healthSleep: options.healthSleep,
+                interactive: false,
+                isolatedPreview: true,
+                logger,
+                migrate: true,
+                migrateToken: secrets.adminToken,
+                migrateUrl: url,
+                migrateYes: true,
+                secretsFile: secretsFile.path,
+                spawner: options.spawner,
+                target: "cloudflare",
+            }),
+        );
 
         // The URL built from the Worker's name and the account's subdomain, not one parsed out of wrangler's output: the
         // seed carries the preview's admin token, which must only go where the migrations went. Recorded only for a Worker
@@ -957,12 +1017,28 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
         return fail(logger, `could not read ${baselinePath}: ${reason(error)}`);
     }
 
+    let running = false;
+    let written: Buffer | undefined;
+    const watch: BaselineWatch = {
+        begin: () => {
+            running = true;
+        },
+        end: () => {
+            written = existsSync(baselinePath) ? readFileSync(baselinePath) : undefined;
+            running = false;
+        },
+    };
     const putBack = (): void => {
         try {
             restore();
 
             if (baselineBefore === undefined) {
-                rmSync(baselinePath, { force: true });
+                // Only what this run's pipeline left: a baseline another process wrote meanwhile is that process's.
+                const current = existsSync(baselinePath) ? readFileSync(baselinePath) : undefined;
+
+                if (current !== undefined && (running || (written !== undefined && current.equals(written)))) {
+                    rmSync(baselinePath, { force: true });
+                }
             } else if (!baselineBefore.equals(existsSync(baselinePath) ? readFileSync(baselinePath) : Buffer.alloc(0))) {
                 writeFileSync(baselinePath, baselineBefore);
             }
@@ -1006,7 +1082,7 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
         }
 
         const { plan } = planned;
-        const collisions = productionCollisions(committed, [plan.worker, ...plan.resources.map((resource) => resource.name)]);
+        const collisions = productionCollisions(committed, previewIdentities(plan.worker, plan.resources));
 
         if (collisions.length > 0) {
             return fail(logger, `preview "${plan.slug}" names collide with production's ${collisions.join(", ")}; name the preview differently`);
@@ -1030,7 +1106,7 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
             return fail(logger, access.error, EXIT_CODE.AUTH);
         }
 
-        return await shipPreview({ ...context, committed, config, appId: identified.appId }, plan, variables, options, access.request);
+        return await shipPreview({ ...context, baseline: watch, committed, config, appId: identified.appId }, plan, variables, options, access.request);
     } finally {
         putBack();
         disarm();
@@ -1201,6 +1277,35 @@ const plannedAs = (config: PreviewConfig, record: PreviewRecord): PreviewPlan | 
     return origin.config === undefined ? undefined : planPreview({ ...origin.config, name: record.production }, record.name, record.sourceEnv).plan;
 };
 
+/**
+ * KV is eventually consistent, and a checkout can carry a different app id than the one that deployed: an absent record is
+ * "nothing to delete" only when nothing under the preview's names is left in the account.
+ */
+const unrecordedRefusal = async (request: Request, config: PreviewConfig, slug: string, logger: Logger): Promise<PreviewCommandResult | undefined> => {
+    const remains = await leftBehind(request, config, slug);
+
+    return remains.length === 0
+        ? undefined
+        : fail(
+              logger,
+              `no record of preview "${slug}" could be read, but ${remains.join(" and ")}; nothing was deleted. If a deploy just ran, its record may not have reached this location yet: run delete again. Otherwise delete from a checkout whose package.json has the lunora.appId that deployed it`,
+              EXIT_CODE.FAILURE,
+          );
+};
+
+const reportDryRun = (record: PreviewRecord, logger: Logger): PreviewCommandResult => {
+    logger.info(`dry run: would delete Worker "${record.worker}" and its Durable Objects`);
+
+    for (const resource of record.resources) {
+        logger.info(`  ${resource.kind} "${resource.name}" (${resource.binding})`);
+    }
+
+    return { code: EXIT_CODE.SUCCESS, data: { plan: summarize(record) } };
+};
+
+const isRecordOfThisPreview = (context: PreviewContext, record: PreviewRecord, slug: string): boolean =>
+    record.worker === previewWorkerName(record.production, record.name) && record.appId === context.appId && record.name === slug;
+
 const deleteRecorded = async (
     context: PreviewContext,
     options: PreviewCommandOptions,
@@ -1217,16 +1322,10 @@ const deleteRecorded = async (
                 : await recordFor(request, namespace, context.appId, names.production, names.slug, logger, options.dryRun !== true);
 
         if (namespace === undefined || record === undefined) {
-            const remains = await leftBehind(request, config, names.slug);
+            const refusal = await unrecordedRefusal(request, config, names.slug, logger);
 
-            // KV is eventually consistent, and a checkout can carry a different app id than the one that deployed: an absent
-            // record is "nothing to delete" only when nothing under the preview's names is left in the account.
-            if (remains.length > 0) {
-                return fail(
-                    logger,
-                    `no record of preview "${names.slug}" could be read, but ${remains.join(" and ")}; nothing was deleted. If a deploy just ran, its record may not have reached this location yet: run delete again. Otherwise delete from a checkout whose package.json has the lunora.appId that deployed it`,
-                    EXIT_CODE.FAILURE,
-                );
+            if (refusal !== undefined) {
+                return refusal;
             }
         }
     } catch (error) {
@@ -1238,24 +1337,21 @@ const deleteRecorded = async (
     }
 
     // The record is account data anyone with the token can edit: it is trusted only for what a preview could own.
-    const recordedNames = [record.worker, ...record.resources.flatMap((resource) => [resource.id, resource.name])];
-    const collisions = [
-        ...productionCollisions(config, recordedNames),
-        ...(context.alsoProduction === undefined ? [] : productionCollisions(context.alsoProduction, recordedNames)),
-    ];
+    const collisions = recordCollisions(context, record);
 
     // The id and `name` form the key the record is later deleted under, so both must be the ones read. The Worker
     // is the one `record.production` named at deploy time, which is not the current name once the app was renamed.
-    if (
-        record.worker !== previewWorkerName(record.production, record.name) ||
-        record.appId !== context.appId ||
-        record.name !== names.slug ||
-        collisions.length > 0
-    ) {
+    if (!isRecordOfThisPreview(context, record, names.slug) || collisions.length > 0) {
         return fail(
             logger,
             `the record for preview "${names.slug}" names ${collisions.length > 0 ? `production's ${collisions.join(", ")}` : `Worker "${record.worker}", which is not the Worker of this preview`}; refusing to delete anything`,
         );
+    }
+
+    // An identity read from a pull request's files can name another project's preview of the same number: only a record
+    // this pull request's own deploy made, in this repository, is deleted through it.
+    if (context.requireOrigin === true && !madeByThisRun(record, ciOrigin(options.environment ?? process.env, names.slug))) {
+        return fail(logger, ORIGIN_REFUSAL(names.slug), EXIT_CODE.FAILURE);
     }
 
     let states: ("changed" | "missing" | "present")[];
@@ -1277,13 +1373,7 @@ const deleteRecorded = async (
     }
 
     if (options.dryRun === true) {
-        logger.info(`dry run: would delete Worker "${record.worker}" and its Durable Objects`);
-
-        for (const resource of record.resources) {
-            logger.info(`  ${resource.kind} "${resource.name}" (${resource.binding})`);
-        }
-
-        return { code: EXIT_CODE.SUCCESS, data: { plan: summarize(record) } };
+        return reportDryRun(record, logger);
     }
 
     return removePreview(
@@ -1470,6 +1560,46 @@ const readHeadIdentity = (
 };
 
 /**
+ * The outcome of deleting under both identities. The checkout's can report the head's Worker as left over, which the head's
+ * then removes: once either deleted something, a failed run is repeated, and what it then finds gone no longer counts.
+ */
+const settleHeadDeletes = async (
+    contexts: ReadonlyArray<PreviewContext>,
+    first: ReadonlyArray<PreviewCommandResult>,
+    options: PreviewCommandOptions,
+    name: string,
+): Promise<PreviewCommandResult> => {
+    const results = [...first];
+
+    if (results.some((result) => result.code === EXIT_CODE.SUCCESS)) {
+        for (const [index, result] of results.entries()) {
+            if (result.code !== EXIT_CODE.SUCCESS && result.code !== EXIT_CODE.NOT_FOUND) {
+                // eslint-disable-next-line no-await-in-loop -- sequential: each repeat sees what the earlier ones removed
+                const again = await deletePreview(contexts[index] as PreviewContext, options, name);
+
+                results[index] = again.code === EXIT_CODE.NOT_FOUND ? { code: EXIT_CODE.SUCCESS } : again;
+            }
+        }
+    }
+
+    const failed = results.find((result) => result.code !== EXIT_CODE.SUCCESS && result.code !== EXIT_CODE.NOT_FOUND);
+
+    if (failed !== undefined) {
+        return failed;
+    }
+
+    return (
+        results.find((result) => result.code === EXIT_CODE.SUCCESS && result.data !== undefined) ??
+        results.find((result) => result.code === EXIT_CODE.SUCCESS) ??
+        fail(
+            options.logger,
+            `no preview "${name}" is on record under this checkout's project or under the pull request head's, whose id or Worker name differs; nothing was deleted`,
+            EXIT_CODE.FAILURE,
+        )
+    );
+};
+
+/**
  * Delete under this checkout's identity and, when the pull request's head names another, under that too: a pull request
  * that changed `lunora.appId` or the Worker name made its previews under the new ones, which the base checkout cannot
  * name. Not-found is answered only when no identity could have a record; with two different identities it is a failure.
@@ -1501,24 +1631,17 @@ const deleteForHead = async (context: PreviewContext, options: PreviewCommandOpt
         return deletePreview(checked, options, name);
     }
 
-    const results = [
-        await deletePreview(checked, options, name),
-        await deletePreview({ ...checked, appId, config: { ...context.config, name: production } }, options, name),
-    ];
-    const failed = results.find((result) => result.code !== EXIT_CODE.SUCCESS && result.code !== EXIT_CODE.NOT_FOUND);
+    // Under the head's account too, as `--env` does: the head may have moved the project to another one.
+    const asHead: PreviewContext = {
+        ...checked,
+        appId,
+        config: { ...context.config, ...(typeof headConfig.account_id === "string" ? { account_id: headConfig.account_id } : {}), name: production },
+        requireOrigin: true,
+    };
+    const contexts = [checked, asHead];
+    const results = [await deletePreview(checked, options, name), await deletePreview(asHead, options, name)];
 
-    if (failed !== undefined) {
-        return failed;
-    }
-
-    return (
-        results.find((result) => result.code === EXIT_CODE.SUCCESS) ??
-        fail(
-            options.logger,
-            `no preview "${name}" is on record under this checkout's project or under the pull request head's, whose id or Worker name differs; nothing was deleted`,
-            EXIT_CODE.FAILURE,
-        )
-    );
+    return settleHeadDeletes(contexts, results, options, name);
 };
 
 const runPreviewCommand = async (options: PreviewCommandOptions): Promise<PreviewCommandResult> => {
