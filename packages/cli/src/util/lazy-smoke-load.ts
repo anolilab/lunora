@@ -433,6 +433,18 @@ const unexpectedAnswer = (response: Response, text: string): SmokeLoadError => {
     );
 };
 
+/** Evaluates one module on the Worker; its error message, or `undefined` when it loaded. Anything but this run's answer blocks. */
+const requestModule = async (input: Parameters<typeof requestStep>[0], runId: string): Promise<string | undefined> => {
+    const step = await requestStep(input);
+    const message = step.body?.message;
+
+    if (step.body?.run !== runId || (message !== undefined && typeof message !== "string")) {
+        throw unexpectedAnswer(step.response, step.text);
+    }
+
+    return message;
+};
+
 /**
  * Ask the booted smoke Worker to evaluate every lazy module, one request per step, so a step that
  * never settles is named by the timeout. The first request evaluates nothing: it tells a Worker whose
@@ -479,14 +491,12 @@ const probeLazyModules = async (input: {
 
     for (const [index, module] of deferred.entries()) {
         // eslint-disable-next-line no-await-in-loop -- one module per request, so a timeout names the module that hangs
-        const step = await requestStep({ ...request, pending: `${module.kind} module ${module.label}`, query: `step=deferred&index=${String(index)}` });
-        const message = step.body?.message;
+        const message = await requestModule(
+            { ...request, pending: `${module.kind} module ${module.label}`, query: `step=deferred&index=${String(index)}` },
+            runId,
+        );
 
-        if (step.body?.run !== runId || (message !== undefined && typeof message !== "string")) {
-            throw unexpectedAnswer(step.response, step.text);
-        }
-
-        if (typeof message === "string") {
+        if (message !== undefined) {
             failures.push({ deferred: module.kind, functionPath: `${module.kind}:${module.label}`, message });
         }
     }
@@ -495,18 +505,12 @@ const probeLazyModules = async (input: {
 
     for (const specifier of integrationModules) {
         // eslint-disable-next-line no-await-in-loop -- one module per request, so a timeout names the module that hangs
-        const step = await requestStep({
-            ...request,
-            pending: `import(${JSON.stringify(specifier)})`,
-            query: new URLSearchParams({ specifier, step: "integration" }).toString(),
-        });
-        const message = step.body?.message;
+        const message = await requestModule(
+            { ...request, pending: `import(${JSON.stringify(specifier)})`, query: new URLSearchParams({ specifier, step: "integration" }).toString() },
+            runId,
+        );
 
-        if (step.body?.run !== runId || (message !== undefined && typeof message !== "string")) {
-            throw unexpectedAnswer(step.response, step.text);
-        }
-
-        if (typeof message === "string") {
+        if (message !== undefined) {
             integrationFailures.push({ message, specifier });
         }
     }
@@ -611,7 +615,7 @@ const startSmokeServer = (options: DevProcessOptions): Promise<DevProcess | unde
 /** What was covered, for the success line: only the kinds the project has. */
 const describeCovered = ({ checked, deferredChecked, integrations }: ProbeResult): string =>
     [
-        ...(checked > 0 ? [`${String(checked)} lazy function(s)`] : []),
+        `${String(checked)} lazy function(s)`,
         ...(deferredChecked > 0 ? [`${String(deferredChecked)} deferred module(s)`] : []),
         ...(integrations.checked > 0 ? [`${String(integrations.checked)} integration module(s) loaded with import()`] : []),
     ].join(" and ");
@@ -759,7 +763,12 @@ export default {
             return Response.json({ ...${functionsFile === undefined ? "{ checked: 0, failures: [] }" : "(await loadAllFunctions())"}, run: runId });
         }
 
-        const load = step === "integration" ? integrationLoaders.get(url.searchParams.get("specifier") ?? "") : undefined;
+        const load =
+            step === "deferred"
+                ? deferred[Number(url.searchParams.get("index"))]
+                : step === "integration"
+                  ? integrationLoaders.get(url.searchParams.get("specifier") ?? "")
+                  : undefined;
 
         if (load !== undefined) {
             try {
@@ -850,7 +859,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
 
     const { base, configFile } = target;
     // Only reached from lazy output (see above); an eager build's loaders are not probed.
-    const integrationModules = collectIntegrationModules(cwd, composedEntry ?? readWorkerConfig(cwd, environment).main);
+    const integrationModules = collectIntegrationModules(cwd, composedEntry ?? readWorkerConfig(cwd, environment).main, schemaDirectory);
 
     const output: string[] = [];
     let directory: string | undefined;
