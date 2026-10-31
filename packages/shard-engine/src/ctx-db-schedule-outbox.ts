@@ -394,6 +394,21 @@ const readScheduleOutbox = (sql: SqlExec, limit: number, cursor?: string): { ent
     return { entries, nextCursor: rows.length > limit && last !== undefined ? toScheduleOutboxCursor(last) : undefined };
 };
 
+/**
+ * What a drop needs to know about the row it is about to remove, captured before it awaits the
+ * scheduler: whether the row is parked, and a version that changes when the id is recorded anew.
+ * An id alone cannot say "the same entry": a mutation may schedule a new job under the same explicit
+ * id while a drop is awaiting, and `INSERT OR REPLACE` gives that row a new `created_at` and envelope.
+ */
+const readScheduleOutboxState = (sql: SqlExec, id: string): { parked: boolean; version: string } | undefined => {
+    const row = runDrizzle<{ created_at: number; dead: number; envelope_json: string }>(
+        sql,
+        dsql`SELECT created_at, envelope_json, dead FROM ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)} WHERE id = ${id}`,
+    ).toArray()[0];
+
+    return row === undefined ? undefined : { parked: row.dead === 1, version: `${String(row.created_at)}:${row.envelope_json}` };
+};
+
 const hasScheduleOutboxEntry = (sql: SqlExec, id: string): boolean =>
     runDrizzle<{ id: string }>(sql, dsql`SELECT id FROM ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)} WHERE id = ${id}`).toArray().length > 0;
 
@@ -437,6 +452,7 @@ export {
     readDueScheduleOutbox,
     readDueScheduleOutboxEntry,
     readScheduleOutbox,
+    readScheduleOutboxState,
     recordScheduleOutbox,
     requeueScheduleOutbox,
     SCHEDULE_OUTBOX_TABLE,

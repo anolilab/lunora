@@ -193,7 +193,6 @@ import {
     GlobalPollTick,
     globalShapeReadKey,
     handleReplicaControl,
-    hasScheduleOutboxEntry,
     isDevEnvironment,
     isLossyBody,
     isTtlExpired,
@@ -230,6 +229,7 @@ import {
     readMigrationStatus,
     readQueueMessageById,
     readReactorState,
+    readScheduleOutboxState,
     readShapePokeCursor,
     readTablePage,
     recordCapturedMail,
@@ -1656,6 +1656,16 @@ const cancelScheduleOutboxJob = async (scheduler: SchedulerLike | undefined, id:
 
     await cancel.call(scheduler, id);
 };
+
+/**
+ * One hand-off awaiting the scheduler. `version` identifies the outbox row it was made for, so a drop
+ * of an older entry under the same id is not mistaken for a drop of this one.
+ */
+interface ScheduleOutboxAttempt {
+    dropped: boolean;
+    stale: boolean;
+    version: string | undefined;
+}
 
 /** How many dropped ids {@link ShardDO.scheduleOutboxDropped} remembers. */
 const SCHEDULE_OUTBOX_DROPPED_CAP = 1024;
@@ -3255,14 +3265,14 @@ abstract class ShardDO {
      * itself, not inferred from the row, because a row can also vanish for an innocent
      * reason. In memory is enough: an attempt never outlives the instance that started it.
      */
-    private readonly scheduleOutboxAttempts = new Map<string, Set<{ dropped: boolean; stale: boolean }>>();
+    private readonly scheduleOutboxAttempts = new Map<string, Set<ScheduleOutboxAttempt>>();
 
     /**
      * Outbox entries an operator is dropping right now. The drop first asks the
      * scheduler to cancel the job (it may already hold it), and the retry loop must
      * not hand the entry over again while that is awaiting.
      */
-    private readonly scheduleOutboxDropping = new Set<string>();
+    private readonly scheduleOutboxDropping = new Map<string, string | undefined>();
 
     /**
      * Ids an operator dropped whose buffered post-commit call may not have started yet. A missing
@@ -3271,6 +3281,9 @@ abstract class ShardDO {
      * shard that is dropped from for months does not grow it.
      */
     private readonly scheduleOutboxDropped = new Set<string>();
+
+    /** The `created_at` last handed to `recordScheduleOutbox`; see {@link ShardDO.scheduleOutbox}. */
+    private lastScheduleOutboxRecordAt = 0;
 
     /**
      * Epoch millis before which registration is not retried, set when one
@@ -6913,7 +6926,10 @@ abstract class ShardDO {
             record: (id, envelope): void => {
                 // New custody for the id supersedes an earlier drop of it.
                 this.scheduleOutboxDropped.delete(id);
-                recordScheduleOutbox(this.sql as SqlExec, id, JSON.stringify(envelope), Date.now());
+                // Strictly increasing, so two records of one id never share a `created_at` and a row's
+                // (created_at, envelope) pair identifies it even for an identical call recorded twice.
+                this.lastScheduleOutboxRecordAt = Math.max(Date.now(), this.lastScheduleOutboxRecordAt + 0.001);
+                recordScheduleOutbox(this.sql as SqlExec, id, JSON.stringify(envelope), this.lastScheduleOutboxRecordAt);
             },
             wake: (): void => {
                 // Fire-and-forget: this is called from a settle that is about to
@@ -12118,14 +12134,17 @@ abstract class ShardDO {
         const { id } = parseScheduleOutboxEntryArgs("dropOutboxEntry", args);
         const sql = this.sql as SqlExec;
 
-        // Registered before the first await, so the retry loop and a late attempt both see it.
-        this.scheduleOutboxDropping.add(id);
+        const before = readScheduleOutboxState(sql, id);
+
+        if (before === undefined) {
+            return adminResponse({ dropped: false });
+        }
+
+        // Registered before the first await, so the retry loop and a late attempt both see it. It names
+        // the exact entry being dropped: a job scheduled anew under the same id is not that entry.
+        this.scheduleOutboxDropping.set(id, before.version);
 
         try {
-            if (!hasScheduleOutboxEntry(sql, id)) {
-                return adminResponse({ dropped: false });
-            }
-
             let cancelError: Error | undefined;
 
             try {
@@ -12134,13 +12153,32 @@ abstract class ShardDO {
                 cancelError = error instanceof Error ? error : new Error(String(error));
             }
 
+            const after = readScheduleOutboxState(sql, id);
+
+            if (after?.version !== before.version) {
+                // The entry this drop was cancelling is gone, replaced by a new schedule under the same
+                // id (or released by its own hand-off). Whatever is there now is not this drop's to
+                // delete, mark or cancel.
+                this.recordAudit("dropOutboxEntry", { id, detail: { outcome: "applied" } });
+
+                return adminResponse({ dropped: true });
+            }
+
             const awaiting = this.scheduleOutboxAttempts.get(id);
 
             // An attempt still awaiting the scheduler may yet land the job: it carries the drop
             // and cancels the job itself, and the row has to outlive it. Parking keeps the row
             // from being handed over meanwhile; the attempt removes it once its cancel is confirmed.
             for (const attempt of awaiting ?? []) {
-                attempt.dropped = true;
+                if (attempt.version === before.version) {
+                    attempt.dropped = true;
+                }
+            }
+
+            // A job that landed during the drop and could not be cancelled by its attempt left the
+            // row parked, which it was not when the drop began: the job may still run.
+            if (cancelError === undefined && after.parked && !before.parked) {
+                cancelError = new Error("a hand-off that landed during the drop could not be cancelled, so the job may still run");
             }
 
             if (cancelError !== undefined) {
@@ -15815,6 +15853,7 @@ abstract class ShardDO {
         // The row is read again, synchronously with the claim below, and that read is
         // what gets replayed. A drop in progress owns the id until it settles.
         const entry = this.scheduleOutboxDropping.has(snapshot.id) ? undefined : readDueScheduleOutboxEntry(sql, snapshot.id, Date.now());
+        const version = readScheduleOutboxState(sql, snapshot.id)?.version;
 
         if (entry === undefined) {
             return;
@@ -15842,8 +15881,8 @@ abstract class ShardDO {
             return;
         }
 
-        const attempt = { dropped: false, stale: false };
-        const awaiting = this.scheduleOutboxAttempts.get(entry.id) ?? new Set<typeof attempt>();
+        const attempt: ScheduleOutboxAttempt = { dropped: false, stale: false, version };
+        const awaiting = this.scheduleOutboxAttempts.get(entry.id) ?? new Set<ScheduleOutboxAttempt>();
 
         awaiting.add(attempt);
         this.scheduleOutboxAttempts.set(entry.id, awaiting);
@@ -15859,7 +15898,7 @@ abstract class ShardDO {
                 { ...envelope.options, id: entry.id } as never,
             );
 
-            await this.settleScheduleOutboxHandOff(sql, scheduler, entry.id, attempt.dropped, trace);
+            await this.settleScheduleOutboxHandOff(sql, scheduler, entry.id, this.wasScheduleOutboxDropped(entry.id, attempt), trace);
         } catch (error) {
             await this.settleFailedScheduleOutboxAttempt(sql, scheduler, { attempt, attempts, envelope, error, forever, id: entry.id }, trace);
         } finally {
@@ -15883,19 +15922,21 @@ abstract class ShardDO {
         // An operator may have dropped the entry (or the retry loop parked it) while an earlier
         // hand-off in the same drain was still awaiting: the call must not start then. Checked
         // synchronously with the registration below, the same ordering a drop uses.
-        if (this.scheduleOutboxDropping.has(id) || this.scheduleOutboxDropped.has(id)) {
+        const state = readScheduleOutboxState(sql, id);
+
+        if (this.scheduleOutboxDropped.has(id) || (state !== undefined && this.scheduleOutboxDropping.get(id) === state.version)) {
             return;
         }
 
         // A parked row is one the retry loop gave up on or a failed drop stopped. An ABSENT row is
         // not a drop: a sibling call with the same explicit id may already have released it, and that
         // call must still reach the scheduler, which answers it as a duplicate.
-        if (hasScheduleOutboxEntry(sql, id) && readDueScheduleOutboxEntry(sql, id, Number.MAX_SAFE_INTEGER) === undefined) {
+        if (state?.parked === true) {
             return;
         }
 
-        const attempt = { dropped: false, stale: false };
-        const awaiting = this.scheduleOutboxAttempts.get(id) ?? new Set<typeof attempt>();
+        const attempt: ScheduleOutboxAttempt = { dropped: false, stale: false, version: state?.version };
+        const awaiting = this.scheduleOutboxAttempts.get(id) ?? new Set<ScheduleOutboxAttempt>();
 
         awaiting.add(attempt);
         this.scheduleOutboxAttempts.set(id, awaiting);
@@ -15904,7 +15945,7 @@ abstract class ShardDO {
             await run();
         } catch (error) {
             try {
-                if (attempt.dropped) {
+                if (this.wasScheduleOutboxDropped(id, attempt)) {
                     await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, true);
                 }
             } catch {
@@ -15917,7 +15958,7 @@ abstract class ShardDO {
         }
 
         try {
-            await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, attempt.dropped);
+            await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, this.wasScheduleOutboxDropped(id, attempt));
         } catch {
             // The scheduler accepted the job and the mutation committed. A bookkeeping failure here
             // (a storage hiccup, a stub handle) must not surface as a failed mutation: the row that
@@ -15937,7 +15978,12 @@ abstract class ShardDO {
         }
     }
 
-    private releaseScheduleOutboxAttempt(id: string, awaiting: Set<{ dropped: boolean; stale: boolean }>, attempt: { dropped: boolean; stale: boolean }): void {
+    /** Whether the entry this attempt was made for has been dropped, now or while it was in the air. */
+    private wasScheduleOutboxDropped(id: string, attempt: ScheduleOutboxAttempt): boolean {
+        return attempt.dropped || (attempt.version !== undefined && this.scheduleOutboxDropping.get(id) === attempt.version);
+    }
+
+    private releaseScheduleOutboxAttempt(id: string, awaiting: Set<ScheduleOutboxAttempt>, attempt: ScheduleOutboxAttempt): void {
         awaiting.delete(attempt);
 
         if (awaiting.size === 0) {
@@ -15950,7 +15996,7 @@ abstract class ShardDO {
         sql: SqlExec,
         scheduler: SchedulerLike,
         failed: {
-            attempt: { dropped: boolean; stale: boolean };
+            attempt: ScheduleOutboxAttempt;
             attempts: number;
             envelope: ScheduleOutboxEnvelope;
             error: unknown;
@@ -15965,7 +16011,7 @@ abstract class ShardDO {
         // dispatch landed and only the bookkeeping was lost. Custody ends the
         // same way an acceptance ends it.
         if (isLunoraError(error) && error.code === "DUPLICATE_SCHEDULE_ID") {
-            await this.settleScheduleOutboxHandOff(sql, scheduler, id, attempt.dropped, trace);
+            await this.settleScheduleOutboxHandOff(sql, scheduler, id, this.wasScheduleOutboxDropped(id, attempt), trace);
 
             return;
         }
@@ -15973,7 +16019,7 @@ abstract class ShardDO {
         // The operator dropped the entry while this attempt was awaiting.
         // The accept may have been lost on the way back, so the job can still exist: cancel it, and
         // keep the row (parked) if that cannot be confirmed.
-        if (attempt.dropped) {
+        if (this.wasScheduleOutboxDropped(id, attempt)) {
             await this.settleScheduleOutboxHandOff(sql, scheduler, id, true, trace);
 
             return;
@@ -16006,7 +16052,7 @@ abstract class ShardDO {
         dropped: boolean,
         trace?: TraceRefLike,
     ): Promise<void> {
-        if (!dropped && !this.scheduleOutboxDropping.has(id)) {
+        if (!dropped) {
             forgetScheduleOutbox(sql, id);
 
             return;

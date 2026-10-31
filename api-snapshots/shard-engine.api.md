@@ -5068,6 +5068,15 @@ const readScheduleOutbox: (sql: SqlExec, limit: number, cursor?: string) => {
 };
 ```
 
+### `readScheduleOutboxState` (const)
+
+```ts
+const readScheduleOutboxState: (sql: SqlExec, id: string) => {
+    parked: boolean;
+    version: string;
+} | undefined;
+```
+
 ### `readSchemaHistory` (const)
 
 ```ts

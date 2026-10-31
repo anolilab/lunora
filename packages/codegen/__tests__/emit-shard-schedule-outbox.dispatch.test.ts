@@ -903,6 +903,67 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         expect(harness.outbox()).toStrictEqual([]);
     });
 
+    it("leaves a job scheduled anew under the same id alone when the drop that was cancelling the old one finishes", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        const { entered, release } = harness.holdCancel();
+        const drop = harness.drop("dup-id");
+
+        await entered;
+        harness.setReachable(true);
+        harness.received.length = 0;
+
+        // A new mutation schedules under the same explicit id while the drop awaits the scheduler.
+        await harness.shard.handleRpc("outbox:sameId", {});
+        release();
+        await drop;
+
+        // The new row is a different entry: it was handed off, not skipped and not deleted by the old drop.
+        expect(harness.received).toHaveLength(2);
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("reports a drop as failed when an attempt that landed during it could not cancel the job", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlacedForever", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+        const landing = harness.hold();
+
+        harness.setReachable(true);
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await landing.entered;
+
+        const cancelling = harness.holdCancel();
+        const drop = harness.drop(id);
+
+        await cancelling.entered;
+        // The job lands while the drop is cancelling; the attempt's own cancel is refused and parks the row.
+        harness.failCancel(new Error("cancel refused"));
+        landing.release();
+        await attempt;
+        harness.failCancel(undefined);
+        cancelling.release();
+
+        // The drop's cancel worked, but a job that may still run was left parked: that is not a success.
+        await expect(drop).rejects.toThrow(/may still run|cancel/u);
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 1, id }]);
+    });
+
     it("does not hand a dropped entry to the scheduler when it was already queued in the same batch", async () => {
         expect.assertions(3);
 

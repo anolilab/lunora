@@ -113,6 +113,7 @@ export {
     readDueScheduleOutbox,
     readDueScheduleOutboxEntry,
     readScheduleOutbox,
+    readScheduleOutboxState,
     recordScheduleOutbox,
     requeueScheduleOutbox,
     SCHEDULE_OUTBOX_TABLE,
