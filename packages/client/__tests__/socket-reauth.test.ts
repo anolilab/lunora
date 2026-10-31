@@ -1133,3 +1133,139 @@ describe("a follower tab's claims request", () => {
         client.close();
     });
 });
+
+describe("a follower tab and a change of its claims", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+        vi.useRealTimers();
+    });
+
+    type Internals = {
+        applyOwnClaims: (claims: string) => void;
+        followerClaims: (key: string, retry: () => void, frameClaims?: string) => null | string | undefined;
+        ownClaimsValue: string | undefined;
+        subscriptions: { all: () => { serverBase: unknown; serverClaims: string | undefined }[] };
+    };
+
+    const build = (claimsAnswer: () => Promise<Response>, crossTab = false) => {
+        const { WebSocket } = createSocketHarness();
+        const fetchMock = vi.fn<typeof fetch>(async (input) =>
+            (input as string).includes("/_lunora/claims") ? claimsAnswer() : jsonResponse({ result: { ok: true } }),
+        );
+
+        if (crossTab) {
+            vi.spyOn(TabCoordinator.prototype, "isLeader").mockReturnValue(false);
+        }
+
+        const client = new LunoraClient({
+            authTokenOnUpgrade: true,
+            crossTabSync: crossTab,
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            url: "http://app.test",
+            WebSocket,
+        });
+        const claimsCalls = () => fetchMock.mock.calls.filter(([input]) => (input as string).includes("/_lunora/claims"));
+
+        return { claimsCalls, client, internals: client as unknown as Internals };
+    };
+
+    it("asks again, once per fingerprint, when the leader's differs, and judges the held frame by the answer", async () => {
+        expect.assertions(6);
+
+        const { claimsCalls, client, internals } = build(async () => jsonResponse({ claims: "fp-new" }));
+        const retry = vi.fn<() => void>();
+
+        client.setAuthToken("token-1", "user-1");
+        internals.applyOwnClaims("fp-old");
+
+        expect(internals.followerClaims("k", retry, "fp-new")).toBeUndefined();
+
+        await settle();
+
+        expect(claimsCalls()).toHaveLength(1);
+        expect(retry).toHaveBeenCalledTimes(1);
+        expect(internals.ownClaimsValue).toBe("fp-new");
+
+        // A fingerprint the tab checked against once and still differs from is a different tab's: no loop.
+        internals.followerClaims("k", retry, "fp-other");
+        await settle();
+
+        expect(internals.followerClaims("k", retry, "fp-other")).toBe("fp-new");
+
+        await settle();
+
+        expect(claimsCalls()).toHaveLength(2);
+
+        client.close();
+    });
+
+    it("takes off the views what a leader committed under claims, until the tab's own are known again", async () => {
+        expect.assertions(4);
+
+        const { client, internals } = build(async () => jsonResponse({ claims: "fp-same" }), true);
+
+        client.setAuthToken("token-1", "user-1");
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+
+        const state = internals.subscriptions.all().at(0) as ReturnType<Internals["subscriptions"]["all"]>[number];
+
+        state.serverBase = ["row"];
+        state.serverClaims = "fp-same";
+
+        client.setAuthToken("token-2", "user-1");
+
+        expect(state.serverBase).toBeUndefined();
+        expect(state.serverClaims).toBeUndefined();
+
+        // The same claims come back: a token refresh alone must not leave the tab blank.
+        internals.applyOwnClaims("fp-same");
+
+        expect(state.serverBase).toStrictEqual(["row"]);
+        expect(state.serverClaims).toBe("fp-same");
+
+        client.close();
+    });
+
+    it("retries a failed claims request while frames wait, with a growing delay, and stops at close", async () => {
+        expect.assertions(4);
+
+        let failures = 2;
+        const { claimsCalls, client, internals } = build(async () => {
+            if (failures > 0) {
+                failures -= 1;
+
+                throw new Error("offline");
+            }
+
+            return jsonResponse({ claims: "fp-mine" });
+        });
+        const retry = vi.fn<() => void>();
+
+        client.setAuthToken("token-1", "user-1");
+        internals.followerClaims("k", retry);
+        await settle();
+
+        expect(claimsCalls()).toHaveLength(1);
+
+        await vi.advanceTimersByTimeAsync(500);
+        await vi.advanceTimersByTimeAsync(1000);
+
+        expect(claimsCalls()).toHaveLength(3);
+        expect(retry).toHaveBeenCalledTimes(1);
+
+        // A held frame that never gets an answer leaves no timer behind once the client is closed.
+        failures = 10;
+        client.setAuthToken("token-3", "user-1");
+        internals.followerClaims("k2", retry);
+        await settle();
+        client.close();
+
+        expect(vi.getTimerCount()).toBe(0);
+    });
+});

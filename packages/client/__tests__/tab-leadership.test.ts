@@ -356,6 +356,89 @@ describe("onFollowerSubscriptionData", () => {
             expect(state.serverBase).toStrictEqual([{ id: "a" }]);
         });
 
+        it("replays a settled frame held for the claims lookup, with the same arguments", () => {
+            expect.assertions(3);
+
+            const state = liveSubscription();
+            let own: string | undefined;
+            const retries: (() => void)[] = [];
+            const { host } = fakeHost({
+                ownClaims: (_key, retry) => {
+                    retries.push(retry);
+
+                    return own;
+                },
+                subscription: () => state,
+            });
+
+            onFollowerSubscriptionSettled(host, "s1", 9, "e1", undefined, undefined, "subj:a", "fp-leader");
+
+            expect(host.ackAndAdvanceCursor).not.toHaveBeenCalled();
+
+            own = "fp-leader";
+            retries[0]?.();
+
+            expect(host.ackAndAdvanceCursor).toHaveBeenCalledTimes(1);
+            expect(host.ackAndAdvanceCursor).toHaveBeenCalledWith(state, 9, "e1");
+        });
+
+        it("hands the frame's own fingerprint to the host so a changed one can be verified", () => {
+            expect.assertions(1);
+
+            const state = liveSubscription();
+            const ownClaims = vi.fn<(key: string, retry: () => void, frameClaims?: string) => null | string | undefined>(() => "fp-mine");
+            const { host } = fakeHost({ ownClaims, subscription: () => state });
+
+            onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a", "fp-theirs");
+
+            expect(ownClaims).toHaveBeenCalledWith("s1", expect.any(Function), "fp-theirs");
+        });
+
+        it("does not take an error the leader found under claims this tab does not hold", () => {
+            expect.assertions(3);
+
+            const state = liveSubscription();
+            const { host } = fakeHost({ ownClaims: () => "fp-mine", subscription: () => state });
+            const onError = vi.fn<(error: unknown) => void>();
+
+            state.errorCallbacks.add(onError);
+            onFollowerSubscriptionError(host, "s1", { code: "FORBIDDEN", message: "no" }, "subj:a", "fp-theirs");
+
+            expect(onError).not.toHaveBeenCalled();
+            expect(state.valueReceived).toBe(false);
+
+            onFollowerSubscriptionError(host, "s1", { code: "FORBIDDEN", message: "no" }, "subj:a", "fp-mine");
+
+            expect(onError).toHaveBeenCalledTimes(1);
+        });
+
+        it("holds an error until its own claims are known, then judges it", () => {
+            expect.assertions(2);
+
+            const state = liveSubscription();
+            let own: string | undefined;
+            const retries: (() => void)[] = [];
+            const { host } = fakeHost({
+                ownClaims: (_key, retry) => {
+                    retries.push(retry);
+
+                    return own;
+                },
+                subscription: () => state,
+            });
+            const onError = vi.fn<(error: unknown) => void>();
+
+            state.errorCallbacks.add(onError);
+            onFollowerSubscriptionError(host, "s1", { code: "FORBIDDEN", message: "no" }, "subj:a", "fp-theirs");
+
+            expect(onError).not.toHaveBeenCalled();
+
+            own = "fp-theirs";
+            retries[0]?.();
+
+            expect(onError).toHaveBeenCalledTimes(1);
+        });
+
         it("does not advance a cursor on a settled frame read under other claims", () => {
             expect.assertions(2);
 

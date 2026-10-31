@@ -5,6 +5,17 @@ import type { SubscriptionError, SubscriptionState } from "./subscription";
 import { fanSubscriptionError, setSubscriptionAck } from "./subscription";
 import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition } from "./subscription-frames";
 
+/** Whether a frame stamped `claims` was read under the claims this tab holds; if not yet known, `retry` replays the frame. */
+const claimsAllow = (host: TabLeadershipHost, holdKey: string, claims: string | undefined, retry: () => void): boolean => {
+    if (claims === undefined) {
+        return true;
+    }
+
+    const own = host.ownClaims(holdKey, retry, claims);
+
+    return own !== undefined && (own === null || own === claims);
+};
+
 /**
  * The leader's last-reported status, as a follower mirrors it. The status is `undefined`
  * until the leader's first broadcast, and it is reset whenever this tab stops following
@@ -63,9 +74,12 @@ export interface TabLeadershipHost {
     /**
      * This tab's own claims fingerprint, to compare with the one a leader stamped on data it relayed: the fingerprint
      * once known, `null` for a tab with no credential (nothing to differ from), `undefined` while it is being fetched.
-     * In that case `retry` is called once it is known, so a held frame is applied or dropped then.
+     * In that case `retry` is called once it is known, so a held frame is applied or dropped then. `key` names the held
+     * frame (a later one under the same name replaces it). `frameClaims` is the fingerprint the frame carries: when it
+     * differs from a known own value the host verifies that value again, since the server may have changed it, and
+     * `retry` runs with the answer.
      */
-    ownClaims: (key: string, retry: () => void) => null | string | undefined;
+    ownClaims: (key: string, retry: () => void, frameClaims?: string) => null | string | undefined;
 
     /** Shards with a queued offline write, so their sockets open even with no subscription. */
     queuedShardKeys: () => Iterable<string | undefined>;
@@ -201,14 +215,12 @@ export const onFollowerSubscriptionData = (
 
     // Same user is not same claims (another scope or tenant): data read under claims this tab does not hold is not
     // shown, and nothing claims-stamped is shown until this tab knows its own. A frame with no claims is as before.
-    if (claims !== undefined) {
-        const own = host.ownClaims(key, () => {
+    if (
+        !claimsAllow(host, key, claims, () => {
             onFollowerSubscriptionData(host, key, data, cursor, epoch, identity, claims);
-        });
-
-        if (own === undefined || (own !== null && own !== claims)) {
-            return;
-        }
+        })
+    ) {
+        return;
     }
 
     const state = host.subscription(key);
@@ -241,8 +253,23 @@ export const onFollowerSubscriptionData = (
 };
 
 /** The leader reported an error for `key`. Fan it to this tab's subscribers. */
-export const onFollowerSubscriptionError = (host: TabLeadershipHost, key: string, error: SubscriptionError, identity: string | null | undefined): void => {
+export const onFollowerSubscriptionError = (
+    host: TabLeadershipHost,
+    key: string,
+    error: SubscriptionError,
+    identity: string | null | undefined,
+    claims?: string,
+): void => {
     if (isForeignStamp(identity, host.identityFingerprint())) {
+        return;
+    }
+
+    // A refusal is an answer about the claims it ran under: a tab holding other claims may be allowed the query.
+    if (
+        !claimsAllow(host, `error:${key}`, claims, () => {
+            onFollowerSubscriptionError(host, key, error, identity, claims);
+        })
+    ) {
         return;
     }
 
@@ -296,12 +323,12 @@ export const onFollowerSubscriptionSettled = (
     }
 
     // A position read under claims this tab does not hold must not move the cursor it would resume from.
-    if (claims !== undefined) {
-        const own = host.ownClaims(key, () => undefined);
-
-        if (own === undefined || (own !== null && own !== claims)) {
-            return;
-        }
+    if (
+        !claimsAllow(host, `settled:${key}`, claims, () => {
+            onFollowerSubscriptionSettled(host, key, cursor, epoch, lastMutationId, clientId, identity, claims);
+        })
+    ) {
+        return;
     }
 
     host.ackAndAdvanceCursor(state, cursor, epoch);

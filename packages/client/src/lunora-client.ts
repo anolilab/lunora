@@ -471,6 +471,10 @@ const ROOM_PENDING_LIMIT = 100;
 /** Longest a live-grant control POST may take, headers and body. Past it the POST is aborted so the chain behind it moves on. */
 const LIVE_CONTROL_TIMEOUT_MS = 10_000;
 
+/** Retries of a failed claims request while frames wait on it, and the first delay; each doubles the last. */
+const OWN_CLAIMS_MAX_RETRIES = 5;
+const OWN_CLAIMS_RETRY_BASE_MS = 500;
+
 /** Longest a supplementary socket waits on a ticket provider before it mints again: a provider that never settles must not stall the channel. */
 const WS_TICKET_MINT_TIMEOUT_MS = 10_000;
 
@@ -712,6 +716,20 @@ class LunoraClient {
     private readonly heldLeaderFrames = new Map<string, () => void>();
 
     private ownClaimsFetch: Promise<unknown> | undefined;
+
+    /** Leader fingerprints this tab already re-verified its own against, so a tab that truly differs asks once, not per frame. */
+    private readonly claimsVerifiedAgainst = new Set<string>();
+
+    /** The claims request failed while frames were held: its retry timer and how many have failed in a row. */
+    private ownClaimsRetryTimer: ReturnType<typeof setTimeout> | undefined;
+
+    private ownClaimsFailures = 0;
+
+    /** What a reset hid from a follower's subscriptions, put back if the answer shows the same claims. */
+    private readonly suspendedFollowerValues = new Map<
+        SubscriptionState,
+        { base: unknown; claims: string; cursor: number | undefined; epoch: string | undefined }
+    >();
 
     /**
      * The claims fingerprint of the socket whose `data`, `delta`, `resume` or poke frame is being applied, set only
@@ -3841,6 +3859,9 @@ class LunoraClient {
         this.replayRetryTimers.clear();
         this.replayRetryState.clear();
 
+        this.stopOwnClaimsRetry();
+        this.suspendedFollowerValues.clear();
+
         for (const timer of this.leaderAnswerTimers.values()) {
             clearTimeout(timer);
         }
@@ -4267,7 +4288,7 @@ class LunoraClient {
             identityFingerprint: () => this.identityFingerprint(),
             isLeader: () => this.tabCoordinator?.isLeader() === true,
             leader: this.leader,
-            ownClaims: (key, retry) => this.followerClaims(key, retry),
+            ownClaims: (key, retry, frameClaims) => this.followerClaims(key, retry, frameClaims),
             queueResubscribe: (state) => {
                 this.queueResubscribe(state);
             },
@@ -4302,8 +4323,8 @@ class LunoraClient {
             onLeaderClaimAnswered: () => {
                 onLeaderClaimAnswered(leadership);
             },
-            onSubscriptionError: (key, error, identity) => {
-                onFollowerSubscriptionError(leadership, key, error, identity);
+            onSubscriptionError: (key, error, identity, claims) => {
+                onFollowerSubscriptionError(leadership, key, error, identity, claims);
             },
             onSubscriptionSettled: (key, cursor, epoch, lastMutationId, clientId, identity, claims) => {
                 onFollowerSubscriptionSettled(leadership, key, cursor, epoch, lastMutationId, clientId, identity, claims);
@@ -7287,7 +7308,7 @@ class LunoraClient {
                 return;
             }
             case "error": {
-                this.handleErrorMessage(message);
+                this.handleErrorMessage(message, shardKey);
 
                 break;
             }
@@ -7350,7 +7371,7 @@ class LunoraClient {
         }
     }
 
-    private handleErrorMessage(message: ServerErrorMessage): void {
+    private handleErrorMessage(message: ServerErrorMessage, shardKey: string | undefined): void {
         // Token-expiry rejection (sent just before the server closes the socket
         // with code 4001). Surface it to listeners; the close handler also fires
         // and arms the reconnect, so nothing else to do here.
@@ -7407,6 +7428,8 @@ class LunoraClient {
             // (correct), so there is no need to also suppress the broadcast.
             const identity = this.identityFingerprint();
             const key = SubscriptionRegistry.keyOf(state);
+            // The claims the refusal was decided under, so a follower holding others does not take it as its own answer.
+            const claims = this.getConnection(shardKey)?.claims;
 
             // A refusal answers the request: the subscription stops counting as pending on this connection.
             // Marked before fanning, so a callback that resets the session (see above) is not undone by it.
@@ -7422,7 +7445,7 @@ class LunoraClient {
             // like its `data` and `settled` siblings — only the leader holds the
             // socket that produced this frame.
             if (this.tabCoordinator?.isLeader()) {
-                this.tabCoordinator.broadcastSubscriptionError(key, subscriptionError, identity);
+                this.tabCoordinator.broadcastSubscriptionError(key, subscriptionError, identity, claims);
             }
 
             return;
@@ -7650,7 +7673,7 @@ class LunoraClient {
         this.settleAwaitedAnswer(state, true);
     }
 
-    private followerClaims(key: string, retry: () => void): null | string | undefined {
+    private followerClaims(key: string, retry: () => void, frameClaims?: string): null | string | undefined {
         // No credential, nothing to differ from: an anonymous tab and its leader read under the same (no) claims.
         if (this.identityFingerprint() === null && !this.identityUnresolved()) {
             // eslint-disable-next-line unicorn/no-null -- `null` is the follower hook's "no claims of my own"
@@ -7660,6 +7683,15 @@ class LunoraClient {
         if (this.ownClaimsValue === undefined) {
             this.heldLeaderFrames.set(key, retry);
             this.fetchOwnClaims();
+        } else if (frameClaims !== undefined && frameClaims !== this.ownClaimsValue && !this.claimsVerifiedAgainst.has(frameClaims)) {
+            // The server may have changed this credential's claims (an org switch, a role change) without the tab's
+            // credential changing, so the leader's new fingerprint is not proof of a different tab. Ask once per
+            // fingerprint; the frame is held and judged against the answer.
+            this.claimsVerifiedAgainst.add(frameClaims);
+            this.heldLeaderFrames.set(key, retry);
+            this.fetchOwnClaims();
+
+            return undefined;
         }
 
         return this.ownClaimsValue;
@@ -7669,6 +7701,9 @@ class LunoraClient {
     private resetOwnClaims(): void {
         this.ownClaimsValue = undefined;
         this.ownClaimsFetch = undefined;
+        this.claimsVerifiedAgainst.clear();
+        this.stopOwnClaimsRetry();
+        this.suspendFollowerValues();
 
         // Frames held for the discarded answer would otherwise wait for the next one.
         if (this.heldLeaderFrames.size > 0) {
@@ -7678,9 +7713,55 @@ class LunoraClient {
         }
     }
 
+    /**
+     * A follower's claims-stamped values were read under claims this tab may no longer hold. They are taken off the
+     * views and the caches until the tab knows its own fingerprint again; {@link applyOwnClaims} puts back those that
+     * were read under the claims it finds, so a plain token refresh does not leave the tab blank.
+     */
+    private suspendFollowerValues(): void {
+        if (this.tabCoordinator === undefined || this.tabCoordinator.isLeader()) {
+            return;
+        }
+
+        for (const state of this.subscriptions.all()) {
+            if (state.serverClaims !== undefined && state.serverBase !== undefined) {
+                this.suspendedFollowerValues.set(state, {
+                    base: state.serverBase,
+                    claims: state.serverClaims,
+                    cursor: state.serverCursor,
+                    epoch: state.serverEpoch,
+                });
+            }
+
+            if (state.serverClaims !== undefined) {
+                state.serverBase = undefined;
+                state.serverCursor = undefined;
+                state.serverClaims = undefined;
+                refoldSubscription(state, undefined);
+            }
+        }
+    }
+
     /** Take `claims` as this tab's own: drop what a leader committed under others, from memory and the restored cache, and run the held frames. */
     private applyOwnClaims(claims: string): void {
+        if (claims !== this.ownClaimsValue) {
+            this.claimsVerifiedAgainst.clear();
+        }
+
         this.ownClaimsValue = claims;
+        this.ownClaimsFailures = 0;
+
+        for (const [state, suspended] of this.suspendedFollowerValues) {
+            if (suspended.claims === claims && state.serverBase === undefined) {
+                state.serverBase = suspended.base;
+                state.serverCursor = suspended.cursor;
+                state.serverEpoch = suspended.epoch;
+                state.serverClaims = claims;
+                refoldSubscription(state, suspended.base);
+            }
+        }
+
+        this.suspendedFollowerValues.clear();
 
         for (const state of this.subscriptions.all()) {
             if (state.serverClaims !== undefined && state.serverClaims !== claims) {
@@ -7747,8 +7828,12 @@ class LunoraClient {
 
                 return undefined;
             })
-            // Unanswered, the tab stays without claims and shows nothing claims-stamped; the next frame asks again.
-            .catch(() => undefined)
+            // Unanswered, the tab stays without claims and shows nothing claims-stamped; held frames ask again.
+            .catch(() => {
+                if (this.ownClaimsFetch === fetching) {
+                    this.scheduleOwnClaimsRetry();
+                }
+            })
             .finally(() => {
                 if (this.ownClaimsFetch === fetching) {
                     this.ownClaimsFetch = undefined;
@@ -7756,6 +7841,27 @@ class LunoraClient {
             });
 
         this.ownClaimsFetch = fetching;
+    }
+
+    /** Ask for the tab's claims again, with a growing delay and a bound, for as long as frames wait on the answer. */
+    private scheduleOwnClaimsRetry(): void {
+        if (this.closed || this.heldLeaderFrames.size === 0 || this.ownClaimsRetryTimer !== undefined || this.ownClaimsFailures >= OWN_CLAIMS_MAX_RETRIES) {
+            return;
+        }
+
+        const delay = OWN_CLAIMS_RETRY_BASE_MS * 2 ** this.ownClaimsFailures;
+
+        this.ownClaimsFailures += 1;
+        this.ownClaimsRetryTimer = setTimeout(() => {
+            this.ownClaimsRetryTimer = undefined;
+            this.fetchOwnClaims();
+        }, delay);
+    }
+
+    private stopOwnClaimsRetry(): void {
+        clearTimeout(this.ownClaimsRetryTimer);
+        this.ownClaimsRetryTimer = undefined;
+        this.ownClaimsFailures = 0;
     }
 
     /** Run `apply` with the claims fingerprint of the socket that delivered the frame, for the values and cursors it commits. */

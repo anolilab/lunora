@@ -83,7 +83,7 @@ interface TabCoordinatorOptions {
      * absent-field mixed-version rule — identical here).
      */
     onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void;
-    onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null) => void;
+    onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null, claims?: string) => void;
 
     /**
      * Called when the leader broadcasts a `settled` frame's checkpoint advance
@@ -141,7 +141,7 @@ type SubscriptionDataMessage = {
 
 type WsLeaderMessage =
     | SubscriptionDataMessage
-    | { error: SubscriptionError; identity?: string | null; key: string; tabId: string; type: "subscription-error" }
+    | { claims?: string; error: SubscriptionError; identity?: string | null; key: string; tabId: string; type: "subscription-error" }
     | {
           claims?: string;
           clientId?: string;
@@ -213,7 +213,7 @@ class TabCoordinator {
     private readonly onSubscriptionData:
         ((key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void) | undefined;
     private readonly onLeaderClaimAnswered: (() => void) | undefined;
-    private readonly onSubscriptionError: ((key: string, error: SubscriptionError, identity?: string | null) => void) | undefined;
+    private readonly onSubscriptionError: ((key: string, error: SubscriptionError, identity?: string | null, claims?: string) => void) | undefined;
     private readonly onSubscriptionSettled:
         | ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null, claims?: string) => void)
         | undefined;
@@ -424,12 +424,19 @@ class TabCoordinator {
      * deliver one caller's rejection to a tab that had since signed in as
      * someone else.
      */
-    public broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null): void {
+    public broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null, claims?: string): void {
         if (!this.leader) {
             return;
         }
 
-        this.broadcast({ type: "subscription-error", tabId: this.tabId, key, error, ...(identity === undefined ? {} : { identity }) });
+        this.broadcast({
+            type: "subscription-error",
+            tabId: this.tabId,
+            key,
+            error,
+            ...(identity === undefined ? {} : { identity }),
+            ...(claims === undefined ? {} : { claims }),
+        });
     }
 
     /**
@@ -596,7 +603,7 @@ class TabCoordinator {
                     break;
                 }
 
-                this.onSubscriptionError?.(message.key, message.error, message.identity);
+                this.onSubscriptionError?.(message.key, message.error, message.identity, message.claims);
 
                 break;
             }
