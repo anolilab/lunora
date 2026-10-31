@@ -260,8 +260,9 @@ export const buildPgExec = (client: RowClient): SqlExec => {
  *
  * Given a **pool** (anything with `getConnection`), `transaction` takes one
  * connection for the store's row + companion writes, so they commit together.
- * A single connection gets no `transaction`: other writers' statements would
- * land inside an open one, so its companions commit one statement at a time.
+ * A single connection cannot hold one apart from other writers' statements, so
+ * `transaction` is present but rejects with `GLOBAL_TRANSACTION_UNSUPPORTED`: a
+ * write to a table with companions fails before it writes anything.
  *
  * `batch` dispatches every statement concurrently (`Promise.all`), same
  * rationale as {@link buildPgExec}'s `batch` — `Mysql2Like` only exposes a
