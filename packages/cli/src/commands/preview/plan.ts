@@ -229,8 +229,9 @@ const environmentConfig = (config: PreviewConfig, envName: string): { config: Pr
     const top = typeof config.name === "string" ? config.name : "";
 
     // Wrangler inherits only the settings into an environment; vars and bindings are the environment's own, so the top
-    // level's are not carried over (a preview must not receive a production var the environment never had).
-    const inherited = Object.fromEntries(Object.entries(config).filter(([key]) => SETTINGS_KEYS.has(key)));
+    // level's are not carried over (a preview must not receive a production var the environment never had). `exports` is
+    // inherited too, and is where a workflow is declared: dropping it here would hide an inherited workflow from the refusal.
+    const inherited = Object.fromEntries(Object.entries(config).filter(([key]) => SETTINGS_KEYS.has(key) || key === "exports"));
 
     return { config: { ...inherited, ...found, env: config.env, name: typeof found.name === "string" ? found.name : `${top}-${envName}` } };
 };
@@ -412,6 +413,12 @@ const previewEnvironmentBlock = (
 
     if (isPresent(config.durable_objects)) {
         block.durable_objects = config.durable_objects;
+    }
+
+    // Written even when it equals the top level's: an environment that omits `exports` inherits production's, so the
+    // block states the resolved map (the plan has already refused a workflow in it).
+    if (isPresent(source.exports)) {
+        block.exports = source.exports;
     }
 
     for (const [key, kind] of Object.entries(ISOLATED_KEYS)) {

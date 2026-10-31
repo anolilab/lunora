@@ -773,6 +773,41 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(plan.resources.map((resource) => resource.kind)).toStrictEqual(["d1"]);
         });
 
+        it("refuses an --env preview that inherits a top-level workflow export, which Wrangler would give the preview Worker", () => {
+            expect.assertions(2);
+
+            const withWorkflow = {
+                ...production,
+                env: { ...production.env, production: { d1_databases: [{ binding: "DB", database_id: "e", database_name: "e" }], name: "lunora-app-prod" } },
+                exports: { Flow: { type: "workflow" } },
+            } as unknown as PreviewConfig;
+            const merged = environmentConfig(withWorkflow, "production").config as PreviewConfig;
+
+            expect(merged.exports).toStrictEqual({ Flow: { type: "workflow" } });
+            expect(planPreview(merged, "42", "production").error).toMatch(/workflow "Flow".*take over production's workflow/u);
+        });
+
+        it("writes the resolved exports into the preview block, so nothing is inherited from the top level", () => {
+            expect.assertions(2);
+
+            const top = { ...production, exports: { ShardDO: { storage: "sqlite", type: "durable-object" } } } as unknown as PreviewConfig;
+            const withEnv = {
+                ...top,
+                env: { ...top.env, production: { exports: { OwnDO: { storage: "sqlite", type: "durable-object" } }, name: "lunora-app-prod" } },
+            } as unknown as PreviewConfig;
+            const blockOf = (config: PreviewConfig, from?: string): Record<string, unknown> => {
+                const plan = planPreview(config, "42", from).plan as PreviewPlan;
+
+                return previewEnvironmentBlock(config, plan, new Map(plan.resources.map((r) => [resourceKey(r.kind, r.binding), "id"])), {});
+            };
+
+            expect(blockOf(top).exports).toStrictEqual({ ShardDO: { storage: "sqlite", type: "durable-object" } });
+            // The environment's own `exports` replaces the top level's wholesale, as Wrangler resolves it.
+            expect(blockOf(environmentConfig(withEnv, "production").config as PreviewConfig, "production").exports).toStrictEqual({
+                OwnDO: { storage: "sqlite", type: "durable-object" },
+            });
+        });
+
         it("refuses an app whose bindings exist only inside an environment, which a preview planned from the top level would lack", () => {
             expect.assertions(2);
 
