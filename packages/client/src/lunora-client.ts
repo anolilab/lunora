@@ -709,8 +709,8 @@ class LunoraClient {
     /** Polling-fallback cadence (ms); `0` disables it. See {@link LunoraClientOptions.pollingFallback}. */
     private readonly pollingFallbackIntervalMs: number;
 
-    /** This tab's own claims fingerprint, fetched from the worker; `undefined` until known and again after any credential change. */
-    private ownClaimsValue: string | undefined;
+    /** This tab's own claims fingerprint, fetched from the worker; `undefined` until known and again after any credential change, `null` once the server is known to announce none. */
+    private ownClaimsValue: null | string | undefined;
 
     /** Frames a follower held for want of `ownClaimsValue`, one per subscription, applied once it is known. */
     private readonly heldLeaderFrames = new Map<string, () => void>();
@@ -7680,17 +7680,17 @@ class LunoraClient {
             return null;
         }
 
-        // Rows with no claims stamp (`frameClaims === ""`): the server announces fingerprints to a tab that holds one,
-        // so the frame is an anomaly; verify once and never show it. A tab with none yet takes it as before.
+        // Rows with no claims stamp (`frameClaims === ""`): a server that announces fingerprints makes the frame an
+        // anomaly, so it is held until the tab knows its own, verified once if it has one, and shown only to a tab the
+        // server is known to give none.
         if (frameClaims === "") {
-            if (this.ownClaimsValue !== undefined && !this.claimsVerifiedAgainst.has("")) {
+            if (this.ownClaimsValue === undefined || (this.ownClaimsValue !== null && !this.claimsVerifiedAgainst.has(""))) {
                 this.claimsVerifiedAgainst.add("");
                 this.heldLeaderFrames.set(key, retry);
                 this.fetchOwnClaims();
             }
 
-            // eslint-disable-next-line unicorn/no-null -- `null` is the follower hook's "no claims of my own"
-            return this.ownClaimsValue ?? null;
+            return this.ownClaimsValue;
         }
 
         if (this.ownClaimsValue === undefined) {
@@ -7791,6 +7791,10 @@ class LunoraClient {
 
         this.dropClaimedEntries(claims);
 
+        this.releaseHeldFrames();
+    }
+
+    private releaseHeldFrames(): void {
         const held = [...this.heldLeaderFrames.values()];
 
         this.heldLeaderFrames.clear();
@@ -7835,12 +7839,21 @@ class LunoraClient {
                 ? { "content-type": "application/json" }
                 : { authorization: `Bearer ${authToken}`, "content-type": "application/json" },
         )
-            .then(({ text }) => {
+            .then(({ status, text }) => {
                 const { claims } = JSON.parse(text) as { claims?: string };
 
                 // A credential change since the request began makes the answer about another credential.
-                if (typeof claims === "string" && this.ownClaimsFetch === fetching) {
+                if (this.ownClaimsFetch !== fetching) {
+                    return undefined;
+                }
+
+                if (typeof claims === "string") {
                     this.applyOwnClaims(claims);
+                } else if (status === 200) {
+                    // An answer with no fingerprint: the server announces none, so frames without a stamp are its norm.
+                    // eslint-disable-next-line unicorn/no-null -- `null` is "known to have no claims"
+                    this.ownClaimsValue = null;
+                    this.releaseHeldFrames();
                 }
 
                 return undefined;

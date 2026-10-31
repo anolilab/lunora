@@ -1204,29 +1204,44 @@ describe("a follower tab and a change of its claims", () => {
         client.close();
     });
 
-    it("holds rows with no claims stamp for a tab that holds a fingerprint and asks once, but takes them when it has none", async () => {
-        expect.assertions(4);
+    it("holds rows with no claims stamp until the tab knows whether the server gives it a fingerprint", async () => {
+        expect.assertions(7);
 
         const { claimsCalls, client, internals } = build(async () => jsonResponse({ claims: "fp-mine" }));
         const retry = vi.fn<() => void>();
 
         client.setAuthToken("token-1", "user-1");
 
-        // No fingerprint yet: accepted as before.
-        expect(internals.followerClaims("k", retry, "")).toBeNull();
+        // Unknown, fetch pending: held, not accepted.
+        expect(internals.followerClaims("k", retry, "")).toBeUndefined();
 
-        internals.applyOwnClaims("fp-mine");
+        await settle();
 
+        // Known: a fingerprint, so the unstamped rows are an anomaly. Verified once, never shown.
+        expect(retry).toHaveBeenCalledTimes(1);
         expect(internals.followerClaims("k", retry, "")).toBe("fp-mine");
 
         await settle();
         internals.followerClaims("k", retry, "");
         await settle();
 
-        expect(claimsCalls()).toHaveLength(1);
-        expect(retry).toHaveBeenCalledTimes(1);
+        expect(claimsCalls()).toHaveLength(2);
+        expect(retry).toHaveBeenCalledTimes(2);
 
         client.close();
+
+        const none = build(async () => jsonResponse({}));
+        const noneRetry = vi.fn<() => void>();
+
+        none.client.setAuthToken("token-1", "user-1");
+        none.internals.followerClaims("k", noneRetry, "");
+        await settle();
+
+        // The server answered with no fingerprint: unstamped rows are its norm, and the held frame is replayed.
+        expect(noneRetry).toHaveBeenCalledTimes(1);
+        expect(none.internals.followerClaims("k", noneRetry, "")).toBeNull();
+
+        none.client.close();
     });
 
     it("seeds a follower from no claims-stamped cache entry until its own claims are known, and a lone tab as before", () => {
