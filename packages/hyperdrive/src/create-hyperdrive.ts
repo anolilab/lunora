@@ -1,3 +1,6 @@
+import { LunoraError } from "@lunora/errors";
+
+import { lazyValue } from "../../../shared/lazy-value";
 import toMysqlParams from "./mysql-params";
 import type { HyperdriveConnection, HyperdriveLike, Mysql2Like, NodePgLike, PostgresJsLike, SqlClient } from "./types";
 
@@ -11,20 +14,25 @@ import type { HyperdriveConnection, HyperdriveLike, Mysql2Like, NodePgLike, Post
  * the binding's connection details out; the user constructs their own driver
  * from `connectionString` and wraps it with one of the {@link fromPostgresJs} /
  * {@link fromNodePg} / {@link fromMysql2} adapters to get a {@link SqlClient}.
+ * The adapters take a LOADER, not a driver: it runs on the first query, so the
+ * driver's `import()` keeps it out of the Worker's startup graph (a static
+ * `import postgres from "postgres"` in the entry is evaluated by every isolate
+ * before its first event).
  * @example
  * ```ts
  * import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
- * import postgres from "postgres";
  *
  * // Wire the client once, on the app builder — called per shard construction,
  * // not per request. `ctx.sql` is emitted `readonly`; it is never assigned.
  * const app = defineApp<Env>()
  *     .shard((env) => env.SHARD)
- *     .hyperdrive((env) => {
- *         const { connectionString } = createHyperdrive(env.HYPERDRIVE);
+ *     .hyperdrive((env) =>
+ *         fromPostgresJs(async () => {
+ *             const { default: postgres } = await import("postgres");
  *
- *         return fromPostgresJs(postgres(connectionString, { fetch_types: false, max: 5 }));
- *     })
+ *             return postgres(createHyperdrive(env.HYPERDRIVE).connectionString, { fetch_types: false, max: 5 });
+ *         }),
+ *     )
  *     .build();
  *
  * // Then, inside an action (never a query/mutation):
@@ -54,7 +62,9 @@ export const createHyperdrive = (binding: HyperdriveLike): { config: HyperdriveC
 };
 
 /**
- * Wrap a `postgres` (postgres.js) client as a {@link SqlClient}.
+ * Wrap a `postgres` (postgres.js) client, built by `load` on the first query
+ * and reused, as a {@link SqlClient}. A failed load rejects that query and the
+ * next one retries.
  *
  * Uses the driver's `.unsafe(text, params)` escape hatch so the caller supplies
  * a plain SQL string with `$1, $2, …` placeholders and a positional params
@@ -67,35 +77,52 @@ export const createHyperdrive = (binding: HyperdriveLike): { config: HyperdriveC
  * wins. Prepared reads are cacheable by Hyperdrive, so a `.global()` store's
  * config must have caching disabled (see `@lunora/hyperdrive/global`).
  */
-export const fromPostgresJs = (client: PostgresJsLike): SqlClient => {
-    const { begin } = client;
+export const fromPostgresJs = (load: () => Promise<PostgresJsLike> | PostgresJsLike): SqlClient => {
+    const client = lazyValue(load);
 
-    return {
+    const wrapped: SqlClient = {
         dbSystem: "postgresql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
-            const rows = await client.unsafe(text, params, { prepare: true });
+            const driver = await client();
+            const rows = await driver.unsafe(text, params, { prepare: true });
 
             return rows as Row[];
         },
-        ...(begin === undefined
-            ? {}
-            : {
-                  // `begin` hands back what `work` resolved to.
-                  transaction: async <T>(work: (tx: SqlClient) => Promise<T>): Promise<T> => (await begin(async (tx) => await work(fromPostgresJs(tx)))) as T,
-              }),
+        // Always present: whether the driver has `begin` is only known once it is loaded. The store treats a present
+        // `transaction` as atomic, so a driver without `begin` fails loudly instead of committing statement by statement.
+        transaction: async <T>(work: (tx: SqlClient) => Promise<T>): Promise<T> => {
+            const { begin } = await client();
+
+            if (begin === undefined) {
+                throw new LunoraError(
+                    "GLOBAL_TRANSACTION_UNSUPPORTED",
+                    "@lunora/hyperdrive: the postgres.js client has no `begin()`, so a .global() write cannot commit its row and companions together. Pass a postgres.js client that has `begin()`.",
+                );
+            }
+
+            // `begin` hands back what `work` resolved to.
+            return (await begin(async (tx) => await work(fromPostgresJs(() => tx)))) as T;
+        },
     };
+
+    return wrapped;
 };
 
 /**
- * Wrap a `pg` (node-postgres) `Client` or `Pool` as a {@link SqlClient}.
+ * Wrap a `pg` (node-postgres) `Client` or `Pool`, built by `load` on the first
+ * query, as a {@link SqlClient}. `load` may `await client.connect()` before
+ * returning.
  *
  * node-postgres returns a result object whose `rows` field holds the row array.
  */
-export const fromNodePg = (client: NodePgLike): SqlClient => {
+export const fromNodePg = (load: () => Promise<NodePgLike> | NodePgLike): SqlClient => {
+    const client = lazyValue(load);
+
     return {
         dbSystem: "postgresql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
-            const result = await client.query(text, params);
+            const driver = await client();
+            const result = await driver.query(text, params);
 
             return result.rows as Row[];
         },
@@ -103,7 +130,8 @@ export const fromNodePg = (client: NodePgLike): SqlClient => {
 };
 
 /**
- * Wrap a `mysql2/promise` connection or pool as a {@link SqlClient}.
+ * Wrap a `mysql2/promise` connection or pool, built by `load` on the first
+ * query, as a {@link SqlClient}.
  *
  * Use `?` placeholders (MySQL positional syntax). `mysql2`'s `query` resolves
  * to a `[rows, fields]` tuple; the adapter returns the first element. For a
@@ -111,11 +139,14 @@ export const fromNodePg = (client: NodePgLike): SqlClient => {
  * row array, so the adapter normalises that to `[]` — matching the empty-array
  * contract the postgres.js / node-postgres adapters already honour.
  */
-export const fromMysql2 = (connection: Mysql2Like): SqlClient => {
+export const fromMysql2 = (load: () => Promise<Mysql2Like> | Mysql2Like): SqlClient => {
+    const connection = lazyValue(load);
+
     return {
         dbSystem: "mysql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
-            const [rows] = await connection.query(text, toMysqlParams(params));
+            const driver = await connection();
+            const [rows] = await driver.query(text, toMysqlParams(params));
 
             return Array.isArray(rows) ? (rows as Row[]) : [];
         },

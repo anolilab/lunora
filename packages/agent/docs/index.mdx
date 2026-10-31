@@ -700,9 +700,9 @@ action runs on an action ctx, which is where `ctx.browser` lives (and
 `browserTool` also makes codegen provision the `BROWSER` wrangler binding.
 `browserTool` still needs `ctx.browser` wired the same way a direct
 `@lunora/browser` user does: supply a `config.browser` thunk
-(`createBrowser({ binding: env.BROWSER, launch })`, with the optional
-`@cloudflare/playwright` `launch` peer) to `createShardDO()`; codegen never
-injects that peer, so the browser op throws a directed error until it is wired.
+(`createBrowser({ binding: env.BROWSER, playwright: () => import("@cloudflare/playwright") })`,
+loading the optional peer on first use) to `createShardDO()`; codegen never
+wires that peer, so the browser op throws a directed error until it is wired.
 Payloads are replay-stable, so a workflow replay re-encodes identical bytes to
 identical text.
 

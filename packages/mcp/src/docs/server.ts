@@ -57,7 +57,7 @@ const serverInfo = (version: string | undefined): McpServerInfo => {
  * Connect it yourself, or use {@link createDocsMcpFetchHandler} for the remote
  * HTTP case.
  */
-const createDocsMcpServer = (options: DocsMcpServerOptions): Server =>
+const createDocsMcpServer = (options: DocsMcpServerOptions): Promise<Server> =>
     createToolServer(serverInfo(options.version), docsTools(options.index), docsResources(options.index));
 
 /**
@@ -70,8 +70,8 @@ const createDocsMcpServer = (options: DocsMcpServerOptions): Server =>
  */
 const createDocsMcpFetchHandler =
     (options: DocsMcpServerOptions): McpFetchHandler =>
-    (request: Request): Promise<Response> =>
-        serveStateless(createDocsMcpServer(options), request, { maxRequestBytes: options.maxRequestBytes });
+    async (request: Request): Promise<Response> =>
+        serveStateless(await createDocsMcpServer(options), request, { maxRequestBytes: options.maxRequestBytes });
 
 export type { DocsMcpServerOptions };
 export { createDocsMcpFetchHandler, createDocsMcpServer, DOCS_SERVER_NAME };

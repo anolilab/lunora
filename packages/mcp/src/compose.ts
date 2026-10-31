@@ -13,10 +13,10 @@
  * Deliberately free of `@lunora/client` and of Node built-ins, so a surface
  * built on it (notably `./docs`) runs unchanged on Workers and in the browser.
  */
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { CallToolResult, ListResourcesResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
-import { CallToolRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
+import loadMcpSdk from "./sdk";
 import { errorFromThrown, errorResult, withErrorShape } from "./tool-result";
 import type { ToolDefinition, ToolResult } from "./tool-types";
 
@@ -63,8 +63,12 @@ interface McpResourceProvider {
  * Thrown errors become `isError` results rather than rejections, per the MCP
  * convention that a tool failure is output the model can read and react to,
  * not a protocol-level fault.
+ *
+ * Async because it loads the MCP SDK (see `./sdk`): building the server is what needs it, so a
+ * module that only defines tools stays free of the SDK until the first server is built.
  */
-const createToolServer = (info: McpServerInfo, tools: ReadonlyArray<McpTool>, resources?: McpResourceProvider): Server => {
+const createToolServer = async (info: McpServerInfo, tools: ReadonlyArray<McpTool>, resources?: McpResourceProvider): Promise<Server> => {
+    const { CallToolRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema, Server } = await loadMcpSdk();
     const dispatch = new Map<string, McpTool>();
 
     for (const tool of tools) {

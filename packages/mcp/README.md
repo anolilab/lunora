@@ -220,7 +220,7 @@ await server.connect(myTransport);
 import { createFunctionMcpServer } from "@lunora/mcp";
 import { openRpcSpec } from "./lunora/_generated/openrpc";
 
-const server = createFunctionMcpServer({
+const server = await createFunctionMcpServer({
     url: env.LUNORA_URL,
     token: caller.token, // the caller's bearer, not an admin token
     openRpcSpec,
@@ -236,7 +236,7 @@ import { createFunctionMcpServer, serveStateless } from "@lunora/mcp/worker";
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
         const user = await resolveUser(request); // your own session check
-        const server = createFunctionMcpServer({ url: env.LUNORA_URL, token: user.token, openRpcSpec });
+        const server = await createFunctionMcpServer({ url: env.LUNORA_URL, token: user.token, openRpcSpec });
 
         return serveStateless(server, request);
     },
@@ -247,7 +247,8 @@ Requirements and behaviour:
 
 - **Generate the document.** Pass `apiSpec: "openrpc"` (or `"both"`) to the Vite plugin, or run `lunora codegen --api-spec openrpc`. Without it, `_generated/openrpc.ts` is not emitted and the import fails.
 - **Identity is the caller's.** Each tool runs as `token` through the public RPC path, so auth and row-level security apply as they do in the app. Nothing calls `/_lunora/admin/*`, so no admin token is needed.
-- **One tool per query, mutation, action and stream.** Internal functions are not listed. The tool name is the function path with non-identifier characters replaced by `_` (`billing/invoices:create` → `billing_invoices_create`). Construction throws if two functions map to one name or a name exceeds 64 characters.
+- **One tool per query, mutation, action and stream.** Internal functions are not listed. The tool name is the function path with non-identifier characters replaced by `_` (`billing/invoices:create` → `billing_invoices_create`). Construction rejects if two functions map to one name or a name exceeds 64 characters.
+- **The MCP SDK loads on first use.** `createFunctionMcpServer`, `createToolServer` and the docs and local servers are async: they `import()` `@modelcontextprotocol/sdk` when the first server is built, so a Worker that mounts MCP does not evaluate the SDK at startup. `createPaidMcpServer` stays synchronous (register tools at module scope as before); its `fetchHandler` loads the SDK on the first request.
 - **Descriptions come from the doc comment** above `export const name = query(…)`. A function without one gets a generated sentence.
 - **Writes are off by default.** With `allowWrites: false`, mutation and action tools are not listed and a direct call is refused. With it on, each write uses the same two-step confirmation as [Write confirmation](#write-confirmation-the-two-step-handshake). The digest is keyed by `token`, so writes need one. A write tool has no `outputSchema`, because its first call returns a proposal rather than the function's result.
 - **Arguments are decoded.** A `v.bigint()` argument arrives as a decimal string and is converted back to a `bigint`; a `v.bytes()` argument arrives as base64 and is converted to an `ArrayBuffer`. A nullable or union argument is decoded through the one branch the value fits: its JSON type, its `const`, the `const` properties of an object (a discriminator), and the carrier of a string (a decimal for `v.bigint()`, canonical base64 for `v.bytes()`). A value that still fits several branches (`v.union(v.string(), v.bigint())` with `"5"`) is sent as it is, because picking one would guess. A decimal string whose length is a multiple of four is also canonical base64, so a `v.bigint()`-or-`v.bytes()` union leaves it as it is.
@@ -336,7 +337,7 @@ Anything else reads a published site over HTTP:
 ```ts
 import { createDocsMcpServer, createRemoteDocsIndex } from "@lunora/mcp/docs";
 
-const server = createDocsMcpServer({ index: createRemoteDocsIndex({ baseUrl: "https://lunora.sh" }) });
+const server = await createDocsMcpServer({ index: createRemoteDocsIndex({ baseUrl: "https://lunora.sh" }) });
 ```
 
 Point a client at the hosted endpoint with no install at all:

@@ -166,6 +166,18 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
         await harness?.close();
     });
 
+    describe("transactions", () => {
+        it(
+            "refuses a global write on a single connection, which cannot hold a transaction apart from other writers",
+            async () => {
+                expect.assertions(1);
+
+                await expect(harness.singleConnectionExec.transaction?.(async () => 1)).rejects.toMatchObject({ code: "GLOBAL_TRANSACTION_UNSUPPORTED" });
+            },
+            TEST_TIMEOUT,
+        );
+    });
+
     describe("findMany — where filtering + ordering", () => {
         it(
             "filters, orders, and decodes booleans through backtick-quoted MySQL SQL",

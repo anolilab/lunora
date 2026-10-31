@@ -15,7 +15,7 @@ the same provider-agnostic `ctx.payments` surface as every other provider:
 hosted checkout, subscriptions, entitlement checks, usage metering, a native
 billing portal, and webhook sync through the shared payment/subscription state
 machine. As with every adapter, the package **never imports the Polar SDK**: you
-inject a client, so `@polar-sh/sdk` stays an optional peer dependency.
+pass a loader for the client, so `@polar-sh/sdk` stays an optional peer dependency.
 
 The adapter advertises these capabilities:
 
@@ -84,8 +84,8 @@ POLAR_WEBHOOK_SECRET=<your-polar-webhook-secret>
 
 ## Install
 
-Add the package and the Polar SDK (an optional peer, since the adapter takes the
-client by injection):
+Add the package and the Polar SDK (an optional peer, since the app loads the
+client itself):
 
 <Tabs items={["pnpm","npm","yarn","bun"]}>
 
@@ -117,24 +117,30 @@ your Polar secrets, comes from a `payment(env)` thunk you pass to
 <Steps>
 <Step>
 
-**Construct and inject the Polar SDK client.** A real `Polar` instance satisfies
+**Pass a loader for the Polar SDK client.** The adapter calls it on its first
+provider call and reuses the client, so `@polar-sh/sdk` stays out of the
+Worker's startup graph; a static `import { Polar } from "@polar-sh/sdk"` in the
+entry is evaluated at startup and defeats this. A real `Polar` instance satisfies
 the structural `PolarClientLike`; the cast keeps this package free of a hard
 `@polar-sh/sdk` dependency. Pass `server: "sandbox"` while developing.
 
 ```ts title="lunora/server.ts"
 import type { PolarClientLike } from "@lunora/payment/polar";
 import { createPolarAdapter } from "@lunora/payment/polar";
-import { Polar } from "@polar-sh/sdk";
 import { createShardDO } from "./_generated/shard";
 
 export const ShardDO = createShardDO({
     payment: (env) => ({
         adapter: createPolarAdapter({
-            client: new Polar({
-                accessToken: env.POLAR_ACCESS_TOKEN,
-                // Drop `server` (or set "production") for live mode.
-                server: "sandbox",
-            }) as unknown as PolarClientLike,
+            client: async () => {
+                const { Polar } = await import("@polar-sh/sdk");
+
+                return new Polar({
+                    accessToken: env.POLAR_ACCESS_TOKEN,
+                    // Drop `server` (or set "production") for live mode.
+                    server: "sandbox",
+                }) as unknown as PolarClientLike;
+            },
             webhookSecret: env.POLAR_WEBHOOK_SECRET,
             // Optional clock-skew tolerance for the signed webhook timestamp (seconds; default 300).
             webhookToleranceSeconds: 300,
@@ -166,7 +172,11 @@ translator.
 
 <TypeTable
     type={{
-        client: { type: "PolarClientLike", description: "An injected @polar-sh/sdk Polar instance (structural). The package never imports the SDK itself." },
+        client: {
+            type: "() => PolarClientLike | Promise<PolarClientLike>",
+            description:
+                "Loads an @polar-sh/sdk Polar instance (structural) on the first provider call; reused after. The package never imports the SDK itself.",
+        },
         webhookSecret: {
             type: "string",
             description: "The endpoint signing secret from your Polar webhook settings; verifies inbound events (POLAR_WEBHOOK_SECRET).",

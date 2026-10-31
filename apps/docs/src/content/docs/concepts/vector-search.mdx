@@ -336,7 +336,6 @@ and skip the binding entirely:
 ```ts
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import { createPgVectorIndex } from "@lunora/hyperdrive/global";
-import postgres from "postgres";
 
 // Built once — `vectors` runs on every dispatch.
 let docsBody: ReturnType<typeof createPgVectorIndex> | undefined;
@@ -344,7 +343,11 @@ let docsBody: ReturnType<typeof createPgVectorIndex> | undefined;
 export const ShardDO = createShardDO({
     vectors: (env) => {
         docsBody ??= createPgVectorIndex({
-            client: fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE).connectionString, { fetch_types: false, max: 5 })),
+            client: fromPostgresJs(async () => {
+                const { default: postgres } = await import("postgres");
+
+                return postgres(createHyperdrive(env.HYPERDRIVE).connectionString, { fetch_types: false, max: 5 });
+            }),
             dimensions: 768,
             metric: "cosine",
             name: "docs_body",

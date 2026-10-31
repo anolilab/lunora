@@ -596,6 +596,7 @@ export const ERROR_CATALOG = {
     /** A resume below the compacted prefix: the keys survive but their post-images do not, so only a payload consumer (streaming export, replay-PITR, a read replica) is refused. */
     CDC_PAYLOAD_COMPACTED: { status: 409, title: "CDC payloads compacted" },
     EXPIRED: { status: 404, title: "Session expired" },
+    GLOBAL_TRANSACTION_UNSUPPORTED: { status: 500, title: "Global transaction unsupported by driver" },
     LIVE_CONNECTION_LIMIT: { status: 503, title: "Live connection limit reached" },
     LIVE_CONNECTION_NOT_FOUND: { status: 404, title: "Live connection not found" },
     LIVE_STREAMS_UNSUPPORTED: { status: 501, title: "Live streams are not served by this worker" },

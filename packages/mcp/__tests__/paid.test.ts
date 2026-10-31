@@ -76,6 +76,9 @@ const callBody = (name: string): unknown => {
     return { id: 2, jsonrpc: "2.0", method: "tools/call", params: { arguments: {}, name } };
 };
 
+/** A keyword `ToolInputSchema` does not type, which the validator throws on when it runs the schema. */
+const UNRESOLVABLE_REF: Record<string, unknown> = { $ref: "#/definitions/missing" };
+
 const text = (value: string): ToolResult => {
     return { content: [{ text: value, type: "text" }] };
 };
@@ -452,6 +455,25 @@ describe("createPaidMcpServer", () => {
 
         expect(payload.result?.isError).toBe(true);
         expect(payload.result?.content[0]?.text).toMatch(/^BAD_REQUEST: invalid arguments for tool "ping": /);
+        expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("returns a schema the validator cannot run as an isError result, not a protocol error", async () => {
+        expect.assertions(3);
+
+        const handler = vi.fn<() => ToolResult>(() => text("pong"));
+        const mcp = createPaidMcpServer({ charge });
+
+        mcp.tool(
+            { description: "echo", annotations: { readOnlyHint: true }, inputSchema: { ...UNRESOLVABLE_REF, properties: {}, type: "object" }, name: "ping" },
+            handler,
+        );
+
+        const response = await mcp.fetchHandler(mcpRequest(callBody("ping")));
+        const payload = (await response.json()) as { error?: unknown; result?: { isError?: boolean } };
+
+        expect(payload.error).toBeUndefined();
+        expect(payload.result?.isError).toBe(true);
         expect(handler).not.toHaveBeenCalled();
     });
 

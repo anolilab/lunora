@@ -22,11 +22,12 @@ const prepareCommand: Command = {
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         { description: "Use per-module lazy function imports (opt-in; default eager)", name: "lazy-functions", type: Boolean },
         {
-            description: "Evaluate every lazy function module in workerd before passing (default; nothing to check for an eager registry)",
+            description:
+                "Evaluate every lazy function module and import()ed integration SDK in workerd before passing (default; nothing to check when there are none)",
             name: "smoke-load",
             type: Boolean,
         },
-        { description: "Skip evaluating lazy function modules before passing", name: "no-smoke-load", type: Boolean },
+        { description: "Skip evaluating lazy function modules and import()ed integration SDKs before passing", name: "no-smoke-load", type: Boolean },
         // Both forms declared explicitly, for the reason `lunora deploy` spells
         // out at its identical pair: letting cerebro synthesize the positive
         // flag clones the `no-*` description and gives it a `defaultValue`, so

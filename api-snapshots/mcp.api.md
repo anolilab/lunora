@@ -284,7 +284,7 @@ Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 ### `createFunctionMcpServer` (const)
 
 ```ts
-const createFunctionMcpServer: (options: FunctionMcpServerOptions) => Server;
+const createFunctionMcpServer: (options: FunctionMcpServerOptions) => Promise<Server>;
 ```
 
 ### `createLocalMcpServer` (const)
@@ -293,9 +293,7 @@ Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `createLunoraMcpServer` (const)
 
-```ts
-const createLunoraMcpServer: (options: LunoraMcpServerOptions) => Server;
-```
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `createMcpFetchHandler` (const)
 
@@ -308,7 +306,7 @@ Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 ### `createToolServer` (const)
 
 ```ts
-const createToolServer: (info: McpServerInfo, tools: ReadonlyArray<McpTool>, resources?: McpResourceProvider) => Server;
+const createToolServer: (info: McpServerInfo, tools: ReadonlyArray<McpTool>, resources?: McpResourceProvider) => Promise<Server>;
 ```
 
 ### `localTools` (const)
@@ -499,7 +497,7 @@ const createDocsMcpFetchHandler: (options: DocsMcpServerOptions) => McpFetchHand
 ### `createDocsMcpServer` (const)
 
 ```ts
-const createDocsMcpServer: (options: DocsMcpServerOptions) => Server;
+const createDocsMcpServer: (options: DocsMcpServerOptions) => Promise<Server>;
 ```
 
 ### `createRemoteDocsIndex` (const)
@@ -613,12 +611,14 @@ const connectStdio: (options: LunoraMcpServerOptions) => Promise<Server>;
 ### `createLocalMcpServer` (const)
 
 ```ts
-const createLocalMcpServer: (options?: LocalMcpServerOptions) => Server;
+const createLocalMcpServer: (options?: LocalMcpServerOptions) => Promise<Server>;
 ```
 
 ### `createLunoraMcpServer` (const)
 
-Re-exported from `@lunora/mcp` — signature tracked in that section.
+```ts
+const createLunoraMcpServer: (options: LunoraMcpServerOptions) => Server;
+```
 
 ### `localTools` (const)
 

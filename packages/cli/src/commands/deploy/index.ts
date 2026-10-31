@@ -101,11 +101,12 @@ const deployCommand: Command = {
         },
         // Both halves declared explicitly, like `typecheck` on `verify`: the handler reads `!== false`.
         {
-            description: "Evaluate every lazy function module in workerd before shipping (default; nothing to check for an eager registry)",
+            description:
+                "Evaluate every lazy function module and import()ed integration SDK in workerd before shipping (default; nothing to check when there are none)",
             name: "smoke-load",
             type: Boolean,
         },
-        { description: "Skip evaluating lazy function modules before shipping", name: "no-smoke-load", type: Boolean },
+        { description: "Skip evaluating lazy function modules and import()ed integration SDKs before shipping", name: "no-smoke-load", type: Boolean },
         TARGET_OPTION,
         {
             description:

@@ -27,7 +27,12 @@ describe("quickAction", () => {
         stubDohFetch();
 
         const { binding, quickAction } = makeQuickBinding();
-        const browser = createBrowser({ binding, launch: async () => ({}) as never });
+        const browser = createBrowser({
+            binding,
+            playwright: () => {
+                return { launch: async () => ({}) as never };
+            },
+        });
         const many = Array.from({ length: 51 }, (_, index) => {
             return { url: `https://cdn${String(index)}.example.com/a.js` };
         });
@@ -47,7 +52,13 @@ describe("quickAction", () => {
         expect.assertions(3);
 
         const { binding, quickAction } = makeQuickBinding();
-        const browser = createBrowser({ allowedHosts: ["example.com", "cdn.example.com"], binding, launch: async () => ({}) as never });
+        const browser = createBrowser({
+            allowedHosts: ["example.com", "cdn.example.com"],
+            binding,
+            playwright: () => {
+                return { launch: async () => ({}) as never };
+            },
+        });
 
         await browser.quickAction("screenshot", "https://example.com", { addScriptTag: [{ url: "https://cdn.example.com/a.js" }] });
 
@@ -136,7 +147,13 @@ describe("guardrails", () => {
         expect.assertions(1);
 
         const { calls, launch } = captureLaunch();
-        const browser = createBrowser({ allowedHosts: ["Example.COM.", "cdn.example.com"], binding: plainBinding, launch });
+        const browser = createBrowser({
+            allowedHosts: ["Example.COM.", "cdn.example.com"],
+            binding: plainBinding,
+            playwright: () => {
+                return { launch };
+            },
+        });
 
         await browser.launch(async () => "ok", { keepAlive: 60 });
 
@@ -147,7 +164,13 @@ describe("guardrails", () => {
         expect.assertions(1);
 
         const { calls, launch } = captureLaunch();
-        const browser = createBrowser({ allowedHosts: [], binding: plainBinding, launch });
+        const browser = createBrowser({
+            allowedHosts: [],
+            binding: plainBinding,
+            playwright: () => {
+                return { launch };
+            },
+        });
 
         await browser.launch(async () => "ok");
 
@@ -160,7 +183,15 @@ describe("guardrails", () => {
         const { calls, launch } = captureLaunch();
         const allowedHosts = Array.from({ length: 51 }, (_, index) => `h${String(index)}.example.com`);
 
-        expect(() => createBrowser({ allowedHosts, binding: plainBinding, launch })).toThrow(/at most 50/u);
+        expect(() =>
+            createBrowser({
+                allowedHosts,
+                binding: plainBinding,
+                playwright: () => {
+                    return { launch };
+                },
+            }),
+        ).toThrow(/at most 50/u);
         expect(calls).toHaveLength(0);
     });
 
@@ -169,7 +200,15 @@ describe("guardrails", () => {
 
         const { calls, launch } = captureLaunch();
 
-        expect(() => createBrowser({ allowedHosts: ["example.com", "*"], binding: plainBinding, launch })).toThrow(/contains "\*"/u);
+        expect(() =>
+            createBrowser({
+                allowedHosts: ["example.com", "*"],
+                binding: plainBinding,
+                playwright: () => {
+                    return { launch };
+                },
+            }),
+        ).toThrow(/contains "\*"/u);
         expect(calls).toHaveLength(0);
     });
 });

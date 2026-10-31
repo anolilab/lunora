@@ -137,9 +137,11 @@ export const importHyperdriveGlobalRows = ({
 export const createPostgresGlobalCtxDb = (client: RowClient, options: Omit<CreateHyperdriveGlobalCtxDbOptions, "engine" | "exec">): DatabaseWriterLike =>
     createHyperdriveGlobalCtxDb({ ...options, engine: "postgres", exec: buildPgExec(client) });
 
-/** Convenience: a **MySQL** `.global()` writer from a `mysql2/promise` connection/pool (created with `flags: ["FOUND_ROWS"]`). */
-export const createMysqlGlobalCtxDb = (connection: Mysql2Client, options: Omit<CreateHyperdriveGlobalCtxDbOptions, "engine" | "exec">): DatabaseWriterLike =>
-    createHyperdriveGlobalCtxDb({ ...options, engine: "mysql", exec: buildMysqlExec(connection) });
+/** Convenience: a **MySQL** `.global()` writer over a `mysql2/promise` connection/pool (created with `disableEval: true` and `flags: ["FOUND_ROWS"]`) that `load` builds on the first statement. */
+export const createMysqlGlobalCtxDb = (
+    load: () => Mysql2Client | Promise<Mysql2Client>,
+    options: Omit<CreateHyperdriveGlobalCtxDbOptions, "engine" | "exec">,
+): DatabaseWriterLike => createHyperdriveGlobalCtxDb({ ...options, engine: "mysql", exec: buildMysqlExec(load) });
 
 /** The studio's global data browser over a Hyperdrive database — every table in the connection's schema, internal ones hidden. */
 export interface HyperdriveGlobalIntrospector {

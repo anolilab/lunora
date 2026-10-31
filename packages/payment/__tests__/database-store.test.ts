@@ -726,7 +726,7 @@ describe("createDatabasePaymentStore", () => {
         const store = createDatabasePaymentStore(db);
         // `parseWebhook` only verifies and normalizes; it never calls the client.
         const payment = createPayment({
-            adapter: createCreemAdapter({ client: {} as CreemClientLike, webhookSecret: secret }),
+            adapter: createCreemAdapter({ client: () => ({}) as CreemClientLike, webhookSecret: secret }),
             authorize: () => true,
             store,
         });

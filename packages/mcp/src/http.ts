@@ -17,8 +17,8 @@
  */
 import type { McpFetchHandler } from "./serve-stateless";
 import { serveStateless } from "./serve-stateless";
-import type { LunoraMcpServerOptions } from "./server";
-import { createLunoraMcpServer, resolveClient } from "./server";
+import type { LunoraMcpServerOptions } from "./server-options";
+import { resolveClient } from "./server-options";
 
 /** {@link createMcpFetchHandler} options: the server's, plus this transport's body limit. */
 export interface McpFetchHandlerOptions extends LunoraMcpServerOptions {
@@ -42,12 +42,19 @@ export interface McpFetchHandlerOptions extends LunoraMcpServerOptions {
  * that registry on every tool call. A misconfiguration (`url` without `token`)
  * therefore throws when the handler is built rather than on first request,
  * which is where `createLunoraMcpServer` already documents reporting it.
+ *
+ * The server module, and with it `@modelcontextprotocol/sdk`, is `import()`ed on
+ * the first request rather than when the handler is built, so a Worker that
+ * mounts this handler keeps the SDK out of its startup graph.
  */
 export const createMcpFetchHandler = (options: McpFetchHandlerOptions): McpFetchHandler => {
     const client = resolveClient(options);
 
-    return (request: Request): Promise<Response> =>
-        serveStateless(createLunoraMcpServer({ ...options, client }), request, { maxRequestBytes: options.maxRequestBytes });
+    return async (request: Request): Promise<Response> => {
+        const { createLunoraMcpServer } = await import("./server");
+
+        return await serveStateless(createLunoraMcpServer({ ...options, client }), request, { maxRequestBytes: options.maxRequestBytes });
+    };
 };
 
 export { DEFAULT_MAX_REQUEST_BYTES, type McpFetchHandler, serveStateless, type ServeStatelessOptions } from "./serve-stateless";

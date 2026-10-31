@@ -39,20 +39,26 @@ export const screenshotPage = action.input({ url: v.string() }).action(async ({ 
 ## Wiring the thunk
 
 Codegen weaves `ctx.browser` onto every `ActionCtx` and reconciles the `BROWSER`
-binding, but it does **not** construct the helper: `createBrowser` needs the
-optional `@cloudflare/playwright` `launch` peer, and the generated worker stays
-free of it deliberately. So codegen emits `config.browser ? config.browser(env)
-: browserStub`, and `browserStub` throws a directed error on every method. Pass
-the thunk once, where you build the shard:
+binding, but it does **not** construct the helper: `createBrowser` needs a
+loader for the optional `@cloudflare/playwright` peer, and the generated worker
+stays free of it deliberately. So codegen emits `config.browser ?
+config.browser(env) : browserStub`, and `browserStub` throws a directed error on
+every method. Pass the thunk once, where you build the shard:
 
 ```ts
-import { launch } from "@cloudflare/playwright";
 import { createBrowser } from "@lunora/browser";
 
 export const ShardDO = createShardDO({
-    browser: (env) => createBrowser({ binding: env.BROWSER, launch }),
+    browser: (env) => createBrowser({ binding: env.BROWSER, playwright: () => import("@cloudflare/playwright") }),
 });
 ```
+
+The `playwright` loader runs on the first call that drives a browser and its
+module is reused, so the ~3 MiB SDK stays out of the Worker's startup graph
+(Cloudflare rejects a Worker whose global scope takes more than 1 s of CPU). A
+static `import { launch } from "@cloudflare/playwright"` in the entry is evaluated
+at startup and defeats this. A failed load rejects that call; the next one
+retries.
 
 Without that line every `ctx.browser` call throws — including the one the
 `browserTool` agent sandbox makes.
@@ -60,10 +66,9 @@ Without that line every `ctx.browser` call throws — including the one the
 Outside a Lunora action (worker entry, DO, queue handler), build the helper directly:
 
 ```ts
-import { launch } from "@cloudflare/playwright";
 import { createBrowser } from "@lunora/browser";
 
-const browser = createBrowser({ binding: env.BROWSER, launch });
+const browser = createBrowser({ binding: env.BROWSER, playwright: () => import("@cloudflare/playwright") });
 
 const png = await browser.screenshot("https://example.com", { fullPage: true });
 const pdf = await browser.pdf("https://example.com", { format: "A4", printBackground: true });
@@ -78,12 +83,11 @@ const title = await browser.scrape("https://example.com", () => document.title);
 | Option                | Type                      | Notes                                                                                                                                          |
 | --------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `binding`             | `BrowserBindingLike`      | `env.BROWSER`, the Browser Rendering binding. Required.                                                                                        |
-| `launch`              | `BrowserLaunchLike`       | `import { launch } from "@cloudflare/playwright"`. Required — YOU pass it; codegen never injects the optional peer.                            |
+| `playwright`          | `() => Promise<module>`   | `() => import("@cloudflare/playwright")`, loaded on first use. Required for every browser-driving method — YOU pass it; codegen never does.    |
 | `timeoutMs`           | `number`                  | Factory-level navigation timeout (ms). Clamped to 120 000. Default 30 000.                                                                     |
 | `allowPrivateTargets` | `boolean`                 | Opt in to navigating private/internal hosts (loopback, RFC1918, link-local). Default false.                                                    |
 | `allowedHosts`        | `string[]`                | Strict host allowlist. When set, a navigation URL is refused unless its hostname exactly matches an entry; `[]` allows nothing. Default unset. |
 | `resolveDns`          | `boolean`                 | Best-effort DNS-rebinding re-check over Cloudflare DoH. Defaults to true, or false when `allowedHosts` is set.                                 |
-| `connect`, `sessions` | Playwright exports        | `import { connect, sessions } from "@cloudflare/playwright"`. Required only for session reuse.                                                 |
 | `restApi`             | `{ accountId, apiToken }` | Browser Run REST API credentials. Required only for `crawl` / `crawlResult` / `cancelCrawl` (`/crawl` has no binding method).                  |
 
 ### `Browser`
@@ -104,7 +108,7 @@ const title = await browser.scrape("https://example.com", () => document.title);
 
 ### Quick Actions
 
-`quickAction` calls the binding's `quickAction()` (compatibility date `2026-03-24` or later) — no Playwright session, no `launch` needed. Actions: `accessibilityTree`, `content`, `json`, `links`, `markdown`, `pdf`, `scrape`, `screenshot`, `snapshot`. Options are forwarded as-is; the result is Browser Run's `Response` (binary for `screenshot`/`pdf`, JSON otherwise, non-2xx with an error body on failure).
+`quickAction` calls the binding's `quickAction()` (compatibility date `2026-03-24` or later) — no Playwright session, no `playwright` loader needed. Actions: `accessibilityTree`, `content`, `json`, `links`, `markdown`, `pdf`, `scrape`, `screenshot`, `snapshot`. Options are forwarded as-is; the result is Browser Run's `Response` (binary for `screenshot`/`pdf`, JSON otherwise, non-2xx with an error body on failure).
 
 ```ts
 const response = await ctx.browser.quickAction("snapshot", url, { formats: ["markdown", "accessibilityTree"] });
@@ -118,7 +122,11 @@ The `url` goes through the same guards as a navigation. Inline `html` is refused
 `/crawl` is REST-only, so pass account credentials (an API token with Browser Rendering edit rights, kept in `.dev.vars` / `wrangler secret`):
 
 ```ts
-const browser = createBrowser({ binding: env.BROWSER, launch, restApi: { accountId: env.CF_ACCOUNT_ID, apiToken: env.BROWSER_RUN_TOKEN } });
+const browser = createBrowser({
+    binding: env.BROWSER,
+    playwright: () => import("@cloudflare/playwright"),
+    restApi: { accountId: env.CF_ACCOUNT_ID, apiToken: env.BROWSER_RUN_TOKEN },
+});
 
 const jobId = await browser.crawl("https://docs.example.com", { contentUse: "reference", formats: ["markdown"], limit: 50 });
 const job = await browser.crawlResult(jobId, { status: "completed" });
@@ -137,7 +145,7 @@ Browser Run sessions accept several connections at once. Hold a session open wit
 **`allowedHosts` is the supported production configuration.** Browser Run enforces it on the session itself (`guardrails.allowedDomains`): every request the browser makes, redirect hops, sub-resources, service workers and raw CDP included, is checked by Cloudflare, not by code in your Worker.
 
 ```ts
-createBrowser({ binding: env.BROWSER, launch, allowedHosts: ["example.com", "cdn.example.com"] });
+createBrowser({ binding: env.BROWSER, playwright: () => import("@cloudflare/playwright"), allowedHosts: ["example.com", "cdn.example.com"] });
 ```
 
 Without `allowedHosts`, the guard below is a **best-effort check in the Worker**, and `createBrowser` warns once per isolate. Its known limits:
@@ -208,7 +216,7 @@ Refusals are `LunoraError`s with a stable `code`, thrown before a browser is lau
 | `BROWSER_TOO_MANY_REDIRECTS` | A navigation redirected more than 20 times (502).                                                                                                                                                                                            | Fix the redirect loop at the target, or navigate to its final URL.                                                                                   |
 | `BROWSER_TIMEOUT`            | Navigation plus the operation ran past the timeout budget (504). The session is closed.                                                                                                                                                      | Raise `timeoutMs` (capped at 120 s), use a cheaper `waitUntil`, or check the page for something that never settles.                                  |
 | `BROWSER_RUN_ERROR`          | The `/crawl` REST API answered non-2xx (the status is kept, 502 otherwise; the body is capped in the message and kept whole on `cause`), or returned no job id / job.                                                                        | Read the upstream message: a 400 is usually Content Signals refusing the crawl, a 401/403 the API token's permissions, a 429 the account's limits.   |
-| `INTERNAL`                   | A peer export is missing (`launch`, `connect`, `sessions`), the binding has no `quickAction`, or `crawl` was called without `restApi`.                                                                                                       | Pass the export from `@cloudflare/playwright`, set the binding's compatibility date to `2026-03-24` or later, or pass `restApi`.                     |
+| `INTERNAL`                   | `playwright` was not passed, the module it loaded lacks the export a method needs (`launch`, `connect`, `sessions`), the binding has no `quickAction`, or `crawl` was called without `restApi`.                                              | Pass `playwright: () => import("@cloudflare/playwright")`, set the binding's compatibility date to `2026-03-24` or later, or pass `restApi`.         |
 
 `createBrowser({})` without a `binding` throws a plain `TypeError`: it is a wiring mistake, not a request error.
 
