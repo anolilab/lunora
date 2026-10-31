@@ -44,6 +44,7 @@ import {
     previewEnvironmentBlock,
     previewMarker,
     previewNames,
+    previewResources,
     previewWorkerName,
     productionCollisions,
     resourceKey,
@@ -484,6 +485,12 @@ const recordFor = async (
         const current = await readRecord(request, namespace, recordKey(appId, slug));
 
         if (current !== undefined) {
+            // The key is only where the record was read: its own fields decide what is written back, so a record that names
+            // another project or preview would be saved over that one.
+            if (current.appId !== appId || current.name !== slug) {
+                throw new Error(`the record at "${recordKey(appId, slug)}" does not name this project and preview; refusing to act on it`);
+            }
+
             return current;
         }
     }
@@ -599,6 +606,17 @@ interface Hold {
     verify: () => Promise<void>;
 }
 
+/** Whether a Worker by this name is in the account; a lookup that fails counts as no, since it only decides whether to record a URL. */
+const workerPublished = async (request: Request, worker: string): Promise<boolean> => {
+    try {
+        const found = await workerMarker(request, worker, PREVIEW_MARKER_VAR);
+
+        return found.exists;
+    } catch {
+        return false;
+    }
+};
+
 /** Stop before the next step, not after the last one, once the hold cannot be vouched for. */
 const checkHeld = (hold: Hold, slug: string): void => {
     if (hold.lost) {
@@ -673,6 +691,8 @@ const shipHeld = async (
             version: 1,
             worker: plan.worker,
         };
+        // The lookups above may have outlasted the hold: another run may own the record by now, and this write must not undo it.
+        await hold.verify();
         await writeRecord(request, namespace, record);
         ids = await ensureResources(request, namespace, plan, record, logger, () => {
             checkHeld(hold, plan.slug);
@@ -722,8 +742,15 @@ const shipHeld = async (
         });
 
         // The URL built from the Worker's name and the account's subdomain, not one parsed out of wrangler's output: the
-        // seed carries the preview's admin token, which must only go where the migrations went.
-        record.url = url;
+        // seed carries the preview's admin token, which must only go where the migrations went. Recorded only for a Worker
+        // that is there: a deploy that failed before publishing leaves nothing at it, but one that published and then failed
+        // its health check does, and `preview list` should point at it.
+        const published = deployed.code === 0 || (await workerPublished(request, plan.worker));
+
+        if (published) {
+            record.url = url;
+        }
+
         record.updatedAt = new Date().toISOString();
         // The deploy may have outlasted the hold: another run may own the record by now, and this write must not undo it.
         await hold.verify();
@@ -910,7 +937,16 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
     // The deploy pipeline does not re-bless the baseline for a preview, but codegen writes a first one when there is none,
     // and the file is production's: it is put back to the exact bytes it had, or removed if it did not exist.
     const baselinePath = join(cwd, "lunora", SCHEMA_SNAPSHOT_FILENAME);
-    const baselineBefore = existsSync(baselinePath) ? readFileSync(baselinePath) : undefined;
+    let baselineBefore: Buffer | undefined;
+
+    try {
+        baselineBefore = existsSync(baselinePath) ? readFileSync(baselinePath) : undefined;
+    } catch (error) {
+        lock.release();
+
+        return fail(logger, `could not read ${baselinePath}: ${reason(error)}`);
+    }
+
     const putBack = (): void => {
         restore();
         lock.release();
@@ -1122,11 +1158,14 @@ const leftBehind = async (request: Request, config: PreviewConfig, slug: string)
     const found = await Promise.all(
         origins.map(async (origin) => {
             const { names } = previewNames(origin.config, slug);
-            const planned = planPreview(origin.config, slug, origin.env).plan?.resources ?? [];
 
             if (names === undefined) {
                 return [];
             }
+
+            // Not from the plan: a config that refuses planning still declares bindings, and what an earlier deploy made under
+            // their names may be in the account.
+            const planned = previewResources(origin.config, names.worker);
 
             const worker = await workerMarker(request, names.worker, PREVIEW_MARKER_VAR);
             const resources = await unrecordedResources(request, planned, undefined);

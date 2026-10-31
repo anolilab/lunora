@@ -283,6 +283,16 @@ const envOnlyRefusals = (config: PreviewConfig): string[] =>
               }),
     );
 
+/** The resources `config` declares, under the names a preview Worker `worker` gives them. Needs no valid plan: a refused config still declares them. */
+const previewResources = (config: PreviewConfig, worker: string): PlannedResource[] =>
+    Object.entries(ISOLATED_KEYS).flatMap(([key, kind]) =>
+        entriesOf((config as Record<string, unknown>)[key]).map((entry) => {
+            const binding = String(entry.binding);
+
+            return { binding, kind, name: previewResourceName(worker, binding) };
+        }),
+    );
+
 /** The plan for previewing `config` as `name`, or why it cannot be made. Pure: reads nothing, writes nothing. */
 const planPreview = (config: PreviewConfig, name: string, fromEnv?: string): { error: string; plan?: never } | { error?: never; plan: PreviewPlan } => {
     const named = previewNames(config, name);
@@ -315,13 +325,7 @@ const planPreview = (config: PreviewConfig, name: string, fromEnv?: string): { e
         return { error: `this app cannot be previewed in isolation yet:\n  - ${refusals.join("\n  - ")}` };
     }
 
-    const resources = Object.entries(ISOLATED_KEYS).flatMap(([key, kind]) =>
-        entriesOf((config as Record<string, unknown>)[key]).map((entry) => {
-            const binding = String(entry.binding);
-
-            return { binding, kind, name: previewResourceName(worker, binding) };
-        }),
-    );
+    const resources = previewResources(config, worker);
 
     // Binding names are case-sensitive but resource names are lowercase, so `DB` and `db` would share one.
     const shared = resources.find((resource, index) => resources.findIndex((other) => other.name === resource.name) !== index);
@@ -475,6 +479,7 @@ export {
     previewMarker,
     previewNames,
     previewResourceName,
+    previewResources,
     previewWorkerName,
     productionCollisions,
     resourceKey,

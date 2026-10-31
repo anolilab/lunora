@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { runCodegen } from "@lunora/codegen";
+import { runCodegen, SCHEMA_SNAPSHOT_FILENAME } from "@lunora/codegen";
 import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1570,6 +1570,29 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(existsSync(join(workdir, ".lunora", "preview.lock"))).toBe(true);
         });
 
+        it("lets go of its lock when the schema baseline cannot be read", async () => {
+            expect.assertions(3);
+
+            const account = fakeAccount();
+
+            // A directory where the baseline file belongs: it exists, and reading it throws.
+            mkdirSync(join(workdir, "lunora", SCHEMA_SNAPSHOT_FILENAME), { recursive: true });
+
+            const result = await runPreviewCommand({
+                cwd: workdir,
+                dryRun: true,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                logger: silentLogger().logger,
+                name: "42",
+                subcommand: "deploy",
+            });
+
+            expect(result.code).not.toBe(0);
+            expect(result.error).toMatch(/could not read/u);
+            expect(existsSync(join(workdir, ".lunora", "preview.lock"))).toBe(false);
+        });
+
         it("takes over a lock left by a process that is gone, and releases its own", async () => {
             expect.assertions(2);
 
@@ -1755,6 +1778,75 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(record.url).toBeUndefined();
             // The other run's hold is not this run's to release.
             expect(account.locks.get(`${APP_ID}/42`)?.owner).toBe("someone-else");
+        });
+
+        it("checks the hold before it writes the first record, so a run whose hold lapsed during the lookups writes nothing", async () => {
+            expect.assertions(3);
+
+            const account = fakeAccount();
+            const { spawner } = wranglerAt(workdir, account.workers);
+            let stolen = false;
+            const racing = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                // The lookups before the first write: another run takes the preview while they are in flight.
+                if (!stolen && init?.method !== "PUT" && new URL(input as string).pathname.includes("/workers/scripts/")) {
+                    stolen = true;
+                    account.locks.set(`${APP_ID}/42`, { expires: Math.floor(Date.now() / 1000) + 600, owner: "someone-else" });
+                }
+
+                return account.fetch(input, init);
+            }) as typeof globalThis.fetch;
+
+            const result = await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: racing,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+            });
+
+            expect(stolen).toBe(true);
+            expect(result.code).not.toBe(0);
+            expect(registryValues(account).has(`${APP_ID}/42`)).toBe(false);
+        });
+
+        it("records no URL for a preview whose deploy failed before publishing a Worker", async () => {
+            expect.assertions(3);
+
+            const account = fakeAccount();
+            const { spawner: inner } = wranglerAt(workdir, account.workers);
+            const failing: Spawner = async (descriptor) =>
+                descriptor.args.includes("deploy") && descriptor.args.includes("--env") ? { code: 1, stdout: "" } : inner(descriptor);
+
+            const result = await deployWith(account, failing);
+            const record = JSON.parse(registryValues(account).get(`${APP_ID}/42`) ?? "{}") as { url?: string };
+
+            expect(result.code).not.toBe(0);
+            expect(account.workers.size).toBe(0);
+            expect(record.url).toBeUndefined();
+        });
+
+        it("refuses a record whose fields name another preview than the key it was read under", async () => {
+            expect.assertions(3);
+
+            const account = fakeAccount();
+            const { spawner } = wranglerAt(workdir, account.workers);
+
+            await deployWith(account, spawner);
+
+            const registry = registryValues(account);
+            const written = JSON.parse(registry.get(`${APP_ID}/42`) ?? "{}") as Record<string, unknown>;
+
+            registry.set(`${APP_ID}/42`, JSON.stringify({ ...written, name: "7" }));
+
+            const result = await deployWith(account, spawner);
+
+            expect(result.code).not.toBe(0);
+            expect(result.error).toMatch(/does not name this project and preview/u);
+            expect(registry.has(`${APP_ID}/7`)).toBe(false);
         });
 
         it("marks the lock database it makes, and uses it again on the next run", async () => {
@@ -2954,6 +3046,27 @@ describe("lunora preview", { timeout: 120_000 }, () => {
                 subcommand: "delete",
             });
 
+        it("is not 'nothing to delete' when the config now refuses planning but resources under the preview's names exist", async () => {
+            expect.assertions(3);
+
+            const account = await deployed();
+
+            // The record is gone and the Worker with it, but the preview's storage is still in the account.
+            registryValues(account).clear();
+            account.workers.clear();
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                PRODUCTION_WRANGLER.replace('"binding": "FILES",', '"binding": "FILES", "jurisdiction": "eu",'),
+                "utf8",
+            );
+
+            const result = await deleteIt(account);
+
+            expect(result.code).toBe(EXIT_CODE.FAILURE);
+            expect(result.error).toMatch(/exists/u);
+            expect(changes(account, "DELETE")).toHaveLength(0);
+        });
+
         it("refuses a record whose resource id now names an unrelated resource, and deletes nothing", async () => {
             expect.assertions(3);
 
@@ -2989,7 +3102,7 @@ describe("lunora preview", { timeout: 120_000 }, () => {
 
             const result = await deleteIt(account);
 
-            expect(result.error).toMatch(/refusing to delete anything/u);
+            expect(result.error).toMatch(/does not name this project and preview; refusing to act on it/u);
             expect(changes(account, "DELETE")).toHaveLength(0);
         });
 
