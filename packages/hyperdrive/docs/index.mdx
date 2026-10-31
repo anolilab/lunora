@@ -482,6 +482,11 @@ const globalDb = createMysqlGlobalCtxDb(
 
 </Tabs>
 
+A `.global()` write commits its row and companion rows in one transaction, so the
+driver must be able to open one: a postgres.js client with `begin()`, or a mysql2
+**pool** (`createPool`, not a single `createConnection`). Anything else is refused
+with `GLOBAL_TRANSACTION_UNSUPPORTED` instead of committing statement by statement.
+
 ### Turn Hyperdrive's query cache off
 
 The Hyperdrive config behind a `.global()` store **must have query caching

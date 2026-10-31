@@ -144,8 +144,8 @@ const mysqlTransaction = async <T>(pool: MysqlPoolLike, wrap: (held: Mysql2Like)
 
 const raiseNoTransaction = (needs: string): never => {
     throw new LunoraError(
-        "INTERNAL",
-        `@lunora/hyperdrive: a .global() write needs ${needs} to commit its row and companions together; the supplied driver cannot open a transaction.`,
+        "GLOBAL_TRANSACTION_UNSUPPORTED",
+        `@lunora/hyperdrive: a .global() write needs ${needs} to commit its row and companions together; the supplied driver cannot open a transaction. Pass ${needs}.`,
     );
 };
 

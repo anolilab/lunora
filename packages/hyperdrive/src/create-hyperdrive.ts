@@ -95,8 +95,8 @@ export const fromPostgresJs = (load: () => Promise<PostgresJsLike> | PostgresJsL
 
             if (begin === undefined) {
                 throw new LunoraError(
-                    "INTERNAL",
-                    "@lunora/hyperdrive: the postgres.js client has no `begin`, so a .global() write cannot commit its row and companions together.",
+                    "GLOBAL_TRANSACTION_UNSUPPORTED",
+                    "@lunora/hyperdrive: the postgres.js client has no `begin()`, so a .global() write cannot commit its row and companions together. Pass a postgres.js client that has `begin()`.",
                 );
             }
 

@@ -45,6 +45,8 @@ const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> = {
     DELIVERY_RECEIPT_FENCED:
         "The operation committed, but its stored result belongs to an older authority epoch. Do not automatically retry with a new transport ID. Recover through the application's durable operation key under current authorization.",
     CONFLICT: CONFLICT_HINT,
+    GLOBAL_TRANSACTION_UNSUPPORTED:
+        "A `.global()` write commits its row and companion rows in one transaction. Pass a postgres.js client that has `begin()`, or a mysql2 pool (`createPool`) rather than a single connection.",
     NOT_UNIQUE: [
         "`.unique()` matched more than one document — it expects the query to identify at most one row.",
         "",

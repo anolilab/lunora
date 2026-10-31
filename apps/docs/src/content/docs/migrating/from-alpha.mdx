@@ -324,6 +324,19 @@ NXDOMAIN) is refused instead of treated as public.
 `route`. The real `@cloudflare/playwright` exports satisfy the new shapes
 unchanged.
 
+### `@lunora/hyperdrive`: drivers load on the first query
+
+`fromPostgresJs`, `fromNodePg`, `fromMysql2` and `buildMysqlExec` (and the
+`createMysqlGlobalCtxDb` convenience) take a loader, `() => driver` or
+`async () => (await import("postgres")).default(...)`, instead of a constructed
+driver, so the SDK is not evaluated at Worker startup. A `.global()` write also
+needs a driver that can open a transaction: a postgres.js client with `begin()`
+or a mysql2 pool. A client without `begin()`, or a single mysql2 connection, is now
+refused with `GLOBAL_TRANSACTION_UNSUPPORTED` rather than written statement by statement.
+
+**Migration:** wrap the driver you pass in a function, and give `.global()` stores a
+pool (or a postgres.js client) rather than one connection.
+
 ## Recommended (non-breaking) follow-ups
 
 - **Enforce ephemeral WS admin tokens.** The worker can now reject the raw
