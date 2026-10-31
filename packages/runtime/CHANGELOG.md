@@ -1,3 +1,14 @@
+## @lunora/runtime [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.262...@lunora/runtime@1.0.0-alpha.263) (2026-10-31)
+
+### Performance Improvements
+
+* **do,codegen:** share live queries that never read the caller ([#1401](https://github.com/anolilab/lunora/issues/1401)) ([d57a64c](https://github.com/anolilab/lunora/commit/d57a64cc0d292fab0d01a4f0b394842cf2d0bff8))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.270
+
 ## @lunora/runtime [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.261...@lunora/runtime@1.0.0-alpha.262) (2026-10-30)
 
 ### ⚠ BREAKING CHANGES

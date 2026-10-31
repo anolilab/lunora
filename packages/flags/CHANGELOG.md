@@ -1,3 +1,9 @@
+## @lunora/flags [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.97...@lunora/flags@1.0.0-alpha.98) (2026-10-31)
+
+### Performance Improvements
+
+* **do,codegen:** share live queries that never read the caller ([#1401](https://github.com/anolilab/lunora/issues/1401)) ([d57a64c](https://github.com/anolilab/lunora/commit/d57a64cc0d292fab0d01a4f0b394842cf2d0bff8))
+
 ## @lunora/flags [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.96...@lunora/flags@1.0.0-alpha.97) (2026-10-30)
 
 ### Performance Improvements
