@@ -489,6 +489,43 @@ describe(runLazySmokeLoad, () => {
             expect(logger.success).toHaveBeenCalledWith("0 lazy function(s) and 1 deferred module(s) evaluate cleanly");
         });
 
+        /** A lazy `onEmail` handler as codegen emits it: it loads the inbound runtime and the agent definitions on the first message. */
+        const scaffoldLazyEmail = (inbound: string): void => {
+            scaffoldDeferred("agent", "export const ok = true;\n");
+            writeFileSync(
+                join(cwd, "lunora", "_generated", "app.ts"),
+                'type Doc = import("./dataModel.js").Doc;\nconst load = () => Promise.all([import("@lunora/agent/inbound"), import("../agents.js")]);\n',
+            );
+            mkdirSync(join(cwd, "node_modules", "@lunora", "agent"), { recursive: true });
+            writeFileSync(
+                join(cwd, "node_modules", "@lunora", "agent", "package.json"),
+                JSON.stringify({ exports: { "./inbound": "./inbound.mjs" }, name: "@lunora/agent", type: "module" }),
+            );
+            writeFileSync(join(cwd, "node_modules", "@lunora", "agent", "inbound.mjs"), inbound);
+        };
+
+        it("blocks a lazy email handler whose inbound module throws while it is evaluated", async () => {
+            expect.assertions(2);
+
+            scaffoldLazyEmail('throw new Error("inbound broke");\n');
+            answerFromEntry();
+
+            const error = await run();
+
+            expect(error).toContain("@lunora/agent/inbound (module): inbound broke");
+            expect(error).not.toContain("dataModel");
+        });
+
+        it("passes a lazy email handler whose inbound module evaluates, counting only the value imports", async () => {
+            expect.assertions(2);
+
+            scaffoldLazyEmail("export const dispatchAgentEmail = () => {};\n");
+            answerFromEntry();
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(logger.success).toHaveBeenCalledWith("0 lazy function(s) and 2 deferred module(s) evaluate cleanly");
+        });
+
         it("reports function failures and deferred failures together", async () => {
             expect.assertions(1);
 

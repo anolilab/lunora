@@ -122,12 +122,14 @@ regenerating.
   would fail the first request that reaches it, and a module that failed to
   evaluate keeps failing for the life of that isolate. (The deferred `@lunora/auth` and API
   spec modules in the generated `app.ts` behave the same way in every build:
-  an evaluation error there surfaces on the first event, and the smoke-load
-  below does not cover them.)
+  an evaluation error there surfaces on the first event. The smoke-load
+  below covers them in a lazy build.)
 - **So `lunora build`, `prepare` and `deploy` smoke-load lazy builds.** Before
   shipping, they boot the Worker in workerd (`wrangler dev --local`), evaluate
   every lazy function module and every deferred event module (the push-queue
-  registry, `lunora/workflows.ts` and `lunora/agents.ts`), and refuse to ship if
+  registry, `lunora/workflows.ts` and `lunora/agents.ts`) and every other module a
+  generated lazy loader imports on first use (the inbound email runtime, spec and
+  auth modules, and so on, read from the generated output), and refuse to ship if
   any fails, naming each failing module. A project that defers only workflows,
   agents or queues, with no lazy function manifest, is checked too. Whether this runs depends on the generated output, not the flag, so
   `deploy --prebuilt` is covered too. Pass `--no-smoke-load` to skip it. It is

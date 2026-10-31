@@ -70,7 +70,7 @@ interface ModuleFailure {
 }
 
 /** The generated modules a lazy build loads with `import()` on an event rather than at startup. */
-type DeferredKind = "agent" | "queue" | "workflow";
+type DeferredKind = "agent" | "module" | "queue" | "workflow";
 
 interface DeferredModule {
     /** Absolute path the probe imports. */
@@ -84,7 +84,7 @@ const isModuleFailure = (value: unknown): value is ModuleFailure =>
     typeof value === "object" &&
     value !== null &&
     typeof (value as ModuleFailure).functionPath === "string" &&
-    ((value as ModuleFailure).deferred === undefined || ["agent", "queue", "workflow"].includes((value as ModuleFailure).deferred as string)) &&
+    ((value as ModuleFailure).deferred === undefined || ["agent", "module", "queue", "workflow"].includes((value as ModuleFailure).deferred as string)) &&
     typeof (value as ModuleFailure).message === "string";
 
 /**
@@ -195,6 +195,51 @@ const findDeferredModules = (cwd: string, schemaDirectory: string): DeferredModu
 
     if (read("agents.ts").includes('import("../agents.js")') || app.includes('import("../agents.js")')) {
         add("agent", resolveSourceModule(join(cwd, schemaDirectory, "agents")));
+    }
+
+    return found;
+};
+
+/** The `.js` a generated relative specifier carries for the `.ts` source beside it. */
+const JS_EXTENSION = /\.[cm]?js$/u;
+
+/**
+ * A value-position `import("<specifier>")`, which is how every lazy loader the generator emits pulls a module in
+ * (`await import(…)`, `() => import(…)`, an element of `Promise.all([…])`). A type-position
+ * `import("./dataModel.js").Doc` is followed by a member access and never matches.
+ */
+const LOADER_IMPORT = /(?:await|=>|return|[=[,])\s*import\(\s*"([^"]+)"\s*\)(?!\s*\.)/gu;
+
+/**
+ * Every other module a generated lazy loader evaluates on first use: the inbound email runtime, MCP, payment,
+ * browser, the spec and auth modules, and whatever codegen adds next. Read from the emitted `_generated/*.ts`
+ * rather than listed here, so a new loader is covered without touching this file. The function manifest's own
+ * loaders (`functions.ts`) are checked by `loadAllFunctions`, and `known` holds the modules already listed.
+ */
+const findLoaderImports = (cwd: string, schemaDirectory: string, known: ReadonlyArray<DeferredModule>): DeferredModule[] => {
+    const generated = join(cwd, schemaDirectory, "_generated");
+    const seen = new Set(known.map((module) => module.file));
+    const found: DeferredModule[] = [];
+    let names: string[];
+
+    try {
+        names = readdirSync(generated).filter((name) => name.endsWith(".ts") && name !== "functions.ts");
+    } catch {
+        return found;
+    }
+
+    for (const name of names.toSorted((a, b) => a.localeCompare(b))) {
+        for (const match of readFileSync(join(generated, name), "utf8").matchAll(LOADER_IMPORT)) {
+            const specifier = match[1] ?? "";
+            const isRelative = specifier.startsWith(".");
+            // A generated `./x.js` names the `./x.ts` source; a bare specifier resolves from the project like the generated file's does.
+            const file = isRelative ? resolveSourceModule(resolve(generated, specifier.replace(JS_EXTENSION, ""))) : specifier;
+
+            if (file !== undefined && !seen.has(file)) {
+                seen.add(file);
+                found.push({ file, kind: "module", label: isRelative ? relative(cwd, file).split(sep).join("/") : specifier });
+            }
+        }
     }
 
     return found;
@@ -574,11 +619,14 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     // workflows, agents or queues without a lazy function manifest (it declares no functions), so
     // either one starts the check.
     const hasManifest = existsSync(functionsFile) && readFileSync(functionsFile, "utf8").includes("export const loadAllFunctions");
-    const deferred = findDeferredModules(cwd, resolveSchemaDirectory(cwd));
+    const schemaDirectory = resolveSchemaDirectory(cwd);
+    const events = findDeferredModules(cwd, schemaDirectory);
 
-    if (!hasManifest && deferred.length === 0) {
+    if (!hasManifest && events.length === 0) {
         return undefined;
     }
+
+    const deferred = [...events, ...findLoaderImports(cwd, schemaDirectory, events)];
 
     const target = locateSmokeEntry(options);
 
