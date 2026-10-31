@@ -288,7 +288,7 @@ interface RelayShapePoke {
  * wire-encoded message, passed through untouched.
  */
 interface RelayRoomEvent {
-    attachment: Pick<SocketAttachment, "connectionId" | "context" | "identity" | "ip" | "userId">;
+    attachment: Pick<SocketAttachment, "connectionId" | "context" | "expiresAt" | "identity" | "ip" | "revalidateAt" | "userId">;
     connectionId: string;
     data?: unknown;
     kind: "join" | "leave" | "message";

@@ -8435,7 +8435,7 @@ abstract class ShardDO {
 
                 query = held;
 
-                if (held.sinceSeq !== undefined && !this.resumesUnderCurrentClaims(ws, sinceClaims)) {
+                if (held.sinceSeq !== undefined && !this.resumesUnderCurrentClaims(ws, sinceClaims, held.functionPath)) {
                     query = { ...held, sinceEpoch: undefined, sinceSeq: undefined };
                 }
             }
@@ -8493,7 +8493,7 @@ abstract class ShardDO {
                 args: shapeArgs,
                 name: envelope.shape.name,
                 // As for a query: a checkpoint is honoured only under the claims it was read under.
-                ...(envelope.sinceCheckpoint === undefined || this.resumesUnderCurrentClaims(ws, envelope.sinceClaims)
+                ...(envelope.sinceCheckpoint === undefined || this.resumesUnderCurrentClaims(ws, envelope.sinceClaims, envelope.shape.name)
                     ? { sinceEpoch: envelope.sinceEpoch, sinceSeq: envelope.sinceCheckpoint }
                     : {}),
             });
@@ -8673,6 +8673,11 @@ abstract class ShardDO {
             }
 
             if (typeof envelope.topic === "string" && envelope.topic.length > 0 && (await this.authorizeWhisper(ws, envelope.topic, "send"))) {
+                // The authorizer's await can outlast the sender's credential or window; the frame carries its user id.
+                if (this.dropIfLapsed(ws)) {
+                    return;
+                }
+
                 // A room topic is handled server-side rather than blindly relayed:
                 // the shard decodes the client's typed message, dispatches the
                 // room's `onMessage` (which decides what, if anything, members
@@ -17413,10 +17418,12 @@ abstract class ShardDO {
      * that is the fingerprint of the socket's claims now. A missing fingerprint (an older client) is a mismatch,
      * so the default is the cold seed.
      */
-    private resumesUnderCurrentClaims(ws: ShardSocketLike, presented: string | undefined): boolean {
+    private resumesUnderCurrentClaims(ws: ShardSocketLike, presented: string | undefined, name: string | undefined): boolean {
         const { identity, userId } = this.readAttachment(ws);
 
-        return presented !== undefined && presented === claimsFingerprint(userId, identity);
+        // The address is not in the fingerprint, since a reconnect from a new network would then always seed cold. A
+        // function seen reading `ctx.ip` is the exception: its rows may belong to the address the cursor was read at.
+        return presented !== undefined && presented === claimsFingerprint(userId, identity) && (name === undefined || !this.ipKeyedFunctionPaths.has(name));
     }
 
     private dropLapsedSocket(ws: ShardSocketLike, code: number, reason: string): void {
@@ -18561,8 +18568,10 @@ abstract class ShardDO {
             attachment: {
                 connectionId,
                 context: attachment.context,
+                expiresAt: attachment.expiresAt,
                 identity: attachment.identity,
                 ip: attachment.ip,
+                revalidateAt: attachment.revalidateAt,
                 userId: attachment.userId,
             },
             connectionId,

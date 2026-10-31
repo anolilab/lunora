@@ -1,4 +1,5 @@
 import type { SocketAttachment } from "@lunora/shard-engine";
+import { RelayMember } from "@lunora/shard-engine";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { claimsFingerprint } from "../../../shared/claims-fingerprint";
@@ -805,6 +806,41 @@ describe("resume under the claims the cursor was read under", () => {
         return { evaluate, ws };
     };
 
+    it("seeds in full, whatever the fingerprint, a query that has been seen reading the caller's address", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const shard = new ReauthShard(createState(), {});
+        const ws = createFakeWebSocket();
+
+        shard.register(ws, {
+            connectionId: "conn-1",
+            expiresAt: NOW + HOUR,
+            identity: CLAIMS,
+            ip: "203.0.113.9",
+            revalidateAt: NOW + WINDOW,
+            subs: {},
+            userId: "user-1",
+        });
+        // The address is not in the fingerprint (a reconnect from a new network would otherwise always seed cold), so a
+        // query that reads `ctx.ip` is never resumed, since its rows may belong to the address the cursor was read at.
+        (shard as unknown as { ipKeyedFunctionPaths: Set<string> }).ipKeyedFunctionPaths.add("messages:list");
+
+        const evaluate = vi
+            .spyOn(shard as unknown as { evaluateResume: () => unknown }, "evaluateResume")
+            .mockReturnValue({ cursor: 3, epoch: undefined, resumable: true });
+
+        await shard.webSocketMessage(
+            ws as unknown as WebSocket,
+            JSON.stringify({ id: "sub-2", query: { args: {}, functionPath: "messages:list", sinceClaims: fingerprint, sinceSeq: 3 }, type: "subscribe" }),
+        );
+
+        expect(evaluate).not.toHaveBeenCalled();
+        expect(ws.sent.some((frame) => frame.includes('"type":"resume"'))).toBe(false);
+        expect(dataFrames(ws)).toHaveLength(1);
+    });
+
     it("announces the fingerprint of the socket's claims on its identity frame", async () => {
         expect.assertions(1);
 
@@ -1105,5 +1141,85 @@ describe("work queued for a socket that has since lapsed", () => {
         expect([deltas(claimed), deltas(anonymous), deltas(named)]).toStrictEqual([0, 1, 1]);
         expect(claimed.closes).toStrictEqual([]);
         expect(Object.keys(claimed.attachment?.subs ?? {})).toStrictEqual(["table-only"]);
+    });
+});
+
+describe("work started before a socket lapsed", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("relays no whisper whose sender lapsed while its authorizer ran", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const shard = new ReauthShard(createState(), {});
+        const sender = createFakeWebSocket();
+        const member = createFakeWebSocket();
+
+        shard.register(sender, {
+            connectionId: "c1",
+            expiresAt: NOW + HOUR,
+            identity: { role: "member" },
+            revalidateAt: NOW + 60_000,
+            subs: {},
+            userId: "user-1",
+            whispers: ["feed"],
+        });
+        shard.register(member, { connectionId: "c2", subs: {}, whispers: ["feed"] });
+        vi.spyOn(shard as unknown as { authorizeWhisper: () => Promise<boolean> }, "authorizeWhisper").mockImplementation(async () => {
+            // The authorizer outlasts the sender's window.
+            vi.setSystemTime(NOW + 60_000);
+
+            return true;
+        });
+        await shard.webSocketMessage(sender as unknown as WebSocket, JSON.stringify({ data: { x: 1 }, topic: "feed", type: "whisper" }));
+
+        expect(member.sent.some((frame) => frame.includes('"type":"whisper"'))).toBe(false);
+        expect(sender.closes[0]).toBe(4005);
+    });
+
+    it.each([
+        ["expired", NOW - 1, false],
+        ["live", NOW + HOUR, true],
+    ])("runs a relayed room join only if the socket's credential has not expired (%s)", async (_name, expiresAt, runs) => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const shard = new ReauthShard(createState(), {});
+        const handler = vi.spyOn(shard, "handleRpc");
+
+        vi.spyOn(shard as unknown as { roomHandlerPath: () => string }, "roomHandlerPath").mockReturnValue("rooms:handler");
+        vi.spyOn(shard as unknown as { authorizeWhisper: () => Promise<boolean> }, "authorizeWhisper").mockResolvedValue(true);
+
+        const verdict = await (shard as unknown as { relayRoomEvent: (event: unknown) => Promise<{ admitted: boolean }> }).relayRoomEvent({
+            attachment: { connectionId: "c1", expiresAt, userId: "user-1" },
+            connectionId: "c1",
+            kind: "join",
+            relayIndex: 0,
+            topic: "room:a",
+            type: "relay_room_event",
+        });
+
+        expect(handler).toHaveBeenCalledTimes(runs ? 1 : 0);
+        expect(verdict.admitted).toBe(runs);
+    });
+
+    it("hands the owner the deadline of the socket a relay forwards a room event for", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const shard = new ReauthShard(createState(), {});
+        const ws = createFakeWebSocket();
+        const forwarded = vi.fn<(event: { attachment: Record<string, unknown> }) => Promise<boolean>>(async () => true);
+
+        shard.register(ws, { connectionId: "c1", expiresAt: NOW + HOUR, identity: { role: "member" }, revalidateAt: NOW + 60_000, subs: {}, userId: "user-1" });
+        Reflect.set(shard, "relay", Object.assign(Object.create(RelayMember.prototype) as object, { forwardRoomEvent: forwarded }));
+        await (shard as unknown as { forwardRoomEvent: (...args: unknown[]) => Promise<boolean> }).forwardRoomEvent(ws, "room:a", "join", {}, undefined);
+
+        expect(forwarded.mock.calls[0]?.[0].attachment).toMatchObject({ expiresAt: NOW + HOUR, revalidateAt: NOW + 60_000 });
     });
 });
