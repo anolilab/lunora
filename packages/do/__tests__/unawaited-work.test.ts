@@ -154,6 +154,25 @@ describe("watchPendingWork", () => {
         await running;
     });
 
+    it.each([
+        ["queues", "emails", "send"],
+        ["topics", "signups", "publish"],
+    ])("names a call left running on a named ctx.%s producer", async (facade, name, method) => {
+        expect.assertions(2);
+
+        const slow = deferred();
+        const producer = { [method]: async () => slow.promise };
+        const ctx: Record<string, unknown> = { [facade]: { [name]: producer } };
+        const finish = watchPendingWork(ctx);
+        const running = ((ctx[facade] as Record<string, Record<string, () => Promise<string>>>)[name] as Record<string, () => Promise<string>>)[method]!();
+
+        expect(finish()).toStrictEqual([`ctx.${facade}.${name}.${method}`]);
+        expect((ctx[facade] as Record<string, unknown>)[name]).toBe(producer);
+
+        slow.resolve();
+        await running;
+    });
+
     it("restores the original members so identity-keyed queues still find the facade", () => {
         expect.assertions(2);
 

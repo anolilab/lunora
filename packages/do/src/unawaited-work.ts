@@ -21,7 +21,10 @@ const CALL_KINDS = ["fetch", "runAction", "runMutation", "runQuery"] as const;
  * runtime binding is brand-checked by native code the handler may hand it to, and `db` carries identity
  * the engine keys on, so a proxy standing in for either could break a call that works today.
  */
-const FACADE_KINDS = ["ai", "live", "notify", "push", "scheduler", "storage"] as const;
+const FACADE_KINDS = ["ai", "live", "notify", "push", "queues", "scheduler", "storage", "topics"] as const;
+
+/** Facades whose members are themselves producers (`ctx.queues.<name>.send`, `ctx.topics.<name>.publish`). */
+const NESTED_FACADE_KINDS: ReadonlySet<string> = new Set(["queues", "topics"]);
 
 const isThenable = (value: unknown): value is PromiseLike<unknown> =>
     (typeof value === "object" || typeof value === "function") && value !== null && typeof (value as { then?: unknown }).then === "function";
@@ -89,7 +92,7 @@ const watchPendingWork = (context: Record<string, unknown>): (() => string[]) =>
     // One proxy per facade, so `ctx.notify.push` stays the very object `ctx.push` is.
     const watched = new Map<object, object>();
 
-    const watchFacade = (label: string, facade: object): object => {
+    const watchFacade = (label: string, facade: object, nested = false): object => {
         const existing = watched.get(facade);
 
         if (existing !== undefined) {
@@ -102,6 +105,10 @@ const watchPendingWork = (context: Record<string, unknown>): (() => string[]) =>
 
                 if (typeof member === "object" && member !== null && watched.has(member)) {
                     return watched.get(member);
+                }
+
+                if (nested && typeof property === "string" && typeof member === "object" && member !== null && !isThenable(member)) {
+                    return watchFacade(`${label}.${property}`, member);
                 }
 
                 if (typeof member !== "function" || typeof property !== "string") {
@@ -134,7 +141,7 @@ const watchPendingWork = (context: Record<string, unknown>): (() => string[]) =>
 
         if (typeof original === "object" && original !== null) {
             originals.set(name, original);
-            context[name] = watchFacade(`ctx.${name}`, original);
+            context[name] = watchFacade(`ctx.${name}`, original, NESTED_FACADE_KINDS.has(name));
         }
     }
 
