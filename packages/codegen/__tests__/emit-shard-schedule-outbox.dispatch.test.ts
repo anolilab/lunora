@@ -24,6 +24,7 @@
  */
 import { DatabaseSync } from "node:sqlite";
 
+import { LunoraError } from "@lunora/errors";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LUNORA_FUNCTIONS } from "./fixtures/delta-sync/lunora/_generated/functions";
@@ -33,7 +34,7 @@ import { createShardDO } from "./fixtures/delta-sync/lunora/_generated/shard";
 interface TestCtx {
     db: { insert: (table: string, row: Record<string, unknown>) => Promise<unknown>; query: (table: string) => { collect: () => Promise<unknown[]> } };
     runMutation: (reference: { __lunoraRef: string }, args: Record<string, unknown>) => Promise<unknown>;
-    scheduler: { runAfter: (delayMs: number, target: unknown, args: unknown) => Promise<string> };
+    scheduler: { runAfter: (delayMs: number, target: unknown, args: unknown, options?: Record<string, unknown>) => Promise<string> };
 }
 
 /** One call the fake scheduler accepted. */
@@ -43,12 +44,15 @@ interface AcceptedJob {
     target: unknown;
 }
 
+/** Every option the fake scheduler was handed, accepted or not, in call order. */
+type ReceivedOptions = Record<string, unknown> | undefined;
+
 /**
  * The DO state the shard is constructed with. `transaction` is the host primitive
  * the rollback under test actually needs — a state without it falls through to a
  * bare call and every assertion below would pass for the wrong reason.
  */
-const createState = (): { run: (query: string, ...parameters: unknown[]) => unknown; state: unknown } => {
+const createState = (alarms: number[], alarmControl: { fail: boolean }): { run: (query: string, ...parameters: unknown[]) => unknown; state: unknown } => {
     const database = new DatabaseSync(":memory:");
     const run = (query: string, ...parameters: unknown[]): unknown => {
         const rows = database.prepare(query).all(...(parameters as never[])) as unknown[];
@@ -63,6 +67,13 @@ const createState = (): { run: (query: string, ...parameters: unknown[]) => unkn
             getWebSockets: () => [],
             id: { name: "shard-a" },
             storage: {
+                setAlarm: async (at: number | Date): Promise<void> => {
+                    if (alarmControl.fail) {
+                        throw new Error("alarm refused");
+                    }
+
+                    alarms.push(Number(at));
+                },
                 sql: { exec: run },
                 transaction: async <R>(closure: () => Promise<R>): Promise<R> => {
                     run("BEGIN");
@@ -85,30 +96,82 @@ const createState = (): { run: (query: string, ...parameters: unknown[]) => unkn
 };
 
 interface Harness {
+    /** Instants the shard armed its alarm for. */
+    alarms: number[];
+    /** Audit entries the shard wrote, oldest first. */
+    audit: () => { detail: string | null; op: string }[];
+    /** Ids the scheduler was asked to cancel. */
+    cancelled: string[];
+    /** Whether the scheduler held the job each time `cancel` was called, in order. */
+    cancelOutcomes: boolean[];
+    /** Operator drop of an outbox entry. */
+    drop: (id: string) => Promise<Response>;
+    /** Make arming the alarm fail (or work again). */
+    failAlarms: (fail: boolean) => void;
+    /** Make `cancel` throw `error` (or work again, with `undefined`). */
+    failCancel: (error: Error | undefined) => void;
+    /** Make the scheduler throw `error` on every call until reset with `setReachable(true)`. */
+    failWith: (error: Error) => void;
+    /** Hold the next scheduler call: `entered` settles once it is waiting, `release` lets it finish. */
+    hold: () => { entered: Promise<void>; release: () => void };
+    /** Hold the next `cancel` call the same way. */
+    holdCancel: () => { entered: Promise<void>; release: () => void };
+    /** Shard log lines pushed for `functionPath`. */
+    logs: (functionPath: string) => { level: string; message: string }[];
     /** Make every live entry due now, so the retry ladder can be driven without waiting it out. */
     makeDue: () => void;
+    /** Calls in the order they happened: `run` for an accepted hand-off, `cancel-done` when a cancel settled. */
+    order: string[];
     /** Every entry still in `__schedule_outbox`, oldest first. */
     outbox: () => { attempts: number; dead: number; id: string }[];
+    /** Options the scheduler was handed on each call. */
+    received: ReceivedOptions[];
+    /** Make `cancel` answer `{ cancelled: false }` whatever the scheduler holds. */
+    refuseCancels: (refuse: boolean) => void;
     /** Drive the outbox retry tier the shared poll alarm runs. */
     retry: () => Promise<number | undefined>;
+    /** Run raw SQL against the shard's store. */
+    run: (query: string, ...parameters: unknown[]) => unknown;
     /** Jobs the scheduler accepted. */
     scheduled: AcceptedJob[];
     /** Flip the scheduler between "unreachable" and "healthy". */
     setReachable: (reachable: boolean) => void;
     shard: {
         cached: (mutationId: string) => { value: unknown } | undefined;
+        drop: (id: string) => Promise<Response>;
         handleRpc: (path: string, args: Record<string, unknown>) => Promise<unknown>;
+        requeue: (id: string) => Promise<Response>;
         underMutationId: (id: string) => void;
     };
 }
 
-const createHarness = (): Harness => {
+const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => {
     const scheduled: AcceptedJob[] = [];
-    let reachable = true;
+    const received: ReceivedOptions[] = [];
+    const alarms: number[] = [];
+    const cancelled: string[] = [];
+    const cancelOutcomes: boolean[] = [];
+    const order: string[] = [];
+    let refusing = false;
+    let failure: Error | undefined;
+    let cancelFailure: Error | undefined;
+    let heldCancel: { entered: () => void; released: Promise<undefined> } | undefined;
+    let held: { entered: () => void; released: Promise<undefined> } | undefined;
 
     const accept = async (target: unknown, args: unknown, options?: { id?: string }): Promise<string> => {
-        if (!reachable) {
-            throw new Error("SchedulerDO unreachable");
+        received.push(options);
+        order.push("run");
+
+        if (held !== undefined) {
+            const { entered, released } = held;
+
+            held = undefined;
+            entered();
+            await released;
+        }
+
+        if (failure !== undefined) {
+            throw failure;
         }
 
         const id = options?.id ?? "minted";
@@ -119,19 +182,43 @@ const createHarness = (): Harness => {
     };
 
     const ShardClass = createShardDO({
-        scheduler: () => {
-            return {
-                cancel: async (): Promise<{ cancelled: boolean }> => {
-                    return { cancelled: false };
-                },
-                runAfter: async (_delayMs: number, target: unknown, args: unknown, options?: { id?: string }): Promise<string> => accept(target, args, options),
-                runAt: async (_timestampMs: number, target: unknown, args: unknown, options?: { id?: string }): Promise<string> =>
-                    accept(target, args, options),
-            };
-        },
+        scheduler:
+            (configuration.scheduler ?? true)
+                ? () => {
+                      return {
+                          cancel: async (id: string): Promise<{ cancelled: boolean }> => {
+                              if (heldCancel !== undefined) {
+                                  const { entered, released } = heldCancel;
+
+                                  heldCancel = undefined;
+                                  entered();
+                                  await released;
+                              }
+
+                              if (cancelFailure !== undefined) {
+                                  throw cancelFailure;
+                              }
+
+                              cancelled.push(id);
+
+                              const holds = scheduled.some((job) => job.id === id) && !refusing;
+
+                              cancelOutcomes.push(holds);
+                              order.push("cancel-done");
+
+                              return { cancelled: holds };
+                          },
+                          runAfter: async (_delayMs: number, target: unknown, args: unknown, options?: { id?: string }): Promise<string> =>
+                              accept(target, args, options),
+                          runAt: async (_timestampMs: number, target: unknown, args: unknown, options?: { id?: string }): Promise<string> =>
+                              accept(target, args, options),
+                      };
+                  }
+                : undefined,
     });
 
-    const { run, state } = createState();
+    const alarmControl = { fail: false };
+    const { run, state } = createState(alarms, alarmControl);
 
     /**
      * The protected surface this suite has to reach. `underMutationId` stands in
@@ -142,6 +229,16 @@ const createHarness = (): Harness => {
     class Probe extends (ShardClass as unknown as new (state: unknown, env: unknown) => Record<string, unknown>) {
         public cached(mutationId: string): { value: unknown } | undefined {
             return (this as unknown as { readIdempotentResult: (id: string) => { value: unknown } | undefined }).readIdempotentResult(mutationId);
+        }
+
+        public drop(id: string): Promise<Response> {
+            return Promise.resolve(
+                (this as unknown as { handleDropOutboxEntry: (args: Record<string, unknown>) => Response | Promise<Response> }).handleDropOutboxEntry({ id }),
+            );
+        }
+
+        public requeue(id: string): Promise<Response> {
+            return (this as unknown as { handleRetryOutboxEntry: (args: Record<string, unknown>) => Promise<Response> }).handleRetryOutboxEntry({ id });
         }
 
         public retry(): Promise<number | undefined> {
@@ -156,6 +253,72 @@ const createHarness = (): Harness => {
     const shard = new Probe(state, {}) as unknown as Harness["shard"] & { retry: () => Promise<number | undefined> };
 
     return {
+        alarms,
+        audit: () =>
+            (run("SELECT op, detail FROM __lunora_audit__ ORDER BY seq ASC") as { toArray: () => { detail: string | null; op: string }[] })
+                .toArray()
+                .map((row) => {
+                    return { detail: row.detail, op: row.op };
+                }),
+        cancelOutcomes,
+        cancelled,
+        order,
+        refuseCancels: (refuse: boolean) => {
+            refusing = refuse;
+        },
+        failAlarms: (fail: boolean) => {
+            alarmControl.fail = fail;
+        },
+        drop: (id: string) => shard.drop(id),
+        failCancel: (error: Error | undefined) => {
+            cancelFailure = error;
+        },
+        failWith: (error: Error) => {
+            failure = error;
+        },
+        holdCancel: () => {
+            const entered = Promise.withResolvers<undefined>();
+            const released = Promise.withResolvers<undefined>();
+
+            heldCancel = {
+                entered: () => {
+                    entered.resolve(undefined);
+                },
+                released: released.promise,
+            };
+
+            return {
+                entered: entered.promise,
+                release: () => {
+                    released.resolve(undefined);
+                },
+            };
+        },
+        hold: () => {
+            const entered = Promise.withResolvers<undefined>();
+            const released = Promise.withResolvers<undefined>();
+
+            held = {
+                entered: () => {
+                    entered.resolve(undefined);
+                },
+                released: released.promise,
+            };
+
+            return {
+                entered: entered.promise,
+                release: () => {
+                    released.resolve(undefined);
+                },
+            };
+        },
+        logs: (functionPath: string) =>
+            (shard as unknown as { logs: { entries: () => { functionPath: string; level: string; message: string }[] } }).logs
+                .entries()
+                .filter((entry) => entry.functionPath === functionPath)
+                .map((entry) => {
+                    return { level: entry.level, message: entry.message };
+                }),
         makeDue: () => {
             run("UPDATE __schedule_outbox SET next_attempt_at = 0 WHERE dead = 0");
         },
@@ -171,11 +334,13 @@ const createHarness = (): Harness => {
                 .map((row) => {
                     return { attempts: row.attempts, dead: row.dead, id: row.id };
                 }),
+        received,
         retry: () => shard.retry(),
+        run,
         scheduled,
         shard,
         setReachable: (next: boolean) => {
-            reachable = next;
+            failure = next ? undefined : new Error("SchedulerDO unreachable");
         },
     };
 };
@@ -212,6 +377,29 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
             } catch {
                 // swallowed, exactly as the documented action shape does
             }
+        });
+
+        register("outbox:orderPlacedForever", "mutation", async (ctx) => {
+            await ctx.db.insert("notes", { boardId: "b1", body: "forever", ownerId: "u1" });
+
+            const jobId = await ctx.scheduler.runAfter(0, { __lunoraRef: "outbox:charge" }, { orderId: "o-2" }, { retry: { forever: true } });
+
+            return { jobId, ok: true };
+        });
+
+        register("outbox:twoJobs", "mutation", async (ctx) => {
+            await ctx.db.insert("notes", { boardId: "b1", body: "two", ownerId: "u1" });
+            await ctx.scheduler.runAfter(0, { __lunoraRef: "outbox:charge" }, { orderId: "first" });
+            await ctx.scheduler.runAfter(0, { __lunoraRef: "outbox:charge" }, { orderId: "second" });
+
+            return { ok: true };
+        });
+
+        register("outbox:sameId", "mutation", async (ctx) => {
+            await ctx.scheduler.runAfter(0, { __lunoraRef: "outbox:charge" }, { orderId: "a" }, { id: "dup-id" });
+            await ctx.scheduler.runAfter(0, { __lunoraRef: "outbox:charge" }, { orderId: "b" }, { id: "dup-id" });
+
+            return { ok: true };
         });
 
         register("outbox:countNotes", "query", async (ctx) => {
@@ -294,6 +482,762 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         // retry loop resurrects a job the design deliberately dropped.
         expect(harness.outbox()).toStrictEqual([]);
         expect(harness.scheduled).toStrictEqual([{ args: {}, id: expect.any(String), target: { __lunoraRef: "outbox:outer" } }]);
+    });
+
+    it("keeps an operator's Retry now when an attempt already in flight fails afterwards", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+        const { entered, release } = harness.hold();
+
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await entered;
+        await harness.shard.requeue(id);
+        release();
+        await attempt;
+
+        // The reset stands: the stale attempt neither counted itself nor pushed the entry out.
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 0, id }]);
+        expect(harness.logs("scheduler:outbox")).toStrictEqual([]);
+    });
+
+    it("does not let a stale attempt overwrite the reset of a newer one", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+        const older = harness.hold();
+
+        harness.makeDue();
+
+        const olderAttempt = harness.retry();
+
+        await older.entered;
+        await harness.shard.requeue(id);
+
+        const newer = harness.hold();
+
+        harness.makeDue();
+
+        const newerAttempt = harness.retry();
+
+        await newer.entered;
+        older.release();
+        await olderAttempt;
+
+        // The older attempt failed after the operator's reset and while a newer attempt was awaiting: it must write nothing.
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 0, id }]);
+
+        newer.release();
+        await newerAttempt;
+    });
+
+    it("cancels at the scheduler when an entry is dropped, in case it already holds the job", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+
+        await harness.drop(id);
+
+        expect(harness.outbox()).toStrictEqual([]);
+        expect(harness.cancelled).toStrictEqual([id]);
+    });
+
+    it("stops handing an entry over when the scheduler cannot be asked to cancel it", async () => {
+        expect.assertions(5);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+        harness.failCancel(new Error("SchedulerDO unreachable"));
+
+        await expect(harness.shard.handleRpc("outbox:orderPlacedForever", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+
+        // The scheduler is down, so the cancel cannot be confirmed: the drop reports that, and the entry must not run anyway.
+        await expect(harness.drop(id)).rejects.toThrow("SchedulerDO unreachable");
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 1, id }]);
+
+        harness.setReachable(true);
+        harness.makeDue();
+        await harness.retry();
+
+        expect(harness.scheduled).toStrictEqual([]);
+
+        // Once the scheduler answers, the same drop completes.
+        harness.failCancel(undefined);
+        await harness.drop(id);
+
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("cancels the job when an entry is dropped while its hand-off is still awaiting the scheduler", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+        const { entered, release } = harness.hold();
+
+        harness.setReachable(true);
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await entered;
+        await harness.drop(id);
+        release();
+        await attempt;
+
+        // The scheduler accepted the call the drop raced: the drop has to take it back out.
+        expect(harness.scheduled.map((job) => job.id)).toContain(id);
+        expect(harness.cancelled.at(-1)).toBe(id);
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("keeps the row parked when a job that landed during a drop cannot be cancelled either", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlacedForever", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+        const { entered, release } = harness.hold();
+
+        harness.setReachable(true);
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await entered;
+        harness.failCancel(new Error("cancel refused"));
+
+        await expect(harness.drop(id)).rejects.toThrow("cancel refused");
+
+        release();
+        await attempt;
+
+        // The scheduler took the job and neither cancel was confirmed: the entry has to survive so a later drop can finish it.
+        expect(harness.scheduled.map((job) => job.id)).toContain(id);
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 1, id }]);
+    });
+
+    it("keeps the row parked when a drop's own cancel worked but the landing job's cancel fails", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlacedForever", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+        const { entered, release } = harness.hold();
+
+        harness.setReachable(true);
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await entered;
+        await harness.drop(id);
+        harness.failCancel(new Error("cancel refused"));
+        release();
+        await attempt;
+
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 1, id }]);
+    });
+
+    it("audits a Retry now whose alarm could not be armed, and a drop whose cancel failed", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlacedForever", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+
+        harness.failAlarms(true);
+
+        await expect(harness.shard.requeue(id)).rejects.toThrow("alarm refused");
+
+        harness.failCancel(new Error("cancel refused"));
+
+        await expect(harness.drop(id)).rejects.toThrow("cancel refused");
+
+        expect(harness.audit().map((entry) => `${entry.op}:${String((JSON.parse(entry.detail ?? "{}") as { outcome?: string }).outcome)}`)).toStrictEqual([
+            "retryOutboxEntry:failed",
+            "dropOutboxEntry:parked",
+        ]);
+    });
+
+    it("cancels a job that lands from the FIRST post-commit hand-off after the entry was dropped", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+        const { entered, release } = harness.hold();
+        const rpc = harness.shard.handleRpc("outbox:orderPlaced", {});
+
+        // The mutation committed and its first hand-off is waiting on a slow scheduler.
+        await entered;
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+
+        await expect(harness.drop(id).then(async (response) => response.json())).resolves.toStrictEqual({ result: { dropped: true } });
+
+        release();
+        await rpc;
+
+        // The job landed after the drop, so only a cancel issued after it landed can stop it.
+        expect(harness.scheduled.map((job) => job.id)).toContain(id);
+        expect(harness.cancelOutcomes.at(-1)).toBe(true);
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("refuses a Retry now for an entry whose drop is still cancelling", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlacedForever", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+        const { entered, release } = harness.holdCancel();
+        const drop = harness.drop(id);
+
+        await entered;
+
+        await expect(harness.shard.requeue(id).then(async (response) => response.json())).resolves.toStrictEqual({ result: { retried: false } });
+
+        release();
+        await drop;
+
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("cancels a job whose hand-off was rejected after a drop, since the accept may have been lost", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+        const { entered, release } = harness.hold();
+        const rpc = harness.shard.handleRpc("outbox:orderPlaced", {});
+
+        await entered;
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+
+        await harness.drop(id);
+        harness.cancelled.length = 0;
+        harness.failWith(new Error("response lost"));
+        release();
+
+        await expect(rpc).rejects.toThrow("response lost");
+
+        expect(harness.cancelled).toStrictEqual([id]);
+        expect(harness.outbox()).toStrictEqual([]);
+
+        // A cancel that cannot be confirmed keeps the entry, parked, instead of forgetting a job that may run.
+        const second = createHarness();
+        const held = second.hold();
+        const secondRpc = second.shard.handleRpc("outbox:orderPlaced", {});
+
+        await held.entered;
+
+        const secondId = second.outbox()[0]?.id ?? "<no entry>";
+
+        await second.drop(secondId);
+        second.failCancel(new Error("cancel refused"));
+        second.failWith(new Error("response lost"));
+        held.release();
+        await secondRpc.catch(() => undefined);
+
+        expect(second.outbox()).toStrictEqual([{ attempts: 0, dead: 1, id: secondId }]);
+    });
+
+    it("does not fail a committed mutation when the bookkeeping after an accepted hand-off throws", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        // The table is created by shard init, which the first dispatch runs.
+        await expect(harness.shard.handleRpc("outbox:countNotes", {})).resolves.toBe(0);
+
+        harness.run("CREATE TRIGGER outbox_delete_down BEFORE DELETE ON __schedule_outbox BEGIN SELECT RAISE(ABORT, 'bookkeeping down'); END");
+
+        // The scheduler accepted the job; a failed delete of the custody row must not turn that into an error.
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).resolves.toMatchObject({ ok: true });
+
+        expect(harness.scheduled).toHaveLength(1);
+    });
+
+    it("parks rather than deletes a dropped entry when no scheduler is left to confirm the cancel", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness({ scheduler: false });
+
+        await expect(harness.shard.handleRpc("outbox:countNotes", {})).resolves.toBe(0);
+
+        harness.run(
+            "INSERT INTO __schedule_outbox (id, envelope_json, attempts, next_attempt_at, created_at, dead) VALUES (?, ?, 3, 0, ?, 0)",
+            "job-1",
+            JSON.stringify({ args: {}, options: undefined, target: { __lunoraRef: "outbox:charge" }, when: 0 }),
+            Date.now(),
+        );
+
+        // The job may have been accepted before the binding went away: the drop cannot claim it is stopped.
+        await expect(harness.drop("job-1")).rejects.toThrow(/cancel/u);
+        expect(harness.outbox()).toStrictEqual([{ attempts: 3, dead: 1, id: "job-1" }]);
+    });
+
+    it("never hands a dropped entry to the scheduler when its hand-off had not started", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+        const { entered, release } = harness.hold();
+        const rpc = harness.shard.handleRpc("outbox:twoJobs", {});
+
+        // The first hand-off is awaiting the scheduler; the second has not started.
+        await entered;
+
+        const first = harness.received[0]?.id;
+        const second = harness.outbox().find((entry) => entry.id !== first)?.id ?? "<no entry>";
+
+        await harness.drop(second);
+        release();
+        await rpc;
+
+        expect(harness.scheduled.map((job) => job.id)).toStrictEqual([first]);
+        expect(harness.received).toHaveLength(1);
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("sends both calls of a mutation that reuses an explicit job id, leaving the duplicate to the scheduler", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).resolves.toMatchObject({ ok: true });
+
+        // The first hand-off released the shared custody row; the second is not a dropped entry and must still be offered.
+        expect(harness.received.map((options) => options?.id)).toStrictEqual(["dup-id", "dup-id"]);
+    });
+
+    it("offers a job again when its id is scheduled anew after an earlier entry with that id was dropped", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        await harness.drop("dup-id");
+        harness.setReachable(true);
+        harness.received.length = 0;
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).resolves.toMatchObject({ ok: true });
+
+        expect(harness.received).toHaveLength(2);
+    });
+
+    it("does not undo a Retry now with the drop that an in-flight attempt still carries", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+        const { entered, release } = harness.hold();
+        const rpc = harness.shard.handleRpc("outbox:orderPlaced", {});
+
+        await entered;
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+
+        await harness.drop(id);
+
+        await expect(harness.shard.requeue(id).then(async (response) => response.json())).resolves.toStrictEqual({ result: { retried: true } });
+
+        harness.cancelOutcomes.length = 0;
+        release();
+        await rpc;
+
+        // The operator asked for the job after all: the landed job must stand, and the entry is released normally.
+        expect(harness.scheduled.map((job) => job.id)).toContain(id);
+        expect(harness.cancelOutcomes).not.toContain(true);
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("does not let a sibling call with the same id reschedule a job dropped while in flight", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+        const { entered, release } = harness.hold();
+        const rpc = harness.shard.handleRpc("outbox:sameId", {});
+
+        await entered;
+        await harness.drop("dup-id");
+        release();
+        await rpc;
+
+        // The first call landed and was cancelled; the second is the same dropped job and must not start it again.
+        expect(harness.received).toHaveLength(1);
+        expect(harness.cancelOutcomes.at(-1)).toBe(true);
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("leaves a job scheduled anew under the same id alone when the drop that was cancelling the old one finishes", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        const { entered, release } = harness.holdCancel();
+        const drop = harness.drop("dup-id");
+
+        await entered;
+        harness.setReachable(true);
+        harness.received.length = 0;
+
+        // A new mutation schedules under the same explicit id while the drop awaits the scheduler.
+        const replacement = harness.shard.handleRpc("outbox:sameId", {});
+
+        // Its hand-offs wait for the drop that is still cancelling, so the drop is released first.
+        release();
+        await drop;
+        await replacement;
+
+        // The new row is a different entry: it was handed off, not skipped and not deleted by the old drop.
+        expect(harness.received).toHaveLength(2);
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("reports a drop as failed when an attempt that landed during it could not cancel the job", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlacedForever", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+        const landing = harness.hold();
+
+        harness.setReachable(true);
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await landing.entered;
+
+        const cancelling = harness.holdCancel();
+        const drop = harness.drop(id);
+
+        await cancelling.entered;
+        // The job lands while the drop is cancelling; the attempt's own cancel is refused and parks the row.
+        harness.failCancel(new Error("cancel refused"));
+        landing.release();
+        await attempt;
+        harness.failCancel(undefined);
+        cancelling.release();
+
+        // The drop's cancel worked, but a job that may still run was left parked: that is not a success.
+        await expect(drop).rejects.toThrow(/may still run|cancel/u);
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 1, id }]);
+    });
+
+    it("reports a drop as failed when its cancel failed, even if the entry was replaced meanwhile", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        const { entered, release } = harness.holdCancel();
+        const drop = harness.drop("dup-id");
+
+        await entered;
+        harness.failCancel(new Error("cancel refused"));
+        harness.setReachable(true);
+
+        const stamp = (): string =>
+            JSON.stringify((harness.run("SELECT created_at FROM __schedule_outbox WHERE id = 'dup-id'") as { toArray: () => unknown[] }).toArray()[0]);
+        const before = stamp();
+        const replacement = harness.shard.handleRpc("outbox:sameId", {});
+
+        await vi.waitFor(() => {
+            if (stamp() === before) {
+                throw new Error("the replacement has not recorded yet");
+            }
+        });
+        release();
+
+        // The old job may still run (its cancel was refused); the replacement is a different schedule and stays untouched.
+        await expect(drop).rejects.toThrow("cancel refused");
+
+        await replacement;
+
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("does not defer or park a replacement row when the attempt it replaced fails afterwards", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        const { entered, release } = harness.hold();
+
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await entered;
+
+        // Scheduled anew under the same id while the old attempt is awaiting the scheduler.
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        release();
+        await attempt;
+
+        // The old attempt's failure says nothing about the new row.
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 0, id: "dup-id" }]);
+    });
+
+    it("skips the queued call of a dropped schedule even after another mutation reuses its id, and hands that one off", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+        const { entered, release } = harness.hold();
+        const first = harness.shard.handleRpc("outbox:sameId", {});
+
+        // The first mutation's first call is awaiting the scheduler; its second call is still queued.
+        await entered;
+        await harness.drop("dup-id");
+
+        // A second mutation reuses the id after the drop: new custody, never covered by that drop.
+        await harness.shard.handleRpc("outbox:sameId", {});
+        release();
+        await first;
+
+        // First mutation: one call (it landed and was cancelled); the dropped second call never went out.
+        // Second mutation: both of its calls.
+        expect(harness.received).toHaveLength(3);
+        expect(harness.cancelOutcomes).toContain(true);
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("keeps the row parked when the scheduler reports it no longer holds a job that just landed", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+        const { entered, release } = harness.hold();
+        const rpc = harness.shard.handleRpc("outbox:orderPlaced", {});
+
+        await entered;
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+
+        await harness.drop(id);
+        // The landed job already ran, so the scheduler answers { cancelled: false }: the drop did not stop it.
+        harness.refuseCancels(true);
+        release();
+        await rpc;
+
+        expect(harness.scheduled.map((job) => job.id)).toContain(id);
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 1, id }]);
+        expect(harness.logs("scheduler:outbox").some((entry) => entry.level === "error")).toBe(true);
+    });
+
+    it("still skips the queued call of a dropped schedule after more than a thousand other drops", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+        const { entered, release } = harness.hold();
+        const first = harness.shard.handleRpc("outbox:sameId", {});
+
+        await entered;
+        await harness.drop("dup-id");
+
+        for (let index = 0; index < 1100; index += 1) {
+            harness.run(
+                "INSERT INTO __schedule_outbox (id, envelope_json, attempts, next_attempt_at, created_at, dead) VALUES (?, ?, 0, 0, ?, 0)",
+                `other-${String(index)}`,
+                JSON.stringify({ args: {}, options: undefined, target: { __lunoraRef: "outbox:charge" }, when: 0 }),
+                1,
+            );
+            // eslint-disable-next-line no-await-in-loop -- each drop must settle before the next, as separate operator calls do
+            await harness.drop(`other-${String(index)}`);
+        }
+
+        release();
+        await first;
+
+        // Only the first call of the first mutation went out; the dropped second one stays dropped.
+        expect(harness.received.filter((options) => options?.id === "dup-id")).toHaveLength(1);
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("sends a replacement's hand-off only after the drop that was cancelling the old job settled", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        const { entered, release } = harness.holdCancel();
+        const drop = harness.drop("dup-id");
+
+        await entered;
+        harness.setReachable(true);
+        harness.order.length = 0;
+
+        const stamp = (): unknown => (harness.run("SELECT created_at FROM __schedule_outbox WHERE id = 'dup-id'") as { toArray: () => unknown[] }).toArray()[0];
+        const before = JSON.stringify(stamp());
+        const replacement = harness.shard.handleRpc("outbox:sameId", {});
+
+        // The replacement has committed and recorded its custody; its hand-offs are what must still be waiting.
+        await vi.waitFor(() => {
+            if (JSON.stringify(stamp()) === before) {
+                throw new Error("the replacement has not recorded yet");
+            }
+        });
+        // A negative assertion has no event to wait on: let everything the replacement can do on its own run.
+        await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+        });
+        release();
+        await drop;
+        await replacement;
+
+        // An id-only cancel that is still in flight must not meet the replacement at the scheduler.
+        expect(harness.order).toStrictEqual(["cancel-done", "run", "run"]);
+    });
+
+    it("keeps excluding the entry while any of two overlapping drops is still in flight", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlacedForever", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+        const firstGate = harness.holdCancel();
+        const firstDrop = harness.drop(id).catch(() => undefined);
+
+        await firstGate.entered;
+
+        const secondGate = harness.holdCancel();
+        const secondDrop = harness.drop(id).catch(() => undefined);
+
+        await secondGate.entered;
+        harness.failCancel(new Error("cancel refused"));
+        firstGate.release();
+        await firstDrop;
+
+        // The second drop is still cancelling: a Retry now must not be accepted yet.
+        await expect(harness.shard.requeue(id).then(async (response) => response.json())).resolves.toStrictEqual({ result: { retried: false } });
+
+        secondGate.release();
+        await secondDrop;
+
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 1, id }]);
+    });
+
+    it("does not hand a dropped entry to the scheduler when it was already queued in the same batch", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const [first, second] = harness.outbox().map((entry) => entry.id);
+        const { entered, release } = harness.hold();
+
+        harness.setReachable(true);
+        // The tick takes due rows by next attempt, so pin the order the test relies on.
+        harness.run("UPDATE __schedule_outbox SET next_attempt_at = 1 WHERE id = ?", first);
+        harness.run("UPDATE __schedule_outbox SET next_attempt_at = 2 WHERE id = ?", second);
+
+        const attempt = harness.retry();
+
+        await entered;
+        // The batch snapshot already holds `second`; the operator drops it while `first` awaits.
+        await harness.drop(second ?? "");
+        release();
+        await attempt;
+
+        expect(harness.scheduled.map((job) => job.id)).toStrictEqual([first]);
+    });
+
+    it("arms the alarm for a Retry now even when the in-memory alarm time is stale, and before auditing", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+
+        // An earlier alarm the instance believes is pending, which a failed init may never have delivered.
+        Object.assign(harness.shard, {
+            globalPollArmedAt: 1,
+            recordAudit: () => {
+                throw new Error("audit store unavailable");
+            },
+        });
+        harness.alarms.length = 0;
+
+        await expect(harness.shard.requeue(id)).rejects.toThrow("audit store unavailable");
+
+        expect(harness.alarms.length).toBeGreaterThan(0);
     });
 
     it("parks an entry the scheduler never accepts, rather than retrying it forever", async () => {
@@ -396,7 +1340,7 @@ describe("emitted shard — the schedule-rate budget on the real dispatch", () =
             },
         });
 
-        const { state } = createState();
+        const { state } = createState([], { fail: false });
 
         shard = new (ShardClass as unknown as new (state: unknown, env: unknown) => typeof shard)(state, {});
     });
@@ -431,5 +1375,158 @@ describe("emitted shard — the schedule-rate budget on the real dispatch", () =
 
         expect(delays).toHaveLength(FAN_OUT);
         expect(delays.every((delayMs) => delayMs === 0)).toBe(true);
+    });
+});
+
+describe("emitted shard — a retry.forever deferred schedule", () => {
+    /** Drive `count` retry attempts, each made due first. */
+    const drive = async (harness: Harness, count: number): Promise<void> => {
+        for (let attempt = 0; attempt < count; attempt += 1) {
+            harness.makeDue();
+            // eslint-disable-next-line no-await-in-loop -- each attempt reads the row the previous one wrote
+            await harness.retry();
+        }
+    };
+
+    it("stays live past the attempt ceiling and warns once when it passes it", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlacedForever", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        await drive(harness, 12);
+
+        expect(harness.outbox()).toStrictEqual([{ attempts: 12, dead: 0, id: expect.any(String) }]);
+        expect(harness.logs("scheduler:outbox")).toStrictEqual([
+            { level: "warn", message: expect.stringContaining("still waiting for the scheduler after 8 attempts") },
+        ]);
+
+        // The policy travels with the replay, so the scheduler retries it the same way once it has it.
+        harness.setReachable(true);
+        await drive(harness, 1);
+
+        expect(harness.received.at(-1)).toStrictEqual({ id: expect.any(String), retry: { forever: true } });
+    });
+
+    it("parks on a refusal no retry can change", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.failWith(new LunoraError("INVALID_INPUT", "bad args"));
+
+        await expect(harness.shard.handleRpc("outbox:orderPlacedForever", {})).rejects.toThrow("bad args");
+
+        await drive(harness, 1);
+
+        expect(harness.outbox()).toStrictEqual([{ attempts: 1, dead: 1, id: expect.any(String) }]);
+        expect(harness.logs("scheduler:outbox")).toStrictEqual([
+            { level: "error", message: expect.stringContaining("the scheduler refused the stored call: INVALID_INPUT") },
+        ]);
+    });
+
+    it("waits in custody on a shard with no scheduler instead of parking", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness({ scheduler: false });
+
+        // The table is created by shard init, which the first dispatch runs.
+        await expect(harness.shard.handleRpc("outbox:countNotes", {})).resolves.toBe(0);
+
+        const envelope = JSON.stringify({ args: {}, options: { retry: { forever: true } }, target: { __lunoraRef: "outbox:charge" }, when: 0 });
+
+        harness.run(
+            "INSERT INTO __schedule_outbox (id, envelope_json, attempts, next_attempt_at, created_at, dead) VALUES (?, ?, 0, 0, ?, 0)",
+            "job-1",
+            envelope,
+            Date.now(),
+        );
+        await drive(harness, 3);
+
+        expect(harness.outbox()).toStrictEqual([{ attempts: 3, dead: 0, id: "job-1" }]);
+        expect(harness.logs("scheduler:outbox")).toStrictEqual([]);
+    });
+
+    it("parks a stored call that can never become a job", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        // The table is created by shard init, which the first dispatch runs.
+        await expect(harness.shard.handleRpc("outbox:countNotes", {})).resolves.toBe(0);
+
+        const envelope = JSON.stringify({ args: {}, options: { retry: { forever: true } }, target: { notAReference: true }, when: 0 });
+
+        harness.run(
+            "INSERT INTO __schedule_outbox (id, envelope_json, attempts, next_attempt_at, created_at, dead) VALUES (?, ?, 0, 0, ?, 0)",
+            "job-2",
+            envelope,
+            Date.now(),
+        );
+        await drive(harness, 1);
+
+        expect(harness.outbox()).toStrictEqual([{ attempts: 1, dead: 1, id: "job-2" }]);
+        expect(harness.received).toStrictEqual([]);
+    });
+
+    /** Put one hand-written envelope in custody, due now, on a freshly initialised shard. */
+    const seed = async (harness: Harness, id: string, envelope: Record<string, unknown>): Promise<void> => {
+        // The table is created by shard init, which the first dispatch runs.
+        await expect(harness.shard.handleRpc("outbox:countNotes", {})).resolves.toBe(0);
+
+        harness.run(
+            "INSERT INTO __schedule_outbox (id, envelope_json, attempts, next_attempt_at, created_at, dead) VALUES (?, ?, 0, 0, ?, 0)",
+            id,
+            JSON.stringify(envelope),
+            Date.now(),
+        );
+    };
+
+    it("replays a workflow whose params are not an object", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        await seed(harness, "job-3", {
+            args: [1, 2],
+            options: { retry: { forever: true } },
+            target: { className: "ImportWorkflow", isLunoraWorkflow: true },
+            when: 0,
+        });
+        await drive(harness, 1);
+
+        expect(harness.outbox()).toStrictEqual([]);
+        expect(harness.scheduled.map((job) => job.args)).toStrictEqual([[1, 2]]);
+    });
+
+    it("parks a workflow-branded target with no class, whatever reference it also carries", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        await seed(harness, "job-4", { args: {}, target: { __lunoraRef: "outbox:charge", isLunoraWorkflow: true }, when: 0 });
+        await drive(harness, 1);
+
+        expect(harness.outbox()).toStrictEqual([{ attempts: 1, dead: 1, id: "job-4" }]);
+        expect(harness.received).toStrictEqual([]);
+    });
+
+    it("names the target and the reason when a readable envelope cannot be replayed", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+
+        await seed(harness, "job-5", { args: {}, target: { __lunoraRef: "outbox:charge" } });
+        await drive(harness, 1);
+
+        expect(harness.logs("scheduler:outbox")).toStrictEqual([
+            {
+                level: "error",
+                message: expect.stringMatching(/job-5 \(target \{"__lunoraRef":"outbox:charge"\}\) will not be enqueued: its fire time is missing/u),
+            },
+        ]);
     });
 });

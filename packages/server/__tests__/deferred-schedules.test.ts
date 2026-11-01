@@ -471,7 +471,7 @@ const budgetOutbox = (limit: number, deferTo: number) => {
             return deferTo;
         }),
         forget: vi.fn<(id: string) => void>(),
-        record: vi.fn<(id: string, envelope: { when: number }) => void>(),
+        record: vi.fn<(id: string, envelope: { when: number }) => string | undefined>(),
         wake: vi.fn<() => void>(),
     };
 };

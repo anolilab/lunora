@@ -1140,6 +1140,7 @@ interface ScheduleRecord {
 interface ScheduleRetryPolicy {
     backoff?: "exponential" | "linear";
     baseMs?: number;
+    forever?: boolean;
     maxAttempts?: number;
     maxMs?: number;
 }

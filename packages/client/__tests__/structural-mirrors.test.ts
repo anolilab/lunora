@@ -115,6 +115,13 @@ describe("scheduleRecord mirrors", () => {
         expect(membersOf(CLIENT_TYPES, name)).toStrictEqual(membersOf(SCHEDULER_TYPES, name));
     });
 
+    it("this package's ScheduleRetryPolicy carries every field the scheduler's RetryPolicy accepts", () => {
+        expect.assertions(1);
+
+        // The record's `retry` is returned as stored, so a policy field missing here cannot be read by a typed consumer.
+        expect(membersOf(CLIENT_TYPES, "ScheduleRetryPolicy")).toStrictEqual(membersOf(SCHEDULER_TYPES, "RetryPolicy"));
+    });
+
     it.each(["packages/shard-engine/src/system-reader.ts", "packages/server/src/types.ts"])(
         "%s's ScheduledFunctionDoc is a faithful subset of it",
         (mirror) => {

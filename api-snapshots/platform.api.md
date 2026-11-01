@@ -581,6 +581,7 @@ interface ScheduleOptions {
     delayMs?: number;
     retry?: {
         backoffMultiplier?: number;
+        forever?: boolean;
         initialDelayMs?: number;
         maxAttempts?: number;
         maxDelayMs?: number;

@@ -25,7 +25,9 @@ import {
     readAuditLog,
     readCapturedMail,
     readQueueMessages,
+    readScheduleOutbox,
     runReadonlySql,
+    SCHEDULE_OUTBOX_TABLE,
 } from "@lunora/shard-engine";
 
 import { isIssueStatus, parseTablePageFilters } from "./admin-rpc-args";
@@ -180,6 +182,29 @@ const readAdminQueueMessages = (sql: SqlExec, args: Record<string, unknown>): { 
     return { result, tables: new Set([QUEUE_TABLE]) };
 };
 
+/** The most outbox entries one `getScheduleOutbox` read returns. */
+const SCHEDULE_OUTBOX_READ_LIMIT = 500;
+
+/**
+ * Resolve a `getScheduleOutbox` admin read — one page of the deferred schedules
+ * this shard holds because the scheduler has not accepted them, live and parked.
+ * A shard with no outbox table reads as empty; any other failure is the RPC's
+ * error, because an empty list is what tells the operator nothing is waiting. The
+ * retry loop writes the table without a `flushChangedTables`, so the panel
+ * refreshes on its poll rather than a live push.
+ */
+const readAdminScheduleOutbox = (sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } => {
+    const requested = typeof args["limit"] === "number" && Number.isInteger(args["limit"]) && args["limit"] > 0 ? args["limit"] : 100;
+    const cursor = typeof args["cursor"] === "string" ? args["cursor"] : undefined;
+    const tables = new Set([SCHEDULE_OUTBOX_TABLE]);
+
+    if (sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", SCHEDULE_OUTBOX_TABLE).toArray().length === 0) {
+        return { result: { entries: [], nextCursor: undefined }, tables };
+    }
+
+    return { result: readScheduleOutbox(sql, Math.min(requested, SCHEDULE_OUTBOX_READ_LIMIT), cursor), tables };
+};
+
 /**
  * Resolve a `facetColumn` admin read — Datasette-style per-column value/count
  * summary over the active view. Reuses `readTablePage`'s predicate args
@@ -297,10 +322,10 @@ const readAdminStorageOrphans = (
 
 /**
  * Resolve the durable app-signal reads that aren't bound to a user table —
- * the auth-metrics rollup and the dev mail-catcher inbox. Returns the read's
- * `{ result, tables }`, or `undefined` for any path it doesn't own (so
- * `readAdminOp` falls through). Keeps `readAdminOp` under its complexity
- * budget by holding these two in one branch.
+ * the auth-metrics rollup, the dev mail and queue catchers, and the schedule
+ * outbox. Returns the read's `{ result, tables }`, or `undefined` for any path
+ * it doesn't own (so `readAdminOp` falls through). Keeps `readAdminOp` under its
+ * complexity budget by holding them in one branch.
  * @returns the read result and its table-dependency set, or `undefined` when the path is not owned by this resolver
  */
 const readAdminDurableSignal = (functionPath: string, sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } | undefined => {
@@ -314,6 +339,10 @@ const readAdminDurableSignal = (functionPath: string, sql: SqlExec, args: Record
 
     if (functionPath === ADMIN_FUNCTIONS.getQueueMessages) {
         return readAdminQueueMessages(sql, args);
+    }
+
+    if (functionPath === ADMIN_FUNCTIONS.getScheduleOutbox) {
+        return readAdminScheduleOutbox(sql, args);
     }
 
     return undefined;

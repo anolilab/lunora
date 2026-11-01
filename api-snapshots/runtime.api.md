@@ -3312,8 +3312,22 @@ interface SchedulerContext {
     }>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
     list: () => Promise<Record<string, unknown>[]>;
-    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>, options?: SchedulerRunOptions) => Promise<string>;
+    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>, options?: SchedulerRunOptions) => Promise<string>;
+}
+```
+
+### `SchedulerRunOptions` (interface)
+
+```ts
+interface SchedulerRunOptions {
+    retry?: {
+        backoff?: "exponential" | "linear";
+        baseMs?: number;
+        forever?: boolean;
+        maxAttempts?: number;
+        maxMs?: number;
+    };
 }
 ```
 

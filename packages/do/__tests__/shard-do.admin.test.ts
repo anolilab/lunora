@@ -16,6 +16,7 @@ import type {
     RankIndexDefinitionLike,
     RecordQueueMessageInput,
     RelatedPage,
+    SchedulerLike,
     SchemaLike,
     ShardRankPageResult,
     SocketAttachment,
@@ -29,7 +30,11 @@ import {
     ADMIN_FUNCTIONS,
     applyCdcChanges,
     createShardCtxDb as createShardContextDatabase,
+    migrateScheduleOutbox,
+    parkScheduleOutbox,
     rankKeyFromDoc,
+    readAuditLog,
+    recordScheduleOutbox,
     recordSchemaVersion,
     runDataMigration,
     runShardMigrations,
@@ -239,6 +244,25 @@ type ExplainIssueArm<D extends boolean> = Omit<Extract<ExplainIssueResult, { deg
  * this file instead of silently passing.
  */
 type ExplainIssueResultView = Partial<ExplainIssueArm<false> & ExplainIssueArm<true>> & { degraded: boolean };
+
+/** An admin shard whose configured scheduler can cancel, as the real client can. */
+class SchedulingAdminShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
+    public override async handleRpc(): Promise<unknown> {
+        throw new Error("handleRpc must not run for admin RPCs");
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- test double for the configured scheduler
+    protected override scheduleOutboxScheduler(): SchedulerLike {
+        return {
+            cancel: async () => {
+                return { cancelled: false };
+            },
+            runAfter: async () => "job",
+            runAt: async () => "job",
+        } as unknown as SchedulerLike;
+    }
+}
 
 /**
  * A real-SQLite-backed ShardDO whose `handleRpc` throws — proving the admin
@@ -1267,6 +1291,172 @@ describe("shardDO admin introspection", () => {
         const read = await readQueueMessages(readResponse);
 
         expect(read.result.entries).toHaveLength(0);
+    });
+
+    describe("schedule outbox", () => {
+        /** Shape of a `getScheduleOutbox` admin response. */
+        interface OutboxResponse {
+            result: { entries: { attempts: number; id: string; parked: boolean; target?: string }[]; nextCursor?: string };
+        }
+
+        const seed = (): void => {
+            migrateScheduleOutbox(database.sql);
+            recordScheduleOutbox(database.sql, "job-live", JSON.stringify({ args: {}, target: { __lunoraRef: "billing:sync" }, when: 0 }), 100);
+            recordScheduleOutbox(database.sql, "job-parked", JSON.stringify({ args: {}, target: { __lunoraRef: "billing:charge" }, when: 0 }), 200);
+            parkScheduleOutbox(database.sql, "job-parked", 8, 300);
+        };
+
+        const readOutbox = async (shard: AdminShard): Promise<OutboxResponse["result"]["entries"]> => {
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.getScheduleOutbox, {}, ADMIN_TOKEN));
+            const body = await response.json<OutboxResponse>();
+
+            return body.result.entries;
+        };
+
+        it("lists what the shard holds for the scheduler, live and parked", async () => {
+            expect.assertions(1);
+
+            seed();
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            await expect(readOutbox(shard)).resolves.toMatchObject([
+                { id: "job-live", parked: false, target: "billing:sync" },
+                { attempts: 8, id: "job-parked", parked: true, target: "billing:charge" },
+            ]);
+        });
+
+        it("requeues a parked entry back onto the retry ladder and audits it", async () => {
+            expect.assertions(3);
+
+            seed();
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.retryOutboxEntry, { id: "job-parked" }, ADMIN_TOKEN));
+
+            await expect(response.json()).resolves.toEqual({ result: { retried: true } });
+            await expect(readOutbox(shard)).resolves.toMatchObject([
+                { id: "job-live", parked: false },
+                { attempts: 0, id: "job-parked", parked: false },
+            ]);
+            expect(readAuditLog(database.sql).map((entry) => entry.op)).toContain("retryOutboxEntry");
+        });
+
+        it("drops an entry so it is never handed to the scheduler", async () => {
+            expect.assertions(2);
+
+            seed();
+
+            const shard = new SchedulingAdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.dropOutboxEntry, { id: "job-live" }, ADMIN_TOKEN));
+
+            await expect(response.json()).resolves.toEqual({ result: { dropped: true } });
+            await expect(readOutbox(shard)).resolves.toMatchObject([{ id: "job-parked" }]);
+        });
+
+        it("keeps a dropped entry, parked, when no scheduler is configured to confirm the cancel", async () => {
+            expect.assertions(2);
+
+            seed();
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.dropOutboxEntry, { id: "job-live" }, ADMIN_TOKEN));
+
+            // Not the redacted "internal error": the operator is told the entry was parked and what to do.
+            await expect(response.json()).resolves.toMatchObject({ error: { code: "SERVICE_UNAVAILABLE", message: expect.stringContaining("parked") } });
+            await expect(readOutbox(shard)).resolves.toMatchObject([{ id: "job-live", parked: true }, { id: "job-parked" }]);
+        });
+
+        it("pages to the parked entries behind the live ones", async () => {
+            expect.assertions(2);
+
+            seed();
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const firstResponse = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.getScheduleOutbox, { limit: 1 }, ADMIN_TOKEN));
+            const first = await firstResponse.json<OutboxResponse>();
+            const secondResponse = await shard.fetch(
+                tokenAdminRequest(ADMIN_FUNCTIONS.getScheduleOutbox, { cursor: first.result.nextCursor, limit: 1 }, ADMIN_TOKEN),
+            );
+            const second = await secondResponse.json<OutboxResponse>();
+
+            expect(first.result.entries.map((entry) => entry.id)).toStrictEqual(["job-live"]);
+            expect(second.result).toMatchObject({ entries: [{ id: "job-parked" }] });
+        });
+
+        it("reads a shard with no outbox table as empty", async () => {
+            expect.assertions(1);
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            await expect(readOutbox(shard)).resolves.toStrictEqual([]);
+        });
+
+        it("fails the read rather than reporting an empty outbox when the table cannot be read", async () => {
+            expect.assertions(1);
+
+            // The name exists, the columns the read needs do not.
+            database.raw(`CREATE TABLE "__schedule_outbox" ("id" TEXT PRIMARY KEY)`);
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.getScheduleOutbox, {}, ADMIN_TOKEN));
+
+            expect(response.ok).toBe(false);
+        });
+
+        it("reports a Retry now whose poll alarm could not be armed", async () => {
+            expect.assertions(1);
+
+            seed();
+
+            const refusing: ShardDOState = {
+                ...state,
+                storage: {
+                    ...state.storage,
+                    setAlarm: async () => {
+                        throw new Error("alarm refused");
+                    },
+                },
+            };
+            const shard = new AdminShard(refusing, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.retryOutboxEntry, { id: "job-parked" }, ADMIN_TOKEN));
+
+            expect(response.ok).toBe(false);
+        });
+
+        it("admin-gates the outbox read, retry and drop (403 without the bearer)", async () => {
+            expect.assertions(4);
+
+            seed();
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            for (const [name, args] of [
+                [ADMIN_FUNCTIONS.getScheduleOutbox, {}],
+                [ADMIN_FUNCTIONS.retryOutboxEntry, { id: "job-parked" }],
+                [ADMIN_FUNCTIONS.dropOutboxEntry, { id: "job-live" }],
+            ] as const) {
+                // eslint-disable-next-line no-await-in-loop -- three independent refusals, order is irrelevant
+                const response = await shard.fetch(tokenAdminRequest(name, args));
+
+                expect(response.status).toBe(403);
+            }
+
+            // Nothing was dropped or requeued by the refused calls.
+            await expect(readOutbox(shard)).resolves.toMatchObject([
+                { id: "job-live", parked: false },
+                { attempts: 8, id: "job-parked", parked: true },
+            ]);
+        });
+
+        it("refuses a drop without an id", async () => {
+            expect.assertions(1);
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.dropOutboxEntry, {}, ADMIN_TOKEN));
+
+            expect(response.status).toBe(400);
+        });
     });
 
     it("forgets every companion rebuild marker on rebuildCompanions", async () => {

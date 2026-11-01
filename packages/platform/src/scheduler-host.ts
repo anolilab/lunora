@@ -24,6 +24,8 @@ export interface ScheduleOptions {
     retry?: {
         /** Backoff multiplier. */
         backoffMultiplier?: number;
+        /** Retry without an attempt limit, overriding `maxAttempts`. A host without unbounded retry must reject this option rather than ignore it. */
+        forever?: boolean;
         /** Initial backoff delay (ms). */
         initialDelayMs?: number;
         /** Maximum number of delivery attempts. */

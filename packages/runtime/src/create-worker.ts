@@ -217,6 +217,17 @@ interface HttpActionContext {
     waitUntil?: (promise: Promise<unknown>) => void;
 }
 
+/** `@lunora/server`'s `ScheduleRunOptions`, restated structurally like {@link SchedulerContext}. */
+interface SchedulerRunOptions {
+    retry?: {
+        backoff?: "exponential" | "linear";
+        baseMs?: number;
+        forever?: boolean;
+        maxAttempts?: number;
+        maxMs?: number;
+    };
+}
+
 /**
  * The scheduler surface on an HTTP action context. Mirrors `@lunora/server`'s
  * `Scheduler` so `HttpActionCtx` can `Pick` it straight off `ActionContext`;
@@ -227,8 +238,8 @@ interface SchedulerContext {
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
     list: () => Promise<Record<string, unknown>[]>;
-    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>, options?: SchedulerRunOptions) => Promise<string>;
+    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>, options?: SchedulerRunOptions) => Promise<string>;
 }
 
 interface HttpActionLike {
@@ -4386,7 +4397,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return records.map((record) => decodeRecordArgs(record));
         };
 
-        const schedule = async (scheduledFor: number, target: unknown, args: Record<string, unknown> = {}): Promise<string> => {
+        const schedule = async (
+            scheduledFor: number,
+            target: unknown,
+            args: Record<string, unknown> = {},
+            runOptions?: SchedulerRunOptions,
+        ): Promise<string> => {
             const fields = targetFields(target);
 
             const { id } = await post<{ id: string }>("/schedule", {
@@ -4395,6 +4411,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // fractional instant (`runAfter(1500.5)`), as `@lunora/scheduler`'s
                 // `runAt` also rounds.
                 scheduledFor: Math.ceil(scheduledFor),
+                // The SchedulerDO sanitizes the policy (`normalizeRetry`), so it is forwarded as given.
+                retry: runOptions?.retry,
                 ...fields,
             });
 
@@ -4414,7 +4432,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 return body.record === undefined ? null : decodeRecordArgs(body.record);
             },
             list: listAll,
-            runAfter: async (delayMs, target, args) => {
+            runAfter: async (delayMs, target, args, runOptions) => {
                 // `@lunora/scheduler`'s `assertScheduleDelay`, restated: this
                 // package does not depend on `@lunora/scheduler` (it speaks to the
                 // SchedulerDO over HTTP), and pulling it in for one guard would
@@ -4424,9 +4442,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     throw new LunoraError("ctx.scheduler.runAfter: `delayMs` must be a non-negative finite number", { code: "INVALID_INPUT", status: 400 });
                 }
 
-                return await schedule(Date.now() + delayMs, target, args);
+                return await schedule(Date.now() + delayMs, target, args, runOptions);
             },
-            runAt: async (timestampMs, target, args) => {
+            runAt: async (timestampMs, target, args, runOptions) => {
                 // `@lunora/scheduler`'s `assertScheduleInstant`, restated for the
                 // same reason `runAfter` restates its guard above — and to the same
                 // CODE and MESSAGE, byte for byte. An unchecked NaN/Infinity
@@ -4437,7 +4455,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     throw new LunoraError("ctx.scheduler.runAt: `date` must be a non-negative finite number", { code: "INVALID_INPUT", status: 400 });
                 }
 
-                return await schedule(timestampMs, target, args);
+                return await schedule(timestampMs, target, args, runOptions);
             },
         };
     };

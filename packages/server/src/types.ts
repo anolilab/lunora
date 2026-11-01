@@ -1566,6 +1566,14 @@ interface RetryPolicy {
     backoff?: "exponential" | "linear";
     /** Base delay in milliseconds for the first retry. Default `30_000`. */
     baseMs?: number;
+
+    /**
+     * Keep retrying instead of dead-lettering, overriding `maxAttempts`. Delays are clamped to between
+     * 1 second and 30 minutes, so a `maxMs` below the ceiling sets how often a failing job retries.
+     * `cancel` applies once the scheduler has accepted the job; while it is still in a shard's outbox
+     * custody, drop it from Studio's Outbox view. Honoured by SchedulerDO.
+     */
+    forever?: boolean;
     /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */
     maxAttempts?: number;
     /** Optional ceiling clamping the computed backoff delay. */
@@ -1656,6 +1664,12 @@ interface SchedulableWorkflowReference {
  */
 type SchedulableTarget = FunctionHandle<"action" | "mutation", unknown, unknown> | SchedulableWorkflowReference | string;
 
+/** Per-call options for {@link Scheduler.runAfter} / {@link Scheduler.runAt}. */
+interface ScheduleRunOptions {
+    /** Retry policy for this job; the scheduler's defaults apply when omitted. */
+    retry?: RetryPolicy;
+}
+
 interface Scheduler {
     /** Cancel a pending job by id. `cancelled` is `false` when no such job exists. */
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
@@ -1669,9 +1683,9 @@ interface Scheduler {
      * for the accepted targets. A workflow/agent reference starts a fresh
      * durable instance on fire (the args become its `params`).
      */
-    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>, options?: ScheduleRunOptions) => Promise<string>;
     /** Like {@link Scheduler.runAfter} but fires at an absolute epoch-ms timestamp. */
-    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
+    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>, options?: ScheduleRunOptions) => Promise<string>;
 }
 
 // --- Durable workflows -------------------------------------------------------
@@ -2855,6 +2869,7 @@ export type {
     ScheduledJobState,
     ScheduledJobView,
     Scheduler,
+    ScheduleRunOptions,
     Schema,
     SearchFilterBuilder,
     SearchIndexDefinition,
