@@ -916,12 +916,12 @@ export const DOC_TOPICS: ReadonlyArray<{
         headings: [
             "Durable Objects",
             "Statement limits (Durable Objects **and** D1)",
+            "Transaction limits",
             "D1",
             "R2",
             "Workers",
             "Worker startup (error 10021)",
             "Queues",
-            "Pipelines",
         ],
         id: "limits",
         summary: "Cloudflare ceilings you should keep in your head.",

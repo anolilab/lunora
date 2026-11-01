@@ -5,13 +5,13 @@ import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 interface ShardSpy {
-    calls: { body: unknown; shardKey: string }[];
+    calls: { body: unknown; scheduledFor: string | null; shardKey: string }[];
     namespace: ShardNamespaceLike;
     response: Response;
 }
 
 const createShardSpy = (response = new Response("ok", { status: 200 })): ShardSpy => {
-    const calls: { body: unknown; shardKey: string }[] = [];
+    const calls: { body: unknown; scheduledFor: string | null; shardKey: string }[] = [];
 
     const spy = { calls, response } as ShardSpy;
 
@@ -21,7 +21,7 @@ const createShardSpy = (response = new Response("ok", { status: 200 })): ShardSp
 
             return {
                 fetch: async (request: Request) => {
-                    calls.push({ body: await request.clone().json(), shardKey });
+                    calls.push({ body: await request.clone().json(), scheduledFor: request.headers.get("x-lunora-scheduled-for"), shardKey });
 
                     return spy.response;
                 },
@@ -64,6 +64,20 @@ describe("createWorker — code-defined cron jobs", () => {
         expect(shard.calls[1]?.body).toStrictEqual({ args: {}, functionPath: "digests:flush" });
         // Jobs without an explicit shardKey land on the default root shard.
         expect(shard.calls[0]?.shardKey).toBe("__root__");
+    });
+
+    it("forwards the tick's planned time so the shard can record the job's start lag", async () => {
+        expect.assertions(1);
+
+        const shard = createShardSpy();
+        const worker = createWorker({
+            cronJobs: { [CRON]: [{ args: {}, functionPath: "presence:clear", name: "clear presence" }] },
+            shardDO: shard.namespace,
+        });
+
+        await worker.scheduled({ cron: CRON, scheduledTime: 1_700_000_000_000 }, {}, fakeContext);
+
+        expect(shard.calls[0]?.scheduledFor).toBe("1700000000000");
     });
 
     it("does not dispatch jobs for a non-firing expression", async () => {

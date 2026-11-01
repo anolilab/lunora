@@ -58,6 +58,30 @@ Two are yours to respect, because no rewrite can absorb them:
 - **A `.global()` table over 100 columns cannot be created.** Split it, or move
   the extra fields into one object field.
 
+## Transaction limits
+
+Lunora's own ceilings on one function call's transaction, enforced on every
+host. Crossing one fails the call with `TRANSACTION_LIMIT_EXCEEDED`; reaching
+80% of one logs a single `warn` line (`lunora.transaction.near_limit`) first.
+
+| Limit             | Value       | Counts                                      |
+| ----------------- | ----------- | ------------------------------------------- |
+| Documents read    | **100 000** | Every row materialized, filtered-out or not |
+| Bytes read        | **32 MiB**  | Stored JSON of every document materialized  |
+| Documents written | **50 000**  | Inserts, patches, replaces and deletes      |
+| Bytes written     | **32 MiB**  | Serialized size of every written document   |
+
+A stream keeps one budget for its life: documents read are capped over the
+whole stream, bytes read per yielded frame.
+
+Documents read from `.global()` tables count against the bytes-read limit,
+sized by their serialized JSON (in UTF-16 code units, like every other read)
+and counted once per transaction. They come back from D1 or Hyperdrive through
+the global writer's own reads, so rank pages, aggregates and `related` over a
+global table are not counted.
+
+Raise them by overriding `transactionLimits()` on the generated shard class.
+
 ## D1
 
 | Limit                         | Value                        | Implication                               |

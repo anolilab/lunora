@@ -3439,6 +3439,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         mutationId?: string,
         forwardedIdentity?: { identity?: string; userId?: string },
         traceparent?: string,
+        scheduledFor?: number,
     ): Promise<Response> => {
         // The scheduler-dispatch endpoint takes `functionPath` off a request body and a
         // cron target is app-authored — neither can legitimately be the reserved
@@ -3457,7 +3458,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // This path is already admin/HMAC-gated and may call any `internal`
         // function, so it is strictly more privileged than the paywall it passes.
         // The shared builder carries the trust-boundary headers; see `shared/system-dispatch-headers`.
-        const headers = buildSystemDispatchHeaders({ forwardedIdentity, mutationId, traceparent });
+        const headers = buildSystemDispatchHeaders({ forwardedIdentity, mutationId, scheduledFor, traceparent });
 
         return forwardToShard(shardDO, shardKey, shardRpcRequest(functionPath, args, headers));
     };
@@ -3544,7 +3545,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * Throws a {@link LunoraError} on failure so both the scheduled-fire loop and
      * the manual `/cron-jobs/run` trigger surface the same error shape.
      */
-    const runOneCronJob = async (job: CronJobDispatch, env: unknown, context: ExecutionContextLike | undefined, traceparent?: string): Promise<void> => {
+    const runOneCronJob = async (
+        job: CronJobDispatch,
+        env: unknown,
+        context: ExecutionContextLike | undefined,
+        traceparent?: string,
+        scheduledFor?: number,
+    ): Promise<void> => {
         if (job.workflow) {
             await startWorkflowInstance(job.workflow, job.args ?? {}, { context, env }, `cron job "${job.name}"`);
 
@@ -3558,7 +3565,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             });
         }
 
-        const response = await dispatchToShard(job.functionPath, job.args ?? {}, job.shardKey ?? defaultShard, undefined, undefined, traceparent);
+        // The tick's planned time rides along so the shard records the job's start lag, as a scheduled job's does.
+        const response = await dispatchToShard(job.functionPath, job.args ?? {}, job.shardKey ?? defaultShard, undefined, undefined, traceparent, scheduledFor);
 
         if (!response.ok) {
             // A failed background job is operationally a 500-class "didn't run",
@@ -3644,6 +3652,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         errors: Error[],
         toError: (error: unknown) => Error,
         traceparent?: string,
+        scheduledTime?: number,
     ): Promise<number> => {
         const cronJobs = options.cronJobs?.[cron];
 
@@ -3663,7 +3672,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             try {
                 // eslint-disable-next-line no-await-in-loop -- see above
-                await runOneCronJob(job, env, context, traceparent);
+                await runOneCronJob(job, env, context, traceparent, scheduledTime);
                 // eslint-disable-next-line no-await-in-loop -- see above
                 await endCronRun(stub, job.name, gate);
             } catch (error: unknown) {
@@ -3823,6 +3832,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             id?: unknown;
             instanceName?: unknown;
             pool?: unknown;
+            scheduledFor?: unknown;
             shardKey?: unknown;
             workflow?: unknown;
         };
@@ -3882,7 +3892,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // The caller (a trigger's `ctx.run`, the scheduler DO) already opened a
         // trace and named it on the request; forward it so the dispatched function
         // is a CHILD of the work that asked for it rather than its own trace.
-        const response = await dispatchToShard(candidate.functionPath, args, shardKey, recordId, identity, request.headers.get("traceparent") ?? undefined);
+        // The job's due time rides along so the shard can record how late it started;
+        // a sender predating the field simply leaves the metric unrecorded.
+        const scheduledFor = typeof candidate.scheduledFor === "number" ? candidate.scheduledFor : undefined;
+        const response = await dispatchToShard(
+            candidate.functionPath,
+            args,
+            shardKey,
+            recordId,
+            identity,
+            request.headers.get("traceparent") ?? undefined,
+            scheduledFor,
+        );
 
         // Workpool jobs hold a concurrency slot until the action settles; release
         // it. Best-effort only in that a failure can't fail this dispatch — a
@@ -5915,7 +5936,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // Code-defined crons: run every job declared under the firing expression.
         // Failures join `errors` for the combined rethrow below. A workflow-targeting
         // job starts its instance off the Worker's `ctx.exports` (or `env`).
-        const ranJobs = await runCronJobs(controller.cron, env, context, errors, toError, traceparent);
+        const ranJobs = await runCronJobs(controller.cron, env, context, errors, toError, traceparent, controller.scheduledTime);
         const isBackupCron = Boolean(options.backupStore) && options.backupCron !== undefined && options.backupCron === controller.cron;
 
         if (isBackupCron) {

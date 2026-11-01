@@ -388,3 +388,30 @@ describe("createWorker — scheduled dispatch idempotency key", () => {
         expect(seen[0]?.get("x-lunora-userid")).toBeNull();
     });
 });
+
+describe("createWorker — scheduled dispatch due time", () => {
+    it("forwards the job's due time to the shard for its lag metric", async () => {
+        expect.assertions(1);
+
+        const seen: Headers[] = [];
+        const shardDO: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        seen.push(new Headers(request.headers));
+
+                        return Response.json({ result: null }, { status: 200 });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: schedulerSpy().namespace, shardDO });
+
+        await dispatch(worker, { args: {}, functionPath: "jobs:sweep", id: "job-lag", scheduledFor: 1_700_000_000_000 });
+
+        expect(seen[0]?.get("x-lunora-scheduled-for")).toBe("1700000000000");
+    });
+});

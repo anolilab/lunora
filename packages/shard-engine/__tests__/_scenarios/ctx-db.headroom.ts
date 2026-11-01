@@ -7,7 +7,8 @@ import { isLunoraError } from "@lunora/errors";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../../src/ctx-db";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, meterReadBytes, runShardMigrations } from "../../src/ctx-db";
+import { isFtsAvailable } from "../../src/do-sql";
 import { TransactionHeadroomTracker } from "../../src/transaction-headroom";
 import type { SqlHarness } from "../_helpers/sql-harness";
 
@@ -183,6 +184,486 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
                         .paginate({ numItems: 1 }),
                 ),
             ).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+        });
+
+        it("stops a read on total bytes even when the row count is fine", async () => {
+            expect.assertions(1);
+
+            const seed = build({ maxWrittenRows: 100 });
+
+            for (let index = 0; index < 20; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+                await seed.insert("notes", { body: "x".repeat(200), bucket: "a" });
+            }
+
+            const reader = build({ maxReadBytes: 2000, maxReadRows: 1_000_000 });
+
+            await expect(
+                codeOf(async () =>
+                    reader
+                        .query("notes")
+                        .withIndex("by_bucket", (q) => q.eq("bucket", "a"))
+                        .collect(),
+                ),
+            ).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+        });
+
+        it("charges a by-id read by its stored size", async () => {
+            expect.assertions(2);
+
+            const id = await build({}).insert("notes", { body: "x".repeat(500), bucket: "a" });
+            const tracker = new TransactionHeadroomTracker({ maxReadBytes: 100 });
+            const reader = createShardContextDatabase({ clock: () => 1_700_000_000_000, headroom: tracker, schema, sql });
+
+            await expect(codeOf(async () => reader.get("notes", id))).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+            expect(tracker.headroom().readBytes).toBeGreaterThan(500);
+        });
+
+        it("does not charge a write's pre-image probe on top of the read that loaded the row", async () => {
+            expect.assertions(1);
+
+            const id = await build({}).insert("notes", { body: "x".repeat(500), bucket: "a" });
+            const [stored] = sql.exec<{ __doc__: string }>("SELECT __doc__ FROM notes").toArray();
+            const writer = build({ maxReadBytes: Math.floor((stored?.__doc__.length ?? 0) * 1.5) });
+
+            await expect(
+                codeOf(async () => {
+                    await writer.get("notes", id);
+                    await writer.patch("notes", id, { bucket: "b" });
+                    await writer.delete("notes", id);
+                }),
+            ).resolves.toBeUndefined();
+        });
+
+        it("charges a conditional patch that hands back a row the transaction never read", async () => {
+            expect.assertions(1);
+
+            const id = await build({}).insert("notes", { body: "x".repeat(500), bucket: "a" });
+            const writer = build({ maxReadBytes: 100 });
+
+            await expect(codeOf(async () => writer.patchIf?.("notes", id, { patch: { bucket: "b" }, where: { bucket: "not-a" } }))).resolves.toBe(
+                "TRANSACTION_LIMIT_EXCEEDED",
+            );
+        });
+
+        it("charges a document read twice in one transaction once", async () => {
+            expect.assertions(1);
+
+            const id = await build({}).insert("notes", { body: "x".repeat(300), bucket: "a" });
+            const [stored] = sql.exec<{ __doc__: string }>("SELECT __doc__ FROM notes").toArray();
+            const tracker = new TransactionHeadroomTracker();
+            const reader = createShardContextDatabase({ clock: () => 1_700_000_000_000, headroom: tracker, schema, sql });
+
+            await reader.get("notes", id);
+            await reader.get("notes", id);
+
+            expect(tracker.headroom().readBytes).toBe(stored?.__doc__.length);
+        });
+
+        it("charges two different documents that share an id", () => {
+            expect.assertions(1);
+
+            const sharing: SqlExec = {
+                exec: <Row>() => {
+                    const rows = [
+                        { __doc__: "aaa", id: "same" },
+                        { __doc__: "bbbbb", id: "same" },
+                    ] as Row[];
+
+                    return { one: () => rows[0] as Row, [Symbol.iterator]: () => rows[Symbol.iterator](), toArray: () => rows };
+                },
+            };
+            const tracker = new TransactionHeadroomTracker();
+
+            meterReadBytes(sharing, tracker).exec("SELECT").toArray();
+
+            expect(tracker.headroom().readBytes).toBe(8);
+        });
+
+        it("stops pulling rows from a cursor once the read ceiling is crossed", () => {
+            expect.assertions(2);
+
+            let pulled = 0;
+            const doc = JSON.stringify({ body: "x".repeat(100) });
+            const unbounded: SqlExec = {
+                exec: <Row>() => {
+                    const rows = function* rowsOf(): Generator<Row> {
+                        for (let index = 0; index < 1000; index += 1) {
+                            pulled += 1;
+
+                            yield { __doc__: doc, id: `row-${String(index)}` } as Row;
+                        }
+                    };
+                    const cursor = {
+                        one: () => undefined as Row,
+                        [Symbol.iterator]: rows,
+                        toArray: () => [...rows()],
+                    };
+
+                    return cursor;
+                },
+            };
+            const metered = meterReadBytes(unbounded, new TransactionHeadroomTracker({ maxReadBytes: doc.length * 3 }));
+
+            expect(() => metered.exec("SELECT").toArray()).toThrow(/TRANSACTION_LIMIT_EXCEEDED|limit/iu);
+            // The native `toArray` would have pulled all 1000 before any charge landed.
+            expect(pulled).toBeLessThan(10);
+        });
+
+        it("charges a patched document once, whatever size the patch leaves it", async () => {
+            expect.assertions(1);
+
+            const id = await build({}).insert("notes", { body: "x".repeat(100), bucket: "a" });
+            const [stored] = sql.exec<{ __doc__: string }>("SELECT __doc__ FROM notes").toArray();
+            const tracker = new TransactionHeadroomTracker();
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, headroom: tracker, schema, sql });
+
+            await writer.get("notes", id);
+            await writer.patch("notes", id, { body: "y".repeat(400) });
+            await writer.get("notes", id);
+
+            expect(tracker.headroom().readBytes).toBe(stored?.__doc__.length);
+        });
+
+        it("charges equal ids held by two tables separately", async () => {
+            expect.assertions(1);
+
+            const twoTables: SchemaLike = { tables: { memos: schema.tables["notes"]!, notes: schema.tables["notes"]! } };
+
+            runShardMigrations(sql, twoTables);
+
+            const id = await build({}).insert("notes", { body: "x".repeat(100), bucket: "a" });
+
+            sql.exec("INSERT INTO memos SELECT * FROM notes");
+
+            const [stored] = sql.exec<{ __doc__: string }>("SELECT __doc__ FROM notes").toArray();
+            const tracker = new TransactionHeadroomTracker();
+            const reader = createShardContextDatabase({ clock: () => 1_700_000_000_000, headroom: tracker, schema: twoTables, sql });
+
+            await reader.get("notes", id);
+            await reader.get("memos", id);
+
+            expect(tracker.headroom().readBytes).toBe((stored?.__doc__.length ?? 0) * 2);
+        });
+
+        describe("global tables", () => {
+            const globalSchema: SchemaLike = {
+                tables: { shared: { indexes: [], shape: { body: { kind: "string" } }, shardMode: { kind: "global" } } },
+            };
+            const rows = Array.from({ length: 5 }, (_unused, index) => {
+                return { _id: `g${String(index)}`, body: "x".repeat(100) };
+            });
+            const fakeGlobal = {
+                findFirst: async () => rows[0] ?? null,
+                findMany: async () => {
+                    return { continueCursor: null, isDone: true, page: rows };
+                },
+                get: async (_table: string, id: string) => rows.find((row) => row._id === id) ?? null,
+                query: () => {
+                    return { collect: async () => rows };
+                },
+            } as unknown as DatabaseWriterLike;
+            const buildGlobal = (tracker: TransactionHeadroomTracker): DatabaseWriterLike =>
+                createShardContextDatabase({ clock: () => 1_700_000_000_000, globalDb: fakeGlobal, headroom: tracker, schema: globalSchema, sql });
+
+            it("refuses a global read that loads more than the read ceiling", async () => {
+                expect.assertions(3);
+
+                const writer = buildGlobal(new TransactionHeadroomTracker({ maxReadBytes: 250 }));
+
+                await expect(codeOf(async () => writer.findMany("shared", {}))).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+                await expect(codeOf(async () => writer.query("shared").collect())).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+                await expect(codeOf(async () => writer.get("shared", "g0"))).resolves.toBeUndefined();
+            });
+
+            it("sizes a global document that has page, row or document fields as a whole", async () => {
+                expect.assertions(2);
+
+                const fat = { _id: "f1", body: "y".repeat(500), document: { n: 1 }, page: [1], row: { n: 1 } };
+                const tracker = new TransactionHeadroomTracker();
+                const writer = createShardContextDatabase({
+                    clock: () => 1_700_000_000_000,
+                    globalDb: { get: async () => fat } as unknown as DatabaseWriterLike,
+                    headroom: tracker,
+                    schema: globalSchema,
+                    sql,
+                });
+
+                await expect(writer.get("shared", "f1")).resolves.toStrictEqual(fat);
+                expect(tracker.headroom().readBytes).toBeGreaterThan(500);
+            });
+
+            it("charges documents a global query yields through async iteration", async () => {
+                expect.assertions(1);
+
+                const writer = createShardContextDatabase({
+                    clock: () => 1_700_000_000_000,
+                    globalDb: {
+                        query: () =>
+                            (async function* streamRows() {
+                                yield* rows;
+                            })(),
+                    } as unknown as DatabaseWriterLike,
+                    headroom: new TransactionHeadroomTracker({ maxReadBytes: 250 }),
+                    schema: globalSchema,
+                    sql,
+                });
+
+                await expect(
+                    codeOf(async () => {
+                        const seen: unknown[] = [];
+
+                        for await (const row of writer.query("shared") as unknown as AsyncIterable<unknown>) {
+                            seen.push(row);
+                        }
+
+                        return seen;
+                    }),
+                ).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+            });
+
+            it("charges equal ids held by two global tables separately", async () => {
+                expect.assertions(1);
+
+                const twoGlobals: SchemaLike = {
+                    tables: {
+                        a: { ...globalSchema.tables["shared"]! },
+                        b: { ...globalSchema.tables["shared"]! },
+                    },
+                };
+                const tracker = new TransactionHeadroomTracker();
+                const writer = createShardContextDatabase({
+                    clock: () => 1_700_000_000_000,
+                    globalDb: { get: async () => rows[0] } as unknown as DatabaseWriterLike,
+                    headroom: tracker,
+                    schema: twoGlobals,
+                    sql,
+                });
+
+                await writer.get("a", "g0");
+
+                const once = tracker.headroom().readBytes;
+
+                await writer.get("b", "g0");
+
+                expect(tracker.headroom().readBytes).toBe(once * 2);
+            });
+
+            it("charges a global row once however often it is read", async () => {
+                expect.assertions(3);
+
+                const tracker = new TransactionHeadroomTracker();
+                const writer = buildGlobal(tracker);
+
+                await writer.get("shared", "g0");
+                await writer.get("shared", "g0");
+
+                const once = tracker.headroom().readBytes;
+
+                await writer.findMany("shared", {});
+
+                const all = tracker.headroom().readBytes;
+
+                await writer.findMany("shared", {});
+
+                expect(once).toBeGreaterThan(100);
+                expect(all).toBe(once * rows.length);
+                expect(tracker.headroom().readBytes).toBe(all);
+            });
+        });
+
+        it("still meters a read that overlaps an unmetered deleteAll", async () => {
+            expect.assertions(2);
+
+            const seed = build({});
+            let first = "";
+
+            for (let index = 0; index < 5; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+                first = await seed.insert("notes", { body: "x".repeat(200), bucket: "a" });
+            }
+
+            const writer = build({ maxReadBytes: 100 });
+            const erasing = writer.deleteAll?.("notes");
+
+            // The erase is awaiting; a read on the same writer is not part of it.
+            await expect(codeOf(async () => writer.get("notes", first))).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+            await expect(erasing).resolves.toStrictEqual({ deleted: 5 });
+        });
+
+        describe("deleteAll under .rls('required')", () => {
+            const rlsSchema: SchemaLike = {
+                rlsMode: "required",
+                tables: {
+                    notes: { ...schema.tables["notes"]!, isPublic: false },
+                    stats: { ...schema.tables["notes"]!, isPublic: true },
+                },
+            };
+
+            const survivors = (table: string): number => sql.exec(`SELECT id FROM ${table}`).toArray().length;
+
+            it.each([
+                ["metered", true],
+                ["unmetered", false],
+            ])("refuses the protected table and leaves its rows, %s", async (_label, metered) => {
+                expect.assertions(3);
+
+                runShardMigrations(sql, rlsSchema);
+
+                const trusted = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: rlsSchema, sql });
+
+                await trusted.insert("notes", { body: "hidden", bucket: "a" });
+
+                const caller = createShardContextDatabase({
+                    clock: () => 1_700_000_000_000,
+                    enforceRls: true,
+                    ...(metered ? { headroom: new TransactionHeadroomTracker() } : {}),
+                    schema: rlsSchema,
+                    sql,
+                });
+
+                await expect(codeOf(async () => caller.deleteAll?.("notes"))).resolves.toBeDefined();
+                expect(survivors("notes")).toBe(1);
+
+                // A `.public()` table has no policy to bypass, so the erase proceeds on both paths.
+                await trusted.insert("stats", { body: "open", bucket: "a" });
+                await caller.deleteAll?.("stats");
+
+                expect(survivors("stats")).toBe(0);
+            });
+        });
+
+        it("does not charge read bytes inside an unmetered deleteAll", async () => {
+            expect.assertions(1);
+
+            const seed = build({ maxWrittenRows: 100 });
+
+            for (let index = 0; index < 10; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+                await seed.insert("notes", { body: "x".repeat(200), bucket: "a" });
+            }
+
+            await expect(build({ maxReadBytes: 100 }).deleteAll?.("notes")).resolves.toStrictEqual({ deleted: 10 });
+        });
+
+        it("probes FTS once per database handle, not once per metered writer", () => {
+            expect.assertions(1);
+
+            let probes = 0;
+            const counting: SqlExec = {
+                exec: (query, ...params) => {
+                    if (query.includes("CREATE VIRTUAL TABLE") && query.includes("__lunora_fts_probe")) {
+                        probes += 1;
+                    }
+
+                    return sql.exec(query, ...params);
+                },
+            };
+
+            for (let writer = 0; writer < 3; writer += 1) {
+                isFtsAvailable(meterReadBytes(counting, new TransactionHeadroomTracker()));
+            }
+
+            expect(probes).toBe(1);
+        });
+
+        it("charges stored documents consumed by iterating the cursor", async () => {
+            expect.assertions(2);
+
+            await build({}).insert("notes", { body: "x".repeat(300), bucket: "a" });
+
+            const [stored] = sql.exec<{ __doc__: string }>("SELECT __doc__ FROM notes").toArray();
+            const tracker = new TransactionHeadroomTracker();
+            const rows = [...meterReadBytes(sql, tracker).exec("SELECT id, __doc__ FROM notes")];
+
+            expect(rows).toHaveLength(1);
+            expect(tracker.headroom().readBytes).toBe(stored?.__doc__.length);
+        });
+
+        it("charges a materialized row once on a host whose toArray iterates the cursor", () => {
+            expect.assertions(1);
+
+            const doc = JSON.stringify({ body: "x".repeat(100) });
+            const selfIterating: SqlExec = {
+                exec: <Row>() => {
+                    const rows = [{ __doc__: doc }] as Row[];
+                    const cursor = {
+                        one: () => [...cursor][0] as Row,
+                        [Symbol.iterator]: () => rows[Symbol.iterator](),
+                        toArray: () => [...cursor],
+                    };
+
+                    return cursor;
+                },
+            };
+            const tracker = new TransactionHeadroomTracker();
+            const metered = meterReadBytes(selfIterating, tracker);
+
+            metered.exec("SELECT").toArray();
+            metered.exec("SELECT").one();
+
+            expect(tracker.headroom().readBytes).toBe(doc.length * 2);
+        });
+
+        it("does not charge an aggregate companion rebuild to the writing transaction", async () => {
+            expect.assertions(1);
+
+            const seed = build({ maxWrittenRows: 100 });
+
+            for (let index = 0; index < 10; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+                await seed.insert("notes", { body: "x".repeat(200), bucket: "a" });
+            }
+
+            const withAggregate: SchemaLike = {
+                tables: { notes: { ...schema.tables["notes"]!, aggregateIndexes: [{ by: ["bucket"], name: "count_by_bucket", on: "notes", op: "count" }] } },
+            };
+
+            runShardMigrations(sql, withAggregate);
+
+            const writer = createShardContextDatabase({
+                clock: () => 1_700_000_000_000,
+                headroom: new TransactionHeadroomTracker({ maxReadBytes: 100 }),
+                schema: withAggregate,
+                sql,
+            });
+
+            await expect(codeOf(async () => writer.insert("notes", { body: "b", bucket: "a" }))).resolves.toBeUndefined();
+        });
+
+        it("warns once when a read crosses 80% of a ceiling", async () => {
+            expect.assertions(2);
+
+            const seed = build({ maxWrittenRows: 100 });
+
+            for (let index = 0; index < 9; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+                await seed.insert("notes", { body: "b", bucket: "a" });
+            }
+
+            const warnings: unknown[] = [];
+            const reader = createShardContextDatabase({
+                clock: () => 1_700_000_000_000,
+                headroom: new TransactionHeadroomTracker({ maxReadRows: 10 }, (warning) => {
+                    warnings.push(warning);
+                }),
+                schema,
+                sql,
+            });
+            const read = async (): Promise<unknown> =>
+                reader
+                    .query("notes")
+                    .withIndex("by_bucket", (q) => q.eq("bucket", "a"))
+                    .take(9);
+
+            await read();
+
+            expect(warnings).toStrictEqual([{ kind: "readRows", limit: 10, used: 9 }]);
+
+            // Past the ceiling now: it throws, and the warning is not repeated.
+            await codeOf(read);
+
+            expect(warnings).toHaveLength(1);
         });
 
         it("leaves a transaction within its ceilings untouched", async () => {
