@@ -40,6 +40,9 @@ const REGISTRATION_BY_TYPE_NAME = new Map<string, { call: string; file?: string;
     ["ContainerDefinition", { call: "defineContainer({ … })", file: "containers" }],
     ["QueueDefinition", { call: "defineQueue({ … })", file: "queues", note: "A dropped queue has no caller to fail — its consumer is simply never wired." }],
     ["RegisteredAction", { call: "action.input({ … }).action(handler)" }],
+    ["RegisteredInternalAction", { call: "internalAction.input({ … }).action(handler)" }],
+    ["RegisteredInternalMutation", { call: "internalMutation.input({ … }).mutation(handler)" }],
+    ["RegisteredInternalQuery", { call: "internalQuery.input({ … }).query(handler)" }],
     [
         "RegisteredLifecycleHook",
         {

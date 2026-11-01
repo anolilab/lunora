@@ -778,6 +778,8 @@ type FrameworkWorkerOptionsInput = ((env: unknown) => FrameworkWorkerOptions) | 
 interface FunctionDescriptor {
     args: FunctionArgumentDescriptor[];
     kind: "action" | "mutation" | "query";
+    meta?: unknown;
+    metaUnloaded?: true;
     path: string;
     visibility?: "internal" | "public";
 }
@@ -792,6 +794,7 @@ interface FunctionRegistryEntry {
     expose?: RestExposure;
     kind: "action" | "mutation" | "query" | "stream";
     lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "socket" | "whisper";
+    readonly [PROCEDURE_META]?: unknown;
     socketPath?: string;
     visibility?: "internal" | "public";
     x402?: {

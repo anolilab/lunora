@@ -598,7 +598,7 @@ interface ExposeConfig {
     readonly rest?: boolean;
 }
 
-interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
+interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind, Visibility extends FunctionVisibility = FunctionVisibility> {
     readonly args: A;
 
     /**
@@ -630,7 +630,13 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
      */
     readonly lifecycle?: LifecycleEventKind;
 
-    readonly visibility?: FunctionVisibility;
+    /**
+     * `"internal"` on a function an `internal*` builder registered: callable
+     * through `ctx.run*` and the scheduler, never from a client. A literal in the
+     * type as well as the value, because a package's declaration file is all
+     * codegen sees of a function it ships, and the client `api` is built from it.
+     */
+    readonly visibility?: Visibility;
 
     /**
      * Set by the `.x402({ price })` builder modifier. Marks the procedure as paid
@@ -640,9 +646,12 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly x402?: X402ProcedureConfig;
 }
 
-type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
-type RegisteredMutation<A extends ArgsValidator, R> = RegisteredFunction<A, R, "mutation">;
-type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "action">;
+type RegisteredQuery<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "query", Visibility>;
+type RegisteredMutation<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "mutation", Visibility>;
+type RegisteredAction<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "action", Visibility>;
+type RegisteredInternalQuery<A extends ArgsValidator, R> = RegisteredQuery<A, R, "internal">;
+type RegisteredInternalMutation<A extends ArgsValidator, R> = RegisteredMutation<A, R, "internal">;
+type RegisteredInternalAction<A extends ArgsValidator, R> = RegisteredAction<A, R, "internal">;
 
 /**
  * Structural mirror of `@lunora/client`'s `FunctionReference` — the handle the
@@ -733,19 +742,19 @@ interface RunQueryOptions {
 }
 
 interface RunQuery {
-    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>, options?: RunQueryOptions): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R, FunctionVisibility>, args: InferArgs<A>, options?: RunQueryOptions): Promise<R>;
     <Args, R>(reference: FunctionHandle<"query", Args, R>, args: Args, options?: RunQueryOptions): Promise<R>;
 }
 
 /** `ctx.runMutation` — overloaded for the same reason as {@link RunQuery}. */
 interface RunMutation {
-    <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
     <Args, R>(reference: FunctionHandle<"mutation", Args, R>, args: Args): Promise<R>;
 }
 
 /** `ctx.runAction` — overloaded for the same reason as {@link RunQuery}. */
 interface RunAction {
-    <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredAction<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
     <Args, R>(reference: FunctionHandle<"action", Args, R>, args: Args): Promise<R>;
 }
 
@@ -2835,6 +2844,9 @@ export type {
     RankSortKey,
     RegisteredAction,
     RegisteredFunction,
+    RegisteredInternalAction,
+    RegisteredInternalMutation,
+    RegisteredInternalQuery,
     RegisteredLifecycleHook,
     RegisteredMutation,
     RegisteredQuery,

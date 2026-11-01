@@ -96,7 +96,7 @@ import { LunoraError } from "@lunora/errors";
 import { fnv1aHex } from "../../../../shared/fnv1a";
 import { rootOfFieldPath } from "../../../../shared/json-field-path";
 import { isRelationPredicate } from "../../../../shared/relation-operators";
-import type { Middleware } from "../builder/types";
+import type { PolicyMiddleware } from "../builder/types";
 import type { QueryPlan } from "../data-model";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, defineLazyFacade } from "../facade";
@@ -1152,15 +1152,15 @@ const wrapDatabase = <Context>(
  * IMPORTANT: a mask is in scope only for procedures whose builder chain
  * includes this middleware — opt-in, never global (the same invariant as RLS).
  */
-const mask = <Context extends MaskContextIn = MaskContextIn>(
-    policies: MaskPolicies<Context>,
-    options: MaskOptions<Context> = {},
-): Middleware<Context, Context> => {
+const mask = <Context extends MaskContextIn = MaskContextIn>(policies: MaskPolicies<Context>, options: MaskOptions<Context> = {}): PolicyMiddleware => {
     const perTable = new Map<string, MaskColumns<Context>>(Object.entries(policies));
     const rolePermissions = indexRolePermissions(options.roles);
 
-    const middleware: Middleware<Context, Context> = async ({ ctx, next }) => {
-        const maskContext: MaskContext<Context> = { auth: await resolvePolicyAuth(ctx.auth ?? {}, rolePermissions), ctx };
+    const middleware: PolicyMiddleware = async ({ ctx, next }) => {
+        // The policies were typed against their own `Context`; the procedure
+        // context is the runtime object they are evaluated with.
+        const context = ctx as unknown as Context;
+        const maskContext: MaskContext<Context> = { auth: await resolvePolicyAuth(context.auth ?? {}, rolePermissions), ctx: context };
 
         // Procedure-wide escape hatch: a privileged caller sees raw values, so
         // we forward the unwrapped ctx untouched (no wrap, no facade rebind).
@@ -1179,9 +1179,9 @@ const mask = <Context extends MaskContextIn = MaskContextIn>(
             return next();
         }
 
-        const wrapped = wrapDatabase<Context>(ctx.db, perTable, maskContext, options.indexFields);
+        const wrapped = wrapDatabase<Context>(context.db, perTable, maskContext, options.indexFields);
         const extension: Record<string, unknown> = { db: wrapped };
-        const { orm } = ctx as { orm?: unknown };
+        const { orm } = context as { orm?: unknown };
 
         if (orm !== null && typeof orm === "object") {
             // `wrapped` carries the re-bound masked-table facade entries, so

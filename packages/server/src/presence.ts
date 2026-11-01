@@ -39,19 +39,28 @@
  *
  * export const presence = definePresence({ ttlMs: 10_000 });
  *
- * // Merge the table into the app schema (auto-namespaced to `presence_present`):
- * // lunora/schema.ts
- * export const schema = defineSchema({ ... }).extend(presence.extension);
+ * // Re-export the functions so codegen exposes them under `presence:*`.
+ * // `disconnect` is optional: without it a dropped socket's row lingers until the TTL.
+ * export const { disconnect, heartbeat, listPresent, sweep } = presence.functions;
  *
- * // Re-export the functions so codegen exposes them under `presence:*`:
- * export const { heartbeat, listPresent, sweep } = presence.functions;
+ * // lunora/schema.ts — merge the table (auto-namespaced to `presence_present`):
+ * import { presence } from "./presence";
+ *
+ * export default defineSchema({ ... }).extend(presence.extension);
  * ```
+ *
+ * Codegen reads the table by calling `definePresence` with the options written
+ * here, so keep them literal; options holding a function (`tenant`) cannot be
+ * evaluated at build time — extend with `presenceExtension` instead, the same
+ * table under its own export. The functions are not registered until
+ * re-exported, so a wrapper (`@lunora/ratelimit`) can be exported in their place.
  *
  * The client then calls `presence:heartbeat` on an interval and subscribes to
  * `presence:listPresent` — the `usePresence` hook in `@lunora/react` does both.
  */
 
 import { LunoraError } from "@lunora/errors";
+import type { ColumnValidator, StringColumnValidator } from "@lunora/values";
 import { v } from "@lunora/values";
 
 import { initLunora } from "./builder/index";
@@ -59,7 +68,7 @@ import { onDisconnect } from "./lifecycle";
 import type { Component, SchemaExtension } from "./plugin";
 import { defineComponent, defineSchemaExtension } from "./plugin";
 import { defineTable } from "./schema";
-import type { MutationCtx as MutationContext, RegisteredLifecycleHook, RegisteredMutation, RegisteredQuery } from "./types";
+import type { MutationCtx as MutationContext, RegisteredInternalMutation, RegisteredLifecycleHook, RegisteredMutation, RegisteredQuery } from "./types";
 
 /** Default time-to-live for a presence row: a heartbeat keeps a member "present" for this long. */
 const DEFAULT_TTL_MS = 30_000;
@@ -180,7 +189,15 @@ interface DefinePresenceOptions {
     ttlMs?: number;
 }
 
-/** The registered functions a presence component ships. */
+/**
+ * The registered functions a presence component ships.
+ *
+ * Installed from npm, this declaration is all codegen can see of them — there is
+ * no `mutation(...)` call to read — so it is what the generated `api` is built
+ * from. Each entry therefore states its argument validators precisely, uses the
+ * internal alias for a server-only function, and narrows a hook's `lifecycle`; a
+ * loose type here becomes a loose client type, or a codegen error.
+ */
 interface PresenceFunctions {
     /**
      * Connection-lifecycle hook: the instant a client's WebSocket drops, hard-
@@ -192,7 +209,7 @@ interface PresenceFunctions {
      * member). The TTL filter + `sweep` remain the fallback for ungraceful drops
      * where no `context` was recorded.
      */
-    disconnect: RegisteredLifecycleHook;
+    disconnect: RegisteredLifecycleHook & { readonly lifecycle: "disconnect" };
 
     /**
      * Upsert the caller's presence row for `roomId` in their tenant and stamp
@@ -205,9 +222,9 @@ interface PresenceFunctions {
      */
     heartbeat: RegisteredMutation<
         {
-            data: ReturnType<typeof v.optional>;
-            roomId: ReturnType<typeof v.string>;
-            sessionId: ReturnType<typeof v.string>;
+            data: ColumnValidator<Record<string, unknown> | undefined, Record<string, unknown> | undefined>;
+            roomId: StringColumnValidator;
+            sessionId: StringColumnValidator;
         },
         { lastSeen: number }
     >;
@@ -217,7 +234,7 @@ interface PresenceFunctions {
      * tenant, newest heartbeat first. Subscribe to it for a reactive "who's
      * here" list.
      */
-    listPresent: RegisteredQuery<{ roomId: ReturnType<typeof v.string> }, PresenceMember[]>;
+    listPresent: RegisteredQuery<{ roomId: StringColumnValidator }, PresenceMember[]>;
 
     /**
      * Internal mutation that hard-deletes every expired row for `roomId` in
@@ -228,11 +245,15 @@ interface PresenceFunctions {
      * that went quiet with stale rows left behind (schedule it on a cron /
      * `runAfter` if you care).
      */
-    sweep: RegisteredMutation<{ roomId: ReturnType<typeof v.string>; tenantId: ReturnType<typeof v.string> }, { deleted: number }>;
+    sweep: RegisteredInternalMutation<{ roomId: StringColumnValidator; tenantId: StringColumnValidator }, { deleted: number }>;
 }
 
 /** The component shape `definePresence` returns: the presence extension + typed functions. */
-type PresenceComponent = Component<{ [PRESENCE_BARE_TABLE]: ReturnType<typeof defineTable> }> & { functions: PresenceFunctions };
+type PresenceComponent = Component<{ [PRESENCE_BARE_TABLE]: ReturnType<typeof defineTable> }> & {
+    /** Always present (unlike a bare {@link Component}'s), so `.extend(presence.extension)` typechecks. */
+    readonly extension: SchemaExtension<{ [PRESENCE_BARE_TABLE]: ReturnType<typeof defineTable> }, typeof PRESENCE_KEY>;
+    functions: PresenceFunctions;
+};
 
 /**
  * The presence schema extension: a single `present` table, auto-namespaced to
@@ -266,7 +287,7 @@ const presenceExtension = defineSchemaExtension(PRESENCE_KEY, {
 
 // The presence functions are built with the procedure builders (no generated
 // server here, so bind the base contexts via `initLunora.dataModel().create()`).
-const { mutation, query } = initLunora.dataModel().create();
+const { internalMutation, mutation, query } = initLunora.dataModel().create();
 
 /**
  * Build a presence {@link Component} — schema extension + heartbeat / listPresent
@@ -420,26 +441,24 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
         return members;
     });
 
-    const sweep = mutation.input({ roomId: v.string(), tenantId: v.string() }).mutation(async ({ args, ctx: context }): Promise<{ deleted: number }> => {
-        const cutoff = Date.now() - ttlMs;
+    // Server-only: an `internalMutation`, so a client can never trigger the bulk delete.
+    const sweep = internalMutation
+        .input({ roomId: v.string(), tenantId: v.string() })
+        .mutation(async ({ args, ctx: context }): Promise<{ deleted: number }> => {
+            const cutoff = Date.now() - ttlMs;
 
-        const stale = await context.db
-            .query(PRESENCE_TABLE)
-            .withIndex("byTenantRoomLastSeen", (q) => q.eq("tenantId", args.tenantId).eq("roomId", args.roomId))
-            .filter((row) => (row["lastSeen"] as number) <= cutoff)
-            .collect();
+            const stale = await context.db
+                .query(PRESENCE_TABLE)
+                .withIndex("byTenantRoomLastSeen", (q) => q.eq("tenantId", args.tenantId).eq("roomId", args.roomId))
+                .filter((row) => (row["lastSeen"] as number) <= cutoff)
+                .collect();
 
-        // These deletes share the mutation's snapshot and the stale set is
-        // small (one room's expired members); fire them together.
-        await Promise.all(stale.map((row) => context.db.delete(PRESENCE_TABLE, row["_id"] as never)));
+            // These deletes share the mutation's snapshot and the stale set is
+            // small (one room's expired members); fire them together.
+            await Promise.all(stale.map((row) => context.db.delete(PRESENCE_TABLE, row["_id"] as never)));
 
-        return { deleted: stale.length };
-    });
-
-    // `sweep` is server-only — stamp it internal so a client can't trigger bulk
-    // deletes. mutation()/internalMutation() differ only by a visibility tag, so
-    // re-tag here to keep the factory single-sourced.
-    const internalSweep = { ...sweep, visibility: "internal" } as typeof sweep;
+            return { deleted: stale.length };
+        });
 
     // Immediate-departure hook: when the socket closes, drop the matching row
     // now instead of waiting for the TTL filter to age it out. The client stamps
@@ -498,7 +517,7 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
 
     return defineComponent(PRESENCE_KEY, {
         extension: presenceExtension,
-        functions: { disconnect, heartbeat, listPresent, sweep: internalSweep },
+        functions: { disconnect, heartbeat, listPresent, sweep },
     }) as PresenceComponent;
 };
 

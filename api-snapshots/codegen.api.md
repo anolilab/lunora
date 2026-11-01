@@ -384,6 +384,7 @@ interface FunctionIR {
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
     lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
+    meta?: Record<string, unknown> | "unloaded";
     output?: ValidatorIR;
     readsIp?: true;
     returnType: string;
@@ -392,6 +393,7 @@ interface FunctionIR {
         origin?: string;
         path: string;
     };
+    typeDerivedArgs?: true;
     visibility?: "internal" | "public";
     x402?: {
         price?: number | string;

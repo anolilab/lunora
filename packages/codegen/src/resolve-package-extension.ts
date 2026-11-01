@@ -26,10 +26,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createJiti } from "jiti";
-import type { Node as TsNode } from "ts-morph";
+import type { CallExpression, Node as TsNode } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { ColumnMetaIR, IndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir";
+import { literalOf, NOT_LITERAL } from "./static-literal";
 
 /** A runtime `@lunora/values` validator, duck-typed to the introspectable surface (`kind` + `_meta`). */
 interface RuntimeValidator {
@@ -348,11 +349,74 @@ const accessPathOf = (argument: TsNode): ExtensionAccessPath | undefined => {
     return undefined;
 };
 
-/** Walk `exportName` + `propertyPath` on an imported module namespace to the candidate extension value. */
-const readExtensionValue = (module_: Record<string, unknown>, access: ExtensionAccessPath): unknown => {
-    let current: unknown = module_[access.importedName];
+/** The call an initializer is, through `as` / `satisfies` / parentheses. */
+const unwrapCall = (node: TsNode): CallExpression | undefined => {
+    if (Node.isCallExpression(node)) {
+        return node;
+    }
 
-    for (const segment of access.propertyPath) {
+    return Node.isParenthesizedExpression(node) || Node.isAsExpression(node) || Node.isSatisfiesExpression(node) ? unwrapCall(node.getExpression()) : undefined;
+};
+
+/** A component built by calling a package factory: which module and export to call, with what, and where its extension sits. */
+interface FactoryAccess {
+    args: unknown[];
+    importedName: string;
+    moduleSpecifier: string;
+    propertyPath: ReadonlyArray<string>;
+}
+
+/**
+ * Map `.extend(presence.extension)` to the factory call behind `presence` —
+ * `const presence = definePresence({ ttlMs: 10_000 })`, in this file or in the
+ * module it is imported from — when the factory is imported from a package and
+ * every argument is a literal. The documented wiring for a published component
+ * has exactly this shape, and no import binding names the extension itself.
+ */
+const factoryAccessOf = (argument: TsNode): FactoryAccess | undefined => {
+    if (!Node.isPropertyAccessExpression(argument) || !Node.isIdentifier(argument.getExpression())) {
+        return undefined;
+    }
+
+    const symbol = argument.getExpression().getSymbol();
+    const declaration = (symbol?.getAliasedSymbol() ?? symbol)?.getValueDeclaration();
+    const initializer = Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
+    const call = initializer === undefined ? undefined : unwrapCall(initializer);
+    const callee = call?.getExpression();
+
+    if (call === undefined || callee === undefined || !Node.isIdentifier(callee)) {
+        return undefined;
+    }
+
+    const args = call.getArguments().map((node) => literalOf(node));
+
+    if (args.includes(NOT_LITERAL)) {
+        return undefined;
+    }
+
+    for (const importDeclaration of call.getSourceFile().getImportDeclarations()) {
+        const moduleSpecifier = importDeclaration.getModuleSpecifierValue();
+
+        // A relative factory is the user's own module, and its source is already the AST path's to read.
+        if (moduleSpecifier.startsWith(".")) {
+            continue;
+        }
+
+        for (const named of importDeclaration.getNamedImports()) {
+            if ((named.getAliasNode()?.getText() ?? named.getName()) === callee.getText()) {
+                return { args, importedName: named.getName(), moduleSpecifier, propertyPath: [argument.getName()] };
+            }
+        }
+    }
+
+    return undefined;
+};
+
+/** Read `propertyPath` off a value, `undefined` when a step is not an object. */
+const readPath = (value: unknown, propertyPath: ReadonlyArray<string>): unknown => {
+    let current = value;
+
+    for (const segment of propertyPath) {
         if (typeof current !== "object" || current === null) {
             return undefined;
         }
@@ -361,6 +425,40 @@ const readExtensionValue = (module_: Record<string, unknown>, access: ExtensionA
     }
 
     return current;
+};
+
+/** Walk `exportName` + `propertyPath` on an imported module namespace to the candidate extension value. */
+const readExtensionValue = (module_: Record<string, unknown>, access: ExtensionAccessPath): unknown =>
+    readPath(module_[access.importedName], access.propertyPath);
+
+/** Import `moduleSpecifier` from the PROJECT's node_modules (not codegen's). */
+const loadProjectModule = (moduleSpecifier: string, projectRoot: string): Record<string, unknown> => {
+    // Resolved with ESM conditions: `require.resolve` honours only `require`/`default`,
+    // so it refuses every `@lunora/*` package (their `exports` carry `import` only).
+    // `require()` of the resolved ESM file is supported on the Node versions Lunora targets.
+    const resolved = createJiti(join(projectRoot, "noop.js")).esmResolve(moduleSpecifier);
+
+    return createRequire(join(projectRoot, "noop.cjs"))(resolved.startsWith("file:") ? fileURLToPath(resolved) : resolved) as Record<string, unknown>;
+};
+
+/** The runtime extension value a `.extend(...)` argument names, by import binding or by a literal-argument factory call. */
+const extensionValueOf = (argument: TsNode, projectRoot: string): unknown => {
+    const access = accessPathOf(argument);
+
+    // A relative import is the user's own module, not a package to load: follow it to the factory call instead.
+    if (access && !access.moduleSpecifier.startsWith(".")) {
+        return readExtensionValue(loadProjectModule(access.moduleSpecifier, projectRoot), access);
+    }
+
+    const factory = factoryAccessOf(argument);
+
+    if (!factory) {
+        return undefined;
+    }
+
+    const create = loadProjectModule(factory.moduleSpecifier, projectRoot)[factory.importedName];
+
+    return typeof create === "function" ? readPath((create as (...args: unknown[]) => unknown)(...factory.args), factory.propertyPath) : undefined;
 };
 
 /**
@@ -373,23 +471,8 @@ const readExtensionValue = (module_: Record<string, unknown>, access: ExtensionA
  * AST-only test callers pass none and keep the pure-AST behaviour.
  */
 const resolvePackageExtension = (argument: TsNode, projectRoot: string): ResolvedPackageExtension | undefined => {
-    const access = accessPathOf(argument);
-
-    if (!access) {
-        return undefined;
-    }
-
     try {
-        // Resolve + load the package from the PROJECT's node_modules (not codegen's).
-        // Resolved with ESM conditions: `require.resolve` honours only `require`/`default`,
-        // so it refuses every `@lunora/*` package (their `exports` carry `import` only).
-        // `require()` of the resolved ESM file is supported on the Node versions Lunora targets.
-        const resolved = createJiti(join(projectRoot, "noop.js")).esmResolve(access.moduleSpecifier);
-        const loadedModule = createRequire(join(projectRoot, "noop.cjs"))(resolved.startsWith("file:") ? fileURLToPath(resolved) : resolved) as Record<
-            string,
-            unknown
-        >;
-        const value = readExtensionValue(loadedModule, access);
+        const value = extensionValueOf(argument, projectRoot);
 
         if (typeof value !== "object" || value === null) {
             return undefined;

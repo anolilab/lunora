@@ -145,6 +145,28 @@ describe("lazy metadata discovery", () => {
         expect(functions).toHaveLength(1);
     });
 
+    it("copies a literal .meta() onto the lazy stub, later calls winning as at runtime", () => {
+        expect.assertions(4);
+
+        write(
+            "posts.ts",
+            `import { query } from "@lunora/server";
+            const authed = query.meta({ auth: "user", rateLimit: { per: 60 } });
+            export const remove = authed.meta({ auth: "admin" }).query(() => 1);
+            export const computed = query.meta({ auth: role }).query(() => 2);
+            export const plain = query.query(() => 3);
+            const role = "admin";`,
+        );
+        const functions = discover();
+        const byName = new Map(functions.map((entry) => [entry.exportName, entry]));
+        const emitted = emitFunctions({ functions, lazyFunctions: true });
+
+        expect(byName.get("remove")?.meta).toStrictEqual({ auth: "admin", rateLimit: { per: 60 } });
+        expect(byName.get("computed")?.meta).toBe("unloaded");
+        expect(byName.get("plain")).not.toHaveProperty("meta");
+        expect(emitted).toContain('[Symbol.for("lunora.procedure.meta")]: {"auth":"admin","rateLimit":{"per":60}}');
+    });
+
     it("preserves public credential-cache exclusions and the last authored metadata", () => {
         expect.assertions(2);
 

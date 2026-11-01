@@ -328,4 +328,4 @@ const unwrapHandlerReturn = (handler: Node, streamChunk = false): string => {
     return rendered.includes("unknown") ? "unknown" : [...new Set(rendered)].join(" | ");
 };
 
-export default unwrapHandlerReturn;
+export { renderReturnType, unwrapHandlerReturn };

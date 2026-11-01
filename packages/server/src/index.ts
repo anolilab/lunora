@@ -14,6 +14,7 @@ export type {
     MiddlewareContext,
     MiddlewareNext,
     MutationBuilder,
+    PolicyMiddleware,
     QueryBuilder,
     TerminalKind,
 } from "./builder/index";
@@ -95,6 +96,7 @@ export type { Component, ComponentFunctions, DefineComponentOptions, DefinePlugi
 export { composePluginMiddleware, defineComponent, definePlugin, defineSchemaExtension, installPlugins, mergeSchemaExtension } from "./plugin";
 export type { DefinePresenceOptions, PresenceComponent, PresenceFunctions, PresenceMember } from "./presence";
 export { definePresence, PRESENCE_DEFAULT_TTL_MS, PRESENCE_TABLE, presenceExtension } from "./presence";
+export { PROCEDURE_META, procedureMeta, UNLOADED_META } from "./procedure-meta";
 export type { ProtectPublicOptions } from "./protect-public";
 export { protectPublic } from "./protect-public";
 export type { ReactorHandler, ReactorOutcome, ReactorSelect, RegisteredReactor } from "./reactors";
@@ -203,6 +205,9 @@ export type {
     ReadOnlyStorage,
     RegisteredAction,
     RegisteredFunction,
+    RegisteredInternalAction,
+    RegisteredInternalMutation,
+    RegisteredInternalQuery,
     RegisteredLifecycleHook,
     RegisteredMutation,
     RegisteredQuery,

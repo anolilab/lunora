@@ -1,12 +1,11 @@
 import type { RateLimitConfigMap } from "@lunora/ratelimit";
 import { dbRateLimit } from "@lunora/ratelimit";
-import type { Middleware, PaginationResult } from "lunorash/server";
+import type { PaginationResult } from "lunorash/server";
 import { definePolicies, definePolicy, rls } from "lunorash/server";
 
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Doc" is the generated dataModel type name; aliasing it breaks codegen
 import type { Doc } from "./_generated/dataModel.js";
-// eslint-disable-next-line unicorn/prevent-abbreviations -- "MutationCtx"/"QueryCtx" are the generated server type names
-import type { Id, MutationCtx, QueryCtx } from "./_generated/server.js";
+import type { Id } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
 
 // 20 note writes per minute per user, durable via the DB-backed store.
@@ -26,13 +25,8 @@ const policies = definePolicies([
     definePolicy({ on: "insert", table: "notes", when: ({ auth, row }) => row?.ownerId === auth.userId }),
 ]);
 
-// `rls()` types its context against the runtime writer shape
-// (`RlsContextIn.db: DatabaseWriterLike`), which the generated reader/writer
-// facades deliberately narrow — the runtime object underneath is the same
-// adapter, so re-typing the middleware onto the generated ctx is sound (the
-// same boundary cast the `@lunora/server` RLS tests use).
-const notesReadRls = rls(policies) as unknown as Middleware<QueryCtx, QueryCtx>;
-const notesWriteRls = rls(policies) as unknown as Middleware<MutationCtx, MutationCtx>;
+const notesReadRls = rls(policies);
+const notesWriteRls = rls(policies);
 
 /**
  * List the caller's notes. Deliberately reads the WHOLE table — the `rls()`

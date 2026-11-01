@@ -1,7 +1,9 @@
+import { decodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
 import type { ExecutionContextLike, FunctionRegistryLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
+import PROCEDURE_META from "../src/procedure-meta-key";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 const fakeContext: ExecutionContextLike = {
@@ -149,5 +151,29 @@ describe("createWorker — functions admin endpoint", () => {
         );
 
         expect(response.status).toBe(405);
+    });
+
+    it("carries each function's .meta() wire-encoded, and flags one only its loaded module can answer for", async () => {
+        expect.assertions(3);
+
+        const registry: FunctionRegistryLike = {
+            "notes:list": { kind: "query" },
+            "notes:remove": { kind: "mutation", [PROCEDURE_META]: { auth: "admin", scopes: new Set(["notes:write"]) } },
+            "notes:share": { kind: "mutation", [PROCEDURE_META]: "unloaded" },
+        };
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, functions: registry, shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/functions", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+        const body: { functions: { meta?: unknown; metaUnloaded?: true; path: string }[] } = await response.json();
+        const { functions } = body;
+        const byPath = new Map(functions.map((entry) => [entry.path, entry]));
+
+        expect(byPath.get("notes:list")).not.toHaveProperty("meta");
+        expect(decodeWire(byPath.get("notes:remove")?.meta)).toStrictEqual({ auth: "admin", scopes: new Set(["notes:write"]) });
+        expect(byPath.get("notes:share")).toMatchObject({ metaUnloaded: true });
     });
 });

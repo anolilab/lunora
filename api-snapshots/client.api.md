@@ -321,6 +321,8 @@ interface FunctionArgumentDescriptor {
 interface FunctionDescriptor {
     args?: FunctionArgumentDescriptor[];
     kind: "action" | "mutation" | "query";
+    meta?: unknown;
+    metaUnloaded?: true;
     path: string;
 }
 ```

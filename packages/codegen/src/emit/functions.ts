@@ -200,7 +200,8 @@ const renderFunctionRegistry = (
                     // The worker reads a route's path off the stub to know which upgrades reach the shard.
                     ...(definition.socket === undefined ? {} : { auth: definition.socket.auth, socketPath: definition.socket.path }),
                 },
-            )} } satisfies RegisteredLunoraFunction & Pick<FunctionManifestEntry, "argumentDescriptors" | "channel" | "expose">,`;
+                // `procedureMeta(fn)` reads the stub until the module loads; the key is `@lunora/server`'s `PROCEDURE_META`.
+            )}${definition.meta === undefined ? "" : `, [Symbol.for("lunora.procedure.meta")]: ${JSON.stringify(definition.meta)}`} } satisfies RegisteredLunoraFunction & Pick<FunctionManifestEntry, "argumentDescriptors" | "channel" | "expose">,`;
         })
         .join("\n");
 
@@ -254,10 +255,11 @@ const renderFunctionRegistry = (
     const installLines = functions
         .filter((definition) => !lazyFunctions || eagerPaths.has(definition.filePath))
         .map((definition) => {
-            // Skip argless functions (nothing to accelerate) and lifecycle hooks
-            // (no `.args`). Refinements (`.check`) and unmodelled validators are
-            // declined by `compileArgsValidator` itself (returns undefined below).
-            if (definition.lifecycle || Object.keys(definition.args).length === 0) {
+            // Skip argless functions (nothing to accelerate), lifecycle hooks (no
+            // `.args`) and args read off a type (no bounds to compile). Refinements
+            // (`.check`) and unmodelled validators are declined by
+            // `compileArgsValidator` itself (returns undefined below).
+            if (definition.lifecycle || definition.typeDerivedArgs || Object.keys(definition.args).length === 0) {
                 return undefined;
             }
 

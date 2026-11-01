@@ -506,7 +506,8 @@ const mergeExtendCall = (extendCall: CallExpression, projectRoot: string | undef
 
         // eslint-disable-next-line no-console -- codegen surfaces a clear, actionable warning when an extension cannot be resolved.
         console.warn(
-            `@lunora/codegen: skipping \`.extend(${extendArgument.getText()})\` — its \`defineSchemaExtension(...)\` could not be resolved from local sources, and ${projectRoot === undefined ? "no project root was available to resolve the package" : "the package could not be imported/introspected"}. Extension tables will be absent from the generated types.`,
+            `@lunora/codegen: skipping \`.extend(${extendArgument.getText()})\` — its \`defineSchemaExtension(...)\` could not be resolved from local sources, and ${projectRoot === undefined ? "no project root was available to resolve the package" : "the package could not be imported/introspected"}. Extension tables will be absent from the generated types. ` +
+                "If the receiver is a component built with options codegen cannot evaluate (a function, a variable), extend with the extension the package exports instead (e.g. `presenceExtension` from `@lunora/server`).",
         );
 
         return undefined;
