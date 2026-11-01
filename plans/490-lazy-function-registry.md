@@ -181,8 +181,27 @@ reported as `<file> (queue|workflow|agent)`, and a project that defers only thes
   now does so on first call, not at isolate start (already nondeterministic across isolates).
   Mutations are transaction-wrapped by `runMutationTransaction` after the handler is resolved,
   so the load sits **outside** the span if `prepareFunction` is awaited first (recommended).
-  Open: confirm an `await import()` before the input gate is released does not widen the
-  interleaving window for concurrent RPCs on one DO (add a workerd test).
+- **Interleaving at the cold load (answered, #1166).** It did widen the window. workerd returns
+  to its event loop on every dynamic `import()`, even of an uploaded module that is already
+  evaluated, so a request pipelined behind a cold one on the same stub overtook it. Lost updates
+  stayed impossible, because the mutation body runs inside the single-writer gate and the load
+  sits in front of it. Admission order broke, on the first call per module per isolate, in
+  builds whose loaders emit a real `import()` (Vite/rolldown chunks, uploaded modules): a
+  pipelined query missed the client's own write, and two cold mutations committed out of
+  order. The esbuild single-file wrapper (`Promise.resolve().then(init)`) and eager mode never
+  yield and were not exposed. Fixed by holding the shard while a cold module loads:
+  the generated `prepareFunction` runs the load through `ShardDO.holdShardWhileLoading`
+  (`ShardHost.runSerialized`, i.e. `blockConcurrencyWhile` on Cloudflare). Two constraints
+  come with it, both checked against plain workerd: the import must START inside the hold
+  (workerd never delivers I/O begun outside it, so awaiting another request's in-flight
+  import times the hold out and resets the object, hence `loadFunction` shares a load only
+  once it has settled), and the warm path must never call `import()` or enter the hold.
+  `packages/do/__tests__/workerd/lazy-input-gate.workerd.test.ts` pins ordering,
+  read-your-writes, one evaluation per module, and the warm path, for RPC, subscription and
+  stream, per loader shape. One limit: under `@cloudflare/vitest-plugin` modules resolve
+  through the module-fallback service, which is real I/O, so a cold load concurrent with
+  another request's unheld import of the same module deadlocks there but not in production;
+  that case is not in the suite.
 - **Live-query subscriptions that name an unloaded function.** `executeSubscription` is already
   async; it awaits `prepareFunction` first. After a hibernation wake-up the DO restores
   subscriptions from attachments and re-runs by path, loading on demand. The first re-run

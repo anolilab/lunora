@@ -725,7 +725,7 @@ export interface FunctionManifestEntry {
 export const LUNORA_FUNCTION_MANIFEST: Readonly<Record<string, FunctionManifestEntry>> = {${manifestBody}};
 
 const MODULE_LOADERS: Record<string, () => Promise<Record<string, unknown>>> = {${moduleLoaders}};
-const loadedModules = new Map<string, Promise<Record<string, unknown>>>();
+const settledLoads = new Map<string, Promise<Record<string, unknown>>>();
 const resolvedModules = new Map<string, Record<string, unknown>>();
 const boundFunctions = new Set<string>();
 const unloadedFunctionHandler = (): never => {
@@ -772,7 +772,11 @@ export const loadFunction = async (functionPath: string): Promise<RegisteredLuno
         return registered;
     }
 
-    let pending = loadedModules.get(manifest.moduleId);
+    // Only a SETTLED load is shared. An in-flight one is not: a Durable Object holds its other events
+    // back while a cold load runs (\`holdShardWhileLoading\`), and workerd only lets through I/O that
+    // began inside that hold, so awaiting an import another request started would wait out the hold's
+    // timeout and reset the object. A second \`import()\` still evaluates the module only once.
+    let pending = settledLoads.get(manifest.moduleId);
 
     if (pending === undefined) {
         const loader = MODULE_LOADERS[manifest.moduleId];
@@ -781,8 +785,15 @@ export const loadFunction = async (functionPath: string): Promise<RegisteredLuno
             throw new Error(\`no lazy module loader registered for "\${functionPath}"\`);
         }
 
-        pending = loader();
-        loadedModules.set(manifest.moduleId, pending);
+        const started = loader();
+        const settle = (): void => {
+            if (!settledLoads.has(manifest.moduleId)) {
+                settledLoads.set(manifest.moduleId, started);
+            }
+        };
+
+        started.then(settle, settle);
+        pending = started;
     }
 
     // A module that failed to evaluate stays failed for the isolate: the runtime has already cached
@@ -808,7 +819,7 @@ export const loadFunction = async (functionPath: string): Promise<RegisteredLuno
 export const loadAllFunctions = async (): Promise<{ checked: number; failures: ReadonlyArray<{ functionPath: string; message: string }> }> => {
     const functionPaths = Object.keys(LUNORA_FUNCTION_MANIFEST);
     // Concurrent, so the total is bounded by the slowest module rather than by all of them added up. A module
-    // shared by several functions is evaluated once (loadFunction keeps its pending promise), and failures keep manifest order.
+    // shared by several functions is evaluated once (the module registry dedupes concurrent imports), and failures keep manifest order.
     const failures = (
         await Promise.all(
             functionPaths.map(async (functionPath) => {

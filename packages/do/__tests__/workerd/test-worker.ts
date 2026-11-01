@@ -26,11 +26,13 @@ import { ShardDO } from "../../src/shard-do";
 import { ShardRegistryDO } from "../../src/shard-registry-do";
 import messagesSchema from "../_helpers/messages-schema";
 import type { DeliveryAuthorizationTestDO } from "./delivery-authorization-worker";
+import type TestLazyShardDO from "./lazy-gate/worker";
 
 interface Env {
     AUTHORIZED: DurableObjectNamespace<DeliveryAuthorizationTestDO>;
     COUNTER: DurableObjectNamespace<TestCounterDO>;
     ECHO: DurableObjectNamespace<TestEchoDO>;
+    LAZY_SHARD: DurableObjectNamespace<TestLazyShardDO>;
     LIVE_SHARD: DurableObjectNamespace<TestLiveShardDO>;
     LUNORA_ALLOWED_ORIGINS?: string;
     MERGED: DurableObjectNamespace;
@@ -698,5 +700,6 @@ const handler = {
 
 export default handler;
 export { DeliveryAuthorizationTestDO } from "./delivery-authorization-worker";
+export { default as TestLazyShardDO } from "./lazy-gate/worker";
 export { TestCounterDO, TestEchoDO, TestLiveShardDO, TestMergedDO, TestSessionDO, TestShardDO, TestSyncDO };
 export type { Env };

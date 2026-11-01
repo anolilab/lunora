@@ -160,8 +160,8 @@ describe("lazy function registry", () => {
         // pin the registry itself: a failed load stays in the cache and every call rethrows it.
         const emitted = emitFunctions({ functions: [makeFunction("list")], lazyFunctions: true });
 
-        expect(emitted).not.toContain("loadedModules.delete(");
-        expect(emitted).toContain("loadedModules.set(manifest.moduleId, pending);");
+        expect(emitted).not.toContain("settledLoads.delete(");
+        expect(emitted).toContain("settledLoads.set(manifest.moduleId, started);");
     });
 
     it("emits the smoke loader only when there is a lazy entry for it to check", () => {

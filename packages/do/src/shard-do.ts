@@ -5789,9 +5789,34 @@ abstract class ShardDO {
         return false;
     }
 
-    /** Prepare a codegen-lazy procedure only after the caller's purpose is known. */
+    /**
+     * Prepare a codegen-lazy procedure only after the caller's purpose is known.
+     *
+     * Return `undefined` when the procedure is already loaded: a warm call must not yield, nor hold the
+     * shard. A cold load must run through {@link ShardDO.holdShardWhileLoading}.
+     */
     // eslint-disable-next-line class-methods-use-this -- the generated subclass overrides this for lazy function registries
     protected prepareFunction(_functionPath: string, _reason: "rpc" | "subscription" | "stream" | "reactor"): void | Promise<void> {}
+
+    /**
+     * Hold every other event on this shard back until a cold procedure module has loaded.
+     *
+     * workerd returns to its event loop on every dynamic `import()`, even of a bundled module that is already
+     * evaluated, and the next queued request runs in that gap. Without the hold a request that arrived later
+     * on a warm procedure overtakes the cold one: a client's pipelined query misses its own write, and two
+     * mutations from one client can commit in the reverse order. The hold restores the order an eager
+     * registry has, at the cost of stalling the shard for one module evaluation per isolate.
+     *
+     * `load` is a thunk because workerd only lets through I/O begun INSIDE the hold: an import started
+     * before it, or by another request, is never delivered, and the hold times out and resets the object.
+     * `runSerialized` rather than `blockConcurrencyWhile` directly, because a module that fails to evaluate
+     * rejects here, and a rejecting `blockConcurrencyWhile` resets the whole Durable Object.
+     */
+    protected holdShardWhileLoading(load: () => Promise<unknown>): Promise<void> {
+        return this.shardHost.runSerialized(async () => {
+            await load();
+        });
+    }
 
     /**
      * Whether `functionPath` names a registered `mutation` — the only function
