@@ -145,6 +145,7 @@ export declare const functions: {
         at: Validator<Date>;
         flags: Validator<boolean[]>;
         mode: Validator<"draft" | "live">;
+        limit: Validator<5n>;
         note: Validator<string | null>;
         note_id: Validator<string & { readonly __table: "notes" }>;
         owner: Validator<string & { readonly __brand: "owner" }>;
@@ -165,6 +166,7 @@ export const { save } = functions;
             at: { kind: "from", tsType: "Date" },
             blob: { kind: "bytes" },
             flags: { inner: { kind: "boolean" }, kind: "array" },
+            limit: { kind: "literal", literalValue: "5n" },
             mode: {
                 kind: "union",
                 members: [

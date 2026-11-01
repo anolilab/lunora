@@ -84,7 +84,7 @@ const valueIr = (type: Type, at: Node, depth: number): ValidatorIR => {
         return { kind: "bytes" };
     }
 
-    if (type.isStringLiteral() || type.isNumberLiteral() || type.isBooleanLiteral()) {
+    if (type.isStringLiteral() || type.isNumberLiteral() || type.isBooleanLiteral() || type.isBigIntLiteral()) {
         return { kind: "literal", literalValue: type.getText(at) };
     }
 

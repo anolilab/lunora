@@ -72,7 +72,11 @@ export default defineDefault;
                          vectorIndexes: [{ dimensions: 3, embed: () => [0, 0, 0], field: "body", metadata: ["authorId"], metric: "cosine", name: "postsByBody" }],
                          shardMode: { kind: "root" },
                      },
-                     authors: { shape: { name: s("string") }, indexes: [], shardMode: { kind: "root" } },
+                     authors: {
+                         shape: { name: s("string"), apiKey: { kind: "literal", _meta: { column: { notNull: true }, value: "sk_live_secret", sensitive: true } } },
+                         indexes: [],
+                         shardMode: { kind: "root" },
+                     },
                      tags: { shape: { label: s("string") }, indexes: [], shardMode: { kind: "root" } },
                      postTags: { shape: { postId: s("string"), tagId: s("string") }, indexes: [], shardMode: { kind: "root" } },
                      feed: {
@@ -226,8 +230,8 @@ export default defineSchema({ todos: defineTable({ title: v.string() }) }).exten
         ).toStrictEqual([table, "todos"]);
     });
 
-    it("keeps a factory table's declarations: expiry, indexes, relations, backend, memory, soft delete, visibility, source", () => {
-        expect.assertions(5);
+    it("keeps a factory table's declarations: expiry, indexes, relations, sensitivity, backend, memory, soft delete, visibility, source", () => {
+        expect.assertions(6);
 
         const discovered = tables({
             "schema.ts": `import { defineSchema, defineTable, v } from "@lunora/server";
@@ -238,6 +242,12 @@ export default defineSchema({ todos: defineTable({ title: v.string() }) }).exten
         });
         const spots = discovered.find((table) => table.name === "rich_spots");
 
+        // The sensitive marker survives, so every schema emitter redacts the literal.
+        expect(discovered.find((table) => table.name === "rich_authors")?.shape["apiKey"]).toMatchObject({
+            kind: "literal",
+            literalValue: '"sk_live_secret"',
+            sensitive: true,
+        });
         // Relations, rank and inline vector indexes reach the data model, retargeted to the namespaced tables.
         expect(discovered.find((table) => table.name === "rich_posts")).toMatchObject({
             rankIndexes: [{ name: "byScore", partitionBy: ["authorId"], sortBy: [{ direction: "desc", field: "score" }] }],

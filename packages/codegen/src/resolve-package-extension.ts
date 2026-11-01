@@ -143,7 +143,12 @@ const columnMetaToIR = (column: Record<string, unknown> | undefined): ColumnMeta
 const runtimeValidatorToIR = (validator: RuntimeValidator | undefined): ValidatorIR => {
     const meta = validator?._meta ?? {};
     const kind = validator?.kind ?? "unknown";
-    const ir: ValidatorIR = { column: columnMetaToIR(meta["column"] as Record<string, unknown> | undefined), kind };
+    const ir: ValidatorIR = {
+        column: columnMetaToIR(meta["column"] as Record<string, unknown> | undefined),
+        kind,
+        // Every schema emitter redacts on this flag; dropped, a `v.sensitive(v.literal(secret))` column prints the secret.
+        ...(meta["sensitive"] === true ? { sensitive: true } : {}),
+    };
 
     switch (kind) {
         case "array":
