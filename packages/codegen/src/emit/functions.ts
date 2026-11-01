@@ -119,6 +119,11 @@ const renderFrozenLiteral = (value: unknown): string => {
         return `Object.freeze({ ${entries.join(", ")} })`;
     }
 
+    // `JSON.stringify` turns these into `null` / `0`; the loaded procedure keeps the real value.
+    if (typeof value === "number" && (!Number.isFinite(value) || Object.is(value, -0))) {
+        return Object.is(value, -0) ? "-0" : String(value);
+    }
+
     return JSON.stringify(value);
 };
 

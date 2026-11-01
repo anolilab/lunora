@@ -40,6 +40,7 @@ interface RuntimeValidator {
 
 /** A runtime `defineTable(...)` builder, duck-typed to the fields the IR needs. */
 interface RuntimeTableBuilder {
+    geoIndexes?: ReadonlyArray<{ field: string; name: string; precision?: number }>;
     indexes?: ReadonlyArray<{ fields: ReadonlyArray<string>; name: string; unique?: boolean }>;
     isExternallyManaged?: boolean;
     // Carried only to detect (and warn about) features the runtime path does not
@@ -56,6 +57,7 @@ interface RuntimeTableBuilder {
     }>;
     shape?: Record<string, RuntimeValidator>;
     shardMode?: { backend?: string; field?: string; kind: string };
+    ttlPolicy?: { after?: number; field: string };
     vectorIndexes?: ReadonlyArray<unknown>;
 }
 
@@ -237,9 +239,15 @@ const runtimeTableToIR = (builder: RuntimeTableBuilder, bareName: string): Table
 
     warnDroppedTableFeatures(builder, bareName);
 
+    const shardMode = shardModeToIR(builder.shardMode);
+
     return {
         ...(builder.isExternallyManaged ? { externallyManaged: true } : {}),
-        geoIndexes: [],
+        geoIndexes: (builder.geoIndexes ?? []).map(({ field, name, precision }) => {
+            return { field, name, ...(precision === undefined ? {} : { precision }) };
+        }),
+        // Normalised like the AST path: a global table without a backend is D1.
+        ...(shardMode === "global" ? { globalBackend: builder.shardMode?.backend === "hyperdrive" ? ("hyperdrive" as const) : ("d1" as const) } : {}),
         indexes,
         name: bareName,
         rankIndexes: [],
@@ -255,7 +263,10 @@ const runtimeTableToIR = (builder: RuntimeTableBuilder, bareName: string): Table
             };
         }),
         shape: Object.fromEntries(Object.entries(shape).map(([name, validator]) => [name, runtimeValidatorToIR(validator)])),
-        shardMode: shardModeToIR(builder.shardMode),
+        shardMode,
+        ...(builder.ttlPolicy
+            ? { ttl: { field: builder.ttlPolicy.field, ...(builder.ttlPolicy.after === undefined ? {} : { after: builder.ttlPolicy.after }) } }
+            : {}),
         // Inline vector/rank indexes and relations are not yet introspected from a
         // package extension; their presence is surfaced via `warnDroppedTableFeatures`.
         vectorIndexes: [],

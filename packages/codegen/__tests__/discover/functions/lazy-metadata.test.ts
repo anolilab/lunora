@@ -146,7 +146,7 @@ describe("lazy metadata discovery", () => {
     });
 
     it("copies a literal .meta() onto the lazy stub, later calls winning as at runtime", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         write(
             "posts.ts",
@@ -155,6 +155,7 @@ describe("lazy metadata discovery", () => {
             export const remove = authed.meta({ auth: "admin" }).query(() => 1);
             export const computed = query.meta({ auth: role }).query(() => 2);
             export const plain = query.query(() => 3);
+            export const bounded = query.meta({ max: 1e999, origin: -0 }).query(() => 4);
             const role = "admin";`,
         );
         const functions = discover();
@@ -166,6 +167,8 @@ describe("lazy metadata discovery", () => {
         expect(byName.get("plain")).not.toHaveProperty("meta");
         // Deep-frozen like the builder's own copy, so a reader cannot change it before the module loads.
         expect(emitted).toContain('[Symbol.for("lunora.procedure.meta")]: Object.freeze({ "auth": "admin", "rateLimit": Object.freeze({ "per": 60 }) })');
+        // Values JSON cannot carry are emitted as themselves, not as `null` / `0`.
+        expect(emitted).toContain('[Symbol.for("lunora.procedure.meta")]: Object.freeze({ "max": Infinity, "origin": -0 })');
     });
 
     it("preserves public credential-cache exclusions and the last authored metadata", () => {

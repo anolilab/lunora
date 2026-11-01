@@ -10,13 +10,20 @@ const NOT_LITERAL = Symbol("not-literal");
  * is {@link NOT_LITERAL}: codegen hands these values to package code and copies
  * them into generated output, so it must never evaluate the user's own code.
  */
+/** A numeric literal's value as JavaScript reads it. `getLiteralValue()` answers `NaN` for an overflowing `1e999`, which is `Infinity`. */
+const numericValueOf = (node: NumericLiteral): number => Number(node.getText().replaceAll("_", ""));
+
 const scalarLiteralOf = (node: TsNode): unknown => {
-    if (Node.isStringLiteral(node) || Node.isNoSubstitutionTemplateLiteral(node) || Node.isNumericLiteral(node)) {
+    if (Node.isStringLiteral(node) || Node.isNoSubstitutionTemplateLiteral(node)) {
         return node.getLiteralValue();
     }
 
+    if (Node.isNumericLiteral(node)) {
+        return numericValueOf(node);
+    }
+
     if (Node.isPrefixUnaryExpression(node) && node.getOperatorToken() === SyntaxKind.MinusToken && Node.isNumericLiteral(node.getOperand())) {
-        return -(node.getOperand() as NumericLiteral).getLiteralValue();
+        return -numericValueOf(node.getOperand() as NumericLiteral);
     }
 
     if (Node.isTrueLiteral(node) || Node.isFalseLiteral(node)) {

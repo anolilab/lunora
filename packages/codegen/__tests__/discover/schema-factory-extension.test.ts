@@ -35,6 +35,7 @@ const installFactoryPackage = (): void => {
     functions: Record<string, never>;
 };
 export declare const track: (options?: Record<string, unknown>) => { extension: string };
+export declare const defineRich: typeof defineThing;
 declare const defineDefault: typeof defineThing;
 export default defineDefault;
 `,
@@ -48,12 +49,36 @@ export default defineDefault;
              return { extension: { key: "tracked", tables: { items: { shape: { name: s("string") }, indexes: [], shardMode: { kind: "root" } } } } };
          };
          export default (options = {}) => defineThing({ key: "byDefault", ...options });
+         export const defineRich = () => ({
+             extension: {
+                 key: "rich",
+                 tables: {
+                     spots: {
+                         shape: { expiresAt: s("number"), loc: s("geoPoint") },
+                         indexes: [],
+                         geoIndexes: [{ field: "loc", name: "byLoc", precision: 6 }],
+                         ttlPolicy: { field: "expiresAt", after: 1000 },
+                         shardMode: { kind: "global", backend: "hyperdrive" },
+                     },
+                 },
+             },
+         });
          export const defineThing = (options = {}) => {
              const key = options.key ?? "thing";
              return { extension: { key, tables: { items: { shape: { name: s("string") }, indexes: [], shardMode: { kind: "root" } } } }, functions: {} };
          };
         `,
     );
+};
+
+const tables = (files: Record<string, string>) => {
+    mkdirSync(join(root, "lunora"), { recursive: true });
+
+    for (const [name, source] of Object.entries(files)) {
+        writeFileSync(join(root, "lunora", name), source);
+    }
+
+    return discoverSchema(new Project({ skipAddingFilesFromTsConfig: true }), join(root, "lunora", "schema.ts"), root).tables;
 };
 
 const tableNames = (files: Record<string, string>): string[] => {
@@ -153,6 +178,25 @@ export default defineSchema({ todos: defineTable({ title: v.string() }) }).exten
 `,
             }),
         ).toStrictEqual([table, "todos"]);
+    });
+
+    it("keeps a factory table's expiry, geo indexes and global backend", () => {
+        expect.assertions(1);
+
+        const spots = tables({
+            "schema.ts": `import { defineSchema, defineTable, v } from "@lunora/server";
+import { defineRich } from "test-component";
+const rich = defineRich();
+export default defineSchema({ todos: defineTable({ title: v.string() }) }).extend(rich.extension);
+`,
+        }).find((table) => table.name === "rich_spots");
+
+        expect(spots).toMatchObject({
+            geoIndexes: [{ field: "loc", name: "byLoc", precision: 6 }],
+            globalBackend: "hyperdrive",
+            shardMode: "global",
+            ttl: { after: 1000, field: "expiresAt" },
+        });
     });
 
     it("does not call a factory whose options are not literals", () => {
