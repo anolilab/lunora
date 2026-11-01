@@ -1,3 +1,19 @@
+## @lunora/mcp [1.0.0-alpha.284](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.283...@lunora/mcp@1.0.0-alpha.284) (2026-11-01)
+
+### ⚠ BREAKING CHANGES
+
+* **x402:** require an explicit facilitator URL (#1438)
+
+### Bug Fixes
+
+* **x402:** require an explicit facilitator URL ([#1438](https://github.com/anolilab/lunora/issues/1438)) ([86fd043](https://github.com/anolilab/lunora/commit/86fd043bc5e0f749ef628e56adbaff83d8420476))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.278
+* **@lunora/x402:** upgraded to 1.0.0-alpha.113
+
 ## @lunora/mcp [1.0.0-alpha.283](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.282...@lunora/mcp@1.0.0-alpha.283) (2026-10-31)
 
 

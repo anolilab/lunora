@@ -1,3 +1,13 @@
+## @lunora/runtime [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.267...@lunora/runtime@1.0.0-alpha.268) (2026-11-01)
+
+### ⚠ BREAKING CHANGES
+
+* **x402:** require an explicit facilitator URL (#1438)
+
+### Bug Fixes
+
+* **x402:** require an explicit facilitator URL ([#1438](https://github.com/anolilab/lunora/issues/1438)) ([86fd043](https://github.com/anolilab/lunora/commit/86fd043bc5e0f749ef628e56adbaff83d8420476))
+
 ## @lunora/runtime [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.266...@lunora/runtime@1.0.0-alpha.267) (2026-10-31)
 
 ### ⚠ BREAKING CHANGES
