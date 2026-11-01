@@ -61,6 +61,20 @@ export default defineDefault;
                          shardMode: { kind: "global", backend: "hyperdrive" },
                      },
                      scratch: { shape: { note: s("string") }, indexes: [], memoryMode: true, shardMode: { kind: "root" } },
+                     posts: {
+                         shape: { authorId: s("string"), body: s("string"), score: s("number") },
+                         indexes: [],
+                         rankIndexes: [{ name: "byScore", on: "", partitionBy: ["authorId"], sortBy: [{ direction: "desc", field: "score" }] }],
+                         relationMap: {
+                             author: { field: "authorId", kind: "one", onDelete: "cascade", references: "_id", table: "authors" },
+                             tags: { kind: "many", table: "tags", through: { from: "postId", table: "postTags", to: "tagId" } },
+                         },
+                         vectorIndexes: [{ dimensions: 3, embed: () => [0, 0, 0], field: "body", metadata: ["authorId"], metric: "cosine", name: "postsByBody" }],
+                         shardMode: { kind: "root" },
+                     },
+                     authors: { shape: { name: s("string") }, indexes: [], shardMode: { kind: "root" } },
+                     tags: { shape: { label: s("string") }, indexes: [], shardMode: { kind: "root" } },
+                     postTags: { shape: { postId: s("string"), tagId: s("string") }, indexes: [], shardMode: { kind: "root" } },
                      feed: {
                          shape: { title: s("string") },
                          indexes: [],
@@ -198,8 +212,8 @@ export default defineSchema({ todos: defineTable({ title: v.string() }) }).exten
         ).toStrictEqual([table, "todos"]);
     });
 
-    it("keeps a factory table's declarations: expiry, indexes, backend, memory, soft delete, visibility, source", () => {
-        expect.assertions(4);
+    it("keeps a factory table's declarations: expiry, indexes, relations, backend, memory, soft delete, visibility, source", () => {
+        expect.assertions(5);
 
         const discovered = tables({
             "schema.ts": `import { defineSchema, defineTable, v } from "@lunora/server";
@@ -210,6 +224,15 @@ export default defineSchema({ todos: defineTable({ title: v.string() }) }).exten
         });
         const spots = discovered.find((table) => table.name === "rich_spots");
 
+        // Relations, rank and inline vector indexes reach the data model, retargeted to the namespaced tables.
+        expect(discovered.find((table) => table.name === "rich_posts")).toMatchObject({
+            rankIndexes: [{ name: "byScore", partitionBy: ["authorId"], sortBy: [{ direction: "desc", field: "score" }] }],
+            relations: [
+                { field: "authorId", kind: "one", name: "author", onDelete: "cascade", references: "_id", table: "rich_authors" },
+                { kind: "many", name: "tags", table: "rich_tags", through: { from: "postId", table: "rich_postTags", to: "tagId" } },
+            ],
+            vectorIndexes: [{ dimensions: 3, field: "body", metadata: ["authorId"], metric: "cosine", name: "postsByBody", table: "rich_posts" }],
+        });
         // `.memory()` rows are cleared on wake; dropping the flag would keep them.
         expect(discovered.find((table) => table.name === "rich_scratch")?.memory).toBe(true);
         // A sourced table the shard does not know about is never polled or bootstrapped.

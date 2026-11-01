@@ -29,7 +29,7 @@ import { createJiti } from "jiti";
 import type { CallExpression, ImportDeclaration, Node as TsNode } from "ts-morph";
 import { Node } from "ts-morph";
 
-import type { ColumnMetaIR, IndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir";
+import type { ColumnMetaIR, IndexIR, RelationIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir";
 import { literalOf, NOT_LITERAL } from "./static-literal";
 
 /** A runtime `@lunora/values` validator, duck-typed to the introspectable surface (`kind` + `_meta`). */
@@ -60,10 +60,8 @@ interface RuntimeTableBuilder {
     isExternallyManaged?: boolean;
     isPublic?: boolean;
     memoryMode?: boolean;
-    // Carried only to detect (and warn about) features the runtime path does not
-    // yet convert — see the drop-warning in `runtimeTableToIR`.
-    rankIndexes?: ReadonlyArray<unknown>;
-    relationMap?: Record<string, unknown>;
+    rankIndexes?: ReadonlyArray<{ name: string; partitionBy?: ReadonlyArray<string>; sortBy: ReadonlyArray<{ direction: "asc" | "desc"; field: string }> }>;
+    relationMap?: Record<string, RuntimeRelation>;
     searchIndexes?: ReadonlyArray<{
         field: string;
         filterFields?: ReadonlyArray<string>;
@@ -76,8 +74,13 @@ interface RuntimeTableBuilder {
     shardMode?: { backend?: string; field?: string; kind: string };
     softDeleteMode?: { field: string };
     ttlPolicy?: { after?: number; field: string };
-    vectorIndexes?: ReadonlyArray<unknown>;
+    vectorIndexes?: ReadonlyArray<{ dimensions?: number; field: string; metadata?: ReadonlyArray<string>; metric?: VectorIndexIR["metric"]; name: string }>;
 }
+
+/** A runtime `.relations(...)` entry: keyed by a field, or many-to-many through a join table. */
+type RuntimeRelation =
+    | { field: string; kind: "many" | "one"; onDelete?: "cascade" | "restrict" | "set null"; references: string; table: string; through?: never }
+    | { kind: "many"; table: string; through: { from: string; table: string; to: string } };
 
 /** A runtime `defineSchemaExtension(...)` value, duck-typed. */
 interface RuntimeSchemaExtension {
@@ -219,35 +222,6 @@ const shardModeToIR = (shardMode: RuntimeTableBuilder["shardMode"]): TableIR["sh
     return "root";
 };
 
-/**
- * Features the runtime path does not yet convert. If a package extension's table
- * actually uses one, warn (matching the rest of this module's surface) rather
- * than drop it silently — silent loss would emit a wrong (e.g. relation-less)
- * type with no signal. The runtime builder exposes them, so we can detect use.
- */
-const warnDroppedTableFeatures = (builder: RuntimeTableBuilder, bareName: string): void => {
-    const dropped: string[] = [];
-
-    if (builder.relationMap && Object.keys(builder.relationMap).length > 0) {
-        dropped.push("relations");
-    }
-
-    if (builder.rankIndexes && builder.rankIndexes.length > 0) {
-        dropped.push("rank indexes");
-    }
-
-    if (builder.vectorIndexes && builder.vectorIndexes.length > 0) {
-        dropped.push("vector indexes");
-    }
-
-    if (dropped.length > 0) {
-        // eslint-disable-next-line no-console -- make the limitation visible rather than silently emit an incomplete type.
-        console.warn(
-            `@lunora/codegen: package schema-extension table "${bareName}" declares ${dropped.join(" + ")}, which are not yet introspected from a node_modules extension — they will be absent from the generated types.`,
-        );
-    }
-};
-
 /** A runtime `.source(...)` definition as the AST path reads it — the same fields, from the value instead of the literal. */
 const externalSourceToIR = (source: RuntimeExternalSource): NonNullable<TableIR["externalSource"]> => {
     const text = (key: "binding" | "idColumn" | "mode" | "query"): string | undefined => (typeof source[key] === "string" ? source[key] : undefined);
@@ -272,8 +246,6 @@ const runtimeTableToIR = (builder: RuntimeTableBuilder, bareName: string): Table
         return { fields: index.fields, name: index.name, ...(index.unique ? { unique: true } : {}) };
     });
 
-    warnDroppedTableFeatures(builder, bareName);
-
     const shardMode = shardModeToIR(builder.shardMode);
 
     return {
@@ -292,8 +264,29 @@ const runtimeTableToIR = (builder: RuntimeTableBuilder, bareName: string): Table
         indexes,
         ...(builder.memoryMode === true ? { memory: true } : {}),
         name: bareName,
-        rankIndexes: [],
-        relations: [],
+        rankIndexes: (builder.rankIndexes ?? []).map(({ name, partitionBy, sortBy }) => {
+            return {
+                name,
+                ...(partitionBy === undefined ? {} : { partitionBy }),
+                sortBy: sortBy.map(({ direction, field }) => {
+                    return { direction, field };
+                }),
+            };
+        }),
+        relations: Object.entries(builder.relationMap ?? {}).map(([name, relation]): RelationIR => {
+            if (relation.through !== undefined) {
+                return { kind: "many", name, table: relation.table, through: { ...relation.through } };
+            }
+
+            return {
+                field: relation.field,
+                kind: relation.kind,
+                name,
+                ...(relation.onDelete === undefined ? {} : { onDelete: relation.onDelete }),
+                references: relation.references,
+                table: relation.table,
+            };
+        }),
         searchIndexes: (builder.searchIndexes ?? []).map((index) => {
             return {
                 field: index.field,
@@ -311,9 +304,17 @@ const runtimeTableToIR = (builder: RuntimeTableBuilder, bareName: string): Table
         ...(builder.ttlPolicy
             ? { ttl: { field: builder.ttlPolicy.field, ...(builder.ttlPolicy.after === undefined ? {} : { after: builder.ttlPolicy.after }) } }
             : {}),
-        // Inline vector/rank indexes and relations are not yet introspected from a
-        // package extension; their presence is surfaced via `warnDroppedTableFeatures`.
-        vectorIndexes: [],
+        // Inline `.vectorize()` stamps its owner, bare like every other name here; namespacing rewrites it.
+        vectorIndexes: (builder.vectorIndexes ?? []).map((index) => {
+            return {
+                ...(index.dimensions === undefined ? {} : { dimensions: index.dimensions }),
+                field: index.field,
+                ...(index.metadata === undefined ? {} : { metadata: index.metadata }),
+                ...(index.metric === undefined ? {} : { metric: index.metric }),
+                name: index.name,
+                table: bareName,
+            };
+        }),
     };
 };
 
