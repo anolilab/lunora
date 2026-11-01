@@ -163,7 +163,9 @@ const resultType = (type: Type, at: Node): Type | undefined => {
         return returned.getTypeArguments()[0];
     }
 
-    const promise = returned?.isUnion() ? returned.getUnionTypes().find((member) => member.getSymbol()?.getName() === "Promise") : undefined;
+    // Dispatch awaits the handler, so callers see `T` whether it returns `Promise<T>` or `Promise<T> | T`.
+    const candidates = returned?.isUnion() ? returned.getUnionTypes() : [returned];
+    const promise = candidates.find((member) => member?.getSymbol()?.getName() === "Promise");
 
     return promise?.getTypeArguments()[0] ?? returned;
 };

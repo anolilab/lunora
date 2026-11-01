@@ -267,6 +267,24 @@ export declare const functions: { join: ReturnType<typeof onConnect>; leave: Reg
         );
     });
 
+    it("renders an async handler's awaited result, as dispatch returns it", () => {
+        expect.assertions(1);
+
+        mkdirSync(join(workdir, "node_modules/async-component"), { recursive: true });
+        writeFileSync(join(workdir, "node_modules/async-component/package.json"), JSON.stringify({ name: "async-component", types: "index.d.ts" }));
+        writeFileSync(
+            join(workdir, "node_modules/async-component/index.d.ts"),
+            `export declare const functions: {
+    load: { readonly args: {}; readonly handler: (context: unknown, args: {}) => Promise<{ ready: boolean }>; readonly kind: "query"; readonly visibility?: "public" };
+};
+`,
+        );
+
+        expect(discover({ "load.ts": `import { functions } from "async-component";\nexport const { load } = functions;\n` })[0]?.returnType).toBe(
+            "{ ready: boolean; }",
+        );
+    });
+
     it("refuses a published function whose type leaves its visibility open", () => {
         expect.assertions(1);
 
