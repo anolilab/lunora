@@ -1032,7 +1032,7 @@ interface InternalQueryBuilder<Context, Args extends ArgsValidator, Output = und
         args: InferArgs<Args>;
         ctx: Context;
         signal: AbortSignal;
-    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredStream<Args, R, "internal">;
+    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredInternalStream<Args, R>;
     use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
 }
 ```
@@ -1982,19 +1982,33 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
 ### `RegisteredInternalAction` (type)
 
 ```ts
-type RegisteredInternalAction<A extends ArgsValidator, R> = RegisteredAction<A, R, "internal">;
+type RegisteredInternalAction<A extends ArgsValidator, R> = RegisteredAction<A, R, "internal"> & {
+    readonly visibility: "internal";
+};
 ```
 
 ### `RegisteredInternalMutation` (type)
 
 ```ts
-type RegisteredInternalMutation<A extends ArgsValidator, R> = RegisteredMutation<A, R, "internal">;
+type RegisteredInternalMutation<A extends ArgsValidator, R> = RegisteredMutation<A, R, "internal"> & {
+    readonly visibility: "internal";
+};
 ```
 
 ### `RegisteredInternalQuery` (type)
 
 ```ts
-type RegisteredInternalQuery<A extends ArgsValidator, R> = RegisteredQuery<A, R, "internal">;
+type RegisteredInternalQuery<A extends ArgsValidator, R> = RegisteredQuery<A, R, "internal"> & {
+    readonly visibility: "internal";
+};
+```
+
+### `RegisteredInternalStream` (type)
+
+```ts
+type RegisteredInternalStream<A extends ArgsValidator, R> = RegisteredStream<A, R, "internal"> & {
+    readonly visibility: "internal";
+};
 ```
 
 ### `RegisteredLifecycleHook` (type)
@@ -5965,6 +5979,10 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `RegisteredInternalQuery` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RegisteredInternalStream` (type)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 

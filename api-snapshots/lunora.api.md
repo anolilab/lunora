@@ -745,6 +745,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RegisteredInternalStream` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RegisteredLifecycleHook` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6281,6 +6285,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RegisteredInternalStream` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RegisteredLifecycleHook` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -8648,6 +8656,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RegisteredInternalQuery` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalStream` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

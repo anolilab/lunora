@@ -649,9 +649,16 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
 type RegisteredQuery<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "query", Visibility>;
 type RegisteredMutation<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "mutation", Visibility>;
 type RegisteredAction<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "action", Visibility>;
-type RegisteredInternalQuery<A extends ArgsValidator, R> = RegisteredQuery<A, R, "internal">;
-type RegisteredInternalMutation<A extends ArgsValidator, R> = RegisteredMutation<A, R, "internal">;
-type RegisteredInternalAction<A extends ArgsValidator, R> = RegisteredAction<A, R, "internal">;
+
+/**
+ * An internal registration. `visibility` is REQUIRED here, not optional: dispatch
+ * refuses a client call by the value's own marker, while codegen (for a published
+ * package) can only read the type, so the type may claim "internal" only for a
+ * value that carries it.
+ */
+type RegisteredInternalQuery<A extends ArgsValidator, R> = RegisteredQuery<A, R, "internal"> & { readonly visibility: "internal" };
+type RegisteredInternalMutation<A extends ArgsValidator, R> = RegisteredMutation<A, R, "internal"> & { readonly visibility: "internal" };
+type RegisteredInternalAction<A extends ArgsValidator, R> = RegisteredAction<A, R, "internal"> & { readonly visibility: "internal" };
 
 /**
  * Structural mirror of `@lunora/client`'s `FunctionReference` — the handle the
@@ -873,6 +880,9 @@ interface RegisteredStream<A extends ArgsValidator, R, Visibility extends Functi
     /** See {@link RegisteredFunction.visibility}. */
     readonly visibility?: Visibility;
 }
+
+/** An internal stream; `visibility` is required for the reason given on {@link RegisteredInternalQuery}. */
+type RegisteredInternalStream<A extends ArgsValidator, R> = RegisteredStream<A, R, "internal"> & { readonly visibility: "internal" };
 
 /**
  * Durability settings for a `.stream()` procedure.
@@ -2855,6 +2865,7 @@ export type {
     RegisteredInternalAction,
     RegisteredInternalMutation,
     RegisteredInternalQuery,
+    RegisteredInternalStream,
     RegisteredLifecycleHook,
     RegisteredMutation,
     RegisteredQuery,

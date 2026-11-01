@@ -209,6 +209,7 @@ export type {
     RegisteredInternalAction,
     RegisteredInternalMutation,
     RegisteredInternalQuery,
+    RegisteredInternalStream,
     RegisteredLifecycleHook,
     RegisteredMutation,
     RegisteredQuery,

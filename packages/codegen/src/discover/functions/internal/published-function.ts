@@ -235,6 +235,16 @@ const publishedFunctionIr = (at: Node, exportName: string, relativePath: string,
         );
     }
 
+    // Dispatch refuses a client call by the VALUE's marker, and an optional `visibility?: "internal"` lets the value
+    // omit it — the function would be served while the client `api` hid it. Only the required form is a promise.
+    if (visibility === "internal" && type.getProperty("visibility")?.isOptional() !== false) {
+        throw new LunoraError(
+            "PUBLISHED_FUNCTION_UNSUPPORTED",
+            `${relativePath}:${exportName} re-exports an internal function from a published package whose type makes \`visibility\` optional, so the value may not carry it. ` +
+                'Declare it with a `RegisteredInternal*` type, which requires `visibility: "internal"`.',
+        );
+    }
+
     const argumentsType = type.getProperty("args")?.getTypeAtLocation(at);
 
     // An empty args map has to mean "no arguments": the client treats such a function as holding nothing

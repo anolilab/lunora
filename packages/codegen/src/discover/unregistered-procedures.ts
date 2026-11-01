@@ -43,6 +43,7 @@ const REGISTRATION_BY_TYPE_NAME = new Map<string, { call: string; file?: string;
     ["RegisteredInternalAction", { call: "internalAction.input({ … }).action(handler)" }],
     ["RegisteredInternalMutation", { call: "internalMutation.input({ … }).mutation(handler)" }],
     ["RegisteredInternalQuery", { call: "internalQuery.input({ … }).query(handler)" }],
+    ["RegisteredInternalStream", { call: "internalQuery.input({ … }).stream(handler)" }],
     [
         "RegisteredLifecycleHook",
         {

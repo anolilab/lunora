@@ -187,11 +187,12 @@ export const { save } = functions;
         writeFileSync(join(workdir, "node_modules/stream-component/package.json"), JSON.stringify({ name: "stream-component", types: "index.d.ts" }));
         writeFileSync(
             join(workdir, "node_modules/stream-component/index.d.ts"),
-            `import type { RegisteredStream } from "@lunora/server";
+            `import type { RegisteredInternalStream, RegisteredStream } from "@lunora/server";
 import type { Validator } from "@lunora/values";
 export declare const functions: {
     ticks: RegisteredStream<{ roomId: Validator<string> }, { at: number }>;
-    audit: RegisteredStream<{}, string, "internal">;
+    audit: RegisteredInternalStream<{}, string>;
+    loose: RegisteredStream<{}, string, "internal">;
 };
 `,
         );
@@ -299,6 +300,24 @@ export declare const functions: { lobby: RegisteredRoom<{ text: string }> };
 
         expect(() => discover({ "rooms.ts": `import { functions } from "room-component";\nexport const { lobby } = functions;\n` })).toThrow(
             /re-exports a room from a published package/u,
+        );
+    });
+
+    it("refuses an internal function whose type lets the value omit its marker", () => {
+        expect.assertions(1);
+
+        mkdirSync(join(workdir, "node_modules/stream-component"), { recursive: true });
+        writeFileSync(join(workdir, "node_modules/stream-component/package.json"), JSON.stringify({ name: "stream-component", types: "index.d.ts" }));
+        writeFileSync(
+            join(workdir, "node_modules/stream-component/index.d.ts"),
+            `import type { RegisteredStream } from "@lunora/server";
+export declare const functions: { loose: RegisteredStream<{}, string, "internal"> };
+`,
+        );
+
+        // Dispatch would serve it (the value has no marker) while the client api hid it.
+        expect(() => discover({ "ticker.ts": `import { functions } from "stream-component";\nexport const { loose } = functions;\n` })).toThrow(
+            /makes `visibility` optional/u,
         );
     });
 

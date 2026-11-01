@@ -83,6 +83,7 @@ describe("registration-type parity (anti-drift lock for the dropped-registration
             "RegisteredInternalAction",
             "RegisteredInternalMutation",
             "RegisteredInternalQuery",
+            "RegisteredInternalStream",
             "RegisteredLifecycleHook",
             "RegisteredMigration",
             "RegisteredMutation",

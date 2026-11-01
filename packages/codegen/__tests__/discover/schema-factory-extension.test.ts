@@ -151,6 +151,20 @@ export const thing = defineThing({ key: "collab", limits: [1, -2], note: null })
         ).toStrictEqual(["collab_items", "todos"]);
     });
 
+    it("sees through a cast on the extended value", () => {
+        expect.assertions(1);
+
+        expect(
+            tableNames({
+                "schema.ts": `import { defineSchema, defineTable, v } from "@lunora/server";
+import { defineThing } from "test-component";
+const thing = defineThing({ key: "cast" });
+export default defineSchema({ todos: defineTable({ title: v.string() }) }).extend((thing.extension as never) satisfies never);
+`,
+            }),
+        ).toStrictEqual(["cast_items", "todos"]);
+    });
+
     it("resolves a component built in the schema module itself", () => {
         expect.assertions(1);
 

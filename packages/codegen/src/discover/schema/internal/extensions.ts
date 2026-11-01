@@ -470,10 +470,17 @@ const mergeExtension = (key: string, keyNode: TsNode, options: ObjectLiteralExpr
  * than crashing on inputs it can't statically resolve.
  */
 const mergeExtendCall = (extendCall: CallExpression, projectRoot: string | undefined): MergedExtension | undefined => {
-    const extendArgument = extendCall.getArguments()[0];
+    const rawArgument = extendCall.getArguments()[0];
 
-    if (!extendArgument) {
+    if (!rawArgument) {
         return undefined;
+    }
+
+    // `.extend(component.extension as SchemaExtension)`: the cast says nothing about which extension it is.
+    let extendArgument: TsNode = rawArgument;
+
+    while (Node.isParenthesizedExpression(extendArgument) || Node.isAsExpression(extendArgument) || Node.isSatisfiesExpression(extendArgument)) {
+        extendArgument = extendArgument.getExpression();
     }
 
     const resolved = resolveSchemaExtensionCall(extendArgument);
