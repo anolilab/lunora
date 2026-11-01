@@ -29,7 +29,9 @@
  * makes that the schema could express belongs in the schema, for that reason.
  *
  * ```ts
- * const mcp = createPaidMcpServer({ charge: { network: "base", recipient: { evm: env.PAYOUT } } });
+ * const mcp = createPaidMcpServer({
+ *   charge: { facilitator: { url: "https://facilitator.example/x402" }, network: "base", recipient: { evm: env.PAYOUT } },
+ * });
  * mcp.tool({ name: "ping", description: "health check", inputSchema: { properties: {}, type: "object" } }, () => text("pong"));
  * mcp.paidTool(
  *   { name: "premium_report", description: "the paid report", inputSchema: { properties: {}, type: "object" }, price: "$0.05" },

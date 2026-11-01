@@ -21,6 +21,7 @@ import type { X402ChargeConfig } from "../../src/config";
 import { stubFacilitator } from "./_facilitator";
 
 const chargeConfig: X402ChargeConfig = {
+    facilitator: { url: "https://facilitator.example/x402" },
     network: "base",
     price: "$0.01",
     recipient: { evm: "0x1111111111111111111111111111111111111111" },
@@ -56,7 +57,11 @@ describe("@lunora/x402 (workerd)", () => {
         expect.hasAssertions();
 
         const facilitator = stubFacilitator();
-        const gate = createProcedureChargeGate({ network: "base", recipient: { evm: "0x1111111111111111111111111111111111111111" } });
+        const gate = createProcedureChargeGate({
+            facilitator: { url: "https://facilitator.example/x402" },
+            network: "base",
+            recipient: { evm: "0x1111111111111111111111111111111111111111" },
+        });
 
         let dispatched = 0;
         const dispatch = (): Promise<Response> => {
@@ -97,6 +102,7 @@ describe("@lunora/x402 (workerd)", () => {
         stubFacilitator({ supported: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1" });
 
         const middleware = await createChargeMiddleware({
+            facilitator: { url: "https://facilitator.example/x402" },
             network: "solana-devnet",
             price: "$0.01",
             recipient: { svm: "GmaDrppBC7P5ARKV8g3djiwP89vz1jLK23V2GBjuAEGB" },
