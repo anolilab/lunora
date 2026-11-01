@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,11 +20,31 @@ const installFactoryPackage = (): void => {
     mkdirSync(packageDirectory, { recursive: true });
     writeFileSync(
         join(packageDirectory, "package.json"),
-        JSON.stringify({ exports: "./index.mjs", main: "index.mjs", name: "test-component", type: "module" }),
+        JSON.stringify({
+            exports: { ".": { import: "./index.mjs", types: "./index.d.ts" } },
+            main: "index.mjs",
+            name: "test-component",
+            type: "module",
+            types: "index.d.ts",
+        }),
+    );
+    writeFileSync(
+        join(packageDirectory, "index.d.ts"),
+        `export declare const defineThing: (options?: Record<string, unknown>) => {
+    extension: { key: string; tables: Record<string, unknown> };
+    functions: Record<string, never>;
+};
+export declare const track: (options?: Record<string, unknown>) => { extension: string };
+`,
     );
     writeFileSync(
         join(packageDirectory, "index.mjs"),
         `const s = (kind) => ({ kind, _meta: { column: { notNull: true } } });
+         import { writeFileSync } from "node:fs";
+         export const track = (options = {}) => {
+             writeFileSync(options.marker, "called");
+             return { extension: { key: "tracked", tables: { items: { shape: { name: s("string") }, indexes: [], shardMode: { kind: "root" } } } } };
+         };
          export const defineThing = (options = {}) => {
              const key = options.key ?? "thing";
              return { extension: { key, tables: { items: { shape: { name: s("string") }, indexes: [], shardMode: { kind: "root" } } } }, functions: {} };
@@ -83,6 +103,23 @@ export default defineSchema({ todos: defineTable({ title: v.string() }) }).exten
 `,
             }),
         ).toStrictEqual(["thing_items", "todos"]);
+    });
+
+    it("never calls a package export whose declared type is not a component factory", () => {
+        expect.assertions(2);
+
+        const marker = join(root, "called.txt");
+
+        expect(
+            tableNames({
+                "schema.ts": `import { defineSchema, defineTable, v } from "@lunora/server";
+import { track } from "test-component";
+const thing = track({ marker: ${JSON.stringify(marker)} });
+export default defineSchema({ todos: defineTable({ title: v.string() }) }).extend(thing.extension);
+`,
+            }),
+        ).toStrictEqual(["todos"]);
+        expect(existsSync(marker)).toBe(false);
     });
 
     it("does not copy options whose literal sets a prototype", () => {

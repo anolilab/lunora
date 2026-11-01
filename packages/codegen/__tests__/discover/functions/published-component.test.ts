@@ -1,11 +1,12 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import discoverFunctions from "../../../src/discover/functions";
+import { warnUnwiredComponents } from "../../../src/discover/functions/internal/registered-type";
 import { emitApi } from "../../../src/emit/api";
 import { emitFunctions } from "../../../src/emit/functions";
 import type { FunctionIR } from "../../../src/ir";
@@ -32,7 +33,16 @@ const discover = (files: Record<string, string>): FunctionIR[] => {
         writeFileSync(join(workdir, "lunora", name), source);
     }
 
-    return discoverFunctions(new Project({ skipAddingFilesFromTsConfig: true, tsConfigFilePath: join(workdir, "tsconfig.json") }), join(workdir, "lunora"));
+    const project = new Project({ skipAddingFilesFromTsConfig: true, tsConfigFilePath: join(workdir, "tsconfig.json") });
+    const functions = discoverFunctions(project, join(workdir, "lunora"));
+
+    // What `run-codegen` does once after discovery.
+    warnUnwiredComponents(
+        Object.keys(files).map((name) => project.getSourceFileOrThrow(join(workdir, "lunora", name))),
+        (source) => relative(join(workdir, "lunora"), source.getFilePath()),
+    );
+
+    return functions;
 };
 
 const summary = (functions: FunctionIR[]): Record<string, Pick<FunctionIR, "args" | "kind" | "lifecycle" | "returnType" | "visibility">> =>
@@ -134,6 +144,7 @@ export declare const functions: {
         flags: Validator<boolean[]>;
         mode: Validator<"draft" | "live">;
         note: Validator<string | null>;
+        note_id: Validator<string & { readonly __table: "notes" }>;
         owner: Validator<string & { readonly __brand: "owner" }>;
         point: Validator<{ x: number; label?: string }>;
         pinned: Validator<boolean | undefined>;
@@ -158,6 +169,7 @@ export const { save } = functions;
                 ],
             },
             note: { kind: "union", members: [{ kind: "null" }, { kind: "string" }] },
+            note_id: { kind: "id", tableName: "notes" },
             owner: { kind: "from", tsType: 'string & { readonly __brand: "owner"; }' },
             pinned: { inner: { kind: "boolean" }, kind: "optional" },
             point: { kind: "object", shape: { label: { inner: { kind: "string" }, kind: "optional" }, x: { kind: "number" } } },
@@ -207,7 +219,7 @@ export const presence = definePresence();
         }
     });
 
-    it("stays quiet when another module re-exports the component's functions", () => {
+    it("stays quiet when another module reads the component's functions, in any form", () => {
         expect.assertions(2);
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -217,12 +229,21 @@ export const presence = definePresence();
                 "collab.ts": `import { presence } from "./presence";
 export const { heartbeat } = presence.functions;
 `,
+                "rooms.ts": `import { roomPresence } from "./presence";
+const { functions } = roomPresence;
+export const listPresent = functions.listPresent;
+`,
+                "sweeper.ts": `import { sweepPresence } from "./presence";
+export const sweep = sweepPresence["functions"].sweep;
+`,
                 "presence.ts": `import { definePresence } from "@lunora/server";
 export const presence = definePresence();
+export const roomPresence = definePresence();
+export const sweepPresence = definePresence();
 `,
             });
 
-            expect(found.map((entry) => entry.exportName)).toStrictEqual(["heartbeat"]);
+            expect(found.map((entry) => entry.exportName)).toStrictEqual(["heartbeat", "listPresent", "sweep"]);
             expect(warn).not.toHaveBeenCalled();
         } finally {
             warn.mockRestore();

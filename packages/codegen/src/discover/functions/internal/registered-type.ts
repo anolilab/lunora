@@ -24,6 +24,30 @@ const registeredKindOf = (type: Type, at: Node): string | undefined => {
     return kind !== undefined && PROCEDURE_KINDS.has(kind) && type.getProperty("handler") !== undefined ? kind : undefined;
 };
 
+/** Whether `reference` reads its value's `functions`: `x.functions`, `x["functions"]`, or `const { functions } = x`. */
+const readsFunctions = (reference: Node): boolean => {
+    const parent = reference.getParent();
+
+    if (Node.isPropertyAccessExpression(parent) && parent.getExpression() === reference) {
+        return parent.getName() === "functions";
+    }
+
+    if (Node.isElementAccessExpression(parent) && parent.getExpression() === reference) {
+        const argument = parent.getArgumentExpression();
+
+        return argument !== undefined && Node.isStringLiteral(argument) && argument.getLiteralValue() === "functions";
+    }
+
+    // A reference whose parent is a declaration and is not its name is that declaration's initializer.
+    const pattern = Node.isVariableDeclaration(parent) && parent.getNameNode() !== reference ? parent.getNameNode() : undefined;
+
+    return (
+        pattern !== undefined &&
+        Node.isObjectBindingPattern(pattern) &&
+        pattern.getElements().some((element) => (element.getPropertyNameNode()?.getText() ?? element.getName()) === "functions")
+    );
+};
+
 /**
  * Warn about an exported component whose `functions` are never read anywhere in
  * the project: `export const presence = definePresence()` with no
@@ -52,11 +76,7 @@ const warnUnwiredComponents = (sources: ReadonlyArray<SourceFile>, relativePathO
                 continue;
             }
 
-            const read = nameNode.findReferencesAsNodes().some((reference) => {
-                const parent = reference.getParent();
-
-                return Node.isPropertyAccessExpression(parent) && parent.getExpression() === reference && parent.getName() === "functions";
-            });
+            const read = nameNode.findReferencesAsNodes().some((reference) => readsFunctions(reference));
 
             if (read) {
                 continue;

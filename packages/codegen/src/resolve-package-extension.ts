@@ -369,9 +369,10 @@ interface FactoryAccess {
 /**
  * Map `.extend(presence.extension)` to the factory call behind `presence` —
  * `const presence = definePresence({ ttlMs: 10_000 })`, in this file or in the
- * module it is imported from — when the factory is imported from a package and
- * every argument is a literal. The documented wiring for a published component
- * has exactly this shape, and no import binding names the extension itself.
+ * module it is imported from — when the factory is imported from a package,
+ * every argument is a literal, and its declared return type carries a schema
+ * extension there. The documented wiring for a published component has exactly
+ * this shape, and no import binding names the extension itself.
  */
 const factoryAccessOf = (argument: TsNode): FactoryAccess | undefined => {
     if (!Node.isPropertyAccessExpression(argument) || !Node.isIdentifier(argument.getExpression())) {
@@ -390,7 +391,11 @@ const factoryAccessOf = (argument: TsNode): FactoryAccess | undefined => {
 
     const args = call.getArguments().map((node) => literalOf(node));
 
-    if (args.includes(NOT_LITERAL)) {
+    // Codegen runs the call, so it must be a component factory by its declared type — an
+    // `extension` with `tables` — not any package export the source happens to call.
+    const extensionType = call.getReturnType().getProperty(argument.getName())?.getTypeAtLocation(call).getNonNullableType();
+
+    if (args.includes(NOT_LITERAL) || extensionType?.getProperty("tables") === undefined) {
         return undefined;
     }
 

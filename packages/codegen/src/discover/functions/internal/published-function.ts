@@ -61,7 +61,7 @@ const objectIr = (type: Type, at: Node, depth: number): ValidatorIR | undefined 
  * The IR for a value type, so every surface built from args — the client `api`,
  * OpenAPI, MCP schemas, the non-JS SDKs — sees a real kind rather than an opaque
  * one. Covers the shapes `@lunora/values` validators produce; anything else (a
- * branded `Id<…>`, a class, an intersection) is carried as `from` with its text.
+ * class, any other intersection) is carried as `from` with its text.
  */
 const valueIr = (type: Type, at: Node, depth: number): ValidatorIR => {
     if (depth > MAX_TYPE_DEPTH) {
@@ -76,6 +76,13 @@ const valueIr = (type: Type, at: Node, depth: number): ValidatorIR => {
 
     if (type.isStringLiteral() || type.isNumberLiteral() || type.isBooleanLiteral()) {
         return { kind: "literal", literalValue: type.getText(at) };
+    }
+
+    // `Id<"table">` is `string & { readonly __table: "table" }` — `@lunora/values`' brand for `v.id(...)`.
+    const tableName = type.isIntersection() ? literalProperty(type, "__table", at) : undefined;
+
+    if (tableName !== undefined) {
+        return { kind: "id", tableName };
     }
 
     if (type.isUnion()) {

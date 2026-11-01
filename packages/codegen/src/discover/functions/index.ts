@@ -1,5 +1,3 @@
-import { relative } from "node:path";
-
 import { LunoraError } from "@lunora/errors";
 import type { CallExpression, Project, SourceFile, VariableStatement } from "ts-morph";
 import { Node } from "ts-morph";
@@ -18,7 +16,6 @@ import { argsFromBuilderChain, outputFromBuilderChain, returnTypeFromBuilderCall
 import { argsFromCall, exposeFromBuilderChain, x402FromBuilderChain } from "./internal/expose";
 import lazyMetadataFromBuilderChain from "./internal/lazy-metadata";
 import publishedFunctionIr from "./internal/published-function";
-import { warnUnwiredComponents } from "./internal/registered-type";
 import { exportCallsOfDeclaration, exportPublishedBindingsOfDeclaration, resolveExpressionToCall } from "./internal/resolve-call";
 
 interface DiscoveredFunction {
@@ -462,12 +459,6 @@ const discoverFunctions = (project: Project, lunoraDirectory: string, options: {
 
         functions.push(...discoverFileFunctions(source, relativePath, options.lazyFunctions === true));
     }
-
-    // After the loop: every `lunora/` file is in the project, so a re-export in any of them counts.
-    warnUnwiredComponents(
-        filePaths.map((filePath) => project.getSourceFileOrThrow(filePath)),
-        (source) => relative(lunoraDirectory, source.getFilePath()),
-    );
 
     functions.sort((a, b) => `${a.filePath}:${a.exportName}`.localeCompare(`${b.filePath}:${b.exportName}`));
 

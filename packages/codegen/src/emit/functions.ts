@@ -11,6 +11,7 @@ import {
     baseSpecifiers,
     GENERATED_HEADER,
     IMPORT_PATH_RE,
+    isSensitiveFunction,
     renderArgsType,
     renderNamespaceTree,
     renderObjectKey,
@@ -661,7 +662,8 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
     // The interface field exists only where a stub can carry it, so a project with no
     // `v.sensitive` argument keeps byte-identical output. Agents count: their runtime
     // mutations (`agentSupplySecret`) are sensitive and are not in `functions`.
-    const hasSensitiveArgs = agents.length > 0 || functions.some((definition) => sensitiveArgumentNamesOf(definition.args).length > 0);
+    // The same predicate `run-codegen` gates the shard's masking on, or the shard reads a field this type lacks.
+    const hasSensitiveArgs = agents.length > 0 || functions.some((definition) => isSensitiveFunction(definition));
     const sensitiveArgsField = hasSensitiveArgs
         ? `    /**
      * Names of the arguments whose validators carry a \`v.sensitive\` marker. Read by the
