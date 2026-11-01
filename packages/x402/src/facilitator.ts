@@ -4,10 +4,8 @@
  * A **facilitator** is the third party that actually talks to the chain: it
  * `/verify`s a signed `PAYMENT-SIGNATURE` payload and `/settle`s it on-chain, so neither
  * the seller (charge rail) nor the buyer (pay rail) needs an RPC node or a
- * settlement key of its own. A facilitator must be configured explicitly — there
- * is no default, because the public `x402.org` facilitator serves testnets only.
- * CDP's hosted facilitator authenticates per request via a bearer token (see
- * {@link FacilitatorConfig}).
+ * settlement key of its own. CDP's hosted facilitator authenticates per request
+ * via a bearer token (see {@link FacilitatorConfig}).
  */
 import { HTTPFacilitatorClient } from "@x402/core/server";
 
