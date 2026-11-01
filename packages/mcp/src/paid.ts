@@ -81,11 +81,12 @@ type X402Price = number | string;
 
 /** Mirrors x402's charge config with the per-tool price omitted. */
 interface X402ChargeSettings {
+    /** Facilitator that verifies and settles payments. Required, no default. */
+    readonly facilitator: { readonly headers?: Record<string, string>; readonly url: string };
     /** Network this resource settles on. */
     readonly network: string;
     /** Everything else x402 accepts, forwarded untouched. */
     readonly [key: string]: unknown;
-
     /** Payout wallet(s), per network family. */
     readonly recipient: { readonly evm?: string; readonly svm?: string };
 }
