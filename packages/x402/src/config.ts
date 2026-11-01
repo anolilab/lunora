@@ -27,10 +27,13 @@ export interface FacilitatorConfig {
      * Base URL. **Required — there is no default.** The caller must supply a
      * working facilitator; the old `x402.org/facilitator` default is dead (404,
      * see #1436) and cannot serve as a public fallback. For CDP's hosted
-     * facilitator use `https://api.cdp.coinbase.com` and also set
-     * `headers.Authorization` to a CDP bearer token.
+     * facilitator use `https://api.cdp.coinbase.com/platform/v2/x402` and also
+     * set `headers.Authorization` to a CDP bearer token. Note CDP bearer JWTs
+     * expire after about 2 minutes, and the client does not refresh `headers`,
+     * so long-running servers must refresh the token and rebuild the client
+     * (or rotate `headers`) on expiry.
      */
-    readonly url?: string;
+    readonly url: string;
 }
 
 /**
@@ -165,7 +168,7 @@ export const resolveFacilitatorUrl = (facilitator?: FacilitatorConfig): string =
         throw new Error(
             "No facilitator URL configured. Pass `facilitator.url` to the charge/pay config. " +
                 "The old `x402.org/facilitator` default is dead (404); for CDP's hosted facilitator " +
-                "use `https://api.cdp.coinbase.com` and set `facilitator.headers.Authorization` to a CDP bearer token."
+                "use `https://api.cdp.coinbase.com/platform/v2/x402` and set `facilitator.headers.Authorization` to a CDP bearer token."
         );
     }
 

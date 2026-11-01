@@ -45,7 +45,7 @@ family installed, compile the package's declarations under `skipLibCheck`.
 
 - **EVM** (Base, Arbitrum, Ethereum, Polygon, …) is signed via [`@x402/evm`](https://npmjs.com/package/@x402/evm) + [viem](https://viem.sh); pass a raw CAIP-2 id for chains without a friendly alias.
 - **Solana** is signed via [`@x402/svm`](https://npmjs.com/package/@x402/svm).
-- **Facilitator** must be configured explicitly — there is no default. Provide `facilitator.url` for a self-hosted or CDP facilitator; CDP's hosted facilitator (`https://api.cdp.coinbase.com`) needs a bearer token in `facilitator.headers.Authorization`.
+- **Facilitator** must be configured explicitly — there is no default. Provide `facilitator.url` for a self-hosted or CDP facilitator; CDP's hosted facilitator (`https://api.cdp.coinbase.com/platform/v2/x402`) needs a bearer token in `facilitator.headers.Authorization` (note: CDP bearer JWTs expire after ~2 minutes and the client does not refresh `headers` — refresh the token and rebuild the client on expiry).
 
 ### Provider seams
 

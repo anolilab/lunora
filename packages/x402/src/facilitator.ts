@@ -6,7 +6,9 @@
  * the seller (charge rail) nor the buyer (pay rail) needs an RPC node or a
  * settlement key of its own. A facilitator must be configured explicitly — there
  * is no default. CDP's hosted facilitator authenticates per request via a bearer
- * token (see {@link FacilitatorConfig}).
+ * token (see {@link FacilitatorConfig}); note the CDP bearer JWT expires after
+ * about 2 minutes and the client does not refresh `headers`, so a long-running
+ * server must refresh the token and rebuild the client on expiry.
  */
 import { HTTPFacilitatorClient } from "@x402/core/server";
 

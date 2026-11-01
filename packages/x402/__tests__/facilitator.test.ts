@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { FacilitatorConfig } from "../src/config";
 import { createFacilitatorClient } from "../src/facilitator";
 
 describe("createFacilitatorClient", () => {
@@ -7,10 +8,12 @@ describe("createFacilitatorClient", () => {
         expect(() => createFacilitatorClient()).toThrow(/No facilitator URL configured/);
     });
 
-    it("throws when the facilitator config omits a url", () => {
-        expect(() => createFacilitatorClient({ headers: { authorization: "Bearer cdp-token" } })).toThrow(
-            /No facilitator URL configured/,
-        );
+    it("throws when the facilitator config omits a url (runtime guard for JS / dynamic config)", () => {
+        // `url` is required in the type, but the runtime guard still protects
+        // JavaScript callers and dynamically assembled config.
+        const config = { headers: { authorization: "Bearer cdp-token" } } as unknown as FacilitatorConfig;
+
+        expect(() => createFacilitatorClient(config)).toThrow(/No facilitator URL configured/);
     });
 
     it("honours an overridden facilitator url", () => {
