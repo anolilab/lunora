@@ -61,6 +61,16 @@ export default defineDefault;
                          shardMode: { kind: "global", backend: "hyperdrive" },
                      },
                      scratch: { shape: { note: s("string") }, indexes: [], memoryMode: true, shardMode: { kind: "root" } },
+                     events: {
+                         shape: { deletedAt: s("number"), expiresAt: s("number") },
+                         indexes: [],
+                         aggregateIndexes: [{ name: "byCount" }],
+                         commitOrderedMode: true,
+                         isPublic: true,
+                         softDeleteMode: { field: "deletedAt" },
+                         ttlPolicy: { field: "expiresAt" },
+                         shardMode: { kind: "root" },
+                     },
                  },
              },
          });
@@ -181,8 +191,8 @@ export default defineSchema({ todos: defineTable({ title: v.string() }) }).exten
         ).toStrictEqual([table, "todos"]);
     });
 
-    it("keeps a factory table's expiry, geo indexes, global backend and memory mode", () => {
-        expect.assertions(2);
+    it("keeps a factory table's declarations: expiry, indexes, backend, memory, soft delete, visibility", () => {
+        expect.assertions(3);
 
         const discovered = tables({
             "schema.ts": `import { defineSchema, defineTable, v } from "@lunora/server";
@@ -195,6 +205,13 @@ export default defineSchema({ todos: defineTable({ title: v.string() }) }).exten
 
         // `.memory()` rows are cleared on wake; dropping the flag would keep them.
         expect(discovered.find((table) => table.name === "rich_scratch")?.memory).toBe(true);
+        expect(discovered.find((table) => table.name === "rich_events")).toMatchObject({
+            aggregateIndexed: true,
+            commitOrdered: true,
+            isPublic: true,
+            softDelete: { field: "deletedAt" },
+            ttl: { field: "expiresAt" },
+        });
         expect(spots).toMatchObject({
             geoIndexes: [{ field: "loc", name: "byLoc", precision: 6 }],
             globalBackend: "hyperdrive",

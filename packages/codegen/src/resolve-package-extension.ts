@@ -40,9 +40,13 @@ interface RuntimeValidator {
 
 /** A runtime `defineTable(...)` builder, duck-typed to the fields the IR needs. */
 interface RuntimeTableBuilder {
+    aggregateIndexes?: ReadonlyArray<unknown>;
+    commitOrderedMode?: boolean;
+    externalSource?: unknown;
     geoIndexes?: ReadonlyArray<{ field: string; name: string; precision?: number }>;
     indexes?: ReadonlyArray<{ fields: ReadonlyArray<string>; name: string; unique?: boolean }>;
     isExternallyManaged?: boolean;
+    isPublic?: boolean;
     memoryMode?: boolean;
     // Carried only to detect (and warn about) features the runtime path does not
     // yet convert — see the drop-warning in `runtimeTableToIR`.
@@ -58,6 +62,7 @@ interface RuntimeTableBuilder {
     }>;
     shape?: Record<string, RuntimeValidator>;
     shardMode?: { backend?: string; field?: string; kind: string };
+    softDeleteMode?: { field: string };
     ttlPolicy?: { after?: number; field: string };
     vectorIndexes?: ReadonlyArray<unknown>;
 }
@@ -223,6 +228,10 @@ const warnDroppedTableFeatures = (builder: RuntimeTableBuilder, bareName: string
         dropped.push("vector indexes");
     }
 
+    if (builder.externalSource !== undefined) {
+        dropped.push("an external source");
+    }
+
     if (dropped.length > 0) {
         // eslint-disable-next-line no-console -- make the limitation visible rather than silently emit an incomplete type.
         console.warn(
@@ -243,7 +252,11 @@ const runtimeTableToIR = (builder: RuntimeTableBuilder, bareName: string): Table
     const shardMode = shardModeToIR(builder.shardMode);
 
     return {
+        ...(builder.aggregateIndexes && builder.aggregateIndexes.length > 0 ? { aggregateIndexed: true as const } : {}),
+        ...(builder.commitOrderedMode === true ? { commitOrdered: true } : {}),
         ...(builder.isExternallyManaged ? { externallyManaged: true } : {}),
+        // Under `.rls("required")` a table that lost `.public()` here would be refused at runtime.
+        ...(builder.isPublic === true ? { isPublic: true } : {}),
         geoIndexes: (builder.geoIndexes ?? []).map(({ field, name, precision }) => {
             return { field, name, ...(precision === undefined ? {} : { precision }) };
         }),
@@ -266,6 +279,8 @@ const runtimeTableToIR = (builder: RuntimeTableBuilder, bareName: string): Table
         }),
         shape: Object.fromEntries(Object.entries(shape).map(([name, validator]) => [name, runtimeValidatorToIR(validator)])),
         shardMode,
+        // The TTL sweep skips tombstones through this field; without it, expired deleted rows keep the alarm running.
+        ...(builder.softDeleteMode ? { softDelete: { field: builder.softDeleteMode.field } } : {}),
         ...(builder.ttlPolicy
             ? { ttl: { field: builder.ttlPolicy.field, ...(builder.ttlPolicy.after === undefined ? {} : { after: builder.ttlPolicy.after }) } }
             : {}),
