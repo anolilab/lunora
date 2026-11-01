@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createJiti } from "jiti";
-import type { CallExpression, Node as TsNode } from "ts-morph";
+import type { CallExpression, ImportDeclaration, Node as TsNode } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { ColumnMetaIR, IndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir";
@@ -358,6 +358,30 @@ const unwrapCall = (node: TsNode): CallExpression | undefined => {
     return Node.isParenthesizedExpression(node) || Node.isAsExpression(node) || Node.isSatisfiesExpression(node) ? unwrapCall(node.getExpression()) : undefined;
 };
 
+/**
+ * The export of `importDeclaration` a factory call reaches: the named or default
+ * import `binding` is, or — for `ns.defineX(...)` — the namespace import's
+ * `defineX`. Matched by symbol, not by name, so a local function shadowing an
+ * import's name is not taken for the package factory.
+ */
+const importedNameOf = (importDeclaration: ImportDeclaration, callee: TsNode, binding: TsNode): string | undefined => {
+    const bound = binding.getSymbol()?.compilerSymbol;
+    const isBinding = (node: TsNode | undefined): boolean => bound !== undefined && node?.getSymbol()?.compilerSymbol === bound;
+
+    if (Node.isPropertyAccessExpression(callee)) {
+        return isBinding(importDeclaration.getNamespaceImport()) ? callee.getName() : undefined;
+    }
+
+    if (isBinding(importDeclaration.getDefaultImport())) {
+        return "default";
+    }
+
+    return importDeclaration
+        .getNamedImports()
+        .find((specifier) => isBinding(specifier.getAliasNode() ?? specifier.getNameNode()))
+        ?.getName();
+};
+
 /** A component built by calling a package factory: which module and export to call, with what, and where its extension sits. */
 interface FactoryAccess {
     args: unknown[];
@@ -385,7 +409,10 @@ const factoryAccessOf = (argument: TsNode): FactoryAccess | undefined => {
     const call = initializer === undefined ? undefined : unwrapCall(initializer);
     const callee = call?.getExpression();
 
-    if (call === undefined || callee === undefined || !Node.isIdentifier(callee)) {
+    // `defineThing(...)` names a named or default import; `pkg.defineThing(...)` a namespace import's export.
+    const binding = callee !== undefined && Node.isPropertyAccessExpression(callee) ? callee.getExpression() : callee;
+
+    if (call === undefined || callee === undefined || binding === undefined || !Node.isIdentifier(binding)) {
         return undefined;
     }
 
@@ -407,13 +434,10 @@ const factoryAccessOf = (argument: TsNode): FactoryAccess | undefined => {
             continue;
         }
 
-        for (const named of importDeclaration.getNamedImports()) {
-            // By symbol, not by name: a local function shadowing the import's name is not the package factory.
-            const local = (named.getAliasNode() ?? named.getNameNode()).getSymbol()?.compilerSymbol;
+        const importedName = importedNameOf(importDeclaration, callee, binding);
 
-            if (local !== undefined && local === callee.getSymbol()?.compilerSymbol) {
-                return { args, importedName: named.getName(), moduleSpecifier, propertyPath: [argument.getName()] };
-            }
+        if (importedName !== undefined) {
+            return { args, importedName, moduleSpecifier, propertyPath: [argument.getName()] };
         }
     }
 

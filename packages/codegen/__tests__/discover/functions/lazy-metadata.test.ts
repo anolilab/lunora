@@ -164,7 +164,8 @@ describe("lazy metadata discovery", () => {
         expect(byName.get("remove")?.meta).toStrictEqual({ auth: "admin", rateLimit: { per: 60 } });
         expect(byName.get("computed")?.meta).toBe("unloaded");
         expect(byName.get("plain")).not.toHaveProperty("meta");
-        expect(emitted).toContain('[Symbol.for("lunora.procedure.meta")]: {"auth":"admin","rateLimit":{"per":60}}');
+        // Deep-frozen like the builder's own copy, so a reader cannot change it before the module loads.
+        expect(emitted).toContain('[Symbol.for("lunora.procedure.meta")]: Object.freeze({ "auth": "admin", "rateLimit": Object.freeze({ "per": 60 }) })');
     });
 
     it("preserves public credential-cache exclusions and the last authored metadata", () => {

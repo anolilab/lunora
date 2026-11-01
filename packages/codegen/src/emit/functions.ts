@@ -103,6 +103,25 @@ const eagerModulePaths = (
         ...shapes.map((shape) => shape.filePath),
     ]);
 
+/**
+ * A JSON value as a deep-frozen literal. The builder deep-freezes `.meta()` on a
+ * loaded function, so the stub standing in for it must not hand out an object a
+ * reader can mutate and see change before the module loads.
+ */
+const renderFrozenLiteral = (value: unknown): string => {
+    if (Array.isArray(value)) {
+        return `Object.freeze([${value.map((entry) => renderFrozenLiteral(entry)).join(", ")}])`;
+    }
+
+    if (value !== null && typeof value === "object") {
+        const entries = Object.entries(value).map(([key, entry]) => `${JSON.stringify(key)}: ${renderFrozenLiteral(entry)}`);
+
+        return `Object.freeze({ ${entries.join(", ")} })`;
+    }
+
+    return JSON.stringify(value);
+};
+
 // Split this generated lookup so no-secrets can keep checking strings without
 // mistaking a framework access for a credential-shaped literal.
 const renderFunctionTableLookup = (table: "LUNORA_FUNCTIONS" | "LUNORA_FUNCTION_MANIFEST"): string => `${table}[functionPath]`;
@@ -221,7 +240,7 @@ const renderFunctionRegistry = (
                     ...(definition.socket === undefined ? {} : { auth: definition.socket.auth, socketPath: definition.socket.path }),
                 },
                 // `procedureMeta(fn)` reads the stub until the module loads; the key is `@lunora/server`'s `PROCEDURE_META`.
-            )}${definition.meta === undefined ? "" : `, [Symbol.for("lunora.procedure.meta")]: ${JSON.stringify(definition.meta)}`} } satisfies RegisteredLunoraFunction & Pick<FunctionManifestEntry, "argumentDescriptors" | "channel" | "expose">,`;
+            )}${definition.meta === undefined ? "" : `, [Symbol.for("lunora.procedure.meta")]: ${renderFrozenLiteral(definition.meta)}`} } satisfies RegisteredLunoraFunction & Pick<FunctionManifestEntry, "argumentDescriptors" | "channel" | "expose">,`;
         })
         .join("\n");
 

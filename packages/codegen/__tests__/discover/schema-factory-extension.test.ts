@@ -35,6 +35,8 @@ const installFactoryPackage = (): void => {
     functions: Record<string, never>;
 };
 export declare const track: (options?: Record<string, unknown>) => { extension: string };
+declare const defineDefault: typeof defineThing;
+export default defineDefault;
 `,
     );
     writeFileSync(
@@ -45,6 +47,7 @@ export declare const track: (options?: Record<string, unknown>) => { extension: 
              writeFileSync(options.marker, "called");
              return { extension: { key: "tracked", tables: { items: { shape: { name: s("string") }, indexes: [], shardMode: { kind: "root" } } } } };
          };
+         export default (options = {}) => defineThing({ key: "byDefault", ...options });
          export const defineThing = (options = {}) => {
              const key = options.key ?? "thing";
              return { extension: { key, tables: { items: { shape: { name: s("string") }, indexes: [], shardMode: { kind: "root" } } } }, functions: {} };
@@ -134,6 +137,22 @@ export default defineSchema({ todos: defineTable({ title: v.string() }) }).exten
 `,
             }),
         ).toStrictEqual(["todos"]);
+    });
+
+    it.each([
+        ["a default import", `import defineThing from "test-component";\nconst thing = defineThing();`, "byDefault_items"],
+        ["a namespace import", `import * as components from "test-component";\nconst thing = components.defineThing({ key: "spaced" });`, "spaced_items"],
+    ])("resolves a factory reached through %s", (_form, binding, table) => {
+        expect.assertions(1);
+
+        expect(
+            tableNames({
+                "schema.ts": `import { defineSchema, defineTable, v } from "@lunora/server";
+${binding}
+export default defineSchema({ todos: defineTable({ title: v.string() }) }).extend(thing.extension);
+`,
+            }),
+        ).toStrictEqual([table, "todos"]);
     });
 
     it("does not call a factory whose options are not literals", () => {
