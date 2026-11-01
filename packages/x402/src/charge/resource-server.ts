@@ -17,7 +17,7 @@ import { importOptionalPeer } from "../optional-peer";
 /**
  * Construct and initialise the resource server for `config`. Registers the exact
  * scheme for the configured network's family (EVM or SVM) scoped to that one
- * CAIP-2 network, wired to `config.facilitator` (or the public default).
+ * CAIP-2 network, wired to the required `config.facilitator`.
  */
 export const buildResourceServer = async (config: X402ChargeConfig): Promise<x402ResourceServer> => {
     const { x402ResourceServer: ResourceServer } = await import("@x402/core/server");

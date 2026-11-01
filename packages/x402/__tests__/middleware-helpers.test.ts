@@ -10,16 +10,16 @@ describe("resolvePayTo", () => {
     });
 
     it("returns the SVM address for a Solana network", () => {
-        expect(resolvePayTo({ network: "solana", price: "0.01", recipient: { svm: "So11111111111111111111111111111111111111112" } })).toBe(
+        expect(resolvePayTo({ network: "solana", recipient: { svm: "So11111111111111111111111111111111111111112" } })).toBe(
             "So11111111111111111111111111111111111111112",
         );
     });
 
     it("throws when the matching recipient is missing", () => {
-        expect(() => resolvePayTo({ network: "base", price: "0.01", recipient: {} })).toThrow(
+        expect(() => resolvePayTo({ network: "base", recipient: {} })).toThrow(
             expect.objectContaining({ code: "ENV_INVALID", message: expect.stringMatching(/recipient\.evm/) }),
         );
-        expect(() => resolvePayTo({ network: "solana", price: "0.01", recipient: { evm: "0x1111111111111111111111111111111111111111" } })).toThrow(
+        expect(() => resolvePayTo({ network: "solana", recipient: { evm: "0x1111111111111111111111111111111111111111" } })).toThrow(
             expect.objectContaining({ code: "ENV_INVALID", message: expect.stringMatching(/recipient\.svm/) }),
         );
     });

@@ -45,17 +45,17 @@ family installed, compile the package's declarations under `skipLibCheck`.
 
 - **EVM** (Base, Arbitrum, Ethereum, Polygon, …) is signed via [`@x402/evm`](https://npmjs.com/package/@x402/evm) + [viem](https://viem.sh); pass a raw CAIP-2 id for chains without a friendly alias.
 - **Solana** is signed via [`@x402/svm`](https://npmjs.com/package/@x402/svm).
-- **Facilitator** defaults to the public, Coinbase-operated `https://x402.org/facilitator` (no key required); override it for a self-hosted or CDP facilitator.
+- **Facilitator** (charge rail) must be configured explicitly — there is no default. The public `https://x402.org/facilitator` serves testnets only, so a default would fail on a mainnet payment route. For CDP's hosted facilitator pass `https://api.cdp.coinbase.com/platform/v2/x402` plus a bearer token in `facilitator.headers.Authorization`; otherwise point at a self-hosted facilitator.
 
 ### Provider seams
 
 Three parts of the exchange are pluggable, and each is chosen independently:
 
-| Seam               | Default                                       | How to change it                                                                         |
-| ------------------ | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| **Facilitator**    | public `https://x402.org/facilitator`         | `facilitator: { url, headers }` — self-hosted or a keyed CDP facilitator.                |
-| **Wallet custody** | `"raw-key"` (a `ctx.secrets` key, EVM + SVM)  | `"cdp"` (Coinbase-managed, EVM) or the `"signer"` escape hatch (any provider you adapt). |
-| **Scheme / chain** | exact scheme picked by `network` (EVM vs SVM) | choose the `network`; `@x402/evm` and `@x402/svm` register the matching exact scheme.    |
+| Seam               | Default                                       | How to change it                                                                                                                                              |
+| ------------------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Facilitator**    | (required — no default)                       | `facilitator: { url, headers }` — `https://x402.org/facilitator` for testnets, `https://api.cdp.coinbase.com/platform/v2/x402` for keyed CDP, or self-hosted. |
+| **Wallet custody** | `"raw-key"` (a `ctx.secrets` key, EVM + SVM)  | `"cdp"` (Coinbase-managed, EVM) or the `"signer"` escape hatch (any provider you adapt).                                                                      |
+| **Scheme / chain** | exact scheme picked by `network` (EVM vs SVM) | choose the `network`; `@x402/evm` and `@x402/svm` register the matching exact scheme.                                                                         |
 
 The pay rail's `signer` config selects wallet custody:
 

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProcedureChargeGate } from "../src/charge/procedure";
 
 const gateConfig = {
+    facilitator: { url: "https://facilitator.example/x402" },
     network: "base",
     recipient: { evm: "0x1111111111111111111111111111111111111111" },
 } as const;

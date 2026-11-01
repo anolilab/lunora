@@ -1,11 +1,11 @@
 /**
- * Facilitator wiring shared by both rails.
+ * Facilitator wiring for the charge rail.
  *
  * A **facilitator** is the third party that actually talks to the chain: it
  * `/verify`s a signed `PAYMENT-SIGNATURE` payload and `/settle`s it on-chain, so neither
  * the seller (charge rail) nor the buyer (pay rail) needs an RPC node or a
- * settlement key of its own. The public `x402.org/facilitator` needs no auth; a
- * private / CDP facilitator authenticates per request.
+ * settlement key of its own. CDP's hosted facilitator authenticates per request
+ * via a bearer token (see {@link FacilitatorConfig}).
  */
 import { HTTPFacilitatorClient } from "@x402/core/server";
 
@@ -18,8 +18,8 @@ import { resolveFacilitatorUrl } from "./config";
  * `config.headers` (e.g. a CDP bearer token) are applied to every facilitator
  * call — `@x402/core` splits auth per endpoint (`verify` / `settle` /
  * `supported`), so the same header map is handed to each. With no config the
- * client points at the public {@link resolveFacilitatorUrl default} and sends no
- * auth headers.
+ * client throws (fail loud) — a facilitator URL is required; see
+ * {@link resolveFacilitatorUrl}.
  */
 export const createFacilitatorClient = (config?: FacilitatorConfig): HTTPFacilitatorClient => {
     const url = resolveFacilitatorUrl(config);

@@ -12,6 +12,7 @@ vi.mock(import("../src/serve-stateless"), async (importOriginal) => {
 
 /** The worker-level x402 charge vocabulary shared by every paid tool. */
 const charge = {
+    facilitator: { url: "https://facilitator.example/x402" },
     network: "base",
     recipient: { evm: "0x1111111111111111111111111111111111111111" },
 } as const;

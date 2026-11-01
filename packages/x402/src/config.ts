@@ -18,19 +18,20 @@ import type { X402Network } from "./networks";
 import type { SpendPolicy } from "./pay/policy";
 
 /**
- * The public, Coinbase-operated facilitator (verify + settle). It needs no API
- * key. Override with a self-hosted or CDP facilitator via {@link FacilitatorConfig}.
- */
-export const DEFAULT_FACILITATOR_URL = "https://x402.org/facilitator";
-
-/**
  * How to reach a facilitator's `/verify` + `/settle` endpoints.
  */
 export interface FacilitatorConfig {
     /** Extra headers for a private facilitator (e.g. a CDP bearer token). */
     readonly headers?: Record<string, string>;
-    /** Base URL. Defaults to {@link DEFAULT_FACILITATOR_URL}. */
-    readonly url?: string;
+
+    /**
+     * Base URL. **Required — there is no default.** The client appends
+     * `/verify`, `/settle` and `/supported`, so pass the base, not an endpoint:
+     * CDP's hosted facilitator is `https://api.cdp.coinbase.com/platform/v2/x402`
+     * (plus a bearer token in `headers.Authorization`), and the public,
+     * testnet-only facilitator is `https://x402.org/facilitator`.
+     */
+    readonly url: string;
 }
 
 /**
@@ -62,7 +63,8 @@ export interface X402Recipient {
  * address** — no private key — because the facilitator performs settlement.
  */
 export interface X402ChargeConfig {
-    readonly facilitator?: FacilitatorConfig;
+    /** Facilitator that verifies and settles payments. Required — no default. */
+    readonly facilitator: FacilitatorConfig;
     /** Network this resource settles on. */
     readonly network: X402Network;
 
@@ -154,6 +156,21 @@ export type X402SignerConfig =
       };
 
 /**
- * Resolve a facilitator's base URL, applying the public default.
+ * Resolve a facilitator's base URL.
+ *
+ * There is **no default**: the public `https://x402.org/facilitator` only serves
+ * testnets, so a hardcoded fallback would fail on a mainnet payment route. Fail
+ * loud instead of picking a facilitator that may not serve the configured network.
  */
-export const resolveFacilitatorUrl = (facilitator?: FacilitatorConfig): string => facilitator?.url ?? DEFAULT_FACILITATOR_URL;
+export const resolveFacilitatorUrl = (facilitator?: FacilitatorConfig): string => {
+    if (facilitator?.url === undefined || facilitator.url.length === 0) {
+        throw new Error(
+            "No facilitator URL configured. Pass `facilitator.url` in the charge config. " +
+                "The public `https://x402.org/facilitator` serves testnets only; for CDP's hosted facilitator " +
+                "use `https://api.cdp.coinbase.com/platform/v2/x402` and set `facilitator.headers.Authorization` " +
+                "to a CDP bearer token, or point at a self-hosted facilitator.",
+        );
+    }
+
+    return facilitator.url;
+};

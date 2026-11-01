@@ -95,7 +95,12 @@ const paymentSignatureFor = (challenge: Response): string => {
     );
 };
 
-const gate = () => createProcedureChargeGate({ network: "base", recipient: { evm: RECIPIENT } });
+const gate = () =>
+    createProcedureChargeGate({
+        facilitator: { url: "https://facilitator.example/x402" },
+        network: "base",
+        recipient: { evm: RECIPIENT },
+    });
 
 describe("paid (.x402) procedures on the REST surface", () => {
     afterEach(() => {
