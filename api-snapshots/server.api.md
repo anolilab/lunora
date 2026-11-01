@@ -3892,13 +3892,17 @@ const mergeSchemaExtension: <T extends Record<string, TableDefinition>, X extend
 ### `onConnect` (const)
 
 ```ts
-const onConnect: (handler: LifecycleHandler) => RegisteredLifecycleHook;
+const onConnect: (handler: LifecycleHandler) => RegisteredLifecycleHook & {
+    readonly lifecycle: "connect";
+};
 ```
 
 ### `onDisconnect` (const)
 
 ```ts
-const onDisconnect: (handler: LifecycleHandler) => RegisteredLifecycleHook;
+const onDisconnect: (handler: LifecycleHandler) => RegisteredLifecycleHook & {
+    readonly lifecycle: "disconnect";
+};
 ```
 
 ### `onQueryChange` (const)
@@ -3910,7 +3914,9 @@ const onQueryChange: <T>(select: ReactorSelect<T>, handler: ReactorHandler<T>) =
 ### `onShardInit` (const)
 
 ```ts
-const onShardInit: (handler: ShardInitHandler) => RegisteredLifecycleHook;
+const onShardInit: (handler: ShardInitHandler) => RegisteredLifecycleHook & {
+    readonly lifecycle: "init";
+};
 ```
 
 ### `onWhisper` (const)

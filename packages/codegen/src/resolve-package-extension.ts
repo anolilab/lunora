@@ -38,11 +38,23 @@ interface RuntimeValidator {
     kind?: string;
 }
 
+/** A runtime `.source(...)` definition, duck-typed to the fields the IR records. */
+interface RuntimeExternalSource {
+    binding?: unknown;
+    columns?: unknown;
+    idColumn?: unknown;
+    mode?: unknown;
+    query?: unknown;
+    reconcileEveryMs?: unknown;
+    softDeleteColumn?: unknown;
+    tenantBy?: unknown;
+}
+
 /** A runtime `defineTable(...)` builder, duck-typed to the fields the IR needs. */
 interface RuntimeTableBuilder {
     aggregateIndexes?: ReadonlyArray<unknown>;
     commitOrderedMode?: boolean;
-    externalSource?: unknown;
+    externalSource?: RuntimeExternalSource;
     geoIndexes?: ReadonlyArray<{ field: string; name: string; precision?: number }>;
     indexes?: ReadonlyArray<{ fields: ReadonlyArray<string>; name: string; unique?: boolean }>;
     isExternallyManaged?: boolean;
@@ -228,16 +240,29 @@ const warnDroppedTableFeatures = (builder: RuntimeTableBuilder, bareName: string
         dropped.push("vector indexes");
     }
 
-    if (builder.externalSource !== undefined) {
-        dropped.push("an external source");
-    }
-
     if (dropped.length > 0) {
         // eslint-disable-next-line no-console -- make the limitation visible rather than silently emit an incomplete type.
         console.warn(
             `@lunora/codegen: package schema-extension table "${bareName}" declares ${dropped.join(" + ")}, which are not yet introspected from a node_modules extension — they will be absent from the generated types.`,
         );
     }
+};
+
+/** A runtime `.source(...)` definition as the AST path reads it — the same fields, from the value instead of the literal. */
+const externalSourceToIR = (source: RuntimeExternalSource): NonNullable<TableIR["externalSource"]> => {
+    const text = (key: "binding" | "idColumn" | "mode" | "query"): string | undefined => (typeof source[key] === "string" ? source[key] : undefined);
+    const columns = Array.isArray(source.columns) ? source.columns.filter((column): column is string => typeof column === "string") : undefined;
+
+    return {
+        binding: text("binding") ?? "",
+        ...(columns === undefined ? {} : { columns }),
+        hasReconcile: source.reconcileEveryMs !== undefined,
+        hasSoftDelete: source.softDeleteColumn !== undefined,
+        hasTenantBy: source.tenantBy !== undefined,
+        ...(text("idColumn") === undefined ? {} : { idColumn: text("idColumn") }),
+        ...(text("mode") === undefined ? {} : { mode: text("mode") }),
+        ...(text("query") === undefined ? {} : { query: text("query") }),
+    };
 };
 
 /** Convert one runtime table builder to a BARE-named {@link TableIR} (the caller applies the extension-key prefix). */
@@ -255,6 +280,8 @@ const runtimeTableToIR = (builder: RuntimeTableBuilder, bareName: string): Table
         ...(builder.aggregateIndexes && builder.aggregateIndexes.length > 0 ? { aggregateIndexed: true as const } : {}),
         ...(builder.commitOrderedMode === true ? { commitOrdered: true } : {}),
         ...(builder.isExternallyManaged ? { externallyManaged: true } : {}),
+        // Without it the shard has no sourced table, so its polling and bootstrap are never generated.
+        ...(builder.externalSource ? { externalSource: externalSourceToIR(builder.externalSource) } : {}),
         // Under `.rls("required")` a table that lost `.public()` here would be refused at runtime.
         ...(builder.isPublic === true ? { isPublic: true } : {}),
         geoIndexes: (builder.geoIndexes ?? []).map(({ field, name, precision }) => {

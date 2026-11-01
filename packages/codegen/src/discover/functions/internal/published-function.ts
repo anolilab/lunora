@@ -181,6 +181,17 @@ const publishedFunctionIr = (at: Node, exportName: string, relativePath: string,
 
     const base = { ...(description ? { description } : {}), exportName, filePath: relativePath, kind: kind as FunctionIR["kind"] };
     const lifecycle = literalProperty(type, "lifecycle", at);
+    // Every registration has an optional `lifecycle?`; only a hook's is required. One whose moment is not a
+    // single literal cannot be routed, and the visibility advice below would not help it.
+    const lifecycleProperty = type.getProperty("lifecycle");
+
+    if (lifecycle === undefined && lifecycleProperty !== undefined && !lifecycleProperty.isOptional()) {
+        throw new LunoraError(
+            "PUBLISHED_FUNCTION_UNSUPPORTED",
+            `${relativePath}:${exportName} re-exports a lifecycle hook from a published package whose type does not say which moment it runs at. ` +
+                'Declare it with its moment, e.g. `RegisteredLifecycleHook & { readonly lifecycle: "disconnect" }` (what `onDisconnect` returns).',
+        );
+    }
 
     if (lifecycle !== undefined) {
         if (!LIFECYCLE_MOMENTS.has(lifecycle as LifecycleMoment)) {

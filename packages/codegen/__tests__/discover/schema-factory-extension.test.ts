@@ -61,6 +61,13 @@ export default defineDefault;
                          shardMode: { kind: "global", backend: "hyperdrive" },
                      },
                      scratch: { shape: { note: s("string") }, indexes: [], memoryMode: true, shardMode: { kind: "root" } },
+                     feed: {
+                         shape: { title: s("string") },
+                         indexes: [],
+                         isExternallyManaged: true,
+                         externalSource: { binding: "HYPERDRIVE", columns: ["title"], mode: "incremental", query: "select * from feed", reconcileEveryMs: 60000, tenantBy: () => [] },
+                         shardMode: { kind: "root" },
+                     },
                      events: {
                          shape: { deletedAt: s("number"), expiresAt: s("number") },
                          indexes: [],
@@ -191,8 +198,8 @@ export default defineSchema({ todos: defineTable({ title: v.string() }) }).exten
         ).toStrictEqual([table, "todos"]);
     });
 
-    it("keeps a factory table's declarations: expiry, indexes, backend, memory, soft delete, visibility", () => {
-        expect.assertions(3);
+    it("keeps a factory table's declarations: expiry, indexes, backend, memory, soft delete, visibility, source", () => {
+        expect.assertions(4);
 
         const discovered = tables({
             "schema.ts": `import { defineSchema, defineTable, v } from "@lunora/server";
@@ -205,6 +212,16 @@ export default defineSchema({ todos: defineTable({ title: v.string() }) }).exten
 
         // `.memory()` rows are cleared on wake; dropping the flag would keep them.
         expect(discovered.find((table) => table.name === "rich_scratch")?.memory).toBe(true);
+        // A sourced table the shard does not know about is never polled or bootstrapped.
+        expect(discovered.find((table) => table.name === "rich_feed")?.externalSource).toStrictEqual({
+            binding: "HYPERDRIVE",
+            columns: ["title"],
+            hasReconcile: true,
+            hasSoftDelete: false,
+            hasTenantBy: true,
+            mode: "incremental",
+            query: "select * from feed",
+        });
         expect(discovered.find((table) => table.name === "rich_events")).toMatchObject({
             aggregateIndexed: true,
             commitOrdered: true,

@@ -239,6 +239,30 @@ export declare const functions: { ping: RegisteredMutation<{}, void>; open: Regi
         );
     });
 
+    it("routes a published hook by the moment its factory returns, and names the fix for one that hides it", () => {
+        expect.assertions(2);
+
+        mkdirSync(join(workdir, "node_modules/hook-component"), { recursive: true });
+        writeFileSync(join(workdir, "node_modules/hook-component/package.json"), JSON.stringify({ name: "hook-component", types: "index.d.ts" }));
+        writeFileSync(
+            join(workdir, "node_modules/hook-component/index.d.ts"),
+            `import type { onConnect, RegisteredLifecycleHook } from "@lunora/server";
+export declare const functions: { join: ReturnType<typeof onConnect>; leave: RegisteredLifecycleHook };
+`,
+        );
+
+        expect(summary(discover({ "hooks.ts": `import { functions } from "hook-component";\nexport const { join } = functions;\n` }))).toStrictEqual({
+            join: { args: {}, kind: "mutation", lifecycle: "connect", returnType: "void", visibility: "internal" },
+        });
+
+        rmSync(join(workdir, "lunora"), { force: true, recursive: true });
+        rmSync(join(workdir, "node_modules/@lunora"), { force: true, recursive: true });
+
+        expect(() => discover({ "hooks.ts": `import { functions } from "hook-component";\nexport const { leave } = functions;\n` })).toThrow(
+            /does not say which moment it runs at/u,
+        );
+    });
+
     it("refuses a published function whose type leaves its visibility open", () => {
         expect.assertions(1);
 
