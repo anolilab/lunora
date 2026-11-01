@@ -37,6 +37,11 @@ const objectIr = (type: Type, at: Node, depth: number): ValidatorIR | undefined 
     }
 
     const properties = type.getProperties();
+
+    // A type with methods is a runtime object (`Date`, a lib interface), not a JSON shape; its keys are no schema.
+    if (properties.some((property) => property.getTypeAtLocation(at).getCallSignatures().length > 0)) {
+        return undefined;
+    }
     const indexValue = type.getStringIndexType();
 
     if (indexValue !== undefined && properties.length === 0) {
@@ -72,6 +77,11 @@ const valueIr = (type: Type, at: Node, depth: number): ValidatorIR => {
 
     if (scalar !== undefined) {
         return { kind: scalar[1] };
+    }
+
+    // `v.bytes()` parses to an `ArrayBuffer` — a lib interface, which would otherwise read as an object of its methods.
+    if ((type.getSymbol() ?? type.getAliasSymbol())?.getName() === "ArrayBuffer") {
+        return { kind: "bytes" };
     }
 
     if (type.isStringLiteral() || type.isNumberLiteral() || type.isBooleanLiteral()) {

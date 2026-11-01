@@ -141,6 +141,8 @@ export const heartbeat = presence.functions.heartbeat;
 import type { Validator } from "@lunora/values";
 export declare const functions: {
     save: RegisteredMutation<{
+        blob: Validator<ArrayBuffer>;
+        at: Validator<Date>;
         flags: Validator<boolean[]>;
         mode: Validator<"draft" | "live">;
         note: Validator<string | null>;
@@ -160,6 +162,8 @@ export const { save } = functions;
         });
 
         expect(save?.args).toStrictEqual({
+            at: { kind: "from", tsType: "Date" },
+            blob: { kind: "bytes" },
             flags: { inner: { kind: "boolean" }, kind: "array" },
             mode: {
                 kind: "union",
