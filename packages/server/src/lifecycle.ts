@@ -52,7 +52,7 @@ type ShardInitHandler = (context: MutationContext, event: ShardInitEvent) => Pro
 const wrapLifecycle = <Moment extends "connect" | "disconnect" | "init">(
     lifecycle: Moment,
     handler: LifecycleHandler | ShardInitHandler,
-): RegisteredLifecycleHook & { readonly lifecycle: Moment } => {
+): RegisteredLifecycleHook<Moment> => {
     return {
         args: {},
         handler: (context: unknown, event: unknown) => handler(context as MutationContext, event as LifecycleEvent),
@@ -63,10 +63,10 @@ const wrapLifecycle = <Moment extends "connect" | "disconnect" | "init">(
 };
 
 /** Register a hook that fires once when a client's WebSocket connects. */
-const onConnect = (handler: LifecycleHandler): RegisteredLifecycleHook & { readonly lifecycle: "connect" } => wrapLifecycle("connect", handler);
+const onConnect = (handler: LifecycleHandler): RegisteredLifecycleHook<"connect"> => wrapLifecycle("connect", handler);
 
 /** Register a hook that fires once when a client's WebSocket disconnects. */
-const onDisconnect = (handler: LifecycleHandler): RegisteredLifecycleHook & { readonly lifecycle: "disconnect" } => wrapLifecycle("disconnect", handler);
+const onDisconnect = (handler: LifecycleHandler): RegisteredLifecycleHook<"disconnect"> => wrapLifecycle("disconnect", handler);
 
 /**
  * Register a hook that fires ONCE per Durable Object instance, before any
@@ -118,7 +118,7 @@ const onDisconnect = (handler: LifecycleHandler): RegisteredLifecycleHook & { re
  * instance's rows in place: a memory table's rows live in SQLite until they are
  * deleted, so an eviction on its own does not remove them.
  */
-const onShardInit = (handler: ShardInitHandler): RegisteredLifecycleHook & { readonly lifecycle: "init" } => wrapLifecycle("init", handler);
+const onShardInit = (handler: ShardInitHandler): RegisteredLifecycleHook<"init"> => wrapLifecycle("init", handler);
 
 export { onConnect, onDisconnect, onShardInit };
 export type { LifecycleHandler, ShardInitHandler };

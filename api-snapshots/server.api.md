@@ -1782,9 +1782,7 @@ type PresenceComponent = Component<{
 
 ```ts
 interface PresenceFunctions {
-    disconnect: RegisteredLifecycleHook & {
-        readonly lifecycle: "disconnect";
-    };
+    disconnect: RegisteredLifecycleHook<"disconnect">;
     heartbeat: RegisteredMutation<{
         data: ColumnValidator<Record<string, unknown> | undefined, Record<string, unknown> | undefined>;
         roomId: StringColumnValidator;
@@ -2002,8 +2000,8 @@ type RegisteredInternalQuery<A extends ArgsValidator, R> = RegisteredQuery<A, R,
 ### `RegisteredLifecycleHook` (type)
 
 ```ts
-type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "mutation"> & {
-    readonly lifecycle: LifecycleEventKind;
+type RegisteredLifecycleHook<Moment extends LifecycleEventKind = LifecycleEventKind> = RegisteredFunction<Record<string, never>, void, "mutation", "internal"> & {
+    readonly lifecycle: Moment;
 };
 ```
 
@@ -3892,17 +3890,13 @@ const mergeSchemaExtension: <T extends Record<string, TableDefinition>, X extend
 ### `onConnect` (const)
 
 ```ts
-const onConnect: (handler: LifecycleHandler) => RegisteredLifecycleHook & {
-    readonly lifecycle: "connect";
-};
+const onConnect: (handler: LifecycleHandler) => RegisteredLifecycleHook<"connect">;
 ```
 
 ### `onDisconnect` (const)
 
 ```ts
-const onDisconnect: (handler: LifecycleHandler) => RegisteredLifecycleHook & {
-    readonly lifecycle: "disconnect";
-};
+const onDisconnect: (handler: LifecycleHandler) => RegisteredLifecycleHook<"disconnect">;
 ```
 
 ### `onQueryChange` (const)
@@ -3914,9 +3908,7 @@ const onQueryChange: <T>(select: ReactorSelect<T>, handler: ReactorHandler<T>) =
 ### `onShardInit` (const)
 
 ```ts
-const onShardInit: (handler: ShardInitHandler) => RegisteredLifecycleHook & {
-    readonly lifecycle: "init";
-};
+const onShardInit: (handler: ShardInitHandler) => RegisteredLifecycleHook<"init">;
 ```
 
 ### `onWhisper` (const)

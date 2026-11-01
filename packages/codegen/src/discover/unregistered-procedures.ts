@@ -47,12 +47,7 @@ const REGISTRATION_BY_TYPE_NAME = new Map<string, { call: string; file?: string;
         "RegisteredLifecycleHook",
         {
             call: "onConnect(handler)",
-            // `lifecycle` is typed as the whole `LifecycleEventKind` union rather
-            // than a literal, so — unlike the reactor below — there is nothing to
-            // read that says which of the three factories produced this. Naming
-            // one and being wrong twice out of three times is the papercut this
-            // map exists to avoid, so the finding says so instead.
-            note: "Substitute the hook you called: `onConnect`, `onDisconnect` and `onShardInit` share one type, so codegen cannot tell which you wrote. A dropped hook has no caller to fail — it silently never fires.",
+            note: "Substitute the hook you called: `onConnect`, `onDisconnect` or `onShardInit`. A dropped hook has no caller to fail — it silently never fires.",
         },
     ],
     ["RegisteredMigration", { call: "defineMigration({ … })", note: "A dropped migration never runs, so `lunora migrate up` reports nothing to do." }],

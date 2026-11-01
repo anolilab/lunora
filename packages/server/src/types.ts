@@ -825,7 +825,14 @@ interface LifecycleEvent {
  * lifecycle side it fires on. Produced by `onConnect` / `onDisconnect` /
  * `onShardInit`.
  */
-type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "mutation"> & { readonly lifecycle: LifecycleEventKind };
+type RegisteredLifecycleHook<Moment extends LifecycleEventKind = LifecycleEventKind> = RegisteredFunction<
+    Record<string, never>,
+    void,
+    "mutation",
+    "internal"
+> & {
+    readonly lifecycle: Moment;
+};
 
 /**
  * The event an `onShardInit` hook receives.

@@ -209,7 +209,7 @@ interface PresenceFunctions {
      * member). The TTL filter + `sweep` remain the fallback for ungraceful drops
      * where no `context` was recorded.
      */
-    disconnect: RegisteredLifecycleHook & { readonly lifecycle: "disconnect" };
+    disconnect: RegisteredLifecycleHook<"disconnect">;
 
     /**
      * Upsert the caller's presence row for `roomId` in their tenant and stamp

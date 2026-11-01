@@ -285,6 +285,23 @@ export declare const functions: { join: ReturnType<typeof onConnect>; leave: Reg
         );
     });
 
+    it("refuses a published room with advice that fits a room", () => {
+        expect.assertions(1);
+
+        mkdirSync(join(workdir, "node_modules/room-component"), { recursive: true });
+        writeFileSync(join(workdir, "node_modules/room-component/package.json"), JSON.stringify({ name: "room-component", types: "index.d.ts" }));
+        writeFileSync(
+            join(workdir, "node_modules/room-component/index.d.ts"),
+            `import type { RegisteredRoom } from "@lunora/server";
+export declare const functions: { lobby: RegisteredRoom<{ text: string }> };
+`,
+        );
+
+        expect(() => discover({ "rooms.ts": `import { functions } from "room-component";\nexport const { lobby } = functions;\n` })).toThrow(
+            /re-exports a room from a published package/u,
+        );
+    });
+
     it("refuses a published function whose type leaves its visibility open", () => {
         expect.assertions(1);
 

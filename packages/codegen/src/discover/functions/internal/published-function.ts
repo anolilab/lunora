@@ -192,6 +192,14 @@ const publishedFunctionIr = (at: Node, exportName: string, relativePath: string,
     }
 
     const base = { ...(description ? { description } : {}), exportName, filePath: relativePath, kind: kind as FunctionIR["kind"] };
+    // A room is reached by its literal name, which a declaration-file type does not carry (`name: string`).
+    if (type.getProperty("channel") !== undefined && !type.getPropertyOrThrow("channel").isOptional()) {
+        throw new LunoraError(
+            "PUBLISHED_FUNCTION_UNSUPPORTED",
+            `${relativePath}:${exportName} re-exports a room from a published package; its name is not in the declared type, so codegen cannot route it. Declare the room with \`defineRoom\` in this file instead.`,
+        );
+    }
+
     const lifecycle = literalProperty(type, "lifecycle", at);
     // Every registration has an optional `lifecycle?`; only a hook's is required. One whose moment is not a
     // single literal cannot be routed, and the visibility advice below would not help it.
