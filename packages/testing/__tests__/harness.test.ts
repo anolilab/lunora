@@ -199,6 +199,7 @@ describe("lunoraTest", () => {
 
         const t = start();
 
+        // @ts-expect-error -- an internal function is a type error at the top level; this pins the runtime guard for untyped callers
         await expect(async () => t.mutation(internalSend, { author: "ada", body: "leak" })).rejects.toThrow(
             "is an internal function — it is unreachable from the external RPC boundary in production",
         );
@@ -253,10 +254,12 @@ describe("lunoraTest", () => {
 
         const t = start();
 
+        // @ts-expect-error -- an internal function is a type error at the top level; this pins the runtime guard for untyped callers
         await expect(async () => t.mutation(internalSend, { author: "ada", body: "leak" })).rejects.toThrow("This mutation is an internal function");
 
         // The old wording quoted the kind (`"mutation" is an internal function`),
         // which read as if a function literally named "mutation" existed.
+        // @ts-expect-error -- an internal function is a type error at the top level; this pins the runtime guard for untyped callers
         await expect(async () => t.mutation(internalSend, { author: "ada", body: "leak" })).rejects.not.toThrow('"mutation" is an internal function');
     });
 

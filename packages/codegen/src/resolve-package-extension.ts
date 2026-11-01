@@ -43,6 +43,7 @@ interface RuntimeTableBuilder {
     geoIndexes?: ReadonlyArray<{ field: string; name: string; precision?: number }>;
     indexes?: ReadonlyArray<{ fields: ReadonlyArray<string>; name: string; unique?: boolean }>;
     isExternallyManaged?: boolean;
+    memoryMode?: boolean;
     // Carried only to detect (and warn about) features the runtime path does not
     // yet convert — see the drop-warning in `runtimeTableToIR`.
     rankIndexes?: ReadonlyArray<unknown>;
@@ -249,6 +250,7 @@ const runtimeTableToIR = (builder: RuntimeTableBuilder, bareName: string): Table
         // Normalised like the AST path: a global table without a backend is D1.
         ...(shardMode === "global" ? { globalBackend: builder.shardMode?.backend === "hyperdrive" ? ("hyperdrive" as const) : ("d1" as const) } : {}),
         indexes,
+        ...(builder.memoryMode === true ? { memory: true } : {}),
         name: bareName,
         rankIndexes: [],
         relations: [],

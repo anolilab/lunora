@@ -143,9 +143,16 @@ const argumentIr = (validatorType: Type, at: Node): ValidatorIR => {
     return valueType === undefined ? { kind: "from" } : fieldIr(valueType, false, at, 0);
 };
 
-/** The handler's resolved result: `R` out of its declared `Promise<R> | R`. */
+const ASYNC_ITERABLES = new Set(["AsyncGenerator", "AsyncIterable", "AsyncIterableIterator"]);
+
+/** The handler's resolved result: `R` out of its declared `Promise<R> | R`, or a stream's chunk out of `AsyncIterable<R>`. */
 const resultType = (type: Type, at: Node): Type | undefined => {
     const returned = type.getProperty("handler")?.getTypeAtLocation(at).getCallSignatures()[0]?.getReturnType();
+
+    if (returned !== undefined && ASYNC_ITERABLES.has((returned.getSymbol() ?? returned.getAliasSymbol())?.getName() ?? "")) {
+        return returned.getTypeArguments()[0];
+    }
+
     const promise = returned?.isUnion() ? returned.getUnionTypes().find((member) => member.getSymbol()?.getName() === "Promise") : undefined;
 
     return promise?.getTypeArguments()[0] ?? returned;
@@ -198,9 +205,24 @@ const publishedFunctionIr = (at: Node, exportName: string, relativePath: string,
     }
 
     const argumentsType = type.getProperty("args")?.getTypeAtLocation(at);
-    const args = Object.fromEntries(
-        (argumentsType?.getProperties() ?? []).map((property) => [property.getName(), argumentIr(property.getTypeAtLocation(at), at)]),
-    );
+
+    // An empty args map has to mean "no arguments": the client treats such a function as holding nothing
+    // sensitive. A type that does not list its keys (`any`, an index signature) would read as empty too.
+    if (
+        argumentsType === undefined ||
+        argumentsType.isAny() ||
+        argumentsType.isUnknown() ||
+        argumentsType.getStringIndexType() !== undefined ||
+        argumentsType.getNumberIndexType() !== undefined
+    ) {
+        throw new LunoraError(
+            "PUBLISHED_FUNCTION_UNSUPPORTED",
+            `${relativePath}:${exportName} re-exports a function from a published package whose type does not list its arguments. ` +
+                "Declare its validator map with one key per argument (an empty `{}` for none) so codegen can type the client call.",
+        );
+    }
+
+    const args = Object.fromEntries(argumentsType.getProperties().map((property) => [property.getName(), argumentIr(property.getTypeAtLocation(at), at)]));
     const result = resultType(type, at);
 
     return {

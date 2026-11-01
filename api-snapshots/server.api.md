@@ -1032,7 +1032,7 @@ interface InternalQueryBuilder<Context, Args extends ArgsValidator, Output = und
         args: InferArgs<Args>;
         ctx: Context;
         signal: AbortSignal;
-    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredStream<Args, R>;
+    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredStream<Args, R, "internal">;
     use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
 }
 ```
@@ -2072,12 +2072,12 @@ interface RegisteredShape<Args extends ValidatorMap = ValidatorMap, Context = Qu
 ### `RegisteredStream` (interface)
 
 ```ts
-interface RegisteredStream<A extends ArgsValidator, R> {
+interface RegisteredStream<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> {
     readonly args: A;
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
-    readonly visibility?: FunctionVisibility;
+    readonly visibility?: Visibility;
 }
 ```
 

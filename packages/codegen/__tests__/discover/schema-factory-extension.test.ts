@@ -60,6 +60,7 @@ export default defineDefault;
                          ttlPolicy: { field: "expiresAt", after: 1000 },
                          shardMode: { kind: "global", backend: "hyperdrive" },
                      },
+                     scratch: { shape: { note: s("string") }, indexes: [], memoryMode: true, shardMode: { kind: "root" } },
                  },
              },
          });
@@ -180,17 +181,20 @@ export default defineSchema({ todos: defineTable({ title: v.string() }) }).exten
         ).toStrictEqual([table, "todos"]);
     });
 
-    it("keeps a factory table's expiry, geo indexes and global backend", () => {
-        expect.assertions(1);
+    it("keeps a factory table's expiry, geo indexes, global backend and memory mode", () => {
+        expect.assertions(2);
 
-        const spots = tables({
+        const discovered = tables({
             "schema.ts": `import { defineSchema, defineTable, v } from "@lunora/server";
 import { defineRich } from "test-component";
 const rich = defineRich();
 export default defineSchema({ todos: defineTable({ title: v.string() }) }).extend(rich.extension);
 `,
-        }).find((table) => table.name === "rich_spots");
+        });
+        const spots = discovered.find((table) => table.name === "rich_spots");
 
+        // `.memory()` rows are cleared on wake; dropping the flag would keep them.
+        expect(discovered.find((table) => table.name === "rich_scratch")?.memory).toBe(true);
         expect(spots).toMatchObject({
             geoIndexes: [{ field: "loc", name: "byLoc", precision: 6 }],
             globalBackend: "hyperdrive",

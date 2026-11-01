@@ -851,7 +851,7 @@ interface ShardInitEvent {
  * can stop early — break out of the loop or check `signal.aborted` between
  * yields.
  */
-interface RegisteredStream<A extends ArgsValidator, R> {
+interface RegisteredStream<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> {
     readonly args: A;
 
     /**
@@ -863,7 +863,8 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
-    readonly visibility?: FunctionVisibility;
+    /** See {@link RegisteredFunction.visibility}. */
+    readonly visibility?: Visibility;
 }
 
 /**

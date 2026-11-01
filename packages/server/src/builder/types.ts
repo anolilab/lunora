@@ -281,7 +281,7 @@ export interface InternalQueryBuilder<Context, Args extends ArgsValidator, Outpu
     stream: <R>(
         handler: (options: { args: InferArgs<Args>; ctx: Context; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
         options?: StreamOptions,
-    ) => RegisteredStream<Args, R>;
+    ) => RegisteredStream<Args, R, "internal">;
     use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
 }
 

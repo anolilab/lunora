@@ -6,7 +6,6 @@ import type {
     ActionCtx,
     ArgsValidator,
     AuthState,
-    FunctionVisibility,
     InferArgs,
     MutationCtx,
     QueryCtx,
@@ -266,14 +265,14 @@ interface LunoraTestOptions {
 interface TestHarness {
     /** Run a registered `action` (or an inline `async (context) => …`) against the harness. */
     action: {
-        <A extends ArgsValidator, R>(reference: RegisteredAction<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
+        <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineActionFunction<R>): Promise<R>;
     };
     /** Close the underlying in-memory SQLite database, releasing the native handle. Idempotent; safe to call on any `withIdentity` view. */
     close: () => void;
     /** Run a registered `mutation` (or an inline `async (context) => …`) against the harness. */
     mutation: {
-        <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
+        <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineMutationFunction<R>): Promise<R>;
     };
 
@@ -285,7 +284,7 @@ interface TestHarness {
     notify: FakeNotifyControls;
     /** Run a registered `query` (or an inline `async (context) => …`) against the harness. */
     query: {
-        <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
+        <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineQueryFunction<R>): Promise<R>;
     };
 
@@ -348,7 +347,7 @@ interface TestHarness {
      * are coalesced).
      */
     subscribe: {
-        <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R, FunctionVisibility>, args: InferArgs<A>): TestSubscription<R>;
+        <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): TestSubscription<R>;
         <R>(inline: InlineQueryFunction<R>): TestSubscription<R>;
     };
 

@@ -394,24 +394,24 @@ interface SweepOptions {
 ```ts
 interface TestHarness {
     action: {
-        <A extends ArgsValidator, R>(reference: RegisteredAction<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
+        <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineActionFunction<R>): Promise<R>;
     };
     close: () => void;
     mutation: {
-        <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
+        <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineMutationFunction<R>): Promise<R>;
     };
     notify: FakeNotifyControls;
     query: {
-        <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
+        <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineQueryFunction<R>): Promise<R>;
     };
     queues: FakeQueueControls;
     run: <R>(function_: InlineMutationFunction<R>) => Promise<R>;
     scheduler: FakeSchedulerControls;
     subscribe: {
-        <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R, FunctionVisibility>, args: InferArgs<A>): TestSubscription<R>;
+        <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): TestSubscription<R>;
         <R>(inline: InlineQueryFunction<R>): TestSubscription<R>;
     };
     topics: FakeTopicControls;

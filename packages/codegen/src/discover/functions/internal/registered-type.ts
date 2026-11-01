@@ -1,7 +1,7 @@
 import type { SourceFile, Type } from "ts-morph";
 import { Node } from "ts-morph";
 
-const PROCEDURE_KINDS = new Set(["action", "mutation", "query"]);
+const PROCEDURE_KINDS = new Set(["action", "mutation", "query", "stream"]);
 
 /** The string literal a property of `type` is declared as, or `undefined` when it is absent or not one literal. */
 const literalProperty = (type: Type, name: string, at: Node): string | undefined => {

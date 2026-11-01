@@ -176,6 +176,69 @@ export const { save } = functions;
         });
     });
 
+    it("discovers a published stream with its chunk type", () => {
+        expect.assertions(1);
+
+        mkdirSync(join(workdir, "node_modules/stream-component"), { recursive: true });
+        writeFileSync(join(workdir, "node_modules/stream-component/package.json"), JSON.stringify({ name: "stream-component", types: "index.d.ts" }));
+        writeFileSync(
+            join(workdir, "node_modules/stream-component/index.d.ts"),
+            `import type { RegisteredStream } from "@lunora/server";
+import type { Validator } from "@lunora/values";
+export declare const functions: {
+    ticks: RegisteredStream<{ roomId: Validator<string> }, { at: number }>;
+    audit: RegisteredStream<{}, string, "internal">;
+};
+`,
+        );
+
+        expect(
+            summary(
+                discover({
+                    "ticker.ts": `import { functions } from "stream-component";
+export const { audit, ticks } = functions;
+`,
+                }),
+            ),
+        ).toStrictEqual({
+            audit: { args: {}, kind: "stream", returnType: "string", visibility: "internal" },
+            ticks: { args: { roomId: { kind: "string" } }, kind: "stream", returnType: "{ at: number; }", visibility: "public" },
+        });
+    });
+
+    const installArgless = (): void => {
+        mkdirSync(join(workdir, "node_modules/argless-component"), { recursive: true });
+        writeFileSync(join(workdir, "node_modules/argless-component/package.json"), JSON.stringify({ name: "argless-component", types: "index.d.ts" }));
+        writeFileSync(
+            join(workdir, "node_modules/argless-component/index.d.ts"),
+            `import type { RegisteredMutation } from "@lunora/server";
+import type { Validator } from "@lunora/values";
+export declare const functions: { ping: RegisteredMutation<{}, void>; open: RegisteredMutation<Record<string, Validator>, void> };
+`,
+        );
+    };
+
+    it("exempts an argument-free published function from the sensitive marking", () => {
+        expect.assertions(1);
+
+        installArgless();
+
+        const ping = discover({ "ping.ts": `import { functions } from "argless-component";\nexport const { ping } = functions;\n` });
+
+        // Nothing to leak, so the client may queue it offline.
+        expect(emitApi({ functions: ping })).toContain('ping: { __lunoraRef: "ping:ping" }');
+    });
+
+    it("refuses a published function whose args type does not list its keys", () => {
+        expect.assertions(1);
+
+        installArgless();
+
+        expect(() => discover({ "open.ts": `import { functions } from "argless-component";\nexport const { open } = functions;\n` })).toThrow(
+            /does not list its arguments/u,
+        );
+    });
+
     it("refuses a published function whose type leaves its visibility open", () => {
         expect.assertions(1);
 
