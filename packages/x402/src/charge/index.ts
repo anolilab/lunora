@@ -10,7 +10,7 @@
  * framework-agnostic core for other surfaces (procedures, MCP tools).
  */
 export type { EvmAddress, FacilitatorConfig, X402ChargeConfig, X402Price, X402Recipient } from "../config";
-export { DEFAULT_FACILITATOR_URL, resolveFacilitatorUrl } from "../config";
+export { resolveFacilitatorUrl } from "../config";
 export type { Caip2, X402Network } from "../networks";
 export { isEvmNetwork, isSvmNetwork, toCaip2 } from "../networks";
 export type { HttpActionHandler } from "./http-action";

@@ -18,18 +18,18 @@ import type { X402Network } from "./networks";
 import type { SpendPolicy } from "./pay/policy";
 
 /**
- * The public, Coinbase-operated facilitator (verify + settle). It needs no API
- * key. Override with a self-hosted or CDP facilitator via {@link FacilitatorConfig}.
- */
-export const DEFAULT_FACILITATOR_URL = "https://x402.org/facilitator";
-
-/**
  * How to reach a facilitator's `/verify` + `/settle` endpoints.
  */
 export interface FacilitatorConfig {
     /** Extra headers for a private facilitator (e.g. a CDP bearer token). */
     readonly headers?: Record<string, string>;
-    /** Base URL. Defaults to {@link DEFAULT_FACILITATOR_URL}. */
+    /**
+     * Base URL. **Required — there is no default.** The caller must supply a
+     * working facilitator; the old `x402.org/facilitator` default is dead (404,
+     * see #1436) and cannot serve as a public fallback. For CDP's hosted
+     * facilitator use `https://api.cdp.coinbase.com` and also set
+     * `headers.Authorization` to a CDP bearer token.
+     */
     readonly url?: string;
 }
 
@@ -154,6 +154,20 @@ export type X402SignerConfig =
       };
 
 /**
- * Resolve a facilitator's base URL, applying the public default.
+ * Resolve a facilitator's base URL.
+ *
+ * There is **no default** — the caller MUST provide one. A hardcoded default
+ * would silently hit a dead endpoint (`x402.org/facilitator` returns 404), so
+ * we fail loud instead (see #1436).
  */
-export const resolveFacilitatorUrl = (facilitator?: FacilitatorConfig): string => facilitator?.url ?? DEFAULT_FACILITATOR_URL;
+export const resolveFacilitatorUrl = (facilitator?: FacilitatorConfig): string => {
+    if (facilitator?.url === undefined) {
+        throw new Error(
+            "No facilitator URL configured. Pass `facilitator.url` to the charge/pay config. " +
+                "The old `x402.org/facilitator` default is dead (404); for CDP's hosted facilitator " +
+                "use `https://api.cdp.coinbase.com` and set `facilitator.headers.Authorization` to a CDP bearer token."
+        );
+    }
+
+    return facilitator.url;
+};

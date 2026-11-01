@@ -41,9 +41,10 @@ bun add @lunora/x402
 
 **Networks.** EVM chains (Base, Arbitrum, Ethereum, Polygon, …) are signed via
 `@x402/evm` + viem; pass a raw CAIP-2 id for chains without a friendly alias.
-Solana is signed via `@x402/svm`. The facilitator defaults to the public,
-Coinbase-operated `https://x402.org/facilitator` (no key required); override it
-via `facilitator: { url, headers }` for a self-hosted or keyed CDP facilitator.
+Solana is signed via `@x402/svm`. The facilitator must be configured explicitly
+via `facilitator: { url, headers }` — there is no default; use a self-hosted
+facilitator or a keyed CDP facilitator (`https://api.cdp.coinbase.com` with a
+bearer token in `headers.Authorization`).
 
 ## The charge rail: sell a resource
 
