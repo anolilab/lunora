@@ -80,8 +80,27 @@ const moduleAliasesFor = (
 };
 
 /** Keep eager registry imports and lazy shim emission on the same file-path policy. */
-const eagerModulePaths = (migrations: ReadonlyArray<MigrationIR>, mutators: ReadonlyArray<MutatorIR>, shapes: ReadonlyArray<ShapeIR>): ReadonlySet<string> =>
-    new Set([...migrations.map((migration) => migration.filePath), ...mutators.map((mutator) => mutator.filePath), ...shapes.map((shape) => shape.filePath)]);
+
+/**
+ * Modules the lazy registry imports up front. Besides the kinds that must be
+ * loaded to register at all, that is every module re-exporting a function from
+ * a published package: codegen read it off a declaration-file type, which does
+ * not say whether it is paid (`x402`), what its `.meta()` is, or which arguments
+ * are `v.sensitive`. An unloaded stub would answer all three as "none" — a paid
+ * call dispatched free — so the real function stands in from the start.
+ */
+const eagerModulePaths = (
+    functions: ReadonlyArray<FunctionIR>,
+    migrations: ReadonlyArray<MigrationIR>,
+    mutators: ReadonlyArray<MutatorIR>,
+    shapes: ReadonlyArray<ShapeIR>,
+): ReadonlySet<string> =>
+    new Set([
+        ...functions.filter((definition) => definition.typeDerivedArgs).map((definition) => definition.filePath),
+        ...migrations.map((migration) => migration.filePath),
+        ...mutators.map((mutator) => mutator.filePath),
+        ...shapes.map((shape) => shape.filePath),
+    ]);
 
 // Split this generated lookup so no-secrets can keep checking strings without
 // mistaking a framework access for a credential-shaped literal.
@@ -153,7 +172,7 @@ const renderFunctionRegistry = (
     shapeBody: string;
 } => {
     const aliasByPath = moduleAliasesFor(functions, migrations, mutators, shapes);
-    const eagerPaths = eagerModulePaths(migrations, mutators, shapes);
+    const eagerPaths = eagerModulePaths(functions, migrations, mutators, shapes);
 
     const importLines = [...aliasByPath.entries()]
         .filter(([filePath]) => {
@@ -979,7 +998,7 @@ const emitLazyFunctionModules = (options: EmitFunctionsOptions): Record<string, 
     const mutators = options.mutators ?? [];
     const shapes = options.shapes ?? [];
     const aliases = moduleAliasesFor(functions, migrations, mutators, shapes);
-    const eagerPaths = eagerModulePaths(migrations, mutators, shapes);
+    const eagerPaths = eagerModulePaths(functions, migrations, mutators, shapes);
     const filePaths = [...new Set(functions.filter((definition) => !eagerPaths.has(definition.filePath)).map((definition) => definition.filePath))];
     const base = baseSpecifiers(options.useUmbrella ?? false);
     const output: Record<string, string> = {};

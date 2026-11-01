@@ -54,7 +54,14 @@ const objectLiteralOf = (node: ObjectLiteralExpression): unknown => {
             return NOT_LITERAL;
         }
 
-        entries.push([Node.isStringLiteral(nameNode) ? nameNode.getLiteralValue() : nameNode.getText(), value]);
+        const key = Node.isStringLiteral(nameNode) ? nameNode.getLiteralValue() : nameNode.getText();
+
+        // In a literal, `__proto__: value` sets the prototype rather than a key, which no copied value reproduces.
+        if (key === "__proto__") {
+            return NOT_LITERAL;
+        }
+
+        entries.push([key, value]);
     }
 
     return Object.fromEntries(entries);

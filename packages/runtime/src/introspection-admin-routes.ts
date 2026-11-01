@@ -141,12 +141,17 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
                 }
 
                 const meta = entry[PROCEDURE_META];
-                let metaField: Pick<FunctionDescriptor, "meta" | "metaUnloaded"> = {};
+                let metaField: Pick<FunctionDescriptor, "meta" | "metaUnencodable" | "metaUnloaded"> = {};
 
                 if (meta === "unloaded") {
                     metaField = { metaUnloaded: true };
                 } else if (meta !== undefined) {
-                    metaField = { meta: encodeWire(meta) };
+                    try {
+                        metaField = { meta: encodeWire(meta) };
+                    } catch {
+                        // `.meta()` accepts anything structured-cloneable; the wire codec does not (a RegExp, a cycle). One such function must not fail the whole listing.
+                        metaField = { metaUnencodable: true };
+                    }
                 }
 
                 return [{ args: [...(entry.argumentDescriptors ?? describeArguments(entry.args))], kind: entry.kind, ...metaField, path }];

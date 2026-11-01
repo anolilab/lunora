@@ -351,6 +351,8 @@ interface FunctionDescriptor {
      * `@lunora/wire` restores a `Map`/`Set` inside it). Absent when it declares none.
      */
     meta?: unknown;
+    /** Set instead of `meta` when the declaration holds a value the wire codec cannot encode (a `RegExp`, a cycle). */
+    metaUnencodable?: true;
     /** Set instead of `meta` for a lazily registered function whose meta is only readable once its module loads. */
     metaUnloaded?: true;
     /** The `<file>:<function>` identifier, e.g. `messages:list`. */

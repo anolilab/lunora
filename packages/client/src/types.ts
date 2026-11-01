@@ -1402,6 +1402,8 @@ export interface FunctionDescriptor {
     kind: "action" | "mutation" | "query";
     /** The function's `.meta(...)`, wire-encoded (`decodeWire` restores it). Absent when it declares none, or from an older worker. */
     meta?: unknown;
+    /** Set instead of `meta` when the declaration holds a value the wire codec cannot encode (a `RegExp`, a cycle). */
+    metaUnencodable?: true;
     /** Set instead of `meta` when the function is registered lazily and only its loaded module can supply it. */
     metaUnloaded?: true;
     path: string;

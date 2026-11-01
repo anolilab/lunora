@@ -153,13 +153,14 @@ describe("createWorker — functions admin endpoint", () => {
         expect(response.status).toBe(405);
     });
 
-    it("carries each function's .meta() wire-encoded, and flags one only its loaded module can answer for", async () => {
-        expect.assertions(3);
+    it("carries each function's .meta() wire-encoded, and flags one it cannot answer for", async () => {
+        expect.assertions(4);
 
         const registry: FunctionRegistryLike = {
             "notes:list": { kind: "query" },
             "notes:remove": { kind: "mutation", [PROCEDURE_META]: { auth: "admin", scopes: new Set(["notes:write"]) } },
             "notes:share": { kind: "mutation", [PROCEDURE_META]: "unloaded" },
+            "notes:tag": { kind: "mutation", [PROCEDURE_META]: { pattern: /^tag:/u } },
         };
         const worker = createWorker({ adminToken: ADMIN_TOKEN, functions: registry, shardDO: noopNamespace });
 
@@ -168,12 +169,14 @@ describe("createWorker — functions admin endpoint", () => {
             {},
             fakeContext,
         );
-        const body: { functions: { meta?: unknown; metaUnloaded?: true; path: string }[] } = await response.json();
+        const body: { functions: { meta?: unknown; metaUnencodable?: true; metaUnloaded?: true; path: string }[] } = await response.json();
         const { functions } = body;
         const byPath = new Map(functions.map((entry) => [entry.path, entry]));
 
         expect(byPath.get("notes:list")).not.toHaveProperty("meta");
         expect(decodeWire(byPath.get("notes:remove")?.meta)).toStrictEqual({ auth: "admin", scopes: new Set(["notes:write"]) });
         expect(byPath.get("notes:share")).toMatchObject({ metaUnloaded: true });
+        // A declaration the wire codec cannot encode is flagged on its own entry; the rest of the listing still answers.
+        expect(byPath.get("notes:tag")).toMatchObject({ metaUnencodable: true });
     });
 });

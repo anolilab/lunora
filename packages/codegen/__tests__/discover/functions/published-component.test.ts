@@ -6,6 +6,8 @@ import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import discoverFunctions from "../../../src/discover/functions";
+import { emitApi } from "../../../src/emit/api";
+import { emitFunctions } from "../../../src/emit/functions";
 import type { FunctionIR } from "../../../src/ir";
 
 // The built `@lunora/server`. Linked into a scratch project, its `definePresence`
@@ -85,6 +87,24 @@ export const { disconnect, heartbeat, listPresent, sweep } = presence.functions;
                 visibility: "internal",
             },
         });
+    });
+
+    it("registers a published function eagerly under lazy functions, and marks its client reference sensitive", () => {
+        expect.assertions(3);
+
+        const functions = discover({
+            "presence.ts": `import { definePresence } from "@lunora/server";
+export const presence = definePresence();
+export const { heartbeat } = presence.functions;
+`,
+        });
+        const registry = emitFunctions({ functions, lazyFunctions: true });
+
+        // The type does not say whether the function is paid or carries meta, so no stub may stand in for it.
+        expect(registry).toContain('"presence:heartbeat": lunora_presence_0.heartbeat as unknown as RegisteredLunoraFunction');
+        expect(registry).not.toContain('"presence:heartbeat": { args: {}, handler: unloadedFunctionHandler');
+        // Nor does it say which arguments are `v.sensitive`, so the client keeps them out of the offline queue.
+        expect(emitApi({ functions })).toContain('heartbeat: { __lunoraRef: "presence:heartbeat", sensitive: true }');
     });
 
     it("discovers the property-access form of the same re-export", () => {

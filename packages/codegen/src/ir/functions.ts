@@ -104,7 +104,10 @@ export interface FunctionIR {
      * from a published component) rather than from `.input(...)`. The types are
      * exact, but bounds and refinements (`.max()`, `.check()`) are not in a type,
      * so no AOT validator may be compiled from them: the runtime parses through
-     * the function's own `args`.
+     * the function's own `args`. Nor does the type say whether the function is
+     * paid, what its `.meta()` is, or which args are `v.sensitive`, so its module
+     * is loaded eagerly under lazy functions and its client reference is marked
+     * sensitive.
      */
     typeDerivedArgs?: true;
 

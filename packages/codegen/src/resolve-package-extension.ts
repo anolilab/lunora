@@ -403,7 +403,10 @@ const factoryAccessOf = (argument: TsNode): FactoryAccess | undefined => {
         }
 
         for (const named of importDeclaration.getNamedImports()) {
-            if ((named.getAliasNode()?.getText() ?? named.getName()) === callee.getText()) {
+            // By symbol, not by name: a local function shadowing the import's name is not the package factory.
+            const local = (named.getAliasNode() ?? named.getNameNode()).getSymbol()?.compilerSymbol;
+
+            if (local !== undefined && local === callee.getSymbol()?.compilerSymbol) {
                 return { args, importedName: named.getName(), moduleSpecifier, propertyPath: [argument.getName()] };
             }
         }

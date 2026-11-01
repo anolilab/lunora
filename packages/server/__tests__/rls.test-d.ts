@@ -1,4 +1,4 @@
-import type { EmptyArgs, MutationBuilder, QueryBuilder } from "../src/index";
+import type { EmptyArgs, MutationBuilder, QueryBuilder, RlsContextIn } from "../src/index";
 import { definePolicies, definePolicy, protectPublic, rls } from "../src/index";
 
 /**
@@ -41,6 +41,23 @@ const check = (): void => {
     query.use(protectPublic({ use: [rls(policies)] })).query(async ({ ctx }) => {
         expectNotes(await ctx.db.query("notes").take(1));
     });
+
+    // A policy reading a field the procedure context lacks does not attach; the same policy attaches where it is present.
+    const tenantPolicies = definePolicies<RlsContextIn & { tenantId: string }>([
+        definePolicy({
+            on: "read",
+            table: "notes",
+            when: ({ ctx }) => {
+                return { ownerId: ctx.tenantId };
+            },
+        }),
+    ]);
+    const tenantQuery = null as unknown as QueryBuilder<GeneratedContext & { tenantId: string }, EmptyArgs>;
+
+    tenantQuery.use(rls(tenantPolicies));
+
+    // @ts-expect-error -- `tenantId` is required by the policies and missing from the procedure context
+    query.use(rls(tenantPolicies));
 
     // Two steps compose, and a mutation context is accepted the same way.
     mutation

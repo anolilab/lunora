@@ -1152,11 +1152,14 @@ const wrapDatabase = <Context>(
  * IMPORTANT: a mask is in scope only for procedures whose builder chain
  * includes this middleware — opt-in, never global (the same invariant as RLS).
  */
-const mask = <Context extends MaskContextIn = MaskContextIn>(policies: MaskPolicies<Context>, options: MaskOptions<Context> = {}): PolicyMiddleware => {
+const mask = <Context extends MaskContextIn = MaskContextIn>(
+    policies: MaskPolicies<Context>,
+    options: MaskOptions<Context> = {},
+): PolicyMiddleware<Omit<Context, "db">> => {
     const perTable = new Map<string, MaskColumns<Context>>(Object.entries(policies));
     const rolePermissions = indexRolePermissions(options.roles);
 
-    const middleware: PolicyMiddleware = async ({ ctx, next }) => {
+    const middleware: PolicyMiddleware<Omit<Context, "db">> = async ({ ctx, next }) => {
         // The policies were typed against their own `Context`; the procedure
         // context is the runtime object they are evaluated with.
         const context = ctx as unknown as Context;

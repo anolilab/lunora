@@ -58,9 +58,14 @@ export type Middleware<ContextIn, ContextOut> = (options: { ctx: ContextIn; next
  * `QueryCtx` / `MutationCtx` carries a typed `db` facade that is not assignable to
  * the untyped writer shape a policy module projects. Keeping the caller's type is
  * sound because the runtime only swaps `db` (and `orm`) for wrappers of the same
- * facade.
+ * facade. `Required` is everything else the policies read (`auth`, a `tenantId`
+ * an earlier middleware adds), so attaching them where it is missing is still a
+ * type error rather than an `undefined` at request time.
  */
-export type PolicyMiddleware = <Context extends { db: object }>(options: { ctx: Context; next: MiddlewareNext<Context> }) => Promise<Context>;
+export type PolicyMiddleware<Required = unknown> = <Context extends Required & { db: object }>(options: {
+    ctx: Context;
+    next: MiddlewareNext<Context>;
+}) => Promise<Context>;
 
 /**
  * The context a `.use(...)` step actually receives: the procedure context plus

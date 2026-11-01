@@ -1743,7 +1743,7 @@ type PolicyDecisionOf<DM, REL extends Record<keyof DM, object>, T extends keyof 
 ### `PolicyMiddleware` (type)
 
 ```ts
-type PolicyMiddleware = <Context extends {
+type PolicyMiddleware<Required = unknown> = <Context extends Required & {
     db: object;
 }>(options: {
     ctx: Context;
@@ -2208,6 +2208,15 @@ interface RetryPolicy {
     baseMs?: number;
     maxAttempts?: number;
     maxMs?: number;
+}
+```
+
+### `RlsContextIn` (interface)
+
+```ts
+interface RlsContextIn {
+    auth?: AuthLike;
+    db: RlsDatabase;
 }
 ```
 
@@ -3869,7 +3878,7 @@ const liveStreamRouter: (mounts: ReadonlyArray<LiveStreamMount>, fallback?: Live
 ### `mask` (const)
 
 ```ts
-const mask: <Context extends MaskContextIn = MaskContextIn>(policies: MaskPolicies<Context>, options?: MaskOptions<Context>) => PolicyMiddleware;
+const mask: <Context extends MaskContextIn = MaskContextIn>(policies: MaskPolicies<Context>, options?: MaskOptions<Context>) => PolicyMiddleware<Omit<Context, "db">>;
 ```
 
 ### `mergeSchemaExtension` (const)
@@ -3945,7 +3954,7 @@ const redactSecrets: (message: string) => string;
 ### `rls` (const)
 
 ```ts
-const rls: <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray<Policy<Context>>, options?: RlsOptions) => PolicyMiddleware;
+const rls: <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray<Policy<Context>>, options?: RlsOptions) => PolicyMiddleware<Omit<Context, "db">>;
 ```
 
 ### `serveStorageObject` (const)
@@ -7302,15 +7311,6 @@ interface RestCachePolicy {
     readonly staleWhileRevalidate?: number;
     readonly tag?: string;
     readonly vary?: string;
-}
-```
-
-### `RlsContextIn` (interface)
-
-```ts
-interface RlsContextIn {
-    auth?: AuthLike;
-    db: RlsDatabase;
 }
 ```
 

@@ -109,6 +109,7 @@ export type {
     PolicyDecision,
     PolicyDecisionOf,
     PolicyOperation,
+    RlsContextIn,
     RlsOptions,
     RlsReadRegistry,
     Role,

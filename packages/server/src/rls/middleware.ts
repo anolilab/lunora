@@ -2088,7 +2088,10 @@ const resolvePolicyAuth = async (
     };
 };
 
-const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray<Policy<Context>>, options: RlsOptions = {}): PolicyMiddleware => {
+const rls = <Context extends RlsContextIn = RlsContextIn>(
+    policies: ReadonlyArray<Policy<Context>>,
+    options: RlsOptions = {},
+): PolicyMiddleware<Omit<Context, "db">> => {
     // Erased once here (rather than at each use) so the per-request step can be
     // carried alongside steps declared by other `rls()` calls with their own
     // context types — the same erasure `tagRlsMiddleware` stores.
@@ -2096,7 +2099,7 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
     const perTable = indexByTable(erased);
     const rolePermissions = indexRolePermissions(options.roles);
 
-    const middleware: PolicyMiddleware = async ({ ctx, next }) => {
+    const middleware: PolicyMiddleware<Omit<Context, "db">> = async ({ ctx, next }) => {
         // The policies were typed against their own `Context`; the procedure
         // context is the runtime object they are evaluated with.
         const context = ctx as unknown as Context;
@@ -2149,7 +2152,7 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
 
 export { rls };
 
-export type { RlsDatabase };
+export type { RlsContextIn, RlsDatabase };
 
 /**
  * Internal policy-evaluation primitives, exported for the in-process RLS test

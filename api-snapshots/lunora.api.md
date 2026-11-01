@@ -833,6 +833,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RlsContextIn` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RlsOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6362,6 +6366,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RetryPolicy` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RlsContextIn` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

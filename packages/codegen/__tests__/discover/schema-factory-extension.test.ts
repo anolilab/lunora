@@ -85,6 +85,20 @@ export default defineSchema({ todos: defineTable({ title: v.string() }) }).exten
         ).toStrictEqual(["thing_items", "todos"]);
     });
 
+    it("does not copy options whose literal sets a prototype", () => {
+        expect.assertions(1);
+
+        expect(
+            tableNames({
+                "schema.ts": `import { defineSchema, defineTable, v } from "@lunora/server";
+import { defineThing } from "test-component";
+const thing = defineThing({ __proto__: { key: "inherited" } });
+export default defineSchema({ todos: defineTable({ title: v.string() }) }).extend(thing.extension);
+`,
+            }),
+        ).toStrictEqual(["todos"]);
+    });
+
     it("does not call a factory whose options are not literals", () => {
         expect.assertions(1);
 
