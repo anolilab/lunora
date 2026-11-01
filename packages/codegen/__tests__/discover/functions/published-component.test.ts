@@ -10,6 +10,7 @@ import { warnUnwiredComponents } from "../../../src/discover/functions/internal/
 import { emitApi } from "../../../src/emit/api";
 import { emitFunctions } from "../../../src/emit/functions";
 import type { FunctionIR } from "../../../src/ir";
+import { validatorIrToJsonSchema } from "../../../src/schema-ir";
 
 // The built `@lunora/server`. Linked into a scratch project, its `definePresence`
 // reaches the checker only as `dist/*.d.ts`, the way it does from npm: the
@@ -166,12 +167,12 @@ export const { save } = functions;
             at: { kind: "from", tsType: "Date" },
             blob: { kind: "bytes" },
             flags: { inner: { kind: "boolean" }, kind: "array" },
-            limit: { kind: "literal", literalValue: "5n" },
+            limit: { kind: "literal", literalValue: "5n", sensitive: true },
             mode: {
                 kind: "union",
                 members: [
-                    { kind: "literal", literalValue: '"draft"' },
-                    { kind: "literal", literalValue: '"live"' },
+                    { kind: "literal", literalValue: '"draft"', sensitive: true },
+                    { kind: "literal", literalValue: '"live"', sensitive: true },
                 ],
             },
             note: { kind: "union", members: [{ kind: "null" }, { kind: "string" }] },
@@ -321,6 +322,27 @@ export declare const functions: { loose: RegisteredStream<{}, string, "internal"
         expect(() => discover({ "ticker.ts": `import { functions } from "stream-component";\nexport const { loose } = functions;\n` })).toThrow(
             /makes `visibility` optional/u,
         );
+    });
+
+    it("keeps a published literal's value out of the generated JSON schema", () => {
+        expect.assertions(2);
+
+        mkdirSync(join(workdir, "node_modules/key-component"), { recursive: true });
+        writeFileSync(join(workdir, "node_modules/key-component/package.json"), JSON.stringify({ name: "key-component", types: "index.d.ts" }));
+        writeFileSync(
+            join(workdir, "node_modules/key-component/index.d.ts"),
+            `import type { RegisteredMutation } from "@lunora/server";
+import type { Validator } from "@lunora/values";
+export declare const functions: { unlock: RegisteredMutation<{ key: Validator<"sk_live_secret"> }, void> };
+`,
+        );
+
+        const [unlock] = discover({ "unlock.ts": `import { functions } from "key-component";\nexport const { unlock } = functions;\n` });
+        // `v.sensitive` cannot be seen in a type, so the value could be the secret it guards.
+        const schema = JSON.stringify(validatorIrToJsonSchema(unlock?.args["key"] ?? { kind: "unknown" }));
+
+        expect(schema).not.toContain("sk_live_secret");
+        expect(schema).toContain('"type":"string"');
     });
 
     it("refuses a published function whose type leaves its visibility open", () => {

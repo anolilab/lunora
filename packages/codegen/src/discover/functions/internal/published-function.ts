@@ -85,7 +85,9 @@ const valueIr = (type: Type, at: Node, depth: number): ValidatorIR => {
     }
 
     if (type.isStringLiteral() || type.isNumberLiteral() || type.isBooleanLiteral() || type.isBigIntLiteral()) {
-        return { kind: "literal", literalValue: type.getText(at) };
+        // `v.sensitive` leaves no trace in the type, and a literal's value could be the secret it guards.
+        // Marked sensitive, schema emitters keep the type and drop the `const`; the client types still narrow.
+        return { kind: "literal", literalValue: type.getText(at), sensitive: true };
     }
 
     // `Id<"table">` is `string & { readonly __table: "table" }` — `@lunora/values`' brand for `v.id(...)`.
