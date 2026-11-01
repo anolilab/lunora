@@ -157,19 +157,34 @@ const argumentIr = (validatorType: Type, at: Node): ValidatorIR => {
 
 const ASYNC_ITERABLES = new Set(["AsyncGenerator", "AsyncIterable", "AsyncIterableIterator"]);
 
-/** The handler's resolved result: `R` out of its declared `Promise<R> | R`, or a stream's chunk out of `AsyncIterable<R>`. */
-const resultType = (type: Type, at: Node): Type | undefined => {
+/**
+ * The handler's resolved result, as the types a caller receives: each member of
+ * `Promise<A> | B` awaited (`A`, `B`), since dispatch awaits whatever it returns,
+ * or a stream's chunk out of `AsyncIterable<R>`.
+ */
+const resultTypes = (type: Type, at: Node): Type[] => {
     const returned = type.getProperty("handler")?.getTypeAtLocation(at).getCallSignatures()[0]?.getReturnType();
 
-    if (returned !== undefined && ASYNC_ITERABLES.has((returned.getSymbol() ?? returned.getAliasSymbol())?.getName() ?? "")) {
-        return returned.getTypeArguments()[0];
+    if (returned === undefined) {
+        return [];
     }
 
-    // Dispatch awaits the handler, so callers see `T` whether it returns `Promise<T>` or `Promise<T> | T`.
-    const candidates = returned?.isUnion() ? returned.getUnionTypes() : [returned];
-    const promise = candidates.find((member) => member?.getSymbol()?.getName() === "Promise");
+    if (ASYNC_ITERABLES.has((returned.getSymbol() ?? returned.getAliasSymbol())?.getName() ?? "")) {
+        const [chunk] = returned.getTypeArguments();
 
-    return promise?.getTypeArguments()[0] ?? returned;
+        return chunk === undefined ? [] : [chunk];
+    }
+
+    return (returned.isUnion() ? returned.getUnionTypes() : [returned]).map((member) =>
+        member.getSymbol()?.getName() === "Promise" ? (member.getTypeArguments()[0] ?? member) : member,
+    );
+};
+
+/** Render the result types through the shared return-type checks; `"unknown"` when any is refused. */
+const renderResult = (types: ReadonlyArray<Type>, at: Node): string => {
+    const rendered = [...new Set(types.map((member) => renderReturnType(member, at)))];
+
+    return rendered.length === 0 || rendered.includes("unknown") ? "unknown" : rendered.join(" | ");
 };
 
 /**
@@ -266,14 +281,13 @@ const publishedFunctionIr = (at: Node, exportName: string, relativePath: string,
     }
 
     const args = Object.fromEntries(argumentsType.getProperties().map((property) => [property.getName(), argumentIr(property.getTypeAtLocation(at), at)]));
-    const result = resultType(type, at);
 
     return {
         ...base,
         args,
         // The handler body is not in the program, so it cannot be scanned for an IP read.
         ...(kind === "query" ? { readsIp: true as const } : {}),
-        returnType: result ? renderReturnType(result, at) : "unknown",
+        returnType: renderResult(resultTypes(type, at), at),
         typeDerivedArgs: true,
         visibility,
     };

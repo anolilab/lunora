@@ -272,7 +272,7 @@ export declare const functions: { join: ReturnType<typeof onConnect>; leave: Reg
     });
 
     it("renders an async handler's awaited result, as dispatch returns it", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         mkdirSync(join(workdir, "node_modules/async-component"), { recursive: true });
         writeFileSync(join(workdir, "node_modules/async-component/package.json"), JSON.stringify({ name: "async-component", types: "index.d.ts" }));
@@ -280,13 +280,16 @@ export declare const functions: { join: ReturnType<typeof onConnect>; leave: Reg
             join(workdir, "node_modules/async-component/index.d.ts"),
             `export declare const functions: {
     load: { readonly args: {}; readonly handler: (context: unknown, args: {}) => Promise<{ ready: boolean }>; readonly kind: "query"; readonly visibility?: "public" };
+    count: { readonly args: {}; readonly handler: (context: unknown, args: {}) => Promise<string> | number; readonly kind: "query"; readonly visibility?: "public" };
 };
 `,
         );
 
-        expect(discover({ "load.ts": `import { functions } from "async-component";\nexport const { load } = functions;\n` })[0]?.returnType).toBe(
-            "{ ready: boolean; }",
-        );
+        const found = discover({ "load.ts": `import { functions } from "async-component";\nexport const { count, load } = functions;\n` });
+
+        expect(found.find((entry) => entry.exportName === "load")?.returnType).toBe("{ ready: boolean; }");
+        // Each member is awaited: a sync `number` member is not dropped in favour of the promise's `string`.
+        expect(found.find((entry) => entry.exportName === "count")?.returnType).toBe("number | string");
     });
 
     it("refuses a published room with advice that fits a room", () => {
