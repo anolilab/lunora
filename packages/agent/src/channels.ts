@@ -438,6 +438,12 @@ const dispatchAgentChannel =
                 return pong;
             }
 
+            // GitHub and Discord send JSON, so a signed body that is not a JSON object is refused here, rather than mapped and routed to the
+            // default shard. Slack also sends form bodies, which are legitimate.
+            if (channel !== "slack" && parseJsonObject(body) === undefined) {
+                return new Response("Malformed webhook body", { status: 400 });
+            }
+
             // eslint-disable-next-line no-await-in-loop -- see above
             const run = await config.map(event);
 

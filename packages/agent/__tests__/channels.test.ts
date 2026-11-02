@@ -670,6 +670,61 @@ describe(dispatchAgentChannel, () => {
         ]);
     });
 
+    it("reads Slack's team_id from a form-encoded slash command, which is neither JSON nor a payload", async () => {
+        const { binding, created } = fakeBinding();
+        const seen: AgentChannelShardInput[] = [];
+        const agent = {
+            onInbound: {
+                channel: "slack" as const,
+                map: () => {
+                    return { input: "x", threadKey: "t" };
+                },
+                resolveShard: (input: AgentChannelShardInput) => {
+                    seen.push(input);
+
+                    return input.workspaceId === "T1" ? "org-a" : undefined;
+                },
+                secret: "SLACK_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
+
+        const response = await handler(
+            await slackRequest(secret, new URLSearchParams({ command: "/ask", team_id: "T1", text: "hello" }).toString()),
+            { SupportAgentWorkflow: binding, SLACK_SECRET: secret },
+            NO_CONTEXT,
+        );
+
+        expect(response.status).toBe(200);
+        expect(seen).toStrictEqual([{ channel: "slack", workspaceId: "T1" }]);
+        expect(created).toStrictEqual([{ input: "x", shardKey: "org-a", threadKey: "t" }]);
+    });
+
+    it("refuses a signed GitHub body that is not a JSON object, before the mapper or any shard sees it", async () => {
+        expect.assertions(3);
+
+        const { binding, created } = fakeBinding();
+        let mapped = 0;
+        const agent = {
+            onInbound: {
+                channel: "github" as const,
+                map: () => {
+                    mapped += 1;
+
+                    return { input: "x", threadKey: "t" };
+                },
+                secret: "GITHUB_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
+
+        const response = await handler(await githubRequest(secret, "[1,2]"), { GITHUB_SECRET: secret, SupportAgentWorkflow: binding }, NO_CONTEXT);
+
+        expect(response.status).toBe(400);
+        expect(mapped).toBe(0);
+        expect(created).toStrictEqual([]);
+    });
+
     it("reads GitHub's workspace from installation.id and Slack's from an interactive payload's team.id", async () => {
         const { binding } = fakeBinding();
         const seen: (string | undefined)[] = [];
