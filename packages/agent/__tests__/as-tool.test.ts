@@ -123,6 +123,20 @@ const runWithChildThread = (history: ReadonlyArray<AgentMessageRow>): { keys: st
 };
 
 describe(agentAsTool, () => {
+    it("gives the same tool-call id on two parent runs distinct child instances", async () => {
+        expect.assertions(2);
+
+        const binding = mockAgentBinding(["complete", "complete"]);
+        const { run } = runWithChildThread([{ content: "the answer", role: "assistant", seq: 3 }]);
+        const tool = agentAsTool({ description: "Delegate research.", name: "research", wait: immediate });
+
+        await tool.execute({ prompt: "find X" }, context({ ResearchAgentWorkflow: binding }, run, { instanceId: "wf-tenant-a" }));
+        await tool.execute({ prompt: "find X" }, context({ ResearchAgentWorkflow: binding }, run, { instanceId: "wf-tenant-b" }));
+
+        expect(binding.created.map(({ id }) => id)).toHaveLength(2);
+        expect(binding.created[0]?.id).not.toBe(binding.created[1]?.id);
+    });
+
     it("starts a child run with a derived, replay-stable thread key + instance id", async () => {
         const binding = mockAgentBinding(["complete"]);
         const { run } = runWithChildThread([{ content: "the answer", role: "assistant", seq: 3 }]);
@@ -135,7 +149,7 @@ describe(agentAsTool, () => {
         // Derived from the parent's threadKey + toolCallId — same inputs replay
         // identically. The call id is hashed into the instance id (the thread key
         // keeps it raw), so no caller's id shape can make it unacceptable to `create`.
-        expect(binding.created[0]?.id).toBe("sub-research-97062c995ebfee41");
+        expect(binding.created[0]?.id).toBe("sub-research-b0724d177b75c671");
         expect(binding.created[0]?.params).toStrictEqual({ depth: 1, input: "find X", threadKey: "thread-1::sub::research::call_9" });
     });
 
@@ -257,7 +271,7 @@ describe(agentAsTool, () => {
 
         expect(result.stopped).toBe("final");
         expect(journal.invoked).toStrictEqual(["llm:turn:0", "tool:research:call_9", "llm:turn:1"]);
-        expect(binding.created[0]?.id).toBe("sub-research-97062c995ebfee41");
+        expect(binding.created[0]?.id).toBe("sub-research-b0724d177b75c671");
 
         const toolRow = [...runtime.messages.values()].find((message) => message.role === "tool" && message.toolName === "research");
 
