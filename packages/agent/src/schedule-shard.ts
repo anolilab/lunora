@@ -42,6 +42,19 @@ const withAgentScheduleShard = <S extends object>(scheduler: S, specs: ReadonlyA
 
             return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(scheduler) : value;
         },
+        // A spread of the facade (`withDeferredSchedules` copies it) reads its keys, so they must be the scheduler's.
+        has(_facade, property) {
+            return Reflect.has(scheduler, property);
+        },
+        ownKeys() {
+            return Reflect.ownKeys(scheduler);
+        },
+        getOwnPropertyDescriptor(_facade, property) {
+            const descriptor = Reflect.getOwnPropertyDescriptor(scheduler, property);
+
+            // The facade has no such property of its own, so every reported one must be configurable.
+            return descriptor === undefined ? undefined : { ...descriptor, configurable: true };
+        },
     });
 };
 

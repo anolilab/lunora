@@ -27,6 +27,17 @@ const recordingScheduler = (calls: ScheduledCall[]) => {
 };
 
 describe(withAgentScheduleShard, () => {
+    it("keeps the scheduler's own members when the facade is spread, as the deferral does", async () => {
+        expect.assertions(3);
+
+        const scheduler = withAgentScheduleShard(recordingScheduler([]), [{ className: "SupportAgentWorkflow", exportName: "support" }], "org-a");
+        const copy = { ...scheduler } as Record<string, unknown>;
+
+        expect(Object.keys(copy)).toStrictEqual(expect.arrayContaining(["cancel", "runAfter", "runAt"]));
+        expect(copy["cancel"]).toBeTypeOf("function");
+        await expect((copy["cancel"] as (id: string) => Promise<unknown>)("job-1")).resolves.toStrictEqual({ cancelled: true });
+    });
+
     it("stamps an agent run on a frozen scheduler, whose own methods a proxy could not replace", async () => {
         expect.assertions(2);
 
