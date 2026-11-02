@@ -246,14 +246,21 @@ const runOnce = (
  * The watchers for the folders that can hold a `lunora.config` codegen reads, each reporting only the candidate files in it.
  * Best effort: a folder the platform will not watch is skipped, and the Lunora folder's watch still runs.
  */
-const watchConfigFolders = (candidates: ReadonlySet<string>, onConfigChange: (filename: string) => void, warn: (message: string) => void): FSWatcher[] => {
+const watchConfigFolders = (
+    candidates: ReadonlySet<string>,
+    onConfigChange: (filename: string | undefined) => void,
+    warn: (message: string) => void,
+): FSWatcher[] => {
     const watchers: FSWatcher[] = [];
 
     for (const folder of new Set([...candidates].map((candidate) => dirname(candidate)))) {
         if (existsSync(folder)) {
             try {
                 const watcher = watch(folder, (_event, filename) => {
-                    if (typeof filename === "string" && candidates.has(join(folder, filename))) {
+                    // Some platforms report no name; the save may still be to a config, so it is forwarded as unnamed rather than dropped.
+                    if (typeof filename !== "string") {
+                        onConfigChange(undefined);
+                    } else if (candidates.has(join(folder, filename))) {
                         onConfigChange(filename);
                     }
                 });
@@ -555,7 +562,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
             ...watchConfigFolders(
                 configCandidates,
                 (filename) => {
-                    replayConfigEvent(filename);
+                    replayConfigEvent(filename ?? "?");
                 },
                 (message) => {
                     options.logger.warn(message);

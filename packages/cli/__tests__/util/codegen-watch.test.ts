@@ -411,6 +411,42 @@ describe("startCodegenWatch", () => {
         }
     });
 
+    it("regenerates on a config-folder event that reports no file name, rather than dropping it", async () => {
+        expect.assertions(2);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-config-unnamed-"));
+
+        writeFileSync(join(workdir, "package.json"), "{}", "utf8");
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "schema.ts"), "", "utf8");
+
+        const runs = runCounter();
+        vi.mocked(runCodegen).mockImplementation(() => {
+            runs.report();
+
+            return { platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>;
+        });
+
+        const handle = startCodegenWatch({ debounceMs: 0, logger: silentLogger().logger, lunoraDirectory: "lunora", projectRoot: workdir });
+
+        try {
+            await handle.ready;
+
+            const configListener = vi.mocked(watch).mock.calls.find((call) => call[0] === workdir && call.length === 2)?.[1] as
+                ((event: string, filename: string | null) => void) | undefined;
+
+            expect(configListener).toBeDefined();
+
+            configListener?.("rename", null);
+            await runs.reached(2);
+
+            expect(vi.mocked(runCodegen).mock.calls.length).toBeGreaterThanOrEqual(2);
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
     it("says so, and keeps the Lunora folder watch, when a config folder cannot be watched", async () => {
         expect.assertions(3);
 
