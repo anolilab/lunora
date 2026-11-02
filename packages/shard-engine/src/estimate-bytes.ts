@@ -81,10 +81,33 @@ const measureSerialized = (value: unknown, lengthOf: (encoded: string) => number
  */
 const estimateBytes = (value: unknown): number | undefined => measureSerialized(value, (encoded) => encoded.length);
 
-const textEncoder = new TextEncoder();
+/**
+ * Encoded (UTF-8) byte length of `text`: what a stored JSON string costs on disk and on the wire. Counted
+ * from the code units rather than encoded, since every read charges each stored document and an encoded
+ * copy of a near-cap read would be another cap's worth of allocation. A lone surrogate counts as the
+ * three bytes of U+FFFD, which is what `TextEncoder` writes for it.
+ */
+const utf8ByteLength = (text: string): number => {
+    let bytes = 0;
 
-/** Encoded (UTF-8) byte length of `text`: what a stored JSON string costs on disk and on the wire. */
-const utf8ByteLength = (text: string): number => textEncoder.encode(text).length;
+    // Iterates code points, so a surrogate pair is one character of four bytes; a lone surrogate is one
+    // character of three, as U+FFFD.
+    for (const character of text) {
+        const codePoint = character.codePointAt(0) ?? 0;
+
+        if (codePoint < 0x80) {
+            bytes += 1;
+        } else if (codePoint < 0x8_00) {
+            bytes += 2;
+        } else if (codePoint < 0x1_00_00) {
+            bytes += 3;
+        } else {
+            bytes += 4;
+        }
+    }
+
+    return bytes;
+};
 
 /**
  * The size of a value in UTF-8 bytes, where {@link estimateBytes} counts UTF-16 code units. For a value that
