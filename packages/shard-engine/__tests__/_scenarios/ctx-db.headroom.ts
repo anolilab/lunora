@@ -230,6 +230,7 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
                 codeOf(async () => {
                     await writer.get("notes", id);
                     await writer.patch("notes", id, { bucket: "b" });
+                    await writer.replace("notes", id, { body: "y".repeat(900), bucket: "c" });
                     await writer.delete("notes", id);
                 }),
             ).resolves.toBeUndefined();
@@ -706,6 +707,38 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
             });
 
             await expect(codeOf(async () => writer.insert("notes", { body: "b", bucket: "a" }))).resolves.toBeUndefined();
+        });
+
+        it("does not charge the scan that recomputes a removed min/max to the writing transaction", async () => {
+            expect.assertions(2);
+
+            const ledger: SchemaLike = {
+                tables: {
+                    ledger: {
+                        aggregateIndexes: [{ by: ["bucket"], field: "amount", name: "maxAmount", on: "ledger", op: "max" }],
+                        indexes: [],
+                        shape: { amount: { kind: "bigint" }, bucket: { kind: "string" }, pad: { kind: "string" } },
+                    },
+                },
+            };
+
+            runShardMigrations(sql, ledger);
+
+            const seed = createShardContextDatabase({ clock: () => 1_700_000_000_000, headroom: new TransactionHeadroomTracker(), schema: ledger, sql });
+            let largest = "";
+
+            for (let index = 1; index <= 10; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+                largest = await seed.insert("ledger", { amount: BigInt(index), bucket: "a", pad: "x".repeat(200) });
+            }
+
+            const stored = (sql.exec("SELECT __doc__ FROM ledger WHERE id = ?", largest).toArray()[0] as { __doc__: string }).__doc__;
+            const tracker = new TransactionHeadroomTracker({ maxReadBytes: new TextEncoder().encode(stored).length * 3 });
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, headroom: tracker, schema: ledger, sql });
+
+            // Deleting the group's maximum rescans the nine survivors; the caller read one document.
+            await expect(codeOf(async () => writer.delete("ledger", largest))).resolves.toBeUndefined();
+            expect(tracker.headroom().readBytes).toBeLessThanOrEqual(new TextEncoder().encode(stored).length * 2);
         });
 
         it("warns once when a read crosses 80% of a ceiling", async () => {

@@ -452,8 +452,10 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
         const validator = schema.tables[tableName]?.shape[field];
 
         if (validator && mayHoldProjectedValue(validator)) {
+            // Maintenance the caller cannot see or avoid: a group's survivors are rescanned, so the
+            // read goes around the transaction's read meter, as the companion backfills do.
             const rows = runDrizzle(
-                sql,
+                unwrapSql(sql),
                 dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}${whereSql}`,
             ).toArray();
             // The canonical reducer, not a second copy of it: this is the same
