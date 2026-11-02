@@ -50,7 +50,7 @@ import { Node as TsNode, Project } from "ts-morph";
 
 import type { AcceptedFinding } from "./advisor-accept";
 import { propertyKeyName } from "./discover/property-name";
-import { findProjectConfigFile } from "./project-config-path";
+import { findCodegenConfigFile, findProjectConfigFile } from "./project-config-path";
 
 /**
  * The literals {@link readProjectConfigLiterals} proves by parsing — narrowed,
@@ -208,25 +208,23 @@ const loadProjectConfig = async (projectRoot: string): Promise<LoadedProjectConf
  * idiom there is and reading it as "no keys" was indistinguishable from an empty
  * config.
  */
-const defaultExportObject = (sourceFile: SourceFile): ObjectLiteralExpression | undefined => {
-    const assignment = sourceFile.getExportAssignments().find((candidate) => !candidate.isExportEquals());
-    let expression = assignment?.getExpression();
+const unwrapLiteral = (value: TsNode | undefined): TsNode | undefined => {
+    let inner = value;
 
-    while (
-        expression !== undefined &&
-        (TsNode.isSatisfiesExpression(expression) || TsNode.isAsExpression(expression) || TsNode.isParenthesizedExpression(expression))
-    ) {
-        expression = expression.getExpression();
+    while (inner !== undefined && (TsNode.isSatisfiesExpression(inner) || TsNode.isAsExpression(inner) || TsNode.isParenthesizedExpression(inner))) {
+        inner = inner.getExpression();
     }
 
+    return inner;
+};
+
+const defaultExportObject = (sourceFile: SourceFile): ObjectLiteralExpression | undefined => {
+    const assignment = sourceFile.getExportAssignments().find((candidate) => !candidate.isExportEquals());
+    let expression: TsNode | undefined = unwrapLiteral(assignment?.getExpression());
+
+    // `export default config` names a `const`; its initializer unwraps the same way, parentheses included.
     if (expression !== undefined && TsNode.isIdentifier(expression)) {
-        const declaration = sourceFile.getVariableDeclaration(expression.getText());
-
-        expression = declaration?.getInitializer();
-
-        while (expression !== undefined && (TsNode.isSatisfiesExpression(expression) || TsNode.isAsExpression(expression))) {
-            expression = expression.getExpression();
-        }
+        expression = unwrapLiteral(sourceFile.getVariableDeclaration(expression.getText())?.getInitializer());
     }
 
     return expression !== undefined && TsNode.isObjectLiteralExpression(expression) ? expression : undefined;
@@ -242,15 +240,6 @@ const propertyLiteral = (property: PropertyAssignment | ShorthandPropertyAssignm
 };
 
 /** `value` with any `satisfies` / `as` / parentheses around it peeled off. */
-const unwrapLiteral = (value: TsNode | undefined): TsNode | undefined => {
-    let inner = value;
-
-    while (inner !== undefined && (TsNode.isSatisfiesExpression(inner) || TsNode.isAsExpression(inner) || TsNode.isParenthesizedExpression(inner))) {
-        inner = inner.getExpression();
-    }
-
-    return inner;
-};
 
 /**
  * The literal under `key` in the plain object literal `declared`, `absent`
@@ -417,7 +406,10 @@ const readLazyFunctions = (declared: TsNode | undefined, sourceFile: SourceFile)
     // The whole `codegen` value is not a literal this reader can walk. Only a value whose text names the key can be the
     // unreadable `lazyFunctions`; anything else (a `codegen` that never mentions it) is not a lazy-functions problem.
     if ("unreadable" in member) {
-        return declared?.getText().includes("lazyFunctions") === true ? { lazyFunctionsUnreadable: true } : {};
+        // A name this file cannot resolve (an import, say) may set the key, so it is reported; so is a value whose text names it.
+        const mayName = declared !== undefined && (TsNode.isIdentifier(declared) || declared.getText().includes("lazyFunctions"));
+
+        return mayName ? { lazyFunctionsUnreadable: true } : {};
     }
 
     const value = "literal" in member ? unwrapLiteral(member.literal) : undefined;
@@ -429,7 +421,14 @@ const readLazyFunctions = (declared: TsNode | undefined, sourceFile: SourceFile)
 
 /** `codegen.exclude` and `codegen.lazyFunctions` from the `codegen` object literal, each read on its own. */
 const readCodegen = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
-    return { codegen: { ...readExclude(declared, sourceFile), ...readLazyFunctions(declared, sourceFile) } };
+    // `codegen: sharedCodegen` names a `const` in this file: read the object it names. What it does not resolve stays as the name.
+    const named =
+        declared !== undefined && TsNode.isIdentifier(declared)
+            ? unwrapLiteral(sourceFile.getVariableDeclaration(declared.getText())?.getInitializer())
+            : undefined;
+    const value = named ?? declared;
+
+    return { codegen: { ...readExclude(value, sourceFile), ...readLazyFunctions(value, sourceFile) } };
 };
 
 /** `durableObjects.merge` from the `durableObjects` object literal: a boolean literal, or `unreadable`. */
@@ -597,18 +596,8 @@ const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile
     return TsNode.isObjectLiteralExpression(value) ? { remote: true } : { unreadable: true };
 };
 
-/**
- * The `target`, `remote`, `advisor.minSeverity`, `codegen.exclude`,
- * `codegen.lazyFunctions` and `services` LITERALS declared in the config, without evaluating it — see the
- * module header for what this can and cannot see, and why.
- */
-const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals => {
-    const configPath = findProjectConfigFile(projectRoot);
-
-    if (configPath === undefined) {
-        return {};
-    }
-
+/** The literals of one config file, read the same way whichever way the file was found. */
+const readConfigLiterals = (configPath: string): ProjectConfigLiterals => {
     let source: string;
 
     try {
@@ -659,6 +648,17 @@ const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals =
 };
 
 /**
+ * The `target`, `remote`, `advisor.minSeverity`, `codegen.exclude`,
+ * `codegen.lazyFunctions` and `services` LITERALS declared in the config, without evaluating it — see the
+ * module header for what this can and cannot see, and why.
+ */
+const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals => {
+    const configPath = findProjectConfigFile(projectRoot);
+
+    return configPath === undefined ? {} : readConfigLiterals(configPath);
+};
+
+/**
  * `lunora.config`'s `durableObjects.merge` (plan 462). An unreadable value is
  * said out loud and treated as off: merging changes which classes wrangler binds,
  * so it is never switched on by a value the parser could not prove.
@@ -684,14 +684,14 @@ let lazyFunctionsWarnedFor: string | undefined;
  * host — agrees without each having to pass the flag. An unreadable value is said
  * out loud and treated as off, like `durableObjects.merge`.
  */
-const readProjectLazyFunctions = (projectRoot: string): boolean => {
-    const { codegen } = readProjectConfigLiterals(projectRoot);
+const readProjectLazyFunctions = (lunoraDirectory: string): boolean => {
+    const configPath = findCodegenConfigFile(lunoraDirectory);
+    const { codegen } = configPath === undefined ? {} : readConfigLiterals(configPath);
 
     if (codegen?.lazyFunctionsUnreadable) {
         // Every entry point reads this on each run; the warning is said once per config version, as `codegen.exclude`'s is.
-        const configPath = findProjectConfigFile(projectRoot);
-        const stats = configPath === undefined ? undefined : statSync(configPath);
-        const key = stats === undefined || configPath === undefined ? "" : `${configPath}:${String(stats.mtimeMs)}:${String(stats.size)}`;
+        const stats = configPath === undefined ? undefined : statSync(configPath, { throwIfNoEntry: false });
+        const key = configPath === undefined || stats === undefined ? "" : `${configPath}:${String(stats.mtimeMs)}:${String(stats.size)}`;
 
         if (key !== lazyFunctionsWarnedFor) {
             lazyFunctionsWarnedFor = key;

@@ -4,6 +4,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
     CodegenDiagnosticError,
     createCodegenProject,
+    findProjectConfigFile,
     findTsconfig,
     fingerprintSchemaSources,
     isTestPath,
@@ -825,7 +826,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
             // `regenerate` the arming callback rather than being called back on,
             // so the two stay one-directional.
             // The value codegen last generated with, so a config save that flips `codegen.lazyFunctions` regenerates `_generated/`.
-            let lazyFunctionsSeen = readProjectLazyFunctions(options.projectRoot);
+            let lazyFunctionsSeen = readProjectLazyFunctions(absoluteSchemaDirectory);
             const scheduler = createRegenerateScheduler({
                 // Late-bound: `regenerate` reassigns `absoluteGeneratedDirectory`
                 // from codegen's emit, and the recheck must exclude the same tree
@@ -875,13 +876,16 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 if (PROJECT_CONFIG_FILENAMES.includes(basename(normalized)) && projectConfigCandidatePaths(absoluteSchemaDirectory).includes(normalized)) {
                     cachedProject = undefined;
 
-                    // `codegen.lazyFunctions` decides the shape of `_generated/`, so flipping it regenerates now; other config saves do not.
-                    const lazyNow = readProjectLazyFunctions(options.projectRoot);
+                    // `codegen.lazyFunctions` decides the shape of `_generated/`, so a flip regenerates now. The project-root config is
+                    // hashed by content, so saving it restarts the server, and the restarted server's first codegen reads the new value:
+                    // regenerating here too would race that restart. Only a nearer config, which the restart does not cover, regenerates.
+                    const lazyNow = readProjectLazyFunctions(absoluteSchemaDirectory);
                     const flipped = lazyNow !== lazyFunctionsSeen;
+                    const rootConfig = findProjectConfigFile(options.projectRoot);
 
                     lazyFunctionsSeen = lazyNow;
 
-                    return flipped;
+                    return flipped && (rootConfig === undefined || resolve(rootConfig) !== normalized);
                 }
 
                 // Only a file literally named `tsconfig.json` can possibly be the

@@ -372,6 +372,42 @@ describe("startCodegenWatch", () => {
         }
     });
 
+    it("regenerates when a lunora.config beside the Lunora folder changes, since codegen reads its settings from it", async () => {
+        expect.assertions(1);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-config-"));
+
+        // A package.json marks the project root, which bounds the config search codegen does.
+        writeFileSync(join(workdir, "package.json"), "{}", "utf8");
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "schema.ts"), "", "utf8");
+
+        const runs = runCounter();
+        vi.mocked(runCodegen).mockImplementation(() => {
+            runs.report();
+
+            return { platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>;
+        });
+
+        const handle = startCodegenWatch({ debounceMs: 0, logger: silentLogger().logger, lunoraDirectory: "lunora", projectRoot: workdir });
+
+        try {
+            await handle.ready;
+
+            // Let the folder watch arm first: a write that lands in the first moments after `watch()` can be missed.
+            await new Promise((resolve) => {
+                setTimeout(resolve, 500);
+            });
+            writeFileSync(join(workdir, "lunora.config.ts"), "export default { codegen: { lazyFunctions: true } };\n", "utf8");
+            await runs.reached(2);
+
+            expect(vi.mocked(runCodegen).mock.calls.length).toBeGreaterThanOrEqual(2);
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
     describe("postcodegen hook", () => {
         it("runs the project's postcodegen after a successful generate", async () => {
             expect.assertions(2);

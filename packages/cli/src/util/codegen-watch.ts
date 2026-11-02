@@ -243,6 +243,35 @@ const runOnce = (
 };
 
 /**
+ * The watchers for the folders that can hold a `lunora.config` codegen reads, each reporting only the candidate files in it.
+ * Best effort: a folder the platform will not watch is skipped, and the Lunora folder's watch still runs.
+ */
+const watchConfigFolders = (candidates: ReadonlySet<string>, onConfigChange: (filename: string) => void): FSWatcher[] => {
+    const watchers: FSWatcher[] = [];
+
+    for (const folder of new Set([...candidates].map((candidate) => dirname(candidate)))) {
+        if (existsSync(folder)) {
+            try {
+                const watcher = watch(folder, (_event, filename) => {
+                    if (typeof filename === "string" && candidates.has(join(folder, filename))) {
+                        onConfigChange(filename);
+                    }
+                });
+
+                watcher.on("error", () => {
+                    watcher.close();
+                });
+                watchers.push(watcher);
+            } catch {
+                // Skipped: see above.
+            }
+        }
+    }
+
+    return watchers;
+};
+
+/**
  * Start the codegen watch loop and return a handle to stop it. Regenerates on
  * startup, then on debounced changes under `lunora/` (ignoring writes to the
  * `_generated/` output to avoid a feedback loop). If the platform can't do a
@@ -463,6 +492,10 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
 
     // An RPC service's folder too: `_generated/services/` snapshots its types.
     const serviceWatchers: FSWatcher[] = [];
+    // The config files codegen reads for `codegen.exclude` and `codegen.lazyFunctions` sit beside the Lunora folder or above it,
+    // outside the watched tree, so each folder that can hold one is watched for those files alone.
+    const configWatchers: FSWatcher[] = [];
+    const configCandidates = new Set(projectConfigCandidatePaths(watchDirectory));
 
     try {
         watcher = watch(watchDirectory, { recursive: true }, (_event, filename) => {
@@ -498,11 +531,20 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                 serviceWatchers.push(serviceWatcher);
             }
         }
+        configWatchers.push(
+            ...watchConfigFolders(configCandidates, (filename) => {
+                onEvent(undefined, filename);
+            }),
+        );
     } catch (error: unknown) {
         watcher?.close();
 
         for (const serviceWatcher of serviceWatchers) {
             serviceWatcher.close();
+        }
+
+        for (const configWatcher of configWatchers) {
+            configWatcher.close();
         }
 
         return unavailable(error instanceof Error ? error.message : String(error));
@@ -525,6 +567,10 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
 
             for (const serviceWatcher of serviceWatchers) {
                 serviceWatcher.close();
+            }
+
+            for (const configWatcher of configWatchers) {
+                configWatcher.close();
             }
 
             // Clearing `pending` stops the loop before its next iteration, and
