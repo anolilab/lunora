@@ -1,6 +1,6 @@
 {
     "name": "lunorash",
-    "version": "1.0.0-alpha.467",
+    "version": "1.0.0-alpha.468",
     "description": "The Lunora umbrella package: one install for the server authoring API, worker runtime, Durable Objects, and the lunora CLI",
     "keywords": [
         "backend",
@@ -166,17 +166,17 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/cli": "1.0.0-alpha.469",
-        "@lunora/client": "1.0.0-alpha.281",
-        "@lunora/do": "1.0.0-alpha.276",
+        "@lunora/cli": "1.0.0-alpha.470",
+        "@lunora/client": "1.0.0-alpha.282",
+        "@lunora/do": "1.0.0-alpha.278",
         "@lunora/errors": ">=1.0.0-alpha.77 <2.0.0-0",
-        "@lunora/flags": "1.0.0-alpha.103",
-        "@lunora/observability": "1.0.0-alpha.197",
-        "@lunora/platform": "1.0.0-alpha.78",
+        "@lunora/flags": "1.0.0-alpha.104",
+        "@lunora/observability": "1.0.0-alpha.198",
+        "@lunora/platform": "1.0.0-alpha.79",
         "@lunora/ratelimit": "1.0.0-alpha.194",
-        "@lunora/runtime": "1.0.0-alpha.271",
-        "@lunora/server": "1.0.0-alpha.264",
-        "@lunora/values": "1.0.0-alpha.93"
+        "@lunora/runtime": "1.0.0-alpha.272",
+        "@lunora/server": "1.0.0-alpha.265",
+        "@lunora/values": "1.0.0-alpha.94"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",

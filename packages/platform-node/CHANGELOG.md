@@ -1,3 +1,14 @@
+## @lunora/platform-node [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.212...@lunora/platform-node@1.0.0-alpha.213) (2026-11-02)
+
+### Features
+
+* **runtime:** named, revocable admin tokens ([#1402](https://github.com/anolilab/lunora/issues/1402)) ([6efd702](https://github.com/anolilab/lunora/commit/6efd70285fcfe0dd5525b298494bca771c3f6a8c))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.278
+
 ## @lunora/platform-node [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.211...@lunora/platform-node@1.0.0-alpha.212) (2026-11-02)
 
 

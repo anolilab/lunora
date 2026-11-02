@@ -97,7 +97,7 @@
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.277",
+        "@lunora/do": "1.0.0-alpha.278",
         "@lunora/runtime": "1.0.0-alpha.272",
         "@lunora/shard-engine": "1.0.0-alpha.184",
         "@types/node": "catalog:types",

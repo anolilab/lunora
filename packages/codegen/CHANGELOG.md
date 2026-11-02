@@ -1,3 +1,19 @@
+## @lunora/codegen [1.0.0-alpha.389](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.388...@lunora/codegen@1.0.0-alpha.389) (2026-11-02)
+
+### Features
+
+* **runtime:** named, revocable admin tokens ([#1402](https://github.com/anolilab/lunora/issues/1402)) ([6efd702](https://github.com/anolilab/lunora/commit/6efd70285fcfe0dd5525b298494bca771c3f6a8c))
+
+### Bug Fixes
+
+* **do:** hold the shard while a lazy function module loads ([#1413](https://github.com/anolilab/lunora/issues/1413)) ([8001d68](https://github.com/anolilab/lunora/commit/8001d68cee0b9da2cbebe9b781f7cd05762512b8))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.282
+* **@lunora/do:** upgraded to 1.0.0-alpha.278
+
 ## @lunora/codegen [1.0.0-alpha.388](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.387...@lunora/codegen@1.0.0-alpha.388) (2026-11-02)
 
 ### ⚠ BREAKING CHANGES

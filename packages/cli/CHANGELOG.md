@@ -1,3 +1,17 @@
+## @lunora/cli [1.0.0-alpha.470](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.469...@lunora/cli@1.0.0-alpha.470) (2026-11-02)
+
+### Features
+
+* **cli:** warn when the built worker nears the startup cpu limit ([#1412](https://github.com/anolilab/lunora/issues/1412)) ([7d5ef6b](https://github.com/anolilab/lunora/commit/7d5ef6b6f870d06dac2c420908a2cc65f5bb0aa4))
+* **runtime:** named, revocable admin tokens ([#1402](https://github.com/anolilab/lunora/issues/1402)) ([6efd702](https://github.com/anolilab/lunora/commit/6efd70285fcfe0dd5525b298494bca771c3f6a8c))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.389
+* **@lunora/config:** upgraded to 1.0.0-alpha.446
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.288
+
 ## @lunora/cli [1.0.0-alpha.469](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.468...@lunora/cli@1.0.0-alpha.469) (2026-11-02)
 
 ### ⚠ BREAKING CHANGES

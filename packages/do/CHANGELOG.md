@@ -1,3 +1,9 @@
+## @lunora/do [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.277...@lunora/do@1.0.0-alpha.278) (2026-11-02)
+
+### Bug Fixes
+
+* **do:** hold the shard while a lazy function module loads ([#1413](https://github.com/anolilab/lunora/issues/1413)) ([8001d68](https://github.com/anolilab/lunora/commit/8001d68cee0b9da2cbebe9b781f7cd05762512b8))
+
 ## @lunora/do [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.276...@lunora/do@1.0.0-alpha.277) (2026-11-02)
 
 ### Features

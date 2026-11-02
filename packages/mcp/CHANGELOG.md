@@ -1,3 +1,14 @@
+## @lunora/mcp [1.0.0-alpha.288](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.287...@lunora/mcp@1.0.0-alpha.288) (2026-11-02)
+
+### Features
+
+* **runtime:** named, revocable admin tokens ([#1402](https://github.com/anolilab/lunora/issues/1402)) ([6efd702](https://github.com/anolilab/lunora/commit/6efd70285fcfe0dd5525b298494bca771c3f6a8c))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.282
+
 ## @lunora/mcp [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.286...@lunora/mcp@1.0.0-alpha.287) (2026-11-02)
 
 ### ⚠ BREAKING CHANGES
