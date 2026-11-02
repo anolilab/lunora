@@ -13,6 +13,34 @@ describe("createNodeSchedulerHost", () => {
         vi.useRealTimers();
     });
 
+    describe("cron dialect", () => {
+        it("fires a weekday cron on the Cloudflare weekday, not the default dialect's", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:00Z") });
+
+            const database = new Database(":memory:");
+            const onDispatch = vi.fn<(functionPath: string) => void>();
+            const host = createNodeSchedulerHost(database, { onDispatch: async (functionPath) => { onDispatch(functionPath); } });
+
+            try {
+                // Weekday 1 is Sunday under Cloudflare's dialect and Monday under the default one. From Sunday
+                // noon UTC the Cloudflare fire is six days away; the default dialect would fire within the day.
+                await host.scheduler.cron?.("0 0 * * 1", "reports:weekly", {});
+                await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+
+                expect(onDispatch).not.toHaveBeenCalled();
+
+                await vi.advanceTimersByTimeAsync(6 * 24 * 60 * 60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledWith("reports:weekly");
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+    });
+
     describe("job lifecycle (get)", () => {
         it("reports running while the handler runs, succeeded after it, and canceled for a cancelled job", async () => {
             expect.assertions(4);
