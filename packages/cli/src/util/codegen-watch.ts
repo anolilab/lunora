@@ -253,13 +253,18 @@ const configDigest = (candidates: ReadonlyArray<string>): string => {
     for (const candidate of candidates) {
         hash.update(candidate).update("\0");
 
+        // Presence is hashed on its own, so an empty file and no file at all are different inputs.
         if (existsSync(candidate)) {
+            hash.update("present\0");
+
             try {
                 hash.update(readFileSync(candidate));
             } catch {
                 // Removed between the check and the read: recorded as unreadable, which still differs from its content.
                 hash.update("unreadable");
             }
+        } else {
+            hash.update("absent");
         }
 
         hash.update("\0");
