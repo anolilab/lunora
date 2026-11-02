@@ -1084,6 +1084,7 @@ interface TableSnapshot {
     fields: Record<string, FieldSnapshot>;
     indexes: Record<string, IndexSnapshot>;
     memory?: boolean;
+    refinementsRecorded?: true;
     relations: Record<string, RelationSnapshot>;
     shardMode: string;
     ttl?: TtlSnapshot;

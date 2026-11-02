@@ -276,6 +276,28 @@ describe("diffSnapshots", () => {
         expect(diff.unsupported[0]?.kind).toBe("columnTypeChange");
     });
 
+    it("does not ask for manual SQL when only a column's validation bound changed", () => {
+        expect.assertions(2);
+
+        const column = (refined: boolean): SchemaSnapshot["tables"][string]["columns"][string] => {
+            return {
+                field: refined
+                    ? { kind: "number", nullable: false, optional: false, refined: true, unique: false }
+                    : { kind: "number", nullable: false, optional: false, unique: false },
+                nullable: false,
+                sqlType: "REAL",
+            };
+        };
+        const previous = snapshot({ sessions: { columns: { amount: column(false) }, indexes: {}, name: "sessions" } });
+        const next = snapshot({ sessions: { columns: { amount: column(true) }, indexes: {}, name: "sessions" } });
+
+        // A `.min()` changes no column; the deploy gate reports what it means for stored values.
+        const diff = diffSnapshots(previous, next);
+
+        expect(diff.unsupported).toStrictEqual([]);
+        expect(diff.empty).toBe(true);
+    });
+
     it("empty diff when snapshots are identical", () => {
         expect.assertions(3);
 

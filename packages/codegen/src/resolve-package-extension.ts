@@ -210,6 +210,18 @@ const runtimeValidatorToIR = (validator: RuntimeValidator | undefined): Validato
         }
     }
 
+    // A `.check()` with a schema fragment (`.min()`, `.max()`, …) leaves it in `_meta.constraints`. Schema drift
+    // compares `hasRefinement`, so without it a bound added to a package column would pass the deploy gate unseen.
+    const constraints = meta["constraints"] as Record<string, unknown> | undefined;
+
+    if (constraints !== undefined && Object.keys(constraints).length > 0) {
+        ir.hasRefinement = true;
+
+        if (kind === "string" && typeof constraints["maxLength"] === "number") {
+            ir.stringMaxLength = constraints["maxLength"];
+        }
+    }
+
     return ir;
 };
 

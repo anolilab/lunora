@@ -87,7 +87,12 @@ export default defineDefault;
                          shardMode: { kind: "root" },
                      },
                      events: {
-                         shape: { deletedAt: s("number"), expiresAt: s("number") },
+                         shape: {
+                             code: { kind: "string", _meta: { column: { notNull: true }, constraints: { maxLength: 8 } } },
+                             deletedAt: s("number"),
+                             expiresAt: s("number"),
+                             rank: { kind: "number", _meta: { column: { notNull: true }, constraints: { minimum: 1 } } },
+                         },
                          indexes: [],
                          aggregateIndexes: [{ name: "byCount" }],
                          commitOrderedMode: true,
@@ -231,7 +236,7 @@ export default defineSchema({ todos: defineTable({ title: v.string() }) }).exten
     });
 
     it("keeps a factory table's declarations: expiry, indexes, relations, sensitivity, backend, memory, soft delete, visibility, source", () => {
-        expect.assertions(6);
+        expect.assertions(7);
 
         const discovered = tables({
             "schema.ts": `import { defineSchema, defineTable, v } from "@lunora/server";
@@ -268,6 +273,11 @@ export default defineSchema({ todos: defineTable({ title: v.string() }) }).exten
             hasTenantBy: true,
             mode: "incremental",
             query: "select * from feed",
+        });
+        // Schema drift compares the refinement marker; a bound on a package column must reach it.
+        expect(discovered.find((table) => table.name === "rich_events")?.shape).toMatchObject({
+            code: { hasRefinement: true, kind: "string", stringMaxLength: 8 },
+            rank: { hasRefinement: true, kind: "number" },
         });
         expect(discovered.find((table) => table.name === "rich_events")).toMatchObject({
             aggregateIndexed: true,
