@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.386](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.385...@lunora/codegen@1.0.0-alpha.386) (2026-11-02)
+
+### Bug Fixes
+
+* **codegen:** type lazy function manifest entries for sensitive args ([#1441](https://github.com/anolilab/lunora/issues/1441)) ([d7e239e](https://github.com/anolilab/lunora/commit/d7e239eb0d15eb4c618c841a353940891a54c52f))
+
 ## @lunora/codegen [1.0.0-alpha.385](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.384...@lunora/codegen@1.0.0-alpha.385) (2026-11-02)
 
 ### ⚠ BREAKING CHANGES
