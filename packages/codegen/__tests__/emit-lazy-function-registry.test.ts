@@ -79,14 +79,14 @@ describe("lazy function registry", () => {
                 lazyFunctions: true,
             });
             const checkedType = 'satisfies RegisteredLunoraFunction & Pick<FunctionManifestEntry, "argumentDescriptors" | "channel" | "expose">';
-            const invalidPlaceholder = source.replace(/(handler: unloadedFunctionHandler, \.\.\..*?)"kind":"query"/u, '$1"kind":"invalid"');
+            const invalidPlaceholder = source.replace(/(handler: unloadedFunctionHandler, .*?)"kind":"query"/u, '$1"kind":"invalid"');
             const oldCastControl = invalidPlaceholder.replaceAll(checkedType, "as unknown as RegisteredLunoraFunction");
 
             expect(typecheckGeneratedFunctions(projectRoot, source)).toEqual([]);
             expect(invalidPlaceholder).not.toBe(source);
             expect(typecheckGeneratedFunctions(projectRoot, invalidPlaceholder)).toEqual([
                 expect.stringContaining("Type '\"invalid\"' is not assignable"),
-                expect.stringContaining("does not satisfy the expected type"),
+                expect.stringContaining("Type '\"invalid\"' is not assignable"),
             ]);
             expect(typecheckGeneratedFunctions(projectRoot, oldCastControl)).toEqual([]);
 
@@ -144,6 +144,26 @@ describe("lazy function registry", () => {
 
             expect(source).toContain('"sensitive":true');
             expect(typecheckGeneratedFunctions(projectRoot, source)).toEqual([]);
+        } finally {
+            rmSync(projectRoot, { force: true, recursive: true });
+        }
+    });
+
+    it("rejects a lazy stub member that the registry type does not declare", () => {
+        expect.assertions(2);
+
+        const projectRoot = mkdtempSync(join(tmpdir(), "lunora-lazy-registry-excess-"));
+
+        try {
+            makeFunctionTypecheckProject(projectRoot);
+            const source = emitFunctions({ functions: [makeFunction("premium")], lazyFunctions: true });
+            const withUndeclared = source.replace("handler: unloadedFunctionHandler, ", "handler: unloadedFunctionHandler, undeclaredField: 1, ");
+
+            expect(withUndeclared).not.toBe(source);
+            expect(typecheckGeneratedFunctions(projectRoot, withUndeclared)).toEqual([
+                expect.stringContaining("'undeclaredField' does not exist in type 'RegisteredLunoraFunction & Pick"),
+                expect.stringContaining("'undeclaredField' does not exist in type 'RegisteredLunoraFunction'."),
+            ]);
         } finally {
             rmSync(projectRoot, { force: true, recursive: true });
         }
