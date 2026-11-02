@@ -1,3 +1,41 @@
+## @lunora/vite [1.0.0-alpha.420](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.419...@lunora/vite@1.0.0-alpha.420) (2026-11-02)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** the `lazyFunctions` option is removed from `lunora()`
+(@lunora/vite) and the Rspack/Rsbuild plugin options (@lunora/rspack). Set
+`codegen: { lazyFunctions: true }` in lunora.config.ts instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(vite): re-read codegen.lazyFunctions on config save
+
+The vite and rspack plugins refuse the removed `lazyFunctions` option with
+an error that points at `codegen.lazyFunctions` in lunora.config. Before,
+a plugin that still passed it regenerated the eager registry silently.
+
+The codegen watcher now regenerates when a config save flips
+`codegen.lazyFunctions`, since that flag decides the shape of _generated/.
+Other config saves still do not regenerate.
+
+A non-boolean `codegen.lazyFunctions` warns once per config version, not on
+every codegen run.
+* **codegen:** the `lazyFunctions` option of the vite and rspack plugins is
+removed. Set `codegen: { lazyFunctions: true }` in lunora.config, or pass
+--lazy-functions for one run.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **codegen:** read lazyFunctions from lunora.config in every entry point ([#1414](https://github.com/anolilab/lunora/issues/1414)) ([485a3d5](https://github.com/anolilab/lunora/commit/485a3d57d596c9b1fbe98cf58e50a274a6148d60))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.390
+* **@lunora/config:** upgraded to 1.0.0-alpha.447
+
 ## @lunora/vite [1.0.0-alpha.419](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.418...@lunora/vite@1.0.0-alpha.419) (2026-11-02)
 
 ### Features
