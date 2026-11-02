@@ -267,10 +267,12 @@ export class ${voiceClassName} extends VoiceSessionDO {
         .join("\n");
 
     const imports = agents.map((agent) => agent.exportName).join(", ");
-    let runtimeImport = `import { compileAgentWorkflow } from "@lunora/agent";`;
+    // `/core` keeps the agent loop and the AI SDK out of the Worker's startup graph. The `@lunora/agent` barrel is only
+    // imported where a voice session needs it, since `VoiceSessionDO` builds its model adapters in its constructor.
+    let runtimeImport = `import { compileAgentWorkflow } from "@lunora/agent/core";`;
 
     if (hasVoice) {
-        runtimeImport = `import { compileAgentWorkflow, VoiceSessionDO } from "@lunora/agent";`;
+        runtimeImport = `import { compileAgentWorkflow } from "@lunora/agent/core";\nimport { VoiceSessionDO } from "@lunora/agent";`;
     } else if (lazy) {
         // The `@lunora/agent` barrel (agent loop, model SDKs) loads with the definitions, on the first run.
         runtimeImport = "";
@@ -289,7 +291,7 @@ export class ${voiceClassName} extends VoiceSessionDO {
  * \`export * from "./lunora/_generated/agents.js";\`${voiceHeaderNote}
  */
 import LunoraWorkflow from "@lunora/workflow/do";
-${runtimeImport === "" ? "" : `${runtimeImport}\n`}import type { AgentRunInput, AgentRunResult } from "@lunora/agent";
+${runtimeImport === "" ? "" : `${runtimeImport}\n`}import type { AgentRunInput, AgentRunResult } from "@lunora/agent/core";
 ${lazy ? "" : `\nimport { ${imports} } from "../agents.js";\n`}
 ${classes}`;
 };
@@ -607,7 +609,7 @@ const emitAgentFragments = (
         // hold one and the app imports `requestSecretTool`. Left off otherwise, so the
         // secret mutations refuse with a typed error rather than reaching an undefined field.
         contextField: hasSecretValues ? `\n                agents,\n                agentSecrets: this.secretValues,` : `\n                agents,`,
-        importLines: [`import { createAgentContext } from "@lunora/agent";`, `import type { AgentBindingSpec } from "@lunora/agent";`],
+        importLines: [`import { createAgentContext } from "@lunora/agent/core";`, `import type { AgentBindingSpec } from "@lunora/agent/core";`],
         // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
         specs: `
 /** Wiring specs for \`ctx.agents\` (codegen-derived from \`lunora/agents.ts\`). */

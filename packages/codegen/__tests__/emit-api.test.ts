@@ -37,7 +37,7 @@ describe("emitApi", () => {
         const rendered = emitApi({ agents: [SUPPORT_AGENT], functions: [] });
 
         // The flat AgentRunInput is imported (type-only) so `cronJobs()` args infer.
-        expect(rendered).toContain('import type { AgentRunInput } from "@lunora/agent";');
+        expect(rendered).toContain('import type { AgentRunInput } from "@lunora/agent/core";');
         // The shared WorkflowReference interface backs the agent handle (an agent run is a workflow instance).
         expect(rendered).toContain("export interface WorkflowReference<Params = Record<string, unknown>> {");
         // Typed reference carries AgentRunInput.

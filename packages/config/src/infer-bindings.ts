@@ -630,7 +630,7 @@ const describeDeclaredExports = (
  */
 const describeCapabilitySignals = (capabilities: Capabilities, exported: ReadonlySet<string>, schema: SchemaFacts): string[] => {
     const rules: ReadonlyArray<[boolean, string]> = [
-        [capabilities.usesAi, `AI (${usageOf("ai")}, or env.AI is used)`],
+        [capabilities.usesAi, `AI (${usageOf("ai")}, env.AI is used, or an agent is declared)`],
         [
             capabilities.usesAuth && !exported.has("SessionDO"),
             "hint: @lunora/auth is imported; its tables are D1-backed by default. For DO-backed auth (what @better-auth/scim needs), pass `namespace` to .auth() and export the generated auth DO class",
@@ -781,7 +781,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const scanDirectories = options.scanDirs ?? DEFAULT_SCAN_DIRECTORIES;
 
     const scan = (): CapabilityScan => scanCapabilities(options.projectRoot, scanDirectories, schemaDirectory);
-    const { scannedFiles, ...capabilities } =
+    const { scannedFiles, ...scannedCapabilities } =
         options.cache === undefined ? scan() : options.cache.memo(`capabilities:${options.projectRoot}:${schemaDirectory}:${scanDirectories.join(",")}`, scan);
     const entry = resolveWorkerEntry(options.projectRoot);
     let durableObjects: DurableObjectSpec[];
@@ -804,12 +804,16 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     }
 
     const discoveredSchema = schemaFacts(options.projectRoot, schemaDirectory, options.cache);
-    const schema: SchemaFacts = { ...discoveredSchema, needsD1: capabilities.needsD1 || discoveredSchema.needsD1 };
+    const schema: SchemaFacts = { ...discoveredSchema, needsD1: scannedCapabilities.needsD1 || discoveredSchema.needsD1 };
     const containers = detectClassExports(entry, discoverContainerInfo(options.projectRoot, schemaDirectory, options.cache).containers, "containers");
     const workflows = detectClassExports(entry, discoverWorkflowInfo(options.projectRoot, schemaDirectory).workflows, "workflows");
     // Agents compile onto Cloudflare Workflows, so — like workflows — only an
     // exported agent WorkflowEntrypoint class is safe to reconcile into `exports`.
     const agents = detectClassExports(entry, discoverAgentInfo(options.projectRoot, schemaDirectory).agents, "agents");
+    // An agent calls Workers AI through `env.AI` (a `@cf/...` model, voice, memory
+    // extraction) without the app importing `@lunora/ai` or reading `ctx.ai`, so a
+    // declared agent needs the binding on its own.
+    const capabilities = { ...scannedCapabilities, usesAi: scannedCapabilities.usesAi || agents.length > 0 };
     // Queues need no worker-entry export (their `queue()` handler rides
     // `createWorker`), so the discovered list is reconcilable as-is.
     const queues = [...discoverQueueInfo(options.projectRoot, schemaDirectory).queues];

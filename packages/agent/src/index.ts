@@ -14,6 +14,7 @@ export { functionTool } from "./function-tool";
 export { createAgentGenerate, createEpisodeExtract, createGraphExtract, createStreamGenerate, resolveAgentModel } from "./generate";
 export type { JsCodeToolInput, JsCodeToolOptions, JsCodeToolResult } from "./js-code-tool";
 export { jsCodeTool } from "./js-code-tool";
+export { default as jsonSchema } from "./json-schema";
 export type { McpCallResult, McpClientLike, McpContentPart, McpToolInfo, McpToolsOptions } from "./mcp";
 export { adaptMcpResult, mcpTools } from "./mcp";
 export { buildModelMessages } from "./model-messages";

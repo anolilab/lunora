@@ -256,21 +256,6 @@ const SELF_DESCRIBING_BINDINGS = {
 } as const satisfies Partial<Record<keyof WranglerShape, { binding: string; label: string }>>;
 
 /**
- * Add one {@link SELF_DESCRIBING_BINDINGS} section if absent, written safely
- * like `DB`. Idempotent on `parsed[key].binding`. Pure.
- */
-const reconcileSelfDescribing = (text: string, parsed: WranglerShape, key: keyof typeof SELF_DESCRIBING_BINDINGS): ReconcileStep => {
-    const { binding, label } = SELF_DESCRIBING_BINDINGS[key];
-    const current = parsed[key]?.binding;
-
-    if (typeof current === "string" && current.length > 0) {
-        return { added: [], text };
-    }
-
-    return { added: [label], text: applyModify(text, [key], { binding }) };
-};
-
-/**
  * Whether reconcile should write the `analytics` binding: `ctx.analyticsSql` is
  * read and the project does NOT chain `.analyticsSql(...)` onto `defineApp()`.
  * The chain is a parsed call anywhere in the project ({@link scanAppChains}), so
@@ -346,6 +331,34 @@ const bindingNameOwner = (parsed: WranglerShape, name: string): string | undefin
     }
 
     return undefined;
+};
+
+/**
+ * Add one {@link SELF_DESCRIBING_BINDINGS} section if absent, written safely
+ * like `DB`. Idempotent on `parsed[key].binding`. Pure.
+ */
+const reconcileSelfDescribing = (text: string, parsed: WranglerShape, key: keyof typeof SELF_DESCRIBING_BINDINGS): ReconcileStep => {
+    const { binding, label } = SELF_DESCRIBING_BINDINGS[key];
+    const current = parsed[key]?.binding;
+
+    if (typeof current === "string" && current.length > 0) {
+        return { added: [], text };
+    }
+
+    // Another section holding the name makes wrangler reject the config, so the binding is not written over it.
+    const owner = bindingNameOwner(parsed, binding);
+
+    if (owner !== undefined) {
+        return {
+            added: [],
+            text,
+            warnings: [
+                `${key}: not adding the ${label} binding — the name "${binding}" is already bound by \`${owner}\` in wrangler.jsonc. Rename that binding, then set ${key}.binding by hand.`,
+            ],
+        };
+    }
+
+    return { added: [label], text: applyModify(text, [key], { binding }) };
 };
 
 /** The warning for a binding reconcile would add under a name another section already uses. */

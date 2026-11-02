@@ -169,6 +169,28 @@ describe("discover/agents", () => {
         });
     });
 
+    it("lifts a defineAgent imported from the startup-light /core entry", () => {
+        expect.assertions(1);
+
+        writeAgents(`
+            import { defineAgent } from "@lunora/agent/core";
+            export const support = defineAgent({ model: "m" });
+        `);
+
+        expect(discoverAgents(newProject(), workdir).map((agent) => agent.exportName)).toEqual(["support"]);
+    });
+
+    it("does not lift a defineAgent imported from an unrelated module", () => {
+        expect.assertions(1);
+
+        writeAgents(`
+            import { defineAgent } from "./my-agents";
+            export const support = defineAgent({ model: "m" });
+        `);
+
+        expect(discoverAgents(newProject(), workdir)).toEqual([]);
+    });
+
     it("tolerates a hand-written runtime-function re-export without lifting it", () => {
         expect.assertions(1);
 
@@ -327,7 +349,7 @@ describe("emit (agents)", () => {
         const content = emitAgents(discoverSupportAgent());
 
         expect(content).toContain('import LunoraWorkflow from "@lunora/workflow/do";');
-        expect(content).toContain('import { compileAgentWorkflow } from "@lunora/agent";');
+        expect(content).toContain('import { compileAgentWorkflow } from "@lunora/agent/core";');
         expect(content).toContain('import { support } from "../agents.js";');
         expect(content).toContain("export class SupportAgentWorkflow extends LunoraWorkflow<AgentRunInput, AgentRunResult> {");
         expect(content).toContain('super(ctx, env, compileAgentWorkflow(support, "support"), "support");');
@@ -353,7 +375,7 @@ describe("emit (agents)", () => {
 
         const content = emitAgents(discoverAgents(newProject(), workdir));
 
-        expect(content).toContain('import { compileAgentWorkflow, VoiceSessionDO } from "@lunora/agent";');
+        expect(content).toContain('import { compileAgentWorkflow } from "@lunora/agent/core";\nimport { VoiceSessionDO } from "@lunora/agent";');
         expect(content).toContain("export class SupportVoiceDO extends VoiceSessionDO {");
         expect(content).toContain('super(ctx, env, support, "support");');
         // The workflow class is still emitted alongside the voice DO.
@@ -362,7 +384,7 @@ describe("emit (agents)", () => {
         // A voice-free agent emits neither the import nor the DO class (byte-identical path).
         const voiceless = emitAgents(discoverSupportAgent());
 
-        expect(voiceless).toContain('import { compileAgentWorkflow } from "@lunora/agent";');
+        expect(voiceless).toContain('import { compileAgentWorkflow } from "@lunora/agent/core";');
         expect(voiceless).not.toContain("VoiceSessionDO");
     });
 
@@ -397,7 +419,7 @@ describe("emit (agents)", () => {
 
         const withAgents = emitServer({ agents: discoverSupportAgent(), schema: EMPTY_SCHEMA });
 
-        expect(withAgents).toContain('import type { AgentHandle } from "@lunora/agent";');
+        expect(withAgents).toContain('import type { AgentHandle } from "@lunora/agent/core";');
         expect(withAgents).toContain("export interface LunoraAgents {");
         expect(withAgents).toContain("readonly support: AgentHandle;");
         // The field lands on BOTH MutationCtx and ActionCtx.
@@ -418,7 +440,7 @@ describe("emit (agents)", () => {
 
         const shard = emitShard({ agents: discoverSupportAgent(), schema: EMPTY_SCHEMA });
 
-        expect(shard).toContain('import { createAgentContext } from "@lunora/agent";');
+        expect(shard).toContain('import { createAgentContext } from "@lunora/agent/core";');
         expect(shard).toContain('{ className: "SupportAgentWorkflow", exportName: "support" },');
         expect(shard).toContain("const agents = createAgentContext(env, LUNORA_AGENTS, { exports: this.state.exports });");
         expect(shard).toContain("agents,");
