@@ -467,9 +467,9 @@ const build = (appDirectory, lazy) => {
 
     // The env var opts in as well as the flag, so an exported one would turn the eager build lazy.
     const { LUNORA_LAZY_FUNCTIONS: _ignored, ...environment } = process.env;
-    // --no-smoke-load: the smoke check boots `wrangler dev` (workerd, needs loopback) to evaluate
-    // every lazy module; it does not change the graph, and its failure would read as a build failure here.
-    const mode = lazy ? ["--lazy-functions", "--no-smoke-load"] : [];
+    // The lazy build runs the smoke load: it evaluates every lazy module under workerd, so a module that
+    // throws at evaluation fails the gate here instead of at the first request.
+    const mode = lazy ? ["--lazy-functions"] : [];
 
     try {
         // --no-strict-advisories: the synthetic procedures key rows on an argument
@@ -659,12 +659,14 @@ for (const { label, measured, reference } of builds) {
     }
 }
 
-if (graph.forbidden.length > 0) {
-    fail(
-        `An integration SDK is statically reachable from the reference Worker's entry, so every isolate evaluates it at\n` +
-            `startup whether or not a request uses it. Load it on first use (a loader the integration awaits), not at\n` +
-            `module scope:\n${graph.forbidden.map(({ chain, name }) => `  ${name}:\n    ${chain.join("\n    -> ")}`).join("\n")}`,
-    );
+for (const { label, measured } of builds) {
+    if (measured.graph.forbidden.length > 0) {
+        fail(
+            `An integration SDK is statically reachable from the reference Worker's entry (${label} build), so every isolate evaluates it at\n` +
+                `startup whether or not a request uses it. Load it on first use (a loader the integration awaits), not at\n` +
+                `module scope:\n${measured.graph.forbidden.map(({ chain, name }) => `  ${name}:\n    ${chain.join("\n    -> ")}`).join("\n")}`,
+        );
+    }
 }
 
 if (update) {
