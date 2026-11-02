@@ -1,3 +1,9 @@
+## @lunora/mcp [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.285...@lunora/mcp@1.0.0-alpha.286) (2026-11-02)
+
+### Features
+
+* **scheduler:** add retry.forever and an outbox admin surface ([#1378](https://github.com/anolilab/lunora/issues/1378)) ([b83a9ea](https://github.com/anolilab/lunora/commit/b83a9eacccb29b90981f4b55c30066ef4636e2a2))
+
 ## @lunora/mcp [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.284...@lunora/mcp@1.0.0-alpha.285) (2026-11-02)
 
 
