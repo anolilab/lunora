@@ -39,7 +39,10 @@
  * entry (the dialect `@lunora/scheduler` validates with, so one grammar stays
  * authoritative across the repo: the default dialect reads weekday 1 as Monday,
  * Cloudflare as Sunday) and re-armed from the durable table on
- * construction exactly like one-shot jobs.
+ * construction exactly like one-shot jobs. The sixth, seconds-leading field the
+ * host contract's conformance suite registers stays accepted (`seconds:
+ * "optional"`, as `@lunora/scheduler` does); a five-field expression keeps the
+ * Cloudflare weekday numbering.
  */
 
 import { randomUUID } from "node:crypto";
@@ -48,6 +51,9 @@ import { deserialize, serialize } from "node:v8";
 import type { ScheduledJob, ScheduledJobRecord, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "@lunora/platform";
 import { parse } from "@visulima/cron-parser/cloudflare";
 import type Database from "better-sqlite3";
+
+/** The `cloudflare` entry fixes the dialect; `seconds` keeps the optional leading seconds field working. */
+const CRON_PARSE_OPTIONS = { seconds: "optional" } as const;
 
 /**
  * Retry policy applied when a caller supplies none. `ScheduleOptions.retry`
@@ -593,7 +599,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         let nextAt: number;
 
         try {
-            nextAt = parse(row.expression).next().getTime();
+            nextAt = parse(row.expression, CRON_PARSE_OPTIONS).next().getTime();
         } catch {
             // An unparseable expression is a permanent condition, not a transient
             // one — re-arming would spin. `cron()` validates before it ever
@@ -680,7 +686,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
             // Parse before writing: an invalid expression must fail the caller's
             // await rather than land a row that can never be armed.
-            parse(expression);
+            parse(expression, CRON_PARSE_OPTIONS);
 
             const row: CronRow = {
                 args: serialize(args ?? {}),

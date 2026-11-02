@@ -21,7 +21,11 @@ describe("createNodeSchedulerHost", () => {
 
             const database = new Database(":memory:");
             const onDispatch = vi.fn<(functionPath: string) => void>();
-            const host = createNodeSchedulerHost(database, { onDispatch: async (functionPath) => { onDispatch(functionPath); } });
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async (functionPath) => {
+                    onDispatch(functionPath);
+                },
+            });
 
             try {
                 // Weekday 1 is Sunday under Cloudflare's dialect and Monday under the default one. From Sunday
@@ -34,6 +38,36 @@ describe("createNodeSchedulerHost", () => {
                 await vi.advanceTimersByTimeAsync(6 * 24 * 60 * 60 * 1000);
 
                 expect(onDispatch).toHaveBeenCalledWith("reports:weekly");
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+    });
+
+    describe("cron seconds field", () => {
+        it.each([
+            ["six fields, seconds-leading", "* * * * * *", 1000],
+            ["five fields", "* * * * *", 60 * 1000],
+        ])("registers and fires an expression of %s", async (_label, expression, advanceMs) => {
+            expect.assertions(2);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:00Z") });
+
+            const database = new Database(":memory:");
+            const onDispatch = vi.fn<(functionPath: string) => void>();
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async (functionPath) => {
+                    onDispatch(functionPath);
+                },
+            });
+
+            try {
+                await expect(host.scheduler.cron?.(expression, "tasks:tick", {})).resolves.toBeUndefined();
+
+                await vi.advanceTimersByTimeAsync(advanceMs);
+
+                expect(onDispatch).toHaveBeenCalledWith("tasks:tick");
             } finally {
                 host.dispose();
                 database.close();
