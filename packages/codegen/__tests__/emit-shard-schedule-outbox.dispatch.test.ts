@@ -944,6 +944,42 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         expect(harness.outbox()).toStrictEqual([]);
     });
 
+    it("keeps a row recorded anew under the same id while a dropped hand-off is still cancelling its job", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        const handOff = harness.hold();
+
+        harness.setReachable(true);
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await handOff.entered;
+        await harness.drop("dup-id");
+
+        // The landed attempt has to take its job back out; that cancel is held while a new mutation
+        // records the same id again and fails to hand it off, leaving the new row for the retry loop.
+        const cancel = harness.holdCancel();
+
+        handOff.release();
+        await cancel.entered;
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        cancel.release();
+        await attempt;
+
+        expect(harness.cancelled.at(-1)).toBe("dup-id");
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 0, id: "dup-id" }]);
+    });
+
     it("reports a drop as failed when an attempt that landed during it could not cancel the job", async () => {
         expect.assertions(3);
 

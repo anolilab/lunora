@@ -16156,6 +16156,11 @@ abstract class ShardDO {
 
         // The row goes only once the cancel is confirmed. If it cannot be, the entry stays
         // (parked, so it is never handed over again) and a later drop can finish the cancel.
+        // A call recorded under the same id while the cancel awaits is a newer row the drop does
+        // not cover: it is the retry loop's only copy of that call, so it is neither deleted nor parked.
+        const version = readScheduleOutboxState(sql, id)?.version;
+        const unchanged = (): boolean => readScheduleOutboxState(sql, id)?.version === version;
+
         try {
             const held = await cancelScheduleOutboxJob(scheduler, id);
 
@@ -16166,9 +16171,14 @@ abstract class ShardDO {
                 throw new Error("the scheduler no longer holds the job (it already ran or ended), so the drop could not stop it");
             }
 
-            forgetScheduleOutbox(sql, id);
+            if (unchanged()) {
+                forgetScheduleOutbox(sql, id);
+            }
         } catch (error) {
-            this.parkLiveScheduleOutboxEntry(sql, id);
+            if (unchanged()) {
+                this.parkLiveScheduleOutboxEntry(sql, id);
+            }
+
             this.logs.push({
                 functionPath: "scheduler:outbox",
                 level: "error",
