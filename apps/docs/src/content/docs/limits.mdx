@@ -74,11 +74,16 @@ host. Crossing one fails the call with `TRANSACTION_LIMIT_EXCEEDED`; reaching
 A stream keeps one budget for its life: documents read are capped over the
 whole stream, bytes read per yielded frame.
 
-Documents read from `.global()` tables count against the bytes-read limit,
-sized by their serialized JSON (in UTF-16 code units, like every other read)
-and counted once per transaction. They come back from D1 or Hyperdrive through
-the global writer's own reads, so rank pages, aggregates and `related` over a
-global table are not counted.
+The bytes-read limit counts the UTF-8 bytes of each stored document's JSON, so
+CJK and emoji text costs up to three times its character count. Each document
+is counted once per transaction, however often it is read or patched.
+
+Documents read from `.global()` tables count against it too, sized by their
+serialized JSON in the same unit. A `select` does not make a global read
+cheaper: the whole document is loaded and counted before it is trimmed.
+`findMany`, `findFirst`, `get`, `rankPage` and query terminals are counted;
+aggregates are not, and rows a `with` loads are counted only inside their
+parent.
 
 Raise them by overriding `transactionLimits()` on the generated shard class.
 
