@@ -923,6 +923,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 Re-exported from `@lunora/agent` — signature tracked in that section.
 
+### `withAgentScheduleShard` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ## `@lunora/agent/inbound`
 
 ### `AgentEmailTarget` (interface)

@@ -614,7 +614,7 @@ const emitAgentFragments = (
         contextField: hasSecretValues ? `\n                agents,\n                agentSecrets: this.secretValues,` : `\n                agents,`,
         importLines: [
             `import { createAgentContext } from "@lunora/agent/core";`,
-            `import { withAgentScheduleShard } from "@lunora/agent";`,
+            `import { withAgentScheduleShard } from "@lunora/agent/core";`,
             `import type { AgentBindingSpec } from "@lunora/agent/core";`,
         ],
         // A scheduled agent run starts on this shard, like `ctx.agents.<name>.run` from here.

@@ -126,12 +126,12 @@ const buildFrameworkHostLine = (options: ResolvedAppOptions): string =>
 
 /**
  * Agent workflow class names: a scheduled job that starts one has its run shard stamped
- * from the signed scheduler record, never from the job's args.
+ * from the signed scheduler record, never from the job's args. An app with no agents still
+ * declares its empty list, so its plain scheduled workflows keep their args; an undeclared
+ * list would strip their `shardKey` as if any of them could be an agent run.
  */
 const buildAgentWorkflowLines = (options: ResolvedAppOptions): string[] =>
-    options.agentWorkflows !== undefined && options.agentWorkflows.length > 0
-        ? [`        options.agentWorkflows = ${JSON.stringify(options.agentWorkflows)};`]
-        : [];
+    options.agentWorkflows === undefined ? [] : [`        options.agentWorkflows = ${JSON.stringify(options.agentWorkflows)};`];
 
 /** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
 const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
