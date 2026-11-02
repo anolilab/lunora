@@ -2334,6 +2334,9 @@ const meterGlobalDatabase = (global: DatabaseWriterLike | undefined, headroom: T
 /** A writer and its unmetered twin allocate from one commit sequence, keyed by the twin's options. */
 const commitSequences = new WeakMap<CtxDbOptions, { value: number | undefined }>();
 
+/** ...and count one trigger-recursion depth, so an erase started inside a trigger does not reset the guard. */
+const triggerDepths = new WeakMap<CtxDbOptions, { value: number }>();
+
 const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { baselineSeq, onStalePatchDropped } = options;
     const { headroom } = options;
@@ -2348,12 +2351,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * bounded by one row's side effects per iteration.
      */
     const commitSequence = commitSequences.get(options) ?? { value: undefined };
+    const triggerDepth = triggerDepths.get(options) ?? { value: 0 };
     let erasureWriter: DatabaseWriterLike | undefined;
     const unmeteredWriter = (): DatabaseWriterLike => {
         if (erasureWriter === undefined) {
             const twinOptions: CtxDbOptions = { ...options, enforceRls: false, headroom: undefined };
 
             commitSequences.set(twinOptions, commitSequence);
+            triggerDepths.set(twinOptions, triggerDepth);
             erasureWriter = createShardCtxDb(twinOptions);
         }
 
@@ -3034,8 +3039,6 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         return new Map(rows.map((row) => [row["__fk__"], row.count]));
     };
 
-    let triggerDepth = 0;
-
     /**
      * Precomputed `(table → timing → op)` matcher: whether at least one
      * trigger is declared for that combination. The trigger-overhead bench
@@ -3058,10 +3061,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
     /** Fire matching triggers with a depth guard against runaway self-triggering. */
     const fireTriggers = async (timing: TriggerTimingLike, op: TriggerOpLike, event: TriggerEventLike): Promise<void> => {
-        triggerDepth += 1;
+        triggerDepth.value += 1;
 
-        if (triggerDepth > MAX_TRIGGER_DEPTH) {
-            triggerDepth -= 1;
+        if (triggerDepth.value > MAX_TRIGGER_DEPTH) {
+            triggerDepth.value -= 1;
 
             throw new ConflictError(
                 `trigger recursion exceeded ${String(MAX_TRIGGER_DEPTH)} levels on "${event.table}" — check for a self-triggering write`,
@@ -3075,7 +3078,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure read of post-construction `triggerCtx`
             await runTriggers({ ctx: triggerContext, event, op, schema, tableName: event.table, timing });
         } finally {
-            triggerDepth -= 1;
+            triggerDepth.value -= 1;
         }
     };
 
