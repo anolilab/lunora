@@ -46,7 +46,7 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 pnpm add @lunora/payment stripe
 ```
 
-`stripe` is an optional peer dependency — install only the provider SDK you use; the adapter takes the client by injection. The same holds for the other providers: `createPolarAdapter` (Polar), `createAutumnAdapter` ([Autumn](https://useautumn.com)), `createDodoPaymentsAdapter` ([Dodo Payments](https://dodopayments.com)), and `createCreemAdapter` ([Creem](https://creem.io)) take a structural client too, so no provider SDK is a hard dependency of this package. Additional providers plug in via `PaymentAdapter`.
+`stripe` is an optional peer dependency — install only the provider SDK you use; the adapter takes a loader for the client, called on the first provider call and reused, so the SDK stays out of the Worker's startup graph (a static `import Stripe from "stripe"` in the entry is evaluated at startup and defeats this). The same holds for the other providers: `createPolarAdapter` (Polar), `createAutumnAdapter` ([Autumn](https://useautumn.com)), `createDodoPaymentsAdapter` ([Dodo Payments](https://dodopayments.com)), and `createCreemAdapter` ([Creem](https://creem.io)) take a loader for a structural client too, so no provider SDK is a hard dependency of this package. Additional providers plug in via `PaymentAdapter`.
 
 ## Usage
 
@@ -55,11 +55,14 @@ Build a facade from an adapter and a store, then start a hosted checkout:
 ```ts
 import { createPayment, MemoryPaymentStore } from "@lunora/payment";
 import { createStripeAdapter } from "@lunora/payment/stripe";
-import Stripe from "stripe";
 
 const payment = createPayment({
     adapter: createStripeAdapter({
-        client: new Stripe(env.STRIPE_SECRET_KEY),
+        client: async () => {
+            const { default: Stripe } = await import("stripe");
+
+            return new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() });
+        },
         webhookSecret: env.STRIPE_WEBHOOK_SECRET,
     }),
     // Required. Return `true` only when the current caller owns `referenceId`; anything else

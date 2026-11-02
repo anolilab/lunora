@@ -2,12 +2,12 @@ import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { Input } from "../../components/ui/input";
+import type { AssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
+import assistantReasonMessage from "../../lib/assistant-reason";
 import { fireAndForget } from "../../lib/internal";
 import { cn } from "../../lib/utils";
-import assistantReasonMessage from "./assistant-reason";
 import { EDITOR_TEXT_CLASS } from "./editor-spans";
-import type { SqlAssistant } from "./hooks/use-sql-assistant";
 import type { DiffLine } from "./line-diff";
 import { lineDiff } from "./line-diff";
 
@@ -86,13 +86,7 @@ const SqlInlineEdit = ({
     readonly onAccept: (sql: string) => void;
     /** Dismiss without touching the draft. */
     readonly onCancel: () => void;
-
-    /**
-     * The assistant RPCs. Only four members are read — `unavailable`,
-     * `pending("sql")`, `reason("sql")` and `rewrite` — so any wider assistant
-     * contract satisfies this by structure.
-     */
-    readonly rpc: SqlAssistant;
+    readonly rpc: AssistantRpc;
     /** The statement being rewritten — the operator's selection, or the whole draft. */
     readonly source: string;
     /** True when the target is the whole draft rather than a selection, which the badge names. */

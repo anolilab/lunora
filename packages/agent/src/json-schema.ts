@@ -1,22 +1,38 @@
-import type { Schema } from "@ai-sdk/provider-utils";
+import type { jsonSchema as providerJsonSchema, Schema, ValidationResult } from "@ai-sdk/provider-utils";
 
 /**
- * The AI SDK's `jsonSchema()`, without importing `@ai-sdk/provider-utils`.
- *
- * That package's single entry statically imports `zod/v4` (~830 KiB), so one
- * `jsonSchema` import from a tool factory or `defineAgent` put zod into every
- * agent Worker's startup graph, though only the lazily loaded loop needs it.
- * The SDK recognises a schema purely structurally (`isSchema`: the registered
- * `vercel.ai.schema` symbol plus `jsonSchema` and `validate` keys), so this
- * object is accepted wherever the SDK's own is; a test pins that against the
- * real `asSchema`.
+ * The marker the AI SDK looks for to tell a ready-made schema from a raw zod or standard one. It is
+ * `Symbol.for`, so a schema made here is recognised by whichever copy of the SDK ends up reading it;
+ * `__tests__/json-schema.test.ts` pins this module against the SDK's own `jsonSchema`.
  */
-const jsonSchema = <OBJECT = unknown>(schema: Awaited<Schema["jsonSchema"]>): Schema<OBJECT> =>
-    ({
-        [Symbol.for("vercel.ai.schema")]: true,
+const SCHEMA_MARKER = Symbol.for("vercel.ai.schema");
+
+/**
+ * `jsonSchema` from `@ai-sdk/provider-utils`, built without importing it. That package's root
+ * evaluates zod (about a hundred modules) as soon as anything is imported from it, and every
+ * tool module here builds a schema at module scope, so the root import put zod in every Worker's
+ * startup graph that wires an agent. A schema is a plain object, so the agent builds its own; the
+ * SDK itself is only imported where a zod schema has to be converted (`code-tool`).
+ */
+const jsonSchema = <OBJECT = unknown>(
+    schema: Parameters<typeof providerJsonSchema>[0],
+    { validate }: { validate?: (value: unknown) => PromiseLike<ValidationResult<OBJECT>> | ValidationResult<OBJECT> } = {},
+): Schema<OBJECT> => {
+    let resolved = schema;
+
+    return {
+        [SCHEMA_MARKER]: true,
         _type: undefined,
-        jsonSchema: schema,
-        validate: undefined,
-    }) as unknown as Schema<OBJECT>;
+        get jsonSchema() {
+            if (typeof resolved === "function") {
+                resolved = resolved();
+            }
+
+            return resolved;
+        },
+        validate,
+        // The SDK's `Schema` types its marker as an unexported `unique symbol`, which no value can be typed as.
+    } as unknown as Schema<OBJECT>;
+};
 
 export default jsonSchema;

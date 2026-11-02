@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { performance } from "node:perf_hooks";
 
 import { runAdvisor } from "@lunora/advisor";
@@ -14,12 +14,13 @@ import { buildArchitecture, emitArchitectureModule } from "./architecture";
 import assertNoNamespaceCollisions from "./assert-namespace-collisions";
 import { createCodegenProject } from "./codegen-project";
 import { buildDeclarationSurface } from "./declaration-surface";
-import { withSourceListMemo } from "./discover/ast";
+import { listLunoraSourceFiles, withSourceListMemo } from "./discover/ast";
 import discoverCallEdges from "./discover/call-edges";
 import type { ErasedReturn } from "./discover/erased-returns";
 import { collectErasures, erasedReturnFindings } from "./discover/erased-returns";
 import { discoverFlagKeys } from "./discover/flag-keys";
 import discoverFunctions from "./discover/functions";
+import { warnUnwiredComponents } from "./discover/functions/internal/registered-type";
 import resolveStandardSchemaType from "./discover/functions/resolve-standard-schema-type";
 import discoverHttpRoutes from "./discover/http-routes";
 import discoverInserts from "./discover/inserts";
@@ -45,6 +46,7 @@ import discoverWorkflowCalls from "./discover/workflow-calls";
 import discoverWorkflowEvents from "./discover/workflow-events";
 import {
     buildStorageColumns,
+    emitAdminRevocations,
     emitAgents,
     emitApi,
     emitCollections,
@@ -73,11 +75,11 @@ import { emitApp, emitAuthModule } from "./emit-app";
 import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type { AgentIR, FunctionIR, HttpRouteIR, MaskMetadataIR, MigrationIR, MutatorIR, ShapeIR, WorkflowIR } from "./ir";
 import { setStandardTypeResolver } from "./parse-validator";
-import { platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
-import { readMergeDurableObjects } from "./project-config-file";
+import { gateAdminTokenRevocation, platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
+import { readMergeDurableObjects, readProjectLazyFunctions } from "./project-config-file";
 import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged } from "./run-codegen-files";
 import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
-import { buildSchemaSnapshot } from "./schema-drift";
+import { buildSchemaSnapshot, indexReferencesOf } from "./schema-drift";
 import { buildSpecArtifacts } from "./spec-artifacts";
 
 /**
@@ -304,6 +306,12 @@ const inferToFixpoint = (options: {
         value: { functions, httpRoutes, mutators },
     } = discover();
 
+    // Once, not per pass: the passes refine inferred types, and whether a component's functions are re-exported is syntax.
+    warnUnwiredComponents(
+        listLunoraSourceFiles(lunoraDirectory).map((filePath) => project.getSourceFileOrThrow(filePath)),
+        (source) => relative(lunoraDirectory, source.getFilePath()),
+    );
+
     // Two files whose sanitized namespaces collide (`a-b.ts` + `a_b.ts`) would
     // emit the same key twice into `_generated/api.ts` — a TS2300 inside
     // generated code, with no pointer back to the two files that caused it.
@@ -382,7 +390,11 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const startedAt = timingEnabled ? performance.now() : 0;
 
     const lunoraDirectory = join(options.projectRoot, options.lunoraDirectory ?? "lunora");
-    const lazyFunctions = options.lazyFunctions === true;
+    // Either opt-in enables the lazy registry, and `false` does not veto the
+    // project's: the config is what keeps every entry point that regenerates
+    // `_generated/` in agreement, so a caller that merely omits the flag must
+    // not rewrite it eager.
+    const lazyFunctions = options.lazyFunctions === true || readProjectLazyFunctions(options.projectRoot);
     const schemaPath = join(lunoraDirectory, "schema.ts");
 
     if (!existsSync(schemaPath)) {
@@ -532,6 +544,10 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
                   workflowCalls: discoverWorkflowCalls(project, lunoraDirectory),
               };
 
+    // The drift gate refuses to drop an index a query still names, so these are read on every run: they do not hang off the
+    // advisory opt-out. A run that already walked the queries reuses them.
+    const indexReferences = indexReferencesOf(callSites?.queries ?? discoverQueries(project, lunoraDirectory, functions));
+
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
     // fields, filter-without-index, …). Cheap, derived from the schema + the
     // discovered query reads, and run here so a problem surfaces at codegen time
@@ -673,10 +689,10 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // Structural schema snapshot for the pre-deploy drift gate. Built from the
     // discovered schema + the declared migration ids; the CLI gate diffs the
     // CURRENT snapshot against the committed baseline. Always computed (cheap,
-    // pure) and returned in `CodegenResult`; the baseline file is (re-)blessed
-    // only when it is absent (first capture) or `updateSchemaBaseline` is set —
-    // so a routine codegen run never silently moves the goalposts the gate
-    // measures against.
+    // pure) and returned in `CodegenResult`; codegen writes the baseline file only
+    // when it is absent (first capture). Advancing it is the deploy gate's job, on
+    // success — so a routine codegen run never silently moves the goalposts the
+    // gate measures against.
     const schemaSnapshot = buildSchemaSnapshot(
         schema,
         migrations.map((migration) => migration.id),
@@ -708,6 +724,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         flagKeys,
         hasFlags,
         hasNotify,
+        hasIpReaders: functions.some((definition) => definition.readsIp === true) || shapes.some((shape) => shape.readsIp === true),
         hasRooms: roomsSupported && functions.some((definition) => definition.channel?.kind === "room"),
         hasSensitiveArgs: agents.length > 0 || functions.some((definition) => isSensitiveFunction(definition)),
         // The gate's verdict on the app-declared `requestSecretTool` import. `true` only
@@ -746,12 +763,14 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // `writeIfPresent` skips it.
     const collectionsContent = emitCollections(shapes, dependencies.has("@lunora/db"), useUmbrella);
     const containersContent = emitContainers(containers, schema.jurisdiction);
-    const workflowsContent = emitWorkflows(workflows);
-    const agentsContent = emitAgents(agents);
+    const workflowsContent = emitWorkflows(workflows, { lazy: lazyFunctions });
+    const agentsContent = emitAgents(agents, { lazy: lazyFunctions });
     const queuesContent = emitQueues(queues, options.wranglerQueueProducers);
     const liveContent = emitLive(liveStreams, useUmbrella);
     const cronsContent = emitCrons(crons);
     const schedulerContent = emitScheduler(studioFeatures.scheduler);
+    const adminRevocationGate = gateAdminTokenRevocation(resolveCodegenTarget(options.projectRoot, options.target));
+    const adminRevocationsContent = adminRevocationGate.supported ? emitAdminRevocations(useUmbrella) : "";
     const shardRegistryContent = emitShardRegistry(schema.tables, useUmbrella, schema.jurisdiction);
     const durableObjectsContent = readMergeDurableObjects(options.projectRoot) ? emitDurableObjects(useUmbrella) : "";
     const vectorsContent = emitVectors(schema.vectorIndexes);
@@ -818,6 +837,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         liveStreams: platformGate.signals.liveStreams === true,
         liveStreamsWithheld: platformGate.liveStreamsWithheld,
         liveStreamDeclarations: liveStreams,
+        hasAdminRevocations: adminRevocationGate.supported,
         hasScheduler: studioFeatures.scheduler,
         // The same schema signal `emitShard` gates the shard config's source-client
         // field and the ingest poll on, so the builder method and the config field
@@ -840,6 +860,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         jurisdiction: schema.jurisdiction,
         // `{ pinAuth: true }` — only then is DO-backed auth pinned too.
         jurisdictionPinsAuth: schema.jurisdictionPinsAuth === true,
+        lazyFunctions,
         // Drives the emitted `listSchemaTables` and `resolveTableSharding`.
         tables: schema.tables.map((table) => {
             return { name: table.name, shardMode: table.shardMode };
@@ -928,6 +949,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: liveContent, kind: "optional", name: "live.ts" },
               { content: schedulerContent, kind: "optional", name: "scheduler.ts" },
               { content: shardRegistryContent, kind: "optional", name: "shardRegistry.ts" },
+              { content: adminRevocationsContent, kind: "optional", name: "adminRevocations.ts" },
               { content: durableObjectsContent, kind: "optional", name: "durableObjects.ts" },
               { content: seedContent, kind: "optional", name: "seed.ts" },
               // The `@lunora/auth` exports `app.ts` loads with `import()` on the first event.
@@ -956,10 +978,9 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               },
           ]);
 
-    // Bless the schema baseline on first capture (so a project gets a committed snapshot the
-    // moment it runs codegen) or when explicitly asked to refresh it. The CLI gate reads the
-    // existing baseline BEFORE calling codegen, so re-blessing here never hides drift from that run.
-    if (!options.dryRun && (!schemaSnapshotExists || options.updateSchemaBaseline === true)) {
+    // Bless the schema baseline on first capture, so a project gets a committed snapshot the
+    // moment it runs codegen. The CLI gate reads the existing baseline BEFORE calling codegen.
+    if (!options.dryRun && !schemaSnapshotExists) {
         writeIfChanged(schemaSnapshotPath, serializeSchemaSnapshot(schemaSnapshot));
     }
 
@@ -1013,10 +1034,13 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         },
         migrations,
         outputDirectory,
-        platformDiagnostics: platformGate.diagnostics,
+        platformDiagnostics:
+            adminRevocationGate.diagnostic === undefined ? platformGate.diagnostics : [...platformGate.diagnostics, adminRevocationGate.diagnostic],
         queues,
+        indexReferences,
         schemaSnapshot,
         schemaSnapshotPath,
+        schemaTables: schema.tables,
         workflows,
         writtenFiles,
     };

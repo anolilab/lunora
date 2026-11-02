@@ -213,7 +213,67 @@ const nulCase = (target: BackendParityTarget) => async (): Promise<void> => {
     await expect(writer.insert("wide", stored as never, { allowExplicitId: true })).resolves.toBe(id);
 };
 
+/** More rows than one multi-row backfill INSERT carries, so the rebuild has to split them across statements. */
+const BACKFILL_ROWS = 70;
+
+const backfilledSchema = {
+    tables: {
+        backfilled: {
+            // `count` stores equal `__value__` and `__count__`, the row shape a nested rebuild group must still name.
+            aggregateIndexes: [
+                { by: ["bucket"], name: "sumByBucket", on: "backfilled", op: "sum", field: "score" },
+                { by: ["bucket"], name: "countByBucket", on: "backfilled", op: "count" },
+            ],
+            indexes: [],
+            rankIndexes: [
+                {
+                    name: "byScore",
+                    on: "backfilled",
+                    sortBy: [
+                        { direction: "desc", field: "score" },
+                        { direction: "asc", field: "label" },
+                    ],
+                },
+            ],
+            shape: { bucket: v.string(), label: v.string(), score: v.number() },
+            shardMode: { kind: "global" },
+        },
+    },
+} as unknown as SchemaLike;
+
+/** Insert {@link BACKFILL_ROWS} rows, one per bucket, scored by their index; returns the lowest-scored row's id. */
+const seedBackfilled = async (writer: DatabaseWriterLike): Promise<string> => {
+    const lowest = await writer.insert("backfilled", { bucket: "b0", label: "l0", score: 0.5 });
+
+    await Promise.all(
+        Array.from({ length: BACKFILL_ROWS - 1 }, async (_, offset) => {
+            const index = offset + 1;
+
+            await writer.insert("backfilled", { bucket: `b${String(index)}`, label: `l${String(index)}`, score: index + 0.5 });
+        }),
+    );
+
+    return lowest;
+};
+
+const backfillCase = (target: BackendParityTarget) => async (): Promise<void> => {
+    const lowest = await seedBackfilled(await target.setup(backfilledSchema));
+    // A writer with a fresh scope rebuilds both companions from the rows already there.
+    const rebuilder = await target.setup(backfilledSchema);
+    const groups = await rebuilder.groupBy("backfilled", { agg: { field: "score", op: "sum" }, by: ["bucket"], where: { bucket: "b69" } });
+    const page = await rebuilder.rankPage("backfilled", "byScore", { take: 2 });
+    // The lowest score ranks last among every rebuilt tuple.
+    const lowestRank = await rebuilder.rank("backfilled", "byScore", { row: lowest });
+
+    await expect(rebuilder.count("backfilled")).resolves.toBe(BACKFILL_ROWS);
+    await expect(rebuilder.count("backfilled", { bucket: "b69" })).resolves.toBe(1);
+    expect(groups).toStrictEqual([{ key: { bucket: "b69" }, value: 69.5 }]);
+    expect(page.page.map((row) => row["label"])).toStrictEqual(["l69", "l68"]);
+    expect(lowestRank).toStrictEqual({ position: BACKFILL_ROWS, total: BACKFILL_ROWS });
+};
+
 const backendParityCases = (target: BackendParityTarget): [string, () => Promise<void>][] => [
+    ["rebuilds aggregate and rank companions from more rows than one INSERT carries", backfillCase(target)],
     ["stores null in a required column whose validator accepts it", nullCase(target)],
     ["drops NOT NULL from such a column on a table provisioned before (Postgres)", relaxCase(target)],
     ["leaves such a legacy MySQL column untouched and names the ALTER to run", mysqlNoRelaxCase(target)],

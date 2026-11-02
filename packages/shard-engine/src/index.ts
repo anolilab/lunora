@@ -15,11 +15,14 @@ export type {
     ExportShardArgs,
     ImportConflictMode,
     ImportError,
+    ImportRow,
     ImportShardAdminArgs,
     ImportShardArgs,
     ImportShardResult,
 } from "./admin-export-import";
 export { exportShardRows, importShardRows, parseExportShardArgs, parseImportShardArgs, selectExportTables, validateImportRow } from "./admin-export-import";
+export type { AdminTokenSummary } from "./admin-tokens";
+export { ADMIN_TOKEN_TABLE, adminTokenExists, createAdminTokenRecord, listAdminTokens, revokeAdminTokenRecord, verifyAdminTokenDigest } from "./admin-tokens";
 export { AGGREGATE_SQL_FUNCTION, aggregateSqlFunction, matchesStaticWhere, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
 export type { AggregateTally } from "./aggregate-tally";
 export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally";
@@ -101,15 +104,21 @@ export { IDEMPOTENCY_TABLE, migrateIdempotency, readIdempotent, trimIdempotent, 
 export { clearMemoryTables, isMemoryTable, memoryTableNames } from "./ctx-db-memory";
 export type { RankPageComputation, RankPageDeps } from "./ctx-db-rank-page";
 export { computeRankPage, resolveRankSeekTuple } from "./ctx-db-rank-page";
-export type { ScheduleOutbox, ScheduleOutboxEnvelope, ScheduleOutboxRow } from "./ctx-db-schedule-outbox";
+export type { ScheduleOutbox, ScheduleOutboxEntry, ScheduleOutboxEnvelope, ScheduleOutboxRow } from "./ctx-db-schedule-outbox";
 export {
     deferScheduleOutbox,
+    dropScheduleOutbox,
     forgetScheduleOutbox,
+    hasScheduleOutboxEntry,
     migrateScheduleOutbox,
     parkScheduleOutbox,
     probeScheduleOutbox,
     readDueScheduleOutbox,
+    readDueScheduleOutboxEntry,
+    readScheduleOutbox,
+    readScheduleOutboxState,
     recordScheduleOutbox,
+    requeueScheduleOutbox,
     SCHEDULE_OUTBOX_TABLE,
     trimScheduleOutbox,
 } from "./ctx-db-schedule-outbox";
@@ -477,7 +486,7 @@ export { createSystemReader } from "./system-reader";
 export type { ConflictKind } from "./transaction";
 export type { TransactionSqlLike } from "./transaction";
 export { ConflictError } from "./transaction";
-export type { TransactionHeadroom, TransactionLimits } from "./transaction-headroom";
+export type { TransactionHeadroom, TransactionLimitKind, TransactionLimits, TransactionLimitWarning } from "./transaction-headroom";
 export { DEFAULT_TRANSACTION_LIMITS, TransactionHeadroomTracker } from "./transaction-headroom";
 export type { RunTriggersOptions } from "./triggers";
 export { hasTrigger, runTriggers } from "./triggers";

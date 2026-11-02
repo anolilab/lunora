@@ -125,7 +125,7 @@ const SubscriptionsPanel = ({ initialShardKey }: SubscriptionsPanelProps): React
                 )}
             </div>
 
-            {error !== null && <ErrorAlert error={errorSource} testId="subs-error" />}
+            {error !== null && <ErrorAlert error={errorSource} shardKey={queryShardKey} testId="subs-error" />}
 
             {error === null && result !== undefined && rows.length === 0 && (
                 <EmptyState

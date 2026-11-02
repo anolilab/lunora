@@ -263,7 +263,7 @@ const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement => {
                 <LiveError message={liveError} prefix="tr" />
             </div>
 
-            {error !== null && <ErrorAlert error={errorSource} testId="tr-error" />}
+            {error !== null && <ErrorAlert error={errorSource} shardKey={queryShardKey} testId="tr-error" />}
 
             {showEmpty && (
                 <EmptyState

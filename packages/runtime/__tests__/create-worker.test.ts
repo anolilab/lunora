@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { decodeIdentityHeader } from "../../../shared/identity-header";
-import type { ExecutionContextLike, HttpActionContext, HttpRouterLike, Route } from "../src/create-worker";
+import type { ExecutionContextLike, FrameworkWorkerOptions, HttpActionContext, HttpRouterLike, Route } from "../src/create-worker";
 import { composeWorker, createLunoraHandler, createWorker, withFrameworkWorker } from "../src/create-worker";
 import type { ObservabilityEvent } from "../src/observability";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
@@ -2179,6 +2179,43 @@ describe("createWorker — HTTP actions", () => {
         expect(paths).toStrictEqual(["/list", "/list?cursor=id%3Ab"]);
     });
 
+    it("forwards a runAfter retry policy to the SchedulerDO's /schedule", async () => {
+        expect.assertions(2);
+
+        const bodies: Record<string, unknown>[] = [];
+        const schedulerNamespace: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        const body: Record<string, unknown> = await request.json();
+
+                        bodies.push(body);
+
+                        return Response.json({ id: "job-1", scheduledFor: body["scheduledFor"] });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/jobs", async (c) =>
+                    Response.json(await c.var.lunora.scheduler?.runAfter(0, { __lunoraRef: "jobs:run" }, {}, { retry: { forever: true, maxMs: 60_000 } })),
+                ),
+            ),
+            schedulerDO: schedulerNamespace,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/jobs", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        expect(bodies[0]?.["retry"]).toStrictEqual({ forever: true, maxMs: 60_000 });
+    });
+
     // The two `ctx.scheduler` implementations write to and read from the SAME
     // SchedulerDO record: `@lunora/scheduler`'s `createScheduler` (from a shard)
     // and this one (from an httpAction). `createScheduler` encodes on `runAt` and
@@ -2819,6 +2856,26 @@ describe("createLunoraHandler — framework-neutral mount seam", () => {
         expect(res.status).toBe(200);
     });
 
+    it("calls the options factory once per env object, not once per request", async () => {
+        expect.assertions(2);
+
+        const factory = vi.fn<(env: unknown) => { shardDO: ShardNamespaceLike }>(() => {
+            return { shardDO: shard.namespace };
+        });
+        const handler = createLunoraHandler(factory);
+        const rpc = (): Request => new Request("https://app.example/_lunora/rpc", { body: JSON.stringify({ args: {}, functionPath: "x:y" }), method: "POST" });
+        const env = {};
+
+        await handler(rpc(), env, fakeContext);
+        await handler(rpc(), env, fakeContext);
+
+        expect(factory).toHaveBeenCalledTimes(1);
+
+        await handler(rpc(), {}, fakeContext);
+
+        expect(factory).toHaveBeenCalledTimes(2);
+    });
+
     it("defaults the ExecutionContext when the host omits one", async () => {
         expect.assertions(1);
 
@@ -3380,6 +3437,30 @@ describe("withFrameworkWorker — `scheduled` ownership", () => {
     const hostWith = (scheduled: () => Promise<void>): HttpRouterLike & { scheduled: () => Promise<void> } => {
         return { fetch: () => new Response("ssr"), scheduled };
     };
+
+    it("builds one worker per env object across every entry point", async () => {
+        expect.assertions(2);
+
+        const shard = createShardSpy();
+        const factory = vi.fn<(env: unknown) => FrameworkWorkerOptions>(() => {
+            return { ...generatedCronFreeOptions, shardDO: shard.namespace };
+        });
+        const worker = withFrameworkWorker(
+            hostWith(async () => undefined),
+            factory,
+        );
+        const env = {};
+
+        await worker.fetch(new Request("https://app.example/page"), env, fakeContext);
+        await worker.fetch(new Request("https://app.example/page"), env, fakeContext);
+        await worker.scheduled({ cron: "0 3 * * *", scheduledTime: 0 }, env, fakeContext);
+
+        expect(factory).toHaveBeenCalledTimes(1);
+
+        await worker.fetch(new Request("https://app.example/page"), {}, fakeContext);
+
+        expect(factory).toHaveBeenCalledTimes(2);
+    });
 
     it("keeps the framework host's scheduled when the generated cron registry is empty", async () => {
         expect.assertions(2);

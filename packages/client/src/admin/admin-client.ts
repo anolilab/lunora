@@ -47,13 +47,17 @@ import {
 import { withQuery } from "../client-urls";
 import { LunoraClient } from "../lunora-client";
 import type {
+    AdminTokenSummary,
     AuthCapabilities,
     AuthConfigInfo,
     AuthImpersonation,
     AuthPage,
     AuthSession,
     AuthUser,
+    CreatedAdminToken,
     CronJobInfo,
+    CronRunsResult,
+    DeploymentPauseStatus,
     FunctionDescriptor,
     GlobalFacetResult,
     GlobalFilterClause,
@@ -64,6 +68,8 @@ import type {
     KvValueResult,
     PipelineLogPage,
     PipelineLogQuery,
+    ScheduledHistoryPage,
+    ScheduledJobView,
     ScheduleRecord,
     SchedulerStatus,
     ShardTrafficResult,
@@ -75,19 +81,25 @@ import type {
     WorkflowInstancePage,
     WorkflowInstanceStatus,
 } from "../types";
+import { createAdminToken, listAdminTokens, revokeAdminToken } from "./admin-tokens";
 import { fetchArchitecture, fetchOpenApi, fetchOpenRpc, getCronJobs, listFunctions, runCronJob } from "./functions";
 import { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "./global-tables";
 import { deleteKvKey, getKvValue, listKvKeys, listKvNamespaces, putKvValue } from "./kv";
 import { queryLogArchive, shardTraffic } from "./observability";
 import {
     cancelScheduledJob,
+    getDeploymentPause,
+    getScheduledJob,
     getWorkflowInstance,
+    listCronRuns,
     listDeadJobs,
+    listScheduledHistory,
     listScheduledJobs,
     listWorkflowInstances,
     removeDeadJob,
     retryDeadJob,
     schedulerStatus,
+    setDeploymentPause,
     setWorkflowInstanceStatus,
 } from "./scheduler";
 import { deleteStorageObject, listStorageBuckets, listStorageObjects, signedStorageUrl, uploadStorageObject } from "./storage";
@@ -121,6 +133,27 @@ class LunoraAdminClient extends LunoraClient {
         return shardTraffic(this.adminHost, table);
     }
 
+    // --- Deployment pause ---------------------------------------------------
+
+    /**
+     * Whether the deployment is paused — function calls refused with
+     * `503 DEPLOYMENT_PAUSED`, scheduled jobs held, cron ticks skipped, queue
+     * batches handed back. Hits the admin-gated `GET /_lunora/admin/pause`.
+     * `supported` is `false` on a worker without a `schedulerDO`.
+     */
+    public async getDeploymentPause(): Promise<DeploymentPauseStatus> {
+        return getDeploymentPause(this.adminHost);
+    }
+
+    /**
+     * Pause (`true`) or resume (`false`) the deployment, with an optional note
+     * shown wherever the pause is. Resuming runs every scheduled job held while
+     * paused. Hits the admin-gated `POST /_lunora/admin/pause`.
+     */
+    public async setDeploymentPause(paused: boolean, reason?: string): Promise<DeploymentPauseStatus> {
+        return setDeploymentPause(this.adminHost, paused, reason);
+    }
+
     // --- Scheduler admin ----------------------------------------------------
 
     /**
@@ -145,6 +178,38 @@ class LunoraAdminClient extends LunoraClient {
      */
     public async schedulerStatus(): Promise<SchedulerStatus> {
         return schedulerStatus(this.adminHost);
+    }
+
+    /**
+     * One scheduled job with its lifecycle state — pending, running, or how it
+     * ended (succeeded, failed, canceled) for the scheduler's retention window.
+     * `null` for an id never scheduled or past retention. Hits the admin-gated
+     * `GET /_lunora/admin/scheduled/job?id=`.
+     */
+    public async getScheduledJob(id: string): Promise<ScheduledJobView | null> {
+        return getScheduledJob(this.adminHost, id);
+    }
+
+    /**
+     * Finished scheduled jobs, newest first — one page of the scheduler's
+     * terminal records within the retention window. Pass the returned `cursor`
+     * back for the next, older page; it is absent on the last one. Hits the
+     * admin-gated `GET /_lunora/admin/scheduled/history`. Powers
+     * `@lunora/studio`'s recent-jobs panel.
+     */
+    public async listScheduledHistory(options: { cursor?: string } = {}): Promise<ScheduledHistoryPage> {
+        return listScheduledHistory(this.adminHost, options);
+    }
+
+    /**
+     * The code-defined cron jobs' run history: which runs are in flight, and the
+     * recorded fires (start, duration, outcome, error, ticks skipped because the
+     * previous run was still going), newest first per job. Hits the admin-gated
+     * `GET /_lunora/admin/scheduled/cron-runs`, so the worker needs a
+     * `schedulerDO` — which every app declaring a cron has.
+     */
+    public async listCronRuns(): Promise<CronRunsResult> {
+        return listCronRuns(this.adminHost);
     }
 
     /** Cancel a pending scheduled job by id. Returns whether a job was removed. */
@@ -441,6 +506,29 @@ class LunoraAdminClient extends LunoraClient {
      */
     public async queryLogArchive(query: PipelineLogQuery = {}): Promise<PipelineLogPage> {
         return queryLogArchive(this.adminHost, query);
+    }
+
+    // --- Named admin tokens -------------------------------------------------
+
+    /**
+     * List the deployment's named admin tokens (name, created, last used,
+     * expiry — never the secret). Hits the root-only `GET /_lunora/admin/tokens`.
+     */
+    public async listAdminTokens(): Promise<AdminTokenSummary[]> {
+        return listAdminTokens(this.adminHost);
+    }
+
+    /**
+     * Create a named admin token. The returned `token` is the only time the
+     * secret is shown. Root-only: a named token cannot create another.
+     */
+    public async createAdminToken(options: { expiresAt?: number; name: string }): Promise<CreatedAdminToken> {
+        return createAdminToken(this.adminHost, options);
+    }
+
+    /** Revoke a named admin token. Root-only; other isolates refuse it within 30 seconds. */
+    public async revokeAdminToken(name: string): Promise<void> {
+        return revokeAdminToken(this.adminHost, name);
     }
 
     // --- KV namespace admin -------------------------------------------------

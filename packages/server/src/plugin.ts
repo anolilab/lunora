@@ -364,7 +364,12 @@ export const definePlugin = (<TExtension extends Record<string, TableDefinition>
  *
  * Codegen follows the re-export back to the bundled `query/mutation/action`
  * call (property access or destructuring both work), so the functions land in
- * the generated `api` under the re-exporting file's namespace.
+ * the generated `api` under the re-exporting file's namespace. A component
+ * installed from npm has no call to follow — only its `.d.ts` — so codegen reads
+ * each function off its declared type instead: declare public functions as
+ * `RegisteredQuery` / `RegisteredMutation` / `RegisteredAction` and server-only
+ * ones as their `RegisteredInternal*` counterparts. A bare `RegisteredFunction`
+ * leaves visibility open, and codegen refuses to guess it.
  */
 /* eslint-disable @typescript-eslint/no-explicit-any -- ComponentFunctions is a heterogeneous bag; per-entry types are recovered by the consumer's re-export. */
 export type ComponentFunctions = Readonly<Record<string, RegisteredFunction<any, any, FunctionKind>>>;

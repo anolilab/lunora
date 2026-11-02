@@ -3639,7 +3639,7 @@ describe("dataBrowser — AI filter reply after a table switch", () => {
                 if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
                     return new Promise((resolve) => {
                         finishAi = (clauses) => {
-                            resolve({ result: { clauses, degraded: false } });
+                            resolve({ clauses, degraded: false });
                         };
                     });
                 }
@@ -3704,7 +3704,7 @@ describe("dataBrowser — nested paths on suggested and linked filters", () => {
                 }
 
                 if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
-                    return { result: { clauses: [{ column: "text", operator: "has", path: ["a.b", "tags"], value: "x" }], degraded: false } };
+                    return { clauses: [{ column: "text", operator: "has", path: ["a.b", "tags"], value: "x" }], degraded: false };
                 }
 
                 return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
@@ -3734,7 +3734,7 @@ describe("dataBrowser — nested paths on suggested and linked filters", () => {
                 }
 
                 if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
-                    return { result: { clauses: [{ column: "text", operator: "eq", path: ["a"], value: null }], degraded: false } };
+                    return { clauses: [{ column: "text", operator: "eq", path: ["a"], value: null }], degraded: false };
                 }
 
                 return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
@@ -3766,7 +3766,7 @@ describe("dataBrowser — nested paths on suggested and linked filters", () => {
                 }
 
                 if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
-                    return { result: { clauses: [{ column: "text", operator, value }], degraded: false } };
+                    return { clauses: [{ column: "text", operator, value }], degraded: false };
                 }
 
                 return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
@@ -3795,7 +3795,7 @@ describe("dataBrowser — nested paths on suggested and linked filters", () => {
                 }
 
                 if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
-                    return { result: { clauses: [{ column: "text", operator: "eq", path: ["a"], value: "10" }], degraded: false } };
+                    return { clauses: [{ column: "text", operator: "eq", path: ["a"], value: "10" }], degraded: false };
                 }
 
                 return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
@@ -3825,15 +3825,13 @@ describe("dataBrowser — nested paths on suggested and linked filters", () => {
 
                 if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
                     return {
-                        result: {
-                            clauses: [
-                                { column: "text", operator: "has", value: "10" },
-                                { column: "text", operator: "has", value: "true" },
-                                { column: "text", operator: "gt", value: "18" },
-                                { column: "text", operator: "has", value: 10 },
-                            ],
-                            degraded: false,
-                        },
+                        clauses: [
+                            { column: "text", operator: "has", value: "10" },
+                            { column: "text", operator: "has", value: "true" },
+                            { column: "text", operator: "gt", value: "18" },
+                            { column: "text", operator: "has", value: 10 },
+                        ],
+                        degraded: false,
                     };
                 }
 

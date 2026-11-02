@@ -7,6 +7,7 @@ import { seedPlan } from "@lunora/seed";
 import { join } from "@visulima/path";
 import { Project } from "ts-morph";
 
+import { exportEndLine } from "../../../../../shared/export-end";
 import { targetsRemoteWorker } from "../../util/admin-token";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -259,7 +260,8 @@ const generateSeedRows = (plan: ReturnType<typeof seedPlan>): { lines: string[];
         }
     }
 
-    return { lines, ndjson: lines.length > 0 ? `${lines.join("\n")}\n` : "" };
+    // Ends with the export end marker, since the same text is imported from a file and may be piped to one.
+    return { lines, ndjson: lines.length > 0 ? `${lines.join("\n")}\n${exportEndLine(lines.length)}` : "" };
 };
 
 const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandResult> => {

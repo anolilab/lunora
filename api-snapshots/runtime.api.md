@@ -38,6 +38,26 @@ interface AccessIdentityLike {
 type AdminTableResolver = (table: string) => ShardingInfo | undefined;
 ```
 
+### `AdminTokenSummary` (interface)
+
+```ts
+interface AdminTokenSummary {
+    createdAt: number;
+    expiresAt?: number;
+    lastUsedAt?: number;
+    name: string;
+    revoked?: boolean;
+}
+```
+
+### `AiRunBinding` (interface)
+
+```ts
+interface AiRunBinding {
+    run: (model: string, inputs: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
+}
+```
+
 ### `AirbyteMessage` (type)
 
 ```ts
@@ -484,6 +504,17 @@ interface CorsOptions {
 }
 ```
 
+### `CreatedAdminToken` (interface)
+
+```ts
+interface CreatedAdminToken {
+    createdAt: number;
+    expiresAt?: number;
+    name: string;
+    token: string;
+}
+```
+
 ### `CronHandler` (type)
 
 ```ts
@@ -541,9 +572,9 @@ interface CrossShardRelationCapabilities {
 ```ts
 interface CrossShardRelationOptions {
     fetch?: typeof globalThis.fetch;
-    identity?: Record<string, unknown>;
+    identity?: Record<string, unknown> | undefined;
     origin: string;
-    userId?: string;
+    userId?: string | undefined;
 }
 ```
 
@@ -770,6 +801,9 @@ type FrameworkWorkerOptionsInput = ((env: unknown) => FrameworkWorkerOptions) | 
 interface FunctionDescriptor {
     args: FunctionArgumentDescriptor[];
     kind: "action" | "mutation" | "query";
+    meta?: unknown;
+    metaUnencodable?: true;
+    metaUnloaded?: true;
     path: string;
     visibility?: "internal" | "public";
 }
@@ -784,6 +818,7 @@ interface FunctionRegistryEntry {
     expose?: RestExposure;
     kind: "action" | "mutation" | "query" | "stream";
     lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "socket" | "whisper";
+    readonly [PROCEDURE_META]?: unknown;
     socketPath?: string;
     visibility?: "internal" | "public";
     x402?: {
@@ -818,11 +853,13 @@ type GlobalImportFunction = (request: {
     rows: ReadonlyArray<{
         doc: Record<string, unknown>;
         line: number;
+        op?: "delete";
         table: string;
     }>;
     startLine?: number;
 }) => Promise<{
     conflicts: number;
+    deleted?: number;
     errors: ReadonlyArray<{
         code: string;
         line: number;
@@ -1038,11 +1075,13 @@ interface ImportFanOutRequest {
     batches: ReadonlyArray<{
         rows: ReadonlyArray<{
             doc: Record<string, unknown>;
+            op?: "delete";
             table: string;
         }>;
         shardKey: string;
         startLine?: number;
     }>;
+    deletes?: boolean;
     dryRun?: boolean;
     headers?: Record<string, string>;
     onConflict?: "replace" | "skip";
@@ -1054,6 +1093,7 @@ interface ImportFanOutRequest {
 ```ts
 interface ImportFanOutResult {
     conflicts: number;
+    deleted: number;
     errors: ReadonlyArray<{
         code: string;
         line: number;
@@ -1990,6 +2030,7 @@ interface ShardImportOutcome {
     };
     result?: {
         conflicts: number;
+        deleted: number;
         errors: ReadonlyArray<{
             code: string;
             line: number;
@@ -2244,6 +2285,7 @@ type TraceTrustSignal = "mtls";
 
 ```ts
 interface TriggerTrace {
+    holdSeconds?: number;
     traceparent: string;
 }
 ```
@@ -2316,7 +2358,10 @@ interface WebhookSinkOptions extends OnlyErrorsOption {
 ```ts
 interface WorkerOptions {
     adminGate?: (request: Request, context?: ExecutionContextLike) => boolean | Promise<boolean>;
+    adminRevocations?: ShardNamespaceLike;
     adminToken?: string;
+    aiChatBinding?: AiRunBinding;
+    aiOptInLevel?: AiOptInLevel;
     allowUnauthenticatedShardAccess?: boolean;
     applyGlobals?: GlobalCdcApplyFunction;
     architecture?: unknown;
@@ -2345,6 +2390,7 @@ interface WorkerOptions {
     httpRouter?: HttpRouterLike;
     identity?: IdentityContractLike;
     importGlobals?: GlobalImportFunction;
+    importGlobalsSupportsDelete?: boolean;
     importGlobalsSupportsDryRun?: boolean;
     importGlobalsSupportsReplace?: boolean;
     jurisdiction?: DurableObjectJurisdiction;
@@ -2795,6 +2841,12 @@ const withFrameworkWorker: (host: FrameworkHostHandler, optionsInput: FrameworkW
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `AiOptInLevel` (type)
+
+```ts
+type AiOptInLevel = "disabled" | "schema" | "schema_and_log" | "schema_and_log_and_data";
+```
 
 ### `AppJurisdiction` (type)
 
@@ -3288,8 +3340,22 @@ interface SchedulerContext {
     }>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
     list: () => Promise<Record<string, unknown>[]>;
-    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>, options?: SchedulerRunOptions) => Promise<string>;
+    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>, options?: SchedulerRunOptions) => Promise<string>;
+}
+```
+
+### `SchedulerRunOptions` (interface)
+
+```ts
+interface SchedulerRunOptions {
+    retry?: {
+        backoff?: "exponential" | "linear";
+        baseMs?: number;
+        forever?: boolean;
+        maxAttempts?: number;
+        maxMs?: number;
+    };
 }
 ```
 

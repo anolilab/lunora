@@ -47,6 +47,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
     id: "node",
     name: "Node",
     features: {
+        adminTokenRevocation: {
+            level: "unsupported",
+            note: "Nothing on this host binds the AdminRevocationDO namespace (createWorker adminRevocations), so no named admin token can be created and any that exist are refused (ADMIN_TOKEN_NOT_CONFIGURED); the root LUNORA_ADMIN_TOKEN is the only admin credential. There is no point-in-time restore here to revive a revoked token either",
+        },
         shardedState: {
             level: "emulated",
             note: "One better-sqlite3 database per shard key, one process — no distributed placement or failover. Shard keys are percent-encoded into basenames with A-Z escaped, so `Tenant` and `tenant` stay two databases on a case-insensitive volume (APFS, NTFS) rather than folding into one. There is also no input gate: Cloudflare defers every other dispatch for the span of a mutation, whereas this host can only refuse — SQL issued from another task while a transaction is open throws a retryable `SHARD_UNAVAILABLE` (503) rather than reading rows that are about to roll back, so a read that merely arrived mid-mutation is retried instead of failing the request",
@@ -104,6 +108,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "Lunora's own counter, not a platform primitive: the poll alarm's re-arms that are due sooner than the 2 s floor are counted in one row of the shard's SQL (ShardHost.sql) over a sliding window, and a re-arm past the budget is refused, leaves one recovery wake a window out, and is logged once per trip. Re-arms at or beyond the floor are checked against that row and never written to it, so a poll at 2 s or slower costs no SQL write. The arm it gates is ShardHost.alarms, so it runs wherever the shard has durable SQL and alarms",
         },
+        deploymentPause: {
+            level: "unsupported",
+            note: "No SchedulerDO on this host, which is where the pause flag lives and what holds scheduled jobs while paused: the admin route answers PAUSE_NOT_CONFIGURED and GET reports supported: false. The router, cron and queue checks are host-neutral runtime code and would apply unchanged given a durable home for the flag",
+        },
         scheduleRateBreaker: {
             level: "emulated",
             note: "Lunora's own counter, not a platform primitive: each ctx.scheduler target's schedules are counted per shard in one row of the shard's SQL (ShardHost.sql) over a sliding window, once per invocation, and a schedule past the budget is deferred one window instead of being refused or dropped. The schedules it defers are stored through SchedulerDO, so it runs wherever the shard has durable SQL and a scheduler",
@@ -143,7 +151,7 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         scheduler: {
             level: "emulated",
-            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with retry backoff and a dead-letter queue. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer — but nothing walks an app's DECLARED crons into that method, which is why cronTriggers is rated separately and unsupported here. This rating covers the imperative surface only: ctx.scheduler.runAfter/runAt do dispatch on this host",
+            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with finite retry backoff and a dead-letter queue. This host's schedule() refuses `retry.forever` as INVALID_INPUT before a job is persisted or armed. ctx.scheduler does not call schedule(): it posts to the SchedulerDO namespace the app's .scheduler() declaration binds, so whether a ctx.scheduler call can retry forever is decided by what backs that binding, not by this host. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer — but nothing walks an app's DECLARED crons into that method, which is why cronTriggers is rated separately and unsupported here. This rating covers the imperative surface only: ctx.scheduler.runAfter/runAt do dispatch on this host",
         },
         relationGraph: {
             level: "emulated",

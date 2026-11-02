@@ -3,7 +3,7 @@ import { decodeWire, encodeArgsOrThrow } from "@lunora/wire";
 
 import { collectPages } from "../../../shared/collect-pages";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
-import type { CronTarget, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord, ScheduleTargetArgs } from "./types";
+import type { CronTarget, LunoraSchedulerOptions, RunOptions, ScheduledJobView, Scheduler, ScheduleRecord, ScheduleTargetArgs } from "./types";
 import { isWorkflowReference } from "./types";
 import assertScheduleDelay from "./validate-delay";
 import assertScheduleInstant from "./validate-instant";
@@ -27,7 +27,7 @@ const targetLabel = (target: CronTarget): string => {
  * same value the caller scheduled rather than the tagged wire form. Identity for
  * pure-JSON args, so a record written before the encode landed reads unchanged.
  */
-const decodeRecordArgs = (record: ScheduleRecord): ScheduleRecord => {
+const decodeRecordArgs = <T extends ScheduleRecord>(record: T): T => {
     return { ...record, args: decodeWire(record.args) as Record<string, unknown> };
 };
 
@@ -148,13 +148,13 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
     // `listAll` walks them all so callers see every pending job.
     const list = async (): Promise<ScheduleRecord[]> => listAll("/list");
 
-    // Direct single-record lookup against the DO's `GET /get?id=` route, which
-    // reads the `id:<id>` storage key in O(1) — instead of scanning the whole
-    // `/list` view. The DO omits `record` on a miss, which becomes `null` here.
-    const get = async (id: string): Promise<ScheduleRecord | null> => {
-        const body = await getDO<{ record?: ScheduleRecord }>(options, `/get?id=${encodeURIComponent(id)}`);
+    // The DO's `GET /get?id=` answers the job with its lifecycle state — pending,
+    // running, or a terminal outcome within the retention window — and omits
+    // `record` on a miss, which becomes `null` here.
+    const get = async (id: string): Promise<ScheduledJobView | null> => {
+        const body = await getDO<{ record?: ScheduledJobView }>(options, `/get?id=${encodeURIComponent(id)}`);
 
-        // eslint-disable-next-line unicorn/no-null -- public contract returns `ScheduleRecord | null` (Convex `get` convention), not undefined
+        // eslint-disable-next-line unicorn/no-null -- public contract returns `ScheduledJobView | null`, not undefined
         return body.record === undefined ? null : decodeRecordArgs(body.record);
     };
 

@@ -578,6 +578,52 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(result.durableObjects).toEqual([{ binding: "SHARD", className: "LunoraDO" }]);
     });
 
+    const boundObjects = async (): Promise<Awaited<ReturnType<typeof inferLunoraBindings>>["durableObjects"]> => {
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        return result.durableObjects;
+    };
+
+    it("binds ADMIN_REVOCATIONS for a composed app whose codegen wrote the revocation module", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", `{\n    "name": "app",\n    "main": "virtual:lunora/worker",\n    "compatibility_date": "2026-04-07"\n}\n`);
+        write("lunora/_generated/adminRevocations.ts", 'export { AdminRevocationDO } from "@lunora/do";\n');
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects).toEqual([
+            { binding: "SHARD", className: "ShardDO" },
+            { binding: "ADMIN_REVOCATIONS", className: "AdminRevocationDO" },
+        ]);
+    });
+
+    it("binds ADMIN_REVOCATIONS for a hand-written entry that exports the class, and not otherwise", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        await expect(boundObjects()).resolves.toEqual([{ binding: "SHARD", className: "ShardDO" }]);
+
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { AdminRevocationDO } from "@lunora/do";\n`);
+
+        await expect(boundObjects()).resolves.toContainEqual({
+            binding: "ADMIN_REVOCATIONS",
+            className: "AdminRevocationDO",
+        });
+    });
+
+    it("hosts the admin revocation store in the merged LunoraDO, binding no class of its own", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", `{\n    "name": "app",\n    "main": "virtual:lunora/worker",\n    "compatibility_date": "2026-04-07"\n}\n`);
+        write("lunora/_generated/durableObjects.ts", "export {};\n");
+        write("lunora/_generated/adminRevocations.ts", 'export { AdminRevocationDO } from "@lunora/do";\n');
+
+        await expect(boundObjects()).resolves.toEqual([{ binding: "SHARD", className: "LunoraDO" }]);
+    });
+
     it("reports the shard registry's relay secret for an app that binds the registry, merged or not", async () => {
         expect.assertions(3);
 

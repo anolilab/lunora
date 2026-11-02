@@ -75,6 +75,26 @@ describe("createSystemReader — _scheduled_functions", () => {
         expect(get).toHaveBeenCalledWith("job_1");
     });
 
+    it("carries a finished job's lifecycle state through get(table, id)", async () => {
+        expect.assertions(1);
+
+        const get = vi.fn<SystemReaderSchedulerLike["get"]>(async () =>
+            scheduledRecord({ completedAt: 3000, error: "dead-lettered after 6 attempts", state: "failed" }),
+        );
+        const reader = createSystemReader({ scheduler: { get, list: vi.fn<SystemReaderSchedulerLike["list"]>() } });
+
+        await expect(reader.get("_scheduled_functions", "job_1")).resolves.toStrictEqual({
+            args: { x: 1 },
+            completedAt: 3000,
+            enqueuedAt: 1000,
+            error: "dead-lettered after 6 attempts",
+            functionPath: "messages:send",
+            id: "job_1",
+            scheduledFor: 2000,
+            state: "failed",
+        });
+    });
+
     it("throws a clear error when no scheduler is configured", async () => {
         expect.assertions(2);
 

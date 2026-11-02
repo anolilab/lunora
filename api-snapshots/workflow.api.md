@@ -807,7 +807,7 @@ const workflowDefaultName: (exportName: string) => string;
 ```ts
 class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends WorkflowEntrypoint<Record<string, unknown>, Params> {
     #private;
-    constructor(context: ConstructorParameters<typeof WorkflowEntrypoint>[0], env: Record<string, unknown>, definition: WorkflowDefinition<Params, Output>, exportName?: string);
+    constructor(context: ConstructorParameters<typeof WorkflowEntrypoint>[0], env: Record<string, unknown>, definition: WorkflowDefinition<Params, Output> | (() => Promise<WorkflowDefinition<Params, Output>>), exportName?: string);
     override run(event: Readonly<WorkflowEvent<Params>>, step: WorkflowStep): Promise<Output>;
 }
 ```

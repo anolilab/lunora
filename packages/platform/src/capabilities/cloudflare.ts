@@ -13,6 +13,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
     id: "cloudflare",
     name: "Cloudflare",
     features: {
+        adminTokenRevocation: {
+            level: "native",
+            note: "AdminRevocationDO (a small Durable Object, bound as ADMIN_REVOCATIONS and addressed through the ShardDirectory namespace seam like SchedulerDO) holds each named admin token's revocation, keyed by name and createdAt, outside the default shard's database. It is written before the token row is deleted and checked on every verify, so a pitrRestore of the default shard cannot revive a revoked token",
+        },
         shardedState: { level: "native", note: "Durable Objects with SQLite" },
         globalTables: {
             level: "native",
@@ -96,10 +100,17 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "Cloudflare Workflows declared in wrangler `exports` (no workflows[] binding) and reached through `ctx.exports.<Class>` from the shard DO, the Worker and every WorkflowEntrypoint; needs Wrangler >= 4.142 / @cloudflare/vite-plugin >= 1.61 locally",
         },
-        scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
+        scheduler: {
+            level: "emulated",
+            note: "SchedulerDO (Lunora, on DO alarms, supports `retry.forever`) + declarative Cron Triggers; no runtime cron registration",
+        },
+        deploymentPause: {
+            level: "emulated",
+            note: "Lunora's own flag, not a platform primitive: held in the SchedulerDO, whose alarm holds jobs while it is set. The worker re-reads it per isolate every 5 s for the router (503 DEPLOYMENT_PAUSED), cron (skipped, recorded) and queue consumer (each message re-sent as a delayed copy with a fresh attempt budget). A pause reaches every named scheduler instance: instances register durably with the configured one in its SchedulerDO storage the first time they are addressed, the admin route fans a pause or resume out to all of them (a partial failure is reported, and repeating the command converges), and an instance first addressed during a pause starts paused. Realtime sockets opened before the pause keep serving subscriptions until they reconnect. An app without a SchedulerDO cannot pause",
+        },
         cronTriggers: {
             level: "native",
-            note: "wrangler triggers.crons, reconciled from the declared crons at build time, delivered to the worker's scheduled() handler — which is the one cron dispatch that ships: it walks the generated LUNORA_CRONS map itself",
+            note: "wrangler triggers.crons, reconciled from the declared crons at build time, delivered to the worker's scheduled() handler — which is the one cron dispatch that ships: it walks the generated LUNORA_CRONS map itself. Each job runs under a SchedulerDO-held lease, so a tick landing in any isolate while the previous run is still going is skipped, and every fire (run, skip, failure) is recorded in the SchedulerDO",
         },
         authJurisdictionMove: {
             level: "native",

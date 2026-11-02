@@ -20,6 +20,14 @@ const SCHEDULED_DEAD_RETRY_PATH = "/_lunora/admin/scheduled/dead/retry";
 
 const SCHEDULED_DEAD_CANCEL_PATH = "/_lunora/admin/scheduled/dead/cancel";
 
+const SCHEDULED_HISTORY_PATH = "/_lunora/admin/scheduled/history";
+
+const SCHEDULED_JOB_PATH = "/_lunora/admin/scheduled/job";
+
+const SCHEDULED_CRON_RUNS_PATH = "/_lunora/admin/scheduled/cron-runs";
+
+const PAUSE_PATH = "/_lunora/admin/pause";
+
 const WORKFLOWS_INSTANCES_PATH = "/_lunora/admin/workflows/instances";
 
 const WORKFLOWS_INSTANCE_PATH = "/_lunora/admin/workflows/instance";
@@ -57,6 +65,8 @@ const VECTOR_QUERY_PATH = "/_lunora/admin/vector/query";
 const LOG_ARCHIVE_PATH = "/_lunora/admin/logs/archive";
 
 const KV_NAMESPACES_PATH = "/_lunora/admin/kv/namespaces";
+
+const ADMIN_TOKENS_PATH = "/_lunora/admin/tokens";
 
 const KV_KEYS_PATH = "/_lunora/admin/kv/keys";
 
@@ -170,6 +180,7 @@ const GET_SESSION_PATH = "/get-session";
 const WS_KEEPALIVE_PING = "lunora-ping";
 
 export {
+    ADMIN_TOKENS_PATH,
     ARCHITECTURE_PATH,
     AUTH_ACCOUNTS_PATH,
     AUTH_ADD_MEMBER_PATH,
@@ -229,12 +240,16 @@ export {
     LOG_ARCHIVE_PATH,
     OPENAPI_PATH,
     OPENRPC_PATH,
+    PAUSE_PATH,
     RPC_BATCH_PATH,
     RPC_PATH,
     SCHEDULED_CANCEL_PATH,
+    SCHEDULED_CRON_RUNS_PATH,
     SCHEDULED_DEAD_CANCEL_PATH,
     SCHEDULED_DEAD_PATH,
     SCHEDULED_DEAD_RETRY_PATH,
+    SCHEDULED_HISTORY_PATH,
+    SCHEDULED_JOB_PATH,
     SCHEDULED_PATH,
     SCHEDULED_STATUS_PATH,
     SCHEDULED_WS_PATH,

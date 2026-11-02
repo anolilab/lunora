@@ -83,19 +83,19 @@ export const screenshotPage = action.input({ url: v.string() }).action(async ({ 
 });
 ```
 
-Outside an action — in the worker entry, a Durable Object, or a queue/scheduled handler — build the helper directly. It is the exact `launch(env.BROWSER)` equivalence, just with the always-close / URL-validation / viewport-cap guards applied. The config thunk codegen uses is `browser: (env) => createBrowser({ binding: env.BROWSER, launch })`:
+Outside an action — in the worker entry, a Durable Object, or a queue/scheduled handler — build the helper directly. It is the exact `launch(env.BROWSER)` equivalence, just with the always-close / URL-validation / viewport-cap guards applied. The config thunk codegen uses is `browser: (env) => createBrowser({ binding: env.BROWSER, playwright: () => import("@cloudflare/playwright") })`:
 
 ```ts
-import { launch } from "@cloudflare/playwright";
-
 import { createBrowser } from "@lunora/browser";
 
-const browser = createBrowser({ binding: env.BROWSER, launch });
+const browser = createBrowser({ binding: env.BROWSER, playwright: () => import("@cloudflare/playwright") });
 
 const pdf = await browser.pdf("https://example.com", { format: "A4", printBackground: true });
 const html = await browser.content("https://example.com");
 const title = await browser.scrape("https://example.com", () => document.title);
 ```
+
+`playwright` is a loader, not the module: it runs on the first call that drives a browser and the module is reused, so the SDK stays out of the Worker's startup graph (Cloudflare rejects a Worker whose global scope takes more than 1 s of CPU). A static `import { launch } from "@cloudflare/playwright"` in the entry is evaluated at startup and defeats this. A failed load rejects that call; the next one retries.
 
 ## Quick Actions, crawling, shared sessions
 
@@ -119,7 +119,7 @@ Every navigation URL is validated before the browser is launched. Beyond rejecti
 If you deliberately drive the browser at an internal service reachable through a private-network binding / Cloudflare Tunnel, opt out per-factory:
 
 ```ts
-const browser = createBrowser({ binding: env.BROWSER, launch, allowPrivateTargets: true });
+const browser = createBrowser({ binding: env.BROWSER, playwright: () => import("@cloudflare/playwright"), allowPrivateTargets: true });
 ```
 
 Only set `allowPrivateTargets` when every URL is trusted — it re-opens the SSRF surface.

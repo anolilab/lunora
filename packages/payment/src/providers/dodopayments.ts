@@ -8,12 +8,14 @@
  * Webhooks** (Svix: `webhook-id` / `webhook-timestamp` / `webhook-signature`), verified by
  * {@link verifyStandardWebhook} — the same scheme as Polar.
  *
- * Takes an injected, structural `DodoPaymentsClientLike` (so this package never imports the
- * `dodopayments` SDK); pass `new DodoPayments({ bearerToken })` from the app. Dodo amounts are
- * integer minor units (matching `Money` 1:1), and its billing dates are ISO-8601 strings.
+ * Takes a loader for a structural `DodoPaymentsClientLike` (so this package never imports the
+ * `dodopayments` SDK); pass `async () => new (await import("dodopayments")).default({ bearerToken })`
+ * from the app. It runs on the first provider call, keeping the SDK out of the startup graph. Dodo
+ * amounts are integer minor units (matching `Money` 1:1), and its billing dates are ISO-8601 strings.
  */
 import type DodoPayments from "dodopayments";
 
+import { lazyValue } from "../../../../shared/lazy-value";
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
 import { idempotencyKey } from "../idempotency";
@@ -54,7 +56,7 @@ interface DodoPaymentsClientLike {
 }
 
 interface DodoPaymentsAdapterOptions {
-    readonly client: DodoPaymentsClientLike;
+    readonly client: () => Promise<DodoPaymentsClientLike> | DodoPaymentsClientLike;
     readonly webhookSecret: string;
     readonly webhookToleranceSeconds?: number;
 }
@@ -310,8 +312,8 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
 export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): PaymentAdapter => {
     const { webhookSecret } = options;
-    // Use the injected client as the real `DodoPayments` internally so every call is checked against the SDK.
-    const client = options.client as unknown as DodoPayments;
+    // Use the loaded client as the real `DodoPayments` internally so every call is checked against the SDK.
+    const loadClient = lazyValue(async () => (await options.client()) as unknown as DodoPayments);
 
     return {
         // Dodo is a Merchant-of-Record: it moves the money, so there is no manual payment-intent
@@ -319,6 +321,8 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
         cancelPayment: () => notSupported("manual payment cancellation"),
 
         cancelSubscription: async (subscriptionId, cancelOptions) => {
+            const client = await loadClient();
+
             // Same endpoint either way — only the body differs (schedule vs. immediate). `as const` keeps
             // "cancelled" a literal so it satisfies Dodo's `SubscriptionStatus` enum, not a widened string.
             const body = cancelOptions?.atPeriodEnd ? { cancel_at_next_billing_date: true } : { status: "cancelled" as const };
@@ -331,6 +335,8 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
         capturePayment: (_input: CaptureInput) => notSupported("manual capture"),
 
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
+            const client = await loadClient();
+
             const session = asRecord(
                 await client.checkoutSessions.create({
                     // An existing Dodo customer is attached by id; otherwise Dodo collects one at checkout.
@@ -346,12 +352,16 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
         },
 
         createPortalSession: async (input: PortalInput) => {
+            const client = await loadClient();
+
             const session = asRecord(await client.customers.customerPortal.create(input.customerId, { return_url: input.returnUrl }));
 
             return { url: readString(session, "link") ?? readString(session, "url") ?? "" };
         },
 
         getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer> => {
+            const client = await loadClient();
+
             // Dodo's `customers.create` is NOT idempotent by email, so a retried/raced first checkout
             // for the same reference would mint duplicate customers. The store lookup the facade puts in
             // front of this call is what actually prevents that: the key below is INERT on this SDK,
@@ -373,9 +383,17 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
             };
         },
 
-        getPaymentStatus: async (sessionId) => paymentFromDodo(await client.payments.retrieve(sessionId)),
+        getPaymentStatus: async (sessionId) => {
+            const client = await loadClient();
 
-        getSubscriptionStatus: async (subscriptionId) => subscriptionFromDodo(await client.subscriptions.retrieve(subscriptionId)),
+            return paymentFromDodo(await client.payments.retrieve(sessionId));
+        },
+
+        getSubscriptionStatus: async (subscriptionId) => {
+            const client = await loadClient();
+
+            return subscriptionFromDodo(await client.subscriptions.retrieve(subscriptionId));
+        },
 
         identifier: "dodopayments",
 
@@ -409,6 +427,7 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
                 );
             }
 
+            const client = await loadClient();
             const refund = asRecord(await client.refunds.create({ payment_id: input.sessionId, reason: input.reason }));
             const currency = readString(refund, "currency") ?? "usd";
             const refundedAmount = moneyFromMinor(readNumber(refund, "amount") ?? 0, currency);
@@ -439,6 +458,8 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
         },
 
         reportUsage: async (input: ReportUsageInput) => {
+            const client = await loadClient();
+
             // Dodo usage-events ingest: one event per usage record, keyed to the Dodo customer id; the
             // idempotency key dedupes, and metadata carries the metered value.
             await client.usageEvents.ingest({
@@ -455,12 +476,16 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
         },
 
         resumeSubscription: async (subscriptionId) => {
+            const client = await loadClient();
+
             const subscription = await client.subscriptions.update(subscriptionId, { cancel_at_next_billing_date: false });
 
             return subscriptionFromDodo(subscription);
         },
 
         updateSubscription: async (subscriptionId, patch: SubscriptionPatch) => {
+            const client = await loadClient();
+
             // A plan and/or quantity change goes through Dodo's dedicated change-plan endpoint (prorated
             // immediately), then we re-read the authoritative subscription. `changePlan` REQUIRES BOTH
             // `product_id` and `quantity`, so a patch that sets only one side (plan-only OR quantity-only)

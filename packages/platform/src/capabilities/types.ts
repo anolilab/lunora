@@ -37,12 +37,12 @@
  * `scheduler`, `secretValues`, `secrets`, `services`, `topics`, `vectorStore`, `workerLoaders`, `workflowRollback`,
  * `workflowSchedules`, `workflows`.
  *
- * Every other key here — `authJurisdictionMove`, `conditionalWrites`, `deliveryAuthorization`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
+ * Every other key here — `adminTokenRevocation`, `authJurisdictionMove`, `conditionalWrites`, `deliveryAuthorization`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
  * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
  * `objectColumnPaths`, `objectStorageBackups`, `objectStorageCdcArchive`, `pointInTimeRecovery`, `queryExplain`,
  * `serverReactors`,
  * `shardAlarms`, `shardedState`, `shardPlacement`, `shardReadReplicas`,
- * `websocketHibernation`, `alarmRearmBreaker`, `scheduleRateBreaker` — is
+ * `websocketHibernation`, `alarmRearmBreaker`, `scheduleRateBreaker`, `deploymentPause` — is
  * **advisory**: rating one `unsupported` omits no surface and warns nobody. It
  * still records parity honestly, which is its job; it is not a gate.
  *
@@ -134,6 +134,22 @@ export interface Capability {
 export interface PlatformCapabilities {
     /** Feature-level capabilities. */
     features: {
+        /**
+         * Where a named admin token's revocation is recorded so a point-in-time restore of
+         * the default shard, which brings the token row back, cannot revive the token: a
+         * small Durable Object (`AdminRevocationDO`, bound as `ADMIN_REVOCATIONS`) outside
+         * that database, written FIRST on revoke and consulted on every verify.
+         *
+         * Carried by the same `ShardDirectory` namespace seam the scheduler and shard
+         * registry use (`createWorker({ adminRevocations })`). A host that does not bind one
+         * fails closed: no named token can be created and any that exist are refused, so the
+         * root `LUNORA_ADMIN_TOKEN` is the only admin credential there.
+         *
+         * Advisory for codegen by nature — an app declares no named tokens; they are created
+         * at runtime. The module is emitted for every app and the builder always has the method.
+         */
+        adminTokenRevocation?: Capability;
+
         /**
          * Durable agents — a `defineAgent` export in `lunora/agents.ts`.
          *
@@ -338,6 +354,17 @@ export interface PlatformCapabilities {
          * does that host emits the surface silently.
          */
         deliveryAuthorization?: Capability;
+
+        /**
+         * The operator's incident switch (`lunora pause` / `resume`, Studio, `POST
+         * /_lunora/admin/pause`): function calls answer `503 DEPLOYMENT_PAUSED`,
+         * scheduled jobs are held in place, cron ticks are skipped and recorded,
+         * queue messages are held. The flag is durable in the `SchedulerDO`, and
+         * so is the registry of named scheduler instances a pause fans out to, so a
+         * host rates it by whether it runs one (no separate host contract carries it). Advisory by
+         * nature: an app never declares it, so there is nothing for codegen to gate.
+         */
+        deploymentPause?: Capability;
 
         /**
          * Durable streams: a `.stream()` run whose chunks are persisted and

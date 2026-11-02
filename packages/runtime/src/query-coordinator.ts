@@ -551,7 +551,9 @@ interface ImportFanOutRequest {
      * `rows` arg of `__lunora_admin__:importShard`. The shard's
      * starting-line-number for error attribution is carried in `startLine`.
      */
-    batches: ReadonlyArray<{ rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; shardKey: string; startLine?: number }>;
+    batches: ReadonlyArray<{ rows: ReadonlyArray<{ doc: Record<string, unknown>; op?: "delete"; table: string }>; shardKey: string; startLine?: number }>;
+    /** Let rows tagged `op: "delete"` remove stored rows. Off unless set: the shard refuses those rows. */
+    deletes?: boolean;
     /** Check the rows and return their shape errors without writing. Off unless set: a write is the default. */
     dryRun?: boolean;
     headers?: Record<string, string>;
@@ -563,6 +565,7 @@ interface ShardImportOutcome {
     error?: { message: string; timedOut: boolean };
     result?: {
         conflicts: number;
+        deleted: number;
         errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
         inserted: Record<string, number>;
         replaced: number;
@@ -573,6 +576,8 @@ interface ShardImportOutcome {
 interface ImportFanOutResult {
     /** Total conflicts (skipped `_id`s) across shards. */
     conflicts: number;
+    /** Total stored rows removed by `op: "delete"` rows across shards. */
+    deleted: number;
     /** Errors merged across all per-shard outcomes. */
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     failed: number;
@@ -1142,6 +1147,7 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
     const inserted: Record<string, number> = {};
     const errors: { code: string; line: number; message: string; table: string }[] = [];
     let conflicts = 0;
+    let deleted = 0;
     let replaced = 0;
     let ok = 0;
     let failed = 0;
@@ -1159,6 +1165,7 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
             | undefined
             | {
                   conflicts?: number;
+                  deleted?: number;
                   errors?: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
                   inserted?: Record<string, number>;
                   replaced?: number;
@@ -1176,11 +1183,13 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
         }
 
         conflicts += payload?.conflicts ?? 0;
+        deleted += payload?.deleted ?? 0;
         replaced += payload?.replaced ?? 0;
 
         shards.push({
             result: {
                 conflicts: payload?.conflicts ?? 0,
+                deleted: payload?.deleted ?? 0,
                 errors: payload?.errors ?? [],
                 inserted: shardInserted,
                 replaced: payload?.replaced ?? 0,
@@ -1189,7 +1198,7 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
         });
     }
 
-    return { conflicts, errors, failed, inserted, ok, replaced, shards };
+    return { conflicts, deleted, errors, failed, inserted, ok, replaced, shards };
 };
 
 interface ShardRpcOk {
@@ -1220,12 +1229,42 @@ type ShardRpcOutcome = ShardRpcError | ShardRpcOk;
 interface PreparedShardRpc {
     readonly body: string;
     readonly headers: Record<string, string>;
+    readonly refresh?: ShardHeaderRefresh;
 }
+
+/** Rewrites one shard call's headers just before it is sent. */
+type ShardHeaderRefresh = (headers: Record<string, string>) => Promise<Record<string, string>>;
+
+/**
+ * Per-call header refreshers, keyed by the forwarded-headers record a request's
+ * fan-out was given. A named admin token's shard signal is short-lived and a
+ * fan-out can outlast it, so the worker registers a refresher that re-verifies
+ * the token and signs each shard call afresh. Keyed by identity rather than
+ * carried on the record because the record becomes a `Headers` init, and
+ * because a coordinator the app built itself must pick it up too.
+ */
+const shardHeaderRefreshers = new WeakMap<Readonly<Record<string, string>>, ShardHeaderRefresh>();
+
+const refreshShardHeadersPerCall = (headers: Readonly<Record<string, string>>, refresh: ShardHeaderRefresh): void => {
+    shardHeaderRefreshers.set(headers, refresh);
+};
+
+/**
+ * `headers` as they should go out on the next shard call: re-signed when a refresher was registered for
+ * this record (a named admin token), unchanged otherwise. For callers outside a fan-out that make several
+ * shard calls from one record, such as the AI chat's tool reads.
+ */
+const refreshedShardHeaders = async (headers: Record<string, string>): Promise<Record<string, string>> => {
+    const refresh = shardHeaderRefreshers.get(headers);
+
+    return refresh === undefined ? headers : refresh(headers);
+};
 
 const prepareShardRpc = (request: ShardRpcRequest): PreparedShardRpc => {
     return {
         body: JSON.stringify({ args: request.args ?? {}, functionPath: request.functionPath }),
         headers: { "content-type": "application/json", ...request.headers },
+        refresh: request.headers === undefined ? undefined : shardHeaderRefreshers.get(request.headers),
     };
 };
 
@@ -1262,13 +1301,6 @@ const callOneShard = async (namespace: ShardNamespaceInput, shardKey: string, pr
     // its socket open after we've already resolved with a timeout error.
     const controller = new AbortController();
 
-    const forwarded = new Request("https://shard.internal/rpc", {
-        body: prepared.body,
-        headers: prepared.headers,
-        method: "POST",
-        signal: controller.signal,
-    });
-
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
     const timeoutPromise = new Promise<ShardRpcError>((resolve) => {
@@ -1287,6 +1319,13 @@ const callOneShard = async (namespace: ShardNamespaceInput, shardKey: string, pr
 
     const fetchPromise = (async (): Promise<ShardRpcOutcome> => {
         try {
+            // Inside the timed section: a refresh that re-verifies a named admin token can wait on the token store.
+            const forwarded = new Request("https://shard.internal/rpc", {
+                body: prepared.body,
+                headers: prepared.refresh === undefined ? prepared.headers : await prepared.refresh(prepared.headers),
+                method: "POST",
+                signal: controller.signal,
+            });
             const response = await stub.fetch(forwarded);
 
             if (!response.ok) {
@@ -1962,6 +2001,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                 }
 
                 return importOnShard(batch.shardKey, {
+                    deletes: request.deletes === true,
                     dryRun: request.dryRun === true,
                     onConflict: request.onConflict ?? "skip",
                     rows: [...batch.rows],
@@ -2138,7 +2178,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
     };
 };
 
-export { createDefaultShardRegistry, createQueryCoordinator, createStaticShardRegistry, pruneShardRegistry };
+export { createDefaultShardRegistry, createQueryCoordinator, createStaticShardRegistry, pruneShardRegistry, refreshedShardHeaders, refreshShardHeadersPerCall };
 export type {
     ExportFanOutRequest,
     ExportFanOutResult,

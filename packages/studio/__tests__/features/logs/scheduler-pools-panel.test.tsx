@@ -5,6 +5,7 @@ import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
 import { SchedulerPoolsPanel } from "../../../src/features/logs/scheduler-pools-panel";
+import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
@@ -101,5 +102,147 @@ describe("schedulerPoolsPanel", () => {
         await screen.findByTestId("pools-table");
 
         expect(status.pools.map((pool) => pool.name)).toStrictEqual(["quiet", "busy"]);
+    });
+});
+
+describe("schedulerPoolsPanel lag", () => {
+    it("lists each job's start lag from the shard's scheduler.lag_ms series", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown =>
+                reference === ADMIN_FUNCTIONS.getMetricSeries
+                    ? {
+                          series: [
+                              {
+                                  attributes: { function: "jobs:sweep" },
+                                  count: 4,
+                                  firstTs: 0,
+                                  functionPath: "jobs:sweep",
+                                  kind: "histogram",
+                                  last: 30,
+                                  lastTs: 0,
+                                  max: 90,
+                                  min: 10,
+                                  name: "scheduler.lag_ms",
+                                  sum: 160,
+                              },
+                              {
+                                  attributes: { function: "user:gauge" },
+                                  count: 1,
+                                  firstTs: 0,
+                                  functionPath: "user:gauge",
+                                  kind: "gauge",
+                                  last: 7,
+                                  lastTs: 0,
+                                  max: 7,
+                                  min: 7,
+                                  name: "scheduler.lag_ms",
+                                  sum: 7,
+                              },
+                              {
+                                  count: 2,
+                                  firstTs: 0,
+                                  functionPath: "orders:place",
+                                  kind: "counter",
+                                  last: 1,
+                                  lastTs: 0,
+                                  max: 1,
+                                  min: 1,
+                                  name: "orders.placed",
+                                  sum: 2,
+                              },
+                          ],
+                      }
+                    : undefined,
+        });
+
+        render(withProvider(mock, <SchedulerPoolsPanel loadStatus={async () => STATUS} />));
+
+        const row = await screen.findByTestId("lag-row-jobs:sweep");
+
+        expect(row.textContent).toBe("jobs:sweep4409030");
+        expect(screen.getAllByTestId(/^lag-row-/u)).toHaveLength(1);
+    });
+
+    it("reads the lag series from the chosen shard", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference, _args, options): unknown =>
+                reference === ADMIN_FUNCTIONS.getMetricSeries && (options as { shardKey?: string } | undefined)?.shardKey === "tenant-a"
+                    ? {
+                          series: [
+                              {
+                                  attributes: { function: "jobs:bill" },
+                                  count: 1,
+                                  firstTs: 0,
+                                  functionPath: "jobs:bill",
+                                  kind: "histogram",
+                                  last: 5,
+                                  lastTs: 0,
+                                  max: 5,
+                                  min: 5,
+                                  name: "scheduler.lag_ms",
+                                  sum: 5,
+                              },
+                          ],
+                      }
+                    : { series: [] },
+        });
+
+        render(withProvider(mock, <SchedulerPoolsPanel initialShardKey="tenant-a" loadStatus={async () => STATUS} />));
+
+        await expect(screen.findByTestId("lag-row-jobs:bill")).resolves.toBeDefined();
+    });
+
+    it("says the lag series only cover the shard since it last woke", async () => {
+        expect.assertions(1);
+
+        render(withProvider(createMockClient(), <SchedulerPoolsPanel loadStatus={async () => STATUS} />));
+
+        await expect(screen.findByTestId("lag-scope")).resolves.toBeDefined();
+    });
+
+    it("shows a failed lag read instead of hiding the table", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.getMetricSeries) {
+                    throw new Error("shard unreachable");
+                }
+
+                return undefined;
+            },
+        });
+
+        render(withProvider(mock, <SchedulerPoolsPanel loadStatus={async () => STATUS} />));
+
+        const banner = await screen.findByTestId("lag-error");
+
+        expect(banner.textContent).toContain("shard unreachable");
+        // The pool status is a separate read and still renders.
+        await expect(screen.findByTestId("pools-table")).resolves.toBeDefined();
+    });
+
+    it("treats a worker without the metric read as having no lag data", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.getMetricSeries) {
+                    throw Object.assign(new Error("no such function"), { code: "FUNCTION_NOT_FOUND" });
+                }
+
+                return undefined;
+            },
+        });
+
+        render(withProvider(mock, <SchedulerPoolsPanel loadStatus={async () => STATUS} />));
+
+        await screen.findByTestId("pools-table");
+
+        expect(screen.queryByTestId("lag-error")).toBeNull();
     });
 });

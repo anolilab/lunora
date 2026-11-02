@@ -290,7 +290,7 @@ const AgentsPanel = ({ initialShardKey = "" }: AgentsPanelProps): ReactElement =
                     </CardContent>
                 </Card>
 
-                {messagesError !== null && <ErrorAlert error={messagesErrorSource} testId="agents-messages-error" />}
+                {messagesError !== null && <ErrorAlert error={messagesErrorSource} shardKey={initialShardKey} testId="agents-messages-error" />}
 
                 {selectedKey !== undefined && (
                     <Card className="overflow-hidden py-0" data-testid="agents-thread-detail">
@@ -376,7 +376,7 @@ const AgentsPanel = ({ initialShardKey = "" }: AgentsPanelProps): ReactElement =
 
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-agents-panel">
-            {threadsError !== null && <ErrorAlert error={threadsErrorSource} testId="agents-error" />}
+            {threadsError !== null && <ErrorAlert error={threadsErrorSource} shardKey={initialShardKey} testId="agents-error" />}
 
             <p className="text-sm text-muted-foreground">
                 {t(

@@ -1,3 +1,59 @@
+## @lunora/mail [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.137...@lunora/mail@1.0.0-alpha.138) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.85
+
+## @lunora/mail [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.136...@lunora/mail@1.0.0-alpha.137) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+
+## @lunora/mail [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.135...@lunora/mail@1.0.0-alpha.136) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+
+## @lunora/mail [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.134...@lunora/mail@1.0.0-alpha.135) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+
+## @lunora/mail [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.133...@lunora/mail@1.0.0-alpha.134) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+
+## @lunora/mail [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.132...@lunora/mail@1.0.0-alpha.133) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+
+## @lunora/mail [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.131...@lunora/mail@1.0.0-alpha.132) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.79
+
+## @lunora/mail [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.130...@lunora/mail@1.0.0-alpha.131) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.78
+
 ## @lunora/mail [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.128...@lunora/mail@1.0.0-alpha.129) (2026-10-28)
 
 ### Performance Improvements

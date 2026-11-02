@@ -95,17 +95,24 @@ Prefer to manage it yourself? Run `wrangler hyperdrive create my-db --connection
 // src/server/index.ts
 import type { HyperdriveLike } from "@lunora/hyperdrive";
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
-import postgres from "postgres";
 
 import { defineApp } from "../../lunora/_generated/app";
 
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
-    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 })))
+    .hyperdrive((env) =>
+        fromPostgresJs(async () => {
+            const { default: postgres } = await import("postgres");
+
+            return postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 });
+        }),
+    )
     .build();
 
 export const ShardDO = app.ShardDO;
 ```
+
+The adapter takes a loader, not a driver: it runs on the first query and the client is reused, so the driver stays out of the Worker's startup graph. A static `import postgres from "postgres"` in the entry is evaluated at startup and defeats this. A failed load rejects that query; the next one retries. For `pg`, the loader may `await client.connect()` before returning.
 
 Hand-composing the worker instead? The same thunk is `createShardDO({ sql: (env) => … })`. Without it, every `ctx.sql` method throws a message pointing back at this wiring.
 
@@ -157,7 +164,13 @@ Supply the driver once, on the app builder — required, or every tick records `
 ```ts
 export default defineApp<Env>()
     .shard((env) => env.SHARD)
-    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString, { fetch_types: false, max: 5 })))
+    .sourceClient((env, binding) =>
+        fromPostgresJs(async () => {
+            const { default: postgres } = await import("postgres");
+
+            return postgres((env[binding] as { connectionString: string }).connectionString, { fetch_types: false, max: 5 });
+        }),
+    )
     .build();
 ```
 
@@ -178,13 +191,18 @@ The `@lunora/hyperdrive/global` subpath is the opposite trade-off: Lunora **owns
 ```ts
 import { fromPostgresJs } from "@lunora/hyperdrive";
 import { createPostgresGlobalCtxDb } from "@lunora/hyperdrive/global";
-import postgres from "postgres";
 
-const sql = postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 });
-const globalDb = createPostgresGlobalCtxDb(fromPostgresJs(sql), { schema });
+const globalDb = createPostgresGlobalCtxDb(
+    fromPostgresJs(async () => {
+        const { default: postgres } = await import("postgres");
+
+        return postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 });
+    }),
+    { schema },
+);
 ```
 
-For MySQL use `createMysqlGlobalCtxDb` with a `mysql2/promise` pool created with `disableEval: true` (required on Workers) and `flags: ["FOUND_ROWS"]` — without `CLIENT_FOUND_ROWS` the affected-rows OCC guard sees changed (not matched) rows and raises spurious conflicts. Lower-level building blocks (`buildPgExec`, `buildMysqlExec`, `postgresDialect`, `mysqlDialect`, `createHyperdriveGlobalCtxDb`) are exported for custom wiring.
+For MySQL use `createMysqlGlobalCtxDb` with a loader returning a `mysql2/promise` pool created with `disableEval: true` (required on Workers) and `flags: ["FOUND_ROWS"]` (`import()` the driver inside it, as with `fromMysql2`) — without `CLIENT_FOUND_ROWS` the affected-rows OCC guard sees changed (not matched) rows and raises spurious conflicts. Lower-level building blocks (`buildPgExec`, `buildMysqlExec`, `postgresDialect`, `mysqlDialect`, `createHyperdriveGlobalCtxDb`) are exported for custom wiring.
 
 The Hyperdrive config behind `.global()` must have **query caching disabled** (`wrangler hyperdrive create … --caching-disabled`, or `wrangler hyperdrive update <id> --caching-disabled`). Hyperdrive caches reads for up to 75 s by default and writes don't invalidate them, so the store's OCC re-reads, change-log polls and live-query re-runs would see stale rows. `lunora deploy` sets this on the configs it creates when the schema has `.global({ backend: "hyperdrive" })` tables, and warns about an already-bound config that still caches (when Cloudflare API credentials are set).
 

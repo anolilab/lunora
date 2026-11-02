@@ -4,9 +4,13 @@ import { createWorker } from "lunorash/runtime";
 import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";
 
+// Records revoked named admin tokens where a restore of the shard cannot rewind them.
+export { AdminRevocationDO } from "../../lunora/_generated/adminRevocations.js";
+
 export const ShardDO = createShardDO();
 
 interface Env {
+    ADMIN_REVOCATIONS: ShardNamespaceLike;
     SHARD: ShardNamespaceLike;
 }
 
@@ -21,7 +25,7 @@ export default {
         // OPEN (any caller may target any shard) and data is protected by
         // per-row RLS. A PRODUCTION sharded app must gate this instead — e.g.
         // `authorizeShard: ({ identity, shardKey }) => shardKey === "__root__" || identity?.userId === ownerOf(shardKey)`.
-        worker ??= createWorker({ allowUnauthenticatedShardAccess: true, openApiSpec, shardDO: env.SHARD });
+        worker ??= createWorker({ allowUnauthenticatedShardAccess: true, openApiSpec, adminRevocations: env.ADMIN_REVOCATIONS, shardDO: env.SHARD });
 
         return worker.fetch(request, env, ctx);
     },

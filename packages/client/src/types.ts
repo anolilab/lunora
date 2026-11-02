@@ -319,6 +319,9 @@ export interface OutboxSink {
  * needed to render offline on reload and to resume the live subscription.
  */
 export interface CachedQuery {
+    /** Fingerprint of the claims the value was read under (see `SubscriptionState.serverClaims`), replayed as `sinceClaims`. */
+    claims?: string;
+
     /**
      * Token-hash fingerprint of the bearer the value was cached under, when the
      * entry was written by the identity the client currently advertises.
@@ -698,7 +701,7 @@ export interface ClientSubscribeMessage {
      * snapshot when nothing the query reads changed since it. Absent on a
      * first-time subscribe.
      */
-    query: { args?: Record<string, unknown>; functionPath?: string; sinceEpoch?: string; sinceSeq?: number; table?: string };
+    query: { args?: Record<string, unknown>; functionPath?: string; sinceClaims?: string; sinceEpoch?: string; sinceSeq?: number; table?: string };
     type: "subscribe";
 }
 
@@ -760,6 +763,9 @@ export interface ClientShapeSubscribeMessage {
      * delta.
      */
     sinceCheckpoint?: number;
+
+    /** The claims fingerprint {@link ClientShapeSubscribeMessage.sinceCheckpoint} was read under; absent resumes cold. */
+    sinceClaims?: string;
 
     /**
      * The CDC epoch {@link ClientShapeSubscribeMessage.sinceCheckpoint} belongs
@@ -1004,7 +1010,20 @@ export interface ServerLiveMessage {
  * before it posts a grant, and posts at once when the flag is absent.
  */
 export interface ServerIdentityMessage {
+    /**
+     * Fingerprint of the verified claims the socket is authenticated with. Opaque to the client, which only
+     * hands it back as `sinceClaims` when it resubscribes from a cursor read under these claims.
+     */
+    claims?: string;
     connectionId?: string;
+
+    /**
+     * Milliseconds within which the socket must be re-authenticated through
+     * `POST /_lunora/ws/reauth`, or the server closes it with `4005`. Present only
+     * for an authenticated subscription socket.
+     */
+    revalidateMs?: number;
+
     subject: null | string;
     type: "identity";
     whisperAck?: boolean;
@@ -1146,6 +1165,8 @@ export interface ScheduleRetryPolicy {
     backoff?: "exponential" | "linear";
     /** Base delay in milliseconds for the first retry. Default `30_000`. */
     baseMs?: number;
+    /** Keep retrying instead of dead-lettering; the delay between attempts is clamped to 1 second .. 30 minutes. */
+    forever?: boolean;
     /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */
     maxAttempts?: number;
     /** Optional ceiling clamping the computed backoff delay. */
@@ -1171,6 +1192,11 @@ export interface ScheduleRecord {
      */
     attempts?: number;
     enqueuedAt: number;
+    /** Why the job was dead-lettered. Set on a parked record. */
+    error?: string;
+
+    /** The due time a pooled job had before its full pool first re-armed it; `scheduledFor` then moves with each re-arm. */
+    firstDueAt?: number;
 
     /**
      * The `ns:fn` path dispatched on fire. Absent when the job targets a durable
@@ -1195,6 +1221,77 @@ export interface ScheduleRecord {
      * of {@link ScheduleRecord.functionPath}.
      */
     workflow?: string;
+}
+
+/**
+ * Where a scheduled job is in its life. `succeeded` means its dispatch answered
+ * 2xx (for a workflow/agent target: its instance started); `failed`, that it
+ * exhausted its retry budget; `canceled`, that it was cancelled. Mirrors
+ * `@lunora/scheduler`'s `ScheduledJobState`.
+ */
+export type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+
+/** A scheduled job with its lifecycle state, as `getScheduledJob` / `listScheduledHistory` return it. */
+export interface ScheduledJobView extends ScheduleRecord {
+    /** When the job reached its terminal state (epoch ms). Absent while `pending`/`running`. */
+    completedAt?: number;
+    state: ScheduledJobState;
+}
+
+/** One page of finished jobs, newest first, plus the cursor to the next older page, if any. */
+export interface ScheduledHistoryPage {
+    cursor?: string;
+    records: ScheduledJobView[];
+}
+
+/** How one cron fire ended; `skipped` is a tick that did not run because the previous run was still going or the deployment was paused. Mirrors `@lunora/scheduler`'s `CronRunStatus`. */
+export type CronRunStatus = "failed" | "skipped" | "succeeded";
+
+/** One recorded fire of a code-defined cron job. Mirrors `@lunora/scheduler`'s `CronRunRecord`. */
+export interface CronRunRecord {
+    /** Run time in ms; `0` for a skipped tick. */
+    durationMs: number;
+    /** When the run finished, or when the tick was skipped (epoch ms). */
+    endedAt: number;
+    /** The thrown message of a `failed` run. */
+    error?: string;
+    /** The `cronJobs()` name. */
+    name: string;
+    /** Why a tick was `skipped`: the previous run still held the lease, or the deployment was paused. */
+    reason?: "in-flight" | "paused";
+    runId: string;
+    /** Ticks of the same cron skipped while this run held the lease. */
+    skipped: number;
+    startedAt: number;
+    status: CronRunStatus;
+}
+
+/** A cron run that holds its lease right now. Mirrors `@lunora/scheduler`'s `CronRunInFlight`. */
+export interface CronRunInFlight {
+    name: string;
+    /** When the run last said it was still alive; the lease lapses fifteen minutes after this, or after `startedAt` when it never did. */
+    renewedAt?: number;
+    runId: string;
+    /** Ticks skipped so far because this run was still going. */
+    skipped: number;
+    startedAt: number;
+}
+
+/** What `listCronRuns` returns: the runs in flight, and every recorded run newest first per job. */
+export interface CronRunsResult {
+    inFlight: CronRunInFlight[];
+    runs: CronRunRecord[];
+}
+
+/** Whether the deployment is paused, as `getDeploymentPause` / `setDeploymentPause` return it. */
+export interface DeploymentPauseStatus {
+    paused: boolean;
+    /** When the pause began (epoch ms). */
+    pausedAt?: number;
+    /** The operator's note. */
+    reason?: string;
+    /** `false` on a worker without a `schedulerDO`, which cannot be paused. */
+    supported: boolean;
 }
 
 /**
@@ -1308,6 +1405,12 @@ export interface FunctionArgumentDescriptor {
 export interface FunctionDescriptor {
     args?: FunctionArgumentDescriptor[];
     kind: "action" | "mutation" | "query";
+    /** The function's `.meta(...)`, wire-encoded (`decodeWire` restores it). Absent when it declares none, or from an older worker. */
+    meta?: unknown;
+    /** Set instead of `meta` when the declaration holds a value the wire codec cannot encode (a `RegExp`, a cycle). */
+    metaUnencodable?: true;
+    /** Set instead of `meta` when the function is registered lazily and only its loaded module can supply it. */
+    metaUnloaded?: true;
     path: string;
 }
 
@@ -1323,7 +1426,17 @@ export interface FunctionDescriptor {
 // runtime contract (`@lunora/runtime`, which defines the `/_lunora/admin/*` endpoints)
 // and re-exported here for SDK consumers — a single source of truth, no hand-kept
 // copies to drift. Type-only re-export, so no worker code reaches the browser SDK.
-export type { CronJobInfo, KvKeyEntry, KvKeyListResult, KvNamespaceSummary, KvValueResult, VectorIndexSummary, VectorQueryMatch } from "@lunora/runtime";
+export type {
+    AdminTokenSummary,
+    CreatedAdminToken,
+    CronJobInfo,
+    KvKeyEntry,
+    KvKeyListResult,
+    KvNamespaceSummary,
+    KvValueResult,
+    VectorIndexSummary,
+    VectorQueryMatch,
+} from "@lunora/runtime";
 // The durable log-archive wire types, owned by `@lunora/runtime` (the reader) and
 // re-exported here so the studio's `queryLogArchive` shares one source of truth.
 export type { PipelineLogColumnMap, PipelineLogCursor, PipelineLogField, PipelineLogPage, PipelineLogQuery, PipelineLogRow } from "@lunora/runtime";

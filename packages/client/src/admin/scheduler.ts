@@ -2,19 +2,41 @@ import { decodeWire } from "@lunora/wire";
 
 import { collectPages } from "../../../../shared/collect-pages";
 import {
+    PAUSE_PATH,
     SCHEDULED_CANCEL_PATH,
+    SCHEDULED_CRON_RUNS_PATH,
     SCHEDULED_DEAD_CANCEL_PATH,
     SCHEDULED_DEAD_PATH,
     SCHEDULED_DEAD_RETRY_PATH,
+    SCHEDULED_HISTORY_PATH,
+    SCHEDULED_JOB_PATH,
     SCHEDULED_PATH,
     SCHEDULED_STATUS_PATH,
     WORKFLOWS_INSTANCE_PATH,
     WORKFLOWS_INSTANCES_PATH,
     WORKFLOWS_STATUS_PATH,
 } from "../client-paths";
-import type { ScheduleRecord, SchedulerStatus, WorkflowInstanceDetail, WorkflowInstancePage, WorkflowInstanceStatus } from "../types";
+import type {
+    CronRunsResult,
+    DeploymentPauseStatus,
+    ScheduledJobView,
+    ScheduleRecord,
+    SchedulerStatus,
+    WorkflowInstanceDetail,
+    WorkflowInstancePage,
+    WorkflowInstanceStatus,
+} from "../types";
 import type { LunoraAdminClient } from "./admin-client";
 import type { AdminHost } from "./host";
+
+const toPauseStatus = (body: Partial<DeploymentPauseStatus>): DeploymentPauseStatus => {
+    return {
+        paused: body.paused === true,
+        ...(typeof body.pausedAt === "number" ? { pausedAt: body.pausedAt } : {}),
+        ...(typeof body.reason === "string" ? { reason: body.reason } : {}),
+        supported: body.supported === true,
+    };
+};
 
 /**
  * Undo the scheduler's `encodeWire(args)` on a record read back off the admin
@@ -27,7 +49,7 @@ import type { AdminHost } from "./host";
  * encode exists to carry, so decoding on the way through would turn a job with a
  * `bigint` argument into a 500. Identity for pure-JSON args.
  */
-export const decodeRecordArgs = (record: ScheduleRecord): ScheduleRecord =>
+export const decodeRecordArgs = <T extends ScheduleRecord>(record: T): T =>
     "args" in record ? { ...record, args: decodeWire(record.args) as Record<string, unknown> } : record;
 
 export const listScheduledJobs = async (host: AdminHost): ReturnType<LunoraAdminClient["listScheduledJobs"]> => {
@@ -36,6 +58,47 @@ export const listScheduledJobs = async (host: AdminHost): ReturnType<LunoraAdmin
     const body = (await host.adminFetch(SCHEDULED_PATH, "GET")) as { records?: ScheduleRecord[] };
 
     return (body.records ?? []).map((record) => decodeRecordArgs(record));
+};
+
+export const getScheduledJob = async (host: AdminHost, id: string): ReturnType<LunoraAdminClient["getScheduledJob"]> => {
+    host.assertOpen();
+
+    const body = (await host.adminFetch(`${SCHEDULED_JOB_PATH}?id=${encodeURIComponent(id)}`, "GET")) as { record?: ScheduledJobView };
+
+    // eslint-disable-next-line unicorn/no-null -- `null` is the documented "never scheduled, or past retention" answer
+    return body.record === undefined ? null : decodeRecordArgs(body.record);
+};
+
+export const listScheduledHistory = async (host: AdminHost, options: { cursor?: string } = {}): ReturnType<LunoraAdminClient["listScheduledHistory"]> => {
+    host.assertOpen();
+
+    // One page per call, not every page: seven days of outcomes is unbounded,
+    // so the caller asks for older ones with the returned `cursor`.
+    const path = options.cursor === undefined ? SCHEDULED_HISTORY_PATH : `${SCHEDULED_HISTORY_PATH}?cursor=${encodeURIComponent(options.cursor)}`;
+    const body = (await host.adminFetch(path, "GET")) as { cursor?: string; records?: ScheduledJobView[]; truncated?: boolean };
+    const records = (body.records ?? []).map((record) => decodeRecordArgs(record));
+
+    return body.truncated === true && body.cursor !== undefined ? { cursor: body.cursor, records } : { records };
+};
+
+export const listCronRuns = async (host: AdminHost): ReturnType<LunoraAdminClient["listCronRuns"]> => {
+    host.assertOpen();
+
+    const body = (await host.adminFetch(SCHEDULED_CRON_RUNS_PATH, "GET")) as Partial<CronRunsResult>;
+
+    return { inFlight: body.inFlight ?? [], runs: body.runs ?? [] };
+};
+
+export const getDeploymentPause = async (host: AdminHost): ReturnType<LunoraAdminClient["getDeploymentPause"]> => {
+    host.assertOpen();
+
+    return toPauseStatus((await host.adminFetch(PAUSE_PATH, "GET")) as Partial<DeploymentPauseStatus>);
+};
+
+export const setDeploymentPause = async (host: AdminHost, paused: boolean, reason?: string): ReturnType<LunoraAdminClient["setDeploymentPause"]> => {
+    host.assertOpen();
+
+    return toPauseStatus((await host.adminFetch(PAUSE_PATH, "POST", reason === undefined ? { paused } : { paused, reason })) as Partial<DeploymentPauseStatus>);
 };
 
 export const schedulerStatus = async (host: AdminHost): ReturnType<LunoraAdminClient["schedulerStatus"]> => {

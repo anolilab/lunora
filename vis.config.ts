@@ -57,9 +57,15 @@ export default defineConfig({
         // App codegen (docs: fumadocs-mdx; playground: lunora codegen) emits the
         // generated dirs the apps' source imports. `lunora codegen` loads
         // @lunora/codegen + the @lunora deps, so build the upstream packages first.
+        // The outputs are what a cache hit restores. Without them a hit skips the
+        // command and leaves the gitignored generated dir missing, so the app's
+        // lint and tests run against imports that do not exist.
         codegen: {
             cache: true,
             dependsOn: ["^build"],
+            // Declared so a cache HIT restores the generated dirs too. Without it a hit replays the log and
+            // leaves the checkout without them: the playground's tests import its gitignored `_generated`.
+            outputs: ["{projectRoot}/lunora/_generated", "{projectRoot}/.source"],
         },
         // fallow (codebase-intelligence CLI) is pure static analysis over each
         // project's source — no dist needed, so no ^build dependency. health and

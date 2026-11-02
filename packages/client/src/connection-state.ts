@@ -17,6 +17,12 @@ const isLiveStatus = (status: ConnectionStatus): boolean => status === "connecte
  */
 interface ShardConnection {
     /**
+     * Fingerprint of the verified claims this socket is authenticated with, from its `identity` frame.
+     * Stamped on a value read over it, so a later resume can say which claims the value was read under.
+     */
+    claims?: string;
+
+    /**
      * The server-minted id of this socket, from its `identity` frame. Names the socket to the
      * live-stream control route. Reset on every new socket, like `identityConfirmed`.
      */
@@ -112,7 +118,13 @@ interface ShardConnection {
      * retry that replaced it.
      */
     providerAttempt?: symbol;
+    /** Counts the socket's re-auth requests; only the latest one may act on its answer, so an older refusal cannot undo a newer success. */
+    reauthAttempt?: number;
+    /** A re-auth request is awaiting its answer: its answer re-arms the schedule, so a repeated identity frame must not. */
+    reauthPending?: boolean;
+
     reconnect: ReconnectCalculator;
+
     reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
     /** Subscriptions waiting their turn to be re-sent on this shard (see `RESUBSCRIBE_CONCURRENCY`). */
@@ -146,6 +158,15 @@ interface ShardConnection {
      */
     retired?: boolean;
 
+    /** The socket's revalidation window from its `identity` frame; `undefined` when it announced none. */
+    revalidateMs?: number;
+
+    /**
+     * Re-auths the socket in place within the `revalidateMs` window its `identity` frame
+     * announced; past that window the server closes it with `4005`. Cleared with the socket.
+     */
+    revalidateTimer?: ReturnType<typeof setTimeout>;
+
     /**
      * This socket has sent its room rejoins. Reset on every new socket: room sends wait for
      * it, so a send never reaches the server ahead of its `whisper_subscribe`.
@@ -157,6 +178,7 @@ interface ShardConnection {
      * (protocol §6) and never in the upgrade URL. Absent when the client holds none.
      */
     sessionToken?: string;
+
     /** `undefined` for the default shard (connects without a `shard` param). */
     readonly shardKey: string | undefined;
     socket: undefined | WebSocket;
@@ -178,6 +200,9 @@ interface ShardConnection {
      */
     stableTimer: ReturnType<typeof setTimeout> | undefined;
 
+    /** The socket upgraded with an admin ticket, which its re-auth must present afresh: a ticket outlives the upgrade by a minute at most. */
+    ticketed?: boolean;
+
     /**
      * Per subscription id, the one watchdog armed when its `subscribe` frame goes out. If the server
      * answers nothing for `RESUBSCRIBE_ACK_TIMEOUT_MS` it frees the id's pacing slot (if it holds one)
@@ -185,6 +210,13 @@ interface ShardConnection {
      * first frame bearing the id and by every teardown of the socket.
      */
     unackedWatchdogs: Map<string, ReturnType<typeof setTimeout>>;
+
+    /**
+     * The bearer this socket is authenticated with, or `undefined` when it upgraded on the cookie session alone.
+     * Pinned when the socket opens, and moved only when the server accepts a refreshed one in place: a later
+     * bearer for the same subject does not reconnect it, so re-auth must present this, not the client's current one.
+     */
+    upgradeBearer?: string;
 
     wasEverConnected: boolean;
 

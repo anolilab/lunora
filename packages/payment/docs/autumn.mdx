@@ -107,8 +107,8 @@ AUTUMN_WEBHOOK_SECRET=...            # Autumn dashboard → webhook settings (si
 
 ## Install
 
-The package never imports the `autumn-js` SDK: you inject the client, so
-`autumn-js` stays an optional peer dependency you install alongside it:
+The package never imports the `autumn-js` SDK: you pass a loader for the client,
+so `autumn-js` stays an optional peer dependency you install alongside it:
 
 <Tabs items={["pnpm","npm","yarn","bun"]}>
 
@@ -140,13 +140,20 @@ carries your secret key, comes from a `config.payment(env)` thunk you pass to
 <Steps>
 <Step>
 
-**Construct an `Autumn` client** from `env.AUTUMN_SECRET_KEY`:
+**Write a loader for the `Autumn` client** that builds it from `env.AUTUMN_SECRET_KEY`:
 
 ```ts
-import { Autumn } from "autumn-js";
+const loadAutumn = async () => {
+    const { Autumn } = await import("autumn-js");
 
-const client = new Autumn({ secretKey: env.AUTUMN_SECRET_KEY });
+    return new Autumn({ secretKey: env.AUTUMN_SECRET_KEY });
+};
 ```
+
+The adapter calls the loader on its first provider call and reuses the client,
+so `autumn-js` stays out of the Worker's startup graph. A static
+`import { Autumn } from "autumn-js"` in the entry is evaluated at startup and
+defeats this.
 
 </Step>
 <Step>
@@ -160,7 +167,7 @@ import type { AutumnClientLike } from "@lunora/payment/autumn";
 import { createAutumnAdapter } from "@lunora/payment/autumn";
 
 const adapter = createAutumnAdapter({
-    client: client as unknown as AutumnClientLike,
+    client: async () => (await loadAutumn()) as unknown as AutumnClientLike,
     webhookSecret: env.AUTUMN_WEBHOOK_SECRET,
     webhookToleranceSeconds: 300, // optional clock-skew tolerance for the signed timestamp
 });
@@ -176,12 +183,15 @@ const adapter = createAutumnAdapter({
 import type { AutumnClientLike } from "@lunora/payment/autumn";
 import { createAutumnAdapter } from "@lunora/payment/autumn";
 import { createShardDO } from "./_generated/shard";
-import { Autumn } from "autumn-js";
 
 export const ShardDO = createShardDO({
     payment: (env) => ({
         adapter: createAutumnAdapter({
-            client: new Autumn({ secretKey: env.AUTUMN_SECRET_KEY }) as unknown as AutumnClientLike,
+            client: async () => {
+                const { Autumn } = await import("autumn-js");
+
+                return new Autumn({ secretKey: env.AUTUMN_SECRET_KEY }) as unknown as AutumnClientLike;
+            },
             webhookSecret: env.AUTUMN_WEBHOOK_SECRET,
         }),
         // Override the default "caller owns the referenceId" rule for org/workspace keys. The thunk
@@ -201,7 +211,10 @@ The adapter options:
 
 <TypeTable
     type={{
-        client: { type: "AutumnClientLike", description: "An injected Autumn instance (structural subset). Required." },
+        client: {
+            type: "() => AutumnClientLike | Promise<AutumnClientLike>",
+            description: "Loads an Autumn instance (structural subset) on the first provider call; reused after. Required.",
+        },
         webhookSecret: { type: "string", description: "The Svix (Standard Webhooks) signing secret used to verify inbound webhooks. Required." },
         webhookToleranceSeconds: {
             type: "number",
@@ -227,13 +240,14 @@ and usage. Autumn also ships concepts with no cross-provider equivalent:
 **plan catalog**, and a native **checkout** (prepaid feature quantities, entity
 scoping, reward codes, opting out of a plan's trial). These live in a companion facade,
 `createAutumnFeatures`, kept separate so the provider-agnostic surface stays
-generic. Share the same injected client between the two:
+generic. It takes the same kind of loader as the adapter and runs it on its first
+call, so it can be built at module scope without loading the SDK at startup:
 
 ```ts
 import type { AutumnFeaturesClientLike } from "@lunora/payment/autumn-features";
 import { createAutumnFeatures } from "@lunora/payment/autumn-features";
 
-const autumnFeatures = createAutumnFeatures({ client: client as unknown as AutumnFeaturesClientLike });
+const autumnFeatures = createAutumnFeatures({ client: async () => (await loadAutumn()) as unknown as AutumnFeaturesClientLike });
 
 await autumnFeatures.entities.create(userId, { featureId: "seats", id: "workspace_a", name: "Workspace A" });
 const usage = await autumnFeatures.events.aggregate(userId, { featureId: "api_calls", range: "30d" });

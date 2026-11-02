@@ -9,6 +9,21 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/do`
 
+### `ADMIN_REVOCATION_DO_NAME` (const)
+
+```ts
+const ADMIN_REVOCATION_DO_NAME = "__lunora_admin_revocations__";
+```
+
+### `AdminRevocationDO` (class)
+
+```ts
+class AdminRevocationDO {
+    constructor(state: AdminRevocationDOState, env: unknown);
+    fetch(request: Request): Promise<Response>;
+}
+```
+
 ### `AdvisorProcedure` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -111,6 +126,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ```ts
 const MERGED_ROLES: readonly [
+    "adminRevocations",
     "scheduler",
     "shardRegistry"
 ];
@@ -268,9 +284,10 @@ interface RunShardFindRelatedArgs {
 
 ```ts
 interface RunShardImportArgs {
+    deletes?: boolean;
     dryRun?: boolean;
     onConflict?: ImportConflictMode;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 ```
@@ -464,6 +481,7 @@ abstract class ShardDO {
     protected getInboundBookmark(): string | undefined;
     protected getCurrentUserId(): string | undefined;
     protected getCurrentIp(): string | undefined;
+    protected noteIdentityRead(functionPath: string): void;
     protected getCurrentOrigin(): string | undefined;
     protected getCurrentBaselineSeq(): number | undefined;
     protected recordStalePatchDropped(event: {
@@ -542,6 +560,7 @@ abstract class ShardDO {
     protected persistIdempotentResult(encodedResult: unknown): void;
     protected isCustomMutator(_functionPath: string): boolean;
     protected prepareFunction(_functionPath: string, _reason: "rpc" | "subscription" | "stream" | "reactor"): void | Promise<void>;
+    protected holdShardWhileLoading(load: () => Promise<unknown>): Promise<void>;
     protected isMutationFunction(_functionPath: string): boolean;
     protected classifyClientMutation(): ClientMutationClass | undefined;
     protected rejectNonNextMutation(functionPath: string, mutatorClass: ClientMutationClass | undefined, dispatchStartedAt: number): Response | undefined;
@@ -616,17 +635,23 @@ abstract class ShardDO {
     protected invalidateCompanionMemo(): void;
     protected isCacheableQuery(_functionPath: string): boolean;
     protected transactionLimits(): Partial<TransactionLimits>;
-    protected transactionHeadroom(): TransactionHeadroomTracker;
-    protected subscriptionHeadroom(): TransactionHeadroomTracker;
+    protected transactionHeadroom(functionPath?: string): TransactionHeadroomTracker;
+    protected subscriptionHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker;
+    protected streamHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker;
+    protected windowStreamReads(headroom: TransactionHeadroomTracker, frames: AsyncIterable<unknown>): AsyncIterable<unknown>;
     protected alarmHeadroom(): TransactionHeadroomTracker;
     protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;
     protected flushMigrationProgress(): Promise<void>;
-    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor, error?: ErrorDetail | undefined): void;
+    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor, error?: ErrorDetail | undefined, pinned?: {
+        trace: TraceAnchor | undefined;
+        userId: string | undefined;
+    }): void;
     protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>, scope?: SensitiveScope): ContextLogger;
     protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor, scope?: SensitiveScope): ContextTracer;
     protected resolveDispatchAnchor(identityScoped: boolean): TraceAnchor;
     protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): T;
     protected instrumentSql<T extends SqlClientLike>(client: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): T;
+    protected watchActionWork(functionPath: string, context: unknown): () => void;
     protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): ContextFetch;
     protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): SpanHandle;
     protected makeMetrics(functionPath: string, sink?: TelemetrySink, scope?: SensitiveScope): ContextMetrics;
@@ -747,6 +772,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ```ts
 interface SubscriptionOutcome {
+    identityTracked?: boolean;
     ranges?: Map<string, KeyRange[]>;
     result: unknown;
     tables: Set<string>;
@@ -981,6 +1007,17 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `AdminRevocationDOState` (interface)
+
+```ts
+interface AdminRevocationDOState {
+    storage: {
+        get: <T = unknown>(key: string) => Promise<T | undefined>;
+        put: (entries: Record<string, unknown>) => Promise<void>;
+    };
+}
+```
 
 ### `ClientMutationClass` (type)
 

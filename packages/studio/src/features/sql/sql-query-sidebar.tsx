@@ -1,10 +1,15 @@
 import type { ChangeEvent, MouseEvent, ReactElement, RefObject } from "react";
+import { useState } from "react";
 
+import type { AssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
 import { cn } from "../../lib/utils";
+import SqlQueryRename from "./sql-query-rename";
 
 /** One browser-persisted query in the editor's PRIVATE list. */
 interface SavedQuery {
+    /** One line saying what the query returns. Optional — a query named by hand may have none. */
+    readonly description?: string;
     readonly id: string;
     readonly name: string;
     readonly sql: string;
@@ -34,12 +39,13 @@ const TEMPLATES: ReadonlyArray<QueryTemplate> = [
 interface QueryRowProps {
     readonly active: boolean;
     readonly onDelete: (id: string) => void;
+    readonly onRename: (id: string) => void;
     readonly onSelect: (id: string) => void;
     readonly query: SavedQuery;
 }
 
-/** One saved-query row in the PRIVATE list: select on click, delete on the trailing button. */
-const QueryRow = ({ active, onDelete, onSelect, query }: QueryRowProps): ReactElement => {
+/** One saved-query row in the PRIVATE list: select on click, rename or delete on the trailing buttons. */
+const QueryRow = ({ active, onDelete, onRename, onSelect, query }: QueryRowProps): ReactElement => {
     const t = useT();
     const onClick = (): void => {
         onSelect(query.id);
@@ -47,6 +53,10 @@ const QueryRow = ({ active, onDelete, onSelect, query }: QueryRowProps): ReactEl
     const onDeleteClick = (event: MouseEvent<HTMLButtonElement>): void => {
         event.stopPropagation();
         onDelete(query.id);
+    };
+    const onRenameClick = (event: MouseEvent<HTMLButtonElement>): void => {
+        event.stopPropagation();
+        onRename(query.id);
     };
 
     return (
@@ -59,6 +69,7 @@ const QueryRow = ({ active, onDelete, onSelect, query }: QueryRowProps): ReactEl
                 )}
                 data-testid={`sql-query-${query.id}`}
                 onClick={onClick}
+                title={query.description}
                 type="button"
             >
                 <svg
@@ -74,6 +85,27 @@ const QueryRow = ({ active, onDelete, onSelect, query }: QueryRowProps): ReactEl
                     <path d="M4 6h16M4 12h10M4 18h7" />
                 </svg>
                 <span className="truncate">{query.name}</span>
+            </button>
+            <button
+                aria-label={t("Rename query")}
+                className="hidden size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground group-hover/q:flex"
+                data-testid={`sql-query-rename-open-${query.id}`}
+                onClick={onRenameClick}
+                title={t("Rename query")}
+                type="button"
+            >
+                <svg
+                    aria-hidden="true"
+                    className="size-3.5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={1.6}
+                    viewBox="0 0 24 24"
+                >
+                    <path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4" />
+                </svg>
             </button>
             <button
                 aria-label={t("Delete query")}
@@ -112,6 +144,8 @@ interface SqlQuerySidebarProps {
     /** Load a reference template into the editor; the handler reads `data-sql` off the button. */
     readonly onLoadTemplate: (event: MouseEvent<HTMLButtonElement>) => void;
     readonly onNew: () => void;
+    /** Persist a saved query's name and description. */
+    readonly onRename: (id: string, name: string, description: string) => void;
     readonly onSearchChange: (event: ChangeEvent<HTMLInputElement>) => void;
     readonly onSelect: (id: string) => void;
     /** Flip whether the history outlives the tab. */
@@ -119,6 +153,8 @@ interface SqlQuerySidebarProps {
     readonly queries: ReadonlyArray<SavedQuery>;
     /** True when the history is written to disk rather than kept to this tab. */
     readonly rememberHistory: boolean;
+    /** The shared assistant RPCs, so the rename form can offer a drafted name. Absent when the sidebar is composed without them. */
+    readonly rpc?: AssistantRpc;
     readonly search: string;
 }
 
@@ -147,15 +183,24 @@ const SqlQuerySidebar = ({
     onLoadHistory,
     onLoadTemplate,
     onNew,
+    onRename,
     onSearchChange,
     onSelect,
     onToggleRememberHistory,
     queries,
     rememberHistory,
+    rpc,
     search,
 }: SqlQuerySidebarProps): ReactElement => {
     const t = useT();
     const filtered = matchingQueries(queries, search);
+    // Which row is showing its name/description form, if any. Local to the rail:
+    // nothing outside it cares, and it must not survive a reload.
+    const [editingId, setEditingId] = useState<null | string>(null);
+
+    const closeRename = (): void => {
+        setEditingId(null);
+    };
 
     const onRememberChange = (event: ChangeEvent<HTMLInputElement>): void => {
         onToggleRememberHistory(event.target.checked);
@@ -204,9 +249,30 @@ const SqlQuerySidebar = ({
                         </p>
                     ) : (
                         <ul className="flex flex-col gap-px" data-testid="sql-private" ref={listRef}>
-                            {filtered.map((query) => (
-                                <QueryRow active={activeId === query.id} key={query.id} onDelete={onDelete} onSelect={onSelect} query={query} />
-                            ))}
+                            {filtered.map((query) =>
+                                editingId === query.id ? (
+                                    <li key={query.id}>
+                                        <SqlQueryRename
+                                            onCancel={closeRename}
+                                            onSave={(name, description) => {
+                                                onRename(query.id, name, description);
+                                                closeRename();
+                                            }}
+                                            query={query}
+                                            rpc={rpc}
+                                        />
+                                    </li>
+                                ) : (
+                                    <QueryRow
+                                        active={activeId === query.id}
+                                        key={query.id}
+                                        onDelete={onDelete}
+                                        onRename={setEditingId}
+                                        onSelect={onSelect}
+                                        query={query}
+                                    />
+                                ),
+                            )}
                         </ul>
                     )}
                 </div>

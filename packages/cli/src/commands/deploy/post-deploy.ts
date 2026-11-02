@@ -215,7 +215,10 @@ const finalizeSuccessfulDeploy = async (
 ): Promise<DeployCommandResult> => {
     // Before migrations: a data migration may write rows whose vectors are
     // filtered on immediately afterwards.
-    await provisionVectorMetadataIndexes(options, cwd);
+    // The indexes are named in the schema, not per Worker, so a preview would change production's.
+    if (options.isolatedPreview !== true) {
+        await provisionVectorMetadataIndexes(options, cwd);
+    }
 
     const migrateCode = options.migrate ? await runPostDeployMigrations(options, cwd) : 0;
 
@@ -264,20 +267,16 @@ const completeDeploy = async ({
         deployedAt: new Date().toISOString(),
         dryRun: options.dryRun === true,
         env: options.env,
-        preview: options.preview === true,
         url: options.dryRun === true ? undefined : parseDeployedUrl(stdout),
         workerName: readWranglerName(cwd),
     };
 
-    // A dry run published nothing, and a preview uploaded a Version without
-    // going live — either way, skip the post-deploy finalize (migrations /
+    // A dry run published nothing, so skip the post-deploy finalize (migrations /
     // baseline re-bless), the link write, and the health probe, which only apply
-    // to a live deploy. The URL is still reported.
-    if (options.dryRun === true || options.preview === true) {
+    // to a live deploy.
+    if (options.dryRun === true) {
         if (options.healthCheck === true) {
-            options.logger.warn(
-                `--health-check skipped: ${options.dryRun === true ? "a dry run publishes nothing" : "a preview version serves no live traffic"}`,
-            );
+            options.logger.warn("--health-check skipped: a dry run publishes nothing");
         }
 
         return { code: 0, deployment, descriptor, mintedSecretsFile, validation };
@@ -289,7 +288,9 @@ const completeDeploy = async ({
     // recorded target — nor its architecture the next diff's baseline. Recorded
     // now because the new code is live, whatever the health check and
     // migrations below decide.
-    if (options.temporary !== true) {
+    // A preview is not the checkout's deployment either: its URL and architecture
+    // belong to a throwaway copy.
+    if (options.temporary !== true && options.isolatedPreview !== true) {
         recordArchitecture?.();
         autoLinkFromDeployOutput({ cwd, env: options.env, logger: options.logger, url: deployment.url });
     }
@@ -302,7 +303,10 @@ const completeDeploy = async ({
         return { code: EXIT_CODE.UNAVAILABLE, deployment, descriptor, healthCheck, mintedSecretsFile, validation };
     }
 
-    const finalized = await finalizeSuccessfulDeploy(options, cwd, descriptor, validation, reblessSchemaBaseline, mintedSecretsFile);
+    // The committed baseline describes what production runs; a preview shipping a
+    // branch's schema must not advance it.
+    const rebless = options.isolatedPreview === true ? undefined : reblessSchemaBaseline;
+    const finalized = await finalizeSuccessfulDeploy(options, cwd, descriptor, validation, rebless, mintedSecretsFile);
 
     return { ...finalized, deployment, healthCheck };
 };

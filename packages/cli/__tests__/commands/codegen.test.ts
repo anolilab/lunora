@@ -152,6 +152,19 @@ describe("lunora codegen", () => {
             expect(existsSync(join(generated, "fn", "lunora_messages_0.ts"))).toBe(true);
         });
 
+        it("honors codegen.lazyFunctions in lunora.config without a flag", async () => {
+            expect.assertions(3);
+
+            vi.stubEnv("LUNORA_LAZY_FUNCTIONS", "");
+            writeFileSync(join(workdir, "lunora.config.ts"), "export default { codegen: { lazyFunctions: true } };\n", "utf8");
+            const result = await runExecute<CodegenOptions, CodegenCommandData>(execute, { commandName: "codegen", cwd: workdir, options: { format: "json" } });
+            const generated = join(workdir, "lunora", "_generated");
+
+            expect(result.code).toBe(0);
+            expect(readFileSync(join(generated, "functions.ts"), "utf8")).toContain("export const LUNORA_FUNCTION_MANIFEST");
+            expect(existsSync(join(generated, "fn", "lunora_messages_0.ts"))).toBe(true);
+        });
+
         it("writes the three generated files", () => {
             expect.assertions(3);
 

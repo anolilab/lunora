@@ -10,9 +10,12 @@
  * import { withX402 } from "@lunora/x402/charge";
  *
  * export const report = httpAction(
- *   withX402({ network: "base", price: "$0.05", recipient: { evm: env.PAYOUT } }, async (ctx, request) => {
- *     return Response.json(await ctx.runQuery(api.reports.latest, {}));
- *   }),
+ *   withX402(
+ *     { facilitator: { url: "https://facilitator.example/x402" }, network: "base", price: "$0.05", recipient: { evm: env.PAYOUT } },
+ *     async (ctx, request) => {
+ *       return Response.json(await ctx.runQuery(api.reports.latest, {}));
+ *     },
+ *   ),
  * );
  * ```
  *

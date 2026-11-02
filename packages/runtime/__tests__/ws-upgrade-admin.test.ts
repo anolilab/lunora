@@ -238,3 +238,103 @@ describe("createWorker — the app WS upgrade leaves the non-admin path untouche
         expect(response.status).toBe(200);
     });
 });
+
+/**
+ * The scheduled re-auth of an admin socket presents the credential the upgrade did, and is held to the same checks:
+ * a user the shard gate would refuse must not make a verified admin socket reconnect every half window.
+ */
+describe("createWorker — the socket re-auth route accepts the admin credential", () => {
+    const REAUTH_URL = "https://app.example/_lunora/ws/reauth";
+    const reauth = (query: string): Request =>
+        new Request(`${REAUTH_URL}${query}`, {
+            body: JSON.stringify({ connectionId: "conn-1" }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        });
+
+    const forwardingShard = () => {
+        const seen: Request[] = [];
+        const namespace: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request): Promise<Response> => {
+                        seen.push(request);
+
+                        return Response.json({ ok: true });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+
+        return { namespace, seen };
+    };
+
+    it("forwards an admin re-auth through a deny-all authorizeShard, marked as verified, with no user", async () => {
+        expect.assertions(3);
+
+        const { namespace, seen } = forwardingShard();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authorizeShard: () => false, shardDO: namespace });
+        const minted = await mintWsAdminToken(ADMIN_TOKEN);
+        const response = await worker.fetch(reauth(`?token=${encodeURIComponent(minted.token)}`), {}, fakeContext);
+
+        expect(response.status).toBe(200);
+        expect(seen[0]?.headers.get("x-lunora-admin-reauth")).toBe("1");
+        expect(seen[0]?.headers.get("x-lunora-userid")).toBeNull();
+    });
+
+    it("accepts a valid admin credential beside a lapsed session cookie, forwarding no user", async () => {
+        expect.assertions(3);
+
+        const { namespace, seen } = forwardingShard();
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            authorizeShard: () => false,
+            resolveIdentity: () => {
+                return { exp: Math.floor(Date.now() / 1000) - 60, userId: "user_1" };
+            },
+            shardDO: namespace,
+        });
+        const minted = await mintWsAdminToken(ADMIN_TOKEN);
+        const response = await worker.fetch(reauth(`?token=${encodeURIComponent(minted.token)}`), {}, fakeContext);
+
+        // As the admin upgrade does, the lapsed cookie is ignored rather than refusing the admin credential.
+        expect(response.status).toBe(200);
+        expect(seen[0]?.headers.get("x-lunora-admin-reauth")).toBe("1");
+        expect(seen[0]?.headers.get("x-lunora-userid")).toBeNull();
+    });
+
+    it("refuses a rotated or forged admin credential, forwarding nothing", async () => {
+        expect.assertions(3);
+
+        const { namespace, seen } = forwardingShard();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authorizeShard: () => false, shardDO: namespace });
+        const rotated = await mintWsAdminToken("the-previous-admin-token");
+        const response = await worker.fetch(reauth(`?token=${encodeURIComponent(rotated.token)}`), {}, fakeContext);
+        const forged = await worker.fetch(reauth("?token=v1.9999999999999.AAAA"), {}, fakeContext);
+
+        expect(response.status).toBeGreaterThanOrEqual(400);
+        expect(forged.status).toBeGreaterThanOrEqual(400);
+        expect(seen).toStrictEqual([]);
+    });
+
+    it("never marks a re-auth that presents no admin credential", async () => {
+        expect.assertions(1);
+
+        const { namespace, seen } = forwardingShard();
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            allowUnauthenticatedShardAccess: true,
+            resolveIdentity: () => {
+                return { userId: "user_1" };
+            },
+            shardDO: namespace,
+        });
+
+        await worker.fetch(reauth(""), {}, fakeContext);
+
+        expect(seen[0]?.headers.get("x-lunora-admin-reauth")).toBeNull();
+    });
+});

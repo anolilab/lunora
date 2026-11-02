@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
 import type { ExecutionContextLike } from "../src/create-worker";
-import { createWorker } from "../src/create-worker";
+import { createLunoraHandler, createWorker, withFrameworkWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 /**
@@ -19,6 +19,9 @@ import type { ShardNamespaceLike } from "../src/resolve-shard";
  * claims that JSON-encode into `x-lunora-identity`.
  * - **with shardKey** — envelope picks a specific shard rather than
  * the default `__root__`. Same path; different shard lookup.
+ * - **createLunoraHandler / withFrameworkWorker factory** — the two composers
+ * that derive options from `env`. With one `env` per isolate, as on Workers,
+ * these should cost what a reused `createWorker` costs, not a worker build.
  */
 
 const fakeContext: ExecutionContextLike = {
@@ -78,5 +81,21 @@ describe("worker.fetch — RPC dispatch through forwardToShard", () => {
 
     bench("with shardKey: explicit shard selection", async () => {
         await noAuthWorker.fetch(buildRequest(shardEnvelope), {}, fakeContext);
+    });
+});
+
+const composedEnv = { SHARD: makeShard() };
+const lunoraHandler = createLunoraHandler();
+const frameworkWorker = withFrameworkWorker({ fetch: async () => new Response("ssr") }, (env) => {
+    return { shardDO: (env as typeof composedEnv).SHARD };
+});
+
+describe("composed workers — options derived from env", () => {
+    bench("createLunoraHandler()", async () => {
+        await lunoraHandler(buildRequest(bareEnvelope), composedEnv, fakeContext);
+    });
+
+    bench("withFrameworkWorker(host, (env) => options)", async () => {
+        await frameworkWorker.fetch(buildRequest(bareEnvelope), composedEnv, fakeContext);
     });
 });

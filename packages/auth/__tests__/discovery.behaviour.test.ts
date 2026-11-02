@@ -257,7 +257,7 @@ describe("discovery through createWorker, DO mode", () => {
         expect(objectFetch).not.toHaveBeenCalled();
     });
 
-    // A framework-hosted worker rebuilds its options on every request. The paths
+    // A generated worker builds its options again for every new `env`. The paths
     // codegen passes come from `authDiscoveryPathsFor`, so the declaration's
     // `options(env)` — which rebuilds every plugin — runs once, not per request.
     it("derives the paths once across many framework-mode requests", async () => {

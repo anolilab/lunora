@@ -25,6 +25,9 @@ interface EmitAppOptions {
     emailAgents?: ReadonlyArray<{ className: string; exportName: string }>;
     /** App depends on `@lunora/cloudflare-access` → emit `.access()` (wire the Cloudflare Access `resolveIdentity`, composed ahead of `@lunora/auth` when both are present). */
     hasAccess: boolean;
+    /** The target backs named admin tokens' revocation store → emit `.adminRevocations()`. Absent counts as true. */
+    hasAdminRevocations?: boolean;
+
     /** App depends on `@lunora/auth` → emit `.auth()` + the lazy build/migrate dance. */
     hasAuth: boolean;
 
@@ -39,6 +42,7 @@ interface EmitAppOptions {
     hasFramework: boolean;
     /** Schema declares **D1-backed** `.global()` tables → emit `.global()` (D1 ctx-db + studio introspector + cross-shard relations). */
     hasGlobal: boolean;
+
     /** Schema declares **Hyperdrive-backed** `.global({ backend: "hyperdrive" })` tables → emit `.hyperdriveGlobal()` (reactive Postgres/MySQL ctx-db over Hyperdrive). */
     hasHyperdriveGlobal: boolean;
 
@@ -55,6 +59,7 @@ interface EmitAppOptions {
     hasKvIntrospector: boolean;
     /** App declares `lunora/notify.ts` (`@lunora/notify`) → wire `options.notifySubscriptionStore` so the studio Notifications page can read registered devices. */
     hasNotify: boolean;
+
     /** App declares push queues (`defineQueue`) → wire `LUNORA_QUEUE_REGISTRY` into the worker's `queue()` consumer entry. */
     hasQueue: boolean;
 
@@ -100,6 +105,14 @@ interface EmitAppOptions {
      * auth object (codegen refuses a project it can see doing that).
      */
     jurisdictionPinsAuth?: boolean;
+
+    /**
+     * The lazy function registry is selected (`--lazy-functions`). The modules the
+     * worker reaches only from an event entry — the push-queue registry and the
+     * `onEmail` agent definitions — then load with `import()` on that event instead
+     * of at isolate startup. Absent or `false` keeps the eager output unchanged.
+     */
+    lazyFunctions?: boolean;
 
     /**
      * Every `defineLiveStream` the app declares, read from its literals. With `liveStreams` set, the worker mounts
@@ -473,11 +486,12 @@ const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector =
  * \`startLine\` plus positional counting would mis-attribute every row after
  * the first gap. \`importGlobalRows\` prefers \`row.line\` when present and
  * falls back to the position-derived count otherwise. A dry run is passed through and writes nothing;
- * \`onConflict: "replace"\` overwrites a row whose \`_id\` already exists instead of reporting a conflict.
+ * \`onConflict: "replace"\` overwrites a row whose \`_id\` already exists instead of reporting a conflict, and a row's
+ * \`op: "delete"\` removes the stored row it names.
  */
 const buildGlobalImporter =
     (database: D1DatabaseLike, cdc: boolean) =>
-    (request: { dryRun?: boolean; onConflict?: "replace" | "skip"; rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => {
+    (request: { dryRun?: boolean; onConflict?: "replace" | "skip"; rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; op?: "delete"; table: string }>; startLine?: number }) => {
         const exec = buildExec(database);
         // Same reason the PITR applier carries it: a bulk import that skips the
         // changelog restores rows no downstream consumer is ever told about.
@@ -487,7 +501,7 @@ const buildGlobalImporter =
             dryRun: request.dryRun === true,
             exec,
             onConflict: request.onConflict ?? "skip",
-            rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, table: row.table })),
+            rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, ...(row.op === undefined ? {} : { op: row.op }), table: row.table })),
             ...(request.startLine === undefined ? {} : { startLine: request.startLine }),
         });
     };

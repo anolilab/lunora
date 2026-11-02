@@ -1,7 +1,7 @@
 import { isLunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
-import { estimateBytes } from "../src/estimate-bytes";
+import { estimateBytes, utf8ByteLength } from "../src/estimate-bytes";
 import { DEFAULT_TRANSACTION_LIMITS, TransactionHeadroomTracker } from "../src/transaction-headroom";
 
 /** Run `act` and return the thrown error's code, or undefined if it did not throw. */
@@ -16,6 +16,23 @@ const codeOf = (act: () => void): string | undefined => {
 };
 
 describe("transactionHeadroomTracker", () => {
+    it("refuses a document again when a caught over-limit read is retried", () => {
+        expect.assertions(2);
+
+        const tracker = new TransactionHeadroomTracker({ maxReadBytes: 10 });
+
+        expect(
+            codeOf(() => {
+                tracker.recordDocumentRead("doc", 50);
+            }),
+        ).toBe("TRANSACTION_LIMIT_EXCEEDED");
+        expect(
+            codeOf(() => {
+                tracker.recordDocumentRead("doc", 50);
+            }),
+        ).toBe("TRANSACTION_LIMIT_EXCEEDED");
+    });
+
     it("allows work up to each ceiling", () => {
         expect.assertions(2);
 
@@ -170,5 +187,16 @@ describe("estimateBytes", () => {
         expect.assertions(1);
 
         expect(estimateBytes(undefined)).toBe(0);
+    });
+});
+
+describe("utf8ByteLength", () => {
+    it("counts the encoded bytes of each code point, surrogate pairs and lone surrogates included", () => {
+        expect.assertions(1);
+
+        // Matches TextEncoder exactly, without encoding: a lone surrogate is three bytes (U+FFFD), a pair four.
+        const samples = ["", "abc", "é€", "日本語", "😀x", "a\uD800b", "\uDC00", "\uD83D", "mixed 😀 é 日 \uDFFF end"];
+
+        expect(samples.map((text) => utf8ByteLength(text))).toStrictEqual(samples.map((text) => new TextEncoder().encode(text).length));
     });
 });

@@ -58,6 +58,7 @@ api_surface:
     # not this one, so the job that would have caught it was skipped and the
     # required check stayed green.
     - "scripts/check-dist-production.js"
+    - "packages/studio/scripts/known-bundled-jsx-dev.mjs"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
     - "pnpm-lock.yaml"

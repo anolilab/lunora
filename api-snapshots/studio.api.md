@@ -15,7 +15,10 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 const ADMIN_FUNCTIONS: {
     readonly aiAvailable: "__lunora_admin__:aiAvailable";
     readonly aiChartConfig: "__lunora_admin__:aiChartConfig";
+    readonly aiChat: "__lunora_admin__:aiChat";
+    readonly aiCronExpression: "__lunora_admin__:aiCronExpression";
     readonly aiGenerateSql: "__lunora_admin__:aiGenerateSql";
+    readonly aiNameQuery: "__lunora_admin__:aiNameQuery";
     readonly aiTableFilter: "__lunora_admin__:aiTableFilter";
     readonly assignIssue: "__lunora_admin__:assignIssue";
     readonly backRelationCounts: "__lunora_admin__:backRelationCounts";
@@ -26,6 +29,7 @@ const ADMIN_FUNCTIONS: {
     readonly deleteRows: "__lunora_admin__:deleteRows";
     readonly describeTable: "__lunora_admin__:describeTable";
     readonly describeTables: "__lunora_admin__:describeTables";
+    readonly dropOutboxEntry: "__lunora_admin__:dropOutboxEntry";
     readonly explainIssue: "__lunora_admin__:explainIssue";
     readonly exportShard: "__lunora_admin__:exportShard";
     readonly facetColumn: "__lunora_admin__:facetColumn";
@@ -38,6 +42,7 @@ const ADMIN_FUNCTIONS: {
     readonly getFanoutMetrics: "__lunora_admin__:getFanoutMetrics";
     readonly getFunctionStats: "__lunora_admin__:getFunctionStats";
     readonly getIssues: "__lunora_admin__:getIssues";
+    readonly getScheduleOutbox: "__lunora_admin__:getScheduleOutbox";
     readonly lintSql: "__lunora_admin__:lintSql";
     readonly listFlags: "__lunora_admin__:listFlags";
     readonly listReactors: "__lunora_admin__:listReactors";
@@ -68,6 +73,7 @@ const ADMIN_FUNCTIONS: {
     readonly pitrRestore: "__lunora_admin__:pitrRestore";
     readonly readTablePage: "__lunora_admin__:readTablePage";
     readonly replayQueueMessage: "__lunora_admin__:replayQueueMessage";
+    readonly retryOutboxEntry: "__lunora_admin__:retryOutboxEntry";
     readonly resolveIssue: "__lunora_admin__:resolveIssue";
     readonly rlsPolicies: "__lunora_admin__:rlsPolicies";
     readonly schemaHistory: "__lunora_admin__:schemaHistory";
@@ -591,6 +597,7 @@ interface ImportError {
 ```ts
 interface ImportShardResult {
     conflicts: number;
+    deleted?: number;
     errors: ImportError[];
     inserted: Record<string, number>;
     replaced?: number;
@@ -1328,6 +1335,7 @@ interface AnalyticsPanelProps {
 ```ts
 interface CronTriggersPanelProps {
     readonly loadCronJobs?: () => Promise<CronJobInfo[]>;
+    readonly loadCronRuns?: () => Promise<CronRunsResult>;
     readonly runCronJob?: (name: string) => Promise<{
         name: string;
         ran: boolean;
@@ -1435,6 +1443,66 @@ const MESSAGE_IDS: readonly [
     "Live updates unavailable; showing the last reading.",
     "Agents",
     "Agent",
+    "Answers are suggestions — nothing runs until you insert and run it.",
+    "Ask about your data",
+    "Ask the assistant",
+    "Access rules",
+    "This app declares no row-level-security policies at all. Which tables most need one, and what policy should I write for them?",
+    "The Lunora RLS inspector shows these declared policies — {coverage}. Which tables and operations are still unguarded, and what policy should I add?",
+    "Which procedures still need .use(rls(...))?",
+    "How do I test a policy?",
+    "Allow",
+    "Deny",
+    "The assistant wants to read rows before answering. Nothing runs until you allow it.",
+    "Branch from here",
+    "Assistant",
+    "Close assistant",
+    "Close chat",
+    "Copy",
+    "Debug error",
+    "Debug query",
+    "Debug with AI",
+    "Delete from here",
+    "Explain query",
+    "Explain this query",
+    "How do I verify this is fixed?",
+    "Insert into editor",
+    "New chat",
+    "Older turns were dropped to fit the context budget.",
+    "Read plan",
+    "Is anything wrong with my schema?",
+    "Read this plan",
+    "Show me the most recent rows in {table}",
+    "Try asking",
+    "SQL console",
+    "Stopped early — this answer is incomplete.",
+    "Explain what this query does, step by step:\n{statement}",
+    "SQLite planned this query:\n{statement}\n\nas:\n{plan}\n\nWhat is it doing, and is anything here slow?",
+    "The Lunora advisor reported: {finding}.\n\n{description}\n\nWhat does this mean for my app, and how should I fix it?",
+    "{issueType} on {entity}",
+    "The model could not be reached.",
+    "The studio reported this error:\n{message}{detail}\n\nWhat causes it, and how do I fix it?",
+    "The studio suggested: {hint}",
+    "This statement failed:\n{sql}\n\nThe database said: {error}\n\nWhy, and what should it be?",
+    "What tables does this app have?",
+    "The model returned a statement that is not read-only, so it was discarded.",
+    "The model returned nothing usable.",
+    "The model did not return a schedule Cron Triggers accept.",
+    "Suggest",
+    "Suggest schedule",
+    "Describe a schedule",
+    "Add it to lunora/crons.ts — triggers are compiled into the worker.",
+    "(no such tool)",
+    "refused",
+    "Needs the {needs} data-sharing level; this deployment is set to {level}. Change LUNORA_AI_OPT_IN in wrangler.jsonc.",
+    "a lower level",
+    "AI assistant data sharing",
+    "current",
+    "The assistant is off. Nothing about this deployment is sent to a model.",
+    "Table and column names.",
+    "Table and column names, plus recent log lines.",
+    "Table and column names, log lines, and rows read with SELECT.",
+    "Set LUNORA_AI_OPT_IN in wrangler.jsonc and redeploy to change this. The Studio can read this level but never raise it.",
     "Threads",
     "Timeline",
     "Messages",
@@ -1469,6 +1537,7 @@ const MESSAGE_IDS: readonly [
     "KV Namespaces",
     "R2 Buckets",
     "Vectorize Indexes",
+    "You",
     "{count} bindings",
     "1 binding",
     "Lunora AI rules aren't installed.",
@@ -1630,8 +1699,21 @@ const MESSAGE_IDS: readonly [
     "Couldn't read the columns of {table}: {message}",
     "Import stopped after {rows} rows: {message}. The counts below cover completed chunks only. The chunk from line {line} may have written rows: check the table for rows from line {line} onward before importing again, or delete the written rows first and then import the whole file.",
     "Import stopped after {rows} rows: {message}. The counts below cover those rows. Rows from line {line} onward were not sent: do not import the whole file again, import from that line onward, or delete the written rows first and then import the whole file.",
-    "Inserted {inserted}, replaced {replaced}, {conflicts} conflicts, {errors} errors.",
-    "Overwrite rows whose _id already exists (otherwise they are left unchanged and counted as conflicts)",
+    "Inserted {inserted}, replaced {replaced}, deleted {deleted}, {conflicts} conflicts, {errors} errors.",
+    "Import mode",
+    "Append: rows whose _id already exists are left unchanged and counted as conflicts",
+    "Replace: overwrite, then delete this shard's rows of the file's tables that the file lacks",
+    "Require empty: refuse unless the file's tables hold no rows in this shard",
+    "Show plan",
+    "Import plan",
+    "Import (overwrites rows and may delete rows)?",
+    "This shard cannot delete rows. Nothing was sent. Update the app and import again.",
+    "Nothing was sent: --mode require-empty needs the file's tables to hold no rows, and {table} already holds {count}.",
+    "Nothing was written, because some deletes would be refused. Fix the rows listed below and import again.",
+    "Deleting {count} stored rows the file lacks…",
+    "Every file row is written, but removing the stored rows the file lacks failed: {message}. Import again to finish the deletes.",
+    "Import (overwrites rows)?",
+    "Upsert: new _id values are inserted, rows whose _id already exists are overwritten, nothing is deleted",
     "This shard cannot overwrite existing rows. Nothing was sent. Update the app and import again.",
     "Interactive OpenAPI reference and copy-paste snippets for your functions.",
     "Invalid JSON args: {message}",
@@ -1835,6 +1917,20 @@ const MESSAGE_IDS: readonly [
     "workflow",
     "Run now",
     "Run now?",
+    "Recent runs",
+    "Pause",
+    "Resume",
+    "Pause deployment?",
+    "Resume deployment?",
+    "Deployment paused",
+    "Function calls get 503, scheduled jobs are held on every scheduler instance, cron ticks are skipped and queue messages are held until you resume.",
+    "Reason (optional)",
+    "Deployment running",
+    "started",
+    "duration",
+    "skipped",
+    "never",
+    "{count} ticks skipped",
     "Running…",
     "ran",
     "attempts",
@@ -1846,7 +1942,32 @@ const MESSAGE_IDS: readonly [
     "Jobs that exhaust their retry budget are parked here instead of being dropped.",
     "last tried",
     "max concurrency",
+    "mean lag (ms)",
+    "runs",
+    "max lag (ms)",
+    "last lag (ms)",
+    "Start lag per job on this shard since it last woke; the series reset when the shard hibernates.",
     "No dead-letter jobs.",
+    "No finished jobs.",
+    "Jobs that succeed, fail or are cancelled stay here for seven days.",
+    "state",
+    "finished",
+    "succeeded",
+    "canceled",
+    "pending",
+    "running",
+    "Outbox",
+    "Retry now",
+    "next attempt",
+    "parked",
+    "retrying",
+    "forever",
+    "unreadable",
+    "Nothing is waiting for the scheduler.",
+    "Jobs whose mutation committed but that the scheduler has not accepted yet wait here.",
+    "First page",
+    "Next page",
+    "That job is no longer in the outbox.",
     "No workpools.",
     "pool",
     "Pools",
@@ -1982,6 +2103,14 @@ const MESSAGE_IDS: readonly [
     "Widget type",
     "Could not suggest a chart for that result.",
     "Add a chart, a single value, a table, or a note. Everything is saved on this browser.",
+    "Admin tokens",
+    "Named tokens use the admin API but cannot manage tokens or open admin WebSockets. A revoked token is refused within 30 seconds.",
+    "Copy this token now. It is not shown again.",
+    "Token name",
+    "Expires in days (optional)",
+    "Create token",
+    "Last used",
+    "Never",
     "Keyboard shortcuts",
     "Command palette",
     "Reset",
@@ -2055,6 +2184,9 @@ const MESSAGE_IDS: readonly [
     "New query",
     "Untitled query",
     "Delete query",
+    "Rename query",
+    "Query name",
+    "Query description",
     "No saved queries yet — they save to this browser as you type.",
     "Results",
     "Explain",
@@ -2283,6 +2415,7 @@ const MESSAGE_IDS: readonly [
     "Impersonate",
     "Impersonation token",
     "Revoke",
+    "Revoked",
     "Revoke all sessions",
     "Delete user",
     "Confirm delete",
@@ -2958,6 +3091,7 @@ interface SavedQuery {
 
 ```ts
 interface SchedulePanelProps {
+    readonly initialShardKey?: string;
     readonly loadCronJobs?: CronTriggersPanelProps["loadCronJobs"];
     readonly scheduledCancel?: ScheduledJobsProps["cancelJob"];
     readonly scheduledLoad?: ScheduledJobsProps["loadJobs"];

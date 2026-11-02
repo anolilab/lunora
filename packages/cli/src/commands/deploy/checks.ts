@@ -236,10 +236,9 @@ const findD1PlaceholderEntry = (cwd: string, target: string, environment?: strin
  * worker has already been replaced by `wrangler deploy`.
  */
 const validateMigrateDeployPreflight = (options: DeployCommandOptions): string | undefined => {
-    // A dry run / preview never publishes a live version, so post-deploy
-    // migrations don't run — don't demand `--migrate-url`/`--migrate-yes` for a
-    // `--dry-run --migrate` or `--preview --migrate` combo.
-    if (!options.migrate || options.dryRun || options.preview) {
+    // A dry run never publishes a live version, so post-deploy migrations don't
+    // run — don't demand `--migrate-url`/`--migrate-yes` for `--dry-run --migrate`.
+    if (!options.migrate || options.dryRun) {
         return undefined;
     }
 

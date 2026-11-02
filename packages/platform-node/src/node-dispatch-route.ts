@@ -43,6 +43,8 @@ interface NodeDispatchInvocation {
     id: string | undefined;
     /** Identity the trusted caller forwarded, if any. */
     identity: { identity?: string; userId?: string } | undefined;
+    /** The job's due time in epoch-ms, when the sender stamped one. */
+    scheduledFor?: number;
     shardKey: string;
     traceparent: string | undefined;
 }
@@ -120,6 +122,7 @@ const handle = async (request: Request, options: NodeDispatchRouteOptions): Prom
         functionPath: candidate["functionPath"],
         id: typeof candidate["id"] === "string" && candidate["id"].length > 0 ? candidate["id"] : undefined,
         identity: readForwardedDispatchIdentity(request),
+        scheduledFor: typeof candidate["scheduledFor"] === "number" ? candidate["scheduledFor"] : undefined,
         shardKey,
         traceparent: request.headers.get("traceparent") ?? undefined,
     });
@@ -145,7 +148,12 @@ const createShardInvoke =
 
         const request = new Request("https://shard.internal/rpc", {
             body: JSON.stringify({ args: call.args, functionPath: call.functionPath }),
-            headers: buildSystemDispatchHeaders({ forwardedIdentity: call.identity, mutationId: call.id, traceparent: call.traceparent }),
+            headers: buildSystemDispatchHeaders({
+                forwardedIdentity: call.identity,
+                mutationId: call.id,
+                scheduledFor: call.scheduledFor,
+                traceparent: call.traceparent,
+            }),
             method: "POST",
         });
 

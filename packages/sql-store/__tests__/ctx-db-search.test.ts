@@ -120,6 +120,41 @@ const companionDocumentCount = (): number => Number(raw(`SELECT COUNT(DISTINCT "
 
 const notesDefinition = (searchSchema as unknown as { tables: Record<string, TableDefinitionLike> }).tables["notes"]!;
 
+/**
+ * `inner`, except that the `nth` backfill-progress write is held until `gate` opens and every statement after it is
+ * refused: the pass that issued it was abandoned at its deadline, yet the engine still runs the statement it sent.
+ */
+const abandoningProgressWrite = (inner: SqlCtxExec, nth: number, onHeld: () => void, gate: Promise<void>): SqlCtxExec => {
+    let abandoned = false;
+    let progressWrites = 0;
+    const isProgressWrite = (query: string): boolean => /^(?:UPDATE|INSERT INTO) "__lunora_search_state"/u.test(query) && !query.includes('SET "covered" = 1');
+
+    return {
+        all: async (query, parameters) => {
+            if (abandoned) {
+                throw new Error("abandoned pass");
+            }
+
+            return await inner.all(query, parameters);
+        },
+        run: async (query, parameters) => {
+            if (abandoned) {
+                throw new Error("abandoned pass");
+            }
+
+            progressWrites += isProgressWrite(query) ? 1 : 0;
+            abandoned = progressWrites === nth;
+
+            if (abandoned) {
+                onHeld();
+                await gate;
+            }
+
+            await inner.run(query, parameters);
+        },
+    };
+};
+
 // One outer block so the shared engine setup lives inside a describe, as the
 // suite convention requires.
 describe("global search provisioning", () => {
@@ -297,6 +332,132 @@ describe("global search provisioning", () => {
             const rows = await runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello", { ...BY_BODY, language: "en" }), 300);
 
             expect(rows).toHaveLength(250);
+        });
+
+        it("does not let an abandoned page's late progress write move a finished backfill backwards", async () => {
+            expect.assertions(2);
+
+            createNotesTable();
+            insertPastOnePage();
+
+            // Three pages, so a pass has a middle one whose progress write can be left behind.
+            for (let index = 250; index < 450; index += 1) {
+                insertNote(`d${String(index).padStart(4, "0")}`, `hello note${String(index)}`);
+            }
+
+            let reachedHeld: () => void = () => undefined;
+            const held = new Promise<void>((resolve) => {
+                reachedHeld = resolve;
+            });
+            let release: () => void = () => undefined;
+            const gate = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            const slow = abandoningProgressWrite(exec, 2, reachedHeld, gate);
+            const first = backfillSqlSearchIndexes(slow, searchSchema, dialect).catch(() => undefined);
+
+            await held;
+            // The retry runs the whole backfill while the abandoned write is still in flight.
+            await backfillSqlSearchIndexes(exec, searchSchema, dialect);
+            release();
+            await first;
+
+            const [state] = raw(`SELECT "done", "cursor" FROM "${SEARCH_STATE_TABLE}" WHERE "companion" = ?`, COMPANION);
+
+            // The late write recorded page one's position over the finished one.
+            expect(Number(state?.["done"])).toBe(1);
+            expect(companionDocumentCount()).toBe(450);
+        });
+
+        it("does not let an abandoned profile-change reset rewind a backfill a retry finished", async () => {
+            expect.assertions(2);
+
+            createNotesTable();
+            insertPastOnePage();
+            // Complete under the old analysis, so a change of language starts a rebuild.
+            await backfillSqlSearchIndexes(exec, searchSchema, dialect);
+
+            let reachedHeld: () => void = () => undefined;
+            const held = new Promise<void>((resolve) => {
+                reachedHeld = resolve;
+            });
+            let release: () => void = () => undefined;
+            const gate = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            // The rebuild's first progress write is the reset to the top of the table; the pass that sent it was abandoned.
+            const slow = abandoningProgressWrite(exec, 1, reachedHeld, gate);
+            const first = backfillSqlSearchIndexes(slow, englishSchema, dialect).catch(() => undefined);
+
+            await held;
+            // The retry resets, walks and finishes the rebuild while the abandoned reset is still in flight.
+            await backfillSqlSearchIndexes(exec, englishSchema, dialect);
+            release();
+            await first;
+
+            const [state] = raw(`SELECT "done" FROM "${SEARCH_STATE_TABLE}" WHERE "companion" = ?`, COMPANION);
+
+            // The late reset sent the finished rebuild back to the top.
+            expect(Number(state?.["done"])).toBe(1);
+            expect(companionDocumentCount()).toBe(250);
+        });
+
+        it("does not recreate progress a layout change deleted when a late write resumes", async () => {
+            expect.assertions(1);
+
+            createNotesTable();
+            insertPastOnePage();
+            // Complete under the old analysis, so a change of language starts a rebuild from a recorded state.
+            await backfillSqlSearchIndexes(exec, searchSchema, dialect);
+
+            let reachedHeld: () => void = () => undefined;
+            const held = new Promise<void>((resolve) => {
+                reachedHeld = resolve;
+            });
+            let release: () => void = () => undefined;
+            const gate = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            let readHeld = false;
+            let abandoned = false;
+            let landed = false;
+            const stateTable = `"${SEARCH_STATE_TABLE}"`;
+            // The rebuild's reset first looks for the progress row; that look is held until the row is gone, and the
+            // pass is abandoned once the statement that follows it has landed.
+            const slow: SqlCtxExec = {
+                all: async (query, parameters) => {
+                    readHeld = readHeld || query.startsWith(`SELECT "profile" FROM ${stateTable}`);
+
+                    if (readHeld && query.startsWith(`SELECT "profile" FROM ${stateTable}`)) {
+                        reachedHeld();
+                        await gate;
+                        // Nothing after the write this look leads to reaches the engine: the pass was abandoned.
+                        abandoned = true;
+                    }
+
+                    return await exec.all(query, parameters);
+                },
+                run: async (query, parameters) => {
+                    // The one progress write the held look leads to still lands.
+                    landed = abandoned && !landed && /^(?:INSERT INTO|UPDATE) "__lunora_search_state"/u.test(query);
+
+                    if (abandoned && !landed) {
+                        throw new Error("abandoned pass");
+                    }
+
+                    await exec.run(query, parameters);
+                },
+            };
+            const first = backfillSqlSearchIndexes(slow, englishSchema, dialect).catch(() => undefined);
+
+            await held;
+            // A layout migration deletes the progress row while the old pass is still looking for it.
+            raw(`DELETE FROM ${stateTable} WHERE "companion" = ?`, COMPANION);
+            release();
+            await first;
+
+            // The old pass must not write its progress back over the deleted row.
+            expect(raw(`SELECT * FROM ${stateTable} WHERE "companion" = ?`, COMPANION)).toStrictEqual([]);
         });
 
         it("leaves a staged index populated when its analysis changes", async () => {

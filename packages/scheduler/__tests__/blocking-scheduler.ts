@@ -25,6 +25,14 @@ export class BlockingScheduler extends SchedulerDO {
     /** Per-id resolver; calling it lets that dispatch return. */
     private readonly gates = new Map<string, (ok: boolean) => void>();
 
+    /** Per-id "dispatch has begun" milestone, created by whichever side asks first. */
+    private readonly entries = new Map<string, { promise: Promise<void>; resolve: () => void }>();
+
+    /** Resolves once `id`'s dispatch has begun — the milestone to await before asserting on an in-flight job. */
+    public entered(id: string): Promise<void> {
+        return this.entry(id).promise;
+    }
+
     /** Release one in-flight dispatch with the given outcome. */
     public release(id: string, ok = true): void {
         const gate = this.gates.get(id);
@@ -46,6 +54,7 @@ export class BlockingScheduler extends SchedulerDO {
 
     protected override async dispatch(record: ScheduleRecord): Promise<boolean> {
         this.started.push(record.id);
+        this.entry(record.id).resolve();
 
         const ok = await new Promise<boolean>((resolve) => {
             this.gates.set(record.id, resolve);
@@ -54,6 +63,22 @@ export class BlockingScheduler extends SchedulerDO {
         this.finished.push(record.id);
 
         return ok;
+    }
+
+    private entry(id: string): { promise: Promise<void>; resolve: () => void } {
+        let entry = this.entries.get(id);
+
+        if (entry === undefined) {
+            let markEntered: () => void = () => undefined;
+            const promise = new Promise<void>((resolve) => {
+                markEntered = resolve;
+            });
+
+            entry = { promise, resolve: markEntered };
+            this.entries.set(id, entry);
+        }
+
+        return entry;
     }
 }
 

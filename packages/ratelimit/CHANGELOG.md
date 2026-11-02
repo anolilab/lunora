@@ -1,3 +1,93 @@
+## @lunora/ratelimit [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.193...@lunora/ratelimit@1.0.0-alpha.194) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+* **@lunora/d1:** upgraded to 1.0.0-alpha.230
+* **@lunora/server:** upgraded to 1.0.0-alpha.264
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.183
+* **@lunora/values:** upgraded to 1.0.0-alpha.93
+
+## @lunora/ratelimit [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.192...@lunora/ratelimit@1.0.0-alpha.193) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+* **@lunora/d1:** upgraded to 1.0.0-alpha.229
+* **@lunora/server:** upgraded to 1.0.0-alpha.263
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.182
+* **@lunora/values:** upgraded to 1.0.0-alpha.92
+
+## @lunora/ratelimit [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.191...@lunora/ratelimit@1.0.0-alpha.192) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+* **@lunora/d1:** upgraded to 1.0.0-alpha.228
+* **@lunora/server:** upgraded to 1.0.0-alpha.262
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.181
+* **@lunora/values:** upgraded to 1.0.0-alpha.91
+
+## @lunora/ratelimit [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.190...@lunora/ratelimit@1.0.0-alpha.191) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+* **@lunora/d1:** upgraded to 1.0.0-alpha.227
+* **@lunora/server:** upgraded to 1.0.0-alpha.261
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.180
+* **@lunora/values:** upgraded to 1.0.0-alpha.90
+
+## @lunora/ratelimit [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.189...@lunora/ratelimit@1.0.0-alpha.190) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.226
+* **@lunora/server:** upgraded to 1.0.0-alpha.260
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.179
+
+## @lunora/ratelimit [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.188...@lunora/ratelimit@1.0.0-alpha.189) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/d1:** upgraded to 1.0.0-alpha.225
+* **@lunora/server:** upgraded to 1.0.0-alpha.259
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.178
+* **@lunora/values:** upgraded to 1.0.0-alpha.89
+
+## @lunora/ratelimit [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.187...@lunora/ratelimit@1.0.0-alpha.188) (2026-10-31)
+
+### Bug Fixes
+
+* **ratelimit:** admit retries on token buckets with very long periods ([#1434](https://github.com/anolilab/lunora/issues/1434)) ([84f874e](https://github.com/anolilab/lunora/commit/84f874ee13b3d406a07d79491df550bad5f10473))
+
+## @lunora/ratelimit [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.186...@lunora/ratelimit@1.0.0-alpha.187) (2026-10-30)
+
+### Bug Fixes
+
+* **ratelimit:** give a token-bucket retry-after that actually admits ([#1433](https://github.com/anolilab/lunora/issues/1433)) ([fbb3215](https://github.com/anolilab/lunora/commit/fbb32154a5d43c64d695b0bb24d3a7048cb1e6ce))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.224
+
+## @lunora/ratelimit [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.185...@lunora/ratelimit@1.0.0-alpha.186) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.223
+* **@lunora/server:** upgraded to 1.0.0-alpha.256
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.175
+
 ## @lunora/ratelimit [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.184...@lunora/ratelimit@1.0.0-alpha.185) (2026-10-30)
 
 ### Bug Fixes

@@ -555,6 +555,10 @@ interface SqlCtxExec {
     // `SqlExec` satisfy this without forcing the D1 execs to report a count.
     // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- `void` is intentional: accepts a void-returning exec (one that reports no affected-rows count)
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<SqlRunResult | void>;
+    // Optional, mirroring `SqlExec.transaction` (see dialect.ts): run `work`
+    // against an exec pinned to one connection inside one transaction,
+    // committed when `work` resolves and rolled back when it throws.
+    transaction?: <T>(work: (tx: SqlCtxExec) => Promise<T>) => Promise<T>;
 }
 
 /**

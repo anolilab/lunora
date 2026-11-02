@@ -11,6 +11,7 @@ import {
     baseSpecifiers,
     GENERATED_HEADER,
     IMPORT_PATH_RE,
+    isSensitiveFunction,
     renderArgsType,
     renderNamespaceTree,
     renderObjectKey,
@@ -46,6 +47,19 @@ const renderArgumentDescriptors = (args: Record<string, ValidatorIR>): string =>
             }),
     );
 
+/** The `sensitive` member of a lazy manifest argument descriptor, present only when some argument is sensitive. */
+const sensitiveDescriptorMember = (enabled: boolean): string => (enabled ? "sensitive?: true; " : "");
+
+/** The lazy-only manifest fields of `RegisteredLunoraFunction`, present only in lazy mode so eager output stays byte-identical. */
+const lazyStubFieldsMember = (enabled: boolean): string =>
+    enabled
+        ? `    /** Lazy-mode stub only: the manifest's argument descriptors, read before the module loads. */
+    argumentDescriptors?: FunctionManifestEntry["argumentDescriptors"];
+    /** Lazy-mode stub only: the manifest's cache and REST exposure. */
+    expose?: FunctionManifestEntry["expose"];
+`
+        : "";
+
 /** The module namespaces codegen assigns, shared by eager imports and lazy shims. */
 const moduleAliasesFor = (
     functions: ReadonlyArray<FunctionIR>,
@@ -79,9 +93,51 @@ const moduleAliasesFor = (
     return aliases;
 };
 
-/** Keep eager registry imports and lazy shim emission on the same file-path policy. */
-const eagerModulePaths = (migrations: ReadonlyArray<MigrationIR>, mutators: ReadonlyArray<MutatorIR>, shapes: ReadonlyArray<ShapeIR>): ReadonlySet<string> =>
-    new Set([...migrations.map((migration) => migration.filePath), ...mutators.map((mutator) => mutator.filePath), ...shapes.map((shape) => shape.filePath)]);
+/**
+ * Modules the lazy registry imports up front. Both the registry and the lazy module
+ * emitter read this set, so they agree on which modules load eagerly. Besides the kinds that must be
+ * loaded to register at all, that is every module re-exporting a function from
+ * a published package: codegen read it off a declaration-file type, which does
+ * not say whether it is paid (`x402`), what its `.meta()` is, or which arguments
+ * are `v.sensitive`. An unloaded stub would answer all three as "none" — a paid
+ * call dispatched free — so the real function stands in from the start.
+ */
+const eagerModulePaths = (
+    functions: ReadonlyArray<FunctionIR>,
+    migrations: ReadonlyArray<MigrationIR>,
+    mutators: ReadonlyArray<MutatorIR>,
+    shapes: ReadonlyArray<ShapeIR>,
+): ReadonlySet<string> =>
+    new Set([
+        ...functions.filter((definition) => definition.typeDerivedArgs).map((definition) => definition.filePath),
+        ...migrations.map((migration) => migration.filePath),
+        ...mutators.map((mutator) => mutator.filePath),
+        ...shapes.map((shape) => shape.filePath),
+    ]);
+
+/**
+ * A JSON value as a deep-frozen literal. The builder deep-freezes `.meta()` on a
+ * loaded function, so the stub standing in for it must not hand out an object a
+ * reader can mutate and see change before the module loads.
+ */
+const renderFrozenLiteral = (value: unknown): string => {
+    if (Array.isArray(value)) {
+        return `Object.freeze([${value.map((entry) => renderFrozenLiteral(entry)).join(", ")}])`;
+    }
+
+    if (value !== null && typeof value === "object") {
+        const entries = Object.entries(value).map(([key, entry]) => `${JSON.stringify(key)}: ${renderFrozenLiteral(entry)}`);
+
+        return `Object.freeze({ ${entries.join(", ")} })`;
+    }
+
+    // `JSON.stringify` turns these into `null` / `0`; the loaded procedure keeps the real value.
+    if (typeof value === "number" && (!Number.isFinite(value) || Object.is(value, -0))) {
+        return Object.is(value, -0) ? "-0" : String(value);
+    }
+
+    return JSON.stringify(value);
+};
 
 // Split this generated lookup so no-secrets can keep checking strings without
 // mistaking a framework access for a credential-shaped literal.
@@ -144,6 +200,7 @@ const renderFunctionRegistry = (
     dispatchBody: string;
     importBlock: string;
     installBlock: string;
+    ipReaderPaths: ReadonlyArray<string>;
     manifestBody: string;
     migrationBody: string;
     moduleLoaders: string;
@@ -152,7 +209,7 @@ const renderFunctionRegistry = (
     shapeBody: string;
 } => {
     const aliasByPath = moduleAliasesFor(functions, migrations, mutators, shapes);
-    const eagerPaths = eagerModulePaths(migrations, mutators, shapes);
+    const eagerPaths = eagerModulePaths(functions, migrations, mutators, shapes);
 
     const importLines = [...aliasByPath.entries()]
         .filter(([filePath]) => {
@@ -186,20 +243,23 @@ const renderFunctionRegistry = (
             // masks them in the request log.
             const sensitiveArgs = sensitiveArgumentNamesOf(definition.args);
 
-            return `    "${sanitizeNamespace(definition.filePath)}:${definition.exportName}": { args: {}, handler: unloadedFunctionHandler, ...${JSON.stringify(
-                {
-                    argumentDescriptors: JSON.parse(renderArgumentDescriptors(definition.args)) as unknown,
-                    kind: definition.kind,
-                    ...(sensitiveArgs.length === 0 ? {} : { sensitiveArgs }),
-                    ...(definition.channel ? { channel: definition.channel } : {}),
-                    ...(definition.expose ? { expose: definition.expose } : {}),
-                    ...(definition.lifecycle ? { lifecycle: definition.lifecycle } : {}),
-                    ...(definition.visibility ? { visibility: definition.visibility } : {}),
-                    ...(definition.x402?.price === undefined ? {} : { x402: { price: definition.x402.price } }),
-                    // The worker reads a route's path off the stub to know which upgrades reach the shard.
-                    ...(definition.socket === undefined ? {} : { auth: definition.socket.auth, socketPath: definition.socket.path }),
-                },
-            )} } satisfies RegisteredLunoraFunction & Pick<FunctionManifestEntry, "argumentDescriptors" | "channel" | "expose">,`;
+            // The fields are inlined as literal properties rather than spread, so `satisfies` checks their names as well as their types.
+            const stubFields = JSON.stringify({
+                argumentDescriptors: JSON.parse(renderArgumentDescriptors(definition.args)) as unknown,
+                kind: definition.kind,
+                ...(sensitiveArgs.length === 0 ? {} : { sensitiveArgs }),
+                ...(definition.channel ? { channel: definition.channel } : {}),
+                ...(definition.expose ? { expose: definition.expose } : {}),
+                ...(definition.lifecycle ? { lifecycle: definition.lifecycle } : {}),
+                ...(definition.visibility ? { visibility: definition.visibility } : {}),
+                ...(definition.x402?.price === undefined ? {} : { x402: { price: definition.x402.price } }),
+                // The worker reads a route's path off the stub to know which upgrades reach the shard.
+                ...(definition.socket === undefined ? {} : { auth: definition.socket.auth, socketPath: definition.socket.path }),
+            }).slice(1, -1);
+            // `procedureMeta(fn)` reads the stub until the module loads; the key is `@lunora/server`'s `PROCEDURE_META`.
+            const metaField = definition.meta === undefined ? "" : `, [Symbol.for("lunora.procedure.meta")]: ${renderFrozenLiteral(definition.meta)}`;
+
+            return `    "${sanitizeNamespace(definition.filePath)}:${definition.exportName}": { args: {}, handler: unloadedFunctionHandler, ${stubFields}${metaField} } satisfies RegisteredLunoraFunction & Pick<FunctionManifestEntry, "argumentDescriptors" | "channel" | "expose">,`;
         })
         .join("\n");
 
@@ -231,6 +291,15 @@ const renderFunctionRegistry = (
     // the client-watermark push protocol — exactly the `LUNORA_FUNCTIONS` keys above.
     const mutatorPaths = mutators.map((mutator) => `${sanitizeNamespace(mutator.filePath)}:${mutator.exportName}`);
 
+    // The queries codegen found (failing closed) reading `ctx.ip`, which the shard never resumes warm.
+    // A shape's bare export name rides in the same set (no query path lacks its `:`), since a shape resumes by that name.
+    const ipReaderPaths = [
+        ...functions
+            .filter((definition) => definition.readsIp === true)
+            .map((definition) => `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`),
+        ...shapes.filter((shape) => shape.readsIp === true).map((shape) => shape.exportName),
+    ];
+
     // Splice mutator entries onto the function dispatch body (both already sorted
     // by `${filePath}:${exportName}`); `filter` keeps the joiner clean when either side is empty.
     const combinedDispatch = [dispatchEntries, mutatorEntries].filter((entries) => entries.length > 0).join("\n");
@@ -244,10 +313,11 @@ const renderFunctionRegistry = (
     const installLines = functions
         .filter((definition) => !lazyFunctions || eagerPaths.has(definition.filePath))
         .map((definition) => {
-            // Skip argless functions (nothing to accelerate) and lifecycle hooks
-            // (no `.args`). Refinements (`.check`) and unmodelled validators are
-            // declined by `compileArgsValidator` itself (returns undefined below).
-            if (definition.lifecycle || Object.keys(definition.args).length === 0) {
+            // Skip argless functions (nothing to accelerate), lifecycle hooks (no
+            // `.args`) and args read off a type (no bounds to compile). Refinements
+            // (`.check`) and unmodelled validators are declined by
+            // `compileArgsValidator` itself (returns undefined below).
+            if (definition.lifecycle || definition.typeDerivedArgs || Object.keys(definition.args).length === 0) {
                 return undefined;
             }
 
@@ -350,6 +420,7 @@ const renderFunctionRegistry = (
         manifestBody: manifestEntries.length > 0 ? `\n${manifestEntries}\n` : "",
         migrationBody: migrationEntries.length > 0 ? `\n${migrationEntries}\n` : "",
         moduleLoaders: moduleLoaders.length > 0 ? `\n${moduleLoaders}\n` : "",
+        ipReaderPaths,
         mutatorPaths,
         roomMessagesBody,
         shapeBody: shapeEntries.length > 0 ? `\n${shapeEntries}\n` : "",
@@ -619,7 +690,7 @@ const renderCallerAssembly = (functions: ReadonlyArray<FunctionIR>, lazyFunction
 const emitFunctions = (options: EmitFunctionsOptions): string => {
     const { agents = [], functions, lazyFunctions = false, migrations = [], mutators = [], shapes = [], useUmbrella = false, usesSandbox = false } = options;
     const base = baseSpecifiers(useUmbrella);
-    const { dispatchBody, importBlock, installBlock, manifestBody, migrationBody, moduleLoaders, mutatorPaths, roomMessagesBody, shapeBody } =
+    const { dispatchBody, importBlock, installBlock, ipReaderPaths, manifestBody, migrationBody, moduleLoaders, mutatorPaths, roomMessagesBody, shapeBody } =
         renderFunctionRegistry(functions, migrations, mutators, shapes, lazyFunctions);
     // Auto-registered agent runtime + sandbox dispatcher functions (see the
     // render*FunctionRegistry helpers). Both are empty-gated so an unused feature
@@ -629,7 +700,8 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
     // The interface field exists only where a stub can carry it, so a project with no
     // `v.sensitive` argument keeps byte-identical output. Agents count: their runtime
     // mutations (`agentSupplySecret`) are sensitive and are not in `functions`.
-    const hasSensitiveArgs = agents.length > 0 || functions.some((definition) => sensitiveArgumentNamesOf(definition.args).length > 0);
+    // The same predicate `run-codegen` gates the shard's masking on, or the shard reads a field this type lacks.
+    const hasSensitiveArgs = agents.length > 0 || functions.some((definition) => isSensitiveFunction(definition));
     const sensitiveArgsField = hasSensitiveArgs
         ? `    /**
      * Names of the arguments whose validators carry a \`v.sensitive\` marker. Read by the
@@ -674,6 +746,11 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
             ? `\n/**\n * Custom-mutator function paths — the \`LUNORA_FUNCTIONS\` keys the generated\n * ShardDO's \`isCustomMutator\` override routes through the client-watermark push\n * protocol (\`x-lunora-client-id\`/\`x-lunora-client-seq\` ordering).\n */\nexport const LUNORA_MUTATOR_PATHS: ReadonlySet<string> = new Set([${mutatorPaths.map((path) => JSON.stringify(path)).join(", ")}]);\n`
             : "";
 
+    const ipReadersRegistry =
+        ipReaderPaths.length > 0
+            ? `\n/**\n * Queries and shapes that may read \`ctx.ip\`, decided statically (failing closed). The generated ShardDO marks them\n * address-keyed from its first run, so it never resumes one warm: its rows can depend on the address the cursor\n * was read at, which a claims fingerprint leaves out.\n */\nexport const LUNORA_IP_READER_PATHS: ReadonlySet<string> = new Set([${ipReaderPaths.map((path) => JSON.stringify(path)).join(", ")}]);\n`
+            : "";
+
     const roomsRegistry = renderRoomRegistry(hasRooms, lazyFunctions, functions);
 
     // The `defineWebSocket`-only fragments (registry + interface fields),
@@ -691,10 +768,11 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
 
     const caller = renderCallerAssembly(functions, lazyFunctions);
     const { callRegisteredHelper, dataModelImport, implementation: callerImpl, parameter: callerParameter, types: callerTypes } = caller;
+    const lazyStubFields = lazyStubFieldsMember(lazyFunctions);
     const lazyRegistryPrelude = lazyFunctions
         ? `
 export interface FunctionManifestEntry {
-    argumentDescriptors: ReadonlyArray<{ element?: string; kind: string; name: string; optional: boolean; table?: string }>;
+    argumentDescriptors: ReadonlyArray<{ element?: string; kind: string; name: string; optional: boolean; ${sensitiveDescriptorMember(hasSensitiveArgs)}table?: string }>;
     channel?: { kind: "room"; name: string };
     exportName: string;
     expose?: { cache?: { credentialHeaders?: ReadonlyArray<string>; maxAge?: number; scope?: "private" | "public"; staleWhileRevalidate?: number; tag?: string; vary?: string }; rest?: boolean };
@@ -709,7 +787,7 @@ export interface FunctionManifestEntry {
 export const LUNORA_FUNCTION_MANIFEST: Readonly<Record<string, FunctionManifestEntry>> = {${manifestBody}};
 
 const MODULE_LOADERS: Record<string, () => Promise<Record<string, unknown>>> = {${moduleLoaders}};
-const loadedModules = new Map<string, Promise<Record<string, unknown>>>();
+const settledLoads = new Map<string, Promise<Record<string, unknown>>>();
 const resolvedModules = new Map<string, Record<string, unknown>>();
 const boundFunctions = new Set<string>();
 const unloadedFunctionHandler = (): never => {
@@ -756,7 +834,11 @@ export const loadFunction = async (functionPath: string): Promise<RegisteredLuno
         return registered;
     }
 
-    let pending = loadedModules.get(manifest.moduleId);
+    // Only a SETTLED load is shared. An in-flight one is not: a Durable Object holds its other events
+    // back while a cold load runs (\`holdShardWhileLoading\`), and workerd only lets through I/O that
+    // began inside that hold, so awaiting an import another request started would wait out the hold's
+    // timeout and reset the object. A second \`import()\` still evaluates the module only once.
+    let pending = settledLoads.get(manifest.moduleId);
 
     if (pending === undefined) {
         const loader = MODULE_LOADERS[manifest.moduleId];
@@ -765,8 +847,15 @@ export const loadFunction = async (functionPath: string): Promise<RegisteredLuno
             throw new Error(\`no lazy module loader registered for "\${functionPath}"\`);
         }
 
-        pending = loader();
-        loadedModules.set(manifest.moduleId, pending);
+        const started = loader();
+        const settle = (): void => {
+            if (!settledLoads.has(manifest.moduleId)) {
+                settledLoads.set(manifest.moduleId, started);
+            }
+        };
+
+        started.then(settle, settle);
+        pending = started;
     }
 
     // A module that failed to evaluate stays failed for the isolate: the runtime has already cached
@@ -792,7 +881,7 @@ export const loadFunction = async (functionPath: string): Promise<RegisteredLuno
 export const loadAllFunctions = async (): Promise<{ checked: number; failures: ReadonlyArray<{ functionPath: string; message: string }> }> => {
     const functionPaths = Object.keys(LUNORA_FUNCTION_MANIFEST);
     // Concurrent, so the total is bounded by the slowest module rather than by all of them added up. A module
-    // shared by several functions is evaluated once (loadFunction keeps its pending promise), and failures keep manifest order.
+    // shared by several functions is evaluated once (the module registry dedupes concurrent imports), and failures keep manifest order.
     const failures = (
         await Promise.all(
             functionPaths.map(async (functionPath) => {
@@ -859,14 +948,14 @@ ${rooms.channelField}    /**
      * paywalls it; the shard refuses to subscribe it (\`isPaidFunction\`).
      */
     x402?: { readonly price: number | string };
-${sensitiveArgsField}}
+${lazyStubFields}${sensitiveArgsField}}
 ${agentRegistry.prelude}${sandboxRegistry.prelude}${lazyRegistryPrelude}${smokeLoaderPrelude}
 /**
  * Static dispatch table. The key matches the \`__lunoraRef\` the client
  * emits (\`api[namespace][fn].__lunoraRef === "namespace:fn"\`).
  */
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {${dispatchBodyWithAgents}};
-${compiledArgsInstall}${shapeRegistry}${mutatorPathsRegistry}${roomsRegistry}${rooms.messagesBlock}${socketsRegistry}
+${compiledArgsInstall}${shapeRegistry}${mutatorPathsRegistry}${ipReadersRegistry}${roomsRegistry}${rooms.messagesBlock}${socketsRegistry}
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
  * client's WebSocket connects (\`connect\`) or disconnects (\`disconnect\`), once
@@ -961,7 +1050,7 @@ const emitLazyFunctionModules = (options: EmitFunctionsOptions): Record<string, 
     const mutators = options.mutators ?? [];
     const shapes = options.shapes ?? [];
     const aliases = moduleAliasesFor(functions, migrations, mutators, shapes);
-    const eagerPaths = eagerModulePaths(migrations, mutators, shapes);
+    const eagerPaths = eagerModulePaths(functions, migrations, mutators, shapes);
     const filePaths = [...new Set(functions.filter((definition) => !eagerPaths.has(definition.filePath)).map((definition) => definition.filePath))];
     const base = baseSpecifiers(options.useUmbrella ?? false);
     const output: Record<string, string> = {};

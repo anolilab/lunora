@@ -2,13 +2,13 @@
     "$comment": "Committed size baselines for the Worker each reference template deploys, measured by scripts/check-worker-size.js against a production build: `standalone` is the framework's own floor, `saas` the heaviest composed starter. Cloudflare's Worker size limit is 64 MiB uncompressed on both plans, and there is no compressed limit; the script checks that ceiling separately against rawBytes. The gzipBytes baselines are only a regression signal, not a proximity alarm. `pnpm run worker-size:update` re-baselines an intentional increase.",
     "templates": {
         "standalone": {
-            "gzipBytes": 344186,
-            "rawBytes": 1348884,
+            "gzipBytes": 398159,
+            "rawBytes": 1579359,
             "allowanceBytes": 51200
         },
         "saas": {
-            "gzipBytes": 1532551,
-            "rawBytes": 6778326,
+            "gzipBytes": 1568513,
+            "rawBytes": 6887631,
             "allowanceBytes": 102400
         }
     }

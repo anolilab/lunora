@@ -32,13 +32,12 @@ describe(resolveOptions, () => {
         });
     });
 
-    it("opts into lazy functions explicitly or through the dev child environment", () => {
-        expect.assertions(3);
+    it("opts into lazy functions through the dev child environment", () => {
+        expect.assertions(2);
 
         vi.stubEnv("LUNORA_LAZY_FUNCTIONS", "");
 
         expect(resolveOptions({ projectRoot: workdir }).lazyFunctions).toBe(false);
-        expect(resolveOptions({ lazyFunctions: true, projectRoot: workdir }).lazyFunctions).toBe(true);
 
         vi.stubEnv("LUNORA_LAZY_FUNCTIONS", "1");
 

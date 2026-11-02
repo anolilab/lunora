@@ -361,13 +361,14 @@ describe("schedulerDO dispatch lease — cancelled mid-dispatch", () => {
         vi.restoreAllMocks();
     });
 
-    /** Every durable row the job owns — `id:`, `retry:`, `dead:` and `t:` all end in `:<id>`. */
-    const rowsFor = (storageMap: Map<string, unknown>, id: string): string[] => [...storageMap.keys()].filter((key) => key.endsWith(`:${id}`));
+    /** Every live row the job owns — `id:`, `retry:`, `dead:` and `t:` all end in `:<id>`; its terminal history (`done:`, `dt:`) is not one. */
+    const rowsFor = (storageMap: Map<string, unknown>, id: string): string[] =>
+        [...storageMap.keys()].filter((key) => key.endsWith(`:${id}`) && !key.startsWith("done:") && !key.startsWith("dt:"));
 
     it.each([
         ["fails", false],
         ["succeeds", true],
-    ])("stays cancelled when the in-flight attempt %s", async (_label, ok) => {
+    ])("stays cancelled, never re-fired, when the in-flight attempt %s", async (_label, ok) => {
         expect.hasAssertions();
 
         pinClock(Date.now());
@@ -392,9 +393,10 @@ describe("schedulerDO dispatch lease — cancelled mid-dispatch", () => {
 
         expect(rowsFor(state.storageMap, "job-0")).toStrictEqual([]);
 
+        // A kick that went through ran the job, so that outcome outranks the cancel.
         const get = await scheduler.fetch(new Request("https://scheduler.internal/get?id=job-0"));
 
-        await expect(get.json()).resolves.toStrictEqual({});
+        await expect(get.json()).resolves.toMatchObject({ record: { id: "job-0", state: ok ? "succeeded" : "canceled" } });
 
         // Nothing re-fires on a later pass either.
         await scheduler.alarm();

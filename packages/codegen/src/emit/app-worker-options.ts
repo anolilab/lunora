@@ -61,6 +61,19 @@ ${options.tables.map((table) => `            [${JSON.stringify(table.name)}, ${s
 ];
 
 /**
+ * The admin revocation store, when the builder was given one. Emitted for every
+ * app: named admin tokens are a runtime feature, so no schema signal gates it.
+ * Without it the worker refuses to create a named token and refuses any that exist.
+ */
+const ADMIN_REVOCATIONS_LINES = [
+    `        const adminRevocations = this.adminRevocationsSelector?.(env);
+
+        if (adminRevocations) {
+            options.adminRevocations = adminRevocations;
+        }`,
+];
+
+/**
  * One `liveStreamRouter` mount per declared stream, as the lines of an array literal. Each stream's module loads on its
  * first request, so a worker starts without evaluating the live modules.
  */
@@ -114,6 +127,7 @@ const buildFrameworkHostLine = (options: ResolvedAppOptions): string =>
 /** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
 const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
     ...buildTableShardingLines(options),
+    ...(options.hasAdminRevocations === false ? [] : ADMIN_REVOCATIONS_LINES),
     ...(options.hasScheduler
         ? [
               `        if (this.schedulerDeclaration) {
@@ -148,10 +162,12 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 // plane: the rows \`resolveTableSharding\` classifies as \`.global()\`
                 // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
-                // The importer above skips the write for a dry run, and
-                // overwrites an existing \`_id\` under \`onConflict: "replace"\`.
+                // The importer above skips the write for a dry run, overwrites an
+                // existing \`_id\` under \`onConflict: "replace"\`, and removes the row
+                // an \`op: "delete"\` row names.
                 options.importGlobalsSupportsDryRun = true;
                 options.importGlobalsSupportsReplace = true;
+                options.importGlobalsSupportsDelete = true;
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
                 // all, and every one of them fails SILENTLY when unset — export
@@ -199,6 +215,7 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 });
             options.importGlobalsSupportsDryRun = true;
             options.importGlobalsSupportsReplace = true;
+            options.importGlobalsSupportsDelete = true;
             options.exportGlobals = (request) => exportHyperdriveGlobalRows({ engine, exec: exec(), schema: hyperdriveSchema, tables: request.tables });
             options.syncGlobals = async (request) => {
                 const page = await readHyperdriveGlobalCdc(engine, exec(), request);
@@ -314,8 +331,8 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 // The OAuth discovery documents (an \`mcp()\` resource's metadata, the
                 // issuer's) are derived here from the declared options, so the worker
                 // forwards only those exact paths and no other probe reaches the object.
-                // Memoised on the declaration: a framework-hosted worker rebuilds these
-                // options per request, and \`options(env)\` rebuilds every plugin.
+                // Memoised on the declaration: each worker built for a new \`env\` runs
+                // these options again, and \`options(env)\` rebuilds every plugin.
                 discoveryPaths,
                 internalSecret,${doAuthJurisdictionLine(options)}
                 namespace,
@@ -490,8 +507,60 @@ ${options.voiceAgents
         : []),
 ];
 
+/**
+ * The push-consumer handler backing the worker's `queue(batch, …)` entry:
+ * routes each delivered batch to its `defineQueue` handler. Built from
+ * `@lunora/queue` here (keeping the runtime decoupled) and wired only when the
+ * app declares push queues in `lunora/queues.ts`. In a dev environment (or with
+ * `LUNORA_QUEUE_CAPTURE`), every consumed message is recorded into the studio's
+ * Queues log via the root shard's `recordQueueMessage` admin RPC.
+ * `ctx.live.publish` reaches the handler only for an app that declares a live
+ * stream the target serves: the runtime always offers the Worker's shard-forwarding
+ * publisher as the fifth argument, and this forwards it only when `liveStreams` is set.
+ * Otherwise the handler's `ctx.live` is absent, matching a target without live streams.
+ */
+const buildQueueConsumerLines = (options: ResolvedAppOptions): string[] =>
+    options.hasQueue
+        ? [
+              // The runtime hands the handler the Worker's shard-forwarding publisher (fifth)
+              // and the host's `ctx.run` fetch (sixth, `undefined` on Cloudflare).
+              // Lazy: the registry statically imports every queue-declaring module, so it loads on the
+              // first batch (all of them at once, cached by the module system) instead of at startup.
+              `            queue: ${options.lazyFunctions === true ? "async " : ""}(batch: unknown, queueEnv: unknown, _context: ExecutionContextLike, trigger: TriggerTrace, ${options.liveStreams ? "queueLive" : "_live"}: Parameters<typeof dispatchQueueBatch>[2]["live"], queueFetch: Parameters<typeof dispatchQueueBatch>[2]["fetchImpl"]): Promise<void> =>`,
+              `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], ${options.lazyFunctions === true ? `(await import("./queues.js")).LUNORA_QUEUE_REGISTRY` : "LUNORA_QUEUE_REGISTRY"}, {`,
+              `                    capture: shouldCaptureQueue(queueEnv as Record<string, unknown>)`,
+              `                        ? createQueueCaptureSink(queueEnv as Record<string, unknown>${
+                  options.jurisdiction ? `, { jurisdiction: ${JSON.stringify(options.jurisdiction)} }` : ""
+              })`,
+              `                        : undefined,`,
+              `                    env: queueEnv as Record<string, unknown>,`,
+              // Set only while the deployment is paused: the consumer re-enqueues each
+              // message instead of running it.
+              `                    holdSeconds: trigger.holdSeconds,`,
+              // The consumer's `ctx.run` joins the queue invocation's trace instead
+              // of minting a fresh one per dispatched function.
+              `                    traceparent: trigger.traceparent,`,
+              `                    fetchImpl: queueFetch,`,
+              ...(options.liveStreams ? [`                    live: queueLive,`] : []),
+              `                }),`,
+          ]
+        : [];
+
 /** The `shardDO` + spec fields the worker always (or conditionally) carries. */
 const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
+    // The `env` object's `AI` binding, for the studio's chat assistant
+    // (`__lunora_admin__:aiChat`). Read off `env` exactly as the shard DO reads it
+    // for the three one-shot assistant RPCs — that op is served at the WORKER, so
+    // it cannot reach `env` any other way, and without this it degrades to
+    // "no AI binding" on every app regardless of what is bound.
+    //
+    // Unconditional and untyped-by-name: an app with no `AI` binding yields
+    // `undefined`, which is exactly the not-configured signal the op expects.
+    `            aiChatBinding: (env as Record<string, unknown>)["AI"] as WorkerOptions["aiChatBinding"],`,
+    // How much the chat assistant may read, as a wrangler var rather than a code
+    // change. Read off `env` like the binding above; an app that sets nothing gets
+    // `undefined`, and the runtime's `asOptInLevel` falls back to the safe default.
+    `            aiOptInLevel: (env as Record<string, unknown>)["LUNORA_AI_OPT_IN"] as WorkerOptions["aiOptInLevel"],`,
     `            cronJobs: LUNORA_CRONS,`,
     `            functions: LUNORA_FUNCTIONS,`,
     // The declared `defineIdentity(...)` contract — wires the runtime trust
@@ -506,36 +575,7 @@ const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
     ...(options.wantsArchitecture ? [`            architecture: deferred.architecture,`] : []),
     ...(options.wantsOpenApi ? [`            openApiSpec: deferred.openApiSpec,`] : []),
     ...(options.wantsOpenRpc ? [`            openRpcSpec: deferred.openRpcSpec,`] : []),
-    // The push-consumer handler backing the worker's `queue(batch, …)` entry:
-    // routes each delivered batch to its `defineQueue` handler. Built from
-    // `@lunora/queue` here (keeping the runtime decoupled) and wired only when the
-    // app declares push queues in `lunora/queues.ts`. In a dev environment (or with
-    // `LUNORA_QUEUE_CAPTURE`), every consumed message is recorded into the studio's
-    // Queues log via the root shard's `recordQueueMessage` admin RPC.
-    // `ctx.live.publish` reaches the handler only for an app that declares a live
-    // stream the target serves: the runtime always offers the Worker's shard-forwarding
-    // publisher as the fifth argument, and this forwards it only when `liveStreams` is set.
-    // Otherwise the handler's `ctx.live` is absent, matching a target without live streams.
-    ...(options.hasQueue
-        ? [
-              // The runtime hands the handler the Worker's shard-forwarding publisher (fifth)
-              // and the host's `ctx.run` fetch (sixth, `undefined` on Cloudflare).
-              `            queue: (batch: unknown, queueEnv: unknown, _context: ExecutionContextLike, trigger: TriggerTrace, ${options.liveStreams ? "queueLive" : "_live"}: Parameters<typeof dispatchQueueBatch>[2]["live"], queueFetch: Parameters<typeof dispatchQueueBatch>[2]["fetchImpl"]): Promise<void> =>`,
-              `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], LUNORA_QUEUE_REGISTRY, {`,
-              `                    capture: shouldCaptureQueue(queueEnv as Record<string, unknown>)`,
-              `                        ? createQueueCaptureSink(queueEnv as Record<string, unknown>${
-                  options.jurisdiction ? `, { jurisdiction: ${JSON.stringify(options.jurisdiction)} }` : ""
-              })`,
-              `                        : undefined,`,
-              `                    env: queueEnv as Record<string, unknown>,`,
-              // The consumer's `ctx.run` joins the queue invocation's trace instead
-              // of minting a fresh one per dispatched function.
-              `                    traceparent: trigger.traceparent,`,
-              `                    fetchImpl: queueFetch,`,
-              ...(options.liveStreams ? [`                    live: queueLive,`] : []),
-              `                }),`,
-          ]
-        : []),
+    ...buildQueueConsumerLines(options),
     // Spread so an unset `.httpRouter()` leaves the key absent rather than
     // explicitly `undefined` — `createWorker` treats the two the same, but the
     // emitted options object reads as "not configured" either way.

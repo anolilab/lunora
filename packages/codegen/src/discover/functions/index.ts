@@ -8,12 +8,15 @@ import { sanitizeNamespace } from "../../paths";
 import { listLunoraSourceFiles, lunoraRelativePath } from "../ast";
 import { exportNamesByLocalOf, isAddressableExportName } from "../attribution";
 import { collectErasures, reportErasures } from "../erased-returns";
+import mayReadIp from "../ip-reads";
 import type { LifecycleMoment, ProcedureClassification } from "./classify-procedure-call";
 import { classifyProcedureCall } from "./classify-procedure-call";
+import { procedureHandler } from "./handler";
 import { argsFromBuilderChain, outputFromBuilderChain, returnTypeFromBuilderCall, returnTypeFromCall } from "./internal/builder-chain";
 import { argsFromCall, exposeFromBuilderChain, x402FromBuilderChain } from "./internal/expose";
 import lazyMetadataFromBuilderChain from "./internal/lazy-metadata";
-import { exportCallsOfDeclaration, resolveExpressionToCall } from "./internal/resolve-call";
+import publishedFunctionIr from "./internal/published-function";
+import { exportCallsOfDeclaration, exportPublishedBindingsOfDeclaration, resolveExpressionToCall } from "./internal/resolve-call";
 
 interface DiscoveredFunction {
     /** Set when the builder chain carries `.use(platformAdmin(...))` — see `classifyProcedureCall`. */
@@ -25,6 +28,8 @@ interface DiscoveredFunction {
     expose?: { cache?: ExposeCacheIR; rest?: boolean };
     kind: string;
     lifecycle?: LifecycleMoment;
+    /** The chain's literal `.meta(...)`, lazy builds only — see `FunctionIR.meta`. */
+    meta?: FunctionIR["meta"];
     /** The `.output(validator)` declaration, when the chain has one. */
     output?: ValidatorIR;
     returnType: string;
@@ -148,6 +153,7 @@ const discoverBuilderTerminal = (call: CallExpression, receiver: Node, classifie
         args: argsFromBuilderChain(receiver),
         ...(expose ? { expose } : {}),
         ...(x402 ? { x402 } : {}),
+        ...(metadata?.meta === undefined ? {} : { meta: metadata.meta }),
         ...(classified.adminOnly ? { adminOnly: true as const } : {}),
         kind: classified.kind,
         ...(output.value ? { output: output.value } : {}),
@@ -255,8 +261,11 @@ const functionIrFromCall = (
         kind: discovered.kind as FunctionIR["kind"],
         returnType: discovered.returnType,
         ...(discovered.output ? { output: discovered.output } : {}),
+        ...(discovered.meta === undefined ? {} : { meta: discovered.meta }),
         visibility: discovered.visibility,
         ...(discovered.adminOnly ? { adminOnly: true as const } : {}),
+        // Only a query is ever resumed, so only a query needs the mark. A handler passed by reference is a body the scan never sees.
+        ...(discovered.kind === "query" && (procedureHandler(call) === undefined || mayReadIp(call)) ? { readsIp: true as const } : {}),
         ...(discovered.expose ? { expose: discovered.expose } : {}),
         ...(discovered.x402 ? { x402: discovered.x402 } : {}),
         ...(discovered.lifecycle ? { lifecycle: discovered.lifecycle } : {}),
@@ -343,6 +352,20 @@ const discoverFileFunctions = (source: SourceFile, relativePath: string, lazyFun
                 }),
         );
     const named = new Set(found.map((entry) => entry.exportName));
+
+    // A component published to `node_modules` has no call to follow — read its functions off their type.
+    for (const declaration of source.getVariableStatements().flatMap((statement) => statement.getDeclarations())) {
+        for (const [localName, at] of exportPublishedBindingsOfDeclaration(declaration, (name) => exportNames.has(name))) {
+            for (const name of (exportNames.get(localName) ?? []).filter((candidate) => isAddressableExportName(candidate) && !named.has(candidate))) {
+                const entry = publishedFunctionIr(at, name, relativePath, exportedDescriptionOf(source, name));
+
+                if (entry) {
+                    found.push(entry);
+                    named.add(name);
+                }
+            }
+        }
+    }
 
     // `export default <expression>`, including a local registration alias.
     for (const { call, entry } of defaultExportFunctions(source, relativePath, lazyFunctions)) {

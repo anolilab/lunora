@@ -2,9 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { buildResourceServer } from "../src/charge/resource-server";
 
+const TEST_FACILITATOR = { url: "https://facilitator.example/x402" } as const;
+
 describe("buildResourceServer", () => {
     it("registers the exact EVM scheme for an EVM network only", async () => {
         const server = await buildResourceServer({
+            facilitator: TEST_FACILITATOR,
             network: "base",
             price: "0.01",
             recipient: { evm: "0x1111111111111111111111111111111111111111" },
@@ -17,6 +20,7 @@ describe("buildResourceServer", () => {
 
     it("registers the exact SVM scheme for a Solana network only", async () => {
         const server = await buildResourceServer({
+            facilitator: TEST_FACILITATOR,
             network: "solana",
             price: "0.01",
             recipient: { svm: "So11111111111111111111111111111111111111112" },
@@ -28,6 +32,7 @@ describe("buildResourceServer", () => {
 
     it("scopes registration to the configured network", async () => {
         const server = await buildResourceServer({
+            facilitator: TEST_FACILITATOR,
             network: "base-sepolia",
             price: "0.01",
             recipient: { evm: "0x1111111111111111111111111111111111111111" },
@@ -49,7 +54,12 @@ describe("buildResourceServer", () => {
             const { buildResourceServer: buildWithoutPeer } = await import("../src/charge/resource-server");
 
             await expect(
-                buildWithoutPeer({ network: "base", price: "0.01", recipient: { evm: "0x1111111111111111111111111111111111111111" } }),
+                buildWithoutPeer({
+                    facilitator: TEST_FACILITATOR,
+                    network: "base",
+                    price: "0.01",
+                    recipient: { evm: "0x1111111111111111111111111111111111111111" },
+                }),
             ).rejects.toMatchObject({
                 code: "ENV_INVALID",
                 message: expect.stringMatching(/optional @x402\/evm \+ viem peers/),
@@ -70,7 +80,12 @@ describe("buildResourceServer", () => {
             const { buildResourceServer: buildWithoutPeer } = await import("../src/charge/resource-server");
 
             await expect(
-                buildWithoutPeer({ network: "solana", price: "0.01", recipient: { svm: "So11111111111111111111111111111111111111112" } }),
+                buildWithoutPeer({
+                    facilitator: TEST_FACILITATOR,
+                    network: "solana",
+                    price: "0.01",
+                    recipient: { svm: "So11111111111111111111111111111111111111112" },
+                }),
             ).rejects.toMatchObject({
                 code: "ENV_INVALID",
                 message: expect.stringMatching(/optional @x402\/svm \+ @solana\/kit peers/),

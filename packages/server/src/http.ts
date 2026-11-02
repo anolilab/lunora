@@ -6,6 +6,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 
 import type { LiveTopicRef } from "../../../shared/live-stream";
+import { isSafeHeaderValue, SSE_HEADERS, sseFrame } from "../../../shared/sse";
 import applyOutput from "./apply-output";
 import type { EmptyArgs } from "./builder/index";
 import { parseValidatorMap } from "./functions";
@@ -583,20 +584,6 @@ type LooseStreamHandler = (options: {
 }) => AsyncGenerator<unknown, void, void> | AsyncIterable<unknown>;
 
 /**
- * Headers on every SSE response. SSE responses must stay uncacheable so proxies
- * don't buffer or coalesce live frames — `cacheControl()` is intentionally
- * ignored for stream() routes, and `cacheTag`/`vary` are also omitted because
- * they only make sense alongside a cacheable response. `x-accel-buffering`
- * hints to proxies (including Cloudflare's own buffering layer) that this
- * response must not be coalesced.
- */
-const SSE_HEADERS: Record<string, string> = {
-    "cache-control": "no-cache, no-transform",
-    "content-type": "text/event-stream; charset=utf-8",
-    "x-accel-buffering": "no",
-};
-
-/**
  * Read the SSE resume position off a request: the `Last-Event-ID` header a
  * browser `EventSource` replays automatically on reconnect, falling back to a
  * `lastEventId` query parameter for clients that cannot set that header.
@@ -663,40 +650,6 @@ const sseEvent = <R>(frame: { data: R; id: string }): SseEvent<R> => {
 const isSseEvent = (value: unknown): value is SseEvent<unknown> =>
     typeof value === "object" && value !== null && (value as Partial<SseEvent<unknown>>)[SSE_EVENT_BRAND] === true;
 
-/** A header or SSE field value that cannot break out of its line. */
-const isSafeHeaderValue = (value: string): boolean => !(value.includes("\r") || value.includes("\n") || value.includes("\0"));
-
-/**
- * Format one SSE frame. Each frame ends with `\n\n`, the spec-required
- * separator. `event:` is omitted for `data` (the default event name); we use
- * named events only for the terminal sentinels (`complete`, `error`). `id:` is
- * omitted unless the chunk opted in via {@link sseEvent}.
- *
- * A default `data` frame carries a user chunk, so it goes through the wire codec
- * — the same bracketing the WS stream path has always had, and which this
- * transport was missing on both ends. Bare `JSON.stringify` flattens a `Date` to
- * an ISO string, an `ArrayBuffer` to `{}` and `NaN` to `null` (all still typed
- * as the declared yield type on the client), and throws outright on a `bigint`,
- * killing the stream mid-flight with a redacted "Internal error".
- *
- * The terminal sentinels are NOT encoded: `complete` carries `{}` and `error`
- * carries a plain `{ code, message }` that the client reads without decoding.
- */
-const sseFrame = (chunk: unknown, event?: "complete" | "error", id?: string): string => {
-    const data = JSON.stringify(event === undefined ? encodeWire(chunk) : chunk);
-
-    // An id is written verbatim into an `id:` line, so a line break in it would
-    // end the frame early and let the id inject `event:` / `data:` lines.
-    if (id !== undefined && !isSafeHeaderValue(id)) {
-        throw new LunoraError("INTERNAL", "sseEvent id must not contain CR, LF or NUL");
-    }
-
-    const idLine = id === undefined ? "" : `id: ${id}\n`;
-    const prefix = event ? `event: ${event}\n` : "";
-
-    return `${idLine}${prefix}data: ${data}\n\n`;
-};
-
 /**
  * Encode one yielded chunk into a default SSE frame. `.output()` is enforced
  * HERE — the pump's per-chunk contract check — against the chunk itself, or
@@ -705,15 +658,26 @@ const sseFrame = (chunk: unknown, event?: "complete" | "error", id?: string): st
  * catch and becomes a redacted `event: error` frame, the same verdict the RPC
  * and REST paths reach for a contract breach — a wrong chunk is not a stream
  * that keeps going.
+ *
+ * A data frame goes through the wire codec. Bare `JSON.stringify` flattens a
+ * `Date` to an ISO string, an `ArrayBuffer` to `{}` and `NaN` to `null`, and
+ * throws on a `bigint`, killing the stream mid-flight. The terminal sentinels are
+ * not encoded: `complete` carries `{}` and `error` a plain `{ code, message }`.
  */
 const frameChunk = (output: Validator | undefined, chunk: unknown): string => {
     if (isSseEvent(chunk)) {
+        // Checked here so a bad id is a LunoraError: the shared helper's plain Error
+        // would reach the client as INTERNAL_SERVER_ERROR instead of INTERNAL.
+        if (!isSafeHeaderValue(chunk.id)) {
+            throw new LunoraError("INTERNAL", "sseEvent id must not contain CR, LF or NUL");
+        }
+
         const data = output ? applyOutput(output, chunk.data) : chunk.data;
 
-        return sseFrame(data, undefined, chunk.id);
+        return sseFrame(encodeWire(data), undefined, chunk.id);
     }
 
-    return sseFrame(output ? applyOutput(output, chunk) : chunk);
+    return sseFrame(encodeWire(output ? applyOutput(output, chunk) : chunk));
 };
 
 /**
@@ -921,7 +885,7 @@ const httpRoute: HttpRoute = {
  * `http_action_response_header_injection` advisor lint points to.
  */
 
-export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, lastEventId, sseEvent };
+export { httpAction, httpRoute, httpRouter, lastEventId, sseEvent };
 
 export type {
     HttpActionCtx,
@@ -942,3 +906,5 @@ export type {
     ShardFetchInit,
     SseEvent,
 };
+
+export { isSafeHeaderValue } from "../../../shared/sse";

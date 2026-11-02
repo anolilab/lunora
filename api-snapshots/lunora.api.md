@@ -545,6 +545,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `MigrationCovers` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MigrationCtx` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -613,6 +617,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `PROCEDURE_META` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `PaginationOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -650,6 +658,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `PolicyDecisionOf` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `PolicyMiddleware` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -718,6 +730,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RegisteredFunction` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalAction` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalMutation` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalQuery` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalStream` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -809,6 +837,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RlsContextIn` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RlsOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -845,11 +877,23 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ScheduleRunOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ScheduledFunctionDoc` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `ScheduledJob` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobView` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1150,6 +1194,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `TypedDefinePolicyInput` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `UNLOADED_META` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1561,6 +1609,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `procedureMeta` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `protectPublic` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1610,6 +1662,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 ### `ActionCallOptions` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `AdminTokenSummary` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `ArgsOf` (type)
 
@@ -1715,11 +1771,35 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `CreatedAdminToken` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `CronJobInfo` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `CronRunInFlight` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `CronRunRecord` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `CronRunStatus` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `CronRunsResult` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `DEFAULT_MAX_BUFFER` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `DeploymentPauseStatus` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -1988,6 +2068,18 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `ScheduleRetryPolicy` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ScheduledHistoryPage` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ScheduledJobView` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2650,6 +2742,14 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ## `lunorash/do`
+
+### `ADMIN_REVOCATION_DO_NAME` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `AdminRevocationDO` (class)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `AdvisorProcedure` (interface)
 
@@ -4131,6 +4231,14 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `ScheduledJobRecord` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `ScheduledJobStatus` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
@@ -4443,6 +4551,14 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `AdminTokenSummary` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `AiRunBinding` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `AirbyteMessage` (type)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4528,6 +4644,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `CorsOptions` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `CreatedAdminToken` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -5993,6 +6113,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `MigrationCovers` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MigrationCtx` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6061,6 +6185,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `PROCEDURE_META` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `PaginationOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6098,6 +6226,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `PolicyDecisionOf` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `PolicyMiddleware` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6166,6 +6298,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RegisteredFunction` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalAction` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalMutation` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalQuery` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalStream` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6257,6 +6405,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RlsContextIn` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RlsOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6293,11 +6445,23 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ScheduleRunOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ScheduledFunctionDoc` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `ScheduledJob` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobView` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6598,6 +6762,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `TypedDefinePolicyInput` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `UNLOADED_META` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7006,6 +7174,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `presenceExtension` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `procedureMeta` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -8507,6 +8679,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RegisteredInternalAction` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalMutation` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalQuery` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalStream` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RegisteredLifecycleHook` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -8567,11 +8755,23 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ScheduleRunOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ScheduledFunctionDoc` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `ScheduledJob` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobView` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

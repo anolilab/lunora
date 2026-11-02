@@ -166,7 +166,7 @@ export interface ChargeMiddleware {
  * when the matching `recipient.evm` / `recipient.svm` is missing — a paywall
  * with nowhere to settle must fail loudly at setup, not silently drop funds.
  */
-export const resolvePayTo = (config: X402ChargeConfig): string => {
+export const resolvePayTo = (config: Pick<X402ChargeConfig, "network" | "recipient">): string => {
     const evm = isEvmNetwork(config.network);
     const address = evm ? config.recipient.evm : config.recipient.svm;
 
@@ -178,7 +178,7 @@ export const resolvePayTo = (config: X402ChargeConfig): string => {
 };
 
 /** The single, catch-all route (`accepts` present → gates every request). */
-export const buildRoute = (config: X402ChargeConfig): RouteConfig => {
+export const buildRoute = (config: Pick<X402ChargeConfig, "network" | "price" | "recipient">): RouteConfig => {
     const accepts: PaymentOption = {
         network: toCaip2(config.network),
         payTo: resolvePayTo(config),

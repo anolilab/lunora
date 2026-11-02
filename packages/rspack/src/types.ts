@@ -19,9 +19,6 @@ interface LunoraRspackOptions {
      */
     apiSpec?: CodegenOptions["apiSpec"];
 
-    /** Emit a per-module lazy function registry; omitted keeps the eager registry. */
-    lazyFunctions?: CodegenOptions["lazyFunctions"];
-
     /** Project root containing the `lunora/` directory. Defaults to `process.cwd()`. */
     projectRoot?: string;
 
@@ -47,6 +44,7 @@ interface ResolvedLunoraRspackOptions {
     apiSpec: NonNullable<CodegenOptions["apiSpec"]>;
     /** The target the caller passed, if any. Kept so a `lunora.config.*` edit can re-resolve `target` in watch mode. */
     explicitTarget: string | undefined;
+    /** `LUNORA_LAZY_FUNCTIONS`, which `lunora dev`/`build` set for this process; `codegen.lazyFunctions` in `lunora.config.*` is read by codegen itself. */
     lazyFunctions: boolean;
     projectRoot: string;
     schemaDir: string;

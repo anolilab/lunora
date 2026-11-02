@@ -20,8 +20,8 @@ const schemaOf = (names: ReadonlyArray<string>): SchemaLike => {
     return { tables: Object.fromEntries(names.map((name) => [name, globalTable()])) };
 };
 
-/** Ownership probes are the only statements that select a `slot`; provisioning and inserts never do. */
-const OWNER_PROBE = /AS slot/u;
+/** The batched probe selects a `slot`; the per-row probe and the recheck are a bare `SELECT 1` on the row's table. */
+const OWNER_PROBE = /AS slot|^\s*SELECT 1 FROM "[^"]+" WHERE "id" = \?/u;
 
 type Exec = ReturnType<typeof createD1Exec>["exec"];
 
@@ -60,7 +60,7 @@ describe("d1 import ownership probe", () => {
         harness.close();
     });
 
-    it("probes many rows across two tables in packed statements, not one per row", async () => {
+    it("probes many rows in packed statements, not one per row", async () => {
         expect.assertions(2);
 
         const schema = schemaOf(["alpha", "beta"]);
@@ -73,8 +73,8 @@ describe("d1 import ownership probe", () => {
         });
 
         expect(result).toMatchObject({ conflicts: 0, errors: [], inserted: { alpha: 150 } });
-        // 150 ids x 2 tables = 300 bound ids at 100 per statement; a per-row probe issued 150.
-        expect(probe.probes()).toBe(3);
+        // 150 ids at 100 per statement; a per-row probe issued 150. Only the rows' own table is asked.
+        expect(probe.probes()).toBe(2);
     });
 
     it("probes one row against sixty tables in a single statement", async () => {
@@ -85,7 +85,7 @@ describe("d1 import ownership probe", () => {
         const result = await importGlobalRows(writerFor(schema), schema, { exec: probe.exec, rows: [{ doc: { _id: "one", label: "x" }, table: "t59" }] });
 
         expect(result).toMatchObject({ errors: [], inserted: { t59: 1 } });
-        // The per-row probe asked 50 tables per statement: two round trips for the same row.
+        // One row asks one table: the other fifty-nine are not probed.
         expect(probe.probes()).toBe(1);
     });
 
@@ -106,11 +106,12 @@ describe("d1 import ownership probe", () => {
         expect(probe.probes()).toBe(0);
     });
 
-    it("names the first other table holding the id, and sees an id repeated across tables in one import", async () => {
+    it("accepts the same id in different tables, and still sees an id repeated within one table", async () => {
         expect.assertions(2);
 
         const schema = schemaOf(["alpha", "beta", "gamma"]);
-        const result = await importGlobalRows(writerFor(schema), schema, {
+        const writer = writerFor(schema);
+        const result = await importGlobalRows(writer, schema, {
             exec: counting().exec,
             rows: [
                 { doc: { _id: "x1", label: "a" }, table: "gamma" },
@@ -119,8 +120,8 @@ describe("d1 import ownership probe", () => {
             ],
         });
 
-        expect(result.errors).toMatchObject([{ code: "ID_COLLISION", line: 2, message: expect.stringContaining('"gamma"'), table: "alpha" }]);
-        expect(result).toMatchObject({ conflicts: 1, inserted: { gamma: 1 } });
+        expect(result).toMatchObject({ conflicts: 1, errors: [], inserted: { alpha: 1, gamma: 1 } });
+        await expect(Promise.all([writer.get("alpha", "x1"), writer.get("gamma", "x1")])).resolves.toMatchObject([{ label: "b" }, { label: "a" }]);
     });
 
     it("fails closed: a failing probe errors every row that carries an id and inserts nothing", async () => {

@@ -176,7 +176,7 @@ const FanoutPanel = ({ initialShardKey }: FanoutPanelProps): ReactElement => {
                 )}
             </div>
 
-            {error !== null && <ErrorAlert error={errorSource} testId="fanout-error" />}
+            {error !== null && <ErrorAlert error={errorSource} shardKey={queryShardKey} testId="fanout-error" />}
 
             {error === null && isIdle && (
                 <EmptyState

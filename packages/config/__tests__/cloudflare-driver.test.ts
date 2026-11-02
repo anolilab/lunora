@@ -14,29 +14,35 @@ describe("cLOUDFLARE_DRIVER toolchain", () => {
     const { toolchain } = CLOUDFLARE_DRIVER;
 
     it("builds the deploy argv, matching wrangler's expected flag order", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         expect(toolchain?.deploy({})).toStrictEqual({ args: ["deploy"], tool: "wrangler" });
         // Entry positional precedes flags; `--metafile` always rides with `--outdir`.
-        expect(toolchain?.deploy({ dryRun: true, entry: "src/worker.ts", environment: "prod", outDir: "dist", temporary: true }).args).toStrictEqual([
+        expect(
+            toolchain?.deploy({ dryRun: true, entry: "src/worker.ts", environment: "prod", outDir: "dist", secretsFile: "secrets.json", temporary: true }).args,
+        ).toStrictEqual([
             "deploy",
             "src/worker.ts",
             "--env",
             "prod",
             "--temporary",
             "--dry-run",
+            "--secrets-file",
+            "secrets.json",
             "--outdir",
             "dist",
             "--metafile",
         ]);
+        expect(
+            toolchain?.deploy({ dryRun: true, entry: "src/worker.ts", environment: "prod", outDir: "dist", outFile: "w.bundle", temporary: true }).args,
+        ).toStrictEqual(["deploy", "src/worker.ts", "--env", "prod", "--temporary", "--dry-run", "--outdir", "dist", "--metafile", "--outfile", "w.bundle"]);
     });
 
-    // A preview must never take production traffic, so it maps to a different
-    // wrangler subcommand rather than a flag on `deploy`.
-    it("maps a preview deploy onto versions upload", () => {
+    // A versioned upload is not built yet: the driver refuses it rather than return a production deploy for it.
+    it("refuses a preview deploy instead of returning a production deploy command", () => {
         expect.assertions(1);
 
-        expect(toolchain?.deploy({ preview: true }).args).toStrictEqual(["versions", "upload"]);
+        expect(() => toolchain?.deploy({ entry: "src/worker.ts", environment: "prod", preview: true })).toThrow(/cannot build a preview upload/u);
     });
 
     it("builds tail argv with the worker positional before flags", () => {

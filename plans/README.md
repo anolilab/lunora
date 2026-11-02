@@ -19,15 +19,16 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 ## In progress
 
-| Plan                                             | Title                                                               | Remaining                                                                                            |
-| ------------------------------------------------ | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| [527](./527-ratelimit-memory-store-retention.md) | Evict rate-limit memory-store entries past their horizon            | PR #1223 open; debt (negative) entries deliberately kept                                             |
-| [528](./528-durable-ratelimit-row-retention.md)  | Expire durable rate-limit rows (`createDbStore` / `createSqlStore`) | PR #1225 open, stacked on #1223; bounded sweep on write; tests tightened in a stacked follow-up      |
-| [460](./460-cloudflare-artifacts.md)             | Cloudflare Artifacts as an action-only `ctx.artifacts`              | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid)                          |
-| [463](./463-experimental-graduation.md)          | Graduate the experimental tier to stable                            | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages                                |
-| [166](./166-enterprise-auth-saml-scim.md)        | Enterprise auth: SAML SSO + SCIM                                    | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                        |
-| [464](./464-replay-conflict-resolution.md)       | Replayed offline writes that conflict                               | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express |
-| [468](./468-gdpr-package.md)                     | `@lunora/privacy`: data-subject rights (export, erasure, holds)     | Built end to end; example covers download, retention and expiry; open: legal and tax review (§10)    |
+| Plan                                             | Title                                                               | Remaining                                                                                                                                                  |
+| ------------------------------------------------ | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [527](./527-ratelimit-memory-store-retention.md) | Evict rate-limit memory-store entries past their horizon            | PR #1223 open; debt (negative) entries deliberately kept                                                                                                   |
+| [528](./528-durable-ratelimit-row-retention.md)  | Expire durable rate-limit rows (`createDbStore` / `createSqlStore`) | PR #1225 open, stacked on #1223; bounded sweep on write; tests tightened in a stacked follow-up                                                            |
+| [460](./460-cloudflare-artifacts.md)             | Cloudflare Artifacts as an action-only `ctx.artifacts`              | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid)                                                                                |
+| [463](./463-experimental-graduation.md)          | Graduate the experimental tier to stable                            | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages                                                                                      |
+| [166](./166-enterprise-auth-saml-scim.md)        | Enterprise auth: SAML SSO + SCIM                                    | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                                                                              |
+| [464](./464-replay-conflict-resolution.md)       | Replayed offline writes that conflict                               | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express                                                       |
+| [468](./468-gdpr-package.md)                     | `@lunora/privacy`: data-subject rights (export, erasure, holds)     | Built end to end; example covers download, retention and expiry; open: legal and tax review (§10)                                                          |
+| [364](./364-studio-conversational-assistant.md)  | Conversational assistant for the Studio                             | W1–W9 shipped (assistant reachable studio-wide, server-side data-sharing ladder, hardened markdown); W5 (streaming) blocked — needs its own transport plan |
 
 ## Open (TODO)
 
@@ -48,7 +49,6 @@ When a plan ships: delete its file and remove its row here in the same change.
 | [078](./078-custom-scalar-types.md)                    | Custom scalar types (`v.custom`)                                       | not shipped                                                                            |
 | [089](./089-promise-pipelining-batch.md)               | Promise pipelining over the batch transport                            | draft, design-only                                                                     |
 | [160](./160-adapter-voice-agent-consolidation.md)      | Consolidate the voice/agent surface across the 5 adapters              | deferred                                                                               |
-| [364](./364-studio-conversational-assistant.md)        | Conversational assistant for the Studio                                | P3                                                                                     |
 | [033](./033-stream.md)                                 | Cloudflare Stream (video)                                              | P3, deferred                                                                           |
 | [037](./037-realtime-calls-webrtc.md)                  | Cloudflare Realtime / Calls (WebRTC)                                   | P3, deferred                                                                           |
 | [133](./133-live-cdc-and-do-consumes-do.md)            | Live CDC ingest + DO-consumes-DO shape                                 | P3, demand-gated                                                                       |

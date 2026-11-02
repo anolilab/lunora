@@ -43,6 +43,13 @@ describe("cronJobs", () => {
         expect(cronJobs().interval("every-minute", { minutes: 1 }, fnRef("jobs.tick")).jobs()[0]?.cron).toBe("*/1 * * * *");
     });
 
+    it("rejects a job name too long for the scheduler's overlap lease", () => {
+        expect.hasAssertions();
+
+        expect(() => cronJobs().interval("x".repeat(257), { minutes: 5 }, fnRef("jobs.tick"))).toThrow(/longer than 256 characters/u);
+        expect(cronJobs().interval("x".repeat(256), { minutes: 5 }, fnRef("jobs.tick")).jobs()).toHaveLength(1);
+    });
+
     it("compiles .daily/.weekly/.monthly to fixed-UTC cron expressions", () => {
         expect.assertions(3);
 

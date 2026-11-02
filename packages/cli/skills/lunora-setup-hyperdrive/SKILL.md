@@ -79,17 +79,27 @@ thunk instead. It runs once per shard construction, not per request:
 ```ts title="src/server.ts"
 import type { HyperdriveLike } from "@lunora/hyperdrive";
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
-import postgres from "postgres";
 
 import { defineApp } from "../lunora/_generated/app.js";
 
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
-    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 })))
+    .hyperdrive((env) =>
+        fromPostgresJs(async () => {
+            const { default: postgres } = await import("postgres");
+
+            return postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 });
+        }),
+    )
     .build();
 
 export const ShardDO = app.ShardDO;
 ```
+
+The adapters take a loader, not a driver. It runs on the first query, so the
+driver stays out of the Worker's startup graph; never `import postgres from
+"postgres"` statically in the entry. For `pg`, the loader may `await
+client.connect()` before returning.
 
 Then query from any action:
 
@@ -152,7 +162,11 @@ messages: defineTable({ body: v.string(), channelId: v.string() })
 
 ```ts
 // worker entry: one client per binding name
-.sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString, { fetch_types: false, max: 5 })))
+.sourceClient((env, binding) => fromPostgresJs(async () => {
+    const { default: postgres } = await import("postgres");
+
+    return postgres((env[binding] as { connectionString: string }).connectionString, { fetch_types: false, max: 5 });
+}))
 ```
 
 How `.source()` behaves:

@@ -180,6 +180,12 @@ const accessContext: <Context extends AccessContextInput>() => Middleware<Contex
 const accessFacade: (identity: Record<string, unknown> | null | undefined, userId: string | null | undefined) => AccessFacade;
 ```
 
+### `lazyAccessFacade` (const)
+
+```ts
+const lazyAccessFacade: (readIdentity: () => Record<string, unknown> | null | undefined, readUserId: () => string | null | undefined) => AccessFacade;
+```
+
 ## Referenced internal declarations
 
 Not exported, and reachable only through a signature above. Their members

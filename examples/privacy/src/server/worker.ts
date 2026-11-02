@@ -8,6 +8,7 @@ import { authFor } from "./auth";
 
 /** The bindings the Worker reads. The workflows and the tombstone store are reached from their own code. */
 interface WorkerEnv {
+    ADMIN_REVOCATIONS?: ShardNamespaceLike;
     AUTH_SECRET: string;
     DB: unknown;
     SHARD: ShardNamespaceLike;
@@ -40,6 +41,7 @@ const buildWorker = (env: WorkerEnv): ReturnType<typeof createWorker> =>
                 return null;
             }
         },
+        adminRevocations: env.ADMIN_REVOCATIONS,
         shardDO: env.SHARD,
     });
 

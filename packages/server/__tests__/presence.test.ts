@@ -36,7 +36,7 @@ const createMemoryDb = (): MutationContext["db"] => {
         let direction: "asc" | "desc" | undefined;
 
         // The only ordered reads the presence handlers issue go through the
-        // `byRoomLastSeen` index with `roomId` eq-fixed, so ordering by
+        // `byTenantRoomLastSeen` index with `tenantId` + `roomId` eq-fixed, so ordering by
         // `lastSeen` emulates the index order faithfully.
         const sorted = (): Record<string, unknown>[] => {
             const resolved = resolveRows(rows, table, eqs, predicates);
@@ -105,9 +105,12 @@ const createMemoryDb = (): MutationContext["db"] => {
     } as unknown as MutationContext["db"];
 };
 
-const makeMutationContext = (db: MutationContext["db"], userId: string | null = null): MutationContext =>
+/** The verified identity claims a context carries; `orgId` picks the presence tenant. */
+type Claims = Record<string, unknown> | null;
+
+const makeMutationContext = (db: MutationContext["db"], userId: string | null = null, claims: Claims = null): MutationContext =>
     ({
-        auth: { getIdentity: async () => null, userId },
+        auth: { getIdentity: async () => claims, userId },
         db,
         runMutation: vi.fn<MutationContext["runMutation"]>(),
         runQuery: vi.fn<MutationContext["runQuery"]>(),
@@ -116,9 +119,9 @@ const makeMutationContext = (db: MutationContext["db"], userId: string | null = 
         vectors: {} as MutationContext["vectors"],
     }) as unknown as MutationContext;
 
-const makeQueryContext = (db: MutationContext["db"]): QueryContext =>
+const makeQueryContext = (db: MutationContext["db"], claims: Claims = null): QueryContext =>
     ({
-        auth: { getIdentity: async () => null, userId: null },
+        auth: { getIdentity: async () => claims, userId: null },
         db: db as unknown as QueryContext["db"],
         runQuery: vi.fn<QueryContext["runQuery"]>(),
         storage: {} as QueryContext["storage"],
@@ -327,7 +330,7 @@ describe("definePresence", () => {
         await presence.functions.heartbeat.handler(makeMutationContext(db), { roomId: "room-1", sessionId: "fresh" });
 
         vi.setSystemTime(20_000);
-        const result = await presence.functions.sweep.handler(makeMutationContext(db), { roomId: "room-1" });
+        const result = await presence.functions.sweep.handler(makeMutationContext(db), { roomId: "room-1", tenantId: "" });
 
         expect(result.deleted).toBe(1);
 
@@ -556,6 +559,144 @@ describe("definePresence", () => {
     });
 });
 
+describe("definePresence tenant isolation", () => {
+    const orgA = { orgId: "org-a" };
+    const orgB = { orgId: "org-b" };
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1000);
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("files the same room name under two organizations as two rooms", async () => {
+        expect.assertions(3);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ ttlMs: 10_000 });
+
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "alice", orgA), { roomId: "doc-1", sessionId: "s-a" });
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "bob", orgB), { roomId: "doc-1", sessionId: "s-b" });
+
+        const inA = await presence.functions.listPresent.handler(makeQueryContext(db, orgA), { roomId: "doc-1" });
+        const inB = await presence.functions.listPresent.handler(makeQueryContext(db, orgB), { roomId: "doc-1" });
+        const appWide = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "doc-1" });
+
+        expect(inA.map((member) => member.userId)).toStrictEqual(["alice"]);
+        expect(inB.map((member) => member.userId)).toStrictEqual(["bob"]);
+        // No orgId claim is the app-wide tenant, which holds no organization's rooms.
+        expect(appWide).toStrictEqual([]);
+    });
+
+    it("never lets a heartbeat reach another organization's row with the same room and session", async () => {
+        expect.assertions(3);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ ttlMs: 10_000 });
+        const insertSpy = vi.spyOn(db, "insert");
+        const patchSpy = vi.spyOn(db, "patch");
+
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "alice", orgA), { data: { color: "blue" }, roomId: "doc-1", sessionId: "s-1" });
+
+        // Org B reuses org A's exact (roomId, sessionId): it lands in its own
+        // tenant as a fresh row — neither refused as a hijack nor patching A's.
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "mallory", orgB), { data: { color: "red" }, roomId: "doc-1", sessionId: "s-1" });
+
+        expect(insertSpy).toHaveBeenCalledTimes(2);
+        expect(patchSpy).not.toHaveBeenCalled();
+
+        const inA = await presence.functions.listPresent.handler(makeQueryContext(db, orgA), { roomId: "doc-1" });
+
+        expect(inA).toEqual([{ data: { color: "blue" }, lastSeen: 1000, roomId: "doc-1", userId: "alice" }]);
+    });
+
+    it("never reaps another organization's expired rows from a heartbeat", async () => {
+        expect.assertions(1);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ ttlMs: 10_000 });
+
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "alice", orgA), { roomId: "doc-1", sessionId: "s-a" });
+
+        // Far past every reap cutoff for org A's row.
+        vi.setSystemTime(100_000);
+
+        const deleteSpy = vi.spyOn(db, "delete");
+
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "bob", orgB), { roomId: "doc-1", sessionId: "s-b" });
+
+        expect(deleteSpy).not.toHaveBeenCalled();
+    });
+
+    it("scopes the disconnect cleanup to the socket's own organization", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ ttlMs: 10_000 });
+
+        // Same user id in both orgs, so the ownership gate alone would let it through.
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "user-1", orgA), { roomId: "doc-1", sessionId: "s-1" });
+
+        const deleteSpy = vi.spyOn(db, "delete");
+
+        await presence.functions.disconnect.handler(
+            makeMutationContext(db, "user-1", orgB),
+            lifecycleEvent({ context: { roomId: "doc-1", sessionId: "s-1" }, userId: "user-1" }),
+        );
+
+        expect(deleteSpy).not.toHaveBeenCalled();
+
+        await presence.functions.disconnect.handler(
+            makeMutationContext(db, "user-1", orgA),
+            lifecycleEvent({ context: { roomId: "doc-1", sessionId: "s-1" }, userId: "user-1" }),
+        );
+
+        expect(deleteSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("sweeps only the named tenant's room", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ ttlMs: 10_000 });
+
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "alice", orgA), { roomId: "doc-1", sessionId: "s-a" });
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "bob", orgB), { roomId: "doc-1", sessionId: "s-b" });
+
+        vi.setSystemTime(20_000);
+
+        const result = await presence.functions.sweep.handler(makeMutationContext(db), { roomId: "doc-1", tenantId: "org-a" });
+
+        expect(result.deleted).toBe(1);
+
+        // Org B's stale row is still there for its own sweep to reclaim.
+        const leftForB = await presence.functions.sweep.handler(makeMutationContext(db), { roomId: "doc-1", tenantId: "org-b" });
+
+        expect(leftForB.deleted).toBe(1);
+    });
+
+    it("takes the tenant from the `tenant` option when one is given", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ tenant: (identity) => (typeof identity?.["teamId"] === "string" ? identity["teamId"] : ""), ttlMs: 10_000 });
+
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "alice", { orgId: "org-a", teamId: "team-1" }), {
+            roomId: "doc-1",
+            sessionId: "s-a",
+        });
+
+        const sameTeam = await presence.functions.listPresent.handler(makeQueryContext(db, { orgId: "org-b", teamId: "team-1" }), { roomId: "doc-1" });
+        const sameOrg = await presence.functions.listPresent.handler(makeQueryContext(db, { orgId: "org-a", teamId: "team-2" }), { roomId: "doc-1" });
+
+        expect(sameTeam.map((member) => member.userId)).toStrictEqual(["alice"]);
+        expect(sameOrg).toStrictEqual([]);
+    });
+});
+
 describe("presenceExtension", () => {
     it("namespaces the presence table under the `presence` key when merged", () => {
         expect.assertions(3);
@@ -568,14 +709,15 @@ describe("presenceExtension", () => {
         expect(schema.tables).not.toHaveProperty("present");
     });
 
-    it("declares the (roomId, sessionId), roomId, and (roomId, lastSeen) indexes on the table", () => {
-        expect.assertions(3);
+    it("declares the tenant-led (tenantId, roomId, sessionId) and (tenantId, roomId, lastSeen) indexes", () => {
+        expect.assertions(1);
 
         const schema = defineSchema({ todos: defineTable({ title: v.string() }) }).extend(presenceExtension);
-        const indexNames = schema.tables[PRESENCE_TABLE]?.indexes.map((index) => index.name);
+        const indexes = schema.tables[PRESENCE_TABLE]?.indexes.map((index) => [index.name, index.fields]);
 
-        expect(indexNames).toContain("byRoomSession");
-        expect(indexNames).toContain("byRoom");
-        expect(indexNames).toContain("byRoomLastSeen");
+        expect(indexes).toStrictEqual([
+            ["byTenantRoomSession", ["tenantId", "roomId", "sessionId"]],
+            ["byTenantRoomLastSeen", ["tenantId", "roomId", "lastSeen"]],
+        ]);
     });
 });

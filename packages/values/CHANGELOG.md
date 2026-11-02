@@ -1,3 +1,59 @@
+## @lunora/values [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.93...@lunora/values@1.0.0-alpha.94) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.85
+
+## @lunora/values [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.92...@lunora/values@1.0.0-alpha.93) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+
+## @lunora/values [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.91...@lunora/values@1.0.0-alpha.92) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+
+## @lunora/values [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.90...@lunora/values@1.0.0-alpha.91) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+
+## @lunora/values [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.89...@lunora/values@1.0.0-alpha.90) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+
+## @lunora/values [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.88...@lunora/values@1.0.0-alpha.89) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+
+## @lunora/values [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.87...@lunora/values@1.0.0-alpha.88) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.79
+
+## @lunora/values [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.86...@lunora/values@1.0.0-alpha.87) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.78
+
 ## @lunora/values [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.84...@lunora/values@1.0.0-alpha.85) (2026-10-28)
 
 ### Performance Improvements

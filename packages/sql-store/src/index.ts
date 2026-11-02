@@ -39,4 +39,6 @@ export type {
     ReadGlobalTablePageOptions,
 } from "./introspect";
 export { facetSqlGlobalColumn, listSqlGlobalTables, readSqlGlobalTablePage } from "./introspect";
+export type { QueryTimer } from "./query-timeout";
+export { DEFAULT_QUERY_TIMEOUT_MS, SqlQueryTimeoutError } from "./query-timeout";
 export { decodeBigint, effectiveColumnKind, sqliteDecode, sqliteEncode, tryJsonParse } from "./value-codec";

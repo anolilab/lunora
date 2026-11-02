@@ -5,7 +5,7 @@ import type { HttpRouteIR, ValidatorIR } from "../ir";
 import { parseObjectShape, parseValidator } from "../parse-validator";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
-import unwrapHandlerReturn from "./functions/unwrap-handler-return";
+import { unwrapHandlerReturn } from "./functions/unwrap-handler-return";
 
 /**
  * The `httpRoute.<verb>(...)` factory verbs. Each opens a fresh typed-route

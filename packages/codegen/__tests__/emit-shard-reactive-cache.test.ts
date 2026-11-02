@@ -168,11 +168,14 @@ describe("emitApp — reactive cache wiring", () => {
  */
 describe("emitShard — ctx.ip marks the reactive-cache read scope", () => {
     it("emits `ip` as a getter that marks the dispatch's read scope", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const emitted = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
-        expect(emitted).toContain("get ip() {\n                    options.scope?.markIpRead();");
+        expect(emitted).toContain("get ip() {\n                    return readIp();");
+        expect(emitted).toContain(
+            "const readIp = (): string | undefined => {\n                noteCallerRead();\n                options.scope?.markIpRead();",
+        );
         // The plain field is what the mark replaced; leaving one behind would
         // hand handlers an unmarked route to the same value.
         expect(emitted).not.toContain("\n                ip,\n");
@@ -200,5 +203,17 @@ describe("emitShard — every writer reaches the cache", () => {
 
         expect(writers).toBeGreaterThan(0);
         expect(tunings).toBe(writers);
+    });
+    it("seeds the address-keyed set from the statically found readers, and only when there are some", () => {
+        expect.assertions(4);
+
+        const withReaders = emitShard({ hasIpReaders: true, schema: { tables: [], vectorIndexes: [] } });
+        const without = emitShard({ schema: { tables: [], vectorIndexes: [] } });
+
+        // Before any dispatch has taught the base class, so a first resubscribe is not resumed warm.
+        expect(withReaders).toContain("LUNORA_IP_READER_PATHS");
+        expect(withReaders).toContain("this.ipKeyedFunctionPaths.add(path);");
+        expect(without).not.toContain("LUNORA_IP_READER_PATHS");
+        expect(without).not.toContain("ipKeyedFunctionPaths");
     });
 });

@@ -2,29 +2,29 @@
     "allowanceBytes": 1024,
     "apps": {
         "angular": {
-            "brotliBytes": 35815,
-            "gzipBytes": 41293,
-            "rawBytes": 140421
+            "brotliBytes": 37688,
+            "gzipBytes": 43629,
+            "rawBytes": 148803
         },
         "react": {
-            "brotliBytes": 46755,
-            "gzipBytes": 53833,
-            "rawBytes": 183009
+            "brotliBytes": 48703,
+            "gzipBytes": 56167,
+            "rawBytes": 191396
         },
         "solid": {
-            "brotliBytes": 35861,
-            "gzipBytes": 41450,
-            "rawBytes": 140879
+            "brotliBytes": 37821,
+            "gzipBytes": 43806,
+            "rawBytes": 149306
         },
         "svelte": {
-            "brotliBytes": 35794,
-            "gzipBytes": 41364,
-            "rawBytes": 140645
+            "brotliBytes": 37796,
+            "gzipBytes": 43722,
+            "rawBytes": 149028
         },
         "vue": {
-            "brotliBytes": 35713,
-            "gzipBytes": 41200,
-            "rawBytes": 140341
+            "brotliBytes": 37614,
+            "gzipBytes": 43539,
+            "rawBytes": 148721
         }
     }
 }

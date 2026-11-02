@@ -4,6 +4,7 @@ import { defineAgent, defineAgentTool, isAgentDefinition } from "../src/define-a
 import { agentClassName, agentDefaultName } from "../src/naming";
 import { defineSkill } from "../src/skill";
 
+const NAME_PATTERN = /`name` must be a non-empty string/u;
 const MODEL_PATTERN = /model/u;
 const MAX_TURNS_PATTERN = /maxTurns/u;
 const VOICE_MAX_TURNS_PATTERN = /`voice\.maxTurns` must be a positive integer/u;
@@ -24,6 +25,13 @@ describe(defineAgent, () => {
         expect(agent.maxTurns).toBe(4);
         expect(isAgentDefinition(agent)).toBe(true);
         expect(isAgentDefinition({})).toBe(false);
+    });
+
+    it("rejects a provided name that is empty or not a string, and accepts a valid one", () => {
+        expect(() => defineAgent({ model: "m", name: "" })).toThrow(NAME_PATTERN);
+        expect(() => defineAgent({ model: "m", name: 7 as unknown as string })).toThrow(NAME_PATTERN);
+        expect(defineAgent({ model: "m", name: "support" }).name).toBe("support");
+        expect(defineAgent({ model: "m" }).name).toBeUndefined();
     });
 
     it("rejects a missing model, bad maxTurns, and invalid tool names", () => {

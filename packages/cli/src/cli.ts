@@ -5,6 +5,7 @@ import completionCommand from "@visulima/cerebro/command/completion";
 import versionCommand from "@visulima/cerebro/command/version";
 
 import { addCommand } from "./commands/add";
+import { adminTokenCommand } from "./commands/admin-token";
 import { advisorCommand } from "./commands/advisor";
 import { analyzeCommand } from "./commands/analyze";
 import { backupCommand } from "./commands/backup";
@@ -27,7 +28,9 @@ import { linkCommand } from "./commands/link";
 import { logsCommand } from "./commands/logs";
 import { mcpCommand } from "./commands/mcp";
 import { migrateCommand } from "./commands/migrate";
+import { pauseCommand, resumeCommand } from "./commands/pause";
 import { prepareCommand } from "./commands/prepare";
+import { previewCommand } from "./commands/preview";
 import { profileCommand } from "./commands/profile";
 import { registryCommand } from "./commands/registry/command";
 import { resetCommand } from "./commands/reset";
@@ -57,6 +60,7 @@ const COMMANDS = [
     "build",
     "deploy",
     "prepare",
+    "preview",
     "link",
     "cloudflare",
     "logs",
@@ -69,6 +73,8 @@ const COMMANDS = [
     "import",
     "seed",
     "shards",
+    "pause",
+    "resume",
     "backup",
     "eval",
     "verify",
@@ -98,6 +104,7 @@ const CLI_COMMANDS = [
     buildCommand,
     deployCommand,
     prepareCommand,
+    previewCommand,
     linkCommand,
     cloudflareCommand,
     logsCommand,
@@ -110,6 +117,9 @@ const CLI_COMMANDS = [
     importCommand,
     seedCommand,
     shardsCommand,
+    pauseCommand,
+    resumeCommand,
+    adminTokenCommand,
     introspectCommand,
     backupCommand,
     evalCommand,

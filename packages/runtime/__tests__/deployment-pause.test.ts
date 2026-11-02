@@ -1,0 +1,673 @@
+import { describe, expect, it, vi } from "vitest";
+
+import type { ExecutionContextLike } from "../src/create-worker";
+import { createWorker } from "../src/create-worker";
+import { PAUSE_CACHE_MS, PAUSE_READ_DEADLINE_MS, PAUSED_QUEUE_RETRY_SECONDS } from "../src/deployment-pause";
+import type { ShardNamespaceLike } from "../src/resolve-shard";
+
+const fakeContext: ExecutionContextLike = {
+    passThroughOnException: () => undefined,
+    waitUntil: () => undefined,
+};
+
+const ADMIN_TOKEN = "admin-bear";
+const admin = { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" };
+
+/** A shard that counts the function calls that reach it. */
+const countingShard = (): { calls: () => number; namespace: ShardNamespaceLike } => {
+    let calls = 0;
+
+    return {
+        calls: () => calls,
+        namespace: {
+            get: () => {
+                return {
+                    fetch: async () => {
+                        calls += 1;
+
+                        return Response.json({ result: null });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        },
+    };
+};
+
+/** The SchedulerDO's `/pause` contract, in memory, counting reads. */
+const pausableScheduler = (): { namespace: ShardNamespaceLike; reads: () => number } => {
+    let state: Record<string, unknown> = { paused: false };
+    let reads = 0;
+
+    return {
+        namespace: {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        if (new URL(request.url).pathname === "/instances") {
+                            return Response.json({ instances: [] });
+                        }
+
+                        if (request.method === "GET") {
+                            reads += 1;
+
+                            return Response.json(state);
+                        }
+
+                        const body: { paused: boolean; reason?: string } = await request.json();
+
+                        state = body.paused ? { paused: true, pausedAt: 1, ...(body.reason === undefined ? {} : { reason: body.reason }) } : { paused: false };
+
+                        return Response.json(state);
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        },
+        reads: () => reads,
+    };
+};
+
+/**
+ * The SchedulerDO contract the pause fan-out uses, one in-memory instance per name: `/pause`,
+ * `/instances` and `/instances/register`. `failing` names instances whose `POST /pause` answers 500.
+ */
+const instancedScheduler = (): {
+    failing: Set<string>;
+    namespace: ShardNamespaceLike;
+    paused: (name: string) => boolean;
+    register: (name: string) => Promise<void>;
+} => {
+    const states = new Map<string, Record<string, unknown>>();
+    const registered = new Set<string>();
+    const failing = new Set<string>();
+    const namespace: ShardNamespaceLike = {
+        get: (id) => {
+            const name = (id as { __name: string }).__name;
+
+            return {
+                fetch: async (request: Request) => {
+                    const { pathname } = new URL(request.url);
+
+                    if (pathname === "/instances") {
+                        return Response.json({ instances: [...registered] });
+                    }
+
+                    if (pathname === "/instances/register") {
+                        const body: { name: string } = await request.json();
+
+                        registered.add(body.name);
+
+                        return Response.json(states.get(name) ?? { paused: false });
+                    }
+
+                    if (request.method === "GET") {
+                        return Response.json(states.get(name) ?? { paused: false });
+                    }
+
+                    if (failing.has(name)) {
+                        return new Response("storage unavailable", { status: 500 });
+                    }
+
+                    const body: { paused: boolean; reason?: string } = await request.json();
+                    const state = body.paused
+                        ? { paused: true, pausedAt: 1, ...(body.reason === undefined ? {} : { reason: body.reason }) }
+                        : { paused: false };
+
+                    states.set(name, state);
+
+                    return Response.json(state);
+                },
+            };
+        },
+        idFromName: (name) => {
+            return { __name: name };
+        },
+    };
+
+    return {
+        failing,
+        namespace,
+        paused: (name) => states.get(name)?.paused === true,
+        register: async (name) => {
+            await namespace.get(namespace.idFromName("default")).fetch(
+                new Request("https://scheduler.internal/instances/register", {
+                    body: JSON.stringify({ name }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+        },
+    };
+};
+
+const rpc = (headers?: Record<string, string>): Request =>
+    new Request("https://app.example/_lunora/rpc", {
+        body: JSON.stringify({ args: {}, functionPath: "todos:list" }),
+        headers: headers ?? { "content-type": "application/json" },
+        method: "POST",
+    });
+
+const setPaused = (paused: boolean, reason?: string): Request =>
+    new Request("https://app.example/_lunora/admin/pause", { body: JSON.stringify({ paused, reason }), headers: admin, method: "POST" });
+
+describe("createWorker — deployment pause", () => {
+    it("refuses function calls with 503 DEPLOYMENT_PAUSED while paused, keeps the admin plane open, and serves again on resume", async () => {
+        expect.hasAssertions();
+
+        const shard = countingShard();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: pausableScheduler().namespace, shardDO: shard.namespace });
+
+        const paused = await worker.fetch(setPaused(true, "incident 42"), {}, fakeContext);
+
+        await expect(paused.json()).resolves.toMatchObject({
+            paused: true,
+            reason: "incident 42",
+            supported: true,
+        });
+
+        const refused = await worker.fetch(rpc(), {}, fakeContext);
+
+        expect(refused.status).toBe(503);
+        expect(refused.headers.get("retry-after")).toBe("30");
+        // The operator's note stays on the admin route; callers get a fixed message.
+        await expect(refused.json()).resolves.toStrictEqual({ error: { code: "DEPLOYMENT_PAUSED", message: "the deployment is paused" } });
+        expect(shard.calls()).toBe(0);
+
+        // The operator's own calls still run, and the status read stays reachable.
+        await worker.fetch(rpc(admin), {}, fakeContext);
+
+        expect(shard.calls()).toBe(1);
+
+        const status = await worker.fetch(new Request("https://app.example/_lunora/admin/pause", { headers: admin }), {}, fakeContext);
+
+        await expect(status.json()).resolves.toMatchObject({ paused: true });
+
+        await worker.fetch(setPaused(false), {}, fakeContext);
+
+        const served = await worker.fetch(rpc(), {}, fakeContext);
+
+        expect(served.status).toBe(200);
+        expect(shard.calls()).toBe(2);
+    });
+
+    it("lets an adminGate-only operator's function calls through while paused", async () => {
+        expect.hasAssertions();
+
+        const shard = countingShard();
+        const access = { "cf-access-jwt-assertion": "operator", "content-type": "application/json" };
+        const worker = createWorker({
+            adminGate: (request) => request.headers.get("cf-access-jwt-assertion") === "operator",
+            schedulerDO: pausableScheduler().namespace,
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(
+            new Request("https://app.example/_lunora/admin/pause", { body: JSON.stringify({ paused: true }), headers: access, method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        const refused = await worker.fetch(rpc(), {}, fakeContext);
+
+        expect(refused.status).toBe(503);
+
+        await worker.fetch(rpc(access), {}, fakeContext);
+
+        expect(shard.calls()).toBe(1);
+    });
+
+    it("lets Studio's ticketed WebSocket upgrade through while refusing an anonymous one", async () => {
+        expect.hasAssertions();
+
+        const shard = countingShard();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: pausableScheduler().namespace, shardDO: shard.namespace });
+
+        await worker.fetch(setPaused(true), {}, fakeContext);
+
+        const minted = await worker.fetch(new Request("https://app.example/_lunora/admin/ws-token", { headers: admin, method: "POST" }), {}, fakeContext);
+        const { token } = await minted.json<{ token: string }>();
+        const upgrade = (query: string): Request => new Request(`https://app.example/_lunora/ws${query}`, { headers: { Upgrade: "websocket" } });
+
+        const anonymous = await worker.fetch(upgrade(""), {}, fakeContext);
+
+        expect(anonymous.status).toBe(503);
+        expect(shard.calls()).toBe(0);
+
+        await worker.fetch(upgrade(`?token=${encodeURIComponent(token)}`), {}, fakeContext);
+
+        expect(shard.calls()).toBe(1);
+    });
+
+    it("keeps a newer flag read when an abandoned older one resolves late", async () => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers({ toFake: ["clearTimeout", "setTimeout"] });
+
+        const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+
+        try {
+            let reads = 0;
+            let answerFirst: (() => void) | undefined;
+            const namespace: ShardNamespaceLike = {
+                get: () => {
+                    return {
+                        fetch: async (request: Request) => {
+                            if (request.method !== "GET") {
+                                return Response.json({ paused: true });
+                            }
+
+                            reads += 1;
+
+                            if (reads > 1) {
+                                return Response.json({ paused: true });
+                            }
+
+                            // The first read answers "running", but only after it was abandoned.
+                            await new Promise<void>((resolve) => {
+                                answerFirst = resolve;
+                            });
+
+                            return Response.json({ paused: false });
+                        },
+                    };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            };
+            const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: countingShard().namespace });
+            const abandoned = worker.fetch(rpc(), {}, fakeContext);
+
+            await vi.advanceTimersByTimeAsync(PAUSE_READ_DEADLINE_MS);
+            await abandoned;
+
+            // The failed-open window lapses; the next caller reads afresh and sees the pause.
+            now.mockReturnValue(1_000_000 + PAUSE_CACHE_MS);
+
+            const fresh = await worker.fetch(rpc(), {}, fakeContext);
+
+            expect(fresh.status).toBe(503);
+
+            // Now the abandoned read answers with its older snapshot.
+            answerFirst?.();
+            await vi.advanceTimersByTimeAsync(0);
+
+            const after = await worker.fetch(rpc(), {}, fakeContext);
+
+            expect(after.status).toBe(503);
+        } finally {
+            now.mockRestore();
+            vi.useRealTimers();
+        }
+    });
+
+    it("accepts a Studio socket ticket only on a WebSocket upgrade, not on an RPC call", async () => {
+        expect.hasAssertions();
+
+        const shard = countingShard();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: pausableScheduler().namespace, shardDO: shard.namespace });
+
+        await worker.fetch(setPaused(true), {}, fakeContext);
+
+        const minted = await worker.fetch(new Request("https://app.example/_lunora/admin/ws-token", { headers: admin, method: "POST" }), {}, fakeContext);
+        const { token } = await minted.json<{ token: string }>();
+        const refused = await worker.fetch(
+            new Request(`https://app.example/_lunora/rpc?token=${encodeURIComponent(token)}`, {
+                body: JSON.stringify({ args: {}, functionPath: "todos:list" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(refused.status).toBe(503);
+        expect(shard.calls()).toBe(0);
+    });
+
+    it("reads the flag at most once per cache window", async () => {
+        expect.hasAssertions();
+
+        const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+        const scheduler = pausableScheduler();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: scheduler.namespace, shardDO: countingShard().namespace });
+
+        await worker.fetch(rpc(), {}, fakeContext);
+        await worker.fetch(rpc(), {}, fakeContext);
+
+        expect(scheduler.reads()).toBe(1);
+
+        now.mockReturnValue(1_005_000);
+        await worker.fetch(rpc(), {}, fakeContext);
+
+        expect(scheduler.reads()).toBe(2);
+
+        now.mockRestore();
+    });
+
+    it("shares one flag read between concurrent calls", async () => {
+        expect.hasAssertions();
+
+        const scheduler = pausableScheduler();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: scheduler.namespace, shardDO: countingShard().namespace });
+
+        await Promise.all([worker.fetch(rpc(), {}, fakeContext), worker.fetch(rpc(), {}, fakeContext), worker.fetch(rpc(), {}, fakeContext)]);
+
+        expect(scheduler.reads()).toBe(1);
+    });
+
+    it("keeps a fresh toggle when an older read resolves after it", async () => {
+        expect.hasAssertions();
+
+        let state: Record<string, unknown> = { paused: false };
+        let releaseRead: (() => void) | undefined;
+        let gateFirstRead = true;
+        const namespace: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        if (request.method === "GET") {
+                            const snapshot = state;
+
+                            if (gateFirstRead) {
+                                gateFirstRead = false;
+                                await new Promise<void>((resolve) => {
+                                    releaseRead = resolve;
+                                });
+                            }
+
+                            return Response.json(snapshot);
+                        }
+
+                        const body: { paused: boolean } = await request.json();
+
+                        state = { paused: body.paused };
+
+                        return Response.json(state);
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const shard = countingShard();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: shard.namespace });
+
+        // A call's background read starts while the flag is still clear and stalls.
+        const inFlight = worker.fetch(rpc(), {}, fakeContext);
+
+        await worker.fetch(setPaused(true), {}, fakeContext);
+        releaseRead?.();
+        await inFlight;
+
+        // The isolate that set the flag must see it at once, not the stale read.
+        const refused = await worker.fetch(rpc(), {}, fakeContext);
+
+        expect(refused.status).toBe(503);
+    });
+
+    it("stops waiting on a flag read that never settles, and reads again for the next caller", async () => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers({ toFake: ["clearTimeout", "setTimeout"] });
+
+        const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+
+        try {
+            let reads = 0;
+            const namespace: ShardNamespaceLike = {
+                get: () => {
+                    return {
+                        fetch: async (request: Request) => {
+                            if (request.method !== "GET") {
+                                return Response.json({ paused: true });
+                            }
+
+                            reads += 1;
+
+                            // The first request's read is cancelled with its request and never answers.
+                            return reads === 1
+                                ? new Promise<Response>(() => {
+                                      /* never settles */
+                                  })
+                                : Response.json({ paused: true });
+                        },
+                    };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            };
+            const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: countingShard().namespace });
+            const stalled = worker.fetch(rpc(), {}, fakeContext);
+            const sharing = worker.fetch(rpc(), {}, fakeContext);
+
+            await vi.advanceTimersByTimeAsync(PAUSE_READ_DEADLINE_MS);
+
+            // Both callers fail open instead of hanging on the stalled read.
+            await expect(stalled).resolves.toHaveProperty("status", 200);
+            await expect(sharing).resolves.toHaveProperty("status", 200);
+
+            // Once the failed-open window lapses the next caller reads afresh.
+            now.mockReturnValue(1_000_000 + PAUSE_CACHE_MS);
+
+            const next = await worker.fetch(rpc(), {}, fakeContext);
+
+            expect(reads).toBe(2);
+            expect(next.status).toBe(503);
+        } finally {
+            now.mockRestore();
+            vi.useRealTimers();
+        }
+    });
+
+    describe("every named scheduler instance", () => {
+        const workerOver = (scheduler: ReturnType<typeof instancedScheduler>) =>
+            createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: scheduler.namespace, shardDO: countingShard().namespace });
+
+        it("holds jobs on every registered instance while paused, and releases them all on resume", async () => {
+            expect.hasAssertions();
+
+            const scheduler = instancedScheduler();
+            const worker = workerOver(scheduler);
+
+            await scheduler.register("tenant-a");
+            await scheduler.register("tenant-b");
+
+            await worker.fetch(setPaused(true, "incident 42"), {}, fakeContext);
+
+            expect(["default", "tenant-a", "tenant-b"].map((name) => scheduler.paused(name))).toStrictEqual([true, true, true]);
+
+            const resumed = await worker.fetch(setPaused(false), {}, fakeContext);
+
+            expect(resumed.status).toBe(200);
+            expect(["default", "tenant-a", "tenant-b"].map((name) => scheduler.paused(name))).toStrictEqual([false, false, false]);
+        });
+
+        it("reports the instances a pause could not reach, and converges when it is retried", async () => {
+            expect.hasAssertions();
+
+            const scheduler = instancedScheduler();
+            const worker = workerOver(scheduler);
+
+            await scheduler.register("tenant-a");
+            await scheduler.register("tenant-b");
+            scheduler.failing.add("tenant-b");
+
+            const partial = await worker.fetch(setPaused(true), {}, fakeContext);
+
+            expect(partial.status).toBe(502);
+
+            const body: { error: { code: string; message: string } } = await partial.json();
+
+            expect(body.error.code).toBe("PAUSE_INSTANCES_FAILED");
+            expect(body.error.message).toContain("tenant-b");
+            expect(body.error.message).not.toContain("tenant-a");
+            expect([scheduler.paused("default"), scheduler.paused("tenant-a"), scheduler.paused("tenant-b")]).toStrictEqual([true, true, false]);
+
+            scheduler.failing.delete("tenant-b");
+
+            const retried = await worker.fetch(setPaused(true), {}, fakeContext);
+
+            expect(retried.status).toBe(200);
+            expect(scheduler.paused("tenant-b")).toBe(true);
+        });
+
+        it("reports the instances a resume could not reach, and converges when it is retried", async () => {
+            expect.hasAssertions();
+
+            const scheduler = instancedScheduler();
+            const worker = workerOver(scheduler);
+
+            await scheduler.register("tenant-a");
+            await worker.fetch(setPaused(true), {}, fakeContext);
+            scheduler.failing.add("tenant-a");
+
+            const partial = await worker.fetch(setPaused(false), {}, fakeContext);
+
+            expect(partial.status).toBe(502);
+            await expect(partial.json()).resolves.toMatchObject({ error: { code: "PAUSE_INSTANCES_FAILED" } });
+            expect([scheduler.paused("default"), scheduler.paused("tenant-a")]).toStrictEqual([false, true]);
+
+            scheduler.failing.delete("tenant-a");
+
+            const retried = await worker.fetch(setPaused(false), {}, fakeContext);
+
+            expect(retried.status).toBe(200);
+            expect(scheduler.paused("tenant-a")).toBe(false);
+        });
+
+        it("reports a failure to list the instances, rather than pausing only the default one", async () => {
+            expect.hasAssertions();
+
+            const namespace: ShardNamespaceLike = {
+                get: () => {
+                    return {
+                        fetch: async (request: Request) =>
+                            new URL(request.url).pathname === "/instances" ? new Response("down", { status: 500 }) : Response.json({ paused: true }),
+                    };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            };
+            const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: countingShard().namespace });
+            const response = await worker.fetch(setPaused(true), {}, fakeContext);
+
+            expect(response.status).toBe(502);
+            await expect(response.json()).resolves.toMatchObject({ error: { code: "PAUSE_INSTANCES_FAILED" } });
+        });
+    });
+
+    it("tells the queue consumer to hold its batch while paused, and to run it once resumed", async () => {
+        expect.hasAssertions();
+
+        const queue = vi.fn<(batch: unknown, env: unknown, context: unknown, trigger: { holdSeconds?: number }) => Promise<void>>(async () => undefined);
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, queue, schedulerDO: pausableScheduler().namespace, shardDO: countingShard().namespace });
+
+        await worker.fetch(setPaused(true), {}, fakeContext);
+        await worker.queue?.({ messages: [], queue: "jobs" }, {}, fakeContext);
+
+        expect(queue).toHaveBeenCalledTimes(1);
+        expect(queue.mock.calls[0]?.[3].holdSeconds).toBe(PAUSED_QUEUE_RETRY_SECONDS);
+
+        await worker.fetch(setPaused(false), {}, fakeContext);
+        await worker.queue?.({ messages: [], queue: "jobs" }, {}, fakeContext);
+
+        expect(queue).toHaveBeenCalledTimes(2);
+        expect(queue.mock.calls[1]?.[3].holdSeconds).toBeUndefined();
+    });
+
+    it("hands a forwarded tenant queue batch back for retry while paused", async () => {
+        expect.hasAssertions();
+
+        const queueHandler = vi.fn<() => Promise<{ retry: string[] }>>(async () => {
+            return { retry: [] };
+        });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, queueHandler, schedulerDO: pausableScheduler().namespace, shardDO: countingShard().namespace });
+        const forward = (): Request =>
+            new Request("https://app.example/_lunora/queue", {
+                body: JSON.stringify({
+                    messages: [
+                        { body: 1, id: "m1" },
+                        { body: 2, id: "m2" },
+                    ],
+                    queue: "jobs",
+                }),
+                headers: admin,
+                method: "POST",
+            });
+
+        await worker.fetch(setPaused(true), {}, fakeContext);
+
+        const held = await worker.fetch(forward(), {}, fakeContext);
+
+        await expect(held.json()).resolves.toStrictEqual({ retry: ["m1", "m2"] });
+        expect(queueHandler).not.toHaveBeenCalled();
+
+        await worker.fetch(setPaused(false), {}, fakeContext);
+        await worker.fetch(forward(), {}, fakeContext);
+
+        expect(queueHandler).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips a raw crons handler while paused", async () => {
+        expect.hasAssertions();
+
+        const handler = vi.fn<() => Promise<void>>(async () => undefined);
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            crons: { "* * * * *": handler },
+            schedulerDO: pausableScheduler().namespace,
+            shardDO: countingShard().namespace,
+        });
+
+        await worker.fetch(setPaused(true), {}, fakeContext);
+        await worker.scheduled?.({ cron: "* * * * *", scheduledTime: 0 }, {}, fakeContext);
+
+        expect(handler).not.toHaveBeenCalled();
+
+        await worker.fetch(setPaused(false), {}, fakeContext);
+        await worker.scheduled?.({ cron: "* * * * *", scheduledTime: 0 }, {}, fakeContext);
+
+        expect(handler).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
+    });
+
+    it("reports pausing as unsupported on a worker without a scheduler", async () => {
+        expect.hasAssertions();
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: countingShard().namespace });
+        const status = await worker.fetch(new Request("https://app.example/_lunora/admin/pause", { headers: admin }), {}, fakeContext);
+        const refused = await worker.fetch(setPaused(true), {}, fakeContext);
+
+        await expect(status.json()).resolves.toStrictEqual({ paused: false, supported: false });
+        expect(refused.status).toBe(400);
+        await expect(refused.json()).resolves.toMatchObject({ error: { code: "PAUSE_NOT_CONFIGURED" } });
+    });
+
+    it("refuses to change the flag without the admin bearer", async () => {
+        expect.hasAssertions();
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: pausableScheduler().namespace, shardDO: countingShard().namespace });
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/pause", {
+                body: JSON.stringify({ paused: true }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(403);
+    });
+});
