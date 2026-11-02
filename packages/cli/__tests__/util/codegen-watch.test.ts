@@ -476,6 +476,24 @@ describe("startCodegenWatch", () => {
         }
     });
 
+    it("digests the creation of an empty config as a change, since an empty file and no file are different inputs", () => {
+        expect.assertions(2);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-empty-"));
+
+        try {
+            const config = join(workdir, "lunora.config.ts");
+            const absent = configDigest([config]);
+
+            writeFileSync(config, "", "utf8");
+
+            expect(configDigest([config])).not.toBe(absent);
+            expect(configDigest([config])).toBe(configDigest([config]));
+        } finally {
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
     it("says so, and keeps the Lunora folder watch, when a config folder cannot be watched", async () => {
         expect.assertions(3);
 

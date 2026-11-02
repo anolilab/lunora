@@ -253,13 +253,18 @@ const configDigest = (candidates: ReadonlyArray<string>): string => {
     for (const candidate of candidates) {
         hash.update(candidate).update("\0");
 
+        // Presence is hashed on its own, so an empty file and no file at all are different inputs.
         if (existsSync(candidate)) {
+            hash.update("present\0");
+
             try {
                 hash.update(readFileSync(candidate));
             } catch {
                 // Removed between the check and the read: recorded as unreadable, which still differs from its content.
                 hash.update("unreadable");
             }
+        } else {
+            hash.update("absent");
         }
 
         hash.update("\0");
@@ -268,13 +273,13 @@ const configDigest = (candidates: ReadonlyArray<string>): string => {
     return hash.digest("hex");
 };
 
+/** The message and stack of a watch failure, so the warning says where it came from. */
+const watchFailureDetail = (error: unknown): string => (error instanceof Error ? (error.stack ?? error.message) : String(error));
+
 /**
  * The watchers for the folders that can hold a `lunora.config` codegen reads, each reporting only the candidate files in it.
  * Best effort: a folder the platform will not watch is skipped, and the Lunora folder's watch still runs.
  */
-/** The message and stack of a watch failure, so the warning says where it came from. */
-const watchFailureDetail = (error: unknown): string => (error instanceof Error ? (error.stack ?? error.message) : String(error));
-
 const watchConfigFolders = (
     candidates: ReadonlySet<string>,
     onConfigChange: (filename: string | undefined) => void,
@@ -548,6 +553,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
         }
 
         if (!hookRunning && Date.now() - settledAt >= HOOK_SETTLE_MS) {
+            clearTimeout(configReplay);
             // A hook rewriting identical content ends the cycle here: the bytes codegen last read are still the bytes there are.
             // An event that names no file cannot be checked, so it regenerates.
             if (filename === undefined || configDigest(configPaths) !== codegenDigest) {
