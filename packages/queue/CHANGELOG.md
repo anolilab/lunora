@@ -1,3 +1,14 @@
+## @lunora/queue [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.140...@lunora/queue@1.0.0-alpha.141) (2026-11-02)
+
+### Bug Fixes
+
+* stop held queue copies stalling; page unlimited global findMany under the read cap ([#1443](https://github.com/anolilab/lunora/issues/1443)) ([12e6675](https://github.com/anolilab/lunora/commit/12e66757340c955af552e8eab16df3e9ec736b6e))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+
 ## @lunora/queue [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.139...@lunora/queue@1.0.0-alpha.140) (2026-11-02)
 
 ### Features

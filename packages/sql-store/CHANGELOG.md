@@ -1,3 +1,16 @@
+## @lunora/sql-store [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.230...@lunora/sql-store@1.0.0-alpha.231) (2026-11-02)
+
+### Bug Fixes
+
+* stop held queue copies stalling; page unlimited global findMany under the read cap ([#1443](https://github.com/anolilab/lunora/issues/1443)) ([12e6675](https://github.com/anolilab/lunora/commit/12e66757340c955af552e8eab16df3e9ec736b6e))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.183
+* **@lunora/do:** upgraded to 1.0.0-alpha.276
+
 ## @lunora/sql-store [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.229...@lunora/sql-store@1.0.0-alpha.230) (2026-11-02)
 
 
