@@ -10,6 +10,7 @@ import type {
     MutationCtx,
     QueryCtx,
     RegisteredAction,
+    RegisteredFunction,
     RegisteredMutation,
     RegisteredQuery,
     Schema,
@@ -71,7 +72,7 @@ type InlineActionFunction<R> = (context: ActionCtx) => Promise<R> | R;
  * `handler` and ignores the return value).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural erasure at registry boundary; see comment above
-type FunctionRegistry = Record<string, RegisteredAction<any, any> | RegisteredMutation<any, any> | RegisteredQuery<any, any>>;
+type FunctionRegistry = Record<string, RegisteredFunction<any, any, "action" | "mutation" | "query">>;
 
 /**
  * Options accepted by {@link lunoraTest}.

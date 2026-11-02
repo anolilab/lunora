@@ -26,10 +26,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createJiti } from "jiti";
-import type { Node as TsNode } from "ts-morph";
+import type { CallExpression, ImportDeclaration, Node as TsNode } from "ts-morph";
 import { Node } from "ts-morph";
 
-import type { ColumnMetaIR, IndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir";
+import type { ColumnMetaIR, IndexIR, RelationIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir";
+import { literalOf, NOT_LITERAL } from "./static-literal";
 
 /** A runtime `@lunora/values` validator, duck-typed to the introspectable surface (`kind` + `_meta`). */
 interface RuntimeValidator {
@@ -37,14 +38,30 @@ interface RuntimeValidator {
     kind?: string;
 }
 
+/** A runtime `.source(...)` definition, duck-typed to the fields the IR records. */
+interface RuntimeExternalSource {
+    binding?: unknown;
+    columns?: unknown;
+    idColumn?: unknown;
+    mode?: unknown;
+    query?: unknown;
+    reconcileEveryMs?: unknown;
+    softDeleteColumn?: unknown;
+    tenantBy?: unknown;
+}
+
 /** A runtime `defineTable(...)` builder, duck-typed to the fields the IR needs. */
 interface RuntimeTableBuilder {
+    aggregateIndexes?: ReadonlyArray<unknown>;
+    commitOrderedMode?: boolean;
+    externalSource?: RuntimeExternalSource;
+    geoIndexes?: ReadonlyArray<{ field: string; name: string; precision?: number }>;
     indexes?: ReadonlyArray<{ fields: ReadonlyArray<string>; name: string; unique?: boolean }>;
     isExternallyManaged?: boolean;
-    // Carried only to detect (and warn about) features the runtime path does not
-    // yet convert — see the drop-warning in `runtimeTableToIR`.
-    rankIndexes?: ReadonlyArray<unknown>;
-    relationMap?: Record<string, unknown>;
+    isPublic?: boolean;
+    memoryMode?: boolean;
+    rankIndexes?: ReadonlyArray<{ name: string; partitionBy?: ReadonlyArray<string>; sortBy: ReadonlyArray<{ direction: "asc" | "desc"; field: string }> }>;
+    relationMap?: Record<string, RuntimeRelation>;
     searchIndexes?: ReadonlyArray<{
         field: string;
         filterFields?: ReadonlyArray<string>;
@@ -55,8 +72,15 @@ interface RuntimeTableBuilder {
     }>;
     shape?: Record<string, RuntimeValidator>;
     shardMode?: { backend?: string; field?: string; kind: string };
-    vectorIndexes?: ReadonlyArray<unknown>;
+    softDeleteMode?: { field: string };
+    ttlPolicy?: { after?: number; field: string };
+    vectorIndexes?: ReadonlyArray<{ dimensions?: number; field: string; metadata?: ReadonlyArray<string>; metric?: VectorIndexIR["metric"]; name: string }>;
 }
+
+/** A runtime `.relations(...)` entry: keyed by a field, or many-to-many through a join table. */
+type RuntimeRelation =
+    | { field: string; kind: "many" | "one"; onDelete?: "cascade" | "restrict" | "set null"; references: string; table: string; through?: never }
+    | { kind: "many"; table: string; through: { from: string; table: string; to: string } };
 
 /** A runtime `defineSchemaExtension(...)` value, duck-typed. */
 interface RuntimeSchemaExtension {
@@ -119,7 +143,12 @@ const columnMetaToIR = (column: Record<string, unknown> | undefined): ColumnMeta
 const runtimeValidatorToIR = (validator: RuntimeValidator | undefined): ValidatorIR => {
     const meta = validator?._meta ?? {};
     const kind = validator?.kind ?? "unknown";
-    const ir: ValidatorIR = { column: columnMetaToIR(meta["column"] as Record<string, unknown> | undefined), kind };
+    const ir: ValidatorIR = {
+        column: columnMetaToIR(meta["column"] as Record<string, unknown> | undefined),
+        kind,
+        // Every schema emitter redacts on this flag; dropped, a `v.sensitive(v.literal(secret))` column prints the secret.
+        ...(meta["sensitive"] === true ? { sensitive: true } : {}),
+    };
 
     switch (kind) {
         case "array":
@@ -181,6 +210,18 @@ const runtimeValidatorToIR = (validator: RuntimeValidator | undefined): Validato
         }
     }
 
+    // A `.check()` with a schema fragment (`.min()`, `.max()`, …) leaves it in `_meta.constraints`. Schema drift
+    // compares `hasRefinement`, so without it a bound added to a package column would pass the deploy gate unseen.
+    const constraints = meta["constraints"] as Record<string, unknown> | undefined;
+
+    if (constraints !== undefined && Object.keys(constraints).length > 0) {
+        ir.hasRefinement = true;
+
+        if (kind === "string" && typeof constraints["maxLength"] === "number") {
+            ir.stringMaxLength = constraints["maxLength"];
+        }
+    }
+
     return ir;
 };
 
@@ -198,33 +239,21 @@ const shardModeToIR = (shardMode: RuntimeTableBuilder["shardMode"]): TableIR["sh
     return "root";
 };
 
-/**
- * Features the runtime path does not yet convert. If a package extension's table
- * actually uses one, warn (matching the rest of this module's surface) rather
- * than drop it silently — silent loss would emit a wrong (e.g. relation-less)
- * type with no signal. The runtime builder exposes them, so we can detect use.
- */
-const warnDroppedTableFeatures = (builder: RuntimeTableBuilder, bareName: string): void => {
-    const dropped: string[] = [];
+/** A runtime `.source(...)` definition as the AST path reads it — the same fields, from the value instead of the literal. */
+const externalSourceToIR = (source: RuntimeExternalSource): NonNullable<TableIR["externalSource"]> => {
+    const text = (key: "binding" | "idColumn" | "mode" | "query"): string | undefined => (typeof source[key] === "string" ? source[key] : undefined);
+    const columns = Array.isArray(source.columns) ? source.columns.filter((column): column is string => typeof column === "string") : undefined;
 
-    if (builder.relationMap && Object.keys(builder.relationMap).length > 0) {
-        dropped.push("relations");
-    }
-
-    if (builder.rankIndexes && builder.rankIndexes.length > 0) {
-        dropped.push("rank indexes");
-    }
-
-    if (builder.vectorIndexes && builder.vectorIndexes.length > 0) {
-        dropped.push("vector indexes");
-    }
-
-    if (dropped.length > 0) {
-        // eslint-disable-next-line no-console -- make the limitation visible rather than silently emit an incomplete type.
-        console.warn(
-            `@lunora/codegen: package schema-extension table "${bareName}" declares ${dropped.join(" + ")}, which are not yet introspected from a node_modules extension — they will be absent from the generated types.`,
-        );
-    }
+    return {
+        binding: text("binding") ?? "",
+        ...(columns === undefined ? {} : { columns }),
+        hasReconcile: source.reconcileEveryMs !== undefined,
+        hasSoftDelete: source.softDeleteColumn !== undefined,
+        hasTenantBy: source.tenantBy !== undefined,
+        ...(text("idColumn") === undefined ? {} : { idColumn: text("idColumn") }),
+        ...(text("mode") === undefined ? {} : { mode: text("mode") }),
+        ...(text("query") === undefined ? {} : { query: text("query") }),
+    };
 };
 
 /** Convert one runtime table builder to a BARE-named {@link TableIR} (the caller applies the extension-key prefix). */
@@ -234,15 +263,47 @@ const runtimeTableToIR = (builder: RuntimeTableBuilder, bareName: string): Table
         return { fields: index.fields, name: index.name, ...(index.unique ? { unique: true } : {}) };
     });
 
-    warnDroppedTableFeatures(builder, bareName);
+    const shardMode = shardModeToIR(builder.shardMode);
 
     return {
+        ...(builder.aggregateIndexes && builder.aggregateIndexes.length > 0 ? { aggregateIndexed: true as const } : {}),
+        ...(builder.commitOrderedMode === true ? { commitOrdered: true } : {}),
         ...(builder.isExternallyManaged ? { externallyManaged: true } : {}),
-        geoIndexes: [],
+        // Without it the shard has no sourced table, so its polling and bootstrap are never generated.
+        ...(builder.externalSource ? { externalSource: externalSourceToIR(builder.externalSource) } : {}),
+        // Under `.rls("required")` a table that lost `.public()` here would be refused at runtime.
+        ...(builder.isPublic === true ? { isPublic: true } : {}),
+        geoIndexes: (builder.geoIndexes ?? []).map(({ field, name, precision }) => {
+            return { field, name, ...(precision === undefined ? {} : { precision }) };
+        }),
+        // Normalised like the AST path: a global table without a backend is D1.
+        ...(shardMode === "global" ? { globalBackend: builder.shardMode?.backend === "hyperdrive" ? ("hyperdrive" as const) : ("d1" as const) } : {}),
         indexes,
+        ...(builder.memoryMode === true ? { memory: true } : {}),
         name: bareName,
-        rankIndexes: [],
-        relations: [],
+        rankIndexes: (builder.rankIndexes ?? []).map(({ name, partitionBy, sortBy }) => {
+            return {
+                name,
+                ...(partitionBy === undefined ? {} : { partitionBy }),
+                sortBy: sortBy.map(({ direction, field }) => {
+                    return { direction, field };
+                }),
+            };
+        }),
+        relations: Object.entries(builder.relationMap ?? {}).map(([name, relation]): RelationIR => {
+            if (relation.through !== undefined) {
+                return { kind: "many", name, table: relation.table, through: { ...relation.through } };
+            }
+
+            return {
+                field: relation.field,
+                kind: relation.kind,
+                name,
+                ...(relation.onDelete === undefined ? {} : { onDelete: relation.onDelete }),
+                references: relation.references,
+                table: relation.table,
+            };
+        }),
         searchIndexes: (builder.searchIndexes ?? []).map((index) => {
             return {
                 field: index.field,
@@ -254,10 +315,23 @@ const runtimeTableToIR = (builder: RuntimeTableBuilder, bareName: string): Table
             };
         }),
         shape: Object.fromEntries(Object.entries(shape).map(([name, validator]) => [name, runtimeValidatorToIR(validator)])),
-        shardMode: shardModeToIR(builder.shardMode),
-        // Inline vector/rank indexes and relations are not yet introspected from a
-        // package extension; their presence is surfaced via `warnDroppedTableFeatures`.
-        vectorIndexes: [],
+        shardMode,
+        // The TTL sweep skips tombstones through this field; without it, expired deleted rows keep the alarm running.
+        ...(builder.softDeleteMode ? { softDelete: { field: builder.softDeleteMode.field } } : {}),
+        ...(builder.ttlPolicy
+            ? { ttl: { field: builder.ttlPolicy.field, ...(builder.ttlPolicy.after === undefined ? {} : { after: builder.ttlPolicy.after }) } }
+            : {}),
+        // Inline `.vectorize()` stamps its owner, bare like every other name here; namespacing rewrites it.
+        vectorIndexes: (builder.vectorIndexes ?? []).map((index) => {
+            return {
+                ...(index.dimensions === undefined ? {} : { dimensions: index.dimensions }),
+                field: index.field,
+                ...(index.metadata === undefined ? {} : { metadata: index.metadata }),
+                ...(index.metric === undefined ? {} : { metric: index.metric }),
+                name: index.name,
+                table: bareName,
+            };
+        }),
     };
 };
 
@@ -348,11 +422,106 @@ const accessPathOf = (argument: TsNode): ExtensionAccessPath | undefined => {
     return undefined;
 };
 
-/** Walk `exportName` + `propertyPath` on an imported module namespace to the candidate extension value. */
-const readExtensionValue = (module_: Record<string, unknown>, access: ExtensionAccessPath): unknown => {
-    let current: unknown = module_[access.importedName];
+/** The call an initializer is, through `as` / `satisfies` / parentheses. */
+const unwrapCall = (node: TsNode): CallExpression | undefined => {
+    if (Node.isCallExpression(node)) {
+        return node;
+    }
 
-    for (const segment of access.propertyPath) {
+    return Node.isParenthesizedExpression(node) || Node.isAsExpression(node) || Node.isSatisfiesExpression(node) ? unwrapCall(node.getExpression()) : undefined;
+};
+
+/**
+ * The export of `importDeclaration` a factory call reaches: the named or default
+ * import `binding` is, or — for `ns.defineX(...)` — the namespace import's
+ * `defineX`. Matched by symbol, not by name, so a local function shadowing an
+ * import's name is not taken for the package factory.
+ */
+const importedNameOf = (importDeclaration: ImportDeclaration, callee: TsNode, binding: TsNode): string | undefined => {
+    const bound = binding.getSymbol()?.compilerSymbol;
+    const isBinding = (node: TsNode | undefined): boolean => bound !== undefined && node?.getSymbol()?.compilerSymbol === bound;
+
+    if (Node.isPropertyAccessExpression(callee)) {
+        return isBinding(importDeclaration.getNamespaceImport()) ? callee.getName() : undefined;
+    }
+
+    if (isBinding(importDeclaration.getDefaultImport())) {
+        return "default";
+    }
+
+    return importDeclaration
+        .getNamedImports()
+        .find((specifier) => isBinding(specifier.getAliasNode() ?? specifier.getNameNode()))
+        ?.getName();
+};
+
+/** A component built by calling a package factory: which module and export to call, with what, and where its extension sits. */
+interface FactoryAccess {
+    args: unknown[];
+    importedName: string;
+    moduleSpecifier: string;
+    propertyPath: ReadonlyArray<string>;
+}
+
+/**
+ * Map `.extend(presence.extension)` to the factory call behind `presence` —
+ * `const presence = definePresence({ ttlMs: 10_000 })`, in this file or in the
+ * module it is imported from — when the factory is imported from a package,
+ * every argument is a literal, and its declared return type carries a schema
+ * extension there. The documented wiring for a published component has exactly
+ * this shape, and no import binding names the extension itself.
+ */
+const factoryAccessOf = (argument: TsNode): FactoryAccess | undefined => {
+    if (!Node.isPropertyAccessExpression(argument) || !Node.isIdentifier(argument.getExpression())) {
+        return undefined;
+    }
+
+    const symbol = argument.getExpression().getSymbol();
+    const declaration = (symbol?.getAliasedSymbol() ?? symbol)?.getValueDeclaration();
+    const initializer = Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
+    const call = initializer === undefined ? undefined : unwrapCall(initializer);
+    const callee = call?.getExpression();
+
+    // `defineThing(...)` names a named or default import; `pkg.defineThing(...)` a namespace import's export.
+    const binding = callee !== undefined && Node.isPropertyAccessExpression(callee) ? callee.getExpression() : callee;
+
+    if (call === undefined || callee === undefined || binding === undefined || !Node.isIdentifier(binding)) {
+        return undefined;
+    }
+
+    const args = call.getArguments().map((node) => literalOf(node));
+
+    // Codegen runs the call, so it must be a component factory by its declared type — an
+    // `extension` with `tables` — not any package export the source happens to call.
+    const extensionType = call.getReturnType().getProperty(argument.getName())?.getTypeAtLocation(call).getNonNullableType();
+
+    if (args.includes(NOT_LITERAL) || extensionType?.getProperty("tables") === undefined) {
+        return undefined;
+    }
+
+    for (const importDeclaration of call.getSourceFile().getImportDeclarations()) {
+        const moduleSpecifier = importDeclaration.getModuleSpecifierValue();
+
+        // A relative factory is the user's own module, and its source is already the AST path's to read.
+        if (moduleSpecifier.startsWith(".")) {
+            continue;
+        }
+
+        const importedName = importedNameOf(importDeclaration, callee, binding);
+
+        if (importedName !== undefined) {
+            return { args, importedName, moduleSpecifier, propertyPath: [argument.getName()] };
+        }
+    }
+
+    return undefined;
+};
+
+/** Read `propertyPath` off a value, `undefined` when a step is not an object. */
+const readPath = (value: unknown, propertyPath: ReadonlyArray<string>): unknown => {
+    let current = value;
+
+    for (const segment of propertyPath) {
         if (typeof current !== "object" || current === null) {
             return undefined;
         }
@@ -361,6 +530,40 @@ const readExtensionValue = (module_: Record<string, unknown>, access: ExtensionA
     }
 
     return current;
+};
+
+/** Walk `exportName` + `propertyPath` on an imported module namespace to the candidate extension value. */
+const readExtensionValue = (module_: Record<string, unknown>, access: ExtensionAccessPath): unknown =>
+    readPath(module_[access.importedName], access.propertyPath);
+
+/** Import `moduleSpecifier` from the PROJECT's node_modules (not codegen's). */
+const loadProjectModule = (moduleSpecifier: string, projectRoot: string): Record<string, unknown> => {
+    // Resolved with ESM conditions: `require.resolve` honours only `require`/`default`,
+    // so it refuses every `@lunora/*` package (their `exports` carry `import` only).
+    // `require()` of the resolved ESM file is supported on the Node versions Lunora targets.
+    const resolved = createJiti(join(projectRoot, "noop.js")).esmResolve(moduleSpecifier);
+
+    return createRequire(join(projectRoot, "noop.cjs"))(resolved.startsWith("file:") ? fileURLToPath(resolved) : resolved) as Record<string, unknown>;
+};
+
+/** The runtime extension value a `.extend(...)` argument names, by import binding or by a literal-argument factory call. */
+const extensionValueOf = (argument: TsNode, projectRoot: string): unknown => {
+    const access = accessPathOf(argument);
+
+    // A relative import is the user's own module, not a package to load: follow it to the factory call instead.
+    if (access && !access.moduleSpecifier.startsWith(".")) {
+        return readExtensionValue(loadProjectModule(access.moduleSpecifier, projectRoot), access);
+    }
+
+    const factory = factoryAccessOf(argument);
+
+    if (!factory) {
+        return undefined;
+    }
+
+    const create = loadProjectModule(factory.moduleSpecifier, projectRoot)[factory.importedName];
+
+    return typeof create === "function" ? readPath((create as (...args: unknown[]) => unknown)(...factory.args), factory.propertyPath) : undefined;
 };
 
 /**
@@ -373,23 +576,8 @@ const readExtensionValue = (module_: Record<string, unknown>, access: ExtensionA
  * AST-only test callers pass none and keep the pure-AST behaviour.
  */
 const resolvePackageExtension = (argument: TsNode, projectRoot: string): ResolvedPackageExtension | undefined => {
-    const access = accessPathOf(argument);
-
-    if (!access) {
-        return undefined;
-    }
-
     try {
-        // Resolve + load the package from the PROJECT's node_modules (not codegen's).
-        // Resolved with ESM conditions: `require.resolve` honours only `require`/`default`,
-        // so it refuses every `@lunora/*` package (their `exports` carry `import` only).
-        // `require()` of the resolved ESM file is supported on the Node versions Lunora targets.
-        const resolved = createJiti(join(projectRoot, "noop.js")).esmResolve(access.moduleSpecifier);
-        const loadedModule = createRequire(join(projectRoot, "noop.cjs"))(resolved.startsWith("file:") ? fileURLToPath(resolved) : resolved) as Record<
-            string,
-            unknown
-        >;
-        const value = readExtensionValue(loadedModule, access);
+        const value = extensionValueOf(argument, projectRoot);
 
         if (typeof value !== "object" || value === null) {
             return undefined;

@@ -6,7 +6,7 @@ import { parseObjectShape, parseValidator, resolveObjectLiteral } from "../../..
 import { findObjectProperty } from "../../ast";
 import { builderChainSteps } from "../../builder-chain";
 import { parseOutput } from "../../erased-returns";
-import unwrapHandlerReturn from "../unwrap-handler-return";
+import { unwrapHandlerReturn } from "../unwrap-handler-return";
 
 /**
  * Pull the handler's return type out of an object-literal `query/mutation/action`

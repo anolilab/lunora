@@ -445,6 +445,15 @@ export const ERROR_CATALOG = {
     WORKFLOW_EVENT_NOT_LITERAL: { status: 500, title: "Workflow event type is not a string literal" },
     MIGRATION_ID_NOT_STATIC: { status: 500, title: "Migration id is not statically analyzable" },
     NAMESPACE_COLLISION: { status: 500, title: "Function namespace collision" },
+    PUBLISHED_FUNCTION_UNSUPPORTED: { status: 500, title: "Published function cannot be registered from its declaration" },
+    PUBLISHED_FUNCTION_VISIBILITY_UNKNOWN: { status: 500, title: "Published function does not declare its visibility" },
+
+    /**
+     * `procedureMeta(fn)` on a lazily registered stub whose `.meta()` codegen
+     * could not copy. Tooling-side — never crosses the RPC wire — and not
+     * `internal`: the message is fixed text that says how to fix it.
+     */
+    PROCEDURE_META_UNLOADED: { status: 500, title: "Procedure meta is not loaded" },
 
     /**
      * `@lunora/runtime`'s dispatch/security-boundary codes — RPC/HTTP entry, not
