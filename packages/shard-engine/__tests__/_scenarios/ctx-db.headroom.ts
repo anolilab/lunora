@@ -548,6 +548,82 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
                 expect(all).toBe(once * rows.length);
                 expect(tracker.headroom().readBytes).toBe(all);
             });
+
+            describe("an unlimited findMany", () => {
+                const TOTAL = 10_000;
+                const table = Array.from({ length: TOTAL }, (_unused, index) => {
+                    return { _id: `r${String(index).padStart(4, "0")}`, body: "x".repeat(100) };
+                });
+
+                /** A global writer that serves keyset pages: the cursor is the offset of the next row. */
+                const pagedGlobal = (): { calls: { cursor: unknown; limit: unknown }[]; fetched: () => number; writer: DatabaseWriterLike } => {
+                    const calls: { cursor: unknown; limit: unknown }[] = [];
+                    let rowsServed = 0;
+                    const writer = {
+                        findMany: async (_table: string, args: { cursor?: string; limit?: number } = {}) => {
+                            calls.push({ cursor: args.cursor, limit: args.limit });
+
+                            const start = args.cursor === undefined ? 0 : Number(args.cursor);
+                            const end = args.limit === undefined ? TOTAL : Math.min(TOTAL, start + args.limit);
+                            const page = table.slice(start, end);
+
+                            rowsServed += page.length;
+
+                            return { continueCursor: end < TOTAL ? String(end) : null, isDone: end >= TOTAL, page };
+                        },
+                    } as unknown as DatabaseWriterLike;
+
+                    return { calls, fetched: () => rowsServed, writer };
+                };
+                const metered = (writer: DatabaseWriterLike, tracker: TransactionHeadroomTracker): DatabaseWriterLike =>
+                    createShardContextDatabase({ clock: () => 1_700_000_000_000, globalDb: writer, headroom: tracker, schema: globalSchema, sql });
+
+                it("stops at the page that crosses the cap instead of loading every row", async () => {
+                    expect.assertions(4);
+
+                    const source = pagedGlobal();
+                    // A document is ~130 bytes: the cap falls inside the second page, far short of the table.
+                    const writer = metered(source.writer, new TransactionHeadroomTracker({ maxReadBytes: 130 * 300 }));
+
+                    await expect(codeOf(async () => writer.findMany("shared", {}))).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+                    expect(source.calls).toHaveLength(2);
+                    expect(source.fetched()).toBeLessThan(TOTAL);
+                    expect(source.calls.every((call) => typeof call.limit === "number")).toBe(true);
+                });
+
+                it("returns every row, in order, as one finished result when the table fits", async () => {
+                    expect.assertions(3);
+
+                    const source = pagedGlobal();
+                    const writer = metered(source.writer, new TransactionHeadroomTracker());
+
+                    await expect(writer.findMany("shared", {})).resolves.toStrictEqual({ continueCursor: null, isDone: true, page: table });
+                    expect(source.calls.length).toBeGreaterThan(1);
+                    expect(source.fetched()).toBe(TOTAL);
+                });
+
+                it("hands a caller's own limit straight through as one read", async () => {
+                    expect.assertions(2);
+
+                    const source = pagedGlobal();
+                    const writer = metered(source.writer, new TransactionHeadroomTracker());
+                    const result = await writer.findMany("shared", { limit: 10 });
+
+                    expect(result.page).toHaveLength(10);
+                    expect(source.calls).toStrictEqual([{ cursor: undefined, limit: 10 }]);
+                });
+
+                it("starts from the cursor a caller passed", async () => {
+                    expect.assertions(2);
+
+                    const source = pagedGlobal();
+                    const writer = metered(source.writer, new TransactionHeadroomTracker());
+                    const result = await writer.findMany("shared", { cursor: "9990" });
+
+                    expect(result.page).toStrictEqual(table.slice(9990));
+                    expect(source.calls).toHaveLength(1);
+                });
+            });
         });
 
         it("still meters a read that overlaps an unmetered deleteAll", async () => {
