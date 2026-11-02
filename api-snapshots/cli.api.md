@@ -610,6 +610,7 @@ interface SchemaSnapshot {
 interface SpawnDescriptor {
     args: ReadonlyArray<string>;
     captureStderr?: boolean;
+    captureStderrSilently?: boolean;
     captureStdout?: boolean;
     captureStdoutSilently?: boolean;
     command: string;

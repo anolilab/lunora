@@ -24,6 +24,11 @@ const CLOUDFLARE_TOOLCHAIN: DriverToolchain = {
     prebuildsContainerImages: true,
 
     deploy: (request) => {
+        // A versioned upload is not built here yet: refuse it rather than hand back a production `wrangler deploy` for it.
+        if (request.preview === true) {
+            throw new Error("the Cloudflare driver cannot build a preview upload; deploy an isolated preview with `lunora preview deploy`");
+        }
+
         const args: string[] = ["deploy"];
 
         // Framework composition deploys a wrapper entry that overrides the

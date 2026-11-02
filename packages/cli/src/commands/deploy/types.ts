@@ -157,10 +157,9 @@ interface DeployCommandOptions {
      */
     outDir?: string;
 
-    /** Refused on every target (see `PREVIEW_REFUSAL` in the handler); kept as an option so the refusal can say why. */
     /** Also write the upload form (`wrangler deploy --outfile`) here; `lunora build` profiles its startup. */
     outFile?: string;
-
+    /** Refused on every target (see `PREVIEW_REFUSAL` in the handler); kept as an option so the refusal can say why. */
     preview?: boolean;
     /** Railpack-availability probe injected in tests. Defaults to a real `railpack --version` + `BUILDKIT_HOST` check. */
     railpackAvailable?: DockerProbe;

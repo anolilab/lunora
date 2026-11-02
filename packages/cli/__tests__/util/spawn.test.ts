@@ -242,4 +242,24 @@ describe("defaultSpawner", () => {
         expect(result.code).not.toBe(0);
         expect(result.code).toBe(1);
     });
+
+    // A caller that reports its own outcome captures stderr without printing the tool's errors.
+    it("captures a child's stderr without teeing it when captureStderrSilently is set", async () => {
+        expect.assertions(2);
+
+        const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+        try {
+            const result = await defaultSpawner({
+                args: ["-e", "process.stderr.write('tool-error-text')"],
+                captureStderrSilently: true,
+                command: process.execPath,
+            });
+
+            expect(result.stderr).toContain("tool-error-text");
+            expect(writeSpy).not.toHaveBeenCalledWith(expect.anything());
+        } finally {
+            writeSpy.mockRestore();
+        }
+    });
 });

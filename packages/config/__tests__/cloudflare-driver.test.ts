@@ -38,6 +38,13 @@ describe("cLOUDFLARE_DRIVER toolchain", () => {
         ).toStrictEqual(["deploy", "src/worker.ts", "--env", "prod", "--temporary", "--dry-run", "--outdir", "dist", "--metafile", "--outfile", "w.bundle"]);
     });
 
+    // A versioned upload is not built yet: the driver refuses it rather than return a production deploy for it.
+    it("refuses a preview deploy instead of returning a production deploy command", () => {
+        expect.assertions(1);
+
+        expect(() => toolchain?.deploy({ entry: "src/worker.ts", environment: "prod", preview: true })).toThrow(/cannot build a preview upload/u);
+    });
+
     it("builds tail argv with the worker positional before flags", () => {
         expect.assertions(1);
 

@@ -164,8 +164,14 @@ const reportBundle = (outDirectoryPath: string, outDirectory: string, logger: Lo
 
 /** The upload form is scratch for the startup profile; its per-run directory goes whether or not the build succeeded. */
 const discardStartupBundle = (startupBundle: string | undefined): void => {
-    if (startupBundle !== undefined) {
+    if (startupBundle === undefined) {
+        return;
+    }
+
+    try {
         rmSync(dirname(startupBundle), { force: true, recursive: true });
+    } catch {
+        // Scratch only: a failed removal must not replace the build's own outcome or stop the metadata restore after it.
     }
 };
 
