@@ -1,3 +1,15 @@
+## @lunora/rspack [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.143...@lunora/rspack@1.0.0-alpha.144) (2026-11-02)
+
+### Bug Fixes
+
+* **codegen:** read lazy functions where codegen reads excludes ([#1444](https://github.com/anolilab/lunora/issues/1444)) ([d4f9d49](https://github.com/anolilab/lunora/commit/d4f9d490a7c04cf93a5f451319fef03da7354f4c))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.391
+* **@lunora/config:** upgraded to 1.0.0-alpha.448
+
 ## @lunora/rspack [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.142...@lunora/rspack@1.0.0-alpha.143) (2026-11-02)
 
 ### ⚠ BREAKING CHANGES

@@ -1,3 +1,18 @@
+## @lunora/codegen [1.0.0-alpha.391](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.390...@lunora/codegen@1.0.0-alpha.391) (2026-11-02)
+
+### Bug Fixes
+
+* **codegen:** read lazy functions where codegen reads excludes ([#1444](https://github.com/anolilab/lunora/issues/1444)) ([d4f9d49](https://github.com/anolilab/lunora/commit/d4f9d490a7c04cf93a5f451319fef03da7354f4c))
+
+### Performance Improvements
+
+* **agent:** add a startup-light @lunora/agent/core entry ([#1415](https://github.com/anolilab/lunora/issues/1415)) ([59261a3](https://github.com/anolilab/lunora/commit/59261a32dbd6046c6a6591a2327698b6dbc9baa2))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.277
+
 ## @lunora/codegen [1.0.0-alpha.390](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.389...@lunora/codegen@1.0.0-alpha.390) (2026-11-02)
 
 ### ⚠ BREAKING CHANGES

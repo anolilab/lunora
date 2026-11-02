@@ -1,3 +1,15 @@
+## @lunora/config [1.0.0-alpha.448](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.447...@lunora/config@1.0.0-alpha.448) (2026-11-02)
+
+### Performance Improvements
+
+* **agent:** add a startup-light @lunora/agent/core entry ([#1415](https://github.com/anolilab/lunora/issues/1415)) ([59261a3](https://github.com/anolilab/lunora/commit/59261a32dbd6046c6a6591a2327698b6dbc9baa2))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.391
+* **@lunora/seed:** upgraded to 1.0.0-alpha.279
+
 ## @lunora/config [1.0.0-alpha.447](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.446...@lunora/config@1.0.0-alpha.447) (2026-11-02)
 
 

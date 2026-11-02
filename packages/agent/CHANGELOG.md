@@ -1,3 +1,9 @@
+## @lunora/agent [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.276...@lunora/agent@1.0.0-alpha.277) (2026-11-02)
+
+### Performance Improvements
+
+* **agent:** add a startup-light @lunora/agent/core entry ([#1415](https://github.com/anolilab/lunora/issues/1415)) ([59261a3](https://github.com/anolilab/lunora/commit/59261a32dbd6046c6a6591a2327698b6dbc9baa2))
+
 ## @lunora/agent [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.275...@lunora/agent@1.0.0-alpha.276) (2026-11-02)
 
 ### Continuous Integration
