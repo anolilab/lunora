@@ -3803,13 +3803,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         scheduledFor?: number,
     ): Promise<void> => {
         if (job.workflow) {
-            // A cron has no record shard, so an agent workflow starts on the default shard whatever its args say.
-            await startWorkflowInstance(
-                job.workflow,
-                scheduledWorkflowParams(job.workflow, job.args ?? {}, undefined),
-                { context, env },
-                `cron job "${job.name}"`,
-            );
+            // Cron args are app-authored, not client input, so a `shardKey` in them is the run's shard (see the AgentRunInput docs).
+            await startWorkflowInstance(job.workflow, job.args ?? {}, { context, env }, `cron job "${job.name}"`);
 
             return;
         }

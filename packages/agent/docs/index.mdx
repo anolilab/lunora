@@ -607,7 +607,8 @@ an email or a webhook.
 | `ctx.scheduler.runAfter` / `runAt` with `agents.<name>` | the scheduling shard, unless you pass `{ shardKey }`                                            |
 | an `agentAsTool` parent                                 | the parent run's shard                                                                          |
 | inbound email / a channel                               | what your `resolveEmailShard` / `onInbound.resolveShard` returns; the default shard without one |
-| a client's `agents:agentRun`; a cron                    | the default shard (a cron's args are yours, so a `shardKey` in them is kept)                    |
+| a client's `agents:agentRun`                            | the default shard                                                                               |
+| a cron                                                  | the `shardKey` in its args, else the default shard (the args are yours, not a client's)         |
 
 `functionTool` targets and semantic memory sources (`memory.source`, the agentic
 `searchMemory` / `readMemory` tools) dispatch to the run's shard, so a tool over a
