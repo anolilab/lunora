@@ -260,16 +260,27 @@ const ack = (): Response => new Response(undefined, { status: 200 });
 const sha256Hex = async (value: string): Promise<string> =>
     [...new Uint8Array(await crypto.subtle.digest("SHA-256", utf8(value)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
-/** A JSON body's object, or the JSON in a form-encoded Slack interactive `payload=`. */
-const parseSignedBody = (body: string): Record<string, unknown> | undefined => {
+const parseJsonObject = (json: string): Record<string, unknown> | undefined => {
     try {
-        const json = body.startsWith("payload=") ? new URLSearchParams(body).get("payload") : body;
-        const parsed: unknown = JSON.parse(json ?? "");
+        const parsed: unknown = JSON.parse(json);
 
-        return parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+        return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined;
     } catch {
         return undefined;
     }
+};
+
+/**
+ * The fields of a signature-verified body: a JSON document, the JSON in a form-encoded Slack interactive `payload=`, or the
+ * fields of a form-encoded Slack slash command (`team_id=T1&command=…&text=…`), which is neither JSON nor a `payload=` wrapper.
+ */
+const parseSignedBody = (body: string): Record<string, unknown> | undefined => {
+    if (body.startsWith("payload=")) {
+        // `payload=` is always present here; a value that is not JSON (`null` included) yields no object.
+        return parseJsonObject(String(new URLSearchParams(body).get("payload")));
+    }
+
+    return parseJsonObject(body) ?? Object.fromEntries(new URLSearchParams(body));
 };
 
 const idString = (value: unknown): string | undefined => {
