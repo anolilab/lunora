@@ -1,3 +1,53 @@
+## @lunora/platform-node [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.209...@lunora/platform-node@1.0.0-alpha.210) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.228
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+* **@lunora/queue:** upgraded to 1.0.0-alpha.139
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.269
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.229
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.107
+* **@lunora/do:** upgraded to 1.0.0-alpha.274
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.119
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.181
+* **@lunora/storage:** upgraded to 1.0.0-alpha.167
+
+## @lunora/platform-node [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.208...@lunora/platform-node@1.0.0-alpha.209) (2026-11-01)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.268
+
+## @lunora/platform-node [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.207...@lunora/platform-node@1.0.0-alpha.208) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.227
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+* **@lunora/queue:** upgraded to 1.0.0-alpha.138
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.267
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.228
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.106
+* **@lunora/do:** upgraded to 1.0.0-alpha.273
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.118
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.180
+* **@lunora/storage:** upgraded to 1.0.0-alpha.166
+
+## @lunora/platform-node [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.206...@lunora/platform-node@1.0.0-alpha.207) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.226
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.266
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.227
+* **@lunora/do:** upgraded to 1.0.0-alpha.272
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.179
+
 ## @lunora/platform-node [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.205...@lunora/platform-node@1.0.0-alpha.206) (2026-10-31)
 
 

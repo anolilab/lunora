@@ -8,7 +8,7 @@ import type { FacadeEntry } from "lunorash/server";
 import { bindOrm, defineLazyFacade } from "lunorash/server";
 
 import schema from "../schema.js";
-import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS } from "./functions.js";
+import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS, LUNORA_IP_READER_PATHS } from "./functions.js";
 
 type FunctionKind = "action" | "mutation" | "query";
 
@@ -336,6 +336,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // exists — a trigger that fails first still flushes and fuses.
                 ...(config.observability === undefined ? {} : { telemetrySink: () => config.observability?.((env ?? {}) as Record<string, unknown>) }),
             });
+            for (const path of LUNORA_IP_READER_PATHS) {
+                this.ipKeyedFunctionPaths.add(path);
+            }
         }
 
         protected override isCacheableQuery(functionPath: string): boolean {

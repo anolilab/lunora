@@ -175,6 +175,16 @@ const MAX_RETRY_ATTEMPTS = 5;
  * {@link MAX_RETRY_ATTEMPTS} for the same reason.
  */
 const RETRY_BASE_DELAY_MS = 30_000;
+
+/**
+ * Bounds on the delay between attempts of a {@link RetryPolicy.forever} job. The
+ * floor stops a `baseMs: 0` policy from re-arming in a hot alarm loop that never
+ * ends; the ceiling stops exponential growth (or a huge `maxMs`) from leaving a
+ * job that is meant to keep trying silent for days, and keeps it inside the
+ * schedulable range no matter how many attempts accumulate.
+ */
+const FOREVER_RETRY_MIN_DELAY_MS = 1000;
+const FOREVER_RETRY_MAX_DELAY_MS = 1_800_000;
 // When a pooled job can't run because its pool is at `maxConcurrency`, it is
 // re-armed this far in the future so a later alarm drains it as slots free.
 // Small enough to feel responsive, large enough to avoid a busy alarm loop.
@@ -491,17 +501,36 @@ class SchedulerDO {
      * Resolve the effective retry parameters for a record: its per-job
      * {@link RetryPolicy} merged over the DO's built-in defaults. Callers that
      * never set `record.retry` get today's behaviour verbatim
-     * (`maxAttempts: 5`, exponential, `baseMs: 30_000`, no ceiling).
+     * (`maxAttempts: 5`, exponential, `baseMs: 30_000`, no ceiling). A
+     * `forever` policy has its delay clamped into
+     * [{@link FOREVER_RETRY_MIN_DELAY_MS}, {@link FOREVER_RETRY_MAX_DELAY_MS}].
      */
-    private static resolveRetry(record: ScheduleRecord): { backoff: "exponential" | "linear"; baseMs: number; maxAttempts: number; maxMs?: number } {
+    private static resolveRetry(record: ScheduleRecord): {
+        backoff: "exponential" | "linear";
+        baseMs: number;
+        forever: boolean;
+        maxAttempts: number;
+        maxMs?: number;
+    } {
         const policy = record.retry;
         const maxAttempts =
             typeof policy?.maxAttempts === "number" && Number.isInteger(policy.maxAttempts) && policy.maxAttempts > 0 ? policy.maxAttempts : MAX_RETRY_ATTEMPTS;
         const baseMs = typeof policy?.baseMs === "number" && Number.isFinite(policy.baseMs) && policy.baseMs >= 0 ? policy.baseMs : RETRY_BASE_DELAY_MS;
         const backoff = policy?.backoff === "linear" ? "linear" : "exponential";
         const maxMs = typeof policy?.maxMs === "number" && Number.isFinite(policy.maxMs) && policy.maxMs >= 0 ? policy.maxMs : undefined;
+        const forever = policy?.forever === true;
 
-        return { backoff, baseMs, maxAttempts, maxMs };
+        if (!forever) {
+            return { backoff, baseMs, forever, maxAttempts, maxMs };
+        }
+
+        return {
+            backoff,
+            baseMs: Math.max(FOREVER_RETRY_MIN_DELAY_MS, baseMs),
+            forever,
+            maxAttempts,
+            maxMs: Math.min(FOREVER_RETRY_MAX_DELAY_MS, Math.max(FOREVER_RETRY_MIN_DELAY_MS, maxMs ?? FOREVER_RETRY_MAX_DELAY_MS)),
+        };
     }
 
     /** Clamp an untrusted `maxConcurrency` to a positive integer, else fall back. */
@@ -537,6 +566,10 @@ class SchedulerDO {
 
         if (typeof raw.maxMs === "number" && Number.isFinite(raw.maxMs) && raw.maxMs >= 0) {
             policy.maxMs = raw.maxMs;
+        }
+
+        if (raw.forever === true) {
+            policy.forever = true;
         }
 
         return Object.keys(policy).length === 0 ? undefined : policy;
@@ -1585,6 +1618,11 @@ class SchedulerDO {
      * hangs therefore costs at most that long in declines before the ordinary
      * budget applies again. Without that ceiling, not charging would let one hung
      * handler keep its record retrying and never dead-letter.
+     *
+     * A {@link RetryPolicy.forever} record never parks on its budget. Its
+     * attempt count saturates at `Number.MAX_SAFE_INTEGER` so the stored count
+     * and the backoff exponent stay finite; the delay ceiling in
+     * {@link SchedulerDO.resolveRetry} is what keeps the backoff indexable.
      */
     private async recordRetry(record: ScheduleRecord, inProgress = false): Promise<void> {
         // Cancelled mid-attempt: neither re-arm nor dead-letter a job the caller
@@ -1593,9 +1631,10 @@ class SchedulerDO {
             return;
         }
 
-        const attempts = (record.attempts ?? 0) + (inProgress ? 0 : 1);
-        const step = (record.attempts ?? 0) + 1;
-        const { backoff, baseMs, maxAttempts, maxMs } = SchedulerDO.resolveRetry(record);
+        const { backoff, baseMs, forever, maxAttempts, maxMs } = SchedulerDO.resolveRetry(record);
+        const previous = record.attempts ?? 0;
+        const attempts = Math.min(Number.MAX_SAFE_INTEGER, previous + (inProgress ? 0 : 1));
+        const step = Math.min(Number.MAX_SAFE_INTEGER, previous + 1);
         const rawDelay = backoff === "linear" ? baseMs * step : baseMs * 2 ** (step - 1);
         const cappedDelay = maxMs === undefined ? rawDelay : Math.min(rawDelay, maxMs);
         const delayMs = inProgress ? Math.max(cappedDelay, RETRY_BASE_DELAY_MS) : cappedDelay;
@@ -1606,10 +1645,19 @@ class SchedulerDO {
         // very first retry.
         const nextScheduledFor = Math.round(Date.now() + delayMs);
 
-        if (attempts > maxAttempts) {
+        if (!forever && attempts > maxAttempts) {
             await this.parkDead(record, attempts, `after ${String(attempts)} attempts`);
 
             return;
+        }
+
+        // A forever job never reaches `parkDead`, the only other line a failing job
+        // logs, so say it once where a default job would have parked.
+        if (forever && !inProgress && attempts === maxAttempts + 1) {
+            // eslint-disable-next-line no-console -- no logger is injected into SchedulerDO; emit via console so the host captures it
+            console.warn(
+                `@lunora/scheduler: job "${record.id}" (${record.functionPath ?? record.workflow ?? "unknown"}) has failed ${String(attempts)} attempts and keeps retrying (retry.forever)`,
+            );
         }
 
         if (!isIndexableTime(nextScheduledFor)) {

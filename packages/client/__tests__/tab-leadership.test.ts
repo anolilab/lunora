@@ -33,6 +33,7 @@ const fakeHost = (overrides: Partial<TabLeadershipHost> = {}, mirror: Partial<Le
         identityFingerprint: vi.fn<() => string | null>(() => "subj:a"),
         isLeader: vi.fn<() => boolean>(() => false),
         leader,
+        ownClaims: vi.fn<(key: string, retry: () => void) => null | string | undefined>(() => null),
         queueResubscribe: vi.fn<(state: SubscriptionState) => void>(),
         queuedShardKeys: vi.fn<() => Iterable<string | undefined>>(() => []),
         settleAwaitedAnswer: vi.fn<(state: SubscriptionState, readable: boolean) => void>(),
@@ -287,6 +288,209 @@ describe("onFollowerSubscriptionData", () => {
         expect(state.serverBase).toStrictEqual([{ id: "a" }]);
         expect(state.serverCursor).toBe(5);
         expect(seen).toStrictEqual([[{ id: "a" }]]);
+    });
+
+    it("keeps the leader's claims fingerprint with the cursor it commits, so a promoted follower can still resume", () => {
+        expect.assertions(2);
+
+        const state = liveSubscription({ serverClaims: "fp-old" });
+        const { host } = fakeHost({ subscription: () => state });
+
+        onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a", "fp-leader");
+
+        expect(state.serverClaims).toBe("fp-leader");
+
+        // A broadcast that carries no fingerprint says the position was read under unknown claims.
+        onFollowerSubscriptionData(host, "s1", [{ id: "b" }], 6, "e1", "subj:a");
+
+        expect(state.serverClaims).toBeUndefined();
+    });
+
+    describe("a follower's own claims", () => {
+        it("drops a leader's data read under other claims", () => {
+            expect.assertions(2);
+
+            const state = liveSubscription();
+            const { host } = fakeHost({ ownClaims: () => "fp-mine", subscription: () => state });
+
+            onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a", "fp-theirs");
+
+            expect(state.serverBase).toBeUndefined();
+            expect(host.dropCacheSeed).not.toHaveBeenCalled();
+        });
+
+        it("keeps sharing when the claims match", () => {
+            expect.assertions(1);
+
+            const state = liveSubscription();
+            const { host } = fakeHost({ ownClaims: () => "fp-same", subscription: () => state });
+
+            onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a", "fp-same");
+
+            expect(state.serverBase).toStrictEqual([{ id: "a" }]);
+        });
+
+        it("shows nothing claims-stamped until its own fingerprint is known, then applies the held frame", () => {
+            expect.assertions(3);
+
+            const state = liveSubscription();
+            let own: string | undefined;
+            const retries: (() => void)[] = [];
+            const { host } = fakeHost({
+                ownClaims: (_key, retry) => {
+                    retries.push(retry);
+
+                    return own;
+                },
+                subscription: () => state,
+            });
+
+            onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a", "fp-leader");
+
+            expect(state.serverBase).toBeUndefined();
+
+            own = "fp-leader";
+            retries[0]?.();
+
+            expect(retries).toHaveLength(2);
+            expect(state.serverBase).toStrictEqual([{ id: "a" }]);
+        });
+
+        it("replays a settled frame held for the claims lookup, with the same arguments", () => {
+            expect.assertions(3);
+
+            const state = liveSubscription();
+            let own: string | undefined;
+            const retries: (() => void)[] = [];
+            const { host } = fakeHost({
+                ownClaims: (_key, retry) => {
+                    retries.push(retry);
+
+                    return own;
+                },
+                subscription: () => state,
+            });
+
+            onFollowerSubscriptionSettled(host, "s1", 9, "e1", undefined, undefined, "subj:a", "fp-leader");
+
+            expect(host.ackAndAdvanceCursor).not.toHaveBeenCalled();
+
+            own = "fp-leader";
+            retries[0]?.();
+
+            expect(host.ackAndAdvanceCursor).toHaveBeenCalledTimes(1);
+            expect(host.ackAndAdvanceCursor).toHaveBeenCalledWith(state, 9, "e1");
+        });
+
+        it("hands the frame's own fingerprint to the host so a changed one can be verified", () => {
+            expect.assertions(1);
+
+            const state = liveSubscription();
+            const ownClaims = vi.fn<(key: string, retry: () => void, frameClaims?: string) => null | string | undefined>(() => "fp-mine");
+            const { host } = fakeHost({ ownClaims, subscription: () => state });
+
+            onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a", "fp-theirs");
+
+            expect(ownClaims).toHaveBeenCalledWith("s1", expect.any(Function), "fp-theirs");
+        });
+
+        it("does not take an error the leader found under claims this tab does not hold", () => {
+            expect.assertions(3);
+
+            const state = liveSubscription();
+            const { host } = fakeHost({ ownClaims: () => "fp-mine", subscription: () => state });
+            const onError = vi.fn<(error: unknown) => void>();
+
+            state.errorCallbacks.add(onError);
+            onFollowerSubscriptionError(host, "s1", { code: "FORBIDDEN", message: "no" }, "subj:a", "fp-theirs");
+
+            expect(onError).not.toHaveBeenCalled();
+            expect(state.valueReceived).toBe(false);
+
+            onFollowerSubscriptionError(host, "s1", { code: "FORBIDDEN", message: "no" }, "subj:a", "fp-mine");
+
+            expect(onError).toHaveBeenCalledTimes(1);
+        });
+
+        it("holds an error until its own claims are known, then judges it", () => {
+            expect.assertions(2);
+
+            const state = liveSubscription();
+            let own: string | undefined;
+            const retries: (() => void)[] = [];
+            const { host } = fakeHost({
+                ownClaims: (_key, retry) => {
+                    retries.push(retry);
+
+                    return own;
+                },
+                subscription: () => state,
+            });
+            const onError = vi.fn<(error: unknown) => void>();
+
+            state.errorCallbacks.add(onError);
+            onFollowerSubscriptionError(host, "s1", { code: "FORBIDDEN", message: "no" }, "subj:a", "fp-theirs");
+
+            expect(onError).not.toHaveBeenCalled();
+
+            own = "fp-theirs";
+            retries[0]?.();
+
+            expect(onError).toHaveBeenCalledTimes(1);
+        });
+
+        it("does not advance a cursor on a settled frame read under other claims", () => {
+            expect.assertions(2);
+
+            const state = liveSubscription();
+            const { host } = fakeHost({ ownClaims: () => "fp-mine", subscription: () => state });
+
+            onFollowerSubscriptionSettled(host, "s1", 9, "e1", undefined, undefined, "subj:a", "fp-theirs");
+
+            expect(host.ackAndAdvanceCursor).not.toHaveBeenCalled();
+
+            onFollowerSubscriptionSettled(host, "s1", 9, "e1", undefined, undefined, "subj:a", "fp-mine");
+
+            expect(host.ackAndAdvanceCursor).toHaveBeenCalledTimes(1);
+        });
+
+        it("keeps today's behaviour for a frame that carries no claims", () => {
+            expect.assertions(1);
+
+            const state = liveSubscription();
+            const { host } = fakeHost({ ownClaims: () => null, subscription: () => state });
+
+            onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a");
+
+            expect(state.serverBase).toStrictEqual([{ id: "a" }]);
+        });
+
+        it("does not show rows with no claims stamp to a tab that holds a fingerprint, but still takes a blank reset", () => {
+            expect.assertions(3);
+
+            const state = liveSubscription();
+            const { host } = fakeHost({ ownClaims: () => "fp-mine", subscription: () => state });
+
+            onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a");
+
+            expect(state.serverBase).toBeUndefined();
+
+            onFollowerSubscriptionData(host, "s1", undefined, undefined, undefined, "subj:a");
+
+            expect(host.dropCacheSeed).toHaveBeenCalledTimes(1);
+            expect(state.valueReceived).toBe(true);
+        });
+
+        it("applies a claims-stamped frame to a tab that is anonymous, which has no claims to differ", () => {
+            expect.assertions(1);
+
+            const state = liveSubscription();
+            const { host } = fakeHost({ ownClaims: () => null, subscription: () => state });
+
+            onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a", "fp-leader");
+
+            expect(state.serverBase).toStrictEqual([{ id: "a" }]);
+        });
     });
 
     it("counts the leader's first value as the answer even over a hydrated cache, and only the first", () => {

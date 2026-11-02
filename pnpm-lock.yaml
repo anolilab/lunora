@@ -3199,6 +3199,9 @@ importers:
       '@lunora/seed':
         specifier: workspace:*
         version: link:../seed
+      '@lunora/wire':
+        specifier: 1.0.0-alpha.6
+        version: link:../wire
       '@visulima/cerebro':
         specifier: catalog:cli
         version: 4.0.1(@bomb.sh/tab@0.0.22(cac@7.0.0)(citty@0.2.2)(commander@15.0.0))(@visulima/find-cache-dir@4.0.0)(@visulima/pail@6.0.0(@opentelemetry/api@1.9.1)(@visulima/redact@5.0.0(compromise@14.15.1))(express@5.2.1(supports-color@10.2.2))(hono@4.13.13))(github-slugger@2.0.0)
@@ -3266,9 +3269,6 @@ importers:
       '@lunora/testing':
         specifier: workspace:*
         version: link:../testing
-      '@lunora/wire':
-        specifier: 1.0.0-alpha.6
-        version: link:../wire
       '@types/node':
         specifier: catalog:types
         version: 26.6.4

@@ -35,6 +35,13 @@ interface ExportRow {
      * in tests), which keeps the positional fallback.
      */
     line?: number;
+
+    /**
+     * Import only: `"delete"` removes the stored row whose `_id` the doc carries
+     * instead of writing the doc — how a replace-mode restore prunes the rows its
+     * source no longer has.
+     */
+    op?: "delete";
     table: string;
 }
 
@@ -48,6 +55,8 @@ interface ImportError {
 interface ImportResult {
     /** Skipped rows whose `_id` already exists (the default `onConflict: "skip"`). */
     conflicts: number;
+    /** Stored rows removed by `op: "delete"` rows. A delete whose `_id` is already gone removes nothing and is not counted. */
+    deleted: number;
     errors: ImportError[];
     inserted: Record<string, number>;
     /** Existing rows overwritten under `onConflict: "replace"`. */
@@ -436,10 +445,56 @@ const hasGlobalTriggers = (schema: SchemaLike): boolean =>
 type RowOutcome =
     | { committed: boolean; error: ImportError; kind: "error" }
     | { inserted: string; kind: "inserted" }
+    | { kind: "absent" }
     | { kind: "checked" }
     | { kind: "conflict" }
+    | { kind: "deleted" }
     | { kind: "replaced" }
     | { kind: "skip" };
+
+/**
+ * Remove the stored row a delete row names. Hard and without `onDelete` actions,
+ * matching the shard plane: a restore that left `.softDelete()` tombstones would
+ * still hold the rows it was asked to remove, and a cascade would change tables
+ * the file never names. An `_id` already gone is `absent`, so a re-run converges.
+ */
+const deleteOneRow = async (writer: DatabaseWriterLike, dialect: SqlDialect, args: ImportGlobalArgs, row: ExportRow, line: number): Promise<RowOutcome> => {
+    const { doc, table } = row;
+    const id = doc["_id"];
+
+    if (typeof id !== "string") {
+        return { committed: false, error: { code: "BAD_ROW", line, message: "a delete row needs the `_id` to delete", table }, kind: "error" };
+    }
+
+    if (args.dryRun === true) {
+        return { kind: "checked" };
+    }
+
+    const ownership = await probeOwnTable(writer, dialect, args.exec, table, id, line);
+
+    if ("error" in ownership) {
+        return { committed: false, error: ownership.error, kind: "error" };
+    }
+
+    if (ownership.existingId === undefined) {
+        return { kind: "absent" };
+    }
+
+    try {
+        await writer.delete(table, id, { hard: true, skipOnDelete: true });
+
+        return { kind: "deleted" };
+    } catch (error: unknown) {
+        const { body } = toErrorBody(error, { fallbackCode: "DELETE_FAILED" });
+        // A hard delete removes the row before its companion and after-delete trigger writes run, so a failure there leaves it gone.
+        const committed = takePostCommitError(error, table, id);
+        const message = committed
+            ? `${body.message} (row "${id}" was deleted before this failure, so its triggers or companion writes may not have completed; a re-run finds it absent and does not redo them)`
+            : body.message;
+
+        return { committed, error: { code: body.code, line, message, table }, kind: "error" };
+    }
+};
 
 /**
  * Insert `document`, or — when `existingId` names the row it collides with —
@@ -499,7 +554,7 @@ const writeRow = async (
 };
 
 type ReadyRow = { decoded: Record<string, unknown>; explicitId: string | undefined; kind: "ready"; line: number; table: string };
-type PreparedRow = ReadyRow | { kind: "settled"; outcome: RowOutcome };
+type PreparedRow = ReadyRow | { kind: "delete"; line: number; row: ExportRow } | { kind: "settled"; outcome: RowOutcome };
 
 /**
  * Check one import row without touching the database: routing, shape, decoding,
@@ -534,6 +589,12 @@ const prepareRow = (schema: SchemaLike, dryRun: boolean, row: ExportRow, line: n
             kind: "settled",
             outcome: { committed: false, error: { code: "BAD_ROW", line, message: "row is missing or malformed `doc`", table }, kind: "error" },
         };
+    }
+
+    // A delete carries no new data, so it skips the decode and the shape check.
+    // It runs in the import loop, which holds the writer; a dry run is answered there too, after the `_id` check.
+    if (row.op === "delete") {
+        return { kind: "delete", line, row };
     }
 
     // Mirror `encodeExportDocument` on the way back in: a snapshot line carries a
@@ -709,6 +770,21 @@ const probeBatch = async (
     return batched ? probeHeldIds(exec, dialect, idsByTable) : undefined;
 };
 
+/** Resolve one prepared entry: a settled outcome as it is, a delete through the pruning path, a ready row through the import. */
+const applyPrepared = (
+    writer: DatabaseWriterLike,
+    dialect: SqlDialect,
+    args: ImportGlobalArgs,
+    entry: PreparedRow,
+    source: OwnershipSource,
+): Promise<RowOutcome> => {
+    if (entry.kind === "settled") {
+        return Promise.resolve(entry.outcome);
+    }
+
+    return entry.kind === "delete" ? deleteOneRow(writer, dialect, args, entry.row, entry.line) : importOneRow(writer, dialect, args, entry, source);
+};
+
 /**
  * Import rows into `.global()` tables via the schema-aware writer. The
  * writer rejects unknown ids on `insert` (the writer assigns one when `_id` is
@@ -724,6 +800,7 @@ const importSqlGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLik
     const errors: ImportError[] = [];
     const inserted: Record<string, number> = {};
     let conflicts = 0;
+    let deleted = 0;
     let replaced = 0;
     let line = (args.startLine ?? 1) - 1;
     const prepared = args.rows.map((row): PreparedRow => {
@@ -745,11 +822,16 @@ const importSqlGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLik
 
     for (const entry of prepared) {
         // eslint-disable-next-line no-await-in-loop -- imports apply row-by-row in input order so per-line error/conflict reporting and the shared writer stay deterministic.
-        const outcome = entry.kind === "settled" ? entry.outcome : await importOneRow(writer, dialect, args, entry, source);
+        const outcome = await applyPrepared(writer, dialect, args, entry, source);
 
         switch (outcome.kind) {
             case "conflict": {
                 conflicts += 1;
+                break;
+            }
+
+            case "deleted": {
+                deleted += 1;
                 break;
             }
 
@@ -774,7 +856,7 @@ const importSqlGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLik
         }
     }
 
-    return { conflicts, errors, inserted, replaced };
+    return { conflicts, deleted, errors, inserted, replaced };
 };
 
 export { exportSqlGlobalRows, importSqlGlobalRows, selectGlobalTables };

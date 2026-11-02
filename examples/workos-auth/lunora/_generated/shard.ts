@@ -8,7 +8,7 @@ import type { FacadeEntry } from "lunorash/server";
 import { bindOrm, defineLazyFacade } from "lunorash/server";
 
 import schema from "../schema.js";
-import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS } from "./functions.js";
+import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS, LUNORA_IP_READER_PATHS } from "./functions.js";
 
 type FunctionKind = "action" | "mutation" | "query";
 
@@ -85,7 +85,7 @@ const LUNORA_ADVISORIES = ((): (() => AdvisoryFinding[]) => {
 })();
 
 /** Every declared procedure (discovered by @lunora/codegen) served via `__lunora_admin__:getAdvisorProcedures` — the health map's denominator. */
-const LUNORA_ADVISOR_PROCEDURES = ((): (() => AdvisorProcedure[]) => { let cached: AdvisorProcedure[] | undefined; return () => (cached ??= JSON.parse("[{\"callsMail\":false,\"emitsEvent\":false,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":false,\"usesRls\":false,\"analyzableBody\":true,\"exportName\":\"mine\",\"file\":\"notes\",\"hasEmailArg\":false,\"kind\":\"query\",\"visibility\":\"public\"},{\"callsMail\":false,\"emitsEvent\":false,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":false,\"usesRls\":false,\"analyzableBody\":true,\"exportName\":\"orgNotes\",\"file\":\"notes\",\"hasEmailArg\":false,\"kind\":\"query\",\"visibility\":\"public\"},{\"callsMail\":false,\"emitsEvent\":false,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":false,\"usesRls\":false,\"analyzableBody\":true,\"exportName\":\"add\",\"file\":\"notes\",\"hasEmailArg\":false,\"kind\":\"mutation\",\"visibility\":\"public\"}]") as AdvisorProcedure[]); })();
+const LUNORA_ADVISOR_PROCEDURES = ((): (() => AdvisorProcedure[]) => { let cached: AdvisorProcedure[] | undefined; return () => (cached ??= JSON.parse("[{\"callsMail\":false,\"emitsEvent\":false,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":false,\"usesRls\":true,\"analyzableBody\":true,\"exportName\":\"mine\",\"file\":\"notes\",\"hasEmailArg\":false,\"kind\":\"query\",\"visibility\":\"public\"},{\"callsMail\":false,\"emitsEvent\":false,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":false,\"usesRls\":true,\"analyzableBody\":true,\"exportName\":\"orgNotes\",\"file\":\"notes\",\"hasEmailArg\":false,\"kind\":\"query\",\"visibility\":\"public\"},{\"callsMail\":false,\"emitsEvent\":false,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":false,\"usesRls\":true,\"analyzableBody\":true,\"exportName\":\"add\",\"file\":\"notes\",\"hasEmailArg\":false,\"kind\":\"mutation\",\"visibility\":\"public\"}]") as AdvisorProcedure[]); })();
 
 /** Read-only RLS metadata (policies + roles discovered from `.use(rls(...))` chains) served via `__lunora_admin__:rlsPolicies` for the studio's RLS inspector. */
 const LUNORA_RLS_METADATA = ((): (() => RlsPoliciesResult) => { let cached: RlsPoliciesResult | undefined; return () => (cached ??= JSON.parse("{\"policies\":[],\"roles\":[]}") as RlsPoliciesResult); })();
@@ -279,6 +279,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // exists — a trigger that fails first still flushes and fuses.
                 ...(config.observability === undefined ? {} : { telemetrySink: () => config.observability?.((env ?? {}) as Record<string, unknown>) }),
             });
+            for (const path of LUNORA_IP_READER_PATHS) {
+                this.ipKeyedFunctionPaths.add(path);
+            }
         }
 
         protected override isCacheableQuery(functionPath: string): boolean {

@@ -8,6 +8,7 @@
  * by `WorkerOptions`, so it imports only that type (erased at build) from
  * `create-worker` — no runtime values cross the edge.
  */
+import { exportEndRows } from "../../../shared/export-end";
 import { MAX_BODY_BYTES } from "./body-readers";
 import type { ShardingInfo, WorkerOptions } from "./create-worker";
 import { LunoraError } from "./errors";
@@ -15,14 +16,18 @@ import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
 interface AdminBatch {
-    rows: { doc: Record<string, unknown>; table: string }[];
+    rows: { doc: Record<string, unknown>; op?: "delete"; table: string }[];
     shardKey: string;
     startLine: number;
 }
 
 type ImportRowError = { code: string; line: number; message: string; table: string };
 
-type ParsedImportRow = { error: ImportRowError; ok: false } | { doc: Record<string, unknown>; ok: true; table: string };
+type ParsedImportRow =
+    { end: number; ok: "end" } | { error: ImportRowError; ok: false } | { doc: Record<string, unknown>; ok: true; op?: "delete"; table: string };
+
+/** Whether the request opted into `op: "delete"` rows (`?deletes=true`). Read once for the parser and again for the shard plane. */
+const importWantsDeletes = (request: Request): boolean => new URL(request.url).searchParams.get("deletes") === "true";
 
 /**
  * Validate one NDJSON import line into a `{ table, doc }` row, or an
@@ -30,7 +35,7 @@ type ParsedImportRow = { error: ImportRowError; ok: false } | { doc: Record<stri
  * owns line numbering and accumulation.
  * @returns a discriminated-union result — `{ ok: true, doc, table }` or `{ ok: false, error }`.
  */
-const parseImportRow = (trimmed: string, lineNumber: number): ParsedImportRow => {
+const parseImportRow = (trimmed: string, lineNumber: number, deletes: boolean): ParsedImportRow => {
     let parsed: unknown;
 
     try {
@@ -43,7 +48,14 @@ const parseImportRow = (trimmed: string, lineNumber: number): ParsedImportRow =>
         return { error: { code: "BAD_ROW", line: lineNumber, message: "row must be a JSON object", table: "" }, ok: false };
     }
 
-    const candidate = parsed as { doc?: unknown; table?: unknown };
+    // An export's terminal frame is not a row; the caller checks its count against the rows read.
+    const end = exportEndRows(parsed);
+
+    if (end !== undefined) {
+        return { end, ok: "end" };
+    }
+
+    const candidate = parsed as { doc?: unknown; op?: unknown; table?: unknown };
 
     if (typeof candidate.table !== "string" || candidate.table.length === 0) {
         return { error: { code: "BAD_ROW", line: lineNumber, message: "row is missing `table`", table: "" }, ok: false };
@@ -53,7 +65,34 @@ const parseImportRow = (trimmed: string, lineNumber: number): ParsedImportRow =>
         return { error: { code: "BAD_ROW", line: lineNumber, message: "row is missing or malformed `doc`", table: candidate.table }, ok: false };
     }
 
-    return { doc: candidate.doc as Record<string, unknown>, ok: true, table: candidate.table };
+    // A delete row is honoured only on a request that asked for deletes, so a file line that happens to carry
+    // `op: "delete"` (a change-feed dump, say) is refused by a plain import rather than deleting the stored row.
+    if (candidate.op === "delete" && !deletes) {
+        return {
+            error: {
+                code: "BAD_ROW",
+                line: lineNumber,
+                message: 'a row with `op: "delete"` needs `?deletes=true` on the import request',
+                table: candidate.table,
+            },
+            ok: false,
+        };
+    }
+
+    if (candidate.op !== undefined && candidate.op !== "delete") {
+        return {
+            error: {
+                code: "BAD_ROW",
+                line: lineNumber,
+                message: `row \`op\` must be "delete" when set, got ${JSON.stringify(candidate.op)}`,
+                table: candidate.table,
+            },
+            ok: false,
+        };
+    }
+
+    // A delete still carries a doc: the stored row's fields route it to the same shard an insert of that row would reach.
+    return { doc: candidate.doc as Record<string, unknown>, ok: true, ...(candidate.op === "delete" ? { op: "delete" as const } : {}), table: candidate.table };
 };
 
 type ResolvedImportShardKey = { error: ImportRowError; ok: false } | { ok: true; shardKey: string };
@@ -88,7 +127,7 @@ const resolveImportShardKey = (
 
 interface BucketedImport {
     errors: ImportRowError[];
-    globalRows: { doc: Record<string, unknown>; line: number; table: string }[];
+    globalRows: { doc: Record<string, unknown>; line: number; op?: "delete"; table: string }[];
     perShard: Map<string, AdminBatch>;
 
     /**
@@ -104,6 +143,23 @@ interface BucketedImport {
 }
 
 /**
+ * Refuse a body whose terminal frame disagrees with what was read. Called before the caller fans anything out, so a body cut short (or
+ * padded) after its frame writes nothing. A body with no frame is a plain row stream and is taken as sent.
+ */
+const assertEndMarker = (declaredRows: number | undefined, trailingAfterEnd: boolean, received: number): void => {
+    if (declaredRows === undefined || (!trailingAfterEnd && declaredRows === received)) {
+        return;
+    }
+
+    throw new LunoraError(
+        trailingAfterEnd
+            ? "the import body continues after its end marker, so nothing was imported"
+            : `the import body's end marker declares ${String(declaredRows)} row(s) but ${String(received)} were read, so nothing was imported`,
+        { code: "BAD_REQUEST", status: 400 },
+    );
+};
+
+/**
  * Drain the inbound NDJSON body line-by-line (enforcing the byte budget as
  * bytes arrive), validating + bucketing each row into the per-shard batches,
  * the global-rows list, or the per-row error list. Pure routing — the caller
@@ -114,13 +170,16 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         throw new LunoraError("Import endpoint requires a request body", { code: "BAD_REQUEST", status: 400 });
     }
 
+    const deletes = importWantsDeletes(request);
     const errors: ImportRowError[] = [];
     // Each global row carries its true physical source line so error attribution
     // survives interspersed shard rows / blank lines — a single `startLine` can
     // only describe rows physically contiguous from the first one.
-    const globalRows: { doc: Record<string, unknown>; line: number; table: string }[] = [];
+    const globalRows: { doc: Record<string, unknown>; line: number; op?: "delete"; table: string }[] = [];
     const perShard = new Map<string, AdminBatch>();
     let received = 0;
+    // The row count the body's terminal frame declares, when it carries one. A plain row stream has none and is taken as sent.
+    const end: { declaredRows: number | undefined; trailingAfterEnd: boolean } = { declaredRows: undefined, trailingAfterEnd: false };
     // Physical 1-based source line index. Incremented for EVERY line handled,
     // including blank ones, so `error.line` / `startLine` always point at the
     // user's actual source line. Counting only non-blank lines (the old bug)
@@ -148,7 +207,19 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
 
         received += 1;
 
-        const row = parseImportRow(trimmed, physicalLine);
+        // Nothing may follow a frame: a second export appended to the first would otherwise import as one.
+        if (end.declaredRows !== undefined) {
+            end.trailingAfterEnd = true;
+        }
+
+        const row = parseImportRow(trimmed, physicalLine, deletes);
+
+        if (row.ok === "end") {
+            received -= 1;
+            end.declaredRows = row.end;
+
+            return;
+        }
 
         if (!row.ok) {
             errors.push(row.error);
@@ -157,10 +228,11 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         }
 
         const { doc: documentRow, table } = row;
+        const op = row.op === undefined ? {} : { op: row.op };
         const info = options.resolveTableSharding?.(table);
 
         if (info?.mode.kind === "global") {
-            globalRows.push({ doc: documentRow, line: physicalLine, table });
+            globalRows.push({ doc: documentRow, line: physicalLine, ...op, table });
 
             return;
         }
@@ -178,9 +250,9 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         const existing = perShard.get(resolved.shardKey);
 
         if (existing) {
-            existing.rows.push({ doc: documentRow, table });
+            existing.rows.push({ doc: documentRow, ...op, table });
         } else {
-            perShard.set(resolved.shardKey, { rows: [{ doc: documentRow, table }], shardKey: resolved.shardKey, startLine: physicalLine });
+            perShard.set(resolved.shardKey, { rows: [{ doc: documentRow, ...op, table }], shardKey: resolved.shardKey, startLine: physicalLine });
         }
     };
 
@@ -222,6 +294,8 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         handleLine(buffer);
     }
 
+    assertEndMarker(end.declaredRows, end.trailingAfterEnd, received);
+
     return { errors, globalRows, perShard, received };
 };
 
@@ -239,6 +313,7 @@ interface ImportShardFailure {
 
 interface ImportTotals {
     conflicts: number;
+    deleted: number;
     errors: ImportRowError[];
     failed: ImportShardFailure[];
     inserted: Record<string, number>;
@@ -264,7 +339,7 @@ const shardFailures = (shards: ReadonlyArray<{ error?: { message: string; timedO
  */
 const mergeImportResult = (
     totals: ImportTotals,
-    result: { conflicts: number; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number>; replaced?: number },
+    result: { conflicts: number; deleted?: number; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number>; replaced?: number },
 ): void => {
     for (const [table, count] of Object.entries(result.inserted)) {
         // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
@@ -277,6 +352,8 @@ const mergeImportResult = (
 
     // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
     totals.conflicts += result.conflicts;
+    // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
+    totals.deleted += result.deleted ?? 0;
     // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
     totals.replaced += result.replaced ?? 0;
 };
@@ -304,6 +381,7 @@ const streamingImport = async (
     onConflict: "replace" | "skip",
 ): Promise<{
     conflicts: number;
+    deleted: number;
     errors: ImportRowError[];
     failed: ImportShardFailure[];
     inserted: Record<string, number>;
@@ -328,7 +406,16 @@ const streamingImport = async (
         );
     }
 
-    const totals: ImportTotals = { conflicts: 0, errors, failed: [], inserted: {}, replaced: 0 };
+    // Same reason as the replace refusal above: an importer that ignores `op` reads a delete as an insert of a row it already
+    // holds, reports a conflict and keeps the row, and the shard plane would already have pruned its half.
+    if (globalRows.some((row) => row.op === "delete") && options.importGlobalsSupportsDelete !== true) {
+        throw new LunoraError("delete rows target global tables but no `importGlobals` that can delete rows is configured, so nothing was imported", {
+            code: "BAD_REQUEST",
+            status: 400,
+        });
+    }
+
+    const totals: ImportTotals = { conflicts: 0, deleted: 0, errors, failed: [], inserted: {}, replaced: 0 };
     const warnings: string[] = [];
 
     // A worker with no `resolveTableSharding` cannot tell a `.global()` table
@@ -355,6 +442,7 @@ const streamingImport = async (
         // the live worker (a fail-open leak).
         const result = await coordinator.orchestrateImport(namespace, {
             batches: [...perShard.values()],
+            deletes: importWantsDeletes(request),
             dryRun,
             headers: forwardedHeaders,
             onConflict,
@@ -398,6 +486,7 @@ const streamingImport = async (
     // rather than a result. The endpoint answers 207 in that case.
     return {
         conflicts: totals.conflicts,
+        deleted: totals.deleted,
         errors: totals.errors,
         failed: totals.failed,
         inserted: totals.inserted,

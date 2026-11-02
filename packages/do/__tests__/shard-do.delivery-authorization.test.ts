@@ -234,6 +234,22 @@ describe("delivery authorization", () => {
         expect(missingSecretResponse.status).toBe(403);
     });
 
+    it("serves the socket re-auth route, so the client's scheduled re-auth is not refused as unsupported", async () => {
+        expect.hasAssertions();
+
+        const test = setup();
+        const response = await test.shard.fetch(
+            new Request("https://shard.internal/_lunora/ws/reauth", {
+                body: JSON.stringify({ connectionId: "no-such-connection" }),
+                headers: { "content-type": "application/json", "x-lunora-userid": "alice" },
+                method: "POST",
+            }),
+        );
+
+        // Reaches the route (no such connection), rather than the 501 every unlisted path gets.
+        expect(response.status).toBe(404);
+    });
+
     it.each(["stream", "shape_subscribe", "whisper", "whisper_subscribe"])("refuses unsupported %s without invoking a query", async (type) => {
         expect.hasAssertions();
 

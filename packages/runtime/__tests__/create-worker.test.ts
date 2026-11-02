@@ -2179,6 +2179,43 @@ describe("createWorker — HTTP actions", () => {
         expect(paths).toStrictEqual(["/list", "/list?cursor=id%3Ab"]);
     });
 
+    it("forwards a runAfter retry policy to the SchedulerDO's /schedule", async () => {
+        expect.assertions(2);
+
+        const bodies: Record<string, unknown>[] = [];
+        const schedulerNamespace: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        const body: Record<string, unknown> = await request.json();
+
+                        bodies.push(body);
+
+                        return Response.json({ id: "job-1", scheduledFor: body["scheduledFor"] });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/jobs", async (c) =>
+                    Response.json(await c.var.lunora.scheduler?.runAfter(0, { __lunoraRef: "jobs:run" }, {}, { retry: { forever: true, maxMs: 60_000 } })),
+                ),
+            ),
+            schedulerDO: schedulerNamespace,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/jobs", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        expect(bodies[0]?.["retry"]).toStrictEqual({ forever: true, maxMs: 60_000 });
+    });
+
     // The two `ctx.scheduler` implementations write to and read from the SAME
     // SchedulerDO record: `@lunora/scheduler`'s `createScheduler` (from a shard)
     // and this one (from an httpAction). `createScheduler` encodes on `runAt` and

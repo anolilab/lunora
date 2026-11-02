@@ -38,6 +38,22 @@ const outputPath = join(rootDir, "shared", "ai-knowledge-data.ts");
 /** Cap on one page's summary. Long enough for the reviewed sentence, short enough that 90 of them fit a Worker. */
 const SUMMARY_CAP = 140;
 
+/**
+ * A summary within the cap that ends at a word, with an ellipsis when it was cut: a hard slice left sentences stopping
+ * mid-word ("an isolated preview per pull r"), which agents read as the whole description.
+ */
+const capSummary = (text) => {
+    if (text.length <= SUMMARY_CAP) {
+        return text;
+    }
+
+    // A cut through an astral character leaves its high half, which JSON.stringify writes as a lone surrogate.
+    const cut = text.slice(0, SUMMARY_CAP - 1).replace(/[\uD800-\uDBFF]$/u, "");
+    const boundary = cut.lastIndexOf(" ");
+
+    return `${(boundary > 0 ? cut.slice(0, boundary) : cut).replace(/[\s,;:]+$/u, "")}…`;
+};
+
 /** Cap on one heading. */
 const HEADING_CAP = 60;
 
@@ -109,7 +125,7 @@ const entryFor = (path) => {
         id: relative(contentDir, path)
             .replaceAll(sep, "/")
             .replace(/\.mdx$/u, ""),
-        summary: summary.slice(0, SUMMARY_CAP),
+        summary: capSummary(summary),
         title,
     };
 };

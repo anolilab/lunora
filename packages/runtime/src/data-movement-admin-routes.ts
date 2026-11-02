@@ -14,6 +14,7 @@
  * values from `create-worker`, only the shared `./body-readers` + `./connector-cdc`
  * and the coordinator / connector-format types.
  */
+import { exportEndLine } from "../../../shared/export-end";
 import { readJsonBodyWithLimit, readLooseJsonBody } from "./body-readers";
 import { decodeConnectorCursor, encodeConnectorCursor, foldCdcPage, shardCdcPageSize } from "./connector-cdc";
 import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
@@ -112,6 +113,8 @@ interface DataMovementAdminRouteDeps {
         onConflict: "replace" | "skip",
     ) => Promise<{
         conflicts: number;
+        /** Stored rows removed by `op: "delete"` rows. */
+        deleted: number;
         errors: ReadonlyArray<ImportRowError>;
         /** Shards the fan-out could not write to at all — a non-empty array means the import was PARTIAL. */
         failed: ReadonlyArray<ImportShardFailure>;
@@ -166,10 +169,15 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         const stream = new ReadableStream<Uint8Array>({
             async pull(controller) {
                 try {
+                    let count = 0;
+
                     for await (const row of rows) {
+                        count += 1;
                         controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`));
                     }
 
+                    // Only a stream that read every row reaches here; an errored one never gets its end marker.
+                    controller.enqueue(NDJSON_ENCODER.encode(exportEndLine(count)));
                     controller.close();
                 } catch (error: unknown) {
                     controller.error(error);
@@ -385,6 +393,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         // `?dryRun=true` checks the body and reports what it would reject, writing nothing.
         const dryRun = searchParams.get("dryRun") === "true";
         // `?onConflict=replace` overwrites rows whose `_id` already exists; absent, they are conflicts left unchanged.
+        // `?deletes=true` (read by the import stream) is what lets an `op: "delete"` row remove a stored row.
         const onConflictParameter = searchParams.get("onConflict") ?? "skip";
 
         if (onConflictParameter !== "replace" && onConflictParameter !== "skip") {

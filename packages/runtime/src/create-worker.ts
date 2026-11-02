@@ -8,13 +8,21 @@ import { asOptInLevel } from "../../../shared/ai-opt-in";
 import { asBucketStorage } from "../../../shared/as-bucket-storage";
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
+import { claimsFingerprint } from "../../../shared/claims-fingerprint";
 import { collectPages } from "../../../shared/collect-pages";
 import { isDuplicateInstanceError } from "../../../shared/duplicate-instance";
 import { decodeErrorDetail, describeError, describeInternal, ERROR_DETAIL_HEADER, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
-import { decodeExpectedSubjectHeader, encodeUserIdHeader, EXPECT_SUBJECT_HEADER, isIdentityExpired } from "../../../shared/identity-header";
+import {
+    decodeExpectedSubjectHeader,
+    decodeIdentityHeader,
+    decodeUserIdHeader,
+    encodeUserIdHeader,
+    EXPECT_SUBJECT_HEADER,
+    isIdentityExpired,
+} from "../../../shared/identity-header";
 import { LIVE_PUBLISH_PATH } from "../../../shared/live-stream";
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
@@ -27,7 +35,7 @@ import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { checkBearerToken, isReservedRelationFunctionPath, SCHEDULER_DISPATCH_PATH, verifySchedulerDispatch } from "../../../shared/scheduler-dispatch";
-import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
+import { CLAIMS_FINGERPRINT_PATH, SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import { buildSystemDispatchHeaders, readForwardedDispatchIdentity } from "../../../shared/system-dispatch-headers";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -67,6 +75,7 @@ import { emitRpcEvent, flushSink } from "./observability";
 import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
 import type { DispatchTraceContext } from "./otel-trace";
 import { beginDispatchTrace, injectTraceContext } from "./otel-trace";
+import type PROCEDURE_META from "./procedure-meta-key";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
 import { createDefaultShardRegistry, createQueryCoordinator } from "./query-coordinator";
 import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
@@ -209,6 +218,17 @@ interface HttpActionContext {
     waitUntil?: (promise: Promise<unknown>) => void;
 }
 
+/** `@lunora/server`'s `ScheduleRunOptions`, restated structurally like {@link SchedulerContext}. */
+interface SchedulerRunOptions {
+    retry?: {
+        backoff?: "exponential" | "linear";
+        baseMs?: number;
+        forever?: boolean;
+        maxAttempts?: number;
+        maxMs?: number;
+    };
+}
+
 /**
  * The scheduler surface on an HTTP action context. Mirrors `@lunora/server`'s
  * `Scheduler` so `HttpActionCtx` can `Pick` it straight off `ActionContext`;
@@ -219,8 +239,8 @@ interface SchedulerContext {
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
     list: () => Promise<Record<string, unknown>[]>;
-    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>, options?: SchedulerRunOptions) => Promise<string>;
+    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>, options?: SchedulerRunOptions) => Promise<string>;
 }
 
 interface HttpActionLike {
@@ -296,10 +316,13 @@ type GlobalImportFunction = (request: {
     dryRun?: boolean;
     /** `"replace"` overwrites a row whose `_id` already exists; `"skip"` (the default) reports it as a conflict and leaves it unchanged. */
     onConflict?: "replace" | "skip";
-    rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>;
+    /** `op: "delete"` removes the stored row whose `_id` the doc carries; see {@link WorkerOptions.importGlobalsSupportsDelete}. */
+    rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; op?: "delete"; table: string }>;
     startLine?: number;
 }) => Promise<{
     conflicts: number;
+    /** Stored rows removed by `op: "delete"` rows. */
+    deleted?: number;
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     inserted: Record<string, number>;
     /** Existing rows overwritten under `onConflict: "replace"`. */
@@ -333,6 +356,16 @@ interface FunctionDescriptor {
     /** The function's declared argument schema, derived from its `v.*` validators. */
     args: FunctionArgumentDescriptor[];
     kind: "action" | "mutation" | "query";
+
+    /**
+     * The function's `.meta(...)` declaration, wire-encoded (`decodeWire` from
+     * `@lunora/wire` restores a `Map`/`Set` inside it). Absent when it declares none.
+     */
+    meta?: unknown;
+    /** Set instead of `meta` when the declaration holds a value the wire codec cannot encode (a `RegExp`, a cycle). */
+    metaUnencodable?: true;
+    /** Set instead of `meta` for a lazily registered function whose meta is only readable once its module loads. */
+    metaUnloaded?: true;
     /** The `<file>:<function>` identifier, e.g. `messages:list`. */
     path: string;
     /** `"internal"` functions are never exposed by the discovery endpoint; absence === public. */
@@ -376,6 +409,9 @@ interface FunctionRegistryEntry {
      * WebSocket-upgrade endpoint rather than an unknown app route.
      */
     lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "socket" | "whisper";
+
+    /** The function's `.meta(...)` (or `"unloaded"`), under `@lunora/server`'s `PROCEDURE_META` key. */
+    readonly [PROCEDURE_META]?: unknown;
 
     /**
      * Set on a `defineWebSocket` route: the URL path it serves. The worker
@@ -1312,6 +1348,14 @@ interface WorkerOptions {
      * rows targeting global tables are reported as hard errors.
      */
     importGlobals?: GlobalImportFunction;
+
+    /**
+     * Set when `importGlobals` honours a row's `op: "delete"`. An import that
+     * carries global delete rows is refused unless this is set: an importer that
+     * ignores the op would read the row as an insert, report its `_id` as a
+     * conflict and keep the row the caller asked to remove.
+     */
+    importGlobalsSupportsDelete?: boolean;
 
     /**
      * Set when `importGlobals` honours `dryRun` and writes nothing for it. A dry
@@ -4388,7 +4432,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return records.map((record) => decodeRecordArgs(record));
         };
 
-        const schedule = async (scheduledFor: number, target: unknown, args: Record<string, unknown> = {}): Promise<string> => {
+        const schedule = async (
+            scheduledFor: number,
+            target: unknown,
+            args: Record<string, unknown> = {},
+            runOptions?: SchedulerRunOptions,
+        ): Promise<string> => {
             const fields = targetFields(target);
 
             const { id } = await post<{ id: string }>("/schedule", {
@@ -4397,6 +4446,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // fractional instant (`runAfter(1500.5)`), as `@lunora/scheduler`'s
                 // `runAt` also rounds.
                 scheduledFor: Math.ceil(scheduledFor),
+                // The SchedulerDO sanitizes the policy (`normalizeRetry`), so it is forwarded as given.
+                retry: runOptions?.retry,
                 ...fields,
             });
 
@@ -4416,7 +4467,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 return body.record === undefined ? null : decodeRecordArgs(body.record);
             },
             list: listAll,
-            runAfter: async (delayMs, target, args) => {
+            runAfter: async (delayMs, target, args, runOptions) => {
                 // `@lunora/scheduler`'s `assertScheduleDelay`, restated: this
                 // package does not depend on `@lunora/scheduler` (it speaks to the
                 // SchedulerDO over HTTP), and pulling it in for one guard would
@@ -4426,9 +4477,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     throw new LunoraError("ctx.scheduler.runAfter: `delayMs` must be a non-negative finite number", { code: "INVALID_INPUT", status: 400 });
                 }
 
-                return await schedule(Date.now() + delayMs, target, args);
+                return await schedule(Date.now() + delayMs, target, args, runOptions);
             },
-            runAt: async (timestampMs, target, args) => {
+            runAt: async (timestampMs, target, args, runOptions) => {
                 // `@lunora/scheduler`'s `assertScheduleInstant`, restated for the
                 // same reason `runAfter` restates its guard above — and to the same
                 // CODE and MESSAGE, byte for byte. An unchecked NaN/Infinity
@@ -4439,7 +4490,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     throw new LunoraError("ctx.scheduler.runAt: `date` must be a non-negative finite number", { code: "INVALID_INPUT", status: 400 });
                 }
 
-                return await schedule(timestampMs, target, args);
+                return await schedule(timestampMs, target, args, runOptions);
             },
         };
     };
@@ -4786,21 +4837,31 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         const shardKey = url.searchParams.get("shard") ?? defaultShard;
-        const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity, {
+        // The admin credential an admin socket upgraded with, checked exactly as the upgrade checks it (the master
+        // bearer, or the short-lived sub-token in `?token=`, whose verify is constant-time). A rotated one fails here.
+        const adminReauth = requestIsAdmin(request) || (await checkAdminWsToken(request, effectiveAdminToken()));
+        const resolved = await forwardContext(request, env, publicResolveIdentity, {
             executionContext: context ?? executionContextByRequest.get(request),
             url,
         });
+        // A lapsed session beside a valid admin credential is ignored, as on the admin upgrade; without one it is refused.
+        const { headers: forwardedHeaders, identity } = adminReauth ? withoutLapsedCredential(resolved) : assertLiveCredential(resolved);
 
-        if (identity === null) {
+        if (identity === null && !adminReauth) {
             throw new LunoraError("re-authenticating a socket requires a credential", { code: "UNAUTHENTICATED", status: 401 });
         }
 
-        await assertShardAuthorized(identity, shardKey, false);
+        await assertShardAuthorized(identity, shardKey, adminReauth);
 
         // A fresh request carrying nothing of the caller's but the body: the shard trusts these headers verbatim.
         const headers = new Headers({ "content-type": "application/json" });
 
         setIdentityHeaders(headers, forwardedHeaders);
+
+        // Set here and nowhere else, so only a credential this request proved can make the shard keep an admin socket.
+        if (adminReauth) {
+            headers.set("x-lunora-admin-reauth", "1");
+        }
 
         // An owner woken by this call learns its namespace from it, as from an upgrade: without it the relay holding the socket is unreachable.
         const binding = resolveShardBindingName(env, options.shardDO);
@@ -4813,6 +4874,30 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             shardDO,
             shardKey,
             new Request(new URL(SOCKET_REAUTH_PATH, url.origin), { body: JSON.stringify({ connectionId: body["connectionId"] }), headers, method: "POST" }),
+        );
+    };
+
+    /**
+     * Answer a caller with the fingerprint of its own verified claims, computed from the same forwarded headers and by the
+     * same function the shard uses for a socket's `identity` frame, so the two agree. It resolves the caller exactly as a
+     * re-auth does (a lapsed or missing credential is refused) and returns nothing but that one value: there is no way to
+     * ask about another credential.
+     */
+    const handleClaimsFingerprint = async (request: Request, env: unknown, context: ExecutionContextLike | undefined, url: URL): Promise<Response> => {
+        assertMethod(request, "POST", "claims fingerprint");
+
+        const { headers, identity } = await forwardCallerContext(request, env, publicResolveIdentity, {
+            executionContext: context ?? executionContextByRequest.get(request),
+            url,
+        });
+
+        if (identity === null) {
+            throw new LunoraError("a claims fingerprint requires a credential", { code: "UNAUTHENTICATED", status: 401 });
+        }
+
+        return Response.json(
+            { claims: claimsFingerprint(decodeUserIdHeader(headers["x-lunora-userid"]), decodeIdentityHeader(headers["x-lunora-identity"])) },
+            { headers: { "cache-control": "no-store" } },
         );
     };
 
@@ -6104,6 +6189,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         },
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [SOCKET_REAUTH_PATH]: (request, env, url, context) => handleSocketReauth(request, env, context, url),
+        [CLAIMS_FINGERPRINT_PATH]: (request, env, url, context) => handleClaimsFingerprint(request, env, context, url),
         [RPC_PATH]: (request, env, url, context) => handleRpc(request, env, context, url),
         [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),
         [SCHEDULER_DISPATCH_PATH]: (request, env, _url, context) => handleSchedulerDispatch(request, env, context),

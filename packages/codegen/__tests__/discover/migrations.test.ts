@@ -51,6 +51,110 @@ describe("discover/migrations", () => {
             expect(result).toEqual([{ exportName: "backfill", filePath: "migrations", id: "backfill-read-by", table: "messages" }]);
         });
 
+        it("marks an `up` that returns its document unchanged as an identity, in each spelling", () => {
+            expect.assertions(1);
+
+            writeSource(
+                "migrations.ts",
+                `
+            import { defineMigration } from "@lunora/server";
+            export const a = defineMigration({ id: "arrow", table: "t", up: (document) => document });
+            export const b = defineMigration({ id: "parenthesized", table: "t", up: async (doc) => (doc) });
+            export const c = defineMigration({ id: "block", table: "t", up(doc) { return doc; } });
+            export const d = defineMigration({ id: "function", table: "t", up: function (doc) { return doc; } });
+            export const e = defineMigration({ id: "spread", table: "t", up: (doc) => ({ ...doc }) });
+            export const f = defineMigration({ id: "two-statements", table: "t", up: (doc) => { console.log(doc); return doc; } });
+            export const g = defineMigration({ id: "other-value", table: "t", up: (doc, context) => context });
+            export const h = defineMigration({ id: "wrapped", table: "t", up: ((doc) => doc) });
+        `,
+            );
+
+            const result = discoverMigrations(newProject(), workdir);
+
+            expect(Object.fromEntries(result.map((migration) => [migration.id, migration.identity === true]))).toStrictEqual({
+                arrow: true,
+                block: true,
+                function: true,
+                "other-value": false,
+                parenthesized: true,
+                spread: false,
+                "two-statements": false,
+                wrapped: true,
+            });
+        });
+
+        it("resolves an `up` given by name: a same-file identity function is an identity, a transforming or unresolvable one is not", () => {
+            expect.assertions(1);
+
+            writeSource(
+                "helpers.ts",
+                `
+            export const importedIdentity = (doc: unknown) => doc;
+        `,
+            );
+            writeSource(
+                "migrations.ts",
+                `
+            import { defineMigration } from "@lunora/server";
+            import { importedIdentity } from "./helpers";
+            const noop = (doc: unknown) => doc;
+            function noopDeclaration(doc: unknown) { return doc; }
+            const rewrite = (doc: Record<string, unknown>) => ({ ...doc, touched: true });
+            export const a = defineMigration({ id: "named-const", table: "t", up: noop });
+            export const b = defineMigration({ id: "named-function", table: "t", up: noopDeclaration });
+            export const c = defineMigration({ id: "named-transform", table: "t", up: rewrite });
+            export const d = defineMigration({ id: "imported", table: "t", up: importedIdentity });
+            export const up = noop;
+            export const e = defineMigration({ id: "shorthand", table: "t", up });
+            export const f = defineMigration({ id: "unresolvable", table: "t", up: someGlobal });
+        `,
+            );
+
+            const result = discoverMigrations(newProject(), workdir);
+
+            expect(Object.fromEntries(result.map((migration) => [migration.id, migration.identity === true]))).toStrictEqual({
+                imported: true,
+                "named-const": true,
+                "named-function": true,
+                "named-transform": false,
+                shorthand: true,
+                unresolvable: false,
+            });
+        });
+
+        it("reads a literal `covers` declaration, and ignores one it cannot read", () => {
+            expect.assertions(1);
+
+            writeSource(
+                "migrations.ts",
+                `
+            import { defineMigration } from "@lunora/server";
+            const MODE = "global";
+            export const a = defineMigration({ id: "mode", table: "t", covers: { shardMode: "global", table: "t" }, up: (doc) => ({ ...doc }) });
+            export const b = defineMigration({ id: "region", table: "t", covers: { jurisdiction: "eu" }, up: (doc) => doc });
+            export const c = defineMigration({ id: "memory", table: "t", covers: { memory: true, table: "t" }, up: (doc) => ({ ...doc }) });
+            export const d = defineMigration({ id: "dynamic", table: "t", covers: { shardMode: MODE, table: "t" }, up: (doc) => ({ ...doc }) });
+            export const e = defineMigration({ id: "none", table: "t", up: (doc) => ({ ...doc }) });
+            export const f = defineMigration({ id: "ttl", table: "t", covers: { table: "t", ttl: { after: 1000, field: "expiresAt" } }, up: (doc) => ({ ...doc }) });
+            export const g = defineMigration({ id: "ttl-no-after", table: "t", covers: { table: "t", ttl: { field: "expiresAt" } }, up: (doc) => ({ ...doc }) });
+            export const h = defineMigration({ id: "ttl-dynamic", table: "t", covers: { table: "t", ttl: { after: OFFSET, field: "expiresAt" } }, up: (doc) => ({ ...doc }) });
+        `,
+            );
+
+            const result = discoverMigrations(newProject(), workdir);
+
+            expect(Object.fromEntries(result.map((migration) => [migration.id, migration.covers]))).toStrictEqual({
+                dynamic: { table: "t" },
+                memory: { memory: true, table: "t" },
+                mode: { shardMode: "global", table: "t" },
+                none: undefined,
+                region: { jurisdiction: "eu" },
+                ttl: { table: "t", ttl: { after: 1000, field: "expiresAt" } },
+                "ttl-dynamic": { table: "t" },
+                "ttl-no-after": { table: "t", ttl: { field: "expiresAt" } },
+            });
+        });
+
         it("detects an aliased import — `import { defineMigration as dm }`", () => {
             expect.assertions(2);
 

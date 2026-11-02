@@ -186,7 +186,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         scheduler: {
             level: "emulated",
-            note: "SchedulerDO's `runAfter`/`runAt` half runs on cell alarms, and declarative crons reach `scheduled()` through celld's fleet-wide Cron Triggers. As on Cloudflare there is no runtime cron registration, and celld's cron parser rejects descending ranges and `*` inside a list",
+            note: "SchedulerDO's `runAfter`/`runAt` half runs on cell alarms and supports `retry.forever`, and declarative crons reach `scheduled()` through celld's fleet-wide Cron Triggers. As on Cloudflare there is no runtime cron registration, and celld's cron parser rejects descending ranges and `*` inside a list",
         },
         secrets: {
             level: "unsupported",

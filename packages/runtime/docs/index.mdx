@@ -200,9 +200,9 @@ export default {
 
 Each run writes two objects under `backupPrefix`:
 
-- `lunora-backup-<id>.ndjson`: the snapshot, one `{ table, doc }` per line
-  (the same NDJSON shape the `/_lunora/admin/export` endpoint and
-  `lunora backup create` produce).
+- `lunora-backup-<id>.ndjson`: the snapshot, one `{ table, doc }` per line,
+  then the end marker `{"end":true,"rows":N}` (the same NDJSON shape the
+  `/_lunora/admin/export` endpoint and `lunora backup create` produce).
 - `lunora-backup-<id>.ndjson.manifest.json`: a `BackupManifest`
   (`{ id, createdAt, cron, file, rows, bytes, sha256, scheduledTime, tables? }`).
 

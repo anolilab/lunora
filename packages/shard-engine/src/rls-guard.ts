@@ -90,7 +90,7 @@ interface GuardableWriter {
     aggregate: (tableName: string, options: unknown) => unknown;
     assertPatchAllowed?: (table: string, id: string) => unknown;
     count: (tableName: string, whereOrArgs?: unknown) => unknown;
-    delete: (table: string, id: string, options?: { hard?: boolean }) => unknown;
+    delete: (table: string, id: string, options?: { hard?: boolean; skipOnDelete?: boolean }) => unknown;
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => unknown;
     deleteMany: (table: string, ids: ReadonlyArray<string>, options?: { limit?: number }) => unknown;
     deleteWhere?: (tableName: string, where: Record<string, unknown>, options?: { limit?: number }) => unknown;
@@ -385,7 +385,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
 
     const guarded: Record<PropertyKey, unknown> = {
         ...(raw as Record<string, unknown>),
-        delete: async (table: string, id: string, options?: { hard?: boolean }) => {
+        delete: async (table: string, id: string, options?: { hard?: boolean; skipOnDelete?: boolean }) => {
             // The table is named by the caller, so it gates directly — no owner probe.
             guardTable(table);
 

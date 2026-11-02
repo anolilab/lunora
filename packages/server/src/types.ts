@@ -598,7 +598,7 @@ interface ExposeConfig {
     readonly rest?: boolean;
 }
 
-interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
+interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind, Visibility extends FunctionVisibility = FunctionVisibility> {
     readonly args: A;
 
     /**
@@ -630,7 +630,13 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
      */
     readonly lifecycle?: LifecycleEventKind;
 
-    readonly visibility?: FunctionVisibility;
+    /**
+     * `"internal"` on a function an `internal*` builder registered: callable
+     * through `ctx.run*` and the scheduler, never from a client. A literal in the
+     * type as well as the value, because a package's declaration file is all
+     * codegen sees of a function it ships, and the client `api` is built from it.
+     */
+    readonly visibility?: Visibility;
 
     /**
      * Set by the `.x402({ price })` builder modifier. Marks the procedure as paid
@@ -640,9 +646,19 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly x402?: X402ProcedureConfig;
 }
 
-type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
-type RegisteredMutation<A extends ArgsValidator, R> = RegisteredFunction<A, R, "mutation">;
-type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "action">;
+type RegisteredQuery<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "query", Visibility>;
+type RegisteredMutation<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "mutation", Visibility>;
+type RegisteredAction<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "action", Visibility>;
+
+/**
+ * An internal registration. `visibility` is REQUIRED here, not optional: dispatch
+ * refuses a client call by the value's own marker, while codegen (for a published
+ * package) can only read the type, so the type may claim "internal" only for a
+ * value that carries it.
+ */
+type RegisteredInternalQuery<A extends ArgsValidator, R> = RegisteredQuery<A, R, "internal"> & { readonly visibility: "internal" };
+type RegisteredInternalMutation<A extends ArgsValidator, R> = RegisteredMutation<A, R, "internal"> & { readonly visibility: "internal" };
+type RegisteredInternalAction<A extends ArgsValidator, R> = RegisteredAction<A, R, "internal"> & { readonly visibility: "internal" };
 
 /**
  * Structural mirror of `@lunora/client`'s `FunctionReference` — the handle the
@@ -733,19 +749,19 @@ interface RunQueryOptions {
 }
 
 interface RunQuery {
-    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>, options?: RunQueryOptions): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R, FunctionVisibility>, args: InferArgs<A>, options?: RunQueryOptions): Promise<R>;
     <Args, R>(reference: FunctionHandle<"query", Args, R>, args: Args, options?: RunQueryOptions): Promise<R>;
 }
 
 /** `ctx.runMutation` — overloaded for the same reason as {@link RunQuery}. */
 interface RunMutation {
-    <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
     <Args, R>(reference: FunctionHandle<"mutation", Args, R>, args: Args): Promise<R>;
 }
 
 /** `ctx.runAction` — overloaded for the same reason as {@link RunQuery}. */
 interface RunAction {
-    <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredAction<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
     <Args, R>(reference: FunctionHandle<"action", Args, R>, args: Args): Promise<R>;
 }
 
@@ -816,7 +832,14 @@ interface LifecycleEvent {
  * lifecycle side it fires on. Produced by `onConnect` / `onDisconnect` /
  * `onShardInit`.
  */
-type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "mutation"> & { readonly lifecycle: LifecycleEventKind };
+type RegisteredLifecycleHook<Moment extends LifecycleEventKind = LifecycleEventKind> = RegisteredFunction<
+    Record<string, never>,
+    void,
+    "mutation",
+    "internal"
+> & {
+    readonly lifecycle: Moment;
+};
 
 /**
  * The event an `onShardInit` hook receives.
@@ -842,7 +865,7 @@ interface ShardInitEvent {
  * can stop early — break out of the loop or check `signal.aborted` between
  * yields.
  */
-interface RegisteredStream<A extends ArgsValidator, R> {
+interface RegisteredStream<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> {
     readonly args: A;
 
     /**
@@ -854,8 +877,12 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
-    readonly visibility?: FunctionVisibility;
+    /** See {@link RegisteredFunction.visibility}. */
+    readonly visibility?: Visibility;
 }
+
+/** An internal stream; `visibility` is required for the reason given on {@link RegisteredInternalQuery}. */
+type RegisteredInternalStream<A extends ArgsValidator, R> = RegisteredStream<A, R, "internal"> & { readonly visibility: "internal" };
 
 /**
  * Durability settings for a `.stream()` procedure.
@@ -1566,6 +1593,14 @@ interface RetryPolicy {
     backoff?: "exponential" | "linear";
     /** Base delay in milliseconds for the first retry. Default `30_000`. */
     baseMs?: number;
+
+    /**
+     * Keep retrying instead of dead-lettering, overriding `maxAttempts`. Delays are clamped to between
+     * 1 second and 30 minutes, so a `maxMs` below the ceiling sets how often a failing job retries.
+     * `cancel` applies once the scheduler has accepted the job; while it is still in a shard's outbox
+     * custody, drop it from Studio's Outbox view. Honoured by SchedulerDO.
+     */
+    forever?: boolean;
     /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */
     maxAttempts?: number;
     /** Optional ceiling clamping the computed backoff delay. */
@@ -1656,6 +1691,12 @@ interface SchedulableWorkflowReference {
  */
 type SchedulableTarget = FunctionHandle<"action" | "mutation", unknown, unknown> | SchedulableWorkflowReference | string;
 
+/** Per-call options for {@link Scheduler.runAfter} / {@link Scheduler.runAt}. */
+interface ScheduleRunOptions {
+    /** Retry policy for this job; the scheduler's defaults apply when omitted. */
+    retry?: RetryPolicy;
+}
+
 interface Scheduler {
     /** Cancel a pending job by id. `cancelled` is `false` when no such job exists. */
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
@@ -1669,9 +1710,9 @@ interface Scheduler {
      * for the accepted targets. A workflow/agent reference starts a fresh
      * durable instance on fire (the args become its `params`).
      */
-    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>, options?: ScheduleRunOptions) => Promise<string>;
     /** Like {@link Scheduler.runAfter} but fires at an absolute epoch-ms timestamp. */
-    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
+    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>, options?: ScheduleRunOptions) => Promise<string>;
 }
 
 // --- Durable workflows -------------------------------------------------------
@@ -2835,6 +2876,10 @@ export type {
     RankSortKey,
     RegisteredAction,
     RegisteredFunction,
+    RegisteredInternalAction,
+    RegisteredInternalMutation,
+    RegisteredInternalQuery,
+    RegisteredInternalStream,
     RegisteredLifecycleHook,
     RegisteredMutation,
     RegisteredQuery,
@@ -2855,6 +2900,7 @@ export type {
     ScheduledJobState,
     ScheduledJobView,
     Scheduler,
+    ScheduleRunOptions,
     Schema,
     SearchFilterBuilder,
     SearchIndexDefinition,

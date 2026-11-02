@@ -65,9 +65,27 @@ export type MigrationTransform = (
     // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- public API: `void` lets a transform with no return statement type-check; `undefined` alone wouldn't accept a `(): void` arrow
 ) => MigrationDocument | Promise<MigrationDocument | undefined | void> | undefined | void;
 
+/**
+ * The schema change a migration declares it accounts for. A shard-mode flip, a table turned `.memory()` and a jurisdiction change
+ * move or empty data, so the deploy's drift gate clears them only for a migration that names exactly that change (read statically,
+ * so every value must be a literal). `table` is the table involved; `shardMode` the mode it moves to (`root`, `global`,
+ * `global:d1`, `global:hyperdrive` or `shardBy:<field>`); `memory: true` for a table turned `.memory()`; `jurisdiction` the one the
+ * schema moves to (`none` when it is removed); `ttl` the policy a table moves to when it would delete rows that exist today.
+ */
+export interface MigrationCovers {
+    readonly jurisdiction?: "eu" | "fedramp" | "none" | "us";
+    readonly memory?: true;
+    readonly shardMode?: "global" | "global:d1" | "global:hyperdrive" | "root" | `shardBy:${string}`;
+    readonly table?: string;
+    /** The TTL policy the table moves to (a TTL added, moved to another column or shortened): `field` and `after` in milliseconds. */
+    readonly ttl?: { readonly after?: number; readonly field: string };
+}
+
 export interface MigrationDefinition {
     /** Rows fetched and rewritten per batch. Defaults to the runner's batch size when omitted. */
     readonly batchSize?: number;
+    /** The data-moving schema change this migration accounts for; see {@link MigrationCovers}. */
+    readonly covers?: MigrationCovers;
     /** Optional reverse transform, applied by `migrate down`. */
     readonly down?: MigrationTransform;
     /** Stable, unique identifier — the key per-shard run-state is tracked under. */

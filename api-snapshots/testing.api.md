@@ -182,7 +182,7 @@ interface FakeTopicControls {
 ### `FunctionRegistry` (type)
 
 ```ts
-type FunctionRegistry = Record<string, RegisteredAction<any, any> | RegisteredMutation<any, any> | RegisteredQuery<any, any>>;
+type FunctionRegistry = Record<string, RegisteredFunction<any, any, "action" | "mutation" | "query">>;
 ```
 
 ### `HarnessDispatch` (interface)

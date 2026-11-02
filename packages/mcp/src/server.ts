@@ -49,7 +49,7 @@ interface LunoraMcpServerOptions {
     /**
      * Expose the observability tools (`lunora_get_logs`, `lunora_get_issues`,
      * `lunora_get_advisories`, `lunora_get_query_insights`,
-     * `lunora_get_migration_status`). Defaults to `false`, mirroring
+     * `lunora_get_migration_status`, `lunora_get_schedule_outbox`). Defaults to `false`, mirroring
      * `allowWrites`: they are read-only, but every row they return — log lines,
      * request metadata, grouped error messages — is production user data that
      * lands in the model's context and therefore at its provider. Holding the

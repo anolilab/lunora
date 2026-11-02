@@ -445,6 +445,15 @@ export const ERROR_CATALOG = {
     WORKFLOW_EVENT_NOT_LITERAL: { status: 500, title: "Workflow event type is not a string literal" },
     MIGRATION_ID_NOT_STATIC: { status: 500, title: "Migration id is not statically analyzable" },
     NAMESPACE_COLLISION: { status: 500, title: "Function namespace collision" },
+    PUBLISHED_FUNCTION_UNSUPPORTED: { status: 500, title: "Published function cannot be registered from its declaration" },
+    PUBLISHED_FUNCTION_VISIBILITY_UNKNOWN: { status: 500, title: "Published function does not declare its visibility" },
+
+    /**
+     * `procedureMeta(fn)` on a lazily registered stub whose `.meta()` codegen
+     * could not copy. Tooling-side — never crosses the RPC wire — and not
+     * `internal`: the message is fixed text that says how to fix it.
+     */
+    PROCEDURE_META_UNLOADED: { status: 500, title: "Procedure meta is not loaded" },
 
     /**
      * `@lunora/runtime`'s dispatch/security-boundary codes — RPC/HTTP entry, not
@@ -454,6 +463,8 @@ export const ERROR_CATALOG = {
     AI_CHAT_FAILED: { status: 500, title: "Assistant turn failed" },
     BAD_ROW: { status: 400, title: "Malformed import row" },
     BAD_SUBSCRIPTION_ARGS: { status: 400, title: "Invalid subscription arguments" },
+    /** A subscribe named a table instead of a function on a socket that carries claims; the raw-delta path is not claim-scoped, so it is refused. */
+    SUBSCRIPTION_FUNCTION_REQUIRED: { status: 400, title: "Subscription needs a function path" },
     BATCH_LIMIT_EXCEEDED: { status: 400, title: "Batch limit exceeded" },
     /** An `onDelete` cascade / `set null` would touch more holder rows than one delete may (`CASCADE_MAX_ROWS` in `@lunora/shard-engine`). */
     CASCADE_LIMIT: { status: 400, title: "Cascade limit exceeded" },
@@ -496,6 +507,8 @@ export const ERROR_CATALOG = {
     STALE_CREDENTIAL: { status: 409, title: "Stale credential" },
     /** A socket re-auth resolved to different claims than the socket was opened with; the client must reconnect to change identity. */
     IDENTITY_CHANGED: { status: 409, title: "Socket identity changed" },
+    /** A socket re-auth arrived after the socket's revalidation window had passed; the socket is closed and the client must reconnect. */
+    IDENTITY_STALE: { status: 409, title: "Socket identity stale" },
     FORBIDDEN_FANOUT: { status: 403, title: "Fan-out forbidden" },
     GLOBAL_SEARCH_SCORES_UNSUPPORTED: { status: 400, title: "collectWithScores() is unsupported on a global table" },
     FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },

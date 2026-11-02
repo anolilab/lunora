@@ -55,6 +55,7 @@ const COMMANDS: readonly [
     "build",
     "deploy",
     "prepare",
+    "preview",
     "link",
     "cloudflare",
     "logs",
@@ -126,13 +127,14 @@ interface DeployCommandOptions {
     dryRun?: boolean;
     emitBindings?: string;
     env?: string;
-    fetchImpl?: FetchLike;
+    fetchImpl?: StreamingFetchLike;
     format?: OutputFormat;
     frameworkBuild?: boolean;
     healthCheck?: boolean;
     healthFetch?: HealthFetch;
     healthSleep?: (ms: number) => Promise<void>;
     interactive?: boolean;
+    isolatedPreview?: boolean;
     lazyFunctions?: boolean;
     logger: Logger;
     migrate?: boolean;
@@ -145,6 +147,7 @@ interface DeployCommandOptions {
     railpackAvailable?: DockerProbe;
     secretConfirm?: (message: string) => Promise<boolean>;
     secretLister?: (inputs: ListRemoteSecretsInputs) => Promise<ListRemoteSecretsResult>;
+    secretsFile?: string;
     skipCodegen?: boolean;
     skipServices?: boolean;
     smokeLauncher?: DevProcessSpawner;
@@ -153,7 +156,6 @@ interface DeployCommandOptions {
     strictAdvisories?: boolean;
     target?: string;
     temporary?: boolean;
-    updateSchemaBaseline?: boolean;
 }
 ```
 
@@ -190,7 +192,6 @@ interface DeployedIdentity {
     deployedAt: string;
     dryRun: boolean;
     env?: string;
-    preview: boolean;
     url?: string;
     workerName?: string;
 }
@@ -339,14 +340,16 @@ type FetchLike = (input: string, init?: {
 ```ts
 interface ImportCommandOptions {
     batchSize?: number;
+    confirm?: (prompt: string) => Promise<boolean>;
     cwd?: string;
+    dryRun?: boolean;
     fetchImpl?: StreamingFetchLike;
     file: string;
     format?: OutputFormat;
     from?: ImportSourceName;
     logger: Logger;
+    mode?: ImportMode;
     prod?: boolean;
-    replace?: boolean;
     scan?: boolean;
     storageDir?: string;
     table?: string;
@@ -1154,6 +1157,12 @@ interface ImportCommandData {
 }
 ```
 
+### `ImportMode` (type)
+
+```ts
+type ImportMode = "append" | "replace" | "require-empty" | "upsert";
+```
+
 ### `ImportRowError` (interface)
 
 ```ts
@@ -1186,9 +1195,11 @@ type ImportSourceName = (typeof IMPORT_SOURCE_NAMES)[number];
 ```ts
 interface ImportSummary {
     conflicts: number;
+    deleted: number;
     errors: ImportRowError[];
     failed?: ImportShardFailure[];
     inserted: Record<string, number>;
+    plan?: TablePlan[];
     received: number;
     replaced: number;
     storage?: {
@@ -1452,6 +1463,20 @@ interface StudioServerOptions {
     };
     port: number;
     workerOrigin: string;
+}
+```
+
+### `TablePlan` (interface)
+
+```ts
+interface TablePlan {
+    add: number;
+    delete: number;
+    existing: number;
+    matched: number;
+    source: number;
+    table: string;
+    target: number;
 }
 ```
 

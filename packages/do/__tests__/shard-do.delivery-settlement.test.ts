@@ -192,6 +192,37 @@ describe("delivery-authorized unchanged subscription settlement", () => {
         expect(shard.queryCalls).toBe(1);
     });
 
+    it("does not settle a socket whose identity window lapsed while the delivery authorization ran", async () => {
+        expect.hasAssertions();
+
+        const test = setup();
+
+        test.socket.attachment.clientId = "client";
+
+        test.socket.attachment.revalidateAt = Date.now() + 60_000;
+
+        const shard = new UnrelatedCdcShard(test.state, {}, { deliveryAuthorization: test.authority });
+
+        await test.send(shard);
+
+        test.socket.frames.length = 0;
+
+        const grant = test.authority.getMockImplementation();
+
+        test.authority.mockImplementation(async (request) => {
+            // The window closes while the authority is deciding a subscription; the permit it returns is still valid.
+            if (request.transport === "subscription") {
+                test.socket.serializeAttachment({ ...test.socket.deserializeAttachment(), revalidateAt: Date.now() - 1 });
+            }
+
+            return grant?.(request);
+        });
+
+        await write(shard, "rooms:tick", { "x-lunora-client-id": "client", "x-lunora-client-seq": "1" });
+
+        expect(test.socket.frames.filter((frame) => frame.type === "settled")).toEqual([]);
+    });
+
     it("does not settle or advance a denied subscription after a committed unrelated write", async () => {
         expect.hasAssertions();
 

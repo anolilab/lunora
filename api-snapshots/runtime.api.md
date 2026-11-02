@@ -778,6 +778,9 @@ type FrameworkWorkerOptionsInput = ((env: unknown) => FrameworkWorkerOptions) | 
 interface FunctionDescriptor {
     args: FunctionArgumentDescriptor[];
     kind: "action" | "mutation" | "query";
+    meta?: unknown;
+    metaUnencodable?: true;
+    metaUnloaded?: true;
     path: string;
     visibility?: "internal" | "public";
 }
@@ -792,6 +795,7 @@ interface FunctionRegistryEntry {
     expose?: RestExposure;
     kind: "action" | "mutation" | "query" | "stream";
     lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "socket" | "whisper";
+    readonly [PROCEDURE_META]?: unknown;
     socketPath?: string;
     visibility?: "internal" | "public";
     x402?: {
@@ -826,11 +830,13 @@ type GlobalImportFunction = (request: {
     rows: ReadonlyArray<{
         doc: Record<string, unknown>;
         line: number;
+        op?: "delete";
         table: string;
     }>;
     startLine?: number;
 }) => Promise<{
     conflicts: number;
+    deleted?: number;
     errors: ReadonlyArray<{
         code: string;
         line: number;
@@ -1046,11 +1052,13 @@ interface ImportFanOutRequest {
     batches: ReadonlyArray<{
         rows: ReadonlyArray<{
             doc: Record<string, unknown>;
+            op?: "delete";
             table: string;
         }>;
         shardKey: string;
         startLine?: number;
     }>;
+    deletes?: boolean;
     dryRun?: boolean;
     headers?: Record<string, string>;
     onConflict?: "replace" | "skip";
@@ -1062,6 +1070,7 @@ interface ImportFanOutRequest {
 ```ts
 interface ImportFanOutResult {
     conflicts: number;
+    deleted: number;
     errors: ReadonlyArray<{
         code: string;
         line: number;
@@ -1998,6 +2007,7 @@ interface ShardImportOutcome {
     };
     result?: {
         conflicts: number;
+        deleted: number;
         errors: ReadonlyArray<{
             code: string;
             line: number;
@@ -2356,6 +2366,7 @@ interface WorkerOptions {
     httpRouter?: HttpRouterLike;
     identity?: IdentityContractLike;
     importGlobals?: GlobalImportFunction;
+    importGlobalsSupportsDelete?: boolean;
     importGlobalsSupportsDryRun?: boolean;
     importGlobalsSupportsReplace?: boolean;
     jurisdiction?: DurableObjectJurisdiction;
@@ -3305,8 +3316,22 @@ interface SchedulerContext {
     }>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
     list: () => Promise<Record<string, unknown>[]>;
-    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>, options?: SchedulerRunOptions) => Promise<string>;
+    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>, options?: SchedulerRunOptions) => Promise<string>;
+}
+```
+
+### `SchedulerRunOptions` (interface)
+
+```ts
+interface SchedulerRunOptions {
+    retry?: {
+        backoff?: "exponential" | "linear";
+        baseMs?: number;
+        forever?: boolean;
+        maxAttempts?: number;
+        maxMs?: number;
+    };
 }
 ```
 

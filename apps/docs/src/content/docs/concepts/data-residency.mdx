@@ -350,11 +350,10 @@ lunora codegen
 ### Deploy, overriding the drift gate
 
 The gate will block on the `changedJurisdiction` drift. Since you have already
-exported, override it and re-bless the baseline so the new region becomes the
-recorded shape:
+exported, override it for this one deploy:
 
 ```bash
-lunora deploy --allow-schema-drift --update-schema-baseline
+lunora deploy --allow-schema-drift
 ```
 
 The worker now resolves DOs in the new region, and they start empty.

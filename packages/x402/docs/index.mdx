@@ -41,9 +41,11 @@ bun add @lunora/x402
 
 **Networks.** EVM chains (Base, Arbitrum, Ethereum, Polygon, …) are signed via
 `@x402/evm` + viem; pass a raw CAIP-2 id for chains without a friendly alias.
-Solana is signed via `@x402/svm`. The facilitator defaults to the public,
-Coinbase-operated `https://x402.org/facilitator` (no key required); override it
-via `facilitator: { url, headers }` for a self-hosted or keyed CDP facilitator.
+Solana is signed via `@x402/svm`. The charge rail needs a facilitator — there is
+no default: the public `https://x402.org/facilitator` serves testnets only, so a
+mainnet route needs `facilitator: { url, headers }` pointed at a keyed CDP
+facilitator (`https://api.cdp.coinbase.com/platform/v2/x402` plus a bearer token
+in `headers.Authorization`) or a self-hosted facilitator.
 
 ## The charge rail: sell a resource
 
@@ -80,9 +82,17 @@ import { httpAction } from "@lunora/server";
 import { withX402 } from "@lunora/x402/charge";
 
 export const report = httpAction(
-    withX402({ network: "base", price: "$0.05", recipient: { evm: env.PAYOUT } }, async (ctx, request) => {
-        return Response.json(await ctx.runQuery(api.reports.latest, {}));
-    }),
+    withX402(
+        {
+            facilitator: { url: "https://facilitator.example/x402" },
+            network: "base",
+            price: "$0.05",
+            recipient: { evm: env.PAYOUT },
+        },
+        async (ctx, request) => {
+            return Response.json(await ctx.runQuery(api.reports.latest, {}));
+        },
+    ),
 );
 ```
 
@@ -119,7 +129,11 @@ imports `@lunora/x402` (keeping viem/solana out of unpaid worker bundles):
 ```ts
 import { createProcedureChargeGate } from "@lunora/x402/charge";
 
-const gate = createProcedureChargeGate({ network: "base", recipient: { evm: env.PAYOUT } });
+const gate = createProcedureChargeGate({
+    facilitator: { url: "https://facilitator.example/x402" },
+    network: "base",
+    recipient: { evm: env.PAYOUT },
+});
 // handed to createWorker({ x402Charge: gate })
 ```
 
@@ -167,7 +181,13 @@ request can carry `PAYMENT-SIGNATURE`; stdio cannot). Each `tools/call` for a
 paid tool runs the same charge middleware:
 
 ```ts
-const mcp = createPaidMcpServer({ charge: { network: "base", recipient: { evm: env.PAYOUT } } });
+const mcp = createPaidMcpServer({
+    charge: {
+        facilitator: { url: "https://facilitator.example/x402" },
+        network: "base",
+        recipient: { evm: env.PAYOUT },
+    },
+});
 mcp.paidTool({ name: "premium_report", description: "the paid report", inputSchema: { properties: {}, type: "object" }, price: "$0.05" }, async () =>
     text(await buildReport()),
 );

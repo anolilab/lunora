@@ -19,10 +19,10 @@ import type { IndexHit, IssueSeverity, IssueStatus, LogEntry, TraceAnchor } from
 import { ISSUE_SEVERITIES, ISSUE_STATUSES } from "@lunora/observability";
 import type {
     CdcChange,
-    ExportRow,
     FilterClause,
     FilterOperator,
     ImportConflictMode,
+    ImportRow,
     MigrationDirection,
     OrderByClause,
     QueueMessageOutcome,
@@ -91,11 +91,13 @@ interface RunShardExportArgs {
 
 /** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
 interface RunShardImportArgs {
+    /** Honour rows tagged `op: "delete"`. See `ImportShardArgs.deletes` in `@lunora/shard-engine`. */
+    deletes?: boolean;
     /** Check the rows and report their shape errors, writing nothing. See `ImportShardArgs.dryRun` in `@lunora/shard-engine`. */
     dryRun?: boolean;
     /** What a row whose `_id` already exists does. See `ImportConflictMode` in `@lunora/shard-engine`. */
     onConflict?: ImportConflictMode;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 
@@ -1099,6 +1101,20 @@ const parseReplayQueueMessageArgs = (args: Record<string, unknown>): { id: strin
 };
 
 /**
+ * Validate the `dropOutboxEntry` / `retryOutboxEntry` payload: the outbox
+ * entry's job id. Throws a 400 `LunoraError` when it is missing.
+ */
+const parseScheduleOutboxEntryArgs = (op: string, args: Record<string, unknown>): { id: string } => {
+    const id = typeof args["id"] === "string" ? args["id"].trim() : "";
+
+    if (id === "") {
+        throw new LunoraError("BAD_REQUEST", `${op}: \`id\` is required`);
+    }
+
+    return { id };
+};
+
+/**
  * Validate the `__lunora_admin__:rankBefore` payload. `table`, `index`,
  * `partitionKey`, and `rowId` must be non-empty strings and `sortValues` must
  * be an array; anything else throws a 400 `LunoraError` so the cross-shard
@@ -1679,6 +1695,7 @@ export {
     parseRunMigrationArgs,
     parseSampleErrorsHeader,
     parseSampleRate,
+    parseScheduleOutboxEntryArgs,
     parseSendQueueMessageArgs,
     parseSendWorkflowEventArgs,
     parseSeverityArgument,

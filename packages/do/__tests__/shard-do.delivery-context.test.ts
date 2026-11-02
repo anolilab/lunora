@@ -114,7 +114,7 @@ describe("delivery authority caller context", () => {
         const guarded = new ContextShard(test.state, {}, { deliveryAuthorization: test.authority });
         const unguarded = new ContextShard(test.state, {});
 
-        test.socket.attachment.subs.view = { table: "messages" };
+        test.socket.attachment.subs.view = { functionPath: "messages:list", table: "messages" };
 
         expect(() => {
             guarded.broadcast();

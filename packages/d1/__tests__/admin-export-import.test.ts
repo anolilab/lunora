@@ -202,6 +202,68 @@ describe("d1 admin export/import globals", () => {
     });
 
     describe("importGlobalRows", () => {
+        it("prunes a delete row without the schema's onDelete cascade, so tables the import never names keep their rows", async () => {
+            expect.assertions(3);
+
+            const related: SchemaLike = {
+                tables: {
+                    projects: { indexes: [], relationMap: {}, shape: { name: { kind: "string" } }, shardMode: { kind: "global" } },
+                    todos: {
+                        indexes: [],
+                        relationMap: { project: { field: "projectId", kind: "one", onDelete: "cascade", references: "_id", table: "projects" } },
+                        shape: { projectId: { kind: "string" }, title: { kind: "string" } },
+                        shardMode: { kind: "global" },
+                    },
+                },
+            };
+            const fresh = createD1Exec();
+
+            fresh.ddl(`CREATE TABLE "projects" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "name" TEXT)`);
+            fresh.ddl(`CREATE TABLE "todos" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "projectId" TEXT, "title" TEXT)`);
+
+            const relatedWriter = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: fresh.exec, schema: related });
+
+            await relatedWriter.insert("projects", { _id: "p1", name: "old" }, { allowExplicitId: true });
+            await relatedWriter.insert("todos", { _id: "t1", projectId: "p1", title: "kept" }, { allowExplicitId: true });
+
+            const result = await importGlobalRows(relatedWriter, related, { rows: [{ doc: { _id: "p1" }, op: "delete", table: "projects" }] });
+
+            expect(result).toMatchObject({ deleted: 1, errors: [] });
+            await expect(relatedWriter.get("projects", "p1")).resolves.toBeNull();
+            await expect(relatedWriter.get("todos", "t1")).resolves.toMatchObject({ title: "kept" });
+
+            fresh.close();
+        });
+
+        it("answers a delete row in a dry run without touching the stored row, and counts nothing deleted", async () => {
+            expect.assertions(5);
+
+            const fresh = createD1Exec();
+
+            fresh.ddl(`CREATE TABLE "notes" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "title" TEXT)`);
+
+            const notes: SchemaLike = {
+                tables: { notes: { indexes: [], relationMap: {}, shape: { title: { kind: "string" } }, shardMode: { kind: "global" } } },
+            };
+            const noteWriter = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: fresh.exec, schema: notes });
+
+            await noteWriter.insert("notes", { _id: "n1", title: "stored" }, { allowExplicitId: true });
+
+            const rows = [{ doc: { _id: "n1" }, op: "delete" as const, table: "notes" }];
+
+            await expect(importGlobalRows(noteWriter, notes, { dryRun: true, rows })).resolves.toMatchObject({ deleted: 0, errors: [] });
+            await expect(noteWriter.get("notes", "n1")).resolves.toMatchObject({ title: "stored" });
+
+            // The real run removes the row and says so.
+            await expect(importGlobalRows(noteWriter, notes, { rows })).resolves.toMatchObject({ deleted: 1, errors: [] });
+            await expect(noteWriter.get("notes", "n1")).resolves.toBeNull();
+
+            // A re-run after the row is gone removes nothing and reports no error.
+            await expect(importGlobalRows(noteWriter, notes, { rows })).resolves.toMatchObject({ deleted: 0, errors: [] });
+
+            fresh.close();
+        });
+
         it("inserts a batch and returns per-table counts", async () => {
             expect.assertions(3);
 

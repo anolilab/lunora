@@ -222,10 +222,8 @@ row and throws a `VALIDATION_ERROR` for an amount outside ±(2^53 − 1) instead
 rounding it.
 
 **Migration:** a deploy that changes these columns from `bigint` to `number` is
-blocked by the schema-drift check until one of two things is true: a
-`payment_sessions` migration covers the change, or the schema baseline is
-re-blessed with `--update-schema-baseline`. Rows written before the upgrade still
-hold `bigint` values. The store reads them, but code that reads the columns
+blocked by the schema-drift check until a `payment_sessions` migration covers
+the change. Rows written before the upgrade still hold a `bigint`. The store reads them, but code that reads the columns
 directly gets a `number` for new rows and a `bigint` for old ones, so arithmetic
 that mixes the two throws. `where` filters on these columns do not match the old
 rows either. Convert or backfill those rows before you rely on the columns outside
@@ -323,6 +321,72 @@ NXDOMAIN) is refused instead of treated as public.
 **Migration:** test doubles passed as `launch` / `connect` need a context with
 `route`. The real `@cloudflare/playwright` exports satisfy the new shapes
 unchanged.
+
+### `@lunora/cli`: exports end with a row-count marker
+
+Every export now ends with a last line, `{"end":true,"rows":N}`, and
+`lunora import` (and `lunora backup restore`, which imports) refuses an NDJSON
+file that has no marker, whose count differs from the rows it holds, or that
+continues after it. A file or response cut on a row boundary is still valid
+NDJSON, so the marker is what proves it is whole.
+
+**Migration:** exports and backups written before this change have no marker and
+are refused, with a message saying so. After you have checked a file is complete
+(compare its row count with the backup's manifest, or with the source), append
+the marker with the exact number of rows before it:
+
+```bash
+rows=$(grep -c . backup.ndjson)
+printf '{"end":true,"rows":%s}\n' "$rows" >> backup.ndjson
+```
+
+A worker deployed before this change does not write the marker, so a CLI from
+this release refuses its export: `lunora export`, `lunora backup create`,
+`lunora migrate`, and the stored-row check of the drift gate all fail against it
+until the worker is redeployed. Upgrade the worker first. The one deploy that
+ships the new runtime therefore cannot clear a schema tightening by reading
+rows (the check is inconclusive); give that deploy a migration, or confirm the
+drift with `--allow-schema-drift`.
+
+Hand-written NDJSON needs the same line. Imports from Convex, Supabase and
+Firestore, and `--table` imports of bare documents, are unaffected.
+
+### `@lunora/cli`: `--update-schema-baseline` is removed
+
+`lunora deploy` and `lunora prepare` no longer take `--update-schema-baseline`;
+passing it is an unknown-option error. The gate settles the two cases it existed
+for on its own:
+
+- A dropped index (unique or not), or an index reshaped without becoming unique,
+  does not block. It cannot invalidate a stored row, and the baseline advances
+  with the deploy.
+- A new unique index, an index that becomes unique, or a field that becomes
+  `.unique()` is checked against the table's stored rows. The deploy is refused,
+  naming the repeating rows by `_id`, while any value repeats or the rows cannot be
+  read.
+
+The gate also classifies the rest of the changes it cannot verify by what they can
+do to stored data, so none of them is left needing the flag:
+
+- A dropped table, a dropped relation, a TTL lengthened or removed and `.commitOrdered()`
+  turned off no longer block. Each warns instead: a dropped table's rows are left in place
+  and a removed relation's `onDelete` stops running. A dropped index is refused only while a
+  function still names it through `withIndex`.
+- A shard-mode flip, a table turned `.memory()`, a jurisdiction change and a TTL that is
+  added, moved or shortened (the next sweep deletes the rows already past the cutoff; the
+  blocked message counts them when `lunora deploy` can read the worker) still block,
+  because they move, empty or delete data. They clear only when a new migration names the
+  change in a literal `covers` declaration (`covers: { table: "users", shardMode: "global" }`,
+  `covers: { table: "cache", memory: true }`, `covers: { table: "sessions", ttl: { field: "expiresAt", after: 60000 } }` or `covers: { jurisdiction: "eu" }`); an
+  unrelated migration clears nothing. Where a table is involved the migration must also
+  iterate it with an `up` that rewrites rows. The blocked message names what to declare. The full list is in
+  [Migrations](/docs/concepts/migrations).
+
+**Migration:** drop the flag from scripts and CI. When every change is verified, or
+a new migration covers it, the baseline advances after a successful deploy.
+`--allow-schema-drift` is still the one-run override: it checks nothing and leaves
+the baseline unchanged. An unreadable baseline file is fixed or deleted; deleting
+it makes the next run a first capture.
 
 ## Recommended (non-breaking) follow-ups
 

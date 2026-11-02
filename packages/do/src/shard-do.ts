@@ -184,6 +184,7 @@ import {
     deleteShapePokeCursor,
     deleteShapePokeCursorsForConnection,
     diffGlobalMembership,
+    dropScheduleOutbox,
     DurableStreamRunner,
     envOptionalPositiveInt,
     envPositiveInt,
@@ -223,11 +224,13 @@ import {
     readClientWatermark,
     readDeployInfo,
     readDueScheduleOutbox,
+    readDueScheduleOutboxEntry,
     readGlobalShapeSnapshot,
     readIdempotent,
     readMigrationStatus,
     readQueueMessageById,
     readReactorState,
+    readScheduleOutboxState,
     readShapePokeCursor,
     readTablePage,
     recordCapturedMail,
@@ -240,6 +243,7 @@ import {
     RELATION_FUNCTION_PREFIX,
     RELAY_SIGNATURE_HEADER,
     RelayMember,
+    requeueScheduleOutbox,
     runSocketPool,
     SCAN_DEP,
     selectExpiredIds,
@@ -273,6 +277,7 @@ import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
+import { canonicalClaims, claimsFingerprint } from "../../../shared/claims-fingerprint";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
 import type { ErrorDetail } from "../../../shared/error-detail";
@@ -307,10 +312,10 @@ import { buildTraceparent, LUNORA_ATTR, parseTraceparent } from "../../../shared
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { RAY_ID_HEADER } from "../../../shared/ray-id";
 import { BATCH_END_FRAME, BATCH_START_FRAME, REFRESH_BATCH_CAPABILITY } from "../../../shared/refresh-batch";
-import { parseRelayName } from "../../../shared/relay-name";
+import { holderConnectionId, parseRelayName } from "../../../shared/relay-name";
 import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
-import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
+import { IDENTITY_CHANGED_CLOSE_REASON, IDENTITY_STALE_CLOSE_CODE, SOCKET_REAUTH_PATH, SOCKET_REVALIDATE_MS } from "../../../shared/socket-reauth";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { SCHEDULED_FOR_HEADER } from "../../../shared/system-dispatch-headers";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
@@ -378,6 +383,7 @@ import {
     parseRunMigrationArgs,
     parseSampleErrorsHeader,
     parseSampleRate,
+    parseScheduleOutboxEntryArgs,
     parseSendQueueMessageArgs,
     parseSendWorkflowEventArgs,
     parseSeverityArgument,
@@ -1540,6 +1546,10 @@ const SCHEDULE_OUTBOX_BATCH = 32;
  * rebalance, short enough that a job the scheduler will never accept (a caller
  * error it refuses as `INVALID_INPUT`) stops costing alarms and starts being a
  * reported fact instead.
+ *
+ * A `retry.forever` call is not parked here: it is retried at the ladder's last
+ * rung for as long as the scheduler keeps failing, and this count is only where
+ * the one warning that it is still waiting gets logged.
  */
 const SCHEDULE_OUTBOX_MAX_ATTEMPTS = 8;
 
@@ -1561,6 +1571,160 @@ const SCHEDULE_OUTBOX_FIRST_RETRY_MS = 5000;
 /** The ladder's rung for `attempts` failures so far, flattening at its last entry. */
 const scheduleOutboxBackoffFor = (attempts: number): number =>
     SCHEDULE_OUTBOX_BACKOFF_MS[Math.min(attempts, SCHEDULE_OUTBOX_BACKOFF_MS.length - 1)] ?? SCHEDULE_OUTBOX_FIRST_RETRY_MS;
+
+/**
+ * The attempt count after one more failure. Saturates rather than overflowing: a
+ * `retry.forever` entry is never parked, so its count has no other ceiling.
+ */
+const nextScheduleOutboxAttempt = (attempts: number): number => Math.min(Number.MAX_SAFE_INTEGER, attempts + 1);
+
+const isScheduleOutboxTarget = (target: unknown): boolean => {
+    if (typeof target === "string") {
+        return target.length > 0;
+    }
+
+    if (!isPlainObject(target)) {
+        return false;
+    }
+
+    // The brand first: the scheduler routes any branded target to the workflow
+    // path, so a stray `__lunoraRef` must not vouch for a workflow with no class.
+    if (target["isLunoraWorkflow"] === true) {
+        return (
+            typeof target["className"] === "string" && target["className"].length > 0 && (target["name"] === undefined || typeof target["name"] === "string")
+        );
+    }
+
+    return typeof target["__lunoraRef"] === "string" && target["__lunoraRef"].length > 0;
+};
+
+/**
+ * Read one stored call back, or say why it cannot be replayed. Checked field by
+ * field rather than cast: under the default policy a malformed entry would at
+ * worst cost eight attempts, but a `retry.forever` one would never park, so an
+ * envelope that can never become a job has to be recognised up front.
+ *
+ * `args` only has to decode: a workflow's params may be an array or a `Date`, so
+ * the root is not required to be an object. A refusal carries whatever `target`
+ * the JSON named, so the park log still says which job was lost.
+ */
+const parseScheduleOutboxEnvelope = (
+    envelopeJson: string,
+): { args: unknown; envelope: ScheduleOutboxEnvelope; ok: true } | { ok: false; reason: string; target: unknown } => {
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(envelopeJson);
+    } catch {
+        return { ok: false, reason: "its stored payload is not valid JSON", target: undefined };
+    }
+
+    if (!isPlainObject(parsed) || !Object.hasOwn(parsed, "args")) {
+        return { ok: false, reason: "its stored payload is not a scheduled call", target: undefined };
+    }
+
+    const { args, options, target, when } = parsed;
+
+    if (!isScheduleOutboxTarget(target)) {
+        return { ok: false, reason: "its target is neither a function reference nor a workflow", target };
+    }
+
+    if (typeof when !== "number" || !Number.isFinite(when)) {
+        return { ok: false, reason: "its fire time is missing", target };
+    }
+
+    if (options !== undefined && !isPlainObject(options)) {
+        return { ok: false, reason: "its options are not an object", target };
+    }
+
+    // Built from the checked fields, so a field added to the envelope has to be validated here first.
+    const envelope: ScheduleOutboxEnvelope = { args, options, target, when };
+
+    try {
+        return { args: decodeWire(args), envelope, ok: true };
+    } catch {
+        return { ok: false, reason: "its arguments cannot be decoded", target };
+    }
+};
+
+/**
+ * Ask the scheduler to cancel `id`, or reject when it cannot be asked. `SchedulerLike` only
+ * declares the hand-off methods, but the scheduler a shard is configured with is the real client,
+ * which has `cancel`. A missing scheduler or `cancel` is not a confirmation: the job may have been
+ * accepted under a binding that has since gone, so the caller must keep the entry. Resolves to what the
+ * scheduler answered: whether it held the job.
+ */
+/** Cancel errors raised because there is no scheduler (or none with `cancel`) to ask, as opposed to one that was asked and failed: waiting cannot fix them. */
+const schedulerUnavailableErrors = new WeakSet<Error>();
+
+const isSchedulerUnavailable = (error: unknown): boolean => error instanceof Error && schedulerUnavailableErrors.has(error);
+
+const cancelScheduleOutboxJob = async (scheduler: SchedulerLike | undefined, id: string): Promise<boolean> => {
+    const cancel = (scheduler as { cancel?: (jobId: string) => Promise<unknown> } | undefined)?.cancel;
+
+    if (typeof cancel !== "function") {
+        const error = new TypeError("no scheduler with a cancel method is configured on this shard, so the cancel cannot be confirmed");
+
+        schedulerUnavailableErrors.add(error);
+
+        throw error;
+    }
+
+    const answer = (await cancel.call(scheduler, id)) as { cancelled?: unknown } | undefined;
+
+    // `false` is "no such job": never accepted, or already ended. The caller decides what that means.
+    return answer?.cancelled === true;
+};
+
+/**
+ * One hand-off awaiting the scheduler. `version` identifies the outbox row it was made for, so a
+ * failure of an older attempt does not land on a row recorded anew under the same id. `token` is the
+ * recording it carries (the `created_at` `record` answered), which is what a drop is compared against.
+ */
+interface ScheduleOutboxAttempt {
+    stale: boolean;
+    token: number | undefined;
+    version: string | undefined;
+}
+
+/**
+ * What a drop reports when it could not confirm the cancel. A plain error would be redacted to
+ * "internal error" at the admin edge; this one is catalogued, so the operator learns the entry was
+ * parked rather than dropped and that the drop has to be repeated.
+ */
+const scheduleOutboxDropFailure = (id: string, reason: string, cause: unknown): LunoraError =>
+    new LunoraError(
+        "SERVICE_UNAVAILABLE",
+        `deferred schedule ${id} was parked, not dropped: ${reason}. It will not be handed over; ${
+            isSchedulerUnavailable(cause) ? "drop it again to remove it without a confirmed cancel" : "drop it again once the scheduler answers"
+        }.`,
+        { cause },
+    );
+
+const retriesForever = (envelope: ScheduleOutboxEnvelope): boolean => {
+    const retry = envelope.options?.["retry"];
+
+    return isPlainObject(retry) && retry["forever"] === true;
+};
+
+/**
+ * Why a failed attempt ends custody, or `undefined` to retry it. A `retry.forever`
+ * entry parks only on a refusal no retry can change; anything else parks once the
+ * attempt ceiling is reached.
+ */
+const scheduleOutboxParkReason = (error: unknown, forever: boolean, attempts: number): string | undefined => {
+    if (forever) {
+        return isLunoraError(error) && (error.code === "INVALID_INPUT" || error.code === "INVALID_SCHEDULE_ID")
+            ? `the scheduler refused the stored call: ${error.code}`
+            : undefined;
+    }
+
+    if (attempts >= SCHEDULE_OUTBOX_MAX_ATTEMPTS) {
+        return `${String(SCHEDULE_OUTBOX_MAX_ATTEMPTS)} attempts all failed — last: ${error instanceof Error ? error.message : String(error)}`;
+    }
+
+    return undefined;
+};
 
 /**
  * How long a PARKED outbox entry is kept. A job that exhausted its attempts is
@@ -1734,15 +1898,20 @@ const countLiveConnections = (
     return { callerConnections, ipConnections };
 };
 
-/** Claims a refreshed credential re-issues on every refresh; they say when it was minted and until when, not who it names. */
-const VOLATILE_CLAIMS = new Set(["exp", "expiresAtMs", "iat", "jti", "nbf"]);
+/**
+ * The revalidation deadline a newly accepted socket is held to: any non-route socket carrying a user identity,
+ * admin or not. Admin authority (revoked by an admin-token rotation) says nothing about the user identity riding
+ * beside it, so exempting admin sockets would let a removed user keep its user subscriptions on one. A route socket
+ * is the app's own protocol with no re-auth channel; an anonymous socket has no identity to go stale.
+ */
+const revalidationStamp = (route: unknown, userId: string | undefined, acceptedAt: number): Pick<SocketAttachment, "revalidateAt"> =>
+    route === undefined && userId !== undefined ? { revalidateAt: acceptedAt + SOCKET_REVALIDATE_MS } : {};
 
 /** The claims a re-auth must leave unchanged, as one comparable key (`""` for none). */
-const credentialClaimsKey = (identity: Record<string, unknown> | undefined): string => {
-    const stable = Object.fromEntries(Object.entries(identity ?? {}).filter(([claim]) => !VOLATILE_CLAIMS.has(claim)));
+const credentialClaimsKey = canonicalClaims;
 
-    return Object.keys(stable).length === 0 ? "" : stableWireKey(stable);
-};
+/** Whether the socket carries a user or claims, as opposed to being anonymous. */
+const socketHasClaims = (attachment: SocketAttachment): boolean => attachment.userId !== undefined || canonicalClaims(attachment.identity) !== "";
 
 const socketIdentity = (attachment: SocketAttachment): SubscriptionIdentity => {
     // A copy: the attachment is shared with the socket cache, and user code receives this object.
@@ -3134,6 +3303,41 @@ abstract class ShardDO {
     private readonly registeredTables = new Set<string>();
 
     /**
+     * The hand-offs awaiting the scheduler, per outbox id. `retryOutboxEntry` makes them `stale`
+     * (their failure must not overwrite the reset). Whether one was dropped is read from
+     * {@link ShardDO.scheduleOutboxDroppedThrough} by its token, not inferred from the row, because a
+     * row can also vanish for an innocent reason. In memory is enough: an attempt never outlives the
+     * instance that started it.
+     */
+    private readonly scheduleOutboxAttempts = new Map<string, Set<ScheduleOutboxAttempt>>();
+
+    /**
+     * Outbox entries an operator is dropping right now. The drop first asks the
+     * scheduler to cancel the job (it may already hold it), and the retry loop must
+     * not hand the entry over again while that is awaiting.
+     */
+    private readonly scheduleOutboxDrops = new Map<string, Set<Promise<void>>>();
+
+    /**
+     * Per id, the newest recording an operator dropped: a drop covers every call recorded up to the
+     * row it acted on (including calls of one mutation that a later same-id record replaced), and
+     * no call recorded after it. A missing row alone cannot say "dropped": two calls of one mutation
+     * that share an explicit id share one row, and the first hand-off releases it. Pruned by
+     * {@link ShardDO.pruneScheduleOutboxDropMarker} once no call or attempt it could affect is left.
+     */
+    private readonly scheduleOutboxDroppedThrough = new Map<string, number>();
+
+    /**
+     * Calls recorded for an id whose hand-off has not finished (or whose window has not rolled back).
+     * A drop marker is needed exactly that long, so it is pruned when this reaches zero instead of by
+     * count: evicting a marker early would let a queued call of a dropped job run.
+     */
+    private readonly scheduleOutboxPendingHandOffs = new Map<string, number>();
+
+    /** The `created_at` last handed to `recordScheduleOutbox`; see {@link ShardDO.scheduleOutbox}. */
+    private lastScheduleOutboxRecordAt = 0;
+
+    /**
      * Epoch millis before which registration is not retried, set when one
      * fails: a registry outage costs one attempt per window rather than one per
      * write, against the single DO that has to recover.
@@ -3413,6 +3617,7 @@ abstract class ShardDO {
             currentCdcEpoch: () => this.currentCdcEpoch(),
             deliverWhisperLocal: (topic, frame, exclude) => this.deliverWhisperLocal(topic, frame, exclude),
             deliverLiveLocal: (topic, key, frame) => this.deliverLiveLocal(topic, key, frame),
+            dropIfLapsed: (ws) => this.dropIfLapsed(ws),
             liveControl: (control) => this.handleLiveSocketControl(control),
             getWebSockets: () => this.runner.sockets(),
             maskMetadata: () => this.maskMetadata(),
@@ -3532,6 +3737,11 @@ abstract class ShardDO {
         }
         if (url.pathname === "/_lunora/route") {
             return jsonResponse({ relayCount: 0 });
+        }
+        // The socket's scheduled re-auth: it moves a deadline and compares claims, and delivers nothing, so it is not
+        // a mode the authorization hook has to cover. Refusing it would reconnect every socket each half window.
+        if (url.pathname === SOCKET_REAUTH_PATH && request.method === "POST") {
+            return this.runner.handleFetch(request);
         }
         if (url.pathname !== "/rpc" || request.method !== "POST") {
             return jsonResponse({ error: { code: "NOT_IMPLEMENTED", message: DELIVERY_MODE_UNSUPPORTED } }, 501);
@@ -5118,7 +5328,7 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardImport(_args: RunShardImportArgs): Promise<ImportShardResult> {
-        return Promise.resolve({ conflicts: 0, errors: [], inserted: {}, replaced: 0 });
+        return Promise.resolve({ conflicts: 0, deleted: 0, errors: [], inserted: {}, replaced: 0 });
     }
 
     /**
@@ -6500,6 +6710,8 @@ abstract class ShardDO {
         // wire round-trips; every other outbound path already requires that.
         const deltaJson = JSON.stringify(encodeWire(delta));
 
+        // One clock read for the whole fan-out, shared by every socket's lapse check.
+        const now = Date.now();
         for (const ws of sockets) {
             const attachment = this.readAttachment(ws);
 
@@ -6507,9 +6719,7 @@ abstract class ShardDO {
             // socket whose credential lapsed must not keep receiving its user's
             // rows. This path is subclass-driven (see the README's `broadcast`
             // hook), so nothing upstream of it has already checked.
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment, now)) {
                 continue;
             }
 
@@ -6521,11 +6731,18 @@ abstract class ShardDO {
             // NOT `for...in`: it walks inherited enumerable keys, where
             // `Object.entries` was own-only. See the "never inherited ones" test.
             const { subs } = attachment;
+            const claimed = socketHasClaims(attachment);
 
             for (const subId of Object.keys(subs)) {
                 const query = subs[subId];
 
                 if (query === undefined || !this.matchesSubscription(query, delta)) {
+                    continue;
+                }
+
+                // A table-only subscription (no function) is refused on an authenticated socket now, but one persisted
+                // before that stays in the attachment: raw table deltas are not claim-scoped, so it is not served.
+                if (claimed && !query.functionPath) {
                     continue;
                 }
 
@@ -6761,6 +6978,9 @@ abstract class ShardDO {
     protected scheduleOutbox(): ScheduleOutbox {
         return {
             forget: (id: string): void => {
+                // A window that rolled back: its call will never be handed off.
+                this.finishScheduleOutboxHandOff(id);
+
                 try {
                     forgetScheduleOutbox(this.sql as SqlExec, id);
                 } catch {
@@ -6769,8 +6989,18 @@ abstract class ShardDO {
                     // stale entry is re-offered and refused as a duplicate.
                 }
             },
-            record: (id, envelope): void => {
-                recordScheduleOutbox(this.sql as SqlExec, id, JSON.stringify(envelope), Date.now());
+            handOff: async (id, run, token): Promise<void> => {
+                await this.runScheduleOutboxHandOff(id, run, token === undefined ? undefined : Number(token));
+            },
+            record: (id, envelope): string => {
+                // Strictly increasing, so two records never share a `created_at`: it is the token this
+                // call's hand-off carries, a drop covers tokens up to the row it acted on and none after,
+                // and a row's (created_at, envelope) pair identifies it.
+                this.lastScheduleOutboxRecordAt = Math.max(Date.now(), this.lastScheduleOutboxRecordAt + 0.001);
+                recordScheduleOutbox(this.sql as SqlExec, id, JSON.stringify(envelope), this.lastScheduleOutboxRecordAt);
+                this.scheduleOutboxPendingHandOffs.set(id, (this.scheduleOutboxPendingHandOffs.get(id) ?? 0) + 1);
+
+                return String(this.lastScheduleOutboxRecordAt);
             },
             wake: (): void => {
                 // Fire-and-forget: this is called from a settle that is about to
@@ -6792,7 +7022,9 @@ abstract class ShardDO {
      * config to read, so it reports `undefined` and the tier stays dormant. The
      * generated subclass overrides it with the app's configured scheduler —
      * and only when one is configured, so a shard whose `ctx.scheduler` is the
-     * throwing stub does not retry against a stub eight times before parking.
+     * throwing stub does not retry against a stub eight times before parking. A
+     * `retry.forever` entry stays in custody with backoff while no scheduler is
+     * configured, so a deploy that restores one picks it up.
      * @returns the scheduler to retry through, or `undefined` when this shard has none
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the generated subclass returns `config.scheduler?.(env)`
@@ -6814,13 +7046,14 @@ abstract class ShardDO {
      * twice. A refusal and an acceptance are therefore both "the scheduler has
      * it", and both end custody.
      *
-     * The bound is {@link SCHEDULE_OUTBOX_MAX_ATTEMPTS}: a job the scheduler will
-     * never accept stops costing alarms and becomes a reported fact instead —
-     * parked, logged at `error` with its id and target, and kept for
-     * {@link SCHEDULE_OUTBOX_RETENTION_MS} so an operator can see what was
-     * promised and never enqueued. The queue is bounded on both sides: the
-     * ceiling stops live entries accumulating, the retention sweep stops parked
-     * ones doing so. The sweep rides whatever tick reaches this tier, so a shard
+     * The default bound is {@link SCHEDULE_OUTBOX_MAX_ATTEMPTS}: a job the
+     * scheduler will never accept stops costing alarms and becomes a reported
+     * fact instead — parked, logged at `error` with its id and target, and kept
+     * for {@link SCHEDULE_OUTBOX_RETENTION_MS} so an operator can see what was
+     * promised and never enqueued. A call made with `retry.forever` opts out of
+     * that ceiling: it stays live, paced by the ladder's last rung, until the
+     * scheduler accepts it or refuses it as invalid. The retention sweep only
+     * ever drops parked rows. The sweep rides whatever tick reaches this tier, so a shard
      * holding ONLY parked entries keeps them until something else wakes it —
      * which is the right trade: they are one row per genuinely lost job, not a
      * loop that grows on its own.
@@ -8157,9 +8390,7 @@ abstract class ShardDO {
         // Read once here and reused for the route check below.
         const inboundAttachment = this.readAttachment(ws);
 
-        if (isIdentityExpired(inboundAttachment.expiresAt)) {
-            this.dropExpiredSocket(ws);
-
+        if (this.dropIfLapsed(ws, inboundAttachment)) {
             return;
         }
 
@@ -8325,10 +8556,19 @@ abstract class ShardDO {
             // subscribe (`POST` to the stream's control route); the frame goes only to this socket.
             // `whisperAck` advertises that every live join is answered with `whisper_subscribed`, so a
             // client can hold a live grant until its join is acknowledged. An older shard omits it.
+            // `revalidateMs` is the window a client re-auths the socket within to keep it open; a relative
+            // duration, so the client's clock never has to agree with this one.
             this.sendFrame(
                 ws,
-                // eslint-disable-next-line unicorn/no-null -- `null` is the wire's "no user" value
-                JSON.stringify({ connectionId: attachment.connectionId, subject: attachment.userId ?? null, type: "identity", whisperAck: true }),
+                JSON.stringify({
+                    claims: claimsFingerprint(attachment.userId, attachment.identity),
+                    connectionId: attachment.connectionId,
+                    ...(attachment.revalidateAt === undefined ? {} : { revalidateMs: SOCKET_REVALIDATE_MS }),
+                    // eslint-disable-next-line unicorn/no-null -- `null` is the wire's "no user" value
+                    subject: attachment.userId ?? null,
+                    type: "identity",
+                    whisperAck: true,
+                }),
                 "control",
             );
 
@@ -8419,6 +8659,20 @@ abstract class ShardDO {
             const { functionPath } = envelope.query;
             const isAdmin = functionPath?.startsWith(ADMIN_FUNCTION_PREFIX) === true;
 
+            // A table-only subscribe (no function path) is fed raw table deltas that no claim scopes, and nothing can
+            // seed or reset its rows when the socket's claims change. Refused as soon as the socket's claims are
+            // known, before anything is stored or sent; a socket with none (anonymous) has nothing to leak.
+            if (!functionPath && socketHasClaims(this.readAttachment(ws))) {
+                this.sendSubscriptionError(
+                    ws,
+                    envelope.id,
+                    "SUBSCRIPTION_FUNCTION_REQUIRED",
+                    "a subscription on an authenticated socket must name a function (functionPath)",
+                );
+
+                return;
+            }
+
             // Admin introspection subscriptions read shard internals (raw rows,
             // metrics, logs), so they are gated by the same `LUNORA_ADMIN_TOKEN`
             // as the HTTP admin RPCs — recorded on the socket at upgrade and
@@ -8461,6 +8715,17 @@ abstract class ShardDO {
                 );
 
                 return;
+            }
+
+            // A cursor is honoured only under the claims it was read under; otherwise this is a first subscribe.
+            {
+                const { sinceClaims, ...held } = query;
+
+                query = held;
+
+                if (held.sinceSeq !== undefined && !this.resumesUnderCurrentClaims(ws, sinceClaims, held.functionPath)) {
+                    query = { ...held, sinceEpoch: undefined, sinceSeq: undefined };
+                }
             }
 
             const status = this.subscribe(ws, envelope.id, query);
@@ -8515,8 +8780,10 @@ abstract class ShardDO {
             await this.handleShapeSubscribe(ws, envelope.id, {
                 args: shapeArgs,
                 name: envelope.shape.name,
-                sinceEpoch: envelope.sinceEpoch,
-                sinceSeq: envelope.sinceCheckpoint,
+                // As for a query: a checkpoint is honoured only under the claims it was read under.
+                ...(envelope.sinceCheckpoint === undefined || this.resumesUnderCurrentClaims(ws, envelope.sinceClaims, envelope.shape.name)
+                    ? { sinceEpoch: envelope.sinceEpoch, sinceSeq: envelope.sinceCheckpoint }
+                    : {}),
             });
 
             return;
@@ -8694,6 +8961,11 @@ abstract class ShardDO {
             }
 
             if (typeof envelope.topic === "string" && envelope.topic.length > 0 && (await this.authorizeWhisper(ws, envelope.topic, "send"))) {
+                // The authorizer's await can outlast the sender's credential or window; the frame carries its user id.
+                if (this.dropIfLapsed(ws)) {
+                    return;
+                }
+
                 // A room topic is handled server-side rather than blindly relayed:
                 // the shard decodes the client's typed message, dispatches the
                 // room's `onMessage` (which decides what, if anything, members
@@ -11022,7 +11294,13 @@ abstract class ShardDO {
      */
     private async importAdminShard(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseImportShardArgs(args);
-        const result = await this.runShardImport({ dryRun: parsed.dryRun, onConflict: parsed.onConflict, rows: parsed.rows, startLine: parsed.startLine });
+        const result = await this.runShardImport({
+            deletes: parsed.deletes,
+            dryRun: parsed.dryRun,
+            onConflict: parsed.onConflict,
+            rows: parsed.rows,
+            startLine: parsed.startLine,
+        });
 
         // A dry run writes nothing, so there is no table to flush and no change to audit. The echo is how a client tells a shard that
         // honoured the flag from one built before it existed, which ignores the flag, writes the rows and answers the same body.
@@ -11035,7 +11313,13 @@ abstract class ShardDO {
         await this.flushChangedTables();
 
         this.recordAudit("importShard", {
-            detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted, replaced: result.replaced },
+            detail: {
+                conflicts: result.conflicts,
+                deleted: result.deleted,
+                errors: result.errors.length,
+                inserted: result.inserted,
+                replaced: result.replaced,
+            },
         });
 
         return adminResponse(result);
@@ -12017,6 +12301,209 @@ abstract class ShardDO {
         return adminResponse(result);
     }
 
+    /**
+     * Serve `dropOutboxEntry` — cancel a deferred schedule the scheduler never
+     * confirmed, live or parked. `ctx.scheduler.cancel` only reaches jobs the
+     * SchedulerDO holds, so this is the only way to stop a `retry.forever` entry
+     * that is still waiting.
+     *
+     * The shard cannot always tell that the scheduler never got the job: the accept
+     * may have been lost on the way back, or an attempt may be awaiting it right now.
+     * So the drop cancels the id at the scheduler FIRST and deletes the row only once
+     * that settled. A cancel that fails (the scheduler is often the very thing that is down)
+     * parks the entry so it can never be handed over, and the error goes to the operator;
+     * dropping again completes it. And an attempt that was already in the air takes the job back out
+     * when it lands, see {@link ShardDO.retryScheduleOutboxEntry}. Admin-gated by the caller.
+     */
+    private async handleDropOutboxEntry(args: Record<string, unknown>): Promise<Response> {
+        const { id } = parseScheduleOutboxEntryArgs("dropOutboxEntry", args);
+        const sql = this.sql as SqlExec;
+
+        const before = readScheduleOutboxState(sql, id);
+
+        if (before === undefined) {
+            return adminResponse({ dropped: false });
+        }
+
+        // Registered before the first await, so the retry loop and every hand-off up to this row see
+        // it. The coverage ends at the row being dropped: a job recorded anew under the same id after
+        // this point carries a newer token and is not part of this drop.
+        const settled = Promise.withResolvers<undefined>();
+        const drops = this.scheduleOutboxDrops.get(id) ?? new Set<Promise<void>>();
+
+        drops.add(settled.promise);
+        this.scheduleOutboxDrops.set(id, drops);
+        this.markScheduleOutboxDropped(id, before.createdAt);
+
+        try {
+            let cancelError: Error | undefined;
+            let held = true;
+
+            try {
+                held = await cancelScheduleOutboxJob(this.scheduleOutboxScheduler(), id);
+            } catch (error) {
+                cancelError = error instanceof Error ? error : new Error(String(error));
+            }
+
+            const after = readScheduleOutboxState(sql, id);
+
+            if (after?.version !== before.version) {
+                // The entry this drop was cancelling is gone, replaced by a new schedule under the same
+                // id (or released by its own hand-off). Whatever is there now is not this drop's to
+                // delete, mark or park. But a refused cancel still means the old job may be running.
+                if (cancelError !== undefined) {
+                    this.recordAudit("dropOutboxEntry", { id, detail: { outcome: "failed" } });
+
+                    throw scheduleOutboxDropFailure(id, cancelError.message, cancelError);
+                }
+
+                this.recordAudit("dropOutboxEntry", { id, detail: { outcome: "applied" } });
+
+                return adminResponse({ dropped: true });
+            }
+
+            // An attempt still awaiting the scheduler may yet land the job: it sees the drop by its
+            // token and cancels the job itself, and the row has to outlive it. Parking keeps the row
+            // from being handed over meanwhile; the attempt removes it once its cancel is confirmed.
+            const awaiting = this.scheduleOutboxAttempts.get(id);
+
+            // A job that landed during the drop and could not be cancelled by its attempt left the
+            // row parked, which it was not when the drop began: the job may still run.
+            if (cancelError === undefined && after.parked && !before.parked) {
+                cancelError = new Error("a hand-off that landed during the drop could not be cancelled, so the job may still run");
+            }
+
+            if (this.removeUnconfirmableScheduleOutboxDrop(sql, id, cancelError, before.parked && after.parked, awaiting)) {
+                return adminResponse({ dropped: true });
+            }
+
+            if (cancelError !== undefined) {
+                // The scheduler may be the very thing that is down. The operator asked for this job
+                // to stop, so the shard must not hand it over in the meantime: park it and report
+                // the failure. Dropping again, once the scheduler answers, completes the cancel.
+                this.parkLiveScheduleOutboxEntry(sql, id);
+                this.logs.push({
+                    functionPath: "scheduler:outbox",
+                    level: "error",
+                    message: `deferred schedule ${id} was dropped by an operator but the scheduler could not confirm the cancel (${cancelError.message}). It is parked and will not be handed over; drop it again once the scheduler answers.`,
+                    timestamp: Date.now(),
+                });
+                this.recordAudit("dropOutboxEntry", { id, detail: { outcome: "parked" } });
+
+                throw scheduleOutboxDropFailure(id, cancelError.message, cancelError);
+            }
+
+            if (awaiting === undefined || awaiting.size === 0) {
+                dropScheduleOutbox(sql, id);
+            } else {
+                this.parkLiveScheduleOutboxEntry(sql, id);
+            }
+
+            this.auditAppliedScheduleOutboxDrop(id, held);
+
+            return adminResponse({ dropped: true });
+        } finally {
+            drops.delete(settled.promise);
+
+            if (drops.size === 0) {
+                this.scheduleOutboxDrops.delete(id);
+            }
+
+            settled.resolve(undefined);
+            this.pruneScheduleOutboxDropMarker(id);
+        }
+    }
+
+    /**
+     * Audit a drop that applied. "Not found" is the usual answer for a job the scheduler never
+     * accepted, and the same answer it gives once an accepted job has run: an earlier hand-off whose
+     * accept was lost on the way back. The drop cannot tell the two apart, so the operator is told the
+     * job may have run.
+     */
+    private auditAppliedScheduleOutboxDrop(id: string, held: boolean): void {
+        if (!held) {
+            this.logs.push({
+                functionPath: "scheduler:outbox",
+                level: "warn",
+                message: `deferred schedule ${id} was dropped, but the scheduler held no job under that id. Usually it was never accepted; if an earlier hand-off was accepted and only its answer was lost, the job may already have run.`,
+                timestamp: Date.now(),
+            });
+        }
+
+        this.recordAudit("dropOutboxEntry", { id, detail: held ? { outcome: "applied" } : { outcome: "applied", schedulerHeld: false } });
+    }
+
+    /**
+     * With no scheduler to ask, waiting never confirms the cancel. The first drop parked the row (a
+     * job may have been accepted under a binding that has since gone); dropping a row that was already
+     * parked, with nothing in flight, is the operator accepting that, and removes it.
+     * @returns whether the row was removed
+     */
+    private removeUnconfirmableScheduleOutboxDrop(
+        sql: SqlExec,
+        id: string,
+        cancelError: Error | undefined,
+        alreadyParked: boolean,
+        awaiting: ReadonlySet<ScheduleOutboxAttempt> | undefined,
+    ): boolean {
+        if (!isSchedulerUnavailable(cancelError) || !alreadyParked || (awaiting !== undefined && awaiting.size > 0)) {
+            return false;
+        }
+
+        dropScheduleOutbox(sql, id);
+        this.logs.push({
+            functionPath: "scheduler:outbox",
+            level: "warn",
+            message: `deferred schedule ${id} was removed by a repeated drop without a confirmed cancel: no scheduler is configured on this shard to ask. If it was accepted under a scheduler that has since been removed, it may still run there.`,
+            timestamp: Date.now(),
+        });
+        this.recordAudit("dropOutboxEntry", { id, detail: { outcome: "applied", schedulerHeld: "unknown" } });
+
+        return true;
+    }
+
+    /**
+     * Serve `retryOutboxEntry` — put an entry back on the retry ladder, due now:
+     * the way back for a parked entry, and a way to skip a long backoff once the
+     * scheduler is healthy. Arms the poll alarm for now, because nothing else is
+     * due to wake a shard whose entries were all parked. Admin-gated by the caller.
+     */
+    private async handleRetryOutboxEntry(args: Record<string, unknown>): Promise<Response> {
+        const { id } = parseScheduleOutboxEntryArgs("retryOutboxEntry", args);
+        const now = Date.now();
+        // A drop owns the id until its cancel settles; requeueing now would report a retry the drop then undoes.
+        const retried = !this.isScheduleOutboxBeingDropped(id) && requeueScheduleOutbox(this.sql as SqlExec, id, now);
+
+        if (retried) {
+            // The operator wants the job after all: an attempt still carrying an earlier drop must
+            // not cancel it or delete the requeued row when it lands.
+            for (const attempt of this.scheduleOutboxAttempts.get(id) ?? []) {
+                attempt.stale = true;
+            }
+
+            this.scheduleOutboxDroppedThrough.delete(id);
+
+            // The in-memory alarm time may name a wake the host never delivered (an init
+            // that kept failing before the alarm handler cleared it), and `scheduleGlobalPoll`
+            // would then skip arming. This wake is the one the row now depends on.
+            this.globalPollArmedAt = undefined;
+            // Armed before the audit write and rethrown: the row is due now, and if no alarm
+            // is armed nothing runs it until the next cold start while "retried" claims otherwise.
+            try {
+                await this.scheduleGlobalPoll(now, true);
+            } catch (error) {
+                // The row is already requeued, so the action changed the outbox: audit it as such.
+                this.recordAudit("retryOutboxEntry", { id, detail: { outcome: "failed" } });
+
+                throw error;
+            }
+
+            this.recordAudit("retryOutboxEntry", { id, detail: { outcome: "applied" } });
+        }
+
+        return adminResponse({ retried });
+    }
+
     /** Empty the dev queue consumed-message log (studio "clear log" action). Admin-gated by the caller. */
     private handleClearQueueMessages(): Response {
         const result = clearQueueMessages(this.shardHost.sql);
@@ -12158,6 +12645,7 @@ abstract class ShardDO {
             [ADMIN_FUNCTIONS.clearCapturedMail]: () => this.handleClearCapturedMail(),
             [ADMIN_FUNCTIONS.clearQueueMessages]: () => this.handleClearQueueMessages(),
             [ADMIN_FUNCTIONS.createWorkflowInstance]: (args) => this.handleCreateWorkflowInstance(args),
+            [ADMIN_FUNCTIONS.dropOutboxEntry]: (args) => this.handleDropOutboxEntry(args),
             [ADMIN_FUNCTIONS.explainIssue]: (args) => this.handleExplainIssue(args),
             [ADMIN_FUNCTIONS.getWorkflowInstanceStatus]: (args) => this.handleGetWorkflowInstanceStatus(args),
             [ADMIN_FUNCTIONS.listFlags]: (args) => this.handleListFlags(args),
@@ -12168,6 +12656,7 @@ abstract class ShardDO {
             [ADMIN_FUNCTIONS.recordQueueMessage]: (args) => this.handleRecordQueueMessage(args),
             [ADMIN_FUNCTIONS.releaseShardRegistration]: (args) => this.handleReleaseShardRegistration(args),
             [ADMIN_FUNCTIONS.replayQueueMessage]: (args) => this.handleReplayQueueMessage(args),
+            [ADMIN_FUNCTIONS.retryOutboxEntry]: (args) => this.handleRetryOutboxEntry(args),
             [ADMIN_FUNCTIONS.sendQueueMessage]: (args) => this.handleSendQueueMessage(args),
             [ADMIN_FUNCTIONS.sendTestMail]: (args) => this.handleSendTestMail(args),
             [ADMIN_FUNCTIONS.sendWorkflowEvent]: (args) => this.handleSendWorkflowEvent(args),
@@ -13484,8 +13973,7 @@ abstract class ShardDO {
             // on the frame that STARTED this stream, and a pump can outlive
             // it indefinitely. Tear the iterator down rather than keep
             // pushing the user's data at an expired socket.
-            if (this.isSocketExpired(ws)) {
-                this.dropExpiredSocket(ws);
+            if (this.dropIfLapsed(ws)) {
                 controller.abort();
 
                 break;
@@ -13502,6 +13990,13 @@ abstract class ShardDO {
             // backpressure. Do not let its pending chunk land on a new stream
             // that has since reused the same id.
             if (isStreamCancelled(controller)) {
+                break;
+            }
+
+            // The drain can outlast the credential or the revalidation window.
+            if (this.dropIfLapsed(ws)) {
+                controller.abort();
+
                 break;
             }
 
@@ -13572,7 +14067,9 @@ abstract class ShardDO {
         // anonymous reload starts over, which is the honest answer when nothing
         // durable identifies the caller.
         const caller = attachment.userId ?? anonymousStreamCaller(attachment, id);
-        const runKey = `${caller}\u0000${functionPath}:${stableWireKey(args)}`;
+        // The claims are part of the key: a run produced under one tenant's claims is never attached to the same user's
+        // socket after a claims change, which starts a run of its own, as a cold resume would.
+        const runKey = `${caller}\u0000${claimsFingerprint(attachment.userId, attachment.identity)}\u0000${functionPath}:${stableWireKey(args)}`;
         const cancellers = socketMap(this.streamCancellers, ws);
         const frames = streamFrames(ws, id);
 
@@ -13601,8 +14098,7 @@ abstract class ShardDO {
                 // Same mid-run expiry rule as the ephemeral pump. `false` is the
                 // sink contract's "this consumer is gone", so the runner drops it
                 // and the transcript keeps producing for whoever else is attached.
-                if (this.isSocketExpired(ws)) {
-                    this.dropExpiredSocket(ws);
+                if (this.dropIfLapsed(ws)) {
                     detach();
 
                     return false;
@@ -14136,9 +14632,7 @@ abstract class ShardDO {
             // the socket and skip its push.
             const attachment = this.readAttachment(ws);
 
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment)) {
                 return;
             }
 
@@ -14410,6 +14904,11 @@ abstract class ShardDO {
         // the client must receive; otherwise the pre-run epoch pairs with the
         // pre-run cursor.
         const epoch = isAdmin ? undefined : (resume?.epoch ?? readEpoch);
+
+        // The authorization and the query above yield; a socket whose window passed meanwhile gets neither a resume nor rows.
+        if (this.dropIfLapsed(ws)) {
+            return;
+        }
 
         if (resume?.resumable) {
             // Never reached under delivery authorization: `resume` is forced to
@@ -14763,9 +15262,7 @@ abstract class ShardDO {
         const pokeOne = async (ws: ShardSocketLike): Promise<void> => {
             const attachment = this.readAttachment(ws);
 
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment)) {
                 return;
             }
             const { shapes } = attachment;
@@ -15341,7 +15838,7 @@ abstract class ShardDO {
      * or before it is left alone. Only ever moves the wake EARLIER, so repeated
      * seeds cannot walk the alarm out.
      */
-    private async scheduleGlobalPoll(atMs?: number): Promise<void> {
+    private async scheduleGlobalPoll(atMs?: number, rethrow = false): Promise<void> {
         const target = atMs ?? Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
         const pendingAt = this.globalPollArmedAt;
 
@@ -15356,7 +15853,7 @@ abstract class ShardDO {
             // silently rather than throwing, which is the same outcome the
             // previous `if (!setAlarm) return` produced — no alarm, no crash.
             await this.shardHost.alarms.set(target);
-        } catch {
+        } catch (error) {
             // A failed arm restores the previous pending time (not `undefined`)
             // so a later seed/tick retries without forgetting an alarm that is
             // still armed at the older, later target — but only while this call
@@ -15368,6 +15865,10 @@ abstract class ShardDO {
             // and delays the next poll.
             if (this.globalPollArmedAt === target) {
                 this.globalPollArmedAt = pendingAt;
+            }
+
+            if (rethrow) {
+                throw error;
             }
         }
     }
@@ -15589,35 +16090,57 @@ abstract class ShardDO {
 
     /**
      * One outbox attempt: replay the stored call, then either end custody or push
-     * the entry out along {@link SCHEDULE_OUTBOX_BACKOFF_MS} — parking it once the
-     * ladder runs out.
+     * the entry out along {@link SCHEDULE_OUTBOX_BACKOFF_MS}. The default policy
+     * parks once the ladder runs out; `retry.forever` keeps a valid call live.
      *
      * An envelope that will not parse is parked immediately rather than retried:
      * no number of attempts turns malformed JSON into a job, and the log line is
      * the only useful output left.
      */
-    private async retryScheduleOutboxEntry(sql: SqlExec, scheduler: SchedulerLike | undefined, entry: ScheduleOutboxRow, trace?: TraceRefLike): Promise<void> {
-        const attempts = entry.attempts + 1;
-        let envelope: ScheduleOutboxEnvelope | undefined;
+    private async retryScheduleOutboxEntry(
+        sql: SqlExec,
+        scheduler: SchedulerLike | undefined,
+        snapshot: ScheduleOutboxRow,
+        trace?: TraceRefLike,
+    ): Promise<void> {
+        // The tick read its batch before awaiting the scheduler for the rows ahead of
+        // this one, so the snapshot may predate an operator's drop, requeue or park.
+        // The row is read again, synchronously with the claim below, and that read is
+        // what gets replayed. A drop in progress owns the id until it settles.
+        const entry = this.isScheduleOutboxBeingDropped(snapshot.id) ? undefined : readDueScheduleOutboxEntry(sql, snapshot.id, Date.now());
+        const state = readScheduleOutboxState(sql, snapshot.id);
 
-        try {
-            envelope = JSON.parse(entry.envelopeJson) as ScheduleOutboxEnvelope;
-        } catch {
-            envelope = undefined;
+        if (entry === undefined) {
+            return;
         }
 
-        if (scheduler === undefined || envelope === undefined) {
-            this.parkScheduleOutboxEntry(
-                sql,
-                entry.id,
-                attempts,
-                envelope?.target,
-                scheduler === undefined ? "no scheduler is configured on this shard" : "its stored payload is unreadable",
-                trace,
-            );
+        const attempts = nextScheduleOutboxAttempt(entry.attempts);
+        const stored = parseScheduleOutboxEnvelope(entry.envelopeJson);
+
+        if (!stored.ok) {
+            this.parkScheduleOutboxEntry(sql, entry.id, attempts, stored.target, stored.reason, trace);
 
             return;
         }
+
+        const { envelope } = stored;
+        const forever = retriesForever(envelope);
+
+        if (scheduler === undefined) {
+            if (forever) {
+                this.deferScheduleOutboxEntry(sql, entry.id, attempts, true, trace);
+            } else {
+                this.parkScheduleOutboxEntry(sql, entry.id, attempts, envelope.target, "no scheduler is configured on this shard", trace);
+            }
+
+            return;
+        }
+
+        const attempt: ScheduleOutboxAttempt = { stale: false, token: state?.createdAt, version: state?.version };
+        const awaiting = this.scheduleOutboxAttempts.get(entry.id) ?? new Set<ScheduleOutboxAttempt>();
+
+        awaiting.add(attempt);
+        this.scheduleOutboxAttempts.set(entry.id, awaiting);
 
         try {
             // `runAt`, never `runAfter`: the envelope stores the absolute instant
@@ -15626,41 +16149,308 @@ abstract class ShardDO {
             await (scheduler.runAt as (timestampMs: number, target: never, args: never, options?: never) => Promise<string>)(
                 envelope.when,
                 envelope.target as never,
-                decodeWire(envelope.args) as never,
+                stored.args as never,
                 { ...envelope.options, id: entry.id } as never,
             );
 
-            forgetScheduleOutbox(sql, entry.id);
+            await this.settleScheduleOutboxHandOff(sql, scheduler, entry.id, attempt.version, this.wasScheduleOutboxDropped(entry.id, attempt), true, trace);
         } catch (error) {
-            // A duplicate id means the scheduler already has this job — the first
-            // dispatch landed and only the bookkeeping was lost. Custody ends the
-            // same way an acceptance ends it.
-            if (isLunoraError(error) && error.code === "DUPLICATE_SCHEDULE_ID") {
-                forgetScheduleOutbox(sql, entry.id);
+            await this.settleFailedScheduleOutboxAttempt(sql, scheduler, { attempt, attempts, envelope, error, forever, id: entry.id }, trace);
+        } finally {
+            awaiting.delete(attempt);
 
-                return;
+            if (awaiting.size === 0) {
+                this.scheduleOutboxAttempts.delete(entry.id);
+            }
+        }
+    }
+
+    /**
+     * The post-commit hand-off of a deferred schedule, run as a recorded attempt like every retry:
+     * a drop that arrives while the call awaits the scheduler is seen here and the job is cancelled
+     * when it lands (the row stays parked if that cancel fails). A failure leaves the row for the
+     * retry loop, unless a drop already ended the entry, in which case the row goes.
+     */
+    private async runScheduleOutboxHandOff(id: string, run: () => Promise<unknown>, token: number | undefined): Promise<void> {
+        try {
+            // Covered by a drop already: it never goes out, and waits for nothing.
+            if (!this.isScheduleOutboxTokenDropped(id, token)) {
+                // A newer schedule must not meet an id-only cancel still in flight for the old one at
+                // the scheduler, so it goes out only after every drop in progress has settled.
+                for (let drops = this.scheduleOutboxDrops.get(id); drops !== undefined && drops.size > 0; drops = this.scheduleOutboxDrops.get(id)) {
+                    // eslint-disable-next-line no-await-in-loop -- a drop that starts while waiting must be waited for too
+                    await Promise.all(drops);
+                }
             }
 
-            if (attempts >= SCHEDULE_OUTBOX_MAX_ATTEMPTS) {
-                this.parkScheduleOutboxEntry(
-                    sql,
-                    entry.id,
-                    attempts,
-                    envelope.target,
-                    `${String(SCHEDULE_OUTBOX_MAX_ATTEMPTS)} attempts all failed — last: ${error instanceof Error ? error.message : String(error)}`,
-                    trace,
-                );
+            await this.handOffRecordedScheduleOutboxCall(id, run, token);
+        } finally {
+            this.finishScheduleOutboxHandOff(id);
+        }
+    }
 
-                return;
+    private async handOffRecordedScheduleOutboxCall(id: string, run: () => Promise<unknown>, token: number | undefined): Promise<void> {
+        const sql = this.sql as SqlExec;
+
+        // An operator may have dropped the entry (or the retry loop parked it) while an earlier
+        // hand-off in the same drain was still awaiting: the call must not start then. Checked
+        // synchronously with the registration below, the same ordering a drop uses.
+        const state = readScheduleOutboxState(sql, id);
+
+        if (this.isScheduleOutboxTokenDropped(id, token)) {
+            return;
+        }
+
+        // A parked row is one the retry loop gave up on or a failed drop stopped. An ABSENT row is
+        // not a drop: a sibling call with the same explicit id may already have released it, and that
+        // call must still reach the scheduler, which answers it as a duplicate.
+        if (state?.parked === true) {
+            return;
+        }
+
+        const attempt: ScheduleOutboxAttempt = { stale: false, token, version: state?.version };
+        const awaiting = this.scheduleOutboxAttempts.get(id) ?? new Set<ScheduleOutboxAttempt>();
+
+        awaiting.add(attempt);
+        this.scheduleOutboxAttempts.set(id, awaiting);
+
+        try {
+            await run();
+        } catch (error) {
+            try {
+                if (this.wasScheduleOutboxDropped(id, attempt)) {
+                    await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, attempt.version, true, false);
+                }
+            } catch {
+                // The original failure is the one to report; the row stays for the retry loop.
+            } finally {
+                this.releaseScheduleOutboxAttempt(id, awaiting, attempt);
             }
 
-            deferScheduleOutbox(sql, entry.id, attempts, Date.now() + scheduleOutboxBackoffFor(attempts));
+            throw error;
+        }
+
+        try {
+            await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, attempt.version, this.wasScheduleOutboxDropped(id, attempt), true);
+        } catch {
+            // The scheduler accepted the job and the mutation committed. A bookkeeping failure here
+            // (a storage hiccup, a stub handle) must not surface as a failed mutation: the row that
+            // is left behind is re-offered by the retry loop and refused as a duplicate.
+        } finally {
+            this.releaseScheduleOutboxAttempt(id, awaiting, attempt);
+        }
+    }
+
+    private markScheduleOutboxDropped(id: string, through: number): void {
+        this.scheduleOutboxDroppedThrough.set(id, Math.max(through, this.scheduleOutboxDroppedThrough.get(id) ?? 0));
+    }
+
+    private isScheduleOutboxBeingDropped(id: string): boolean {
+        return (this.scheduleOutboxDrops.get(id)?.size ?? 0) > 0;
+    }
+
+    /** One recorded call is done with: handed off, skipped, or rolled back with its window. */
+    private finishScheduleOutboxHandOff(id: string): void {
+        const left = (this.scheduleOutboxPendingHandOffs.get(id) ?? 0) - 1;
+
+        if (left > 0) {
+            this.scheduleOutboxPendingHandOffs.set(id, left);
+        } else {
+            this.scheduleOutboxPendingHandOffs.delete(id);
+        }
+
+        this.pruneScheduleOutboxDropMarker(id);
+    }
+
+    /**
+     * Forget the drop marker of `id` once nothing it could still decide is left: no recorded call
+     * waiting for its hand-off, no attempt awaiting the scheduler, no drop in flight. Pruned by that
+     * condition rather than by count, because evicting a marker early would let a queued call of a
+     * dropped job go out.
+     */
+    private pruneScheduleOutboxDropMarker(id: string): void {
+        if (
+            (this.scheduleOutboxPendingHandOffs.get(id) ?? 0) === 0 &&
+            (this.scheduleOutboxAttempts.get(id)?.size ?? 0) === 0 &&
+            !this.isScheduleOutboxBeingDropped(id)
+        ) {
+            this.scheduleOutboxDroppedThrough.delete(id);
+        }
+    }
+
+    /** Whether a drop covers the recording `token` names: recorded no later than the row it acted on. */
+    private isScheduleOutboxTokenDropped(id: string, token: number | undefined): boolean {
+        const through = this.scheduleOutboxDroppedThrough.get(id);
+
+        return token !== undefined && through !== undefined && token <= through;
+    }
+
+    /** Whether the entry this attempt was made for has been dropped, now or while it was in the air. */
+    private wasScheduleOutboxDropped(id: string, attempt: ScheduleOutboxAttempt): boolean {
+        return this.isScheduleOutboxTokenDropped(id, attempt.token);
+    }
+
+    private releaseScheduleOutboxAttempt(id: string, awaiting: Set<ScheduleOutboxAttempt>, attempt: ScheduleOutboxAttempt): void {
+        awaiting.delete(attempt);
+
+        if (awaiting.size === 0) {
+            this.scheduleOutboxAttempts.delete(id);
+            this.pruneScheduleOutboxDropMarker(id);
+        }
+    }
+
+    /** A hand-off that threw: end custody if the scheduler turns out to hold the job, else defer or park the entry. */
+    private async settleFailedScheduleOutboxAttempt(
+        sql: SqlExec,
+        scheduler: SchedulerLike,
+        failed: {
+            attempt: ScheduleOutboxAttempt;
+            attempts: number;
+            envelope: ScheduleOutboxEnvelope;
+            error: unknown;
+            forever: boolean;
+            id: string;
+        },
+        trace?: TraceRefLike,
+    ): Promise<void> {
+        const { attempt, attempts, envelope, error, forever, id } = failed;
+
+        // A duplicate id means the scheduler already has this job — the first
+        // dispatch landed and only the bookkeeping was lost. Custody ends the
+        // same way an acceptance ends it.
+        if (isLunoraError(error) && error.code === "DUPLICATE_SCHEDULE_ID") {
+            await this.settleScheduleOutboxHandOff(sql, scheduler, id, attempt.version, this.wasScheduleOutboxDropped(id, attempt), true, trace);
+
+            return;
+        }
+
+        // The operator dropped the entry while this attempt was awaiting.
+        // The accept may have been lost on the way back, so the job can still exist: cancel it, and
+        // keep the row (parked) if that cannot be confirmed.
+        if (this.wasScheduleOutboxDropped(id, attempt)) {
+            await this.settleScheduleOutboxHandOff(sql, scheduler, id, attempt.version, true, false, trace);
+
+            return;
+        }
+
+        // `retryOutboxEntry` reset the row while this attempt was awaiting the
+        // scheduler; writing this attempt's count and backoff would undo that.
+        if (attempt.stale) {
+            return;
+        }
+
+        // The row was recorded anew under the same id while this attempt was awaiting: its backoff
+        // or park state would land on a different schedule.
+        if (readScheduleOutboxState(sql, id)?.version !== attempt.version) {
+            return;
+        }
+
+        const parkReason = scheduleOutboxParkReason(error, forever, attempts);
+
+        if (parkReason === undefined) {
+            this.deferScheduleOutboxEntry(sql, id, attempts, forever, trace);
+        } else {
+            this.parkScheduleOutboxEntry(sql, id, attempts, envelope.target, parkReason, trace);
+        }
+    }
+
+    /**
+     * The scheduler holds the job: end custody. If the entry was dropped while the
+     * hand-off was awaiting (or a drop is cancelling it right now), the operator asked
+     * for the job NOT to run, so take it back out of the scheduler. `landed` says the scheduler
+     * is known to hold (or to have held) the job, which is what makes a "not found" cancel a failure.
+     */
+    private async settleScheduleOutboxHandOff(
+        sql: SqlExec,
+        scheduler: SchedulerLike | undefined,
+        id: string,
+        version: string | undefined,
+        dropped: boolean,
+        landed: boolean,
+        trace?: TraceRefLike,
+    ): Promise<void> {
+        if (!dropped) {
+            forgetScheduleOutbox(sql, id);
+
+            return;
+        }
+
+        // `version` is the row this attempt was made for. A row recorded since under the same id is a
+        // newer request the drop does not cover, and the retry loop's only copy of that call: it is
+        // neither deleted nor parked, and with an id-only cancel the job the scheduler holds may already
+        // be its, so this hand-off does not cancel either. An absent row is not a replacement.
+        const replaced = (): boolean => {
+            const current = readScheduleOutboxState(sql, id)?.version;
+
+            return current !== undefined && current !== version;
+        };
+
+        if (replaced()) {
+            return;
+        }
+
+        // The row goes only once the cancel is confirmed. If it cannot be, the entry stays
+        // (parked, so it is never handed over again) and a later drop can finish the cancel.
+        try {
+            const held = await cancelScheduleOutboxJob(scheduler, id);
+
+            // A job that was just accepted and is now "not found" has already run or ended: the drop
+            // did not stop it, and the operator has to hear that rather than see the entry vanish.
+            // A call that was rejected may never have been accepted, where "not found" is the normal answer.
+            if (landed && !held) {
+                throw new Error("the scheduler no longer holds the job (it already ran or ended), so the drop could not stop it");
+            }
+
+            if (!replaced()) {
+                forgetScheduleOutbox(sql, id);
+            }
+        } catch (error) {
+            if (!replaced()) {
+                this.parkLiveScheduleOutboxEntry(sql, id);
+            }
+
+            this.logs.push({
+                functionPath: "scheduler:outbox",
+                level: "error",
+                message: `deferred schedule ${id} was dropped while its hand-off was in flight, and cancelling it at the scheduler failed: ${error instanceof Error ? error.message : String(error)}. The job may still run; drop the parked entry again once the scheduler answers.`,
+                timestamp: Date.now(),
+                traceId: trace?.traceId,
+            });
+        }
+    }
+
+    /** Park `id` if it is still live, keeping its attempt count; a parked or absent row is left as it is. */
+    // eslint-disable-next-line class-methods-use-this -- sits beside the other outbox row transitions
+    private parkLiveScheduleOutboxEntry(sql: SqlExec, id: string): void {
+        const live = readDueScheduleOutboxEntry(sql, id, Number.MAX_SAFE_INTEGER);
+
+        if (live !== undefined) {
+            parkScheduleOutbox(sql, id, live.attempts, Date.now());
+        }
+    }
+
+    /**
+     * Push one entry out along the ladder. A `retry.forever` entry that reaches
+     * the attempts a default entry would have parked at says so once, at `warn`:
+     * past that point nothing else reports that the job is still not enqueued.
+     */
+    private deferScheduleOutboxEntry(sql: SqlExec, id: string, attempts: number, forever: boolean, trace?: TraceRefLike): void {
+        deferScheduleOutbox(sql, id, attempts, Date.now() + scheduleOutboxBackoffFor(attempts));
+
+        if (forever && attempts === SCHEDULE_OUTBOX_MAX_ATTEMPTS) {
+            this.logs.push({
+                functionPath: "scheduler:outbox",
+                level: "warn",
+                message: `deferred schedule ${id} is still waiting for the scheduler after ${String(attempts)} attempts. Its mutation committed; custody keeps retrying (retry.forever).`,
+                timestamp: Date.now(),
+                traceId: trace?.traceId,
+            });
         }
     }
 
     /** Park one entry and say so at `error` — a job was promised to a caller and will not be enqueued. */
     private parkScheduleOutboxEntry(sql: SqlExec, id: string, attempts: number, target: unknown, why: string, trace?: TraceRefLike): void {
-        parkScheduleOutbox(sql, id, attempts);
+        parkScheduleOutbox(sql, id, attempts, Date.now());
 
         this.logs.push({
             functionPath: "scheduler:outbox",
@@ -16294,9 +17084,7 @@ abstract class ShardDO {
         for (const ws of sockets) {
             const attachment = this.readAttachment(ws);
 
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment)) {
                 continue;
             }
 
@@ -16403,6 +17191,11 @@ abstract class ShardDO {
         epoch: string | undefined,
         baseCheckpoint: number | undefined,
     ): boolean {
+        // The one send for every shape frame (seed, poke, global poll): checked here, after the awaits that built it.
+        if (this.dropIfLapsed(ws)) {
+            return false;
+        }
+
         this.pokeSequence += 1;
         const pokeId = `poke-${String(this.pokeSequence)}`;
         const frames = buildPokeFrames(parts, {
@@ -16687,7 +17480,9 @@ abstract class ShardDO {
         delivery: SocketDelivery,
         permit?: SubscriptionDeliveryPermit,
     ): void {
-        if (!this.allowsSubscriptionOutcome(ws, subId, permit, stamp.generation)) {
+        // Every row-bearing subscription frame (seed, refresh, resume) passes here after its awaited query and drain,
+        // so checking at the send is what keeps a socket that lapsed meanwhile from receiving the rows in hand.
+        if (this.dropIfLapsed(ws) || !this.allowsSubscriptionOutcome(ws, subId, permit, stamp.generation)) {
             return;
         }
         const existing = this.socketIndex.memo(ws, subId);
@@ -16801,6 +17596,11 @@ abstract class ShardDO {
     ): boolean {
         const memo = this.socketIndex.memo(ws, subId);
         if (memo === undefined || !this.allowsSubscriptionOutcome(ws, subId, permit, stamp.generation)) {
+            return false;
+        }
+        // A settlement moves the client's cursor and watermark, so a socket that lapsed during the awaited
+        // authorization gets none, as it would get no rows.
+        if (this.dropIfLapsed(ws)) {
             return false;
         }
         if (
@@ -17076,6 +17876,7 @@ abstract class ShardDO {
 
         return this.handleLiveSocketControl({
             action: "reauth",
+            ...(request.headers.get("x-lunora-admin-reauth") === "1" ? { adminReauth: true as const } : {}),
             callerId: decodeUserIdHeader(request.headers.get("x-lunora-userid")) ?? "",
             connectionId: body.connectionId,
             ...(identity === undefined ? {} : { identity }),
@@ -17086,15 +17887,55 @@ abstract class ShardDO {
     }
 
     /**
-     * Move a socket's credential expiry to the refreshed one, keeping its
-     * subscriptions and memos. Refused — and the socket left to lapse at its old
-     * expiry with 4001 — when the credential is anonymous, already expired, older
-     * than the one the socket holds (a replay), or carries different claims; the
-     * client then reconnects, and a changed identity re-seeds there as on any upgrade.
+     * Re-authenticate a socket that was admitted as admin. The admin credential it was admitted with must still hold
+     * (the shard's own binding check, as on every admin read, so a rotated token fails here) and the worker must have
+     * verified an admin credential on this very request. Failing either closes the socket: a user identity riding
+     * beside it is not enough to keep the socket, since the user may be the one that was revoked. A user who is gone
+     * or changed closes it too, so it reconnects holding only what the admin credential grants; one that is unchanged
+     * is re-authenticated as any user socket.
+     */
+    private async reauthenticateAdminSocket(ws: ShardSocketLike, call: LiveSocketControlCall): Promise<Response> {
+        const attachment = this.readAttachment(ws);
+
+        if (call.adminReauth !== true || !(await this.attachmentAdminAuthorized(attachment))) {
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_stale");
+
+            return jsonResponse({ error: { code: "IDENTITY_STALE", message: "the admin credential no longer holds; reconnect" } }, 409);
+        }
+
+        if (attachment.userId === undefined) {
+            return jsonResponse({ ok: true });
+        }
+
+        if ((attachment.userId ?? "") !== call.callerId || credentialClaimsKey(attachment.identity) !== credentialClaimsKey(call.identity)) {
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, IDENTITY_CHANGED_CLOSE_REASON);
+
+            return jsonResponse({ error: { code: "IDENTITY_CHANGED", message: "the user on this admin socket changed; reconnect" } }, 409);
+        }
+
+        return this.reauthenticateSocket(ws, call);
+    }
+
+    /**
+     * Move a socket's credential expiry to the refreshed one and restart its
+     * revalidation window, keeping its subscriptions and memos. Refused — and the
+     * socket left to lapse at its old expiry or window — when the credential is
+     * anonymous, already expired, or older than the one the socket holds (a replay).
+     * Different claims close the socket at once with `4005`: the caller's identity
+     * has changed (a role, an `orgId`), so the socket must not deliver another
+     * moment under the old one. The client reconnects and re-seeds under the new one.
      */
     private reauthenticateSocket(ws: ShardSocketLike, call: LiveSocketControlCall): Response {
         const attachment = this.readAttachment(ws);
         const { identity, identityExpiry } = call;
+
+        // A socket already past its window is closed, not revived: a late re-auth must not keep what its lapse ended.
+        // Only the window: a credential expiry that has passed is what this call exists to move forward.
+        if (isIdentityExpired(attachment.revalidateAt)) {
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_stale");
+
+            return jsonResponse({ error: { code: "IDENTITY_STALE", message: "the socket's revalidation window passed; reconnect" } }, 409);
+        }
 
         if (call.callerId === "") {
             return jsonResponse({ error: { code: "UNAUTHENTICATED", message: "an anonymous socket has no credential to refresh" } }, 401);
@@ -17104,14 +17945,16 @@ abstract class ShardDO {
             return jsonResponse({ error: { code: "TOKEN_EXPIRED", message: "authentication token expired" } }, 401);
         }
 
+        if (credentialClaimsKey(attachment.identity) !== credentialClaimsKey(identity)) {
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, IDENTITY_CHANGED_CLOSE_REASON);
+
+            return jsonResponse({ error: { code: "IDENTITY_CHANGED", message: "the credential's claims differ from the socket's; reconnect" } }, 409);
+        }
+
         // A credential without an expiry (a cookie session, say) cannot lift the one the socket holds: the socket
         // would outlive both its bearer and the session.
         if (attachment.expiresAt !== undefined && (identityExpiry === undefined || identityExpiry < attachment.expiresAt)) {
             return jsonResponse({ error: { code: "STALE_CREDENTIAL", message: "the socket already holds a later credential" } }, 409);
-        }
-
-        if (credentialClaimsKey(attachment.identity) !== credentialClaimsKey(identity)) {
-            return jsonResponse({ error: { code: "IDENTITY_CHANGED", message: "the credential's claims differ from the socket's; reconnect" } }, 409);
         }
 
         const next: SocketAttachment = { ...attachment };
@@ -17126,6 +17969,10 @@ abstract class ShardDO {
             delete next.identity;
         } else {
             next.identity = identity;
+        }
+
+        if (attachment.revalidateAt !== undefined) {
+            next.revalidateAt = Date.now() + SOCKET_REVALIDATE_MS;
         }
 
         try {
@@ -17280,7 +18127,8 @@ abstract class ShardDO {
         // Accept and stamp are one call for the same reason they were adjacent
         // before: the runtime only tracks attachments for sockets it has accepted,
         // and no frame can arrive against an unstamped socket in between.
-        const connectionId = crypto.randomUUID();
+        // Named for the relay that holds it, so a re-auth can go straight there; see `holderConnectionId`.
+        const connectionId = holderConnectionId(crypto.randomUUID(), parseRelayName(this.runner.shardKey ?? "")?.relayIndex);
         const accepted = this.socketHost.accept(server, {
             admin,
             connectionId,
@@ -17290,6 +18138,7 @@ abstract class ShardDO {
             ...(expiresAt === undefined ? {} : { expiresAt }),
             ...(identity === undefined ? {} : { identity }),
             ...(ip === undefined ? {} : { ip }),
+            ...revalidationStamp(route, userId, acceptedAt),
             ...(route === undefined ? {} : { socketFunction: route.functionPath, socketPath: url.pathname }),
             ...(routeTopic === undefined ? {} : { whispers: [routeTopic] }),
             ...(userId === undefined ? {} : { userId }),
@@ -17391,33 +18240,94 @@ abstract class ShardDO {
     }
 
     /**
-     * Whether `ws` carries a credential whose expiry (stamped at upgrade) is
-     * now past. Delegates to the shared boundary check `@lunora/agent`'s
-     * voice DO uses for the same decision, so the two DOs can never disagree
-     * about it.
+     * Drop `ws` when it may no longer receive: its credential lapsed (`TOKEN_EXPIRED` / `4001`, through the
+     * helper `@lunora/agent`'s voice DO shares) or its identity went unrevalidated past its window (`4005`, see
+     * `SocketAttachment.revalidateAt`).
+     * @returns whether the socket was dropped
      */
-    private isSocketExpired(ws: ShardSocketLike): boolean {
-        return isIdentityExpired(this.readAttachment(ws).expiresAt);
+    private dropIfLapsed(ws: ShardSocketLike, attachment: SocketAttachment = this.readAttachment(ws), now: number = Date.now()): boolean {
+        const { expiresAt, revalidateAt } = attachment;
+
+        // No expiry, no window, no user to give one: nothing here can lapse (an anonymous socket, a user-less admin socket).
+        if (expiresAt === undefined && revalidateAt === undefined && attachment.userId === undefined) {
+            return false;
+        }
+
+        // `now` is read once by a fan-out for all its sockets; the comparison is `isIdentityExpired`'s.
+        if (typeof expiresAt === "number" && now >= expiresAt) {
+            this.dropLapsedSocket(ws, 4001, "token_expired");
+
+            return true;
+        }
+
+        if (typeof revalidateAt === "number" && now >= revalidateAt) {
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_stale");
+
+            return true;
+        }
+
+        // A hibernated socket accepted before the window existed carries a user and no deadline, and would keep
+        // that identity until it happened to reconnect. It gets one window from the first time it is seen.
+        if (
+            attachment.revalidateAt === undefined &&
+            attachment.userId !== undefined &&
+            attachment.socketPath === undefined &&
+            attachment.socketFunction === undefined
+        ) {
+            // Mutated in place too: a caller that writes its own copy back must not erase the deadline, which
+            // the next call would then grant afresh.
+            Object.assign(attachment, revalidationStamp(undefined, attachment.userId, now));
+
+            try {
+                this.writeAttachment(ws, attachment);
+            } catch {
+                // A deadline that cannot be stored would be granted afresh on every check: fail closed instead.
+                this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_stale");
+
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
-     * Drop an expired-credential socket via the shared `TOKEN_EXPIRED`/`4001`
-     * helper `@lunora/agent`'s voice DO also calls, so both DOs send the
-     * client-facing wire shape from one place.
+     * Whether a cursor read under the claims fingerprinted `presented` may be resumed from on this socket: only when
+     * that is the fingerprint of the socket's claims now. A missing fingerprint (an older client) is a mismatch,
+     * so the default is the cold seed.
      */
-    private dropExpiredSocket(ws: ShardSocketLike): void {
+    private resumesUnderCurrentClaims(ws: ShardSocketLike, presented: string | undefined, name: string | undefined): boolean {
+        const { identity, userId } = this.readAttachment(ws);
+
+        // The address is not in the fingerprint, since a reconnect from a new network would then always seed cold. A
+        // function seen reading `ctx.ip` is the exception: its rows may belong to the address the cursor was read at.
+        return presented !== undefined && presented === claimsFingerprint(userId, identity) && (name === undefined || !this.ipKeyedFunctionPaths.has(name));
+    }
+
+    private dropLapsedSocket(ws: ShardSocketLike, code: number, reason: string): void {
         // The close this drop starts is not delivered back to `webSocketClose` (the runtime dispatches that event
         // for a peer's close, not a server-initiated one), so the whole teardown runs here instead: the route's
         // `onClose` or the connection's `onDisconnect`, the room leaves, the per-socket memos and the durable
         // shape-poke rows. Started before the close, so it reads the attachment first. `webSocketClose` runs at most
         // once per socket, so a runtime that does deliver a close finds nothing left to repeat.
-        const teardown = this.webSocketClose(ws as unknown as WebSocket, 4001, "token_expired", true).catch((error: unknown) => {
+        const teardown = this.webSocketClose(ws as unknown as WebSocket, code, reason, true).catch((error: unknown) => {
             // eslint-disable-next-line no-console -- server-side diagnostic: the socket is already closed, so there is nothing to propagate a teardown failure to
-            console.error("[@lunora/do] expired-socket teardown failed:", error);
+            console.error("[@lunora/do] lapsed-socket teardown failed:", error);
         });
 
         this.shardHost.waitUntil?.(teardown);
-        dropExpiredCredentialSocket(ws);
+
+        if (code === 4001) {
+            dropExpiredCredentialSocket(ws);
+
+            return;
+        }
+
+        try {
+            ws.close?.(code, reason);
+        } catch {
+            /* socket already gone */
+        }
     }
 
     /**
@@ -17816,6 +18726,8 @@ abstract class ShardDO {
         // Only a route topic needs the per-socket route re-check; decided once, so an ordinary whisper adds no call per member.
         const routeTopic = topic.startsWith(SOCKET_TOPIC_PREFIX);
 
+        // One clock read for the whole fan-out, shared by every socket's lapse check.
+        const now = Date.now();
         for (const ws of this.runner.sockets()) {
             scanned += 1;
 
@@ -17849,9 +18761,7 @@ abstract class ShardDO {
             // check. Without this a lapsed socket keeps receiving every whisper
             // on its joined topics — including the sender's `from` userId — for
             // the rest of its life.
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment, now)) {
                 continue;
             }
 
@@ -18366,6 +19276,12 @@ abstract class ShardDO {
             return false;
         }
 
+        // The receive-time check ran when the frame arrived; the event may have waited since for its authorization or
+        // the events ahead of it. A lapsed identity runs no handler. A leave still runs: its cleanup must not be skipped.
+        if (kind !== "leave" && this.roomSenderLapsed(ws)) {
+            return false;
+        }
+
         // Checked here, not at receive: a queued event runs only once the events ahead of it have settled.
         if (this.skipsQueuedRoomEvent(ws, topic, kind, joinEpoch)) {
             return true;
@@ -18425,7 +19341,28 @@ abstract class ShardDO {
             this.failedRoomJoins.get(ws)?.delete(topic);
         }
 
+        // The handler awaited: the sender's deadline may have passed meanwhile. What it committed stays, but a
+        // lapsed identity does not reach the other members. A leave is cleanup and still tells them.
+        if (kind !== "leave" && this.roomSenderLapsed(ws)) {
+            return false;
+        }
+
         this.broadcastPending(ws, topic, functionPath, kind, pending);
+
+        return true;
+    }
+
+    /** Whether the sender's credential has lapsed. A local socket is dropped; a relayed event's stand-in has none to close. */
+    private roomSenderLapsed(ws: ShardSocketLike): boolean {
+        const current = this.readAttachment(ws);
+
+        if (!isIdentityExpired(current.expiresAt) && !isIdentityExpired(current.revalidateAt)) {
+            return false;
+        }
+
+        if (typeof (ws as { close?: unknown }).close === "function") {
+            this.dropIfLapsed(ws, current);
+        }
 
         return true;
     }
@@ -18521,8 +19458,10 @@ abstract class ShardDO {
             attachment: {
                 connectionId,
                 context: attachment.context,
+                expiresAt: attachment.expiresAt,
                 identity: attachment.identity,
                 ip: attachment.ip,
+                revalidateAt: attachment.revalidateAt,
                 userId: attachment.userId,
             },
             connectionId,
@@ -18825,6 +19764,17 @@ abstract class ShardDO {
             }
         }
 
+        // Closing a socket is for its owner, or for a request the worker proved carries an admin credential: anyone else gets
+        // the answer for a socket they do not own.
+        if (
+            ws !== undefined &&
+            action === "reauth" &&
+            this.readAttachment(ws).admin === true &&
+            (call.adminReauth === true || (this.readAttachment(ws).userId ?? "") === callerId)
+        ) {
+            return this.reauthenticateAdminSocket(ws, call);
+        }
+
         // Same owner rule as an SSE connection: another caller's socket is refused as absent.
         if (ws === undefined || (this.readAttachment(ws).userId ?? "") !== callerId) {
             return jsonResponse({ error: { code: "LIVE_CONNECTION_NOT_FOUND", message: "no such live connection" } }, 404);
@@ -18988,6 +19938,8 @@ abstract class ShardDO {
 
         let delivered = 0;
 
+        // One clock read for the whole fan-out, shared by every socket's lapse check.
+        const now = Date.now();
         for (const ws of this.liveGrantSockets) {
             const attachment = this.readAttachment(ws);
             const grants = Object.values(attachment.liveGrants ?? {});
@@ -19006,9 +19958,7 @@ abstract class ShardDO {
                 continue;
             }
 
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment, now)) {
                 continue;
             }
 
