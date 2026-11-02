@@ -34,6 +34,7 @@ import { isRunnableDevEnvironment } from "vite";
 
 import { markBuildStarted, oncePerBuild } from "./build-session";
 import { computeConfigFingerprint } from "./config-fingerprint";
+import configFlipRegenerates from "./config-flip";
 import LUNORA_API_UPDATED_EVENT from "./hmr-events";
 import { createRegenerateScheduler, HOOK_SETTLE_MS } from "./regenerate-scheduler";
 import type { PendingCloseMap } from "./server-close";
@@ -880,13 +881,9 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                     // regenerating here too would race that restart. Only a nearer config, which the restart does not cover, regenerates.
                     const lazyNow = readProjectLazyFunctions(absoluteSchemaDirectory);
                     const flipped = lazyNow !== lazyFunctionsSeen;
-                    // A save of any project-root candidate (created, changed or deleted) moves the fingerprint and restarts the server, whose
-                    // first codegen reads the new value. Before the startup baseline settles, no restart follows, so the flip regenerates.
-                    const rootCandidate = PROJECT_CONFIG_FILENAMES.some((name) => resolve(options.projectRoot, name) === normalized);
-
                     lazyFunctionsSeen = lazyNow;
 
-                    return flipped && (!rootCandidate || !configBaselineSettled);
+                    return configFlipRegenerates({ baselineSettled: configBaselineSettled, file: normalized, flipped, projectRoot: options.projectRoot });
                 }
 
                 // Only a file literally named `tsconfig.json` can possibly be the
