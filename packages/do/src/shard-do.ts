@@ -1620,23 +1620,25 @@ const parseScheduleOutboxEnvelope = (
         return { ok: false, reason: "its stored payload is not a scheduled call", target: undefined };
     }
 
-    const { target } = parsed;
-    let reason: string | undefined;
+    const { args, options, target, when } = parsed;
 
     if (!isScheduleOutboxTarget(target)) {
-        reason = "its target is neither a function reference nor a workflow";
-    } else if (typeof parsed["when"] !== "number" || !Number.isFinite(parsed["when"])) {
-        reason = "its fire time is missing";
-    } else if (parsed["options"] !== undefined && !isPlainObject(parsed["options"])) {
-        reason = "its options are not an object";
+        return { ok: false, reason: "its target is neither a function reference nor a workflow", target };
     }
 
-    if (reason !== undefined) {
-        return { ok: false, reason, target };
+    if (typeof when !== "number" || !Number.isFinite(when)) {
+        return { ok: false, reason: "its fire time is missing", target };
     }
+
+    if (options !== undefined && !isPlainObject(options)) {
+        return { ok: false, reason: "its options are not an object", target };
+    }
+
+    // Built from the checked fields, so a field added to the envelope has to be validated here first.
+    const envelope: ScheduleOutboxEnvelope = { args, options, target, when };
 
     try {
-        return { args: decodeWire(parsed["args"]), envelope: parsed as unknown as ScheduleOutboxEnvelope, ok: true };
+        return { args: decodeWire(args), envelope, ok: true };
     } catch {
         return { ok: false, reason: "its arguments cannot be decoded", target };
     }
@@ -1649,11 +1651,20 @@ const parseScheduleOutboxEnvelope = (
  * accepted under a binding that has since gone, so the caller must keep the entry. Resolves to what the
  * scheduler answered: whether it held the job.
  */
+/** Cancel errors raised because there is no scheduler (or none with `cancel`) to ask, as opposed to one that was asked and failed: waiting cannot fix them. */
+const schedulerUnavailableErrors = new WeakSet<Error>();
+
+const isSchedulerUnavailable = (error: unknown): boolean => error instanceof Error && schedulerUnavailableErrors.has(error);
+
 const cancelScheduleOutboxJob = async (scheduler: SchedulerLike | undefined, id: string): Promise<boolean> => {
     const cancel = (scheduler as { cancel?: (jobId: string) => Promise<unknown> } | undefined)?.cancel;
 
     if (typeof cancel !== "function") {
-        throw new TypeError("no scheduler with a cancel method is configured on this shard, so the cancel cannot be confirmed");
+        const error = new TypeError("no scheduler with a cancel method is configured on this shard, so the cancel cannot be confirmed");
+
+        schedulerUnavailableErrors.add(error);
+
+        throw error;
     }
 
     const answer = (await cancel.call(scheduler, id)) as { cancelled?: unknown } | undefined;
@@ -1681,7 +1692,9 @@ interface ScheduleOutboxAttempt {
 const scheduleOutboxDropFailure = (id: string, reason: string, cause: unknown): LunoraError =>
     new LunoraError(
         "SERVICE_UNAVAILABLE",
-        `deferred schedule ${id} was parked, not dropped: ${reason}. It will not be handed over; drop it again once the scheduler answers.`,
+        `deferred schedule ${id} was parked, not dropped: ${reason}. It will not be handed over; ${
+            isSchedulerUnavailable(cause) ? "drop it again to remove it without a confirmed cancel" : "drop it again once the scheduler answers"
+        }.`,
         { cause },
     );
 
@@ -12284,6 +12297,10 @@ abstract class ShardDO {
                 cancelError = new Error("a hand-off that landed during the drop could not be cancelled, so the job may still run");
             }
 
+            if (this.removeUnconfirmableScheduleOutboxDrop(sql, id, cancelError, before.parked && after.parked, awaiting)) {
+                return adminResponse({ dropped: true });
+            }
+
             if (cancelError !== undefined) {
                 // The scheduler may be the very thing that is down. The operator asked for this job
                 // to stop, so the shard must not hand it over in the meantime: park it and report
@@ -12306,19 +12323,7 @@ abstract class ShardDO {
                 this.parkLiveScheduleOutboxEntry(sql, id);
             }
 
-            // "Not found" is the usual answer for a job the scheduler never accepted, and the same answer
-            // it gives once an accepted job has run: an earlier hand-off whose accept was lost on the way
-            // back. The drop cannot tell the two apart, so the operator is told the job may have run.
-            if (!held) {
-                this.logs.push({
-                    functionPath: "scheduler:outbox",
-                    level: "warn",
-                    message: `deferred schedule ${id} was dropped, but the scheduler held no job under that id. Usually it was never accepted; if an earlier hand-off was accepted and only its answer was lost, the job may already have run.`,
-                    timestamp: Date.now(),
-                });
-            }
-
-            this.recordAudit("dropOutboxEntry", { id, detail: held ? { outcome: "applied" } : { outcome: "applied", schedulerHeld: false } });
+            this.auditAppliedScheduleOutboxDrop(id, held);
 
             return adminResponse({ dropped: true });
         } finally {
@@ -12331,6 +12336,54 @@ abstract class ShardDO {
             settled.resolve(undefined);
             this.pruneScheduleOutboxDropMarker(id);
         }
+    }
+
+    /**
+     * Audit a drop that applied. "Not found" is the usual answer for a job the scheduler never
+     * accepted, and the same answer it gives once an accepted job has run: an earlier hand-off whose
+     * accept was lost on the way back. The drop cannot tell the two apart, so the operator is told the
+     * job may have run.
+     */
+    private auditAppliedScheduleOutboxDrop(id: string, held: boolean): void {
+        if (!held) {
+            this.logs.push({
+                functionPath: "scheduler:outbox",
+                level: "warn",
+                message: `deferred schedule ${id} was dropped, but the scheduler held no job under that id. Usually it was never accepted; if an earlier hand-off was accepted and only its answer was lost, the job may already have run.`,
+                timestamp: Date.now(),
+            });
+        }
+
+        this.recordAudit("dropOutboxEntry", { id, detail: held ? { outcome: "applied" } : { outcome: "applied", schedulerHeld: false } });
+    }
+
+    /**
+     * With no scheduler to ask, waiting never confirms the cancel. The first drop parked the row (a
+     * job may have been accepted under a binding that has since gone); dropping a row that was already
+     * parked, with nothing in flight, is the operator accepting that, and removes it.
+     * @returns whether the row was removed
+     */
+    private removeUnconfirmableScheduleOutboxDrop(
+        sql: SqlExec,
+        id: string,
+        cancelError: Error | undefined,
+        alreadyParked: boolean,
+        awaiting: ReadonlySet<ScheduleOutboxAttempt> | undefined,
+    ): boolean {
+        if (!isSchedulerUnavailable(cancelError) || !alreadyParked || (awaiting !== undefined && awaiting.size > 0)) {
+            return false;
+        }
+
+        dropScheduleOutbox(sql, id);
+        this.logs.push({
+            functionPath: "scheduler:outbox",
+            level: "warn",
+            message: `deferred schedule ${id} was removed by a repeated drop without a confirmed cancel: no scheduler is configured on this shard to ask. If it was accepted under a scheduler that has since been removed, it may still run there.`,
+            timestamp: Date.now(),
+        });
+        this.recordAudit("dropOutboxEntry", { id, detail: { outcome: "applied", schedulerHeld: "unknown" } });
+
+        return true;
     }
 
     /**

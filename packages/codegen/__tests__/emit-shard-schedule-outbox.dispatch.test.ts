@@ -870,6 +870,30 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         expect(harness.outbox()).toStrictEqual([{ attempts: 3, dead: 1, id: "job-1" }]);
     });
 
+    it("removes an entry on a second drop when no scheduler will ever be there to confirm the cancel", async () => {
+        expect.assertions(6);
+
+        const harness = createHarness({ scheduler: false });
+
+        await expect(harness.shard.handleRpc("outbox:countNotes", {})).resolves.toBe(0);
+
+        harness.run(
+            "INSERT INTO __schedule_outbox (id, envelope_json, attempts, next_attempt_at, created_at, dead) VALUES (?, ?, 3, 0, ?, 0)",
+            "job-1",
+            JSON.stringify({ args: {}, options: undefined, target: { __lunoraRef: "outbox:charge" }, when: 0 }),
+            Date.now(),
+        );
+
+        // The first drop parks and says how to finish: waiting for a scheduler that does not exist never would.
+        await expect(harness.drop("job-1")).rejects.toThrow(/drop it again to remove it without a confirmed cancel/u);
+        expect(harness.outbox()).toStrictEqual([{ attempts: 3, dead: 1, id: "job-1" }]);
+
+        // Dropping the parked row again is the operator accepting that, and removes it.
+        await expect(harness.drop("job-1")).resolves.toBeInstanceOf(Response);
+        expect(harness.outbox()).toStrictEqual([]);
+        expect(harness.audit().at(-1)).toStrictEqual({ detail: JSON.stringify({ outcome: "applied", schedulerHeld: "unknown" }), op: "dropOutboxEntry" });
+    });
+
     it("never hands a dropped entry to the scheduler when its hand-off had not started", async () => {
         expect.assertions(3);
 

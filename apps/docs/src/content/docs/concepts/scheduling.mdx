@@ -133,8 +133,12 @@ job the scheduler has not accepted: `ctx.scheduler.cancel(id)` reaches only
 jobs the `SchedulerDO` holds. A drop also asks the scheduler to cancel the id,
 because the hand-off may have landed without the shard learning of it; if a
 hand-off is in flight when you drop, the job is cancelled as soon as it lands.
-If the scheduler cannot be reached, or none is configured, to confirm the cancel, the entry is parked so it is
-never handed over, and the drop reports the error; drop it again once the scheduler answers.
+If the scheduler cannot be reached to confirm the cancel, the entry is parked so it is never handed over,
+and the drop reports the error; drop it again once the scheduler answers. On a shard with no scheduler
+configured nothing will ever answer, so the first drop parks the entry and a second drop removes it,
+recorded as unconfirmed. A drop the scheduler answers with "not found" still applies, but is logged:
+that is also its answer for a job an earlier hand-off delivered without the shard hearing back, which
+may already have run.
 Entries are listed oldest first, parked or not. Both are admin RPCs (`__lunora_admin__:retryOutboxEntry`
 and `dropOutboxEntry`), are recorded in the audit log, and act on one
 shard at a time. The MCP server's `lunora_get_schedule_outbox` tool reads the
