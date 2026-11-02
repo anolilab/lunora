@@ -2505,6 +2505,34 @@ describe("createWorker — HTTP actions", () => {
         expect(shard.calls).toHaveLength(0);
     });
 
+    it("refuses `ctx.forShard(key).runMutation` on `agents:agentRun` off the default shard, before dispatch", async () => {
+        expect.assertions(3);
+
+        // The agent's thread rows live on the default shard. A run started from another shard reads an empty table, so the in-flight check
+        // misses the thread and a retry starts a second run.
+        const worker = createWorker({
+            authorizeShard: () => true,
+            httpRouter: honoApp((app) =>
+                app.get("/channels/:id/agent", async (c) => {
+                    try {
+                        await c.var.lunora.forShard(c.req.param("id")).runMutation({ __lunoraRef: "agents:agentRun" }, { threadKey: "t" });
+                    } catch (error) {
+                        return Response.json({ code: (error as { code?: string }).code }, { status: 400 });
+                    }
+
+                    return new Response("ran", { status: 200 });
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/channels/tenant-42/agent"), {}, fakeContext);
+
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toStrictEqual({ code: "BAD_REQUEST" });
+        expect(shard.calls).toHaveLength(0);
+    });
+
     it("encodes `ctx.run*` args and decodes its result, so bigint / Date / bytes survive the shard hop", async () => {
         expect.assertions(5);
 

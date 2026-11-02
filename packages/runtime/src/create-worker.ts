@@ -4785,6 +4785,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // `targetFields` refuses a bare `"ns:fn"` string because an HTTP action
                 // can be reached unauthenticated) — same reasoning, same surface.
                 assertNotReservedRelationPath(functionPath);
+                // The agent's run-start check reads the default shard's thread table; a `forShard` run on another
+                // shard would miss it and start a second run for the same thread.
+                assertAgentRunOnDefaultShard(functionPath, shardKey);
 
                 // Every non-default shard a run names is refused here, before the
                 // system-trusted dispatch below can read it. That covers `forShard` from
