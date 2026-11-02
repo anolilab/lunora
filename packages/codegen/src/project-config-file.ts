@@ -435,7 +435,11 @@ const readCodegen = (declared: TsNode | undefined, sourceFile: SourceFile): Proj
     const isName = unwrapped !== undefined && TsNode.isIdentifier(unwrapped);
     const declaration = unwrapped !== undefined && TsNode.isIdentifier(unwrapped) ? sourceFile.getVariableDeclaration(unwrapped.getText()) : undefined;
     const isConst = declaration?.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const;
-    const value = isConst ? (unwrapLiteral(declaration.getInitializer()) ?? unwrapped) : unwrapped;
+    // A `const` holds a mutable object: a write or an alias elsewhere could change what is exported. Only a name with no other
+    // reference (its one use is the codegen property itself) is read; any other reference leaves it unread, and so reported.
+    const name = declaration?.getNameNode();
+    const provable = declaration !== undefined && isConst && name !== undefined && TsNode.isIdentifier(name) && name.findReferencesAsNodes().length === 1;
+    const value = provable ? (unwrapLiteral(declaration.getInitializer()) ?? unwrapped) : unwrapped;
 
     return { codegen: { ...readExclude(value, sourceFile), ...readLazyFunctions(value, sourceFile, isName) } };
 };

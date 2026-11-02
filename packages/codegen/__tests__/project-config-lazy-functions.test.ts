@@ -159,6 +159,21 @@ describe("codegen.lazyFunctions in lunora.config", () => {
         expect(warn).not.toHaveBeenCalled();
     });
 
+    it("does not trust a named const that is written after its declaration", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        writeFileSync(
+            join(projectRoot, "lunora.config.ts"),
+            "const sharedCodegen = { lazyFunctions: false };\nsharedCodegen.lazyFunctions = true;\nexport default { codegen: sharedCodegen };\n",
+            "utf8",
+        );
+
+        expect(readProjectLazyFunctions(join(projectRoot, "lunora"))).toBe(false);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("not a boolean literal"));
+    });
+
     it("does not follow a let binding, whose value may change before the config runs", () => {
         expect.assertions(2);
 
