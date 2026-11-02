@@ -725,6 +725,59 @@ describe(dispatchAgentChannel, () => {
         expect(created).toStrictEqual([]);
     });
 
+    it("refuses a Slack interactive payload that is not a JSON object, before the mapper runs", async () => {
+        expect.assertions(3);
+
+        const { binding, created } = fakeBinding();
+        let mapped = 0;
+        const agent = {
+            onInbound: {
+                channel: "slack" as const,
+                map: () => {
+                    mapped += 1;
+
+                    return { input: "x", threadKey: "t" };
+                },
+                secret: "SLACK_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
+
+        const response = await handler(await slackRequest(secret, "payload=%7Bnot-json"), { SLACK_SECRET: secret, SupportAgentWorkflow: binding }, NO_CONTEXT);
+
+        expect(response.status).toBe(400);
+        expect(mapped).toBe(0);
+        expect(created).toStrictEqual([]);
+    });
+
+    it("accepts GitHub's form-encoded delivery, a payload= wrapper of a JSON object", async () => {
+        expect.assertions(2);
+
+        const { binding } = fakeBinding();
+        let mapped = 0;
+        const agent = {
+            onInbound: {
+                channel: "github" as const,
+                map: () => {
+                    mapped += 1;
+
+                    return { input: "x", threadKey: "t" };
+                },
+                secret: "GITHUB_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
+
+        const response = await handler(
+            await githubRequest(secret, `payload=${encodeURIComponent('{"action":"opened","installation":{"id":42}}')}`),
+            { GITHUB_SECRET: secret, SupportAgentWorkflow: binding },
+            NO_CONTEXT,
+        );
+
+        expect(response.status).not.toBe(400);
+        expect(mapped).toBe(1);
+    });
+
     it("reads GitHub's workspace from installation.id and Slack's from an interactive payload's team.id", async () => {
         const { binding } = fakeBinding();
         const seen: (string | undefined)[] = [];

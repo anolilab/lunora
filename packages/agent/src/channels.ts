@@ -283,6 +283,13 @@ const parseSignedBody = (body: string): Record<string, unknown> | undefined => {
     return parseJsonObject(body) ?? Object.fromEntries(new URLSearchParams(body));
 };
 
+/**
+ * Whether a signed body is refused before the mapper: it must carry a JSON object. A `payload=` form wrapper is judged by its
+ * payload (GitHub's form delivery, Slack's interactive payloads). Slack's other form bodies, its slash commands, are legitimate.
+ */
+const isMalformedBody = (channel: string, body: string): boolean =>
+    (body.startsWith("payload=") ? parseSignedBody(body) === undefined : channel !== "slack" && parseJsonObject(body) === undefined);
+
 const idString = (value: unknown): string | undefined => {
     if (typeof value === "string" && value !== "") {
         return value;
@@ -438,9 +445,10 @@ const dispatchAgentChannel =
                 return pong;
             }
 
-            // GitHub and Discord send JSON, so a signed body that is not a JSON object is refused here, rather than mapped and routed to the
-            // default shard. Slack also sends form bodies, which are legitimate.
-            if (channel !== "slack" && parseJsonObject(body) === undefined) {
+            // A signed body must carry a JSON object before the mapper sees it, or it is refused rather than routed to the default shard.
+            // A `payload=` form wrapper (GitHub's form delivery, Slack's interactive payloads) is judged by its payload. Slack's other form
+            // bodies, its slash commands, are legitimate fields.
+            if (isMalformedBody(channel, body)) {
                 return new Response("Malformed webhook body", { status: 400 });
             }
 
