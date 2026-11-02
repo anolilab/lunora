@@ -27,6 +27,7 @@
  * a Vite project's behalf would execute an arbitrary project script twice per
  * regeneration.
  */
+import { createHash } from "node:crypto";
 import type { FSWatcher } from "node:fs";
 import { existsSync, readFileSync, statSync, watch } from "node:fs";
 import { dirname, join } from "node:path";
@@ -243,6 +244,31 @@ const runOnce = (
 };
 
 /**
+ * A digest of the config files codegen would read: the content a codegen run generated from. A config save that leaves this
+ * unchanged, such as a `postcodegen` hook rewriting the same bytes, has nothing new for codegen to read.
+ */
+const configDigest = (candidates: ReadonlyArray<string>): string => {
+    const hash = createHash("sha256");
+
+    for (const candidate of candidates) {
+        hash.update(candidate).update("\0");
+
+        if (existsSync(candidate)) {
+            try {
+                hash.update(readFileSync(candidate));
+            } catch {
+                // Removed between the check and the read: recorded as unreadable, which still differs from its content.
+                hash.update("unreadable");
+            }
+        }
+
+        hash.update("\0");
+    }
+
+    return hash.digest("hex");
+};
+
+/**
  * The watchers for the folders that can hold a `lunora.config` codegen reads, each reporting only the candidate files in it.
  * Best effort: a folder the platform will not watch is skipped, and the Lunora folder's watch still runs.
  */
@@ -309,6 +335,9 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     // ran codegen. A run queued behind it for anything else needs codegen again.
     let pending: undefined | { codegen: boolean; reason: string };
     let settledAt = 0;
+    // The config content the last codegen run read; a replayed config save that leaves it unchanged regenerates nothing.
+    let codegenDigest: string | undefined;
+    const configPaths = projectConfigCandidatePaths(watchDirectory);
     let idle: Promise<void> = Promise.resolve();
     const project = createReusableProject(options.projectRoot, watchDirectory);
 
@@ -347,6 +376,9 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                     // No hook on a failed run: `postcodegen` exists to finish
                     // generated output, and running it over a tree codegen did
                     // not write is the one way to make a bad state worse.
+                    if (next.codegen) {
+                        codegenDigest = configDigest(configPaths);
+                    }
                     if (next.codegen && !runOnce(options, lunoraDirectory, next.reason, project)) {
                         continue;
                     }
@@ -507,13 +539,17 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     // A config save that lands while a hook runs, or in its settle window, is replayed once the window is over. The hook's own
     // writes are dropped there; a save of the config is not one of them, so it must not be lost.
     let configReplay: ReturnType<typeof setTimeout> | undefined;
-    const replayConfigEvent = (filename: string): void => {
+    const replayConfigEvent = (filename: string | undefined): void => {
         if (closed) {
             return;
         }
 
         if (!hookRunning && Date.now() - settledAt >= HOOK_SETTLE_MS) {
-            onEvent(undefined, filename);
+            // A hook rewriting identical content ends the cycle here: the bytes codegen last read are still the bytes there are.
+            // An event that names no file cannot be checked, so it regenerates.
+            if (filename === undefined || configDigest(configPaths) !== codegenDigest) {
+                onEvent(undefined, filename ?? "?");
+            }
 
             return;
         }
@@ -562,7 +598,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
             ...watchConfigFolders(
                 configCandidates,
                 (filename) => {
-                    replayConfigEvent(filename ?? "?");
+                    replayConfigEvent(filename);
                 },
                 (message) => {
                     options.logger.warn(message);
@@ -678,3 +714,5 @@ export interface CodegenWatcherHandle {
      */
     watchAvailable: boolean;
 }
+
+export { configDigest };

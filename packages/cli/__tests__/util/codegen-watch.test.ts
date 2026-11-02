@@ -6,7 +6,7 @@ import { runCodegen } from "@lunora/codegen";
 import { consumeStudioWrite, STUDIO_WRITE_TEMP_SUFFIX } from "@lunora/config/studio-host";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { startCodegenWatch } from "../../src/util/codegen-watch";
+import { configDigest, startCodegenWatch } from "../../src/util/codegen-watch";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
@@ -381,6 +381,7 @@ describe("startCodegenWatch", () => {
         writeFileSync(join(workdir, "package.json"), "{}", "utf8");
         mkdirSync(join(workdir, "lunora"), { recursive: true });
         writeFileSync(join(workdir, "lunora", "schema.ts"), "", "utf8");
+        writeFileSync(join(workdir, "lunora.config.ts"), "export default {};\n", "utf8");
 
         const runs = runCounter();
         vi.mocked(runCodegen).mockImplementation(() => {
@@ -394,6 +395,9 @@ describe("startCodegenWatch", () => {
         try {
             await handle.ready;
 
+            // The save changes the config's content, which is what codegen reads, so the digest moves and the listener regenerates.
+            writeFileSync(join(workdir, "lunora.config.ts"), "export default { codegen: { lazyFunctions: true } };\n", "utf8");
+
             // The config folder's watch is registered with its listener. The listener is the observable point at which a save is
             // reported, so the test drives it directly rather than racing a real folder watch.
             const configListener = vi.mocked(watch).mock.calls.find((call) => call[0] === workdir && call.length === 2)?.[1] as
@@ -401,7 +405,7 @@ describe("startCodegenWatch", () => {
 
             expect(configListener).toBeDefined();
 
-            configListener?.("rename", "lunora.config.ts");
+            configListener?.("change", "lunora.config.ts");
             await runs.reached(2);
 
             expect(vi.mocked(runCodegen).mock.calls.length).toBeGreaterThanOrEqual(2);
@@ -443,6 +447,31 @@ describe("startCodegenWatch", () => {
             expect(vi.mocked(runCodegen).mock.calls.length).toBeGreaterThanOrEqual(2);
         } finally {
             await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    it("digests the config content, so a rewrite of identical bytes is no change", () => {
+        expect.assertions(3);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-digest-"));
+
+        try {
+            const config = join(workdir, "lunora.config.ts");
+            const absent = configDigest([config]);
+
+            writeFileSync(config, "export default {};\n", "utf8");
+            const first = configDigest([config]);
+
+            writeFileSync(config, "export default {};\n", "utf8");
+
+            expect(configDigest([config])).toBe(first);
+            expect(first).not.toBe(absent);
+
+            writeFileSync(config, "export default { codegen: { lazyFunctions: true } };\n", "utf8");
+
+            expect(configDigest([config])).not.toBe(first);
+        } finally {
             rmSync(workdir, { force: true, recursive: true });
         }
     });
