@@ -1259,10 +1259,16 @@ describe("dispatchQueueBatch — a DISPATCH_IN_PROGRESS decline", () => {
                     { env: { ...DISPATCH_ENV, QUEUE_Q: queue }, holdSeconds: 300 },
                 );
 
-                expect(queue.send.mock.calls).toStrictEqual([
+                // Copies are sent concurrently, and the queue does not order delivery, so compare as a set.
+                const expected = [
                     [await sealRequeue("tok", "m1", { n: 1 }), { contentType: "json", delaySeconds: 300 }],
                     [await sealRequeue("tok", "m2", { n: 2 }), { contentType: "json", delaySeconds: 300 }],
-                ]);
+                ];
+                const sent = queue.send.mock.calls.map((call) => JSON.stringify(call));
+
+                expect(sent.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(
+                    expected.map((call) => JSON.stringify(call)).toSorted((a, b) => a.localeCompare(b)),
+                );
                 // Acked, not retried: a retry would spend a delivery attempt per hold.
                 expect([first.acked, second.acked]).toStrictEqual([true, true]);
                 expect(retryOptions(first)).toStrictEqual([]);

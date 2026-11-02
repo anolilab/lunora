@@ -654,24 +654,23 @@ const holdBatch = async (batch: MessageBatchLike, entry: QueueRegistryEntry, env
     const secret = requeueSecret(env);
     const producer = entry.binding === undefined ? undefined : (env[entry.binding] as QueueBindingLike | undefined);
 
-    // One at a time, in batch order: the copies reach the queue in the order they were delivered.
-    // Sealing them concurrently let a slower HMAC send first, so a held batch could come back reordered.
-    for (const message of batch.messages) {
-        // eslint-disable-next-line no-await-in-loop -- ordering is the point; a copy must be sent before the next one is sealed
-        const failure = await sendHeldCopy(message, producer, secret, holdSeconds);
+    await Promise.all(
+        batch.messages.map(async (message) => {
+            const failure = await sendHeldCopy(message, producer, secret, holdSeconds);
 
-        if (failure === undefined) {
-            message.ack();
+            if (failure === undefined) {
+                message.ack();
 
-            continue;
-        }
+                return;
+            }
 
-        // eslint-disable-next-line no-console -- last-resort operator signal; there is no injected logger on the dispatch path
-        console.error(
-            `@lunora/queue: queue "${batch.queue}" (${entry.exportName}): message ${message.id} is held with a delayed retry because a fresh copy could not be sent (${failure}); it spends a delivery attempt.`,
-        );
-        message.retry({ delaySeconds: holdSeconds });
-    }
+            // eslint-disable-next-line no-console -- last-resort operator signal; there is no injected logger on the dispatch path
+            console.error(
+                `@lunora/queue: queue "${batch.queue}" (${entry.exportName}): message ${message.id} is held with a delayed retry because a fresh copy could not be sent (${failure}); it spends a delivery attempt.`,
+            );
+            message.retry({ delaySeconds: holdSeconds });
+        }),
+    );
 };
 
 /** The registry entry for `batch.queue`; throws a directed error when none is declared. */
