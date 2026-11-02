@@ -607,6 +607,18 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Function namespace collision";
     };
+    readonly PUBLISHED_FUNCTION_UNSUPPORTED: {
+        readonly status: 500;
+        readonly title: "Published function cannot be registered from its declaration";
+    };
+    readonly PUBLISHED_FUNCTION_VISIBILITY_UNKNOWN: {
+        readonly status: 500;
+        readonly title: "Published function does not declare its visibility";
+    };
+    readonly PROCEDURE_META_UNLOADED: {
+        readonly status: 500;
+        readonly title: "Procedure meta is not loaded";
+    };
     readonly AI_CHAT_FAILED: {
         readonly status: 500;
         readonly title: "Assistant turn failed";
