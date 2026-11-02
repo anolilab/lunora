@@ -1,5 +1,4 @@
-import { jsonSchema } from "@ai-sdk/provider-utils";
-
+import jsonSchema from "./json-schema";
 import { toFunctionReference } from "./paths";
 import type { AgentConfig, AgentFunctionReference, AgentMemorySource, AgentToolDefinition, AnyAgentTool, SkillDefinition } from "./types";
 

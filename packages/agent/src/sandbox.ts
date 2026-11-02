@@ -1,6 +1,6 @@
-import { jsonSchema } from "@ai-sdk/provider-utils";
 import { LunoraError } from "@lunora/errors";
 
+import jsonSchema from "./json-schema";
 import { SANDBOX_INVOKE_PATH, toFunctionReference } from "./paths";
 import { SANDBOX_BROWSER_DISPATCH_TIMEOUT_MS, SANDBOX_CONTAINER_DISPATCH_TIMEOUT_MS } from "./sandbox-budgets";
 import type { AgentToolContext, AgentToolDefinition } from "./types";

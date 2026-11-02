@@ -1,6 +1,6 @@
-import { asSchema, jsonSchema } from "@ai-sdk/provider-utils";
 import { LunoraError } from "@lunora/errors";
 
+import jsonSchema from "./json-schema";
 import isPositiveInteger from "./positive-integer";
 import { capToolOutputText, MAX_TOOL_OUTPUT_CHARS } from "./tool-output";
 import type { AgentToolContext, AgentToolDefinition, AnyAgentTool } from "./types";
@@ -166,6 +166,8 @@ const resolveReferences = (value: unknown, results: Record<string, unknown>): un
  * of a bare `jsonSchema(...)` with no validator, which neither path can check.
  */
 const validatedStepInput = async (step: ToolScriptStep, tool: AnyAgentTool, input: unknown): Promise<unknown> => {
+    // Imported here, not at module scope: the SDK's root pulls zod into the startup graph.
+    const { asSchema } = await import("@ai-sdk/provider-utils");
     const { validate } = asSchema(tool.inputSchema);
 
     if (validate === undefined) {

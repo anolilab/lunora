@@ -1,9 +1,9 @@
-import { jsonSchema } from "@ai-sdk/provider-utils";
 import { LunoraError } from "@lunora/errors";
 import { isDuplicateInstanceError } from "@lunora/workflow";
 
 import { fnv1a64Hex } from "../../../shared/fnv1a";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
+import jsonSchema from "./json-schema";
 import { agentClassName } from "./naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import isPositiveInteger from "./positive-integer";
