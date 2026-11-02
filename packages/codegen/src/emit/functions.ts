@@ -93,10 +93,9 @@ const moduleAliasesFor = (
     return aliases;
 };
 
-/** Keep eager registry imports and lazy shim emission on the same file-path policy. */
-
 /**
- * Modules the lazy registry imports up front. Besides the kinds that must be
+ * Modules the lazy registry imports up front. Both the registry and the lazy module
+ * emitter read this set, so they agree on which modules load eagerly. Besides the kinds that must be
  * loaded to register at all, that is every module re-exporting a function from
  * a published package: codegen read it off a declaration-file type, which does
  * not say whether it is paid (`x402`), what its `.meta()` is, or which arguments
