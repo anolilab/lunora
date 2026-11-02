@@ -696,7 +696,9 @@ const readProjectLazyFunctions = (lunoraDirectory: string): boolean => {
         if (key !== lazyFunctionsWarnedFor) {
             lazyFunctionsWarnedFor = key;
             // eslint-disable-next-line no-console -- codegen has no diagnostic sink for config literals; matches `durableObjects.merge`'s warning.
-            console.warn("@lunora/codegen: `codegen.lazyFunctions` in lunora.config is not a boolean literal — the function registry stays eager.");
+            console.warn(
+                "@lunora/codegen: `codegen.lazyFunctions` in lunora.config is not a boolean literal, so the config does not turn the function registry lazy.",
+            );
         }
     }
 
