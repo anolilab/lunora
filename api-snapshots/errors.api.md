@@ -301,6 +301,14 @@ const ERROR_CATALOG: {
         readonly status: 403;
         readonly title: "Admin access forbidden";
     };
+    readonly ADMIN_ROOT_REQUIRED: {
+        readonly status: 403;
+        readonly title: "Root admin token required";
+    };
+    readonly ADMIN_TOKEN_EXISTS: {
+        readonly status: 409;
+        readonly title: "Admin token name already in use";
+    };
     readonly ADMIN_TOKEN_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Admin token not configured";

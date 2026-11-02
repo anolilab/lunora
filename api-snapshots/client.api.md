@@ -18,6 +18,10 @@ interface ActionCallOptions {
 }
 ```
 
+### `AdminTokenSummary` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `ArgsOf` (type)
 
 ```ts
@@ -237,6 +241,10 @@ interface ConnectLiveStreamOptions {
 ```ts
 type ConnectionStatus = "connected" | "connecting" | "idle" | "offline" | "polling";
 ```
+
+### `CreatedAdminToken` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `CronJobInfo` (interface)
 
@@ -1855,6 +1863,12 @@ class LunoraAdminClient extends LunoraClient {
         topK?: number;
     }): Promise<VectorQueryMatch[]>;
     queryLogArchive(query?: PipelineLogQuery): Promise<PipelineLogPage>;
+    listAdminTokens(): Promise<AdminTokenSummary[]>;
+    createAdminToken(options: {
+        expiresAt?: number;
+        name: string;
+    }): Promise<CreatedAdminToken>;
+    revokeAdminToken(name: string): Promise<void>;
     listKvNamespaces(): Promise<KvNamespaceSummary[]>;
     listKvKeys(options: {
         cursor?: string;

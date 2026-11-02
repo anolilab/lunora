@@ -282,6 +282,7 @@ const NOOP_EXECUTION_CONTEXT: ExecutionContextLike;
 ```ts
 interface PlatformCapabilities {
     features: {
+        adminTokenRevocation?: Capability;
         agents?: Capability;
         ai?: Capability;
         aiSearch?: Capability;

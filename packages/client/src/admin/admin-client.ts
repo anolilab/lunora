@@ -47,12 +47,14 @@ import {
 import { withQuery } from "../client-urls";
 import { LunoraClient } from "../lunora-client";
 import type {
+    AdminTokenSummary,
     AuthCapabilities,
     AuthConfigInfo,
     AuthImpersonation,
     AuthPage,
     AuthSession,
     AuthUser,
+    CreatedAdminToken,
     CronJobInfo,
     CronRunsResult,
     DeploymentPauseStatus,
@@ -79,6 +81,7 @@ import type {
     WorkflowInstancePage,
     WorkflowInstanceStatus,
 } from "../types";
+import { createAdminToken, listAdminTokens, revokeAdminToken } from "./admin-tokens";
 import { fetchArchitecture, fetchOpenApi, fetchOpenRpc, getCronJobs, listFunctions, runCronJob } from "./functions";
 import { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "./global-tables";
 import { deleteKvKey, getKvValue, listKvKeys, listKvNamespaces, putKvValue } from "./kv";
@@ -503,6 +506,29 @@ class LunoraAdminClient extends LunoraClient {
      */
     public async queryLogArchive(query: PipelineLogQuery = {}): Promise<PipelineLogPage> {
         return queryLogArchive(this.adminHost, query);
+    }
+
+    // --- Named admin tokens -------------------------------------------------
+
+    /**
+     * List the deployment's named admin tokens (name, created, last used,
+     * expiry — never the secret). Hits the root-only `GET /_lunora/admin/tokens`.
+     */
+    public async listAdminTokens(): Promise<AdminTokenSummary[]> {
+        return listAdminTokens(this.adminHost);
+    }
+
+    /**
+     * Create a named admin token. The returned `token` is the only time the
+     * secret is shown. Root-only: a named token cannot create another.
+     */
+    public async createAdminToken(options: { expiresAt?: number; name: string }): Promise<CreatedAdminToken> {
+        return createAdminToken(this.adminHost, options);
+    }
+
+    /** Revoke a named admin token. Root-only; other isolates refuse it within 30 seconds. */
+    public async revokeAdminToken(name: string): Promise<void> {
+        return revokeAdminToken(this.adminHost, name);
     }
 
     // --- KV namespace admin -------------------------------------------------

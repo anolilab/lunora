@@ -24,9 +24,13 @@
         "bindings": [
             { "name": "SHARD", "class_name": "ShardDO" },
             { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" },
+            { "name": "ADMIN_REVOCATIONS", "class_name": "AdminRevocationDO" },
         ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "ShardRegistryDO"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO", "ShardRegistryDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["AdminRevocationDO"] },
+    ],
     // Blast-radius cap. Alerting is lagging by definition — by the time a
     // threshold trips, the runaway handler has already run — so a CPU ceiling is
     // one of the few controls that bounds the damage rather than reporting it.

@@ -60,6 +60,13 @@ const toHex = (buffer: ArrayBuffer): string => {
 interface StorageAdminRouteDeps {
     /** Admin-token gate (throws 403). Used directly by the buckets route (which has no `requireAdminOption` value to gate). */
     assertAdmin: (request: Request) => void;
+
+    /**
+     * Root-only gate for the signed-URL route: a signed URL outlives the request
+     * that minted it, so a named admin token could otherwise keep storage access
+     * past its revocation.
+     */
+    assertRootAdmin: (request: Request) => void;
     /** Parse the shared `limit` / `offset` paging params. */
     parsePaging: (request: Request) => { limit?: number; offset?: number };
     /** Read a query param, collapsing missing/empty to `undefined`. */
@@ -289,6 +296,7 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
 
     const handleStorageSignedUrl = async (request: Request): Promise<Response> => {
         assertMethod(request, "GET", "Storage URL");
+        deps.assertRootAdmin(request);
 
         const storageSignedUrl = requireAdminOption(request, storage.storageSignedUrl, {
             code: "STORAGE_URL_NOT_CONFIGURED",

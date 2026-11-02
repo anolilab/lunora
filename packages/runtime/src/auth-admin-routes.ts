@@ -177,6 +177,8 @@ interface AuthAdmin {
 interface AuthAdminRouteDeps {
     /** Throw 403 unless the request carries a valid admin bearer. */
     assertAdmin: (request: Request) => void;
+    /** Throw 403 unless the caller holds root admin authority (not a named admin token). */
+    assertRootAdmin: (request: Request) => void;
     /** The configured auth plane (`authAdmin`), or undefined. */
     getAuthAdmin: () => AuthAdmin | undefined;
     /** Parse the shared `limit`/`offset` paging params off a GET request. */
@@ -205,6 +207,33 @@ interface AuthRouteDescriptor {
 }
 
 const AUTH_BASE = "/_lunora/admin/auth";
+
+/**
+ * The auth ops a named admin token may call: reads, and writes that only take
+ * authority away. Everything else — and any op added later — needs root, because
+ * a grant (a role, a membership, a password, a session for another user) would
+ * outlive the named token's revocation.
+ */
+const NAMED_TOKEN_AUTH_METHODS: ReadonlySet<keyof AuthAdmin> = new Set<keyof AuthAdmin>([
+    "banUser",
+    "cancelInvitation",
+    "capabilities",
+    "config",
+    "listAccounts",
+    "listInvitations",
+    "listMembers",
+    "listOrganizations",
+    "listOrgRoles",
+    "listPasskeys",
+    "listSessions",
+    "listSignUpInvitations",
+    "listTeamMembers",
+    "listTeams",
+    "listUsers",
+    "revokeSignUpInvitation",
+    "revokeUserSession",
+    "revokeUserSessions",
+]);
 
 /** HTTP status for a known client-input `authAdmin` error code; an unmapped code is a backend failure and reads 500. */
 const AUTH_ADMIN_ERROR_STATUS: Record<string, number> = {
@@ -727,6 +756,10 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
         // non-existent paths — every admin path answers 403 without a token,
         // leaking no route topology.
         deps.assertAdmin(request);
+
+        if (!NAMED_TOKEN_AUTH_METHODS.has(descriptor.method)) {
+            deps.assertRootAdmin(request);
+        }
 
         if (request.method !== descriptor.http) {
             throw new LunoraError(`Auth admin endpoint requires ${descriptor.http}`, { code: "METHOD_NOT_ALLOWED", status: 405 });

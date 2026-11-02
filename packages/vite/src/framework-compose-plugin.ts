@@ -162,7 +162,7 @@ interface DurableObjectWiring {
     /** Extra imports the class export needs (none unless the app merges). */
     imports: string;
     /** The namespace expression a role module's builder call receives. */
-    namespace: (module: "scheduler" | "shardRegistry") => string;
+    namespace: (module: "adminRevocations" | "scheduler" | "shardRegistry") => string;
     /** Whether a generated class module is star-re-exported for wrangler. */
     reexported: (module: GeneratedClassModule) => boolean;
 }
@@ -173,12 +173,19 @@ interface DurableObjectWiring {
  * module the app has, named after that module. A merged role's class is
  * imported into `LunoraDO`, not re-exported, so wrangler binds one class.
  */
+/** The binding each role module's class is bound under when the app does not merge. */
+const BINDING_BY_MODULE = {
+    adminRevocations: DURABLE_OBJECT_BINDINGS.AdminRevocationDO,
+    scheduler: DURABLE_OBJECT_BINDINGS.SchedulerDO,
+    shardRegistry: DURABLE_OBJECT_BINDINGS.ShardRegistryDO,
+} as const;
+
 const durableObjectWiring = (base: string, classModules: ReadonlyArray<GeneratedClassModule>, merge: boolean): DurableObjectWiring => {
     if (!merge) {
         return {
             classExport: "export const ShardDO = app.ShardDO;",
             imports: "",
-            namespace: (module) => `env.${module === "scheduler" ? DURABLE_OBJECT_BINDINGS.SchedulerDO : DURABLE_OBJECT_BINDINGS.ShardRegistryDO}`,
+            namespace: (module) => `env.${BINDING_BY_MODULE[module]}`,
             reexported: () => true,
         };
     }
@@ -253,6 +260,11 @@ const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBas
     // re-export forwards `ShardRegistryDO`.
     const shardRegistryCall = classModules.includes("shardRegistry") ? `\n    .shardRegistry((env) => ${durableObjects.namespace("shardRegistry")})` : "";
 
+    // The admin revocation store: every app has the module, and the builder always has the method.
+    const adminRevocationsCall = classModules.includes("adminRevocations")
+        ? `\n    .adminRevocations((env) => ${durableObjects.namespace("adminRevocations")})`
+        : "";
+
     // `configureApp` receives the builder and returns it, so the framework wiring
     // below (`.httpRouter`, `.build`) stays ours and the app's own capabilities
     // are chained in between. See the docs for why the seam exists at all.
@@ -307,7 +319,7 @@ ${wiring.imports}
 import { defineApp } from "${base}/app";${durableObjects.imports}${appConfigImport}
 
 const app = ${configureOpen}defineApp()
-    .shard((env) => env.SHARD)${schedulerCall}${shardRegistryCall}${configureClose}
+    .shard((env) => env.SHARD)${schedulerCall}${shardRegistryCall}${adminRevocationsCall}${configureClose}
     .httpRouter(${wiring.handler})${shardCalls}${allowUnauthenticatedShardAccess ? "\n    .extend(() => ({ allowUnauthenticatedShardAccess: true }))" : ""}
     .build();
 

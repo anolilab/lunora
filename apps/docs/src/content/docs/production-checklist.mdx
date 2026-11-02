@@ -78,6 +78,42 @@ data export/import, migrations, the Studio, scheduled-job admin.
 - [ ] It is stored only in your secret manager/CI, never in `wrangler.jsonc`
       `vars` or the repo. Rotating it also invalidates every outstanding
       ephemeral WS sub-token, so rotation is your kill switch.
+- [ ] **CI jobs and teammates use named admin tokens, not the root token.**
+      `lunora admin-token create ci-deploy --prod --url …` (or Settings → Admin
+      tokens in the Studio) prints a `lnat.<name>.<secret>` bearer once; the
+      worker stores only its SHA-256. A named token works for the HTTP admin
+      API operations that are not root-only (CLI `--token`, the MCP server), and
+      the shard audit log records its name. The root-only operations listed
+      below need `LUNORA_ADMIN_TOKEN`. Revoke one with
+      `lunora admin-token revoke <name>`: the revoking isolate refuses it at once,
+      and every other isolate within 30 seconds (its verification cache); an
+      expiring token stops at its expiry everywhere. Anything that would outlive
+      a revocation needs the root token: managing tokens, admin WebSockets and WS
+      sub-tokens (so the Studio's live panels), `pitrRestore`, `runAs`, storage
+      signed URLs (so `lunora import` of a blob above the verified-upload cap),
+      the auth jurisdiction copy and purge, and every auth admin op except the
+      reads and the ones that only take access away (ban, revoke a session or
+      invitation). Named tokens
+      require `LUNORA_ADMIN_TOKEN` to be set (the worker signs its hop to the
+      shard with it), but rotating it does not revoke them — revoke each by name.
+      Token digests live in a reserved table no SQL console, data browser or
+      export can read, for any caller. A malformed `lnat.` bearer is refused
+      before any lookup, and each isolate allows only a small burst of lookups
+      for names it has not confirmed. Once that burst is spent, the isolate asks
+      the store for the list of real token names (at most once every few
+      seconds) instead of looking up each invented one, so a flood cannot hammer
+      the default shard or lock out a real token. A token created in the last few
+      seconds can be refused once on another isolate during such a flood; retry.
+      Revocations are recorded in a small Durable Object of their own
+      (`AdminRevocationDO`, bound as `ADMIN_REVOCATIONS`) before the token row is
+      deleted, and checked whenever a token is verified, so restoring the default
+      shard to a point before a revocation (`pitrRestore`) cannot bring a revoked
+      token back. A Vite-first app gets the binding and its migration
+      automatically. A hand-written worker entry must export the class
+      (`export { AdminRevocationDO } from "./lunora/_generated/adminRevocations.js"`),
+      bind it, and call `.adminRevocations((env) => env.ADMIN_REVOCATIONS)`;
+      without it no named token can be created and any that exist are refused,
+      leaving the root token as the only admin credential.
 - [ ] **Ephemeral WS tokens stay enforced.** A browser WebSocket cannot set an
       `Authorization` header, so admin sockets authenticate via `?token=`,
       which lands in access logs and browser history. Instead of the raw

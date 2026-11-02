@@ -7,9 +7,13 @@ import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";
 import { buildAuth, buildMigrationAuth } from "../../lunora/auth.js";
 
+// Records revoked named admin tokens where a restore of the shard cannot rewind them.
+export { AdminRevocationDO } from "../../lunora/_generated/adminRevocations.js";
+
 export const ShardDO = createShardDO();
 
 interface Env {
+    ADMIN_REVOCATIONS: ShardNamespaceLike;
     AUTH_SECRET: string;
     /** Base URL better-auth resolves callback/cookie origins against (the deployed worker URL). */
     AUTH_URL?: string;
@@ -81,6 +85,7 @@ export default {
 
                 return session?.user.id ? { userId: session.user.id } : null;
             },
+            adminRevocations: env.ADMIN_REVOCATIONS,
             shardDO: env.SHARD,
         });
         return worker.fetch(request, env, ctx);

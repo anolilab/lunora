@@ -397,6 +397,7 @@ const DEV_WORKER_ENV_VAR = "WORKER_ENV";
 
 ```ts
 const DURABLE_OBJECT_BINDINGS: {
+    readonly AdminRevocationDO: "ADMIN_REVOCATIONS";
     readonly LunoraDO: "SHARD";
     readonly SchedulerDO: "SCHEDULER";
     readonly SessionDO: "SESSION";
@@ -691,6 +692,7 @@ interface FrameworkDetection {
 
 ```ts
 const GENERATED_CLASS_MODULES: readonly [
+    "adminRevocations",
     "agents",
     "containers",
     "scheduler",

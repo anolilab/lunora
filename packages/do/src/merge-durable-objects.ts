@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import { LUNORA_ROLE_PREFIX } from "@lunora/platform";
 
 /** The framework roles that can share the shard class, named after their generated `_generated/` modules. */
-const MERGED_ROLES = ["scheduler", "shardRegistry"] as const;
+const MERGED_ROLES = ["adminRevocations", "scheduler", "shardRegistry"] as const;
 
 /** One of {@link MERGED_ROLES}. */
 type MergedRole = (typeof MERGED_ROLES)[number];
@@ -23,7 +23,7 @@ interface DurableObjectHandlers {
  */
 type RoleClass = new (state: never, env: never) => DurableObjectHandlers;
 
-/** The classes {@link mergeDurableObjects} folds into one; `scheduler` and `shardRegistry` only when the app has them. */
+/** The classes {@link mergeDurableObjects} folds into one; `scheduler`, `shardRegistry` and `adminRevocations` only when the app has them. */
 type MergedRoles = Partial<Record<MergedRole, RoleClass>> & { shard: RoleClass };
 
 /** The merged class: every lifecycle handler is defined, delegating to the instance's role. */
