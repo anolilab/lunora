@@ -89,7 +89,7 @@ import {
     WRAPPED_SQL,
 } from "./do-sql";
 import { renderSql, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
-import { estimateBytes } from "./estimate-bytes";
+import { estimateUtf8Bytes, utf8ByteLength } from "./estimate-bytes";
 import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
 import { NotFoundError } from "./not-found-error";
 import { assertPatchAllowed, operatorFields, readPatchField, resolvePatch } from "./patch-operators";
@@ -2034,7 +2034,10 @@ const queryTable = (query: string, schema: SchemaLike): string | undefined => {
     return found.size === 1 ? [...found][0] : undefined;
 };
 
-/** Charge each stored document in `rows`, read off the JSON column the row store already returned. */
+/**
+ * Charge each stored document in `rows`, read off the JSON column the row store already returned, by the
+ * UTF-8 bytes of that JSON: a CJK- or emoji-heavy document is up to three times its `String.length`.
+ */
 const chargeDocuments = (rows: ReadonlyArray<unknown>, headroom: TransactionHeadroomTracker, table: string | undefined): void => {
     for (const row of rows) {
         const record = row as Record<string, unknown> | undefined;
@@ -2042,13 +2045,14 @@ const chargeDocuments = (rows: ReadonlyArray<unknown>, headroom: TransactionHead
 
         if (typeof raw === "string") {
             const id = record?.["id"];
+            const bytes = utf8ByteLength(raw);
 
             if (typeof id !== "string") {
-                headroom.recordReadBytes(raw.length);
+                headroom.recordReadBytes(bytes);
             } else if (table === undefined) {
-                headroom.recordDocumentRead(`${id}\u0000${String(raw.length)}`, raw.length);
+                headroom.recordDocumentRead(`${id}\u0000${String(bytes)}`, bytes);
             } else {
-                headroom.recordDocumentRead(`${table}\u0000${id}`, raw.length);
+                headroom.recordDocumentRead(`${table}\u0000${id}`, bytes);
             }
         }
     }
@@ -2134,16 +2138,17 @@ const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | und
     });
 };
 
-/** Reads on a global (D1) writer that hand back documents, and the terminals of its query builder. */
-/** How a global read wraps its documents: none, a page, a lookup result or scored hits. */
+/** How a global read wraps its documents: a bare row or list, a page, a lookup result or scored hits. */
 type GlobalResultShape = "lookup" | "page" | "rows" | "scored";
 
+/** Reads on a global (D1) writer that hand back documents; the terminals of its query builder follow. */
 const GLOBAL_ROW_READS: ReadonlyMap<PropertyKey, GlobalResultShape> = new Map([
     ["findFirst", "rows"],
     ["findFirstOrThrow", "rows"],
     ["findMany", "page"],
     ["get", "rows"],
     ["lookupById", "lookup"],
+    ["rankPage", "page"],
 ]);
 const GLOBAL_READER_TERMINALS: ReadonlyMap<PropertyKey, GlobalResultShape> = new Map([
     ["collect", "rows"],
@@ -2156,15 +2161,15 @@ const GLOBAL_READER_TERMINALS: ReadonlyMap<PropertyKey, GlobalResultShape> = new
 
 /**
  * Charge one decoded global document. A row comes back from D1 as an object, not as the stored JSON
- * string the local meter sizes, so it is serialised once with `estimateBytes` (the same UTF-16 unit
- * local reads and writes use) and charged once per transaction by its `_id`.
+ * string the local meter sizes, so it is serialised once and sized in UTF-8 bytes, the unit local
+ * reads are charged in, and charged once per transaction by its `_id`.
  */
 const chargeGlobalDocument = (document: unknown, table: string, headroom: TransactionHeadroomTracker): void => {
     if (typeof document !== "object" || document === null) {
         return;
     }
 
-    const bytes = estimateBytes(document);
+    const bytes = estimateUtf8Bytes(document);
 
     if (bytes === undefined) {
         return;
@@ -2257,6 +2262,39 @@ const meterGlobalReader = <Reader extends object>(reader: Reader, table: string,
         },
     });
 
+/** Reads that take a `select` projection; the global writer applies it after it has loaded the whole row. */
+const PROJECTED_GLOBAL_READS: ReadonlySet<PropertyKey> = new Set(["findFirst", "findFirstOrThrow", "findMany"]);
+
+/**
+ * Take `select` out of a read's arguments, so the global writer hands back the full documents it loaded
+ * and the meter sizes those rather than the projection. `project` puts the projection back on the result.
+ */
+const withoutSelect = (args: unknown[]): { args: unknown[]; project: (result: unknown, shape: GlobalResultShape) => unknown } | undefined => {
+    const options = args[1] as Record<string, unknown> | undefined;
+    const select = options?.["select"];
+
+    if (!Array.isArray(select)) {
+        return undefined;
+    }
+
+    const rest = Object.fromEntries(Object.entries(options as Record<string, unknown>).filter(([key]) => key !== "select"));
+    const relations = rest["with"] as Record<string, unknown> | undefined;
+    const trim = (documents: Record<string, unknown>[]): Record<string, unknown>[] => applySelect(documents, select as string[], relations);
+
+    return {
+        args: [args[0], rest, ...args.slice(2)],
+        project: (result, shape) => {
+            if (typeof result !== "object" || result === null) {
+                return result;
+            }
+
+            return shape === "page"
+                ? { ...result, page: trim((result as { page: Record<string, unknown>[] }).page) }
+                : trim([result as Record<string, unknown>])[0];
+        },
+    };
+};
+
 /** Byte-meter a global writer's document reads; every other member reads through untouched. */
 const meterGlobalDatabase = (global: DatabaseWriterLike | undefined, headroom: TransactionHeadroomTracker | undefined): DatabaseWriterLike | undefined => {
     if (global === undefined || headroom === undefined) {
@@ -2282,11 +2320,12 @@ const meterGlobalDatabase = (global: DatabaseWriterLike | undefined, headroom: T
             }
 
             return async (...args: unknown[]): Promise<unknown> => {
-                const result: unknown = await Reflect.apply(member, target, args);
+                const unprojected = PROJECTED_GLOBAL_READS.has(property) ? withoutSelect(args) : undefined;
+                const result: unknown = await Reflect.apply(member, target, unprojected?.args ?? args);
 
                 chargeGlobalResult(result, shape, String(args[0]), headroom);
 
-                return result;
+                return unprojected === undefined ? result : unprojected.project(result, shape);
             };
         },
     });

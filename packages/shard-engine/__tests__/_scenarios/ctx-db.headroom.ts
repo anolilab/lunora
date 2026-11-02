@@ -246,6 +246,23 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
             );
         });
 
+        it("sizes a stored document by its UTF-8 bytes, not its UTF-16 length", async () => {
+            expect.assertions(3);
+
+            const seed = build({});
+            const id = await seed.insert("notes", { body: "日本語".repeat(100), bucket: "a" });
+            const stored = (sql.exec("SELECT __doc__ FROM notes WHERE id = ?", id).toArray()[0] as { __doc__: string }).__doc__;
+            const bytes = new TextEncoder().encode(stored).length;
+
+            // A cap between the two measures: the document fits by `.length` and not by bytes.
+            expect(stored.length).toBeLessThan(bytes);
+
+            const writer = build({ maxReadBytes: bytes - 1 });
+
+            await expect(codeOf(async () => writer.get("notes", id))).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+            await expect(build({ maxReadBytes: bytes }).get("notes", id)).resolves.toMatchObject({ _id: id });
+        });
+
         it("charges a document read twice in one transaction once", async () => {
             expect.assertions(1);
 
@@ -447,6 +464,66 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
                 await writer.get("b", "g0");
 
                 expect(tracker.headroom().readBytes).toBe(once * 2);
+            });
+
+            it("charges the documents of a global rank page", async () => {
+                expect.assertions(2);
+
+                const ranked = {
+                    rankPage: async () => {
+                        return { continueCursor: null, isDone: true, page: rows };
+                    },
+                } as unknown as DatabaseWriterLike;
+                const tracker = new TransactionHeadroomTracker({ maxReadBytes: 250 });
+                const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, globalDb: ranked, headroom: tracker, schema: globalSchema, sql });
+
+                await expect(codeOf(async () => writer.rankPage("shared", "by_score", {}))).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+                expect(tracker.headroom().readBytes).toBeGreaterThan(250);
+            });
+
+            it("charges the whole document a projected global read loaded, and returns the projection", async () => {
+                expect.assertions(3);
+
+                // Like the real writer: it loads whole rows and trims them to `select` on the way out.
+                const projecting = {
+                    findMany: async (_table: string, args?: { select?: string[] }) => {
+                        const select = args?.select;
+
+                        return {
+                            continueCursor: null,
+                            isDone: true,
+                            page:
+                                select === undefined
+                                    ? rows
+                                    : rows.map((row) => Object.fromEntries(Object.entries(row).filter(([key]) => select.includes(key)))),
+                        };
+                    },
+                } as unknown as DatabaseWriterLike;
+                const tracker = new TransactionHeadroomTracker({ maxReadBytes: 250 });
+                const writer = createShardContextDatabase({
+                    clock: () => 1_700_000_000_000,
+                    globalDb: projecting,
+                    headroom: tracker,
+                    schema: globalSchema,
+                    sql,
+                });
+
+                await expect(codeOf(async () => writer.findMany("shared", { select: ["_id"] }))).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+                expect(tracker.headroom().readBytes).toBeGreaterThan(250);
+
+                const roomy = createShardContextDatabase({
+                    clock: () => 1_700_000_000_000,
+                    globalDb: projecting,
+                    headroom: new TransactionHeadroomTracker(),
+                    schema: globalSchema,
+                    sql,
+                });
+
+                await expect(roomy.findMany("shared", { select: ["_id"] })).resolves.toMatchObject({
+                    page: rows.map((row) => {
+                        return { _id: row._id };
+                    }),
+                });
             });
 
             it("charges a global row once however often it is read", async () => {

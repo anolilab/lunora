@@ -3,6 +3,43 @@ import { BIGINT_KEY_DIGITS } from "./sql-projection";
 /** Characters a wire-tagged leaf costs beyond its payload — `["$lunora.wire$","bigint",""]` plus its key in the originals map. */
 const WIRE_TAG_OVERHEAD = 40;
 
+/** The serialized-size walk shared by the two units; `lengthOf` measures the JSON text. */
+const measureSerialized = (value: unknown, lengthOf: (encoded: string) => number): number | undefined => {
+    let extraWidth = 0;
+
+    const replacer = (_key: string, raw: unknown): unknown => {
+        if (typeof raw === "bigint") {
+            // The zero-padded projection plus the tagged original's wrapper; the
+            // digits themselves come back through the returned string.
+            extraWidth += BIGINT_KEY_DIGITS + 1 + WIRE_TAG_OVERHEAD;
+
+            return raw.toString();
+        }
+
+        if (raw instanceof ArrayBuffer || ArrayBuffer.isView(raw)) {
+            // Two base64 copies plus the wrapper, measured out-of-band rather
+            // than by encoding the blob twice just to read `.length` — that
+            // would allocate ~8/3 of it on every write, to throw it away.
+            extraWidth += 2 * Math.ceil(raw.byteLength / 3) * 4 + WIRE_TAG_OVERHEAD;
+
+            return "";
+        }
+
+        return raw;
+    };
+
+    try {
+        // `JSON.stringify` is TYPED as returning `string`, but genuinely returns
+        // `undefined` for `undefined`, functions, and symbols — so the result
+        // has to be widened before it can be safely measured.
+        const encoded = JSON.stringify(value, replacer) as string | undefined;
+
+        return (encoded === undefined ? 0 : lengthOf(encoded)) + extraWidth;
+    } catch {
+        return undefined;
+    }
+};
+
 /**
  * Approximate serialized size of a value.
  *
@@ -42,41 +79,18 @@ const WIRE_TAG_OVERHEAD = 40;
  * which absorbs the skew — but a caller needing true byte accuracy must not use
  * this.
  */
-const estimateBytes = (value: unknown): number | undefined => {
-    let extraWidth = 0;
+const estimateBytes = (value: unknown): number | undefined => measureSerialized(value, (encoded) => encoded.length);
 
-    const replacer = (_key: string, raw: unknown): unknown => {
-        if (typeof raw === "bigint") {
-            // The zero-padded projection plus the tagged original's wrapper; the
-            // digits themselves come back through the returned string.
-            extraWidth += BIGINT_KEY_DIGITS + 1 + WIRE_TAG_OVERHEAD;
+const textEncoder = new TextEncoder();
 
-            return raw.toString();
-        }
+/** Encoded (UTF-8) byte length of `text`: what a stored JSON string costs on disk and on the wire. */
+const utf8ByteLength = (text: string): number => textEncoder.encode(text).length;
 
-        if (raw instanceof ArrayBuffer || ArrayBuffer.isView(raw)) {
-            // Two base64 copies plus the wrapper, measured out-of-band rather
-            // than by encoding the blob twice just to read `.length` — that
-            // would allocate ~8/3 of it on every write, to throw it away.
-            extraWidth += 2 * Math.ceil(raw.byteLength / 3) * 4 + WIRE_TAG_OVERHEAD;
+/**
+ * The size of a value in UTF-8 bytes, where {@link estimateBytes} counts UTF-16 code units. For a value that
+ * arrived already decoded (a global-table row) and so has no stored string to measure; the read meter sizes
+ * local documents by {@link utf8ByteLength} of the stored JSON, and this keeps the two in one unit.
+ */
+const estimateUtf8Bytes = (value: unknown): number | undefined => measureSerialized(value, utf8ByteLength);
 
-            return "";
-        }
-
-        return raw;
-    };
-
-    try {
-        // `JSON.stringify` is TYPED as returning `string`, but genuinely returns
-        // `undefined` for `undefined`, functions, and symbols — so the result
-        // has to be widened before it can be safely measured.
-        const encoded = JSON.stringify(value, replacer) as string | undefined;
-
-        return (encoded === undefined ? 0 : encoded.length) + extraWidth;
-    } catch {
-        return undefined;
-    }
-};
-
-// eslint-disable-next-line import/prefer-default-export -- named export keeps the re-export chain through the engine barrel uniform (same rationale as `serialize-sql.ts`).
-export { estimateBytes };
+export { estimateBytes, estimateUtf8Bytes, utf8ByteLength };
