@@ -769,7 +769,6 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
 
     const caller = renderCallerAssembly(functions, lazyFunctions);
     const { callRegisteredHelper, dataModelImport, implementation: callerImpl, parameter: callerParameter, types: callerTypes } = caller;
-    // A lazy stub also carries its manifest facts, which the table's element type must declare.
     const lazyStubFields = lazyStubFieldsMember(lazyFunctions);
     const lazyRegistryPrelude = lazyFunctions
         ? `
