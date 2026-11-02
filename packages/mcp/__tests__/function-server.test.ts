@@ -197,9 +197,9 @@ describe("callFunctionTool — writes", () => {
         expect.assertions(2);
 
         const { client } = mockClient();
-        const result = await callFunctionTool(client, routesFor(true), "billing_nested", { args: { card: { number: "4242-4242" } } }, true);
+        const result = await callFunctionTool(client, routesFor(true), "billing_nested", { args: { card: { number: "card-number-secret" } } }, true);
 
-        expect(result.content[0]?.text).not.toContain("4242");
+        expect(result.content[0]?.text).not.toContain("card-number-secret");
         expect(textOf(result)).toMatchObject({ status: "action_required" });
     });
 });

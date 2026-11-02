@@ -531,6 +531,154 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         expect(dead.attempts).toBeGreaterThan(5);
     });
 
+    describe("retry.forever", () => {
+        /** Rewrite the job's time-index key to the epoch so the next alarm fire picks it up. */
+        const forceDue = (state: ReturnType<typeof createFakeState>): void => {
+            const indexKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
+
+            if (indexKey !== undefined) {
+                const recordId = state.storageMap.get(indexKey);
+
+                state.storageMap.delete(indexKey);
+                state.storageMap.set(`t:${"0".padStart(15, "0")}:${String(recordId)}`, recordId);
+            }
+        };
+
+        const retryRow = (state: ReturnType<typeof createFakeState>): ScheduleRecord | undefined =>
+            [...state.storageMap.entries()].find(([key]) => key.startsWith("retry:"))?.[1] as ScheduleRecord | undefined;
+
+        it("keeps retrying past maxAttempts instead of dead-lettering", async () => {
+            expect.assertions(4);
+
+            const state = createFakeState();
+            const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+
+            const id = await scheduledId(
+                await scheduler.fetch(
+                    post("/schedule", { args: {}, functionPath: "f", retry: { forever: true, maxAttempts: 1 }, scheduledFor: Date.now() - 1000 }),
+                ),
+            );
+
+            for (let index = 0; index < 7; index += 1) {
+                forceDue(state);
+
+                // eslint-disable-next-line no-await-in-loop -- sequential alarm fires
+                await scheduler.alarm();
+            }
+
+            expect(keysWithPrefix(state, "dead:")).toHaveLength(0);
+            expect(state.storageMap.has(`id:${id}`)).toBe(true);
+            expect(retryRow(state)?.attempts).toBe(7);
+            expect(retryRow(state)?.retry?.forever).toBe(true);
+        });
+
+        it("warns once, at the attempt a default job would have dead-lettered", async () => {
+            expect.assertions(2);
+
+            const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            try {
+                const state = createFakeState();
+                const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+
+                const id = await scheduledId(
+                    await scheduler.fetch(
+                        post("/schedule", { args: {}, functionPath: "f", retry: { forever: true, maxAttempts: 1 }, scheduledFor: Date.now() - 1000 }),
+                    ),
+                );
+
+                for (let index = 0; index < 6; index += 1) {
+                    forceDue(state);
+
+                    // eslint-disable-next-line no-await-in-loop -- sequential alarm fires
+                    await scheduler.alarm();
+                }
+
+                expect(warnSpy).toHaveBeenCalledTimes(1);
+                expect(warnSpy).toHaveBeenCalledWith(`@lunora/scheduler: job "${id}" (f) has failed 2 attempts and keeps retrying (retry.forever)`);
+            } finally {
+                warnSpy.mockRestore();
+            }
+        });
+
+        it("ignores a forever flag that is not exactly true", async () => {
+            expect.assertions(1);
+
+            const state = createFakeState();
+            const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+
+            const id = await scheduledId(
+                await scheduler.fetch(
+                    post("/schedule", { args: {}, functionPath: "f", retry: { forever: "yes", maxAttempts: 1 }, scheduledFor: Date.now() - 1000 }),
+                ),
+            );
+
+            for (let index = 0; index < 3; index += 1) {
+                forceDue(state);
+
+                // eslint-disable-next-line no-await-in-loop -- sequential alarm fires
+                await scheduler.alarm();
+            }
+
+            expect(keysWithPrefix(state, "dead:")).toEqual([`dead:${id}`]);
+        });
+
+        it("raises a zero baseMs to the one-second floor", async () => {
+            expect.assertions(1);
+
+            const state = createFakeState();
+            const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+            const before = Date.now();
+
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", retry: { baseMs: 0, forever: true }, scheduledFor: before - 1000 }));
+            await scheduler.alarm();
+
+            expect((retryRow(state)?.scheduledFor ?? 0) - before).toBeGreaterThanOrEqual(1000);
+        });
+
+        it("caps the delay at thirty minutes whatever baseMs and maxMs ask for", async () => {
+            expect.assertions(1);
+
+            const state = createFakeState();
+            const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+
+            await scheduler.fetch(
+                post("/schedule", {
+                    args: {},
+                    functionPath: "f",
+                    retry: { baseMs: 86_400_000, forever: true, maxMs: 86_400_000 },
+                    scheduledFor: Date.now() - 1000,
+                }),
+            );
+
+            const before = Date.now();
+
+            await scheduler.alarm();
+
+            expect((retryRow(state)?.scheduledFor ?? Number.POSITIVE_INFINITY) - before).toBeLessThanOrEqual(1_800_000 + 1000);
+        });
+
+        it("saturates the attempt count instead of overflowing it", async () => {
+            expect.assertions(3);
+
+            const state = createFakeState();
+            const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+
+            const id = await scheduledId(
+                await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", retry: { forever: true }, scheduledFor: Date.now() - 1000 })),
+            );
+            const header = state.storageMap.get(`id:${id}`) as ScheduleRecord;
+
+            state.storageMap.set(`id:${id}`, { ...header, attempts: Number.MAX_SAFE_INTEGER });
+
+            await scheduler.alarm();
+
+            expect(keysWithPrefix(state, "dead:")).toHaveLength(0);
+            expect(retryRow(state)?.attempts).toBe(Number.MAX_SAFE_INTEGER);
+            expect(keysWithPrefix(state, "t:")).toHaveLength(1);
+        });
+    });
+
     it("does not requeue a job whose dead-letter row is already durable", async () => {
         expect.assertions(3);
 

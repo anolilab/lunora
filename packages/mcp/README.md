@@ -58,6 +58,7 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 | `lunora_get_advisories`       | List the deployment's schema/query advisories. Requires an admin token.                                                                                       |
 | `lunora_get_query_insights`   | Per-statement execution counts and latency over a recent window. Requires an admin token.                                                                     |
 | `lunora_get_migration_status` | Which migrations are applied and which are pending. Requires an admin token.                                                                                  |
+| `lunora_get_schedule_outbox`  | Deferred `ctx.scheduler` jobs the scheduler has not accepted yet, retrying or parked. Requires an admin token.                                                |
 | `agent_<name>`                | Start a durable [`@lunora/agent`](https://www.npmjs.com/package/@lunora/agent) run and await its answer. One tool per exposed agent. Requires agents enabled. |
 | `lunora_agent_status`         | Poll a running agent by `threadKey` and return its answer once finished. Requires agents enabled.                                                             |
 

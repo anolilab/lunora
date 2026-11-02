@@ -62,6 +62,7 @@ export const ADMIN_FUNCTIONS = {
     deleteRows: "__lunora_admin__:deleteRows",
     describeTable: "__lunora_admin__:describeTable",
     describeTables: "__lunora_admin__:describeTables",
+    dropOutboxEntry: "__lunora_admin__:dropOutboxEntry",
     explainIssue: "__lunora_admin__:explainIssue",
     exportShard: "__lunora_admin__:exportShard",
     facetColumn: "__lunora_admin__:facetColumn",
@@ -74,6 +75,7 @@ export const ADMIN_FUNCTIONS = {
     getFanoutMetrics: "__lunora_admin__:getFanoutMetrics",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
     getIssues: "__lunora_admin__:getIssues",
+    getScheduleOutbox: "__lunora_admin__:getScheduleOutbox",
     lintSql: "__lunora_admin__:lintSql",
     listFlags: "__lunora_admin__:listFlags",
     listReactors: "__lunora_admin__:listReactors",
@@ -105,6 +107,7 @@ export const ADMIN_FUNCTIONS = {
     pitrRestore: "__lunora_admin__:pitrRestore",
     readTablePage: "__lunora_admin__:readTablePage",
     replayQueueMessage: "__lunora_admin__:replayQueueMessage",
+    retryOutboxEntry: "__lunora_admin__:retryOutboxEntry",
     resolveIssue: "__lunora_admin__:resolveIssue",
     rlsPolicies: "__lunora_admin__:rlsPolicies",
     schemaHistory: "__lunora_admin__:schemaHistory",
@@ -751,6 +754,29 @@ export interface QueueMessageRow {
 /** Result of `__lunora_admin__:getQueueMessages` — the dev consumed-message log, newest first. */
 export interface QueueMessagesResult {
     entries: QueueMessageRow[];
+}
+
+/**
+ * One deferred schedule a shard still holds because the scheduler has not
+ * accepted it, as served by `getScheduleOutbox` (mirrors `@lunora/shard-engine`'s
+ * `ScheduleOutboxEntry`).
+ */
+export interface ScheduleOutboxEntry {
+    attempts: number;
+    createdAt: number;
+    forever: boolean;
+    id: string;
+    nextAttemptAt: number;
+    parked: boolean;
+    target: string | undefined;
+    when: number | undefined;
+}
+
+/** Result of `getScheduleOutbox` — one page, oldest first, live and parked alike. */
+export interface ScheduleOutboxResult {
+    entries: ScheduleOutboxEntry[];
+    /** Pass back as `cursor` for the next page; absent on the last one. */
+    nextCursor?: string;
 }
 
 /**

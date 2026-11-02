@@ -375,6 +375,7 @@ const RETRY_BASE_DELAY_MS = 3e4;
 interface RetryPolicy {
     backoff?: "exponential" | "linear";
     baseMs?: number;
+    forever?: boolean;
     maxAttempts?: number;
     maxMs?: number;
 }

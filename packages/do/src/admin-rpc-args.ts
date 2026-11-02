@@ -1101,6 +1101,20 @@ const parseReplayQueueMessageArgs = (args: Record<string, unknown>): { id: strin
 };
 
 /**
+ * Validate the `dropOutboxEntry` / `retryOutboxEntry` payload: the outbox
+ * entry's job id. Throws a 400 `LunoraError` when it is missing.
+ */
+const parseScheduleOutboxEntryArgs = (op: string, args: Record<string, unknown>): { id: string } => {
+    const id = typeof args["id"] === "string" ? args["id"].trim() : "";
+
+    if (id === "") {
+        throw new LunoraError("BAD_REQUEST", `${op}: \`id\` is required`);
+    }
+
+    return { id };
+};
+
+/**
  * Validate the `__lunora_admin__:rankBefore` payload. `table`, `index`,
  * `partitionKey`, and `rowId` must be non-empty strings and `sortValues` must
  * be an array; anything else throws a 400 `LunoraError` so the cross-shard
@@ -1681,6 +1695,7 @@ export {
     parseRunMigrationArgs,
     parseSampleErrorsHeader,
     parseSampleRate,
+    parseScheduleOutboxEntryArgs,
     parseSendQueueMessageArgs,
     parseSendWorkflowEventArgs,
     parseSeverityArgument,

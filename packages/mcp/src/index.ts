@@ -11,7 +11,7 @@
  * (status, title, hint, matched solution) that needs no deployment at all. It also
  * exposes the deployment's observability reads (`lunora_get_logs`,
  * `lunora_get_issues`, `lunora_get_advisories`, `lunora_get_query_insights`,
- * `lunora_get_migration_status`) when `allowObservability` (or the
+ * `lunora_get_migration_status`, `lunora_get_schedule_outbox`) when `allowObservability` (or the
  * LUNORA_MCP_ALLOW_OBSERVABILITY env) is set — read-only, but they return
  * production user data, so they are omitted entirely without it. The server is
  * read-only by default — the write tools are exposed only when `allowWrites`

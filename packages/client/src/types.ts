@@ -1165,6 +1165,8 @@ export interface ScheduleRetryPolicy {
     backoff?: "exponential" | "linear";
     /** Base delay in milliseconds for the first retry. Default `30_000`. */
     baseMs?: number;
+    /** Keep retrying instead of dead-lettering; the delay between attempts is clamped to 1 second .. 30 minutes. */
+    forever?: boolean;
     /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */
     maxAttempts?: number;
     /** Optional ceiling clamping the computed backoff delay. */
