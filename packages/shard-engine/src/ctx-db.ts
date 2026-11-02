@@ -2323,11 +2323,21 @@ const readGlobalPages = async (
 
     for (;;) {
         // eslint-disable-next-line no-await-in-loop -- each page's cursor comes from the previous page
-        const result = (await read([args[0], { ...options, cursor, limit }, ...args.slice(2)])) as {
-            continueCursor: string | null;
-            isDone: boolean;
-            page: unknown[];
-        };
+        const result = (await read([args[0], { ...options, cursor, limit }, ...args.slice(2)])) as
+            | unknown[]
+            | {
+                  continueCursor: string | null;
+                  isDone: boolean;
+                  page: unknown[];
+              };
+        // A writer that answers an unpaged read with a plain array has no cursor to follow: that array is the
+        // whole result, read as before the paged path existed.
+        if (Array.isArray(result)) {
+            chargeGlobalResult(result, "rows", table, headroom);
+
+            return [...page, ...result];
+        }
+
         const before = headroom.headroom().readBytes;
 
         chargeGlobalResult(result, "page", table, headroom);
