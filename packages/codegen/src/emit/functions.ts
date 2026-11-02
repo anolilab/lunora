@@ -47,6 +47,19 @@ const renderArgumentDescriptors = (args: Record<string, ValidatorIR>): string =>
             }),
     );
 
+/** The `sensitive` member of a lazy manifest argument descriptor, present only when some argument is sensitive. */
+const sensitiveDescriptorMember = (enabled: boolean): string => (enabled ? "sensitive?: true; " : "");
+
+/** The lazy-only manifest fields of `RegisteredLunoraFunction`, present only in lazy mode so eager output stays byte-identical. */
+const lazyStubFieldsMember = (enabled: boolean): string =>
+    enabled
+        ? `    /** Lazy-mode stub only: the manifest's argument descriptors, read before the module loads. */
+    argumentDescriptors?: FunctionManifestEntry["argumentDescriptors"];
+    /** Lazy-mode stub only: the manifest's cache and REST exposure. */
+    expose?: FunctionManifestEntry["expose"];
+`
+        : "";
+
 /** The module namespaces codegen assigns, shared by eager imports and lazy shims. */
 const moduleAliasesFor = (
     functions: ReadonlyArray<FunctionIR>,
@@ -80,10 +93,9 @@ const moduleAliasesFor = (
     return aliases;
 };
 
-/** Keep eager registry imports and lazy shim emission on the same file-path policy. */
-
 /**
- * Modules the lazy registry imports up front. Besides the kinds that must be
+ * Modules the lazy registry imports up front. Both the registry and the lazy module
+ * emitter read this set, so they agree on which modules load eagerly. Besides the kinds that must be
  * loaded to register at all, that is every module re-exporting a function from
  * a published package: codegen read it off a declaration-file type, which does
  * not say whether it is paid (`x402`), what its `.meta()` is, or which arguments
@@ -231,21 +243,23 @@ const renderFunctionRegistry = (
             // masks them in the request log.
             const sensitiveArgs = sensitiveArgumentNamesOf(definition.args);
 
-            return `    "${sanitizeNamespace(definition.filePath)}:${definition.exportName}": { args: {}, handler: unloadedFunctionHandler, ...${JSON.stringify(
-                {
-                    argumentDescriptors: JSON.parse(renderArgumentDescriptors(definition.args)) as unknown,
-                    kind: definition.kind,
-                    ...(sensitiveArgs.length === 0 ? {} : { sensitiveArgs }),
-                    ...(definition.channel ? { channel: definition.channel } : {}),
-                    ...(definition.expose ? { expose: definition.expose } : {}),
-                    ...(definition.lifecycle ? { lifecycle: definition.lifecycle } : {}),
-                    ...(definition.visibility ? { visibility: definition.visibility } : {}),
-                    ...(definition.x402?.price === undefined ? {} : { x402: { price: definition.x402.price } }),
-                    // The worker reads a route's path off the stub to know which upgrades reach the shard.
-                    ...(definition.socket === undefined ? {} : { auth: definition.socket.auth, socketPath: definition.socket.path }),
-                },
-                // `procedureMeta(fn)` reads the stub until the module loads; the key is `@lunora/server`'s `PROCEDURE_META`.
-            )}${definition.meta === undefined ? "" : `, [Symbol.for("lunora.procedure.meta")]: ${renderFrozenLiteral(definition.meta)}`} } satisfies RegisteredLunoraFunction & Pick<FunctionManifestEntry, "argumentDescriptors" | "channel" | "expose">,`;
+            // The fields are inlined as literal properties rather than spread, so `satisfies` checks their names as well as their types.
+            const stubFields = JSON.stringify({
+                argumentDescriptors: JSON.parse(renderArgumentDescriptors(definition.args)) as unknown,
+                kind: definition.kind,
+                ...(sensitiveArgs.length === 0 ? {} : { sensitiveArgs }),
+                ...(definition.channel ? { channel: definition.channel } : {}),
+                ...(definition.expose ? { expose: definition.expose } : {}),
+                ...(definition.lifecycle ? { lifecycle: definition.lifecycle } : {}),
+                ...(definition.visibility ? { visibility: definition.visibility } : {}),
+                ...(definition.x402?.price === undefined ? {} : { x402: { price: definition.x402.price } }),
+                // The worker reads a route's path off the stub to know which upgrades reach the shard.
+                ...(definition.socket === undefined ? {} : { auth: definition.socket.auth, socketPath: definition.socket.path }),
+            }).slice(1, -1);
+            // `procedureMeta(fn)` reads the stub until the module loads; the key is `@lunora/server`'s `PROCEDURE_META`.
+            const metaField = definition.meta === undefined ? "" : `, [Symbol.for("lunora.procedure.meta")]: ${renderFrozenLiteral(definition.meta)}`;
+
+            return `    "${sanitizeNamespace(definition.filePath)}:${definition.exportName}": { args: {}, handler: unloadedFunctionHandler, ${stubFields}${metaField} } satisfies RegisteredLunoraFunction & Pick<FunctionManifestEntry, "argumentDescriptors" | "channel" | "expose">,`;
         })
         .join("\n");
 
@@ -754,10 +768,11 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
 
     const caller = renderCallerAssembly(functions, lazyFunctions);
     const { callRegisteredHelper, dataModelImport, implementation: callerImpl, parameter: callerParameter, types: callerTypes } = caller;
+    const lazyStubFields = lazyStubFieldsMember(lazyFunctions);
     const lazyRegistryPrelude = lazyFunctions
         ? `
 export interface FunctionManifestEntry {
-    argumentDescriptors: ReadonlyArray<{ element?: string; kind: string; name: string; optional: boolean; table?: string }>;
+    argumentDescriptors: ReadonlyArray<{ element?: string; kind: string; name: string; optional: boolean; ${sensitiveDescriptorMember(hasSensitiveArgs)}table?: string }>;
     channel?: { kind: "room"; name: string };
     exportName: string;
     expose?: { cache?: { credentialHeaders?: ReadonlyArray<string>; maxAge?: number; scope?: "private" | "public"; staleWhileRevalidate?: number; tag?: string; vary?: string }; rest?: boolean };
@@ -922,7 +937,7 @@ ${rooms.channelField}    /**
      * paywalls it; the shard refuses to subscribe it (\`isPaidFunction\`).
      */
     x402?: { readonly price: number | string };
-${sensitiveArgsField}}
+${lazyStubFields}${sensitiveArgsField}}
 ${agentRegistry.prelude}${sandboxRegistry.prelude}${lazyRegistryPrelude}${smokeLoaderPrelude}
 /**
  * Static dispatch table. The key matches the \`__lunoraRef\` the client
