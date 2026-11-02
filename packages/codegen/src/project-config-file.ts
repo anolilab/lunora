@@ -549,6 +549,10 @@ const readServices = (wrapped: TsNode | undefined): ProjectConfigLiterals => {
     return { services: { declared } };
 };
 
+/** The value a `codegen` property names: its identifier when it is shorthand, so the name is resolved like any other. */
+const codegenValueOf = (property: PropertyAssignment | ShorthandPropertyAssignment, sourceFile: SourceFile): TsNode | undefined =>
+    TsNode.isShorthandPropertyAssignment(property) ? property.getNameNode() : propertyLiteral(property, sourceFile);
+
 /**
  * What one property of the config object contributes.
  *
@@ -557,10 +561,6 @@ const readServices = (wrapped: TsNode | undefined): ProjectConfigLiterals => {
  * read" must not be the same answer, because the second silently ships the app to
  * the default provider.
  */
-/** The value a `codegen` property names: its identifier when it is shorthand, so the name is resolved like any other. */
-const codegenValueOf = (property: PropertyAssignment | ShorthandPropertyAssignment, sourceFile: SourceFile): TsNode | undefined =>
-    TsNode.isShorthandPropertyAssignment(property) ? property.getNameNode() : propertyLiteral(property, sourceFile);
-
 const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile): ProjectConfigLiterals => {
     // A getter or method declares a value this reader cannot see.
     if (TsNode.isGetAccessorDeclaration(property) || TsNode.isMethodDeclaration(property)) {
