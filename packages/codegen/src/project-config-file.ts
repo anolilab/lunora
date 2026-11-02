@@ -414,6 +414,12 @@ const readLazyFunctions = (declared: TsNode | undefined, sourceFile: SourceFile)
         return {};
     }
 
+    // The whole `codegen` value is not a literal this reader can walk. Only a value whose text names the key can be the
+    // unreadable `lazyFunctions`; anything else (a `codegen` that never mentions it) is not a lazy-functions problem.
+    if ("unreadable" in member) {
+        return declared?.getText().includes("lazyFunctions") === true ? { lazyFunctionsUnreadable: true } : {};
+    }
+
     const value = "literal" in member ? unwrapLiteral(member.literal) : undefined;
 
     return value !== undefined && (TsNode.isTrueLiteral(value) || TsNode.isFalseLiteral(value))
@@ -668,6 +674,9 @@ const readMergeDurableObjects = (projectRoot: string): boolean => {
     return durableObjects?.merge === true;
 };
 
+/** The config version the lazy-functions warning was last said for; a repeat run on the same file says nothing. */
+let lazyFunctionsWarnedFor: string | undefined;
+
 /**
  * `lunora.config`'s `codegen.lazyFunctions`: the project-wide opt-in to the lazy
  * function registry. Read inside `runCodegen` so every entry point that writes or
@@ -679,8 +688,16 @@ const readProjectLazyFunctions = (projectRoot: string): boolean => {
     const { codegen } = readProjectConfigLiterals(projectRoot);
 
     if (codegen?.lazyFunctionsUnreadable) {
-        // eslint-disable-next-line no-console -- codegen has no diagnostic sink for config literals; matches `durableObjects.merge`'s warning.
-        console.warn("@lunora/codegen: `codegen.lazyFunctions` in lunora.config is not a boolean literal — the function registry stays eager.");
+        // Every entry point reads this on each run; the warning is said once per config version, as `codegen.exclude`'s is.
+        const configPath = findProjectConfigFile(projectRoot);
+        const stats = configPath === undefined ? undefined : statSync(configPath);
+        const key = stats === undefined || configPath === undefined ? "" : `${configPath}:${String(stats.mtimeMs)}:${String(stats.size)}`;
+
+        if (key !== lazyFunctionsWarnedFor) {
+            lazyFunctionsWarnedFor = key;
+            // eslint-disable-next-line no-console -- codegen has no diagnostic sink for config literals; matches `durableObjects.merge`'s warning.
+            console.warn("@lunora/codegen: `codegen.lazyFunctions` in lunora.config is not a boolean literal — the function registry stays eager.");
+        }
     }
 
     return codegen?.lazyFunctions === true;

@@ -1701,6 +1701,12 @@ const readPackageDependencies: (projectRoot: string) => Set<string> | undefined;
 const readProjectConfigLiterals: (projectRoot: string) => ProjectConfigLiterals;
 ```
 
+### `readProjectLazyFunctions` (const)
+
+```ts
+const readProjectLazyFunctions: (projectRoot: string) => boolean;
+```
+
 ### `readProjectTarget` (const)
 
 ```ts

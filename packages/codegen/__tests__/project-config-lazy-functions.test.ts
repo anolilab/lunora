@@ -40,6 +40,30 @@ describe("codegen.lazyFunctions in lunora.config", () => {
         expect(readProjectConfigLiterals(projectRoot).codegen).toStrictEqual(expected);
     });
 
+    it("does not warn about a codegen value that never names lazyFunctions", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        writeConfig("{ codegen: base.codegen }");
+
+        expect(readProjectLazyFunctions(projectRoot)).toBe(false);
+        expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("says an unreadable lazyFunctions once per config version, not on every run", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        writeConfig("{ codegen: { lazyFunctions: process.env.LAZY === '1' } }");
+        readProjectLazyFunctions(projectRoot);
+        readProjectLazyFunctions(projectRoot);
+
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0]?.[0]).toContain("not a boolean literal");
+    });
+
     it("treats an unreadable value as off and says so", () => {
         expect.assertions(2);
 

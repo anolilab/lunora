@@ -92,6 +92,13 @@ const resolveRunnableTargetOrThrow = (projectRoot: string, explicit?: string): s
 
 const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunoraPluginOptions => {
     const input = options ?? {};
+    // `lazyFunctions` moved to `codegen.lazyFunctions` in lunora.config. A plugin that still passes it would otherwise
+    // regenerate the eager registry without a word, so the removed option is refused here.
+    if ((input as { lazyFunctions?: unknown }).lazyFunctions !== undefined) {
+        throw new Error(
+            "lunora(): the `lazyFunctions` option was removed. Set `codegen: { lazyFunctions: true }` in lunora.config (or pass --lazy-functions for one run).",
+        );
+    }
     const schemaDirectory = input.schemaDir ?? "lunora";
 
     // Each integration toggle is `boolean | options`: `false` opts out, `true`
