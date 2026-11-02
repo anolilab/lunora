@@ -138,8 +138,7 @@ describe("lazy function registry", () => {
             const runtimePolicyCheck = [
                 'const runtimePolicy: { maxAge: number; scope: "private" | "public" } | undefined =',
                 // eslint-disable-next-line no-secrets/no-secrets -- emitted TypeScript fixture, not a credential
-                "    Object.values(LUNORA_FUNCTION_MANIFEST)[0]",
-                "        ?.expose?.cache;",
+                "    Object.values(LUNORA_FUNCTION_MANIFEST)[0]?.expose?.cache;",
                 "export { runtimePolicy };",
             ].join("\n");
 
