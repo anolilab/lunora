@@ -1,3 +1,15 @@
+## @lunora/cli [1.0.0-alpha.473](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.472...@lunora/cli@1.0.0-alpha.473) (2026-11-02)
+
+### Bug Fixes
+
+* **cli,codegen:** restore doc comments and treat an empty config as a change ([#1447](https://github.com/anolilab/lunora/issues/1447)) ([4d29823](https://github.com/anolilab/lunora/commit/4d29823c41883c73fd0528f37ad38e3f43c65c19))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.392
+* **@lunora/config:** upgraded to 1.0.0-alpha.449
+
 ## @lunora/cli [1.0.0-alpha.472](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.471...@lunora/cli@1.0.0-alpha.472) (2026-11-02)
 
 ### Bug Fixes
