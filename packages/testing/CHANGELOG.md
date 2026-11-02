@@ -1,3 +1,301 @@
+## @lunora/testing [1.0.0-alpha.326](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.325...@lunora/testing@1.0.0-alpha.326) (2026-11-02)
+
+### ⚠ BREAKING CHANGES
+
+* `rls()` and `mask()` return `PolicyMiddleware` instead of
+`Middleware<Context, Context>`.
+* `RegisteredQuery`/`RegisteredMutation`/`RegisteredAction`
+now mean public functions; `internal*` builders return the new
+`RegisteredInternal*` types.
+* a function re-exported from a published package and typed
+as a bare `RegisteredFunction` now fails codegen, since its visibility is
+unknown.
+* `PresenceComponent.extension` is required.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix: keep published functions paid, sensitive and policy-checked
+
+- Load every module re-exporting a function from a published package
+  eagerly under lazy functions. A declaration-file type cannot say whether
+  the function is paid, what its `.meta()` is, or which args are
+  `v.sensitive`, so an unloaded stub let a paid call dispatch free and
+  reported no meta.
+- Mark those functions' client references sensitive, since `v.sensitive`
+  leaves no trace in the type and guessing otherwise could persist a secret
+  in the offline queue.
+- Keep the policy's required context in `PolicyMiddleware`, so attaching
+  `rls()` / `mask()` to a procedure context lacking a field the policies
+  read is a type error again. `RlsContextIn` is exported so such a policy
+  context can be written.
+- Match a package factory by symbol, not by name.
+- Treat a `__proto__` key as non-literal; it sets a prototype instead.
+- Encode each function's meta separately in the admin listing and flag an
+  unencodable one (`metaUnencodable`) instead of failing the whole response.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): gate factory calls and tighten published-function discovery
+
+- Call a package factory during extension resolution only when its declared
+  return type carries a schema extension (`extension` with `tables`), so a
+  side-effecting package export the source happens to call is never run.
+- Map `Id<"table">` arguments of published functions to the `id` kind, so
+  OpenAPI and the SDKs keep their string schema.
+- Count `const { functions } = x` and `x["functions"]` as reading a
+  component's functions, and warn about an unwired component once per
+  codegen run instead of once per inference pass.
+- Declare `sensitiveArgs` on the generated registry type whenever the shard
+  masks sensitive arguments, including for type-derived functions, so the
+  generated shard typechecks.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): resolve default and namespace factories, freeze stub meta
+
+- Resolve `.extend(component.extension)` when the factory behind the
+  component is a default import (`import defineX from "pkg"`) or is called
+  through a namespace import (`pkg.defineX(...)`), not only a named import.
+- Emit a lazy stub's `.meta()` deep-frozen, matching the builder's copy on
+  the loaded function, so a reader cannot mutate it before the module loads.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): keep package tables' ttl, geo indexes and global backend
+
+A schema extension read from an installed package lost three table
+declarations without a warning: its `.ttl(...)` policy (no expiry sweep was
+generated), its geo indexes (absent from metadata and types), and a
+Hyperdrive global backend (wired as D1). The runtime builder exposes all
+three in the IR's own shape, so they are now carried over; a global table
+without a backend normalises to D1, as on the AST path.
+
+Lazy-stub `.meta()` also keeps `Infinity`, `NaN` and `-0`, which
+`JSON.stringify` rewrote, and an overflowing numeric literal (`1e999`) now
+reads as `Infinity` rather than `NaN`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix: discover published streams, keep memory tables, align test harness
+
+- Discover a `.stream()` function re-exported from a published package,
+  with its chunk type from the handler's `AsyncIterable<R>`.
+  `RegisteredStream` gains the same visibility type parameter as the other
+  registration types, so an internal stream is typed as one.
+- Stop marking an argument-free published function sensitive: with nothing
+  to leak it may queue offline. Discovery now refuses a published function
+  whose args type does not list its keys (`any`, an index signature), so an
+  empty args map is proven empty.
+- Carry a package table's `.memory()` flag through runtime introspection,
+  so its rows are still cleared on wake.
+- Type the test harness's top-level `query`/`mutation`/`action`/`subscribe`
+  as public-only again: they reject internal functions at runtime, as
+  production does, and now reject them at compile time too.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): carry every package table flag the IR models
+
+Runtime introspection of a package schema extension still dropped table
+declarations that have an IR field:
+
+- `.softDelete()`: the TTL sweep could not skip tombstones, so expired
+  deleted rows kept the alarm rescheduling.
+- `.public()`: under `.rls("required")` the table would be refused at
+  runtime.
+- `.commitOrdered()` and a declared aggregate index.
+
+They are now mapped like the AST path maps them. An external source has no
+introspectable IR, so it joins the dropped-feature warning instead of
+vanishing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix: route published lifecycle hooks and keep package source tables
+
+- `onConnect`, `onDisconnect` and `onShardInit` now return their moment in
+  the type (`RegisteredLifecycleHook & { readonly lifecycle: "connect" }`),
+  so a hook a published component ships through them can be routed. A hook
+  whose declared type hides its moment fails codegen with advice that fits
+  a hook, instead of the visibility message meant for procedures.
+- Carry a package table's `.source(...)` definition through runtime
+  introspection (binding, columns, mode, query and the reconcile, soft
+  delete and tenant markers the lints read), so the shard still polls and
+  bootstraps it. It previously only warned.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): type published byte arguments as bytes, not objects
+
+A published function's `v.bytes()` argument parses to `ArrayBuffer`, a lib
+interface the type mapper read as an object of its methods, so the client
+api, OpenAPI, MCP schemas and SDKs described a plain JSON object the runtime
+validator rejects. `ArrayBuffer` now maps to the `bytes` kind, and any other
+object type with methods (`Date`) is carried as its TS text instead of a
+bogus object shape.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(codegen): convert package tables' relations, rank and vector indexes
+
+A schema extension read from an installed package had its tables'
+`.relations(...)`, `.rankIndex(...)` and inline `.vectorize(...)` replaced
+with empty lists, with a warning, so the generated data model lacked the
+relation helpers and index names. The runtime builder exposes all three in
+the IR's own shapes, so they are converted like every other table
+declaration; relation targets and the vector index owner stay bare and are
+retargeted by the same namespacing the AST path uses. The dropped-feature
+warning is gone, since nothing it covered is dropped any more.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): unwrap a published handler's direct Promise result
+
+The published-function result type unwrapped `Promise<T>` only as a member
+of a `Promise<T> | T` union, so a handler declared to return `Promise<T>`
+directly gave its client reference a `Promise<T>` result, though dispatch
+awaits the handler and returns `T`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix: keep dropped lifecycle hooks reported, refuse published rooms clearly
+
+- `RegisteredLifecycleHook` is generic over its moment
+  (`RegisteredLifecycleHook<"connect">`), and `onConnect`, `onDisconnect`
+  and `onShardInit` return it. The previous anonymous intersection carried no
+  type name, so the dropped-registration check no longer reported a hook
+  exported through a factory, and it silently never fired. Hooks are also
+  typed internal, as the runtime stamps them.
+- A room re-exported from a published package now fails codegen with advice
+  that fits a room (its name is not in the declared type, so it cannot be
+  routed), instead of the procedure visibility message.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* refactor(codegen): read the published room channel property once
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix: require the internal marker wherever a type claims internal
+
+Dispatch refuses a client call by the value's own `visibility` marker, but
+for a published package codegen can only read the declared type. A type
+like `RegisteredStream<A, R, "internal">` has an optional `visibility`, so a
+value could omit the marker: codegen kept the function out of the client
+api while dispatch still served it.
+
+- `RegisteredInternalQuery`/`Mutation`/`Action` and the new
+  `RegisteredInternalStream` require `visibility: "internal"`; internal
+  builders return them.
+- Codegen accepts a published internal function only when its type makes
+  the marker required, and names the `RegisteredInternal*` types otherwise.
+- `.extend(x.extension as T)` (or `satisfies`, parentheses) is unwrapped
+  before resolution, so a cast no longer drops the extension.
+* a published component that declares an internal function as
+`RegisteredQuery<A, R, "internal">` (optional `visibility`) now fails
+codegen; declare it with `RegisteredInternalQuery` and friends.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): keep package columns' sensitive marker and bigint literals
+
+- Runtime introspection of a package schema extension dropped a column's
+  `v.sensitive` marker, so a `v.sensitive(v.literal(secret))` column wrote
+  the secret into every generated schema, which redact only on that flag.
+  The marker is now carried, at every depth.
+- A published argument typed by a bigint literal (`v.literal(5n)`) now
+  keeps its exact-value constraint instead of falling back to an opaque
+  type.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): keep published literal values out of generated schemas
+
+A published function's argument is rebuilt from its declared type, which
+cannot show `v.sensitive`. A literal there could be the very secret the
+marker guards, and it reached generated OpenAPI/OpenRPC schemas as a
+`const`. Type-derived literals are now marked sensitive, so the schemas keep
+their type and drop the value; the client types still narrow to it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): await every member of a published handler's result type
+
+A handler declared `Promise<A> | B` gave its client reference `A` alone:
+the result reader took the promise's type argument and dropped the other
+members, though dispatch awaits whatever the handler returns. Each member is
+now awaited and rendered through the shared return-type checks, joined
+into one union.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix: record package columns' bounds without a false deploy block
+
+Codegen read a package extension's tables at runtime and dropped every
+`.min()`/`.max()`, so a bound added to or removed from a package column was
+invisible to the deploy gate.
+
+- Runtime introspection now marks such a column refined (and carries a
+  string's `maxLength`), the way the AST path does.
+- A package table's snapshot carries `refinementsRecorded`. A baseline
+  without it never recorded those bounds, so the gate skips the refinement
+  comparison for that table once instead of reporting every bound the
+  column always had as newly gained; after one re-blessed baseline the check
+  is live. An app's own tables are unaffected.
+- `migrate generate` no longer reports a bound-only change as a column type
+  change to fix with manual SQL: a `.min()` changes no column, and the
+  deploy gate already reports what it means for stored values.
+
+The payment-demo and privacy snapshots gain the bounds and the marker; the
+gate reports no change between their previous and new snapshots.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(errors): register the published-function and procedure-meta codes
+
+`PUBLISHED_FUNCTION_UNSUPPORTED`, `PUBLISHED_FUNCTION_VISIBILITY_UNKNOWN` and
+`PROCEDURE_META_UNLOADED` were minted without a catalog entry, which the
+repo-wide catalog registration test rejects. They are now catalogued (the two
+codegen codes with the other build-time diagnostics, mapped to exit code 2
+like them), and the generated error reference is regenerated.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): resolve documented component options, keep published kinds
+
+- Fold numeric arithmetic over literal operands (`60 * 60 * 1000`) when
+  evaluating a package factory's options, so the documented
+  `defineActionCache({ ttlMs: 60 * 60 * 1000 })` and
+  `defineDocumentHistory({ retentionMs: … })` wiring resolves its tables
+  instead of dropping them. The skipped-extension hint names every
+  standalone extension, not only presence's.
+- A published function's `v.timestamp()`/`v.date()` argument maps to the
+  timestamp kind, `v.object({})` to an empty object, and `v.geoPoint()` to
+  geoPoint, read from the validator's own interface or the named value type
+  where the parsed value type alone (`number`, `{}`, a plain object) loses
+  them.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* close silent gaps in presence, policy typing and meta ([#1439](https://github.com/anolilab/lunora/issues/1439)) ([053213d](https://github.com/anolilab/lunora/commit/053213d99a83e0e1b88b9a155184993b35473fa4))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.273
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.147
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+* **@lunora/mail:** upgraded to 1.0.0-alpha.135
+* **@lunora/notify:** upgraded to 1.0.0-alpha.107
+* **@lunora/queue:** upgraded to 1.0.0-alpha.139
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.164
+* **@lunora/server:** upgraded to 1.0.0-alpha.262
+* **@lunora/observability:** upgraded to 1.0.0-alpha.195
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.192
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.181
+
 ## @lunora/testing [1.0.0-alpha.325](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.324...@lunora/testing@1.0.0-alpha.325) (2026-10-31)
 
 
