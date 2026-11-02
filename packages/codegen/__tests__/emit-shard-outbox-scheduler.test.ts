@@ -9,6 +9,8 @@ import { dispatchMethods } from "../src/emit/shard-dispatch";
  */
 describe(dispatchMethods, () => {
     it("retries the outbox through a scheduler stamped with the run's shard when the app declares agents", () => {
+        expect.assertions(2);
+
         const source = dispatchMethods(false, false, true);
 
         expect(source).toContain("withAgentScheduleShard(configured, LUNORA_AGENTS, this.currentShardKey())");
@@ -16,6 +18,8 @@ describe(dispatchMethods, () => {
     });
 
     it("keeps the configured scheduler unstamped for an app without agents", () => {
+        expect.assertions(3);
+
         const source = dispatchMethods(false, false, false);
 
         expect(source).toContain("return config.scheduler?.((this.env ?? {}) as Record<string, unknown>) as SchedulerLike | undefined;");
