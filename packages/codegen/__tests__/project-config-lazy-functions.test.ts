@@ -122,6 +122,17 @@ describe("codegen.lazyFunctions in lunora.config", () => {
         expect(warn).not.toHaveBeenCalled();
     });
 
+    it("says an imported shorthand codegen, since the object it names may set lazyFunctions", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        writeFileSync(join(projectRoot, "lunora.config.ts"), 'import codegen from "./shared";\nexport default { codegen };\n', "utf8");
+
+        expect(readProjectLazyFunctions(join(projectRoot, "lunora"))).toBe(false);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("not a boolean literal"));
+    });
+
     it("says a codegen name bound to a call it cannot read, since the call may set lazyFunctions", () => {
         expect.assertions(2);
 

@@ -198,16 +198,7 @@ const loadProjectConfig = async (projectRoot: string): Promise<LoadedProjectConf
     return pending;
 };
 
-/**
- * The object literal the default export resolves to, or `undefined` when it does
- * not resolve to one.
- *
- * A `satisfies` / `as` / parenthesised wrapper is unwrapped, because that is the
- * documented shape. An identifier is followed to a `const` in the same file,
- * because `const config = { … }; export default config;` is the commonest config
- * idiom there is and reading it as "no keys" was indistinguishable from an empty
- * config.
- */
+/** `value` with any `satisfies`, `as` or parenthesised wrapper peeled off. */
 const unwrapLiteral = (value: TsNode | undefined): TsNode | undefined => {
     let inner = value;
 
@@ -218,6 +209,16 @@ const unwrapLiteral = (value: TsNode | undefined): TsNode | undefined => {
     return inner;
 };
 
+/**
+ * The object literal the default export resolves to, or `undefined` when it does
+ * not resolve to one.
+ *
+ * A `satisfies` / `as` / parenthesised wrapper is unwrapped, because that is the
+ * documented shape. An identifier is followed to a `const` in the same file,
+ * because `const config = { … }; export default config;` is the commonest config
+ * idiom there is and reading it as "no keys" was indistinguishable from an empty
+ * config.
+ */
 const defaultExportObject = (sourceFile: SourceFile): ObjectLiteralExpression | undefined => {
     const assignment = sourceFile.getExportAssignments().find((candidate) => !candidate.isExportEquals());
     let expression: TsNode | undefined = unwrapLiteral(assignment?.getExpression());
@@ -552,6 +553,10 @@ const readServices = (wrapped: TsNode | undefined): ProjectConfigLiterals => {
  * read" must not be the same answer, because the second silently ships the app to
  * the default provider.
  */
+/** The value a `codegen` property names: its identifier when it is shorthand, so the name is resolved like any other. */
+const codegenValueOf = (property: PropertyAssignment | ShorthandPropertyAssignment, sourceFile: SourceFile): TsNode | undefined =>
+    TsNode.isShorthandPropertyAssignment(property) ? property.getNameNode() : propertyLiteral(property, sourceFile);
+
 const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile): ProjectConfigLiterals => {
     // A getter or method declares a value this reader cannot see.
     if (TsNode.isGetAccessorDeclaration(property) || TsNode.isMethodDeclaration(property)) {
@@ -573,7 +578,8 @@ const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile
     }
 
     if (key === "codegen") {
-        return readCodegen(propertyLiteral(property, sourceFile), sourceFile);
+        // Shorthand `{ codegen }` names the value: its identifier is what readCodegen resolves, whether the name is imported or a const here.
+        return readCodegen(codegenValueOf(property, sourceFile), sourceFile);
     }
 
     if (key === "durableObjects") {
