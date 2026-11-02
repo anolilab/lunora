@@ -2360,9 +2360,9 @@ interface WorkerOptions {
     adminGate?: (request: Request, context?: ExecutionContextLike) => boolean | Promise<boolean>;
     adminRevocations?: ShardNamespaceLike;
     adminToken?: string;
+    agentWorkflows?: ReadonlyArray<string>;
     aiChatBinding?: AiRunBinding;
     aiOptInLevel?: AiOptInLevel;
-    agentWorkflows?: ReadonlyArray<string>;
     allowUnauthenticatedShardAccess?: boolean;
     applyGlobals?: GlobalCdcApplyFunction;
     architecture?: unknown;

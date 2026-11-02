@@ -1008,6 +1008,16 @@ interface WorkerOptions {
     adminToken?: string;
 
     /**
+     * The generated class names of the app's agent workflows (`SupportAgentWorkflow`).
+     * Codegen wires it. A scheduled job that starts one of them gets its run shard
+     * (`AgentRunInput.shardKey`) from the scheduler record, never from the job's args:
+     * the record's `shardKey` is stamped server-side by the scheduling shard and signed
+     * with the dispatch, while the args may carry a public mutation's client input. A
+     * plain workflow's params are passed through untouched.
+     */
+    agentWorkflows?: ReadonlyArray<string>;
+
+    /**
      * The Workers `AI` binding backing the studio's chat assistant (the
      * `__lunora_admin__:aiChat` admin RPC). Served HERE at the worker rather than
      * on a shard because the DO's admin dispatch is single-threaded and a
@@ -1042,16 +1052,6 @@ interface WorkerOptions {
      * rather than the top tier — so a typo in the var fails closed too.
      */
     aiOptInLevel?: AiOptInLevel;
-
-    /**
-     * The generated class names of the app's agent workflows (`SupportAgentWorkflow`).
-     * Codegen wires it. A scheduled job that starts one of them gets its run shard
-     * (`AgentRunInput.shardKey`) from the scheduler record, never from the job's args:
-     * the record's `shardKey` is stamped server-side by the scheduling shard and signed
-     * with the dispatch, while the args may carry a public mutation's client input. A
-     * plain workflow's params are passed through untouched.
-     */
-    agentWorkflows?: ReadonlyArray<string>;
 
     /**
      * Opt into an authorization-open posture for sharded and fan-out access.
@@ -3803,7 +3803,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         scheduledFor?: number,
     ): Promise<void> => {
         if (job.workflow) {
-            await startWorkflowInstance(job.workflow, job.args ?? {}, { context, env }, `cron job "${job.name}"`);
+            // A cron has no record shard, so an agent workflow starts on the default shard whatever its args say.
+            await startWorkflowInstance(
+                job.workflow,
+                scheduledWorkflowParams(job.workflow, job.args ?? {}, undefined),
+                { context, env },
+                `cron job "${job.name}"`,
+            );
 
             return;
         }
