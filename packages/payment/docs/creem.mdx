@@ -93,7 +93,7 @@ names `@lunora/payment` expects:
 ## Install
 
 Install the payment package alongside the official `creem` SDK. `@lunora/payment`
-never imports `creem` itself (you inject the client), so the SDK stays an
+never imports `creem` itself (you pass a loader for the client), so the SDK stays an
 ordinary dependency of _your_ app, not a hard dependency of the package.
 
 <Tabs items={["pnpm","npm","yarn","bun"]}>
@@ -118,9 +118,12 @@ bun add @lunora/payment creem
 
 ## Configure
 
-The adapter takes the `creem` client by injection, typed as the structural
+The adapter takes a loader for the `creem` client, typed as the structural
 **`CreemClientLike`** (its `checkouts`, `customers`, and `subscriptions`
-resources). A real `Creem` instance satisfies it without a cast — the shape
+resources). It calls the loader on its first provider call and reuses the
+client, so the SDK stays out of the Worker's startup graph; a static
+`import { Creem } from "creem"` in the entry is evaluated at startup and defeats
+this. A real `Creem` instance satisfies the type without a cast — the shape
 exists only to keep `@lunora/payment` free of a hard `creem` dependency and the
 SDK's full types out of the published declarations; internally the adapter calls
 the real SDK methods.
@@ -128,17 +131,19 @@ the real SDK methods.
 <Steps>
 <Step>
 
-**Construct the real Creem SDK client.** The current `creem` SDK takes the API key
-at construction (not per call) and selects test mode via `server: "test"` (or an
-explicit `serverURL`):
+**Write a loader for the real Creem SDK client.** The current `creem` SDK takes the
+API key at construction (not per call) and selects test mode via `server: "test"`
+(or an explicit `serverURL`):
 
 ```ts
-import { Creem } from "creem";
+const loadCreem = async () => {
+    const { Creem } = await import("creem");
 
-const creem = new Creem({
-    apiKey: env.CREEM_API_KEY,
-    // server: "test", // → https://test-api.creem.io while developing
-});
+    return new Creem({
+        apiKey: env.CREEM_API_KEY,
+        // server: "test", // → https://test-api.creem.io while developing
+    });
+};
 ```
 
 </Step>
@@ -151,12 +156,15 @@ request from `ctx.db`, and the default authorizer ties `referenceId` to
 
 ```ts
 import { createCreemAdapter } from "@lunora/payment/creem";
-import { Creem } from "creem";
 import { createShardDO } from "./_generated/shard";
 
 export const ShardDO = createShardDO({
     payment: (env) => {
-        const client = new Creem({ apiKey: env.CREEM_API_KEY });
+        const client = async () => {
+            const { Creem } = await import("creem");
+
+            return new Creem({ apiKey: env.CREEM_API_KEY });
+        };
 
         return {
             adapter: createCreemAdapter({ client, webhookSecret: env.CREEM_WEBHOOK_SECRET }),

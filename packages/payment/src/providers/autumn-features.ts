@@ -10,11 +10,12 @@
  *
  * These live in this companion facade — deliberately separate from `createAutumnAdapter` — so the
  * provider-agnostic path stays generic and only Autumn apps reach for them. The public `client` is
- * the small structural {@link AutumnFeaturesClientLike} (a real `autumn-js` `Autumn` instance
- * satisfies it, no cast); internally it is used as the real `Autumn` so calls are checked against
- * the SDK. It is resource-based — `billing.attach`, `entities.*`, `events.*`, `plans.list`,
- * `referrals.*` — and every call takes a single camelCase params object. Share the same underlying
- * `Autumn` client between this facade and `createAutumnAdapter`.
+ * a loader for the small structural {@link AutumnFeaturesClientLike} (a real `autumn-js` `Autumn`
+ * instance satisfies it, no cast), run on the first call like `createAutumnAdapter`'s, so the facade
+ * can be built at module scope without putting the SDK in the Worker's startup graph. Internally the
+ * client is used as the real `Autumn` so calls are checked against the SDK. It is resource-based —
+ * `billing.attach`, `entities.*`, `events.*`, `plans.list`, `referrals.*` — and every call takes a
+ * single camelCase params object. Pass the same loader to this facade and `createAutumnAdapter`.
  *
  * SECURITY: unlike the `ctx.payments` facade, these methods do **not** authorize the caller — each
  * takes the `referenceId` (and `entityId`) positionally and trusts it. Before exposing any of them on
@@ -26,6 +27,7 @@
  */
 import type { Autumn } from "autumn-js";
 
+import { lazyValue } from "../../../../shared/lazy-value";
 import { asRecord, readNumber, readString } from "../json";
 
 /**
@@ -107,7 +109,7 @@ interface AutumnFeaturesClientLike {
 }
 
 interface AutumnFeaturesOptions {
-    readonly client: AutumnFeaturesClientLike;
+    readonly client: () => Promise<AutumnFeaturesClientLike> | AutumnFeaturesClientLike;
 }
 
 /** The SDK's `featureId` param is `string | string[]` (mutable); copy the readonly input into it. */
@@ -158,12 +160,13 @@ interface AutumnFeatures {
 }
 
 /**
- * Build the Autumn-native feature facade over an injected client. Companion to `createAutumnAdapter`;
- * share the same underlying `autumn-js` `Autumn` client between them.
+ * Build the Autumn-native feature facade over a client loader, run on the first call and reused (a
+ * rejected load is retried on the next call). Companion to `createAutumnAdapter`; pass both the same
+ * loader.
  */
 export const createAutumnFeatures = (options: AutumnFeaturesOptions): AutumnFeatures => {
     // Public param is the tiny structural shim; internally it is the real SDK so calls are checked.
-    const client = options.client as unknown as Autumn;
+    const loadClient = lazyValue(async () => (await options.client()) as unknown as Autumn);
 
     return {
         /**
@@ -172,6 +175,7 @@ export const createAutumnFeatures = (options: AutumnFeaturesOptions): AutumnFeat
          * Autumn applied the change directly without a payment step).
          */
         checkout: async (referenceId: string, input: AutumnCheckoutInput): Promise<{ raw: Record<string, unknown>; url: string }> => {
+            const client = await loadClient();
             const result = asRecord(
                 await client.billing.attach({
                     customerId: referenceId,
@@ -195,6 +199,7 @@ export const createAutumnFeatures = (options: AutumnFeaturesOptions): AutumnFeat
         entities: {
             /** Create a per-seat / per-workspace sub-customer under a reference. */
             create: async (referenceId: string, input: CreateEntityInput): Promise<AutumnEntity> => {
+                const client = await loadClient();
                 const created = await client.entities.create({ customerId: referenceId, entityId: input.id, featureId: input.featureId, name: input.name });
 
                 return entityFrom(asRecord(created));
@@ -202,11 +207,14 @@ export const createAutumnFeatures = (options: AutumnFeaturesOptions): AutumnFeat
 
             /** Remove an entity — frees its seat/allowance. */
             delete: async (referenceId: string, entityId: string): Promise<void> => {
+                const client = await loadClient();
+
                 await client.entities.delete({ customerId: referenceId, entityId });
             },
 
             /** Fetch one entity and its balances. */
             get: async (referenceId: string, entityId: string): Promise<AutumnEntity> => {
+                const client = await loadClient();
                 const entity = await client.entities.get({ customerId: referenceId, entityId });
 
                 return entityFrom(asRecord(entity));
@@ -216,6 +224,7 @@ export const createAutumnFeatures = (options: AutumnFeaturesOptions): AutumnFeat
         events: {
             /** Bucketed usage aggregation for a reference's feature(s) over a range. */
             aggregate: async (referenceId: string, input: EventsAggregateInput): Promise<UsageEventPoint[]> => {
+                const client = await loadClient();
                 const result = await client.events.aggregate({ customerId: referenceId, featureId: toFeatureId(input.featureId), range: input.range });
 
                 return pointsFrom(asRecord(result));
@@ -223,6 +232,7 @@ export const createAutumnFeatures = (options: AutumnFeaturesOptions): AutumnFeat
 
             /** Raw usage events for a reference's feature(s). */
             list: async (referenceId: string, input: EventsListInput): Promise<UsageEventPoint[]> => {
+                const client = await loadClient();
                 const result = await client.events.list({ customerId: referenceId, featureId: toFeatureId(input.featureId) });
 
                 return pointsFrom(asRecord(result));
@@ -232,6 +242,7 @@ export const createAutumnFeatures = (options: AutumnFeaturesOptions): AutumnFeat
         plans: {
             /** The configured plan catalog. */
             list: async (): Promise<Record<string, unknown>[]> => {
+                const client = await loadClient();
                 const result = asRecord(await client.plans.list());
                 const list = result.list ?? result.data ?? result.plans;
 
@@ -242,14 +253,18 @@ export const createAutumnFeatures = (options: AutumnFeaturesOptions): AutumnFeat
         referrals: {
             /** Mint (or fetch) a referral code for a reference in a referral program. */
             createCode: async (referenceId: string, programId: string): Promise<{ code: string; raw: Record<string, unknown> }> => {
+                const client = await loadClient();
                 const result = asRecord(await client.referrals.createCode({ customerId: referenceId, programId }));
 
                 return { code: readString(result, "code") ?? "", raw: result };
             },
 
             /** Redeem a referral code on behalf of a reference. */
-            redeemCode: async (referenceId: string, code: string): Promise<Record<string, unknown>> =>
-                asRecord(await client.referrals.redeemCode({ code, customerId: referenceId })),
+            redeemCode: async (referenceId: string, code: string): Promise<Record<string, unknown>> => {
+                const client = await loadClient();
+
+                return asRecord(await client.referrals.redeemCode({ code, customerId: referenceId }));
+            },
         },
     };
 };

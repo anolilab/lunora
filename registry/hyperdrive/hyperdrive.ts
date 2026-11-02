@@ -7,10 +7,13 @@
  *
  * Usage:
  *   import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
- *   import postgres from "postgres";
  *
  *   const { connectionString } = createHyperdrive(env.HYPERDRIVE);
- *   const sql = fromPostgresJs(postgres(connectionString, { fetch_types: false, max: 5 }));
+ *   const sql = fromPostgresJs(async () => {
+ *       const { default: postgres } = await import("postgres");
+ *
+ *       return postgres(connectionString, { fetch_types: false, max: 5 });
+ *   });
  *   const rows = await sql.query("select id, name from users where org = $1", [orgId]);
  *
  * `fromPostgresJs` / `fromNodePg` / `fromMysql2` all return a `SqlClient`, whose
@@ -41,7 +44,6 @@
  * Action-only (non-deterministic external I/O).
  */
 import { env as workerEnv } from "cloudflare:workers";
-import postgres from "postgres";
 
 import type { HyperdriveLike, SqlClient } from "@lunora/hyperdrive";
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
@@ -77,7 +79,11 @@ const connect = (): SqlClient => {
 
     const { connectionString } = createHyperdrive(binding);
 
-    return fromPostgresJs(postgres(connectionString, { fetch_types: false, max: 5 }));
+    return fromPostgresJs(async () => {
+        const { default: postgres } = await import("postgres");
+
+        return postgres(connectionString, { fetch_types: false, max: 5 });
+    });
 };
 
 /**

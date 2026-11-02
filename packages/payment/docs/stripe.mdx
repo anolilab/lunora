@@ -127,26 +127,33 @@ carries your secret key, comes from a `config.payment(env)` thunk you pass to
 <Steps>
 <Step>
 
-**Construct a `Stripe` client** from `env.STRIPE_SECRET_KEY`. On Workers, use the
-fetch-based HTTP client so the SDK runs on `workerd`:
+**Write a loader for the `Stripe` client** that builds it from
+`env.STRIPE_SECRET_KEY`. On Workers, use the fetch-based HTTP client so the SDK
+runs on `workerd`:
 
 ```ts
-import Stripe from "stripe";
+const loadStripe = async () => {
+    const { default: Stripe } = await import("stripe");
 
-const stripe = new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() });
+    return new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() });
+};
 ```
+
+The adapter calls the loader on its first provider call and reuses the client,
+so `stripe` stays out of the Worker's startup graph. A static `import Stripe from
+"stripe"` in the entry is evaluated at startup and defeats this.
 
 </Step>
 <Step>
 
-**Build the adapter** with `createStripeAdapter`. Pass the `Stripe` instance straight through;
-the adapter's `client` is typed as the real `Stripe`, so there is no cast:
+**Build the adapter** with `createStripeAdapter`. Pass the loader as `client`; a real
+`Stripe` instance satisfies the type it resolves to, so there is no cast:
 
 ```ts
 import { createStripeAdapter } from "@lunora/payment/stripe";
 
 const adapter = createStripeAdapter({
-    client: stripe,
+    client: loadStripe,
     webhookSecret: env.STRIPE_WEBHOOK_SECRET,
     webhookToleranceSeconds: 300, // optional; default 300 (five minutes)
 });
@@ -161,12 +168,15 @@ your entitlement plans, and an optional authorizer/observer:
 ```ts
 import { createStripeAdapter } from "@lunora/payment/stripe";
 import { createShardDO } from "./_generated/shard";
-import Stripe from "stripe";
 
 export const ShardDO = createShardDO({
     payment: (env) => ({
         adapter: createStripeAdapter({
-            client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }),
+            client: async () => {
+                const { default: Stripe } = await import("stripe");
+
+                return new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() });
+            },
             webhookSecret: env.STRIPE_WEBHOOK_SECRET,
         }),
         // Override the default "caller owns the referenceId" rule for org/workspace keys. The thunk
@@ -190,7 +200,11 @@ The adapter options:
 
 <TypeTable
     type={{
-        client: { type: "Stripe", description: "An injected `stripe` SDK instance (typed as the real Stripe). Required." },
+        client: {
+            type: "() => Stripe | Promise<Stripe>",
+            description:
+                "Loads the `stripe` SDK client; called on the first provider call and reused. A failed load rejects that call and the next retries. Required.",
+        },
         webhookSecret: { type: "string", description: "The endpoint signing secret (whsec_…) used to verify inbound webhooks. Required." },
         webhookToleranceSeconds: {
             type: "number",

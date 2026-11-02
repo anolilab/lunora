@@ -293,8 +293,8 @@ const CONTAINER_TOOL_SCHEMA = jsonSchema<ContainerToolInput>({
  * action — which runs on an action ctx carrying `ctx.browser`. Importing the tool
  * makes codegen register the dispatcher and provision the `BROWSER` binding; like
  * any `ctx.browser` user, the app still supplies a `config.browser` thunk
- * (`createBrowser({ binding: env.BROWSER, launch })` with the optional
- * `@cloudflare/playwright` `launch` peer) to `createShardDO()` — codegen never
+ * (`createBrowser({ binding: env.BROWSER, playwright: () => import("@cloudflare/playwright") })`,
+ * loading the optional peer on first use) to `createShardDO()` — codegen never
  * injects that peer, so the browser op throws a directed error until it is wired.
  *
  * `content`/`scrape` return text. `screenshot`/`pdf` write the render to

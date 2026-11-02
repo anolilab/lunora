@@ -36,7 +36,7 @@ same shapes D1 uses (boolean → 1/0, JSON → text/json, bigint → decimal).
 ```bash
 pnpm add @lunora/hyperdrive @lunora/sql-store
 pnpm add postgres   # Postgres engine → buildPgExec(fromPostgresJs(...))
-# or: pnpm add mysql2  → buildMysqlExec(mysql2/promise pool), MySQL 8.0+
+# or: pnpm add mysql2  → buildMysqlExec(loader of a mysql2/promise pool), MySQL 8.0+
 ```
 
 `@lunora/hyperdrive/global` is a subpath export of `@lunora/hyperdrive`, not a
@@ -96,7 +96,6 @@ Codegen emits a `.hyperdriveGlobal({ engine, exec, origin? })` builder method.
 ```ts
 import { fromPostgresJs } from "@lunora/hyperdrive";
 import { buildPgExec } from "@lunora/hyperdrive/global";
-import postgres from "postgres";
 
 import { defineApp } from "../lunora/_generated/app.js";
 
@@ -104,7 +103,14 @@ const app = defineApp<Env>()
     .shard((env) => env.SHARD)
     .hyperdriveGlobal({
         engine: "postgres",
-        exec: (env) => buildPgExec(fromPostgresJs(postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))),
+        exec: (env) =>
+            buildPgExec(
+                fromPostgresJs(async () => {
+                    const { default: postgres } = await import("postgres");
+
+                    return postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 });
+                }),
+            ),
     })
     .build();
 
@@ -113,26 +119,33 @@ export const ShardDO = app.ShardDO;
 
 For MySQL, create the pool with the `FOUND_ROWS` flag. The optimistic-concurrency
 guard needs matched-row counts. Without the flag, an idempotent write reports
-zero affected rows and raises a spurious conflict. `buildMysqlExec` throws at
-construction when the flag is missing. If it can't read the flag, it warns once instead.
+zero affected rows and raises a spurious conflict. `buildMysqlExec` takes a loader,
+like `fromPostgresJs`, and runs it on the first statement; that statement fails when the
+flag is missing. If it can't read the flag, it warns once instead. Import `mysql2` inside
+the loader, never at the top of the file, so the driver stays out of the Worker's startup.
 
 ```ts
 import { buildMysqlExec } from "@lunora/hyperdrive/global";
-import mysql from "mysql2/promise";
 
 // inside the builder chain:
 .hyperdriveGlobal({
     engine: "mysql",
     // disableEval: mysql2 needs it to run on Workers.
-    exec: (env) => buildMysqlExec(mysql.createPool({ uri: env.HYPERDRIVE.connectionString, disableEval: true, flags: ["FOUND_ROWS"] })),
+    exec: (env) =>
+        buildMysqlExec(async () => {
+            const { createPool } = await import("mysql2/promise");
+
+            return createPool({ uri: env.HYPERDRIVE.connectionString, disableEval: true, flags: ["FOUND_ROWS"] });
+        }),
 })
 ```
 
 Each write commits its row and its aggregate, rank and CDC companion rows in one
-transaction when the driver can hold one connection for it: postgres.js
-(`fromPostgresJs`, through `sql.begin`) and a mysql2 **pool** (`getConnection`).
-`fromNodePg` and a single mysql2 connection have no such handle, so there the
-companions commit one statement at a time after the row. Every query and write
+transaction. postgres.js (`fromPostgresJs`, through `sql.begin`) and a mysql2 **pool**
+(`getConnection`) can hold that transaction. A postgres.js client without `begin` and a
+single mysql2 connection cannot, so a write to a table with companions fails there with
+`GLOBAL_TRANSACTION_UNSUPPORTED` before it writes anything. `fromNodePg` has no such
+handle, so its companions commit one statement at a time after the row. Every query and write
 statement, and each write's transaction as a whole, is abandoned after 30 seconds
 with a retryable `SERVICE_UNAVAILABLE` (`createHyperdriveGlobalCtxDb` takes a
 `queryTimeoutMs` to change it; `0` disables it). Table, aggregate, rank and CDC

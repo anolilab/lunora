@@ -3,17 +3,16 @@
  * real `@cloudflare/playwright`, which is a devDependency here even though `src/`
  * never imports it.
  *
- * `createBrowser` takes `launch` / `connect` / `sessions` by INJECTION and types
- * them structurally so the heavy optional peer stays out of the bundle for apps
- * that never screenshot, and so tests can pass plain doubles. The cost of that
- * decoupling is that nothing consumed the real signatures — which is exactly the
+ * `createBrowser` takes the module through a `playwright` loader and types
+ * `launch` / `connect` / `sessions` structurally, so the heavy optional peer
+ * stays out of the startup graph and tests can pass plain doubles. The cost of
+ * that decoupling is that nothing consumed the real signatures — which is exactly the
  * failure mode `AGENTS.md` names: "the canonical binding `*Like` types drifted
  * from the real ones because nothing consumed them".
  *
  * They had drifted, in four places, and the documented usage
- * (`createBrowser({ binding, launch })` — the call `create-browser.ts`'s own
- * error message tells users to write) did not type-check against ANY published
- * version. The whole chain is asserted here, not just the three injected
+ * (`createBrowser({ binding, launch })` — what users were then told to write)
+ * did not type-check against ANY published version. The whole chain is asserted here, not just the three injected
  * functions, because the function mismatches were downstream of the return
  * types: `launch` returns `Browser`, whose `newContext()` returns
  * `BrowserContext`, whose `newPage()` returns `Page`. One wrong leaf failed all
@@ -31,7 +30,16 @@
  */
 import type { Browser, BrowserContext, connect, launch, Page, sessions } from "@cloudflare/playwright";
 
-import type { BrowserBindingLike, BrowserConnectLike, BrowserContextLike, BrowserLaunchLike, BrowserLike, BrowserSessionsLike, PageLike } from "../src/types";
+import type {
+    BrowserBindingLike,
+    BrowserConnectLike,
+    BrowserContextLike,
+    BrowserLaunchLike,
+    BrowserLike,
+    BrowserSessionsLike,
+    PageLike,
+    PlaywrightModuleLike,
+} from "../src/types";
 
 declare const realPage: Page;
 declare const realContext: BrowserContext;
@@ -65,3 +73,6 @@ export const sessionsConforms = (real: typeof sessions): BrowserSessionsLike => 
  * declared with method syntax.
  */
 export const bindingConforms = (real: BrowserRun): BrowserBindingLike => real;
+
+/** What the documented loader, `() => import("@cloudflare/playwright")`, hands `createBrowser`. */
+export const moduleConforms = (real: typeof import("@cloudflare/playwright")): PlaywrightModuleLike => real;

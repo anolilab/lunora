@@ -634,7 +634,7 @@ over its `/api/search`, `/llms.mdx/*`, and `/llms.txt` endpoints:
 ```ts
 import { createDocsMcpServer, createRemoteDocsIndex } from "@lunora/mcp/docs";
 
-const server = createDocsMcpServer({ index: createRemoteDocsIndex({ baseUrl: "https://lunora.sh" }) });
+const server = await createDocsMcpServer({ index: createRemoteDocsIndex({ baseUrl: "https://lunora.sh" }) });
 ```
 
 Because both backends map results through the same helper, a model sees

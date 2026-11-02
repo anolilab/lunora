@@ -93,13 +93,26 @@ describe("dodopayments adapter", () => {
     it("is a merchant-of-record: rejects manual capture but supports refunds", async () => {
         expect.assertions(3);
 
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         expect(adapter.capabilities.merchantOfRecord).toBe(true);
         expect(() => adapter.capturePayment({ sessionId: "x" })).toThrow(/does not support/);
         // Refunds ARE supported by Dodo (unlike manual capture).
         // `refundId` is Dodo's `refund_id` — the same id `refund.succeeded` carries.
         await expect(adapter.refundPayment({ sessionId: "pay_1" })).resolves.toMatchObject({ pending: false, refundId: "ref_1", state: "refunded" });
+    });
+
+    it("rejects a partial refund without loading the client", async () => {
+        expect.assertions(1);
+
+        const adapter = createDodoPaymentsAdapter({
+            client: () => {
+                throw new Error("loader reached");
+            },
+            webhookSecret: SECRET,
+        });
+
+        await expect(adapter.refundPayment({ amount: { currency: "USD", minorUnits: 100n }, sessionId: "pay_1" })).rejects.toThrow(/partial refunds/);
     });
 
     it("flags a refund Dodo has only accepted, not settled", async () => {
@@ -114,7 +127,7 @@ describe("dodopayments adapter", () => {
             },
         };
 
-        const adapter = createDodoPaymentsAdapter({ client, webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => client, webhookSecret: SECRET });
         const result = await adapter.refundPayment({ sessionId: "pay_1" });
 
         // `pending`/`review` settle later via `refund.succeeded` — or not at all, via `refund.failed`,
@@ -147,7 +160,7 @@ describe("dodopayments adapter", () => {
                 };
             },
         };
-        const adapter = createDodoPaymentsAdapter({ client, webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => client, webhookSecret: SECRET });
 
         const session = await adapter.getPaymentStatus("pay_1");
 
@@ -170,7 +183,7 @@ describe("dodopayments adapter", () => {
         };
 
         await expect(
-            createDodoPaymentsAdapter({ client, webhookSecret: SECRET })
+            createDodoPaymentsAdapter({ client: () => client, webhookSecret: SECRET })
                 .getPaymentStatus("pay_1")
                 .then((full) => full.state),
         ).resolves.toBe("refunded");
@@ -181,7 +194,7 @@ describe("dodopayments adapter", () => {
 
         // The base stub carries no `refunds` array at all — the shape a payment that was never
         // refunded arrives in.
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         const session = await adapter.getPaymentStatus("pay_1");
 
@@ -193,7 +206,7 @@ describe("dodopayments adapter", () => {
         expect.assertions(4);
 
         const calls: RecordedCall[] = [];
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         const result = await adapter.createCheckout({
             cancelUrl: "https://x/cancel",
@@ -219,7 +232,7 @@ describe("dodopayments adapter", () => {
         expect.assertions(4);
 
         const calls: RecordedCall[] = [];
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         const immediate = await adapter.cancelSubscription("sub_1");
 
@@ -236,7 +249,7 @@ describe("dodopayments adapter", () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         const subscription = await adapter.updateSubscription("sub_1", { priceId: "enterprise", quantity: 3 });
 
@@ -262,7 +275,7 @@ describe("dodopayments adapter", () => {
                 },
             },
         };
-        const adapter = createDodoPaymentsAdapter({ client, webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => client, webhookSecret: SECRET });
 
         await adapter.updateSubscription("sub_1", { priceId: "enterprise" });
 
@@ -284,7 +297,7 @@ describe("dodopayments adapter", () => {
                 },
             },
         };
-        const adapter = createDodoPaymentsAdapter({ client, webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => client, webhookSecret: SECRET });
 
         // Only quantity changes — the plan must be filled from the current subscription, not dropped.
         await adapter.updateSubscription("sub_1", { quantity: 9 });
@@ -299,7 +312,7 @@ describe("dodopayments adapter", () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         await adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" });
 
@@ -339,7 +352,7 @@ describe("dodopayments adapter", () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         await adapter.reportUsage?.({ customerId: "cus_1", featureId: "api_calls", idempotencyKey: "usage_1", quantity: 3, referenceId: "user_1" });
 
@@ -353,7 +366,7 @@ describe("dodopayments adapter", () => {
     it("normalizes a verified payment.succeeded webhook (Standard Webhooks scheme)", async () => {
         expect.assertions(5);
 
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         const payload = JSON.stringify({
             data: {
@@ -379,7 +392,7 @@ describe("dodopayments adapter", () => {
     it("maps subscription.cancelled/expired to a cancellation and renewed to active", async () => {
         expect.assertions(3);
 
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
 
         const cancelledBody = JSON.stringify({ data: { status: "cancelled", subscription_id: "sub_1" }, type: "subscription.cancelled" });
@@ -397,7 +410,7 @@ describe("dodopayments adapter", () => {
     it("maps an `on_hold` subscription to a non-entitling state, not an active grant (regression)", async () => {
         expect.assertions(1);
 
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
         const payload = JSON.stringify({ data: { status: "on_hold", subscription_id: "sub_1" }, type: "subscription.on_hold" });
         const action = await adapter.parseWebhook({ headers: headersFor("m3", timestamp, sign("m3", timestamp, payload)), payload });
@@ -409,7 +422,7 @@ describe("dodopayments adapter", () => {
     it("maps a paused subscription to subscription.paused, not the generic update (regression)", async () => {
         expect.assertions(1);
 
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
         const payload = JSON.stringify({ data: { status: "paused", subscription_id: "sub_1" }, type: "subscription.paused" });
         const action = await adapter.parseWebhook({ headers: headersFor("m6", timestamp, sign("m6", timestamp, payload)), payload });
@@ -422,7 +435,7 @@ describe("dodopayments adapter", () => {
     it("routes the subscription.paused event to paused whatever status it carries (regression)", async () => {
         expect.assertions(1);
 
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
         // Dodo's `SubscriptionStatus` is pending|active|on_hold|cancelled|failed|expired — there is no
         // `paused` member, so a `subscription.paused` payload cannot carry one. Read from the status
@@ -436,7 +449,7 @@ describe("dodopayments adapter", () => {
     it("maps subscription.unpaused and subscription.past_due instead of dropping them (regression)", async () => {
         expect.assertions(2);
 
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
         const unpausedBody = JSON.stringify({ data: { status: "active", subscription_id: "sub_1" }, type: "subscription.unpaused" });
         const unpaused = await adapter.parseWebhook({ headers: headersFor("m10", timestamp, sign("m10", timestamp, unpausedBody)), payload: unpausedBody });
@@ -457,7 +470,7 @@ describe("dodopayments adapter", () => {
                 return { customer: { customer_id: "cus_1" }, product_id: "pro", status: "active", subscription_id: id };
             },
         };
-        const adapter = createDodoPaymentsAdapter({ client, webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => client, webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
         // `sync.ts` adopts an orphan row only while its referenceId is "" — a customer id there blocks it.
         const payload = JSON.stringify({
@@ -475,7 +488,7 @@ describe("dodopayments adapter", () => {
     it("rounds a fractional webhook amount instead of throwing on the BigInt conversion (regression)", async () => {
         expect.assertions(2);
 
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
         const payload = JSON.stringify({ data: { currency: "USD", payment_id: "pay_1", total_amount: 2500.5 }, type: "payment.succeeded" });
         const action = await adapter.parseWebhook({ headers: headersFor("m7", timestamp, sign("m7", timestamp, payload)), payload });
@@ -487,7 +500,7 @@ describe("dodopayments adapter", () => {
     it("normalizes a refund.succeeded webhook to a refund", async () => {
         expect.assertions(3);
 
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
         const payload = JSON.stringify({ data: { amount: 1000, currency: "USD", payment_id: "pay_1", refund_id: "ref_1" }, type: "refund.succeeded" });
         const action = await adapter.parseWebhook({ headers: headersFor("m4", timestamp, sign("m4", timestamp, payload)), payload });
@@ -501,7 +514,7 @@ describe("dodopayments adapter", () => {
     it("treats a lost chargeback as a funds reversal, not an unhandled event (regression)", async () => {
         expect.assertions(3);
 
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
         // The real wire shape: `GetDispute.amount` is a STRING ("represented as a string to
         // accommodate precision"), not the number the old fixture used. A `readNumber` here yields
@@ -517,7 +530,7 @@ describe("dodopayments adapter", () => {
     it("refuses to scale a non-integer dispute amount rather than guess its unit", async () => {
         expect.assertions(3);
 
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
         const payload = JSON.stringify({ data: { amount: "25.00", currency: "USD", payment_id: "pay_1" }, type: "dispute.lost" });
         const action = await adapter.parseWebhook({ headers: headersFor("m9", timestamp, sign("m9", timestamp, payload)), payload });
@@ -534,7 +547,7 @@ describe("dodopayments adapter", () => {
     it("rejects a bad signature", async () => {
         expect.assertions(1);
 
-        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
 
         await expect(adapter.parseWebhook({ headers: headersFor("m5", timestamp, "v1,not-a-valid-signature"), payload: "{}" })).rejects.toMatchObject({

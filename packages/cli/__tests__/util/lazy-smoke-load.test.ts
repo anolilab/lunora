@@ -5,6 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { DevProcess, DevProcessOptions, DevProcessSpawner, DriverToolchain } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import literal from "../../src/util/js-literal";
 import runLazySmokeLoad from "../../src/util/lazy-smoke-load";
 
 const startDevProcess = vi.hoisted(() => vi.fn<(options: DevProcessOptions) => Promise<DevProcess>>());
@@ -45,19 +46,34 @@ const scaffoldProject = (dir: string): void => {
 /** The run id the smoke entry was written with; the probe must echo it back. */
 const runIdOf = (entryPath: string): string => /const runId = "([^"]+)"/u.exec(readFileSync(entryPath, "utf8"))?.[1] ?? "";
 
+interface WorkerResult {
+    checked?: number;
+    failures?: unknown[];
+    integrations?: { checked: number; failures: { message: string; specifier: string }[] };
+}
+
+/** The smoke Worker's answer to one probe step, the way the generated entry answers it. */
+const answerStep = (url: string, result: WorkerResult, run: string | undefined): Response => {
+    const { searchParams } = new URL(url);
+
+    if (searchParams.get("step") === "functions") {
+        return Response.json({ checked: result.checked, failures: result.failures, run });
+    }
+
+    const failure = result.integrations?.failures.find(({ specifier }) => specifier === searchParams.get("specifier"));
+
+    return Response.json(searchParams.get("step") === "integration" && failure !== undefined ? { message: failure.message, run } : { run });
+};
+
 describe(runLazySmokeLoad, () => {
     let cwd: string;
     const stop = vi.fn<() => Promise<void>>(async () => {});
 
     /** Answers the probe as this run's Worker would: the result plus the run id of the entry written for the latest `wrangler dev`. */
-    const respondWith = (body: object): void => {
+    const respondWith = (body: WorkerResult): void => {
         vi.stubGlobal(
             "fetch",
-            vi.fn<() => Promise<Response>>(async () => {
-                const entry = resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? "");
-
-                return Response.json({ ...body, run: runIdOf(entry) });
-            }),
+            vi.fn<(url: string) => Promise<Response>>(async (url) => answerStep(url, body, runIdOf(resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? "")))),
         );
     };
     const run = (overrides: Partial<Parameters<typeof runLazySmokeLoad>[0]> = {}) => runLazySmokeLoad({ cwd, logger, toolchain, ...overrides });
@@ -86,9 +102,9 @@ describe(runLazySmokeLoad, () => {
         try {
             scaffoldProject(other);
 
-            const owners = new Map<number, { body: { checked: number; failures: unknown[] }; runId: string }>();
-            const clean = { checked: 1, failures: [] };
-            const broken = { checked: 1, failures: [{ functionPath: "posts:list", message: "boom" }] };
+            const owners = new Map<number, { body: WorkerResult; runId: string }>();
+            const clean = { checked: 1, failures: [], integrations: { checked: 0, failures: [] } };
+            const broken = { checked: 1, failures: [{ functionPath: "posts:list", message: "boom" }], integrations: { checked: 0, failures: [] } };
 
             startDevProcess.mockImplementation(async (options) => {
                 if (!owners.has(options.port)) {
@@ -108,7 +124,7 @@ describe(runLazySmokeLoad, () => {
                 vi.fn<(url: string) => Promise<Response>>(async (url) => {
                     const owner = owners.get(Number(new URL(url).port));
 
-                    return Response.json({ ...owner?.body, run: owner?.runId });
+                    return answerStep(url, owner?.body ?? {}, owner?.runId);
                 }),
             );
 
@@ -128,6 +144,24 @@ describe(runLazySmokeLoad, () => {
         expect(ours).toBeUndefined();
         expect(theirs).toContain("boom");
         expect(ports.size).toBe(2);
+    });
+
+    it("blocks when the functions answer carries another run's id", async () => {
+        expect.assertions(2);
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn<(url: string) => Promise<Response>>(async (url) => {
+                const own = runIdOf(resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? ""));
+
+                return answerStep(url, { checked: 1, failures: [] }, new URL(url).searchParams.get("step") === "functions" ? "another-run" : own);
+            }),
+        );
+
+        const error = await run();
+
+        expect(error).toContain("answered with something other than the probe's result");
+        expect(stop).toHaveBeenCalledWith();
     });
 
     it("retries on the next port when its wrangler exits because another run holds the port", async () => {
@@ -242,6 +276,101 @@ describe(runLazySmokeLoad, () => {
         expect(logger.warn).not.toHaveBeenCalled();
     });
 
+    describe("integration modules loaded with import()", () => {
+        /** A lazy project whose entry hands `stripe` to an integration through a loader, with `stripe` installed. */
+        const lazyWithLoader = (): void => {
+            writeFileSync(join(cwd, "src", "index.ts"), 'import { payments } from "./payments.js";\n\nexport default { payments };\n');
+            writeFileSync(join(cwd, "src", "payments.ts"), 'export const payments = { client: async () => (await import("stripe")).default };\n');
+            mkdirSync(join(cwd, "node_modules", "stripe"), { recursive: true });
+            writeFileSync(join(cwd, "node_modules", "stripe", "package.json"), '{ "name": "stripe" }');
+        };
+
+        it("checks the integration SDKs a lazy build loads with import(), next to its lazy functions", async () => {
+            expect.assertions(2);
+
+            lazyWithLoader();
+
+            let entry = "";
+
+            startDevProcess.mockImplementation(async (options) => {
+                entry = readFileSync(resolve(options.cwd, options.args.find((argument) => argument.endsWith("entry.ts")) ?? ""), "utf8");
+
+                return { crashed: new Promise(() => {}), stop };
+            });
+            respondWith({ checked: 0, failures: [], integrations: { checked: 1, failures: [] } });
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(entry).toContain('["stripe", () => import("stripe")]');
+        });
+
+        it("lists at most ten failing integration modules and counts the rest", async () => {
+            expect.assertions(3);
+
+            const failures = Array.from({ length: 12 }, (_, index) => {
+                return { message: "boom", specifier: `sdk-${String(index)}` };
+            });
+
+            writeFileSync(
+                join(cwd, "src", "index.ts"),
+                `export default { ${failures.map(({ specifier }, index) => `l${String(index)}: () => import("${specifier}")`).join(", ")} };\n`,
+            );
+
+            for (const { specifier } of failures) {
+                mkdirSync(join(cwd, "node_modules", specifier), { recursive: true });
+                writeFileSync(join(cwd, "node_modules", specifier, "package.json"), JSON.stringify({ name: specifier }));
+            }
+
+            respondWith({ checked: 0, failures: [], integrations: { checked: 12, failures } });
+
+            const error = await run();
+
+            expect(error).toContain("12 of 12 integration module(s)");
+            expect(error?.match(/import\("sdk-\d+"\)/gu)).toHaveLength(10);
+            expect(error).toContain("…and 2 more integration module(s)");
+        });
+
+        it("leaves an eager build alone even when it loads an SDK with import()", async () => {
+            expect.assertions(2);
+
+            lazyWithLoader();
+            writeFileSync(join(cwd, "lunora", "_generated", "functions.ts"), "export const LUNORA_FUNCTIONS = {};\n");
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(startDevProcess).not.toHaveBeenCalled();
+        });
+
+        it("blocks naming the module when an integration SDK fails to evaluate", async () => {
+            expect.assertions(2);
+
+            lazyWithLoader();
+            respondWith({ checked: 0, failures: [], integrations: { checked: 1, failures: [{ message: "process is not defined", specifier: "stripe" }] } });
+
+            const error = await run();
+
+            expect(error).toContain('import("stripe"): process is not defined');
+            expect(stop).toHaveBeenCalledWith();
+        });
+
+        it("leaves out an import()ed package that is not installed where the smoke entry would resolve it", async () => {
+            expect.assertions(2);
+
+            lazyWithLoader();
+            rmSync(join(cwd, "node_modules"), { force: true, recursive: true });
+
+            let entry = "";
+
+            startDevProcess.mockImplementation(async (options) => {
+                entry = readFileSync(resolve(options.cwd, options.args.find((argument) => argument.endsWith("entry.ts")) ?? ""), "utf8");
+
+                return { crashed: new Promise(() => {}), stop };
+            });
+            respondWith({ checked: 1, failures: [] });
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(entry).not.toContain('import("stripe")');
+        });
+    });
+
     describe("what the smoke Worker runs", () => {
         /** The entry file as it was when wrangler was started — it is removed again once the run ends. */
         const captureEntry = (): { read: () => { content: string; path: string } } => {
@@ -268,8 +397,65 @@ describe(runLazySmokeLoad, () => {
 
             await run({ environment: "production" });
 
-            expect(entry.read().content).toContain(join(cwd, "src", "prod.ts"));
-            expect(entry.read().content).not.toContain(join(cwd, "src", "index.ts"));
+            expect(entry.read().content).toContain(literal(join(cwd, "src", "prod.ts")));
+            expect(entry.read().content).not.toContain(literal(join(cwd, "src", "index.ts")));
+        });
+
+        it("stubs the bound classes against the source config, instead of the entry, once a Vite build has redirected wrangler", async () => {
+            expect.assertions(5);
+
+            writeFileSync(
+                join(cwd, "wrangler.jsonc"),
+                JSON.stringify({
+                    durable_objects: {
+                        bindings: [
+                            { class_name: "ShardDO", name: "SHARD" },
+                            { class_name: "Remote", name: "R", script_name: "other" },
+                        ],
+                    },
+                    main: "src/index.ts",
+                    name: "app",
+                    workflows: [{ binding: "FLOW", class_name: "Flow", name: "flow" }],
+                }),
+            );
+            // What `@cloudflare/vite-plugin` leaves: wrangler then runs the built, `no_bundle` copy, where a TypeScript entry cannot parse.
+            mkdirSync(join(cwd, ".wrangler", "deploy"), { recursive: true });
+            writeFileSync(join(cwd, ".wrangler", "deploy", "config.json"), JSON.stringify({ configPath: "../../dist/server/wrangler.json" }));
+            respondWith({ checked: 1, failures: [] });
+
+            const entry = captureEntry();
+
+            await run();
+
+            expect(entry.read().content).not.toContain("export * from");
+            expect(entry.read().content).toContain("export class ShardDO extends DurableObject {}");
+            expect(entry.read().content).toContain("export class Flow extends WorkflowEntrypoint");
+            expect(entry.read().content).not.toContain("Remote");
+            expect(dev.mock.calls[0]?.[0]).toStrictEqual(expect.objectContaining({ configPath: "wrangler.jsonc" }));
+        });
+
+        it("stubs the classes of the selected config, and Unicode class names, once a Vite build has redirected wrangler", async () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(cwd, "wrangler.jsonc"),
+                JSON.stringify({ durable_objects: { bindings: [{ class_name: "DefaultDO", name: "SHARD" }] }, main: "src/index.ts", name: "app" }),
+            );
+            writeFileSync(
+                join(cwd, "wrangler.alt.jsonc"),
+                JSON.stringify({ durable_objects: { bindings: [{ class_name: "Größe", name: "SHARD" }] }, main: "src/index.ts", name: "app" }),
+            );
+            mkdirSync(join(cwd, ".wrangler", "deploy"), { recursive: true });
+            writeFileSync(join(cwd, ".wrangler", "deploy", "config.json"), JSON.stringify({ configPath: "../../dist/server/wrangler.json" }));
+            respondWith({ checked: 1, failures: [] });
+
+            const entry = captureEntry();
+
+            await run({ configPath: join(cwd, "wrangler.alt.jsonc") });
+
+            expect(entry.read().content).toContain("export class Größe extends DurableObject {}");
+            expect(entry.read().content).not.toContain("DefaultDO");
+            expect(dev.mock.calls[0]?.[0]).toStrictEqual(expect.objectContaining({ configPath: "wrangler.alt.jsonc" }));
         });
 
         it("forces plain http and uses a directory of its own that is gone afterwards", async () => {
@@ -313,31 +499,118 @@ describe(runLazySmokeLoad, () => {
     });
 
     describe("a Worker that boots but does not answer", () => {
+        const timeout = (): Error => Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+
+        /** Answers the first request (which evaluates nothing) as this run's Worker, and every later one with `later`. */
+        const answerPingThen = (later: (url: string) => Promise<Response>): void => {
+            vi.stubGlobal(
+                "fetch",
+                vi.fn<(url: string) => Promise<Response>>(async (url) =>
+                    new URL(url).searchParams.get("step") === "ping"
+                        ? Response.json({ run: runIdOf(resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? "")) })
+                        : later(url),
+                ),
+            );
+        };
+
         it("blocks on a 5xx that carries no result", async () => {
             expect.assertions(2);
 
+            answerPingThen(async () => new Response("The script will never generate a response.", { status: 500 }));
+
+            const error = await run();
+
+            expect(error).toContain("failed while evaluating the lazy function modules (HTTP 500)");
+            expect(stop).toHaveBeenCalledTimes(1);
+        });
+
+        it("names the step that never settles within the deadline", async () => {
+            expect.assertions(1);
+
+            answerPingThen(async () => {
+                throw timeout();
+            });
+
+            await expect(run()).resolves.toContain("did not finish evaluating the lazy function modules within 120s");
+        });
+
+        it("names the integration module whose evaluation never settles", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(cwd, "src", "index.ts"), 'export default { a: () => import("fine"), b: () => import("stuck") };\n');
+
+            for (const name of ["fine", "stuck"]) {
+                mkdirSync(join(cwd, "node_modules", name), { recursive: true });
+                writeFileSync(join(cwd, "node_modules", name, "package.json"), JSON.stringify({ name }));
+            }
+
+            answerPingThen(async (url) => {
+                if (new URL(url).searchParams.get("specifier") === "stuck") {
+                    throw timeout();
+                }
+
+                return answerStep(url, { checked: 0, failures: [] }, runIdOf(resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? "")));
+            });
+
+            const error = await run();
+
+            expect(error).toContain('did not finish evaluating import("stuck") within 120s');
+            expect(error).not.toContain('import("fine")');
+        });
+
+        it("says the runtime did not start, with wrangler's output, when not even a request that evaluates nothing is answered", async () => {
+            expect.assertions(2);
+
+            startDevProcess.mockImplementation(async (options) => {
+                options.onLine("service core:user:app: Uncaught SyntaxError: Unexpected token ':'", "stderr");
+
+                return { crashed: new Promise(() => {}), stop };
+            });
             vi.stubGlobal(
                 "fetch",
-                vi.fn<() => Promise<Response>>(async () => new Response("The script will never generate a response.", { status: 500 })),
+                vi.fn<() => Promise<Response>>(async () => {
+                    throw timeout();
+                }),
             );
 
             const error = await run();
 
-            expect(error).toContain("failed while evaluating the lazy modules (HTTP 500)");
-            expect(stop).toHaveBeenCalledTimes(1);
+            expect(error).toContain("answered no request within 120s, so its runtime did not start");
+            expect(error).toContain("Uncaught SyntaxError: Unexpected token ':'");
         });
 
-        it("blocks when it never answers within the deadline", async () => {
-            expect.assertions(1);
+        it("stops waiting as soon as wrangler reports that the runtime failed to start", async () => {
+            expect.assertions(2);
 
+            startDevProcess.mockImplementation(async (options) => {
+                options.onLine("service core:user:app: Uncaught SyntaxError: Unexpected token ':'", "stderr");
+                options.onLine("✘ [ERROR] The Workers runtime failed to start.", "stderr");
+
+                return { crashed: new Promise(() => {}), stop };
+            });
+            // Hangs until the request is aborted, the way wrangler's proxy holds a request for a runtime that never came up.
             vi.stubGlobal(
                 "fetch",
-                vi.fn<() => Promise<Response>>(async () => {
-                    throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
-                }),
+                vi.fn<(url: string, init: RequestInit) => Promise<Response>>(
+                    async (_url, init) =>
+                        new Promise((_resolve, reject) => {
+                            const abort = (): void => {
+                                reject(new Error("aborted"));
+                            };
+
+                            if (init.signal?.aborted) {
+                                abort();
+                            }
+
+                            init.signal?.addEventListener("abort", abort);
+                        }),
+                ),
             );
 
-            await expect(run()).resolves.toContain("did not finish evaluating the lazy modules");
+            const error = await run();
+
+            expect(error).toContain("the smoke Worker's runtime did not start, so nothing was evaluated");
+            expect(error).toContain("Unexpected token ':'");
         });
 
         it("blocks when something other than the smoke Worker answers, and names the route to check", async () => {
@@ -386,7 +659,7 @@ describe(runLazySmokeLoad, () => {
             vi.fn<() => Promise<Response>>(async () => Response.json({ checked: 3, failures: [] }, { status: 500 })),
         );
 
-        await expect(run()).resolves.toContain("failed while evaluating the lazy modules (HTTP 500)");
+        await expect(run()).resolves.toContain("(HTTP 500)");
     });
 
     it("keeps the check's storage in its own run directory, not the project's .wrangler/state", async () => {
@@ -444,13 +717,12 @@ describe(runLazySmokeLoad, () => {
         const answerFromEntry = (): void => {
             startDevProcess.mockImplementation(async () => {
                 const entry = resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? "");
-                const { default: worker } = (await import(entry)) as { default: { fetch: () => Promise<Response> } };
-                const response = await worker.fetch();
-                const body = (await response.json()) as object;
+                const { default: worker } = (await import(entry)) as { default: { fetch: (request: Request) => Promise<Response> } };
 
+                // Each probe step is answered by the real entry, the way the Worker would.
                 vi.stubGlobal(
                     "fetch",
-                    vi.fn<() => Promise<Response>>(async () => Response.json(body)),
+                    vi.fn<(url: string) => Promise<Response>>(async (url) => worker.fetch(new Request(url))),
                 );
 
                 return { crashed: new Promise(() => {}), stop };
@@ -553,14 +825,12 @@ describe(runLazySmokeLoad, () => {
         it("reports function failures and deferred failures together", async () => {
             expect.assertions(1);
 
-            respondWith({
-                checked: 2,
-                deferredChecked: 1,
-                failures: [
-                    { functionPath: "posts:list", message: "boom" },
-                    { deferred: "workflow", functionPath: "workflow:lunora/workflows.ts", message: "late" },
-                ],
-            });
+            scaffoldDeferred("workflow", 'throw new Error("late");\n');
+            writeFileSync(
+                join(cwd, "lunora", "_generated", "functions.ts"),
+                'export const loadAllFunctions = async () => ({ checked: 2, failures: [{ functionPath: "posts:list", message: "boom" }] });\n',
+            );
+            answerFromEntry();
 
             await expect(run()).resolves.toContain("2 of 3 lazy module(s) fail to load:\n  posts (list): boom\n  lunora/workflows.ts (workflow): late");
         });

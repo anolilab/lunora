@@ -317,14 +317,14 @@ const CAPABILITY_ROWS = [
         tier: "action",
     },
     // `ctx.browser` — Browser Rendering. ActionCtx ONLY: non-deterministic network
-    // I/O. Thunk-only: `createBrowser` needs an injected Playwright `launch` (the
-    // optional `@cloudflare/playwright` peer), so the generated worker stays free
-    // of it and imports only the `Browser` type; the `config.browser` thunk owns
+    // I/O. Thunk-only: `createBrowser` needs a loader for the optional
+    // `@cloudflare/playwright` peer, so the generated worker stays free of it and
+    // imports only the `Browser` type; the `config.browser` thunk owns
     // construction.
     {
         appMethod: {
             configKey: "browser",
-            doc: "Build the `ctx.browser` helper, e.g. `(env) => createBrowser({ binding: env.BROWSER, launch })`. REQUIRED: unlike the binding-backed capabilities, `ctx.browser` is not auto-constructed — without this thunk every method throws, because the generated worker deliberately stays free of the optional `@cloudflare/playwright` peer.",
+            doc: "Build the `ctx.browser` helper, e.g. `(env) => createBrowser({ binding: env.BROWSER, playwright: () => import('@cloudflare/playwright') })`. REQUIRED: unlike the binding-backed capabilities, `ctx.browser` is not auto-constructed — without this thunk every method throws, because the generated worker deliberately stays free of the optional `@cloudflare/playwright` peer. Load it through `playwright` rather than a static import, so it stays out of the Worker's startup graph.",
             method: "browser",
         },
         contextProperty: "browser",
@@ -335,7 +335,7 @@ const CAPABILITY_ROWS = [
         shardBinding: {
             clientType: "Browser",
             missingMessage:
-                "ctx.browser: provide a `browser` config thunk, e.g. `browser: (env) => createBrowser({ binding: env.BROWSER, launch })` with `import { launch } from '@cloudflare/playwright'`. Session reuse (connect/sessions) additionally needs those two exports passed the same way.",
+                "ctx.browser: provide a `browser` config thunk, e.g. `browser: (env) => createBrowser({ binding: env.BROWSER, playwright: () => import('@cloudflare/playwright') })`.",
             stubMethods: ["cancelCrawl", "connect", "content", "crawl", "crawlResult", "launch", "pdf", "quickAction", "scrape", "screenshot", "sessions"],
         },
         tier: "action",
@@ -369,7 +369,8 @@ const CAPABILITY_ROWS = [
             // Same `instrumentDatabase` levels as `ctx.db`, under its own `sql.*` tally.
             instrument: "instrumentSql",
             missingMessage:
-                "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))`.",
+                // eslint-disable-next-line no-secrets/no-secrets -- a code sample in a diagnostic, not a credential
+                "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(async () => (await import('postgres')).default(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))`.",
             stubMethods: ["query"],
         },
         tier: "action",
