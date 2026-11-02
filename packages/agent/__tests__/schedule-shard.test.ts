@@ -27,6 +27,20 @@ const recordingScheduler = (calls: ScheduledCall[]) => {
 };
 
 describe(withAgentScheduleShard, () => {
+    it("stamps an agent run on a frozen scheduler, whose own methods a proxy could not replace", async () => {
+        expect.assertions(2);
+
+        const calls: ScheduledCall[] = [];
+        const frozen = Object.freeze(recordingScheduler(calls));
+        const scheduler = withAgentScheduleShard(frozen, [{ className: "SupportAgentWorkflow", exportName: "support" }], "org-a");
+
+        await scheduler.runAfter(1000, { className: "SupportAgentWorkflow", isLunoraWorkflow: true }, {});
+        await scheduler.runAt(Date.now() + 1000, { className: "ReportWorkflow", isLunoraWorkflow: true }, {});
+
+        expect(calls.map((call) => call.options)).toStrictEqual([{ shardKey: "org-a" }, undefined]);
+        await expect(scheduler.cancel("job-1")).resolves.toStrictEqual({ cancelled: true });
+    });
+
     it("stamps the scheduling shard on agent targets only, keeping a shard the app named", async () => {
         expect.assertions(2);
 

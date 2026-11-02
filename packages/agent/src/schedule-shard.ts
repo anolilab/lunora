@@ -20,21 +20,27 @@ const withAgentScheduleShard = <S extends object>(scheduler: S, specs: ReadonlyA
         return typeof target === "object" && typeof className === "string" && agentClasses.has(className);
     };
 
-    return new Proxy(scheduler, {
-        get(target, property, receiver) {
-            const value = Reflect.get(target, property, receiver) as unknown;
+    // A facade rather than a proxy over the scheduler: a proxy must report a frozen scheduler's own `runAfter` or `runAt` unchanged,
+    // so it could not stamp them. The facade wraps those two and reaches every other member on the scheduler, bound to it.
+    return new Proxy({} as S, {
+        get(_facade, property) {
+            const value = Reflect.get(scheduler, property, scheduler) as unknown;
 
-            if ((property !== "runAfter" && property !== "runAt") || typeof value !== "function") {
-                return value;
+            if (property === "runAfter" || property === "runAt") {
+                if (typeof value !== "function") {
+                    return value;
+                }
+
+                const schedule = value as ScheduleCall;
+
+                return async (when: number, scheduled: unknown, args?: unknown, options?: Record<string, unknown>): Promise<string> => {
+                    const stamped = isAgentTarget(scheduled) ? { ...options, shardKey: options?.["shardKey"] ?? shardKey } : options;
+
+                    return Reflect.apply(schedule, scheduler, [when, scheduled, args, stamped]);
+                };
             }
 
-            const schedule = value as ScheduleCall;
-
-            return async (when: number, scheduled: unknown, args?: unknown, options?: Record<string, unknown>): Promise<string> => {
-                const stamped = isAgentTarget(scheduled) ? { ...options, shardKey: options?.["shardKey"] ?? shardKey } : options;
-
-                return Reflect.apply(schedule, target, [when, scheduled, args, stamped]);
-            };
+            return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(scheduler) : value;
         },
     });
 };
