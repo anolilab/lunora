@@ -384,6 +384,7 @@ interface FunctionIR {
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
     lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
+    meta?: Record<string, unknown> | "unloaded";
     output?: ValidatorIR;
     readsIp?: true;
     returnType: string;
@@ -392,6 +393,7 @@ interface FunctionIR {
         origin?: string;
         path: string;
     };
+    typeDerivedArgs?: true;
     visibility?: "internal" | "public";
     x402?: {
         price?: number | string;
@@ -1082,6 +1084,7 @@ interface TableSnapshot {
     fields: Record<string, FieldSnapshot>;
     indexes: Record<string, IndexSnapshot>;
     memory?: boolean;
+    refinementsRecorded?: true;
     relations: Record<string, RelationSnapshot>;
     shardMode: string;
     ttl?: TtlSnapshot;

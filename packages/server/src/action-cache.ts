@@ -60,7 +60,7 @@
  */
 
 import { isLunoraError } from "@lunora/errors";
-import type { Id } from "@lunora/values";
+import type { ColumnValidator, Id } from "@lunora/values";
 import { v } from "@lunora/values";
 import { encodeWire, parseWire, stableWireKey } from "@lunora/wire";
 
@@ -68,7 +68,7 @@ import { initLunora } from "./builder/index";
 import type { Component, SchemaExtension } from "./plugin";
 import { defineComponent, defineSchemaExtension } from "./plugin";
 import { defineTable } from "./schema";
-import type { RegisteredMutation } from "./types";
+import type { RegisteredInternalMutation } from "./types";
 
 /** Default lifetime of a cached entry: one hour. */
 const DEFAULT_ACTION_CACHE_TTL_MS: number = 60 * 60 * 1000;
@@ -177,7 +177,7 @@ interface ActionCacheFunctions {
      * again rather than assuming one pass drained the table. A caller-supplied
      * `limit` is clamped — `take()` has no ceiling of its own.
      */
-    purgeExpired: RegisteredMutation<{ limit: ReturnType<typeof v.optional> }, { deleted: number }>;
+    purgeExpired: RegisteredInternalMutation<{ limit: ColumnValidator<number | undefined, number | undefined> }, { deleted: number }>;
 }
 
 /**

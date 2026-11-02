@@ -120,6 +120,13 @@ interface TableSnapshot {
      * Always written by a current snapshot; see {@link recordsTableModifiers}.
      */
     memory?: boolean;
+    /**
+     * `true` on a table a package extension contributes, from a format that
+     * records its columns' refinements. Codegen once read such a table from the
+     * package at runtime and dropped every `.min()`/`.max()`, so a baseline without
+     * this marker never recorded them — see {@link recordsPackageRefinements}.
+     */
+    refinementsRecorded?: true;
     /** Relation accessor name → {@link RelationSnapshot}. */
     relations: Record<string, RelationSnapshot>;
 
@@ -753,7 +760,7 @@ const diffFieldShape = (tableName: string, name: string, oldField: FieldSnapshot
  * the schema, so each is breaking with a backfill as the fix. Relaxing one
  * cannot invalidate anything, so it is safe.
  */
-const diffFieldConstraints = (tableName: string, name: string, old: FieldSnapshot, field: FieldSnapshot): DriftChange[] => {
+const diffFieldConstraints = (tableName: string, name: string, old: FieldSnapshot, field: FieldSnapshot, compareRefinement: boolean): DriftChange[] => {
     const changes: DriftChange[] = [];
 
     if (old.unique !== field.unique) {
@@ -784,7 +791,7 @@ const diffFieldConstraints = (tableName: string, name: string, old: FieldSnapsho
         );
     }
 
-    if (old.refined !== field.refined) {
+    if (compareRefinement && old.refined !== field.refined) {
         changes.push(
             field.refined === true
                 ? breakingFieldChange(
@@ -809,7 +816,7 @@ const diffFieldConstraints = (tableName: string, name: string, old: FieldSnapsho
  * the deploy gate blocks. `tableName`/`name` only reach the operator-facing
  * summary text, so a caller that wants the verdict alone can pass anything.
  */
-const diffExistingField = (tableName: string, name: string, old: FieldSnapshot, field: FieldSnapshot): DriftChange[] => {
+const diffExistingField = (tableName: string, name: string, old: FieldSnapshot, field: FieldSnapshot, compareRefinement = true): DriftChange[] => {
     const changes: DriftChange[] = [];
     // Both sides must record the detail for a comparison over it to mean
     // anything — see `recordsFieldDetail`.
@@ -821,7 +828,7 @@ const diffExistingField = (tableName: string, name: string, old: FieldSnapshot, 
     }
 
     if (deep) {
-        changes.push(...diffFieldConstraints(tableName, name, old, field));
+        changes.push(...diffFieldConstraints(tableName, name, old, field, compareRefinement));
     }
 
     if (old.optional && !field.optional) {
@@ -867,6 +874,16 @@ const addedFieldChange = (tableName: string, name: string, field: FieldSnapshot)
               type: "addedRequiredField",
           };
 
+/**
+ * Whether both snapshots can be compared on refinements. A package table's
+ * baseline written before {@link TableSnapshot.refinementsRecorded} never held
+ * its columns' bounds, so the first snapshot that does would report every bound
+ * the column always had as newly gained — a breaking change nothing made. One
+ * re-blessed baseline later both sides carry the marker and the check is live.
+ */
+const recordsPackageRefinements = (baseline: TableSnapshot, current: TableSnapshot): boolean =>
+    current.refinementsRecorded !== true || baseline.refinementsRecorded === true;
+
 /** Diff the fields of one table that exists in both snapshots. */
 const diffFields = (tableName: string, baseline: TableSnapshot, current: TableSnapshot, changes: DriftChange[]): void => {
     for (const [name, field] of Object.entries(current.fields)) {
@@ -875,7 +892,9 @@ const diffFields = (tableName: string, baseline: TableSnapshot, current: TableSn
         if (old === undefined) {
             changes.push({ ...addedFieldChange(tableName, name, field), field: name });
         } else {
-            changes.push(...diffExistingField(tableName, name, old, field).map((change) => ({ ...change, field: name })));
+            changes.push(
+                ...diffExistingField(tableName, name, old, field, recordsPackageRefinements(baseline, current)).map((change) => ({ ...change, field: name })),
+            );
         }
     }
 

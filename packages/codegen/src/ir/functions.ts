@@ -59,6 +59,22 @@ export interface FunctionIR {
     lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
 
     /**
+     * The chain's merged `.meta(...)`, read only for the lazy registry: its stub
+     * stands in for the function until the module loads, so it carries the
+     * declaration `procedureMeta(fn)` reads. `"unloaded"` when the declaration is
+     * not a literal codegen can copy. Absent on eager builds — the registry holds
+     * the real function there.
+     */
+    meta?: Record<string, unknown> | "unloaded";
+
+    /**
+     * Serialized TS source for the handler's return type, with `Promise<T>`
+     * unwrapped so callers see `T` directly. Defaults to `"unknown"` when
+     * ts-morph cannot resolve the type (typically because the consuming
+     * project lacks a tsconfig that can reach `@lunora/server`).
+     */
+
+    /**
      * The `.output(validator)` declaration, when the chain has one.
      *
      * Takes precedence over {@link FunctionIR.returnType} (the handler's
@@ -67,13 +83,6 @@ export interface FunctionIR {
      * must agree — see the emit-side note for what went wrong when they did not.
      */
     output?: ValidatorIR;
-
-    /**
-     * Serialized TS source for the handler's return type, with `Promise<T>`
-     * unwrapped so callers see `T` directly. Defaults to `"unknown"` when
-     * ts-morph cannot resolve the type (typically because the consuming
-     * project lacks a tsconfig that can reach `@lunora/server`).
-     */
 
     /**
      * Set on a query that may read `ctx.ip`, decided statically and failing closed: the shard never resumes it
@@ -89,6 +98,18 @@ export interface FunctionIR {
      * `origin` names the `defineWebSocket` call the route was read from: two export names of one call are one route.
      */
     socket?: { auth: boolean; origin?: string; path: string };
+
+    /**
+     * Set when `args` was read off a declaration-file type (a function re-exported
+     * from a published component) rather than from `.input(...)`. The types are
+     * exact, but bounds and refinements (`.max()`, `.check()`) are not in a type,
+     * so no AOT validator may be compiled from them: the runtime parses through
+     * the function's own `args`. Nor does the type say whether the function is
+     * paid, what its `.meta()` is, or which args are `v.sensitive`, so its module
+     * is loaded eagerly under lazy functions and its client reference is marked
+     * sensitive.
+     */
+    typeDerivedArgs?: true;
 
     /**
      * Call surface the function is exposed on. Absent (or `"public"`) means it

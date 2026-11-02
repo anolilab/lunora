@@ -617,6 +617,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `PROCEDURE_META` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `PaginationOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -654,6 +658,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `PolicyDecisionOf` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `PolicyMiddleware` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -722,6 +730,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RegisteredFunction` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalAction` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalMutation` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalQuery` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalStream` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -810,6 +834,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RetryPolicy` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RlsContextIn` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1162,6 +1190,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `TypedDefinePolicyInput` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `UNLOADED_META` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1570,6 +1602,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `presenceExtension` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `procedureMeta` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6121,6 +6157,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `PROCEDURE_META` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `PaginationOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6158,6 +6198,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `PolicyDecisionOf` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `PolicyMiddleware` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6226,6 +6270,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RegisteredFunction` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalAction` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalMutation` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalQuery` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalStream` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6314,6 +6374,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RetryPolicy` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RlsContextIn` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6666,6 +6730,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `TypedDefinePolicyInput` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `UNLOADED_META` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7074,6 +7142,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `presenceExtension` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `procedureMeta` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -8572,6 +8644,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RegisteredFunction` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalAction` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalMutation` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalQuery` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalStream` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

@@ -72,7 +72,7 @@ import { isPlainObject } from "@lunora/wire";
 // options bag. See `./where-match` for the full story.
 import { assertWithinBatchCap, DEFAULT_BATCH_LIMIT, resolveBatchCap } from "../../../../shared/batch-cap";
 import { previewPatch } from "../../../../shared/field-operators";
-import type { Middleware } from "../builder/types";
+import type { PolicyMiddleware } from "../builder/types";
 import type { QueryPlan } from "../data-model";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, defineLazyFacade } from "../facade";
@@ -2088,7 +2088,10 @@ const resolvePolicyAuth = async (
     };
 };
 
-const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray<Policy<Context>>, options: RlsOptions = {}): Middleware<Context, Context> => {
+const rls = <Context extends RlsContextIn = RlsContextIn>(
+    policies: ReadonlyArray<Policy<Context>>,
+    options: RlsOptions = {},
+): PolicyMiddleware<Omit<Context, "db">> => {
     // Erased once here (rather than at each use) so the per-request step can be
     // carried alongside steps declared by other `rls()` calls with their own
     // context types — the same erasure `tagRlsMiddleware` stores.
@@ -2096,8 +2099,11 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
     const perTable = indexByTable(erased);
     const rolePermissions = indexRolePermissions(options.roles);
 
-    const middleware: Middleware<Context, Context> = async ({ ctx, next }) => {
-        const policyContext: PolicyContext<Context> = { auth: await resolvePolicyAuth(ctx.auth ?? {}, rolePermissions), ctx };
+    const middleware: PolicyMiddleware<Omit<Context, "db">> = async ({ ctx, next }) => {
+        // The policies were typed against their own `Context`; the procedure
+        // context is the runtime object they are evaluated with.
+        const context = ctx as unknown as Context;
+        const policyContext: PolicyContext<Context> = { auth: await resolvePolicyAuth(context.auth ?? {}, rolePermissions), ctx: context };
 
         // Under a `.rls("required")` schema `ctx.db` is the GUARDED writer;
         // recover the unwrapped one so the middleware can read/write the policy
@@ -2109,7 +2115,7 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
         // chain supplies the ORIGINAL base/raw pair and the steps so far, and this
         // step is appended — policies compose instead of the later step routing
         // around the earlier one.
-        const guarded = ctx.db;
+        const guarded = context.db;
         const chain = readChain(guarded);
         const base = chain?.base ?? guarded;
         const raw = chain?.raw ?? ((guarded as unknown as Record<PropertyKey, unknown>)[RLS_UNWRAP_SYMBOL] as RlsDatabase | undefined) ?? guarded;
@@ -2122,7 +2128,7 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
         // the middleware-extension channel without leaking RLS internals into
         // the builder's typed surface.
         const extension: Record<string, unknown> = { db: wrapped };
-        const { orm } = ctx as { orm?: unknown };
+        const { orm } = context as { orm?: unknown };
 
         if (orm !== null && typeof orm === "object") {
             // `wrapped` carries the re-bound policy-table facade entries (plus
@@ -2146,7 +2152,7 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
 
 export { rls };
 
-export type { RlsDatabase };
+export type { RlsContextIn, RlsDatabase };
 
 /**
  * Internal policy-evaluation primitives, exported for the in-process RLS test

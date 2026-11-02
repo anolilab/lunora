@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { performance } from "node:perf_hooks";
 
 import { runAdvisor } from "@lunora/advisor";
@@ -14,12 +14,13 @@ import { buildArchitecture, emitArchitectureModule } from "./architecture";
 import assertNoNamespaceCollisions from "./assert-namespace-collisions";
 import { createCodegenProject } from "./codegen-project";
 import { buildDeclarationSurface } from "./declaration-surface";
-import { withSourceListMemo } from "./discover/ast";
+import { listLunoraSourceFiles, withSourceListMemo } from "./discover/ast";
 import discoverCallEdges from "./discover/call-edges";
 import type { ErasedReturn } from "./discover/erased-returns";
 import { collectErasures, erasedReturnFindings } from "./discover/erased-returns";
 import { discoverFlagKeys } from "./discover/flag-keys";
 import discoverFunctions from "./discover/functions";
+import { warnUnwiredComponents } from "./discover/functions/internal/registered-type";
 import resolveStandardSchemaType from "./discover/functions/resolve-standard-schema-type";
 import discoverHttpRoutes from "./discover/http-routes";
 import discoverInserts from "./discover/inserts";
@@ -303,6 +304,12 @@ const inferToFixpoint = (options: {
         erased,
         value: { functions, httpRoutes, mutators },
     } = discover();
+
+    // Once, not per pass: the passes refine inferred types, and whether a component's functions are re-exported is syntax.
+    warnUnwiredComponents(
+        listLunoraSourceFiles(lunoraDirectory).map((filePath) => project.getSourceFileOrThrow(filePath)),
+        (source) => relative(lunoraDirectory, source.getFilePath()),
+    );
 
     // Two files whose sanitized namespaces collide (`a-b.ts` + `a_b.ts`) would
     // emit the same key twice into `_generated/api.ts` — a TS2300 inside

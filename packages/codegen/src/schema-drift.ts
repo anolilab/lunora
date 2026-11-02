@@ -214,6 +214,10 @@ const tableSnapshotOf = (table: TableIR): TableSnapshot => {
         shardMode: encodeShardMode(table),
     };
 
+    if (table.extensionFromPackage === true) {
+        snapshot.refinementsRecorded = true;
+    }
+
     if (table.ttl) {
         // Rebuilt rather than spread: `parseTtlCall` sets `after: undefined`
         // explicitly when no offset was declared, and `JSON.stringify` drops the

@@ -11,6 +11,7 @@ import {
     baseSpecifiers,
     GENERATED_HEADER,
     IMPORT_PATH_RE,
+    isSensitiveFunction,
     renderArgsType,
     renderNamespaceTree,
     renderObjectKey,
@@ -80,8 +81,51 @@ const moduleAliasesFor = (
 };
 
 /** Keep eager registry imports and lazy shim emission on the same file-path policy. */
-const eagerModulePaths = (migrations: ReadonlyArray<MigrationIR>, mutators: ReadonlyArray<MutatorIR>, shapes: ReadonlyArray<ShapeIR>): ReadonlySet<string> =>
-    new Set([...migrations.map((migration) => migration.filePath), ...mutators.map((mutator) => mutator.filePath), ...shapes.map((shape) => shape.filePath)]);
+
+/**
+ * Modules the lazy registry imports up front. Besides the kinds that must be
+ * loaded to register at all, that is every module re-exporting a function from
+ * a published package: codegen read it off a declaration-file type, which does
+ * not say whether it is paid (`x402`), what its `.meta()` is, or which arguments
+ * are `v.sensitive`. An unloaded stub would answer all three as "none" — a paid
+ * call dispatched free — so the real function stands in from the start.
+ */
+const eagerModulePaths = (
+    functions: ReadonlyArray<FunctionIR>,
+    migrations: ReadonlyArray<MigrationIR>,
+    mutators: ReadonlyArray<MutatorIR>,
+    shapes: ReadonlyArray<ShapeIR>,
+): ReadonlySet<string> =>
+    new Set([
+        ...functions.filter((definition) => definition.typeDerivedArgs).map((definition) => definition.filePath),
+        ...migrations.map((migration) => migration.filePath),
+        ...mutators.map((mutator) => mutator.filePath),
+        ...shapes.map((shape) => shape.filePath),
+    ]);
+
+/**
+ * A JSON value as a deep-frozen literal. The builder deep-freezes `.meta()` on a
+ * loaded function, so the stub standing in for it must not hand out an object a
+ * reader can mutate and see change before the module loads.
+ */
+const renderFrozenLiteral = (value: unknown): string => {
+    if (Array.isArray(value)) {
+        return `Object.freeze([${value.map((entry) => renderFrozenLiteral(entry)).join(", ")}])`;
+    }
+
+    if (value !== null && typeof value === "object") {
+        const entries = Object.entries(value).map(([key, entry]) => `${JSON.stringify(key)}: ${renderFrozenLiteral(entry)}`);
+
+        return `Object.freeze({ ${entries.join(", ")} })`;
+    }
+
+    // `JSON.stringify` turns these into `null` / `0`; the loaded procedure keeps the real value.
+    if (typeof value === "number" && (!Number.isFinite(value) || Object.is(value, -0))) {
+        return Object.is(value, -0) ? "-0" : String(value);
+    }
+
+    return JSON.stringify(value);
+};
 
 // Split this generated lookup so no-secrets can keep checking strings without
 // mistaking a framework access for a credential-shaped literal.
@@ -153,7 +197,7 @@ const renderFunctionRegistry = (
     shapeBody: string;
 } => {
     const aliasByPath = moduleAliasesFor(functions, migrations, mutators, shapes);
-    const eagerPaths = eagerModulePaths(migrations, mutators, shapes);
+    const eagerPaths = eagerModulePaths(functions, migrations, mutators, shapes);
 
     const importLines = [...aliasByPath.entries()]
         .filter(([filePath]) => {
@@ -200,7 +244,8 @@ const renderFunctionRegistry = (
                     // The worker reads a route's path off the stub to know which upgrades reach the shard.
                     ...(definition.socket === undefined ? {} : { auth: definition.socket.auth, socketPath: definition.socket.path }),
                 },
-            )} } satisfies RegisteredLunoraFunction & Pick<FunctionManifestEntry, "argumentDescriptors" | "channel" | "expose">,`;
+                // `procedureMeta(fn)` reads the stub until the module loads; the key is `@lunora/server`'s `PROCEDURE_META`.
+            )}${definition.meta === undefined ? "" : `, [Symbol.for("lunora.procedure.meta")]: ${renderFrozenLiteral(definition.meta)}`} } satisfies RegisteredLunoraFunction & Pick<FunctionManifestEntry, "argumentDescriptors" | "channel" | "expose">,`;
         })
         .join("\n");
 
@@ -254,10 +299,11 @@ const renderFunctionRegistry = (
     const installLines = functions
         .filter((definition) => !lazyFunctions || eagerPaths.has(definition.filePath))
         .map((definition) => {
-            // Skip argless functions (nothing to accelerate) and lifecycle hooks
-            // (no `.args`). Refinements (`.check`) and unmodelled validators are
-            // declined by `compileArgsValidator` itself (returns undefined below).
-            if (definition.lifecycle || Object.keys(definition.args).length === 0) {
+            // Skip argless functions (nothing to accelerate), lifecycle hooks (no
+            // `.args`) and args read off a type (no bounds to compile). Refinements
+            // (`.check`) and unmodelled validators are declined by
+            // `compileArgsValidator` itself (returns undefined below).
+            if (definition.lifecycle || definition.typeDerivedArgs || Object.keys(definition.args).length === 0) {
                 return undefined;
             }
 
@@ -640,7 +686,8 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
     // The interface field exists only where a stub can carry it, so a project with no
     // `v.sensitive` argument keeps byte-identical output. Agents count: their runtime
     // mutations (`agentSupplySecret`) are sensitive and are not in `functions`.
-    const hasSensitiveArgs = agents.length > 0 || functions.some((definition) => sensitiveArgumentNamesOf(definition.args).length > 0);
+    // The same predicate `run-codegen` gates the shard's masking on, or the shard reads a field this type lacks.
+    const hasSensitiveArgs = agents.length > 0 || functions.some((definition) => isSensitiveFunction(definition));
     const sensitiveArgsField = hasSensitiveArgs
         ? `    /**
      * Names of the arguments whose validators carry a \`v.sensitive\` marker. Read by the
@@ -977,7 +1024,7 @@ const emitLazyFunctionModules = (options: EmitFunctionsOptions): Record<string, 
     const mutators = options.mutators ?? [];
     const shapes = options.shapes ?? [];
     const aliases = moduleAliasesFor(functions, migrations, mutators, shapes);
-    const eagerPaths = eagerModulePaths(migrations, mutators, shapes);
+    const eagerPaths = eagerModulePaths(functions, migrations, mutators, shapes);
     const filePaths = [...new Set(functions.filter((definition) => !eagerPaths.has(definition.filePath)).map((definition) => definition.filePath))];
     const base = baseSpecifiers(options.useUmbrella ?? false);
     const output: Record<string, string> = {};

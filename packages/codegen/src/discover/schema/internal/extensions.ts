@@ -470,10 +470,17 @@ const mergeExtension = (key: string, keyNode: TsNode, options: ObjectLiteralExpr
  * than crashing on inputs it can't statically resolve.
  */
 const mergeExtendCall = (extendCall: CallExpression, projectRoot: string | undefined): MergedExtension | undefined => {
-    const extendArgument = extendCall.getArguments()[0];
+    const rawArgument = extendCall.getArguments()[0];
 
-    if (!extendArgument) {
+    if (!rawArgument) {
         return undefined;
+    }
+
+    // `.extend(component.extension as SchemaExtension)`: the cast says nothing about which extension it is.
+    let extendArgument: TsNode = rawArgument;
+
+    while (Node.isParenthesizedExpression(extendArgument) || Node.isAsExpression(extendArgument) || Node.isSatisfiesExpression(extendArgument)) {
+        extendArgument = extendArgument.getExpression();
     }
 
     const resolved = resolveSchemaExtensionCall(extendArgument);
@@ -506,7 +513,8 @@ const mergeExtendCall = (extendCall: CallExpression, projectRoot: string | undef
 
         // eslint-disable-next-line no-console -- codegen surfaces a clear, actionable warning when an extension cannot be resolved.
         console.warn(
-            `@lunora/codegen: skipping \`.extend(${extendArgument.getText()})\` — its \`defineSchemaExtension(...)\` could not be resolved from local sources, and ${projectRoot === undefined ? "no project root was available to resolve the package" : "the package could not be imported/introspected"}. Extension tables will be absent from the generated types.`,
+            `@lunora/codegen: skipping \`.extend(${extendArgument.getText()})\` — its \`defineSchemaExtension(...)\` could not be resolved from local sources, and ${projectRoot === undefined ? "no project root was available to resolve the package" : "the package could not be imported/introspected"}. Extension tables will be absent from the generated types. ` +
+                "If the receiver is a component built with options codegen cannot evaluate (a function, a variable), extend with the extension the package exports instead (e.g. `presenceExtension` from `@lunora/server`).",
         );
 
         return undefined;

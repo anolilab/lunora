@@ -75,6 +75,7 @@ import { emitRpcEvent, flushSink } from "./observability";
 import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
 import type { DispatchTraceContext } from "./otel-trace";
 import { beginDispatchTrace, injectTraceContext } from "./otel-trace";
+import type PROCEDURE_META from "./procedure-meta-key";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
 import { createDefaultShardRegistry, createQueryCoordinator } from "./query-coordinator";
 import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
@@ -344,6 +345,16 @@ interface FunctionDescriptor {
     /** The function's declared argument schema, derived from its `v.*` validators. */
     args: FunctionArgumentDescriptor[];
     kind: "action" | "mutation" | "query";
+
+    /**
+     * The function's `.meta(...)` declaration, wire-encoded (`decodeWire` from
+     * `@lunora/wire` restores a `Map`/`Set` inside it). Absent when it declares none.
+     */
+    meta?: unknown;
+    /** Set instead of `meta` when the declaration holds a value the wire codec cannot encode (a `RegExp`, a cycle). */
+    metaUnencodable?: true;
+    /** Set instead of `meta` for a lazily registered function whose meta is only readable once its module loads. */
+    metaUnloaded?: true;
     /** The `<file>:<function>` identifier, e.g. `messages:list`. */
     path: string;
     /** `"internal"` functions are never exposed by the discovery endpoint; absence === public. */
@@ -387,6 +398,9 @@ interface FunctionRegistryEntry {
      * WebSocket-upgrade endpoint rather than an unknown app route.
      */
     lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "socket" | "whisper";
+
+    /** The function's `.meta(...)` (or `"unloaded"`), under `@lunora/server`'s `PROCEDURE_META` key. */
+    readonly [PROCEDURE_META]?: unknown;
 
     /**
      * Set on a `defineWebSocket` route: the URL path it serves. The worker
