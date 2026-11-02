@@ -56,3 +56,16 @@ describe("emitApp — inbound-email (`onEmail`) route wiring", () => {
         expect(empty).not.toContain("dispatchAgentEmail");
     });
 });
+
+describe("emitApp — agent workflow class names", () => {
+    it("hands the worker every agent class, so a scheduled agent job takes its shard from the record", () => {
+        expect.assertions(3);
+
+        const output = emitApp({ ...baseOptions, agentWorkflows: ["SupportAgentWorkflow", "SalesAgentWorkflow"] });
+
+        expect(output).toContain('options.agentWorkflows = ["SupportAgentWorkflow","SalesAgentWorkflow"];');
+        // An app with no agents still declares the list, so its plain scheduled workflows keep their args' shardKey.
+        expect(emitApp({ ...baseOptions, agentWorkflows: [] })).toContain("options.agentWorkflows = [];");
+        expect(emitApp(baseOptions)).not.toContain("options.agentWorkflows");
+    });
+});

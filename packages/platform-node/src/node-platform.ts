@@ -17,6 +17,7 @@ import { LunoraError } from "@lunora/errors";
 import type { PlatformCapabilities, R2BucketLike, SchedulerHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
 import { NODE_CAPABILITIES } from "@lunora/platform";
 
+import { AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE, isAgentRunOffDefaultShard } from "../../../shared/scheduler-dispatch";
 import { createNodeDispatchRoute, createShardInvoke } from "./node-dispatch-route";
 import type { NodeGlobalStore } from "./node-global-store";
 import { createNodeGlobalStore } from "./node-global-store";
@@ -35,13 +36,21 @@ import type { NodeWorkflowHost } from "./node-workflow-host";
 import { createNodeWorkflowHost } from "./node-workflow-host";
 import { createNodeWorkflowStore } from "./node-workflow-store";
 
+/** The shard a request or job without a `shardKey` runs on; the dispatch route and the due-job delivery both default to it. */
+const DEFAULT_SHARD_KEY = "__root__";
+
 /**
  * Deliver a due job to the shard through `invoke`, carrying its due time so the shard can record
  * scheduler lag. A non-2xx marks the delivery failed, which re-arms it with backoff.
  */
-const createJobDelivery =
+export const createJobDelivery =
     (invoke: ReturnType<typeof createShardInvoke>, shardKey: string): NonNullable<NodeSchedulerHostOptions["onDispatch"]> =>
     async (functionPath, args, job) => {
+        // The route refuses an agent run off the default shard; a due job reaches the shard directly, so the same check applies here.
+        if (isAgentRunOffDefaultShard(functionPath, shardKey, DEFAULT_SHARD_KEY)) {
+            throw new LunoraError("BAD_REQUEST", AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE);
+        }
+
         const response = await invoke({
             args,
             functionPath,

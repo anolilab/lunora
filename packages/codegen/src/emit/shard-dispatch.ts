@@ -323,8 +323,7 @@ __COMMITTED_CATCH__            } finally {
         // parked it, and there is nothing to park — an app with no scheduler has no
         // \`ctx.scheduler\` call that reached the buffer in the first place.
         protected override scheduleOutboxScheduler(): SchedulerLike | undefined {
-            return config.scheduler?.((this.env ?? {}) as Record<string, unknown>) as SchedulerLike | undefined;
-        }`;
+__OUTBOX_SCHEDULER__        }`;
 
 const SUBSCRIPTION_METHODS = `        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): Promise<{ identityTracked?: boolean; ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
             const registered = LUNORA_FUNCTIONS[functionPath];
@@ -393,7 +392,7 @@ const COMMITTED_CATCH = `            } catch (error) {
 `;
 
 /** The dispatch methods for a shard: the committed-marker in the post-commit step only for a rooms app. */
-const dispatchMethods = (hasRooms: boolean, lazyFunctions = false): string => {
+const dispatchMethods = (hasRooms: boolean, lazyFunctions = false, stampsOutbox = false): string => {
     const preflightVisibility = lazyFunctions
         ? '            const registeredBeforeLoad = LUNORA_FUNCTIONS[functionPath];\n\n            if (registeredBeforeLoad?.visibility === "internal" && !this.isSystemDispatch()) {\n                throw new LunoraError("FUNCTION_NOT_FOUND", "function not registered: " + functionPath);\n            }\n\n'
         : "";
@@ -401,10 +400,16 @@ const dispatchMethods = (hasRooms: boolean, lazyFunctions = false): string => {
         ? '            const requestScope = this.captureRequestScope();\n            const preparation = this.prepareFunction(functionPath, "rpc");\n\n            if (preparation !== undefined) {\n                try {\n                    await preparation;\n                } finally {\n                    this.restoreRequestScope(requestScope);\n                }\n            }\n\n'
         : "";
 
-    return DISPATCH_METHODS_TEMPLATE.replace("__COMMITTED_CATCH__", hasRooms ? COMMITTED_CATCH : "").replace(
-        "__PREPARE_FUNCTION__",
-        `${preflightVisibility}${preparation}`,
-    );
+    // A retry replays the recorded options through the raw scheduler, so the agent stamp that the live scheduler applies is
+    // applied again here: a scheduled agent run keeps the shard it started on, not the one its record lacks.
+    const outboxScheduler = stampsOutbox
+        ? "            const configured = config.scheduler?.((this.env ?? {}) as Record<string, unknown>) as SchedulerLike | undefined;\n" +
+          "            return configured === undefined ? undefined : withAgentScheduleShard(configured, LUNORA_AGENTS, this.currentShardKey());\n"
+        : "            return config.scheduler?.((this.env ?? {}) as Record<string, unknown>) as SchedulerLike | undefined;\n";
+
+    return DISPATCH_METHODS_TEMPLATE.replace("__COMMITTED_CATCH__", hasRooms ? COMMITTED_CATCH : "")
+        .replace("__PREPARE_FUNCTION__", `${preflightVisibility}${preparation}`)
+        .replace("__OUTBOX_SCHEDULER__", outboxScheduler);
 };
 
 export { DISPATCH_RUN_SOURCE, dispatchMethods, dispatchRunSource, SUBSCRIPTION_METHODS };
