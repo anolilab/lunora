@@ -272,6 +272,9 @@ const configDigest = (candidates: ReadonlyArray<string>): string => {
  * The watchers for the folders that can hold a `lunora.config` codegen reads, each reporting only the candidate files in it.
  * Best effort: a folder the platform will not watch is skipped, and the Lunora folder's watch still runs.
  */
+/** The message and stack of a watch failure, so the warning says where it came from. */
+const watchFailureDetail = (error: unknown): string => (error instanceof Error ? (error.stack ?? error.message) : String(error));
+
 const watchConfigFolders = (
     candidates: ReadonlySet<string>,
     onConfigChange: (filename: string | undefined) => void,
@@ -292,12 +295,12 @@ const watchConfigFolders = (
                 });
 
                 watcher.on("error", (error) => {
-                    warn(`codegen watch: stopped watching ${folder} for lunora.config changes (${error.message})`);
+                    warn(`codegen watch: stopped watching ${folder} for lunora.config changes\n${watchFailureDetail(error)}`);
                     watcher.close();
                 });
                 watchers.push(watcher);
             } catch (error: unknown) {
-                warn(`codegen watch: could not watch ${folder} for lunora.config changes (${error instanceof Error ? error.message : String(error)})`);
+                warn(`codegen watch: could not watch ${folder} for lunora.config changes\n${watchFailureDetail(error)}`);
             }
         }
     }
