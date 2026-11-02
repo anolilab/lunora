@@ -775,7 +775,7 @@ export interface FunctionManifestEntry {
     argumentDescriptors: ReadonlyArray<{ element?: string; kind: string; name: string; optional: boolean; ${sensitiveDescriptorMember(hasSensitiveArgs)}table?: string }>;
     channel?: { kind: "room"; name: string };
     exportName: string;
-    expose?: { cache?: { credentialHeaders?: ReadonlyArray<string>; maxAge?: number; scope?: "private" | "public"; staleWhileRevalidate?: number; tag?: string; vary?: string }; rest?: boolean };
+    expose?: { cache?: { credentialHeaders?: ReadonlyArray<string>; maxAge: number; scope: "private" | "public"; staleWhileRevalidate?: number; tag?: string; vary?: string }; rest?: boolean };
     kind: "action" | "mutation" | "query" | "stream";
     lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper"${socketLifecycleMember};
     moduleId: string;
