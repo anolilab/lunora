@@ -532,7 +532,9 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `jsonSchema` (const)
 
 ```ts
-const jsonSchema: <OBJECT = unknown>(schema: Awaited<Schema["jsonSchema"]>) => Schema<OBJECT>;
+const jsonSchema: <OBJECT = unknown>(schema: Parameters<typeof jsonSchema$1>[0], { validate }?: {
+    validate?: (value: unknown) => PromiseLike<ValidationResult<OBJECT>> | ValidationResult<OBJECT>;
+}) => Schema<OBJECT>;
 ```
 
 ### `mcpTools` (const)
