@@ -718,6 +718,8 @@ interface ProjectConfigLiterals {
     };
     codegen?: {
         exclude?: string[];
+        lazyFunctions?: boolean;
+        lazyFunctionsUnreadable?: true;
         unreadable?: boolean;
     };
     durableObjects?: {
@@ -1697,6 +1699,12 @@ const readPackageDependencies: (projectRoot: string) => Set<string> | undefined;
 
 ```ts
 const readProjectConfigLiterals: (projectRoot: string) => ProjectConfigLiterals;
+```
+
+### `readProjectLazyFunctions` (const)
+
+```ts
+const readProjectLazyFunctions: (projectRoot: string) => boolean;
 ```
 
 ### `readProjectTarget` (const)

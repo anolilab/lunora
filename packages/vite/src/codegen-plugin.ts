@@ -9,6 +9,7 @@ import {
     isTestPath,
     PROJECT_CONFIG_FILENAMES,
     projectConfigCandidatePaths,
+    readProjectLazyFunctions,
     readServiceBindings,
     refreshCodegenProject,
     runCodegen,
@@ -823,6 +824,8 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
             // The watcher's timers and the budget that bounds them. It hands
             // `regenerate` the arming callback rather than being called back on,
             // so the two stay one-directional.
+            // The value codegen last generated with, so a config save that flips `codegen.lazyFunctions` regenerates `_generated/`.
+            let lazyFunctionsSeen = readProjectLazyFunctions(options.projectRoot);
             const scheduler = createRegenerateScheduler({
                 // Late-bound: `regenerate` reassigns `absoluteGeneratedDirectory`
                 // from codegen's emit, and the recheck must exclude the same tree
@@ -872,7 +875,13 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 if (PROJECT_CONFIG_FILENAMES.includes(basename(normalized)) && projectConfigCandidatePaths(absoluteSchemaDirectory).includes(normalized)) {
                     cachedProject = undefined;
 
-                    return false;
+                    // `codegen.lazyFunctions` decides the shape of `_generated/`, so flipping it regenerates now; other config saves do not.
+                    const lazyNow = readProjectLazyFunctions(options.projectRoot);
+                    const flipped = lazyNow !== lazyFunctionsSeen;
+
+                    lazyFunctionsSeen = lazyNow;
+
+                    return flipped;
                 }
 
                 // Only a file literally named `tsconfig.json` can possibly be the
