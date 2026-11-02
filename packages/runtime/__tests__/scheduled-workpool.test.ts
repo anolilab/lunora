@@ -166,6 +166,28 @@ describe("createWorker — scheduled workflow/agent dispatch", () => {
         expect(created).toStrictEqual([{ input: "follow up", shardKey: "org-a", threadKey: "t-1" }, { input: "follow up", threadKey: "t-1" }, forged]);
     });
 
+    it("does not trust a shardKey in a scheduled workflow's args when the worker declares no agent list", async () => {
+        expect.assertions(1);
+
+        // A hand-written worker does not say which of its workflows are agents, so no workflow's args can carry a shard.
+        const created: Record<string, unknown>[] = [];
+        const binding = {
+            create: async (options: { params?: Record<string, unknown> }) => {
+                created.push(options.params ?? {});
+
+                return { id: "wf-1" };
+            },
+        };
+        const env = { SupportAgentWorkflow: binding };
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: schedulerSpy().namespace, shardDO: okShard() });
+        const forged = { input: "follow up", shardKey: "org-b" };
+
+        await dispatchWithEnv(worker, { args: forged, id: "job-a", shardKey: "org-a", workflow: "SupportAgentWorkflow" }, env);
+        await dispatchWithEnv(worker, { args: forged, id: "job-b", workflow: "SupportAgentWorkflow" }, env);
+
+        expect(created).toStrictEqual([{ input: "follow up", shardKey: "org-a" }, { input: "follow up" }]);
+    });
+
     it("hands the workflow binding JSON-safe params, leaving the wire form intact", async () => {
         expect.assertions(2);
 

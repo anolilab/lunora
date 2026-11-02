@@ -3775,14 +3775,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     /**
      * A scheduled agent run's shard is the record's, which the scheduling shard stamped and
      * the dispatch signature covers; a `shardKey` in the args may be a client's (see
-     * {@link WorkerOptions.agentWorkflows}). A plain workflow's params are its own.
+     * {@link WorkerOptions.agentWorkflows}). A declared list says which workflows are agents,
+     * and a plain workflow's params are its own. Without a list, any scheduled workflow may be
+     * an agent run, so the args' `shardKey` is never trusted: only the record's shard is kept.
      */
     const scheduledWorkflowParams = (workflow: string, args: Record<string, unknown>, recordShard: unknown): Record<string, unknown> => {
-        if (options.agentWorkflows?.includes(workflow) !== true) {
+        const runShard = typeof recordShard === "string" && recordShard.length > 0 ? recordShard : undefined;
+
+        if (options.agentWorkflows !== undefined && !options.agentWorkflows.includes(workflow)) {
             return args;
         }
 
-        return withRunShard(args, typeof recordShard === "string" && recordShard.length > 0 ? recordShard : undefined);
+        return withRunShard(args, runShard);
     };
 
     /**
