@@ -157,12 +157,14 @@ describe("lazy function registry", () => {
         try {
             makeFunctionTypecheckProject(projectRoot);
             const source = emitFunctions({ functions: [makeFunction("premium")], lazyFunctions: true });
-            const withUndeclared = source.replace("handler: unloadedFunctionHandler, ", "handler: unloadedFunctionHandler, undeclaredField: 1, ");
+            // Anchored to the stub line: the manifest entry earlier in the file also has `"kind":"query"`. Inside the serialized
+            // fields, because a property written straight into the literal is excess-checked even under a spread.
+            const withUndeclared = source.replace(/(handler: unloadedFunctionHandler, [^\n]*?"kind":"query")/u, '$1,"undeclaredField":1');
 
             expect(withUndeclared).not.toBe(source);
             expect(typecheckGeneratedFunctions(projectRoot, withUndeclared)).toEqual([
-                expect.stringContaining("'undeclaredField' does not exist in type 'RegisteredLunoraFunction & Pick"),
-                expect.stringContaining("'undeclaredField' does not exist in type 'RegisteredLunoraFunction'."),
+                expect.stringContaining("'\"undeclaredField\"' does not exist in type 'RegisteredLunoraFunction & Pick"),
+                expect.stringContaining("'\"undeclaredField\"' does not exist in type 'RegisteredLunoraFunction'."),
             ]);
         } finally {
             rmSync(projectRoot, { force: true, recursive: true });
