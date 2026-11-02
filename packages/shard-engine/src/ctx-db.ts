@@ -2295,6 +2295,68 @@ const withoutSelect = (args: unknown[]): { args: unknown[]; project: (result: un
     };
 };
 
+/** Rows in the first page of an unlimited global `findMany`, and the floor for every later one. */
+const GLOBAL_READ_MIN_PAGE = 256;
+/** Ceiling on a page's rows, so a table of tiny rows still reads in a bounded number of statements. */
+const GLOBAL_READ_MAX_PAGE = 4096;
+/** Bytes a page aims to hold: later pages are sized from the average document so far, within the bounds above. */
+const GLOBAL_READ_PAGE_BYTES = 1024 * 1024;
+
+/**
+ * Read an unlimited global `findMany` as keyset-continued pages (the cursor carries the `orderBy`
+ * keys and the id tiebreak), charging each page as it arrives. A read over the ceiling stops at the
+ * page that crosses it instead of loading the whole table first, and a read inside it costs
+ * about one statement per {@link GLOBAL_READ_PAGE_BYTES}, not one per 256 rows. The result has the
+ * shape an unlimited read always had: every row, no cursor, done.
+ */
+const readGlobalPages = async (
+    read: (args: unknown[]) => Promise<unknown>,
+    args: unknown[],
+    table: string,
+    headroom: TransactionHeadroomTracker,
+): Promise<unknown> => {
+    const options = (args[1] ?? {}) as Record<string, unknown>;
+    const page: unknown[] = [];
+    let { cursor } = options;
+    let limit = GLOBAL_READ_MIN_PAGE;
+    let chargedBytes = 0;
+
+    for (;;) {
+        // eslint-disable-next-line no-await-in-loop -- each page's cursor comes from the previous page
+        const result = (await read([args[0], { ...options, cursor, limit }, ...args.slice(2)])) as
+            | unknown[]
+            | {
+                  continueCursor: string | null;
+                  isDone: boolean;
+                  page: unknown[];
+              };
+        // A writer that answers an unpaged read with a plain array has no cursor to follow: that array is the
+        // whole result, read as before the paged path existed.
+        if (Array.isArray(result)) {
+            chargeGlobalResult(result, "rows", table, headroom);
+
+            return [...page, ...result];
+        }
+
+        const before = headroom.headroom().readBytes;
+
+        chargeGlobalResult(result, "page", table, headroom);
+        page.push(...result.page);
+
+        if (result.isDone || typeof result.continueCursor !== "string") {
+            // eslint-disable-next-line unicorn/no-null -- findMany's public return uses `continueCursor: string | null`; an unpaged result has no cursor.
+            return { continueCursor: null, isDone: true, page };
+        }
+
+        cursor = result.continueCursor;
+        chargedBytes += headroom.headroom().readBytes - before;
+        limit =
+            chargedBytes > 0
+                ? Math.min(GLOBAL_READ_MAX_PAGE, Math.max(GLOBAL_READ_MIN_PAGE, Math.floor((GLOBAL_READ_PAGE_BYTES * page.length) / chargedBytes)))
+                : GLOBAL_READ_MAX_PAGE;
+    }
+};
+
 /** Byte-meter a global writer's document reads; every other member reads through untouched. */
 const meterGlobalDatabase = (global: DatabaseWriterLike | undefined, headroom: TransactionHeadroomTracker | undefined): DatabaseWriterLike | undefined => {
     if (global === undefined || headroom === undefined) {
@@ -2321,9 +2383,19 @@ const meterGlobalDatabase = (global: DatabaseWriterLike | undefined, headroom: T
 
             return async (...args: unknown[]): Promise<unknown> => {
                 const unprojected = PROJECTED_GLOBAL_READS.has(property) ? withoutSelect(args) : undefined;
-                const result: unknown = await Reflect.apply(member, target, unprojected?.args ?? args);
+                const callArgs = unprojected?.args ?? args;
+                const table = String(args[0]);
+                const unlimitedMany = property === "findMany" && typeof (callArgs[1] as { limit?: unknown } | undefined)?.limit !== "number";
 
-                chargeGlobalResult(result, shape, String(args[0]), headroom);
+                if (unlimitedMany) {
+                    const paged = await readGlobalPages((pageArgs) => Reflect.apply(member, target, pageArgs) as Promise<unknown>, callArgs, table, headroom);
+
+                    return unprojected === undefined ? paged : unprojected.project(paged, shape);
+                }
+
+                const result: unknown = await Reflect.apply(member, target, callArgs);
+
+                chargeGlobalResult(result, shape, table, headroom);
 
                 return unprojected === undefined ? result : unprojected.project(result, shape);
             };
