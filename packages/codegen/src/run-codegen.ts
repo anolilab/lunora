@@ -394,7 +394,9 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // project's: the config is what keeps every entry point that regenerates
     // `_generated/` in agreement, so a caller that merely omits the flag must
     // not rewrite it eager.
-    const lazyFunctions = options.lazyFunctions === true || readProjectLazyFunctions(options.projectRoot);
+    // Read whatever the caller passes, so an unreadable config value is said even when the caller already opts in.
+    const projectLazyFunctions = readProjectLazyFunctions(lunoraDirectory);
+    const lazyFunctions = options.lazyFunctions === true || projectLazyFunctions;
     const schemaPath = join(lunoraDirectory, "schema.ts");
 
     if (!existsSync(schemaPath)) {

@@ -34,6 +34,7 @@ import { isRunnableDevEnvironment } from "vite";
 
 import { markBuildStarted, oncePerBuild } from "./build-session";
 import { computeConfigFingerprint } from "./config-fingerprint";
+import configFlipRegenerates from "./config-flip";
 import LUNORA_API_UPDATED_EVENT from "./hmr-events";
 import { createRegenerateScheduler, HOOK_SETTLE_MS } from "./regenerate-scheduler";
 import type { PendingCloseMap } from "./server-close";
@@ -825,7 +826,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
             // `regenerate` the arming callback rather than being called back on,
             // so the two stay one-directional.
             // The value codegen last generated with, so a config save that flips `codegen.lazyFunctions` regenerates `_generated/`.
-            let lazyFunctionsSeen = readProjectLazyFunctions(options.projectRoot);
+            let lazyFunctionsSeen = readProjectLazyFunctions(absoluteSchemaDirectory);
             const scheduler = createRegenerateScheduler({
                 // Late-bound: `regenerate` reassigns `absoluteGeneratedDirectory`
                 // from codegen's emit, and the recheck must exclude the same tree
@@ -875,13 +876,14 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 if (PROJECT_CONFIG_FILENAMES.includes(basename(normalized)) && projectConfigCandidatePaths(absoluteSchemaDirectory).includes(normalized)) {
                     cachedProject = undefined;
 
-                    // `codegen.lazyFunctions` decides the shape of `_generated/`, so flipping it regenerates now; other config saves do not.
-                    const lazyNow = readProjectLazyFunctions(options.projectRoot);
+                    // `codegen.lazyFunctions` decides the shape of `_generated/`, so a flip regenerates now. The project-root config is
+                    // hashed by content, so saving it restarts the server, and the restarted server's first codegen reads the new value:
+                    // regenerating here too would race that restart. Only a nearer config, which the restart does not cover, regenerates.
+                    const lazyNow = readProjectLazyFunctions(absoluteSchemaDirectory);
                     const flipped = lazyNow !== lazyFunctionsSeen;
-
                     lazyFunctionsSeen = lazyNow;
 
-                    return flipped;
+                    return configFlipRegenerates({ baselineSettled: configBaselineSettled, file: normalized, flipped, projectRoot: options.projectRoot });
                 }
 
                 // Only a file literally named `tsconfig.json` can possibly be the

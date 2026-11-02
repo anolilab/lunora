@@ -1704,7 +1704,7 @@ const readProjectConfigLiterals: (projectRoot: string) => ProjectConfigLiterals;
 ### `readProjectLazyFunctions` (const)
 
 ```ts
-const readProjectLazyFunctions: (projectRoot: string) => boolean;
+const readProjectLazyFunctions: (lunoraDirectory: string) => boolean;
 ```
 
 ### `readProjectTarget` (const)
