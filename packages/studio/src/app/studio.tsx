@@ -1176,7 +1176,9 @@ const buildRouter = ({
             </div>
         ),
         rls: <RlsPanel />,
-        schedule: <SchedulePanel loadCronJobs={scheduledCron} scheduledCancel={scheduledCancel} scheduledLoad={scheduledLoad} />,
+        schedule: (
+            <SchedulePanel initialShardKey={initialShardKey} loadCronJobs={scheduledCron} scheduledCancel={scheduledCancel} scheduledLoad={scheduledLoad} />
+        ),
         schema: <SchemaRoutePanel initialShardKey={initialShardKey} schemaEditable={schemaEditable} />,
         advisorHealth: <AdvisorHealthPanel />,
         security: <SecurityAdvisorPanel />,

@@ -13,6 +13,68 @@ describe("createNodeSchedulerHost", () => {
         vi.useRealTimers();
     });
 
+    describe("cron dialect", () => {
+        it("fires a weekday cron on the Cloudflare weekday, not the default dialect's", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:00Z") });
+
+            const database = new Database(":memory:");
+            const onDispatch = vi.fn<(functionPath: string) => void>();
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async (functionPath) => {
+                    onDispatch(functionPath);
+                },
+            });
+
+            try {
+                // Weekday 1 is Sunday under Cloudflare's dialect and Monday under the default one. From Sunday
+                // noon UTC the Cloudflare fire is six days away; the default dialect would fire within the day.
+                await host.scheduler.cron?.("0 0 * * 1", "reports:weekly", {});
+                await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+
+                expect(onDispatch).not.toHaveBeenCalled();
+
+                await vi.advanceTimersByTimeAsync(6 * 24 * 60 * 60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledWith("reports:weekly");
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+    });
+
+    describe("cron seconds field", () => {
+        it.each([
+            ["six fields, seconds-leading", "* * * * * *", 1000],
+            ["five fields", "* * * * *", 60 * 1000],
+        ])("registers and fires an expression of %s", async (_label, expression, advanceMs) => {
+            expect.assertions(2);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:00Z") });
+
+            const database = new Database(":memory:");
+            const onDispatch = vi.fn<(functionPath: string) => void>();
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async (functionPath) => {
+                    onDispatch(functionPath);
+                },
+            });
+
+            try {
+                await expect(host.scheduler.cron?.(expression, "tasks:tick", {})).resolves.toBeUndefined();
+
+                await vi.advanceTimersByTimeAsync(advanceMs);
+
+                expect(onDispatch).toHaveBeenCalledWith("tasks:tick");
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+    });
+
     describe("job lifecycle (get)", () => {
         it("reports running while the handler runs, succeeded after it, and canceled for a cancelled job", async () => {
             expect.assertions(4);
@@ -319,6 +381,31 @@ describe("createNodeSchedulerHost", () => {
             firstDatabase.close();
             secondDatabase.close();
             rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("hands the handler the job's due time so the shard can measure its lag", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+        vi.setSystemTime(1_700_000_000_000);
+
+        const database = new Database(":memory:");
+        const due: number[] = [];
+        const host = createNodeSchedulerHost(database, {
+            onDispatch: (_functionPath, _args, job): void => {
+                due.push(job.scheduledFor);
+            },
+        });
+
+        try {
+            await host.scheduler.schedule("jobs:run", {}, { delayMs: 500 });
+            await vi.advanceTimersByTimeAsync(500);
+
+            expect(due).toStrictEqual([1_700_000_000_500]);
+        } finally {
+            host.dispose();
+            database.close();
         }
     });
 

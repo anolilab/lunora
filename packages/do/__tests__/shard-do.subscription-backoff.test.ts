@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -58,6 +59,8 @@ const createFakeState = (): ShardDOState => {
 class FlakyShard extends ShardDO {
     public failing = false;
 
+    public failure: Error = new Error("handler bug");
+
     public returnsNull = false;
 
     public runs = 0;
@@ -95,7 +98,7 @@ class FlakyShard extends ShardDO {
         this.runs += 1;
 
         if (this.failing) {
-            return Promise.reject(new Error("handler bug"));
+            return Promise.reject(this.failure);
         }
 
         if (this.returnsNull) {
@@ -153,6 +156,17 @@ describe("shardDO: failing subscription backoff", () => {
 
         expect(errors).toHaveLength(1);
         expect(errors[0]?.id).toBe("sub");
+    });
+
+    it("tells the client when a re-run crosses a transaction limit", async () => {
+        expect.assertions(1);
+
+        shard.failure = new LunoraError("TRANSACTION_LIMIT_EXCEEDED", "this transaction read 40000000 bytes, over the 33554432-byte limit");
+
+        await shard.write();
+        await shard.write();
+
+        expect(frames(ws, "error").map((frame) => frame.code)).toStrictEqual(["TRANSACTION_LIMIT_EXCEEDED"]);
     });
 
     it("retries once the backoff has elapsed and recovers when the query heals", async () => {

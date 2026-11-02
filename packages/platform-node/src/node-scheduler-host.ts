@@ -35,10 +35,14 @@
  * live in `wrangler.jsonc` and are reconciled at build time, so there is no
  * runtime call that could add one — and `SchedulerHost.cron`'s docstring is
  * explicit that presence is a host's declaration that dynamic cron works. On
- * Node it does: expressions are parsed by `@visulima/cron-parser` (the same
- * dependency `@lunora/scheduler` validates with, so one grammar stays
- * authoritative across the repo) and re-armed from the durable table on
- * construction exactly like one-shot jobs.
+ * Node it does: expressions are parsed by `@visulima/cron-parser`'s `cloudflare`
+ * entry (the dialect `@lunora/scheduler` validates with, so one grammar stays
+ * authoritative across the repo: the default dialect reads weekday 1 as Monday,
+ * Cloudflare as Sunday) and re-armed from the durable table on
+ * construction exactly like one-shot jobs. The sixth, seconds-leading field the
+ * host contract's conformance suite registers stays accepted (`seconds:
+ * "optional"`, as `@lunora/scheduler` does); a five-field expression keeps the
+ * Cloudflare weekday numbering.
  */
 
 import { randomUUID } from "node:crypto";
@@ -46,8 +50,11 @@ import { deserialize, serialize } from "node:v8";
 
 import { LunoraError } from "@lunora/errors";
 import type { ScheduledJob, ScheduledJobRecord, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "@lunora/platform";
-import { parse } from "@visulima/cron-parser";
+import { parse } from "@visulima/cron-parser/cloudflare";
 import type Database from "better-sqlite3";
+
+/** The `cloudflare` entry fixes the dialect; `seconds` keeps the optional leading seconds field working. */
+const CRON_PARSE_OPTIONS = { seconds: "optional" } as const;
 
 /**
  * Retry policy applied when a caller supplies none. `ScheduleOptions.retry`
@@ -139,8 +146,12 @@ interface NodeSchedulerHostOptions {
      * precise failure plan 267 caught. Supply one in anything real; the
      * conformance host supplies one purely so the TCK can tell a delivery apart
      * from an expired timer.
+     *
+     * `job.scheduledFor` is the due time (a cron tick's planned fire time).
+     * Forwarding it as the dispatch body's `scheduledFor` is what lets the shard
+     * record the `scheduler.lag_ms` metric, as the Worker dispatch path does.
      */
-    onDispatch?: (functionPath: string, args: Record<string, unknown>, job: { attempts: number; id: string }) => Promise<void> | void;
+    onDispatch?: (functionPath: string, args: Record<string, unknown>, job: { attempts: number; id: string; scheduledFor: number }) => Promise<void> | void;
 }
 
 /**
@@ -526,7 +537,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         const claim = holdClaim(id, now);
 
         try {
-            await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, { attempts, id });
+            await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, { attempts, id, scheduledFor: row.scheduled_for });
             await outsideForeignTransaction();
 
             if (isOpen() && !inTransaction()) {
@@ -589,7 +600,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         let nextAt: number;
 
         try {
-            nextAt = parse(row.expression).next().getTime();
+            nextAt = parse(row.expression, CRON_PARSE_OPTIONS).next().getTime();
         } catch {
             // An unparseable expression is a permanent condition, not a transient
             // one — re-arming would spin. `cron()` validates before it ever
@@ -616,7 +627,12 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
             (async (): Promise<void> => {
                 try {
-                    await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, { attempts: 0, id: row.key });
+                    await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, {
+                        attempts: 0,
+                        // Per tick: a shard dedups replays on this id, so a constant one would run only the first tick of each day.
+                        id: `${row.key}:${String(nextAt)}`,
+                        scheduledFor: nextAt,
+                    });
                 } catch {
                     // See the docstring: a dropped tick must not stop the schedule.
                 }
@@ -671,7 +687,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
             // Parse before writing: an invalid expression must fail the caller's
             // await rather than land a row that can never be armed.
-            parse(expression);
+            parse(expression, CRON_PARSE_OPTIONS);
 
             const row: CronRow = {
                 args: serialize(args ?? {}),

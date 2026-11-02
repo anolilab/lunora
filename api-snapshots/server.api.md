@@ -5639,8 +5639,8 @@ interface InProcessRuntime {
         database: DatabaseWriter;
         rawDatabase: DatabaseWriter;
     };
-    resetHeadroom: () => void;
     runInTransaction: <R>(body: () => Promise<R> | R) => Promise<R>;
+    runWithBudget: <R>(body: () => R) => R;
 }
 ```
 
@@ -5649,6 +5649,7 @@ interface InProcessRuntime {
 ```ts
 interface InProcessRuntimeOptions {
     enforceRls?: boolean;
+    headroomScope?: HeadroomScope;
     scheduler?: unknown;
     sql: SqlExec;
 }
@@ -6805,6 +6806,15 @@ interface GroupByArgs$1 {
     relationBaseWhere?: (table: string) => undefined | WhereInput;
     restrictsCounts?: boolean;
     where?: WhereInput;
+}
+```
+
+### `HeadroomScope` (interface)
+
+```ts
+interface HeadroomScope {
+    getStore: () => TransactionHeadroomTracker | undefined;
+    run: <R>(store: TransactionHeadroomTracker, body: () => R) => R;
 }
 ```
 

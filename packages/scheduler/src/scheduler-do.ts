@@ -956,7 +956,7 @@ class SchedulerDO {
             // completion back to the SchedulerDO (`POST /complete { pool, id }`)
             // so the pool's concurrency slot is released — see handleComplete().
             pool: record.pool,
-            scheduledFor: record.scheduledFor,
+            scheduledFor: record.firstDueAt ?? record.scheduledFor,
             shardKey: record.shardKey,
             // Present instead of `functionPath` for a workflow/agent target; the
             // runtime starts a fresh instance of this binding. `undefined` when
@@ -1676,6 +1676,7 @@ class SchedulerDO {
         const retryRecord: ScheduleRecord = {
             ...record,
             attempts,
+            firstDueAt: undefined,
             scheduledFor: nextScheduledFor,
         };
 
@@ -1748,7 +1749,7 @@ class SchedulerDO {
         }
 
         const nextScheduledFor = Date.now() + POOL_BACKPRESSURE_DELAY_MS;
-        const requeued: ScheduleRecord = { ...record, scheduledFor: nextScheduledFor };
+        const requeued: ScheduleRecord = { ...record, firstDueAt: record.firstDueAt ?? record.scheduledFor, scheduledFor: nextScheduledFor };
 
         await this.state.storage.put<ScheduleRecord | string>({
             ...SchedulerDO.pendingRows(requeued),
@@ -2133,7 +2134,7 @@ class SchedulerDO {
         // via the standard time index and drop the dead row in one move. Going
         // through the normal header+index path means a pooled job re-enters the
         // concurrency gate on the next drain exactly like a fresh enqueue.
-        const revived: DeadRecord = { ...dead, attempts: 0, scheduledFor };
+        const revived: DeadRecord = { ...dead, attempts: 0, firstDueAt: undefined, scheduledFor };
 
         // The park reason and time described the attempts this budget reset discards.
         delete revived.error;

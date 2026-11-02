@@ -37,7 +37,7 @@ const emit = (): string => {
 
 describe("emitted executeStream identity", () => {
     it("takes the socket identity and hands it to buildCtx", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const shard = emit();
 
@@ -46,7 +46,8 @@ describe("emitted executeStream identity", () => {
         // base — naming the type is what makes `tsc` catch the drift.
         expect(shard).toContain("protected override executeStream(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity)");
         // Never a bare `buildCtx({ functionPath })` — that is the per-request fallback.
-        expect(shard).toContain("this.buildCtx({ functionPath, identity })");
+        expect(shard).toContain("this.buildCtx({ functionPath, headroom, identity })");
+        expect(shard).toContain("this.windowStreamReads(headroom, ");
     });
 
     it("builds ctx.ip from the threaded value, not the shared per-request field", () => {

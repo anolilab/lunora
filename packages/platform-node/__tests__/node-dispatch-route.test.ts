@@ -35,6 +35,32 @@ describe("createNodeDispatchRoute", () => {
         expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ args: { n: 1 }, functionPath: "notes:add", id: "job-1", shardKey: "tenant-a" }));
     });
 
+    it("carries the job's due time from the body through to the shard headers", async () => {
+        expect.assertions(2);
+
+        const { invoke, route } = build();
+        const body = JSON.stringify({ args: {}, functionPath: "notes:add", id: "job-2", scheduledFor: 1_700_000_000_000 });
+
+        await route(post(body, { authorization: `Bearer ${TOKEN}` }));
+
+        const [call] = invoke.mock.calls[0] as [NodeDispatchInvocation];
+        const fetch = vi.fn<(request: Request) => Promise<Response>>(async () => Response.json({ result: null }));
+
+        await createShardInvoke(
+            {
+                getByName: () => {
+                    return { fetch };
+                },
+            },
+            true,
+        )(call);
+
+        const [request] = fetch.mock.calls[0] as unknown as [Request];
+
+        expect(call.scheduledFor).toBe(1_700_000_000_000);
+        expect(request.headers.get("x-lunora-scheduled-for")).toBe("1700000000000");
+    });
+
     it("refuses a wrong bearer with DISPATCH_UNAUTHENTICATED and never invokes", async () => {
         expect.assertions(3);
 
@@ -168,7 +194,14 @@ describe("the dispatch route's refusals and shard headers", () => {
             true,
         );
 
-        await invoke({ args: { n: 1 }, functionPath: "notes:add", id: "job-9", identity: undefined, shardKey: "tenant-a", traceparent: undefined });
+        await invoke({
+            args: { n: 1 },
+            functionPath: "notes:add",
+            id: "job-9",
+            identity: undefined,
+            shardKey: "tenant-a",
+            traceparent: undefined,
+        });
 
         const [request] = fetch.mock.calls[0] as unknown as [Request];
 

@@ -15,11 +15,16 @@
 
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "./origin-paywall";
 
+/** Carries a scheduled job's due time (epoch-ms) so the shard can measure how late it started. */
+const SCHEDULED_FOR_HEADER = "x-lunora-scheduled-for";
+
 interface SystemDispatchOptions {
     /** A verified caller identity the trusted caller forwarded, if any. */
     forwardedIdentity?: { identity?: string; userId?: string };
     /** A stable per-job id, used by the shard as the idempotency key. */
     mutationId?: string;
+    /** The job's due time in epoch-ms, for the shard's scheduler-lag metric. */
+    scheduledFor?: number;
     /** The caller's W3C traceparent, so the shard joins the caller's trace. */
     traceparent?: string;
 }
@@ -32,7 +37,7 @@ interface SystemDispatchOptions {
  * context. `x-lunora-mutation-id` makes an at-least-once re-fire collapse on the
  * shard's idempotency table rather than apply its effect twice.
  */
-const buildSystemDispatchHeaders = ({ forwardedIdentity, mutationId, traceparent }: SystemDispatchOptions): Record<string, string> => {
+const buildSystemDispatchHeaders = ({ forwardedIdentity, mutationId, scheduledFor, traceparent }: SystemDispatchOptions): Record<string, string> => {
     const headers: Record<string, string> = {
         "content-type": "application/json",
         [ORIGIN_PAYWALL_HEADER]: ORIGIN_PAYWALL_APPLIED,
@@ -53,6 +58,10 @@ const buildSystemDispatchHeaders = ({ forwardedIdentity, mutationId, traceparent
 
     if (traceparent !== undefined && traceparent.length > 0) {
         headers.traceparent = traceparent;
+    }
+
+    if (scheduledFor !== undefined && Number.isFinite(scheduledFor)) {
+        headers[SCHEDULED_FOR_HEADER] = String(Math.trunc(scheduledFor));
     }
 
     return headers;
@@ -79,4 +88,4 @@ const readForwardedDispatchIdentity = (request: Request): { identity?: string; u
 };
 
 export type { SystemDispatchOptions };
-export { buildSystemDispatchHeaders, readForwardedDispatchIdentity };
+export { buildSystemDispatchHeaders, readForwardedDispatchIdentity, SCHEDULED_FOR_HEADER };
