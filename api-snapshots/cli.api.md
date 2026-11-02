@@ -143,6 +143,7 @@ interface DeployCommandOptions {
     migrateYes?: boolean;
     openShardGatePassed?: boolean;
     outDir?: string;
+    outFile?: string;
     preview?: boolean;
     railpackAvailable?: DockerProbe;
     secretConfirm?: (message: string) => Promise<boolean>;
@@ -609,6 +610,7 @@ interface SchemaSnapshot {
 interface SpawnDescriptor {
     args: ReadonlyArray<string>;
     captureStderr?: boolean;
+    captureStderrSilently?: boolean;
     captureStdout?: boolean;
     captureStdoutSilently?: boolean;
     command: string;
@@ -616,6 +618,7 @@ interface SpawnDescriptor {
     env?: Readonly<Record<string, string>>;
     input?: string;
     stdoutToStderr?: boolean;
+    timeoutMs?: number;
 }
 ```
 

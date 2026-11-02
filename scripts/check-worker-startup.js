@@ -474,7 +474,8 @@ const build = (appDirectory, lazy) => {
     try {
         // --no-strict-advisories: the synthetic procedures key rows on an argument
         // on purpose; that lint is about the app's security, not its startup.
-        execFileSync(process.execPath, [cli, "build", "--no-strict-advisories", ...mode, "--format", "json", "--out-dir", "out"], {
+        // --no-startup-check: the CPU figure is this script's own advisory run, which --no-cpu turns off.
+        execFileSync(process.execPath, [cli, "build", "--no-strict-advisories", "--no-startup-check", ...mode, "--format", "json", "--out-dir", "out"], {
             cwd: appDirectory,
             encoding: "utf8",
             env: { ...environment, CI: "1", WRANGLER_SEND_METRICS: "false" },
