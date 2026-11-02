@@ -27,6 +27,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `AgentChannelShardInput` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `AgentComponent` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -55,6 +59,10 @@ interface AgentEmailRun {
 }
 ```
 
+### `AgentEmailShardInput` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `AgentFunctionPaths` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -76,6 +84,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `AgentHandle` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentInboundShardResolver` (type)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
@@ -581,6 +593,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `withAgentScheduleShard` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `withSecret` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -906,6 +922,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `jsonSchema` (const)
 
 Re-exported from `@lunora/agent` — signature tracked in that section.
+
+### `withAgentScheduleShard` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ## `@lunora/agent/inbound`
 

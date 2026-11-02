@@ -123,6 +123,34 @@ describe("lazy function registry", () => {
         expect(module).toContain("installCompiledValidatorMap(lunora_posts_0.premium.args");
     });
 
+    it("types a lazy manifest's cache policy as the runtime's required RestCachePolicy", () => {
+        expect.assertions(2);
+
+        const projectRoot = mkdtempSync(join(tmpdir(), "lunora-lazy-registry-cache-"));
+
+        try {
+            makeFunctionTypecheckProject(projectRoot);
+            const source = emitFunctions({
+                functions: [makeFunction("premium", { expose: { cache: { maxAge: 60, scope: "private" }, rest: true } })],
+                lazyFunctions: true,
+            });
+            // The runtime's `FunctionRegistryEntry.expose` requires `maxAge` and `scope`; the lazy manifest must too.
+            const runtimePolicyCheck = [
+                'const runtimePolicy: { maxAge: number; scope: "private" | "public" } | undefined =',
+                // eslint-disable-next-line no-secrets/no-secrets -- emitted TypeScript fixture, not a credential
+                "    Object.values(LUNORA_FUNCTION_MANIFEST)[0]?.expose?.cache;",
+                "export { runtimePolicy };",
+            ].join("\n");
+
+            expect(typecheckGeneratedFunctions(projectRoot, source + runtimePolicyCheck)).toEqual([]);
+            expect(typecheckGeneratedFunctions(projectRoot, source.replace("maxAge: number;", "maxAge?: number;") + runtimePolicyCheck)).toEqual([
+                expect.stringContaining("Type 'number | undefined' is not assignable to type 'number'"),
+            ]);
+        } finally {
+            rmSync(projectRoot, { force: true, recursive: true });
+        }
+    });
+
     it("typechecks a lazy manifest entry whose argument is marked sensitive", () => {
         expect.assertions(2);
 

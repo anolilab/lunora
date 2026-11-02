@@ -6,6 +6,13 @@ import { isShardByTable } from "../ir";
 /** Which capability methods the generated `defineApp` builder exposes — one flag per package-backed feature the app actually uses. */
 interface EmitAppOptions {
     /**
+     * Every agent's generated workflow class name → wire `options.agentWorkflows`, so a
+     * scheduled agent job takes its run shard from the scheduler record instead of its
+     * args. Empty/absent ⇒ no wiring, byte-identical output for agent-free projects.
+     */
+    agentWorkflows?: ReadonlyArray<string>;
+
+    /**
      * The package-backed capabilities the app uses (post platform gate). Every
      * used row of the `CAPABILITIES` table with an `appMethod` gets its fluent
      * `defineApp` method (`.ai()`, `.kv()`, `.payment()`, …), which sets the

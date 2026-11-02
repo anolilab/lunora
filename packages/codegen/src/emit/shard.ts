@@ -239,7 +239,9 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         build: agentsBuild,
         contextField: agentsContextField,
         importLines: agentImportLines,
+        schedulerSource: agentsSchedulerSource,
         specs: agentSpecs,
+        stampsOutbox: agentsStampOutbox,
     } = emitAgentFragments(agents, hasSecretValues && agents.length > 0);
     const {
         build: paymentsBuild,
@@ -918,7 +920,7 @@ ${ipReaderBootstrap}${sourceBootstrap}${ttlBootstrap}        }
         ? '            const preparation = this.prepareFunction(functionPath, "subscription");\n            if (preparation !== undefined) await preparation;\n'
         : "";
     const subscriptionMethods = SUBSCRIPTION_METHODS.replace("__PREPARE_FUNCTION__", prepareFunctionCall);
-    const shardDispatchMethods = dispatchMethods(hasRooms, lazyFunctions);
+    const shardDispatchMethods = dispatchMethods(hasRooms, lazyFunctions, agentsStampOutbox);
 
     const facadeBlock = hasTables
         ? `\n            const facade = db as unknown as Record<string, FacadeEntry>;
@@ -1262,7 +1264,7 @@ ${
 `
         : ""
 }${vectorSyncMethod}
-${renderBuildContext({ hasSensitiveArgs: sensitiveArgs, lazyFunctions, actionOnlyFields, agentsBuild, agentsContextField, containersBuild, containersContextField, databaseOptions, everyContextBuild, everyContextField, facadeBlock, globalDatabaseLine, notifyBuild, ormContextField, paymentsBuild, paymentsContextField, queuesBuild, queuesContextField, topicsBuild, topicsContextField, vectorsBuild, vectorsContextField, workflowsBuild, workflowsContextField, actionOnlyBuild })}
+${renderBuildContext({ hasSensitiveArgs: sensitiveArgs, lazyFunctions, actionOnlyFields, agentsBuild, agentsContextField, agentsSchedulerSource, containersBuild, containersContextField, databaseOptions, everyContextBuild, everyContextField, facadeBlock, globalDatabaseLine, notifyBuild, ormContextField, paymentsBuild, paymentsContextField, queuesBuild, queuesContextField, topicsBuild, topicsContextField, vectorsBuild, vectorsContextField, workflowsBuild, workflowsContextField, actionOnlyBuild })}
     };
 `;
 };
