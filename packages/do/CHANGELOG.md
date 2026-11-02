@@ -1,3 +1,20 @@
+## @lunora/do [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.276...@lunora/do@1.0.0-alpha.277) (2026-11-02)
+
+### Features
+
+* **runtime:** named, revocable admin tokens ([#1402](https://github.com/anolilab/lunora/issues/1402)) ([6efd702](https://github.com/anolilab/lunora/commit/6efd70285fcfe0dd5525b298494bca771c3f6a8c))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.85
+* **@lunora/observability:** upgraded to 1.0.0-alpha.198
+* **@lunora/platform:** upgraded to 1.0.0-alpha.79
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.122
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.184
+* **@lunora/values:** upgraded to 1.0.0-alpha.94
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.150
+
 ## @lunora/do [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.275...@lunora/do@1.0.0-alpha.276) (2026-11-02)
 
 

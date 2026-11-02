@@ -1,3 +1,22 @@
+## @lunora/agent [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.275...@lunora/agent@1.0.0-alpha.276) (2026-11-02)
+
+### Continuous Integration
+
+* **startup:** gate the lazy build's startup graph too ([#1409](https://github.com/anolilab/lunora/issues/1409)) ([43de338](https://github.com/anolilab/lunora/commit/43de33840e88893a8a281031452be777c1cbcdbf))
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.164
+* **@lunora/errors:** upgraded to 1.0.0-alpha.85
+* **@lunora/mail:** upgraded to 1.0.0-alpha.138
+* **@lunora/platform:** upgraded to 1.0.0-alpha.79
+* **@lunora/server:** upgraded to 1.0.0-alpha.265
+* **@lunora/values:** upgraded to 1.0.0-alpha.94
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.110
+* **@lunora/container:** upgraded to 1.0.0-alpha.108
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.184
+
 ## @lunora/agent [1.0.0-alpha.275](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.274...@lunora/agent@1.0.0-alpha.275) (2026-11-02)
 
 ### ⚠ BREAKING CHANGES

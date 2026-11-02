@@ -1,3 +1,17 @@
+## @lunora/shard-engine [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.183...@lunora/shard-engine@1.0.0-alpha.184) (2026-11-02)
+
+### Features
+
+* **runtime:** named, revocable admin tokens ([#1402](https://github.com/anolilab/lunora/issues/1402)) ([6efd702](https://github.com/anolilab/lunora/commit/6efd70285fcfe0dd5525b298494bca771c3f6a8c))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.85
+* **@lunora/platform:** upgraded to 1.0.0-alpha.79
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.150
+* **@lunora/values:** upgraded to 1.0.0-alpha.94
+
 ## @lunora/shard-engine [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.182...@lunora/shard-engine@1.0.0-alpha.183) (2026-11-02)
 
 ### Bug Fixes

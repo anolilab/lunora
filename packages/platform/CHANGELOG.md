@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.78...@lunora/platform@1.0.0-alpha.79) (2026-11-02)
+
+### Features
+
+* **runtime:** named, revocable admin tokens ([#1402](https://github.com/anolilab/lunora/issues/1402)) ([6efd702](https://github.com/anolilab/lunora/commit/6efd70285fcfe0dd5525b298494bca771c3f6a8c))
+
 ## @lunora/platform [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.77...@lunora/platform@1.0.0-alpha.78) (2026-11-02)
 
 ### Features
