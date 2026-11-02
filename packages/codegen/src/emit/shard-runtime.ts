@@ -590,9 +590,9 @@ const PLAIN_SCHEDULER_SOURCE = "(config.scheduler?.(env) ?? schedulerStub) as Sc
 const emitAgentFragments = (
     agents: ReadonlyArray<AgentIR>,
     hasSecretValues: boolean,
-): { build: string; contextField: string; importLines: string[]; schedulerSource: string; specs: string } => {
+): { build: string; contextField: string; importLines: string[]; schedulerSource: string; specs: string; stampsOutbox: boolean } => {
     if (agents.length === 0) {
-        return { build: "", contextField: "", importLines: [], schedulerSource: PLAIN_SCHEDULER_SOURCE, specs: "" };
+        return { build: "", contextField: "", importLines: [], schedulerSource: PLAIN_SCHEDULER_SOURCE, specs: "", stampsOutbox: false };
     }
 
     for (const agent of agents) {
@@ -612,9 +612,15 @@ const emitAgentFragments = (
         // hold one and the app imports `requestSecretTool`. Left off otherwise, so the
         // secret mutations refuse with a typed error rather than reaching an undefined field.
         contextField: hasSecretValues ? `\n                agents,\n                agentSecrets: this.secretValues,` : `\n                agents,`,
-        importLines: [`import { createAgentContext } from "@lunora/agent/core";`, `import { withAgentScheduleShard } from "@lunora/agent";`, `import type { AgentBindingSpec } from "@lunora/agent/core";`],
+        importLines: [
+            `import { createAgentContext } from "@lunora/agent/core";`,
+            `import { withAgentScheduleShard } from "@lunora/agent";`,
+            `import type { AgentBindingSpec } from "@lunora/agent/core";`,
+        ],
         // A scheduled agent run starts on this shard, like `ctx.agents.<name>.run` from here.
         schedulerSource: `withAgentScheduleShard(${PLAIN_SCHEDULER_SOURCE}, LUNORA_AGENTS, this.currentShardKey())`,
+        // The schedule outbox retry scheduler is stamped the same way (see `dispatchMethods`).
+        stampsOutbox: true,
         // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
         specs: `
 /** Wiring specs for \`ctx.agents\` (codegen-derived from \`lunora/agents.ts\`). */

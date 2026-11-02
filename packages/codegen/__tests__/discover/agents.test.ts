@@ -436,7 +436,7 @@ describe("emit (agents)", () => {
     });
 
     it("emitShard wires createAgentContext into the built ctx", () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         const shard = emitShard({ agents: discoverSupportAgent(), schema: EMPTY_SCHEMA });
 

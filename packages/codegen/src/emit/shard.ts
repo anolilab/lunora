@@ -241,6 +241,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         importLines: agentImportLines,
         schedulerSource: agentsSchedulerSource,
         specs: agentSpecs,
+        stampsOutbox: agentsStampOutbox,
     } = emitAgentFragments(agents, hasSecretValues && agents.length > 0);
     const {
         build: paymentsBuild,
@@ -919,7 +920,7 @@ ${ipReaderBootstrap}${sourceBootstrap}${ttlBootstrap}        }
         ? '            const preparation = this.prepareFunction(functionPath, "subscription");\n            if (preparation !== undefined) await preparation;\n'
         : "";
     const subscriptionMethods = SUBSCRIPTION_METHODS.replace("__PREPARE_FUNCTION__", prepareFunctionCall);
-    const shardDispatchMethods = dispatchMethods(hasRooms, lazyFunctions);
+    const shardDispatchMethods = dispatchMethods(hasRooms, lazyFunctions, agentsStampOutbox);
 
     const facadeBlock = hasTables
         ? `\n            const facade = db as unknown as Record<string, FacadeEntry>;
