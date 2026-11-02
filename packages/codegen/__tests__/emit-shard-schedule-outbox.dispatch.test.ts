@@ -510,6 +510,35 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         expect(harness.logs("scheduler:outbox")).toStrictEqual([]);
     });
 
+    it("ends custody with the job at the scheduler when a Retry now races an attempt that then lands", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+        const { entered, release } = harness.hold();
+
+        harness.setReachable(true);
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await entered;
+        await harness.shard.requeue(id);
+        release();
+        await attempt;
+
+        // The landed attempt is the job the operator asked for: it stays at the scheduler, and the
+        // requeued row, which would only be re-offered and refused as a duplicate, goes.
+        expect(harness.scheduled.map((job) => job.id)).toStrictEqual([id]);
+        expect(harness.cancelled).toStrictEqual([]);
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
     it("does not let a stale attempt overwrite the reset of a newer one", async () => {
         expect.assertions(2);
 
