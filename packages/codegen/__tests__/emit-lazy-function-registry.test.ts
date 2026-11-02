@@ -123,6 +123,32 @@ describe("lazy function registry", () => {
         expect(module).toContain("installCompiledValidatorMap(lunora_posts_0.premium.args");
     });
 
+    it("typechecks a lazy manifest entry whose argument is marked sensitive", () => {
+        expect.assertions(2);
+
+        const projectRoot = mkdtempSync(join(tmpdir(), "lunora-lazy-registry-sensitive-"));
+
+        try {
+            makeFunctionTypecheckProject(projectRoot);
+            const source = emitFunctions({
+                functions: [
+                    makeFunction("answer", {
+                        args: {
+                            note: { inner: { kind: "string", sensitive: true }, kind: "optional" },
+                            secret: { kind: "string", sensitive: true },
+                        },
+                    }),
+                ],
+                lazyFunctions: true,
+            });
+
+            expect(source).toContain('"sensitive":true');
+            expect(typecheckGeneratedFunctions(projectRoot, source)).toEqual([]);
+        } finally {
+            rmSync(projectRoot, { force: true, recursive: true });
+        }
+    });
+
     it("deduplicates handlers from the same module and emits room routes without loading handlers", () => {
         expect.assertions(4);
 

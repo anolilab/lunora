@@ -47,6 +47,9 @@ const renderArgumentDescriptors = (args: Record<string, ValidatorIR>): string =>
             }),
     );
 
+/** The `sensitive` member of a lazy manifest argument descriptor, present only when some argument is sensitive. */
+const sensitiveDescriptorMember = (enabled: boolean): string => (enabled ? "sensitive?: true; " : "");
+
 /** The module namespaces codegen assigns, shared by eager imports and lazy shims. */
 const moduleAliasesFor = (
     functions: ReadonlyArray<FunctionIR>,
@@ -757,7 +760,7 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
     const lazyRegistryPrelude = lazyFunctions
         ? `
 export interface FunctionManifestEntry {
-    argumentDescriptors: ReadonlyArray<{ element?: string; kind: string; name: string; optional: boolean; table?: string }>;
+    argumentDescriptors: ReadonlyArray<{ element?: string; kind: string; name: string; optional: boolean; ${sensitiveDescriptorMember(hasSensitiveArgs)}table?: string }>;
     channel?: { kind: "room"; name: string };
     exportName: string;
     expose?: { cache?: { credentialHeaders?: ReadonlyArray<string>; maxAge?: number; scope?: "private" | "public"; staleWhileRevalidate?: number; tag?: string; vary?: string }; rest?: boolean };
