@@ -1,4 +1,4 @@
-import type { Node as TsNode, NumericLiteral, ObjectLiteralExpression } from "ts-morph";
+import type { BinaryExpression, Node as TsNode, NumericLiteral, ObjectLiteralExpression } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 /** No literal: a sentinel distinct from every value a literal can evaluate to, `undefined` included. */
@@ -30,7 +30,36 @@ const scalarLiteralOf = (node: TsNode): unknown => {
         return node.getLiteralValue();
     }
 
+    if (Node.isBinaryExpression(node)) {
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion; arithmeticOf folds its operands through literalOf
+        return arithmeticOf(node);
+    }
+
     return Node.isNullLiteral(node) ? null : NOT_LITERAL; // eslint-disable-line unicorn/no-null -- the evaluated value of a `null` literal
+};
+
+const ARITHMETIC: Readonly<Partial<Record<SyntaxKind, (left: number, right: number) => number>>> = {
+    [SyntaxKind.AsteriskAsteriskToken]: (left, right) => left ** right,
+    [SyntaxKind.AsteriskToken]: (left, right) => left * right,
+    [SyntaxKind.MinusToken]: (left, right) => left - right,
+    [SyntaxKind.PercentToken]: (left, right) => left % right,
+    [SyntaxKind.PlusToken]: (left, right) => left + right,
+    [SyntaxKind.SlashToken]: (left, right) => left / right,
+};
+
+/**
+ * `60 * 60 * 1000` — numeric arithmetic folded over literal operands, the way a
+ * documented option like `{ ttlMs: 60 * 60 * 1000 }` is written. Only operators
+ * on finite numbers; anything else (a string `+`, an identifier) stays unreadable.
+ */
+const arithmeticOf = (node: BinaryExpression): unknown => {
+    const operate = ARITHMETIC[node.getOperatorToken().getKind()];
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion; literalOf evaluates each operand
+    const [left, right] = [literalOf(node.getLeft()), literalOf(node.getRight())];
+
+    return operate !== undefined && typeof left === "number" && typeof right === "number" && Number.isFinite(left) && Number.isFinite(right)
+        ? operate(left, right)
+        : NOT_LITERAL;
 };
 
 const literalOf = (node: TsNode): unknown => {

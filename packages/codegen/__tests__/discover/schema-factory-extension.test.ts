@@ -160,6 +160,20 @@ export const thing = defineThing({ key: "collab", limits: [1, -2], note: null })
         ).toStrictEqual(["collab_items", "todos"]);
     });
 
+    it("folds the numeric arithmetic a documented option is written with", () => {
+        expect.assertions(1);
+
+        expect(
+            tableNames({
+                "schema.ts": `import { defineSchema, defineTable, v } from "@lunora/server";
+import { defineThing } from "test-component";
+const thing = defineThing({ key: "cache", ttlMs: 60 * 60 * 1000, retention: 2 ** 10 - 1 });
+export default defineSchema({ todos: defineTable({ title: v.string() }) }).extend(thing.extension);
+`,
+            }),
+        ).toStrictEqual(["cache_items", "todos"]);
+    });
+
     it("sees through a cast on the extended value", () => {
         expect.assertions(1);
 

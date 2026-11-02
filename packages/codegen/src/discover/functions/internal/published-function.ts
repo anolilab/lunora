@@ -8,6 +8,8 @@ import { literalProperty, registeredKindOf } from "./registered-type";
 
 const LIFECYCLE_MOMENTS = new Set<LifecycleMoment>(["connect", "disconnect", "init", "reactor", "whisper"]);
 
+const NAMED_VALUE_KINDS: Readonly<Record<string, string>> = { ArrayBuffer: "bytes", GeoPoint: "geoPoint" };
+
 /** Nesting past this renders as `from`: a recursive value type would otherwise never bottom out. */
 const MAX_TYPE_DEPTH = 8;
 
@@ -79,9 +81,12 @@ const valueIr = (type: Type, at: Node, depth: number): ValidatorIR => {
         return { kind: scalar[1] };
     }
 
-    // `v.bytes()` parses to an `ArrayBuffer` — a lib interface, which would otherwise read as an object of its methods.
-    if ((type.getSymbol() ?? type.getAliasSymbol())?.getName() === "ArrayBuffer") {
-        return { kind: "bytes" };
+    // Named value types that stand for a validator kind: `v.bytes()` parses to a lib `ArrayBuffer` (else an object of its
+    // methods), `v.geoPoint()` to `GeoPoint` (else a plain object, losing the coordinate limits).
+    const named = NAMED_VALUE_KINDS[(type.getSymbol() ?? type.getAliasSymbol())?.getName() ?? ""];
+
+    if (named !== undefined) {
+        return { kind: named };
     }
 
     if (type.isStringLiteral() || type.isNumberLiteral() || type.isBooleanLiteral() || type.isBigIntLiteral()) {
@@ -152,7 +157,24 @@ const fieldIr = (type: Type, optional: boolean, at: Node, depth: number): Valida
 const argumentIr = (validatorType: Type, at: Node): ValidatorIR => {
     const valueType = validatorType.getProperty("__type")?.getTypeAtLocation(at);
 
-    return valueType === undefined ? { kind: "from" } : fieldIr(valueType, false, at, 0);
+    if (valueType === undefined) {
+        return { kind: "from" };
+    }
+
+    // The validator's own interface says what its value type cannot: `v.timestamp()`/`v.date()` parse to a plain
+    // `number`, and `v.object({})` to `{}`, which any non-nullish value satisfies.
+    const validator = (validatorType.getSymbol() ?? validatorType.getAliasSymbol())?.getName();
+
+    if (validator === "TimestampColumnValidator") {
+        return { kind: "timestamp" };
+    }
+
+    // eslint-disable-next-line no-secrets/no-secrets -- a `@lunora/values` interface name, not a credential
+    if (validator === "ObjectColumnValidator" && valueType.getProperties().length === 0) {
+        return { kind: "object", shape: {} };
+    }
+
+    return fieldIr(valueType, false, at, 0);
 };
 
 const ASYNC_ITERABLES = new Set(["AsyncGenerator", "AsyncIterable", "AsyncIterableIterator"]);

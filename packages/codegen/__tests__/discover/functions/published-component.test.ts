@@ -139,9 +139,12 @@ export const heartbeat = presence.functions.heartbeat;
         writeFileSync(
             join(workdir, "node_modules/shaped-component/index.d.ts"),
             `import type { RegisteredMutation } from "@lunora/server";
-import type { Validator } from "@lunora/values";
+import type { ColumnValidator, GeoPoint, ObjectColumnValidator, TimestampColumnValidator, Validator } from "@lunora/values";
 export declare const functions: {
     save: RegisteredMutation<{
+        empty: ObjectColumnValidator<{}>;
+        seenAt: TimestampColumnValidator;
+        where: ColumnValidator<GeoPoint, GeoPoint>;
         blob: Validator<ArrayBuffer>;
         at: Validator<Date>;
         flags: Validator<boolean[]>;
@@ -166,6 +169,7 @@ export const { save } = functions;
         expect(save?.args).toStrictEqual({
             at: { kind: "from", tsType: "Date" },
             blob: { kind: "bytes" },
+            empty: { kind: "object", shape: {} },
             flags: { inner: { kind: "boolean" }, kind: "array" },
             limit: { kind: "literal", literalValue: "5n", sensitive: true },
             mode: {
@@ -179,6 +183,8 @@ export const { save } = functions;
             note_id: { kind: "id", tableName: "notes" },
             owner: { kind: "from", tsType: 'string & { readonly __brand: "owner"; }' },
             pinned: { inner: { kind: "boolean" }, kind: "optional" },
+            seenAt: { kind: "timestamp" },
+            where: { kind: "geoPoint" },
             point: { kind: "object", shape: { label: { inner: { kind: "string" }, kind: "optional" }, x: { kind: "number" } } },
         });
     });
