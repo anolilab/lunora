@@ -7,8 +7,9 @@ import type { Project } from "ts-morph";
 import type { ArchitectureManifest } from "../../../shared/architecture-manifest";
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { createCodegenProject, refreshCodegenProject } from "./codegen-project";
-import type { AgentIR, ContainerIR, MigrationIR, QueueIR, WorkflowIR, WranglerQueueProducerIR, WranglerVariableIR } from "./ir";
+import type { AgentIR, ContainerIR, MigrationIR, QueueIR, TableIR, WorkflowIR, WranglerQueueProducerIR, WranglerVariableIR } from "./ir";
 import type { PlatformDiagnostic } from "./platform-target";
+import type { IndexReference } from "./schema-drift";
 
 export interface CodegenOptions {
     /**
@@ -73,15 +74,6 @@ export interface CodegenOptions {
      * `platform_unknown_target` diagnostic.
      */
     target?: string;
-
-    /**
-     * Re-bless the committed schema-drift baseline (`lunora/.lunora-schema.json`)
-     * with the current structural snapshot. The baseline is ALWAYS written on
-     * first capture (when the file is absent); set this to overwrite an existing
-     * one — e.g. after the developer has added the data migration that justifies
-     * a breaking change. Ignored when `dryRun` is true.
-     */
-    updateSchemaBaseline?: boolean;
 
     /**
      * Every `queues.producers[]` entry of `wrangler.jsonc`, top level and each
@@ -213,12 +205,19 @@ export interface CodegenResult {
     };
 
     /**
+     * Every `.withIndex(name)` the application's functions make, so the drift gate can refuse to drop an index a
+     * query still names. Computed on every run, lint or not: the gate must not depend on an advisory opt-out.
+     */
+    indexReferences: ReadonlyArray<IndexReference>;
+
+    /**
      * Data migrations discovered from `defineMigration` exports under `lunora/`,
      * each with the table it iterates. The drift gate matches a NEW id against
      * its table so a backfill only excuses breaking drift on the table it
      * actually visits. Empty when the project declares none.
      */
     migrations: ReadonlyArray<MigrationIR>;
+
     outputDirectory: string;
 
     /**
@@ -249,6 +248,13 @@ export interface CodegenResult {
 
     /** Absolute path of the committed baseline file (`lunora/.lunora-schema.json`). */
     schemaSnapshotPath: string;
+
+    /**
+     * The parsed tables this run's snapshot was built from. The snapshot keeps a
+     * field's kind but not whether its validator was resolvable, so a caller that
+     * checks stored rows against the schema reads the validators here.
+     */
+    schemaTables: ReadonlyArray<TableIR>;
 
     /**
      * Workflows discovered from `defineWorkflow` exports in

@@ -57,7 +57,24 @@ interface ExportShardArgs {
  */
 type ImportConflictMode = "replace" | "skip";
 
+/**
+ * One inbound import row. `op: "delete"` removes the stored row whose `_id` the
+ * doc carries instead of writing the doc: a replace-mode restore prunes the rows
+ * its source no longer has this way, routed to the shard by the same doc fields
+ * an insert would be.
+ */
+interface ImportRow extends ExportRow {
+    /** `"delete"` removes the row the doc's `_id` names; any other value is refused as a BAD_ROW, never read as an insert. */
+    op?: string;
+}
+
 interface ImportShardArgs {
+    /**
+     * Honour rows tagged `op: "delete"`. Off unless set: a row that asks for a delete without it is a BAD_ROW and the stored row
+     * stays, so a caller that has not opted in (a change-feed dump fed to an import, say) never removes data by accident.
+     */
+    deletes?: boolean;
+
     /**
      * Check every row and report what the import would reject, writing nothing.
      *
@@ -72,7 +89,7 @@ interface ImportShardArgs {
     /** See {@link ImportConflictMode}. Defaults to `"skip"`. A dry run probes nothing, so the mode does not change its answer. */
     onConflict?: ImportConflictMode;
     /** Inbound NDJSON rows. Order is preserved on disk. */
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     /** Starting line number (1-based) for error attribution. Defaults to 1. */
     startLine?: number;
 }
@@ -80,6 +97,8 @@ interface ImportShardArgs {
 interface ImportShardResult {
     /** Skipped rows whose `_id` conflicted with an existing document in the same table. */
     conflicts: number;
+    /** Stored rows removed by `op: "delete"` rows. A delete whose `_id` is already gone removes nothing and is not counted. */
+    deleted: number;
     errors: ImportError[];
     /** Number of rows successfully inserted, per table. */
     inserted: Record<string, number>;
@@ -245,7 +264,13 @@ const validateImportRow = (schema: SchemaLike, table: string, record: Record<str
  * writes nothing and reports only the shape errors (see `ImportShardArgs.dryRun`).
  */
 /** Outcome of importing one row: a recorded error, a skipped conflict, or a successful insert into `table`. */
-type RowOutcome = { error: ImportError; kind: "error" } | { kind: "conflict" } | { kind: "inserted"; table: string } | { kind: "replaced" };
+type RowOutcome =
+    | { error: ImportError; kind: "error" }
+    | { kind: "absent" }
+    | { kind: "conflict" }
+    | { kind: "deleted" }
+    | { kind: "inserted"; table: string }
+    | { kind: "replaced" };
 
 /**
  * The name of the table that already holds `explicitId`, or `undefined` when the
@@ -261,15 +286,20 @@ type RowOutcome = { error: ImportError; kind: "error" } | { kind: "conflict" } |
  * same id and every by-id read resolving to whichever the probe hit first. It is
  * reported per row instead.
  */
+/** The table that holds `explicitId`, `undefined` when none does. A failed probe throws. */
+const findIdOwner = async (writer: DatabaseWriterLike, table: string, explicitId: string): Promise<string | undefined> => {
+    if (writer.lookupById) {
+        const located = await writer.lookupById(explicitId);
+
+        return located === null ? undefined : located.tableName;
+    }
+
+    return (await writer.get(table, explicitId)) === null ? undefined : table;
+};
+
 const locateExistingId = async (writer: DatabaseWriterLike, table: string, explicitId: string): Promise<string | undefined> => {
     try {
-        if (writer.lookupById) {
-            const located = await writer.lookupById(explicitId);
-
-            return located === null ? undefined : located.tableName;
-        }
-
-        return (await writer.get(table, explicitId)) === null ? undefined : table;
+        return await findIdOwner(writer, table, explicitId);
     } catch {
         // An unknown-table failure here is surfaced when the insert runs against
         // the real schema.
@@ -313,6 +343,72 @@ const rowShapeError = (schema: SchemaLike, row: ExportRow, line: number): Import
     const failure = validateImportRow(schema, table, stripDerivedFields(row.doc));
 
     return failure === undefined ? undefined : { code: "VALIDATION_ERROR", line, message: failure, table };
+};
+
+/**
+ * Why a delete row is unusable, or `undefined`. A delete carries no new data, so
+ * only the envelope and the `_id` it names are checked, never the table shape.
+ */
+const deleteRowError = (schema: SchemaLike, row: ImportRow, line: number): ImportError | undefined => {
+    const definition = schema.tables[row.table];
+
+    if (definition === undefined) {
+        return { code: "BAD_ROW", line, message: `unknown table: ${row.table}`, table: row.table };
+    }
+
+    if (definition.shardMode?.kind === "global") {
+        return {
+            code: "BAD_ROW",
+            line,
+            message: `table "${row.table}" is a global (.global()) table and is not importable through the shard import path`,
+            table: row.table,
+        };
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `doc` is parsed wire data; the declared type can't be trusted at runtime
+    return typeof row.doc?.["_id"] === "string" ? undefined : { code: "BAD_ROW", line, message: "a delete row needs the `_id` to delete", table: row.table };
+};
+
+/**
+ * Remove the stored row a delete row names. Hard, like the admin bulk delete: a
+ * restore that left `.softDelete()` tombstones would still hold the rows it was
+ * asked to remove. Without the schema's `onDelete` actions: the file says what
+ * each of its tables holds, and a cascade would change tables it never names. An
+ * `_id` already gone is `absent`, so a re-run converges.
+ */
+const deleteOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row: ImportRow, line: number): Promise<RowOutcome> => {
+    const envelopeError = deleteRowError(schema, row, line);
+
+    if (envelopeError !== undefined) {
+        return { error: envelopeError, kind: "error" };
+    }
+
+    const id = row.doc["_id"] as string;
+
+    // One `try` over the probe and the delete: a probe that fails is an error row, never `absent`, or a prune
+    // would report a clean run over a row it never removed.
+    try {
+        const owner = await findIdOwner(writer, row.table, id);
+
+        if (owner === undefined) {
+            return { kind: "absent" };
+        }
+
+        if (owner !== row.table) {
+            return {
+                error: { code: "ID_COLLISION", line, message: `_id "${id}" belongs to table "${owner}", not "${row.table}"`, table: row.table },
+                kind: "error",
+            };
+        }
+
+        await writer.delete(row.table, id, { hard: true, skipOnDelete: true });
+
+        return { kind: "deleted" };
+    } catch (error: unknown) {
+        const { body } = toErrorBody(error, { fallbackCode: "DELETE_FAILED" });
+
+        return { error: { code: body.code, line, message: body.message, table: row.table }, kind: "error" };
+    }
 };
 
 /** Validate, conflict-check and insert one inbound row, returning its outcome. */
@@ -385,10 +481,39 @@ const importOneRow = async (
     }
 };
 
+/** A row whose `op` is set to anything but `"delete"` is refused, never read as an insert. */
+const opError = (row: ImportRow, line: number, deletes: boolean): ImportError | undefined => {
+    if (row.op === "delete") {
+        return deletes ? undefined : { code: "BAD_ROW", line, message: 'a row with `op: "delete"` needs `deletes: true` on the import', table: row.table };
+    }
+
+    return row.op === undefined
+        ? undefined
+        : { code: "BAD_ROW", line, message: `row \`op\` must be "delete" when set, got ${JSON.stringify(row.op)}`, table: row.table };
+};
+
+const applyRow = async (
+    writer: DatabaseWriterLike,
+    schema: SchemaLike,
+    row: ImportRow,
+    line: number,
+    onConflict: ImportConflictMode,
+    deletes: boolean,
+): Promise<RowOutcome> => {
+    const refused = opError(row, line, deletes);
+
+    if (refused !== undefined) {
+        return { error: refused, kind: "error" };
+    }
+
+    return row.op === "delete" ? deleteOneRow(writer, schema, row, line) : importOneRow(writer, schema, row, line, onConflict);
+};
+
 const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportShardArgs): Promise<ImportShardResult> => {
     const errors: ImportError[] = [];
     const inserted: Record<string, number> = {};
     let conflicts = 0;
+    let deleted = 0;
     let replaced = 0;
     let line = (args.startLine ?? 1) - 1;
 
@@ -399,7 +524,8 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
         // nothing else, so the caller can refuse a file before the first real
         // chunk lands.
         if (args.dryRun === true) {
-            const shapeError = rowShapeError(schema, row, line);
+            const shapeError =
+                opError(row, line, args.deletes === true) ?? (row.op === "delete" ? deleteRowError(schema, row, line) : rowShapeError(schema, row, line));
 
             if (shapeError !== undefined) {
                 errors.push(shapeError);
@@ -408,12 +534,20 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
             continue;
         }
 
-        // eslint-disable-next-line no-await-in-loop -- rows are inserted in stream order through one SQLite handle; line-number attribution depends on the sequence
-        const outcome = await importOneRow(writer, schema, row, line, args.onConflict ?? "skip");
+        // eslint-disable-next-line no-await-in-loop -- rows apply in stream order through one SQLite handle; line-number attribution depends on the sequence
+        const outcome = await applyRow(writer, schema, row, line, args.onConflict ?? "skip", args.deletes === true);
 
         switch (outcome.kind) {
+            case "absent": {
+                break;
+            }
             case "conflict": {
                 conflicts += 1;
+
+                break;
+            }
+            case "deleted": {
+                deleted += 1;
 
                 break;
             }
@@ -433,7 +567,7 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
         }
     }
 
-    return { conflicts, errors, inserted, replaced };
+    return { conflicts, deleted, errors, inserted, replaced };
 };
 
 /** Arguments accepted by the `__lunora_admin__:exportShard` admin RPC. */
@@ -444,9 +578,10 @@ interface ExportShardAdminArgs {
 
 /** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
 interface ImportShardAdminArgs {
+    deletes: boolean;
     dryRun: boolean;
     onConflict: ImportConflictMode;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 
@@ -462,17 +597,26 @@ const parseExportShardArgs = (args: Record<string, unknown>): ExportShardAdminAr
     return { batchSize, tables };
 };
 
+/** Any `op` is kept, so a misspelt one is refused by `importShardRows` rather than dropped into an insert. */
+const keptOp = (op: unknown): { op?: string } => {
+    if (op === undefined) {
+        return {};
+    }
+
+    return { op: typeof op === "string" ? op : JSON.stringify(op) };
+};
+
 /** Coerce loosely-typed admin args into the import shape. */
 const parseImportShardArgs = (args: Record<string, unknown>): ImportShardAdminArgs => {
     const rawRows = Array.isArray(args["rows"]) ? (args["rows"] as unknown[]) : [];
-    const rows: ExportRow[] = [];
+    const rows: ImportRow[] = [];
 
     for (const entry of rawRows) {
         if (!entry || typeof entry !== "object") {
             continue;
         }
 
-        const candidate = entry as { doc?: unknown; table?: unknown };
+        const candidate = entry as { doc?: unknown; op?: unknown; table?: unknown };
 
         if (typeof candidate.table !== "string" || !candidate.doc || typeof candidate.doc !== "object" || Array.isArray(candidate.doc)) {
             // Malformed envelope rows are rejected during validation downstream
@@ -481,14 +625,30 @@ const parseImportShardArgs = (args: Record<string, unknown>): ImportShardAdminAr
             continue;
         }
 
-        rows.push({ doc: candidate.doc as Record<string, unknown>, table: candidate.table });
+        rows.push({ doc: candidate.doc as Record<string, unknown>, ...keptOp(candidate.op), table: candidate.table });
     }
 
     const startLine = typeof args["startLine"] === "number" ? args["startLine"] : undefined;
 
     // Off unless asked for: a caller that never heard of a dry run keeps writing, as it always has.
-    return { dryRun: args["dryRun"] === true, onConflict: args["onConflict"] === "replace" ? "replace" : "skip", rows, startLine };
+    return {
+        deletes: args["deletes"] === true,
+        dryRun: args["dryRun"] === true,
+        onConflict: args["onConflict"] === "replace" ? "replace" : "skip",
+        rows,
+        startLine,
+    };
 };
 
 export { exportShardRows, importShardRows, parseExportShardArgs, parseImportShardArgs, selectExportTables, validateImportRow };
-export type { ExportRow, ExportShardAdminArgs, ExportShardArgs, ImportConflictMode, ImportError, ImportShardAdminArgs, ImportShardArgs, ImportShardResult };
+export type {
+    ExportRow,
+    ExportShardAdminArgs,
+    ExportShardArgs,
+    ImportConflictMode,
+    ImportError,
+    ImportRow,
+    ImportShardAdminArgs,
+    ImportShardArgs,
+    ImportShardResult,
+};

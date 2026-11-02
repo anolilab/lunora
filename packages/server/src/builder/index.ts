@@ -3,6 +3,7 @@ import type { Validator } from "@lunora/values";
 import applyOutput from "../apply-output";
 import { admitSensitiveArgs, validateArgs } from "../functions";
 import { unionMaskColumns } from "../mask/policy-tag";
+import { PROCEDURE_META } from "../procedure-meta";
 import type { RlsTag } from "../rls/policy-tag";
 import { readRlsTags } from "../rls/policy-tag";
 import type {
@@ -37,7 +38,7 @@ interface BuilderState {
     args: ArgsValidator;
     /** Public-surface tag set by `.expose({ rest: true })`; stamped onto the registered function as `fn.expose`. */
     expose?: ExposeConfig;
-    /** Accumulated `.meta(...)` payload; merged across calls and surfaced to middleware as `ctx.meta`. */
+    /** Accumulated `.meta(...)` payload; merged across calls, surfaced to middleware as `ctx.meta` and to tooling via `procedureMeta(fn)`. */
     meta?: Record<string, unknown>;
     middlewares: ReadonlyArray<Middleware<unknown, unknown>>;
     /** Validator the handler's result is parsed through when `.output()` was called. */
@@ -350,6 +351,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                 ...(rls ? { rls } : {}),
                 ...(visibility ? { visibility } : {}),
                 ...(state.x402 ? { x402: state.x402 } : {}),
+                ...(state.meta ? { [PROCEDURE_META]: state.meta } : {}),
             };
         },
         // `.meta(obj)` MERGES so a shared base builder can set defaults a
@@ -397,6 +399,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                           ...(rls ? { rls } : {}),
                           ...(visibility ? { visibility } : {}),
                           ...(state.x402 ? { x402: state.x402 } : {}),
+                          ...(state.meta ? { [PROCEDURE_META]: state.meta } : {}),
                       };
                   },
               }
@@ -459,6 +462,7 @@ export type {
     MiddlewareContext,
     MiddlewareNext,
     MutationBuilder,
+    PolicyMiddleware,
     QueryBuilder,
     TerminalKind,
 } from "./types";

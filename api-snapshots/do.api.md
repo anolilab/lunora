@@ -268,9 +268,10 @@ interface RunShardFindRelatedArgs {
 
 ```ts
 interface RunShardImportArgs {
+    deletes?: boolean;
     dryRun?: boolean;
     onConflict?: ImportConflictMode;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 ```

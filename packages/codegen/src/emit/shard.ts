@@ -67,14 +67,16 @@ interface EmitShardOptions {
     agents?: ReadonlyArray<AgentIR>;
     /** The package-backed capabilities the app uses (post platform gate) — each row of the `CAPABILITIES` table it names is wired per its `shardBinding` / `tier`. */
     capabilities?: ReadonlySet<CapabilityKey>;
-
     containers?: ReadonlyArray<ContainerIR>;
+
     /** The single `defineEnv(...)` contract declared in `lunora/env.ts` — applies the accessor to the worker `env` to populate `ctx.env`. */
     env?: EnvIR;
     /** Statically-discovered `ctx.flags.<type>("key")` reads — the studio Flags page + reactive evaluation iterate these. */
     flagKeys?: ReadonlyArray<{ key: string; type: "boolean" | "number" | "object" | "string" }>;
     /** The project declares `lunora/flags.ts` — wires `ctx.flags` (OpenFeature) onto every ctx. */
     hasFlags?: boolean;
+    /** Whether some query may read `ctx.ip` (see `LUNORA_IP_READER_PATHS`), so the shard seeds its address-keyed set from it. */
+    hasIpReaders?: boolean;
     /** The project declares `lunora/notify.ts` — wires `ctx.notify` + its `ctx.push` alias (`@lunora/notify`) onto every ctx. */
     hasNotify?: boolean;
     /** The project declares at least one `defineRoom` — wires the `LUNORA_ROOMS` topic→path resolution in the `roomHandlerPath` override. */
@@ -178,6 +180,7 @@ const emitShard = ({
     shapes = [],
     storageRules,
     studioFeatures,
+    hasIpReaders = false,
     services = [],
     topics = [],
     useUmbrella = false,
@@ -487,7 +490,7 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
         ...liveStreamImports,
         // Local-first sync registries are pulled in alongside the function table
         // only when the project declares them, so the import list stays minimal.
-        `import { ${["LUNORA_FUNCTIONS", "LUNORA_LIFECYCLE_HOOKS", "LUNORA_MIGRATIONS", ...(lazyFunctions ? ["getLoadedFunction", "loadFunction"] : []), ...(hasMutators ? ["LUNORA_MUTATOR_PATHS"] : []), ...(hasRooms ? ["LUNORA_ROOMS"] : []), ...(hasSockets ? ["LUNORA_SOCKETS"] : []), ...(hasShapes ? ["LUNORA_SHAPES"] : [])].join(", ")} } from "./functions.js";`,
+        `import { ${["LUNORA_FUNCTIONS", "LUNORA_LIFECYCLE_HOOKS", "LUNORA_MIGRATIONS", ...(lazyFunctions ? ["getLoadedFunction", "loadFunction"] : []), ...(hasMutators ? ["LUNORA_MUTATOR_PATHS"] : []), ...(hasIpReaders ? ["LUNORA_IP_READER_PATHS"] : []), ...(hasRooms ? ["LUNORA_ROOMS"] : []), ...(hasSockets ? ["LUNORA_SOCKETS"] : []), ...(hasShapes ? ["LUNORA_SHAPES"] : [])].join(", ")} } from "./functions.js";`,
     );
 
     const vectorsConfigField = hasVectorIndexes ? `\n    vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;` : "";
@@ -816,6 +819,14 @@ ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema a
     // in the inner tracker and the outer entry would be stored with zero deps —
     // permanently stale. `handleRpc` forwards the scope it is handed instead.
     /* eslint-disable no-secrets/no-secrets -- false positive: emitted generated-code text referencing the function registry, not a credential */
+    // The statically-found address readers are address-keyed from the first run, before any dispatch has taught the
+    // base class; the runtime-learned set stays as the backstop for what the analysis cannot see.
+    const ipReaderBootstrap = hasIpReaders
+        ? `            for (const path of LUNORA_IP_READER_PATHS) {
+                this.ipKeyedFunctionPaths.add(path);
+            }
+`
+        : "";
     const constructorOverride = `
         public constructor(state: ShardDOState, env: unknown) {
             super(state, env, {
@@ -833,7 +844,7 @@ ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema a
                 // exists — a trigger that fails first still flushes and fuses.
                 ...(config.observability === undefined ? {} : { telemetrySink: () => config.observability?.((env ?? {}) as Record<string, unknown>) }),
             });
-${sourceBootstrap}${ttlBootstrap}        }
+${ipReaderBootstrap}${sourceBootstrap}${ttlBootstrap}        }
 
         protected override isCacheableQuery(functionPath: string): boolean {
             // NOT \`kind === "query"\` alone. A cache hit answers without running

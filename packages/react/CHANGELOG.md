@@ -1,3 +1,43 @@
+## @lunora/react [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.289...@lunora/react@1.0.0-alpha.290) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.279
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.192
+
+## @lunora/react [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.288...@lunora/react@1.0.0-alpha.289) (2026-11-01)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.278
+
+## @lunora/react [1.0.0-alpha.288](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.287...@lunora/react@1.0.0-alpha.288) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.277
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.191
+
+## @lunora/react [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.286...@lunora/react@1.0.0-alpha.287) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.276
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.190
+
+## @lunora/react [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.285...@lunora/react@1.0.0-alpha.286) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.275
+
 ## @lunora/react [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.284...@lunora/react@1.0.0-alpha.285) (2026-10-31)
 
 

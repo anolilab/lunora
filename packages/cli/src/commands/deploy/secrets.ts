@@ -403,13 +403,14 @@ const checkVariablesForSecrets = async (cwd: string, options: DeployCommandOptio
  * that will crash on a missing secret. Returns `{}` when the deploy may
  * proceed.
  *
- * Best-effort detection: a dry-run/preview publishes nothing (skip), and if the
+ * Best-effort detection: a dry run publishes nothing (skip), and if the
  * worker doesn't exist yet (first deploy) or wrangler isn't authenticated the
  * secret list can't be read — we proceed rather than guess. Any pushing happens
  * BEFORE the deploy spawn so the new version boots with the secrets present.
  */
 const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, interactive: boolean, driver: DeployDriver): Promise<MissingSecretsOutcome> => {
-    if (options.dryRun === true || options.preview === true) {
+    // A preview uploads the secrets it was given with the deploy itself.
+    if (options.dryRun === true || options.isolatedPreview === true) {
         return {};
     }
 
@@ -499,4 +500,4 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     return {};
 };
 
-export { offerMissingSecrets, warnDevVariablesNotPushed };
+export { offerMissingSecrets, resolveRequiredSecretKeys, warnDevVariablesNotPushed };

@@ -17,7 +17,6 @@
  * binding the user's `exec` reads is not knowable here, so every config the
  * deploy creates or reuses is set that way.
  */
-import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
@@ -25,6 +24,7 @@ import { discoverSchemaInfo, resolveSchemaDirectory } from "@lunora/config";
 import { applyModify, findWranglerFile, HYPERDRIVE_PLACEHOLDER_ID, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import { cloudflareRestRequest } from "../../../../../shared/cloudflare-rest";
+import boundedName from "../../util/bounded-name";
 import type { CloudflareEnvironment } from "../../util/cloudflare-credentials";
 import { resolveCloudflareCredentials } from "../../util/cloudflare-credentials";
 import type { Logger } from "../../util/logger";
@@ -65,9 +65,7 @@ interface ProvisionHyperdriveOptions {
 
 type Request = (path: string, init?: RequestInit) => ReturnType<typeof cloudflareRestRequest>;
 
-const NON_NAME_CHARACTER = /[^a-z0-9-]/gu;
 const NON_VARIABLE_CHARACTER = /[^A-Za-z0-9]/gu;
-const TRAILING_DASH = /-$/u;
 
 /** The environment variable a binding's connection string is read from. */
 const connectionStringVariable = (binding: string): string => `LUNORA_${binding.replaceAll(NON_VARIABLE_CHARACTER, "_").toUpperCase()}_URL`;
@@ -90,31 +88,8 @@ const sharedVariable = (bindings: ReadonlyArray<string>): { bindings: string[]; 
     return undefined;
 };
 
-/** Characters of the hash that closes a shortened name, with its dash. */
-const HASH_SUFFIX = 7;
-
-/**
- * The config name for a binding: the deployed Worker's name and the binding, in Cloudflare's alphabet.
- * Past the 32-character limit the front is cut and a short hash of the whole identity closes it, so two
- * long names that share a prefix still get names of their own.
- */
-const configName = (workerName: string, binding: string): string => {
-    const raw = `${workerName}-${binding}`.toLowerCase();
-    const identity = raw.replaceAll(NON_NAME_CHARACTER, "-");
-
-    // A name that needed no change keeps its readable form. One that was cleaned (`billing_api` and `billing-api`
-    // would both read `billing-api`) or is too long is closed with a short hash of the original, which keeps them apart.
-    if (identity === raw && identity.length <= NAME_LIMIT) {
-        return identity;
-    }
-
-    const hash = createHash("sha256")
-        .update(raw)
-        .digest("hex")
-        .slice(0, HASH_SUFFIX - 1);
-
-    return `${identity.slice(0, NAME_LIMIT - HASH_SUFFIX).replace(TRAILING_DASH, "")}-${hash}`;
-};
+/** The config name for a binding: the deployed Worker's name and the binding, within the 32-character limit. */
+const configName = (workerName: string, binding: string): string => boundedName(`${workerName}-${binding}`, NAME_LIMIT);
 
 /** Cloudflare's name for the engine a URL scheme speaks: `postgresql` is `postgres`, and MariaDB is reached as `mysql`. */
 const engineOf = (scheme: string): string => {

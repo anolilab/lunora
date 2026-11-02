@@ -1,3 +1,56 @@
+## @lunora/vite [1.0.0-alpha.416](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.415...@lunora/vite@1.0.0-alpha.416) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.385
+* **@lunora/config:** upgraded to 1.0.0-alpha.442
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+* **@lunora/studio:** upgraded to 1.0.0-alpha.370
+
+## @lunora/vite [1.0.0-alpha.415](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.414...@lunora/vite@1.0.0-alpha.415) (2026-11-01)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.441
+* **@lunora/studio:** upgraded to 1.0.0-alpha.369
+
+## @lunora/vite [1.0.0-alpha.414](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.413...@lunora/vite@1.0.0-alpha.414) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.440
+
+## @lunora/vite [1.0.0-alpha.413](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.412...@lunora/vite@1.0.0-alpha.413) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.384
+* **@lunora/config:** upgraded to 1.0.0-alpha.439
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+* **@lunora/studio:** upgraded to 1.0.0-alpha.368
+
+## @lunora/vite [1.0.0-alpha.412](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.411...@lunora/vite@1.0.0-alpha.412) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.383
+* **@lunora/config:** upgraded to 1.0.0-alpha.438
+* **@lunora/studio:** upgraded to 1.0.0-alpha.367
+
+## @lunora/vite [1.0.0-alpha.411](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.410...@lunora/vite@1.0.0-alpha.411) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.382
+* **@lunora/config:** upgraded to 1.0.0-alpha.437
+* **@lunora/studio:** upgraded to 1.0.0-alpha.366
+
 ## @lunora/vite [1.0.0-alpha.410](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.409...@lunora/vite@1.0.0-alpha.410) (2026-10-31)
 
 

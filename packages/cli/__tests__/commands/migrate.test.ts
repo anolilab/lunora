@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { exportEndLine } from "../../../../shared/export-end";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import { execute as migrateExecute } from "../../src/commands/migrate/dispatch";
 import { runMigrateBackendCommand, runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand } from "../../src/commands/migrate/handler";
@@ -1127,7 +1128,7 @@ describe("lunora migrate d1-to-hyperdrive | hyperdrive-to-d1", () => {
         expect.assertions(4);
 
         const ndjson =
-            '{"table":"settings","doc":{"_creationTime":1,"_id":"a","key":"x"}}\n{"table":"settings","doc":{"_creationTime":2,"_id":"b","key":"y"}}\n';
+            '{"table":"settings","doc":{"_creationTime":1,"_id":"a","key":"x"}}\n{"table":"settings","doc":{"_creationTime":2,"_id":"b","key":"y"}}\n{"end":true,"rows":2}\n';
         const calls: string[] = [];
         const infos: string[] = [];
         const logger: Logger = { error: () => {}, info: (message: string) => infos.push(message), success: () => {}, warn: () => {} };
@@ -1190,7 +1191,7 @@ describe("lunora migrate d1-to-hyperdrive | hyperdrive-to-d1", () => {
     it("rolls back the other way, naming Hyperdrive as the source and D1 as the target", async () => {
         expect.assertions(3);
 
-        const ndjson = '{"table":"settings","doc":{"_creationTime":1,"_id":"a","key":"x"}}\n';
+        const ndjson = '{"table":"settings","doc":{"_creationTime":1,"_id":"a","key":"x"}}\n{"end":true,"rows":1}\n';
         const infos: string[] = [];
         const logger: Logger = { error: () => {}, info: (message: string) => infos.push(message), success: () => {}, warn: () => {} };
         const fetchImpl: StreamingFetchLike = async (input: string) => {
@@ -1264,7 +1265,7 @@ describe("lunora migrate d1-to-hyperdrive | hyperdrive-to-d1", () => {
                     return {
                         body: new ReadableStream<Uint8Array>({
                             start(controller) {
-                                controller.enqueue(new TextEncoder().encode(`${ndjson}\n`));
+                                controller.enqueue(new TextEncoder().encode(`${ndjson}\n${exportEndLine(source.size)}`));
                                 controller.close();
                             },
                         }),
@@ -1431,7 +1432,7 @@ describe("lunora migrate d1-to-hyperdrive | hyperdrive-to-d1", () => {
     it("refuses the import leg against a remote target when --yes was not passed", async () => {
         expect.assertions(2);
 
-        const ndjson = '{"table":"settings","doc":{"_creationTime":1,"_id":"a","key":"x"}}\n';
+        const ndjson = '{"table":"settings","doc":{"_creationTime":1,"_id":"a","key":"x"}}\n{"end":true,"rows":1}\n';
         const errors: string[] = [];
         const logger: Logger = { error: (message: string) => errors.push(message), info: () => {}, success: () => {}, warn: () => {} };
         const fetchImpl: StreamingFetchLike = async () => {
@@ -1511,7 +1512,7 @@ describe("lunora migrate d1-to-hyperdrive | hyperdrive-to-d1", () => {
     it("shreds the private plaintext dump dir even when the import throws", async () => {
         expect.hasAssertions();
 
-        const ndjson = '{"table":"settings","doc":{"_creationTime":1,"_id":"a","key":"x"}}\n';
+        const ndjson = '{"table":"settings","doc":{"_creationTime":1,"_id":"a","key":"x"}}\n{"end":true,"rows":1}\n';
         const errors: string[] = [];
         const logger: Logger = { error: (message: string) => errors.push(message), info: () => {}, success: () => {}, warn: () => {} };
 

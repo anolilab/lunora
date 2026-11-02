@@ -19,10 +19,10 @@ import type { IndexHit, IssueSeverity, IssueStatus, LogEntry, TraceAnchor } from
 import { ISSUE_SEVERITIES, ISSUE_STATUSES } from "@lunora/observability";
 import type {
     CdcChange,
-    ExportRow,
     FilterClause,
     FilterOperator,
     ImportConflictMode,
+    ImportRow,
     MigrationDirection,
     OrderByClause,
     QueueMessageOutcome,
@@ -91,11 +91,13 @@ interface RunShardExportArgs {
 
 /** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
 interface RunShardImportArgs {
+    /** Honour rows tagged `op: "delete"`. See `ImportShardArgs.deletes` in `@lunora/shard-engine`. */
+    deletes?: boolean;
     /** Check the rows and report their shape errors, writing nothing. See `ImportShardArgs.dryRun` in `@lunora/shard-engine`. */
     dryRun?: boolean;
     /** What a row whose `_id` already exists does. See `ImportConflictMode` in `@lunora/shard-engine`. */
     onConflict?: ImportConflictMode;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 

@@ -30,6 +30,7 @@ interface ExportGlobalArgs {
 interface ExportRow {
     doc: Record<string, unknown>;
     line?: number;
+    op?: "delete";
     table: string;
 }
 ```
@@ -122,6 +123,7 @@ interface ImportGlobalArgs {
 ```ts
 interface ImportResult {
     conflicts: number;
+    deleted: number;
     errors: ImportError[];
     inserted: Record<string, number>;
     replaced: number;

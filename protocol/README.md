@@ -522,16 +522,16 @@ defaults to 1 MiB and closes with `1009`, on every reconnect) must raise it.
 
 ### 5.1 Client → server frames
 
-| `type`                                      | Shape                                                                                   |
-| ------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `connect`                                   | `{ type, id: "connect", clientId?, caps?, context?, token? }` — one-shot, first on open |
-| `subscribe`                                 | `{ type, id, query: { functionPath, args, table, sinceSeq?, sinceEpoch? } }`            |
-| `unsubscribe`                               | `{ type, id }`                                                                          |
-| `shape_subscribe`                           | `{ type, id, shape: { name, args? }, sinceCheckpoint?, sinceEpoch? }`                   |
-| `shape_unsubscribe`                         | `{ type, id }`                                                                          |
-| `stream`                                    | `{ type, id, query: { functionPath, args?, shardKey? }, sinceChunk?, generation? }`     |
-| `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                                       |
-| `whisper`                                   | `{ type, topic, data? }`                                                                |
+| `type`                                      | Shape                                                                                      |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `connect`                                   | `{ type, id: "connect", clientId?, caps?, context?, token? }` — one-shot, first on open    |
+| `subscribe`                                 | `{ type, id, query: { functionPath, args, table, sinceSeq?, sinceEpoch?, sinceClaims? } }` |
+| `unsubscribe`                               | `{ type, id }`                                                                             |
+| `shape_subscribe`                           | `{ type, id, shape: { name, args? }, sinceCheckpoint?, sinceEpoch?, sinceClaims? }`        |
+| `shape_unsubscribe`                         | `{ type, id }`                                                                             |
+| `stream`                                    | `{ type, id, query: { functionPath, args?, shardKey? }, sinceChunk?, generation? }`        |
+| `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                                          |
+| `whisper`                                   | `{ type, topic, data? }`                                                                   |
 
 `subscribe.query.args` is `encodeWire(args)`. `functionPath` selects the query
 the server re-executes; `table` addresses the legacy raw-delta fan-out
@@ -543,7 +543,11 @@ on their frame BUILDERS only (`build_subscribe_frame` / `BuildSubscribeFrame` /
 `buildSubscribeFrame`), where it likewise defaults to `functionPath`; no public
 `subscribe` in any of the eight takes it, and every one of them passes that
 default. So `broadcastDelta` is not addressable from any client in this tree —
-only by a consumer that builds the frame itself. `sinceSeq` /
+only by a consumer that builds the frame itself. **Breaking for legacy table clients:** on a socket that carries a user or claims, a `subscribe`
+with no `functionPath` is refused with an `error` frame (`SUBSCRIPTION_FUNCTION_REQUIRED`,
+`400`) before anything is stored or sent, because raw table deltas are not claim-scoped and
+nothing can reset such a view when the claims change. An anonymous socket (no user, no claims)
+keeps accepting table-only subscribes as before. `sinceSeq` /
 `sinceEpoch` ride along only on a resume. Subscription ids are conventionally
 `sub_<n>`; shape ids `shape_<n>`; stream ids `stream_<n>`.
 
@@ -657,20 +661,20 @@ Run `pageDeltaFrames` only once you announce the token.
 
 ### 5.2 Server → client frames
 
-| `type`               | Shape                                                                  | Effect                                                                                                                                                     |
-| -------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ack`                | `{ type, id }`                                                         | subscription acknowledged                                                                                                                                  |
-| `data`               | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }`         | deliver `decodeWire(data)` as the new value                                                                                                                |
-| `delta`              | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId?, more? }` | merge delta into server base; the LAST frame of a run carries the cursor                                                                                   |
-| `resume`             | `{ type, id, cursor?, epoch?, lastMutationId? }`                       | nothing changed; keep value, advance cursor                                                                                                                |
-| `settled`            | `{ type, id, cursor?, epoch?, lastMutationId? }`                       | write touched tables, byte-identical result; advance only                                                                                                  |
-| `error`              | `{ type, id?, error: { code?, message?, hint?, why? }, message? }`     | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)                                                                                  |
-| `complete`           | `{ type, id }`                                                         | subscription/stream closed server-side                                                                                                                     |
-| `chunk`              | `{ type, id, data: <wire>, seq?, generation? }`                        | one streaming-query chunk (`seq` + run `generation` on a durable run only)                                                                                 |
-| `whisper`            | `{ type, topic, data: <wire>, from? }`                                 | ephemeral relay                                                                                                                                            |
-| `live`               | `{ type, stream, topic, data: <wire> }`                                | a server live publish to a WebSocket member granted the stream (server-only; a client `live` frame is refused)                                             |
-| `identity`           | `{ type, connectionId, subject: <string \| null>, whisperAck? }`       | the user this socket is authenticated as (`null` = anonymous); `connectionId` names the socket for live control; `whisperAck` advertises the live-join ack |
-| `whisper_subscribed` | `{ type, topic }`                                                      | a live (non-room) `whisper_subscribe` was processed, admitted or not (server-only; additive, an unknown frame is a no-op)                                  |
+| `type`               | Shape                                                                                    | Effect                                                                                                                                                                                                                                                             |
+| -------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ack`                | `{ type, id }`                                                                           | subscription acknowledged                                                                                                                                                                                                                                          |
+| `data`               | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }`                           | deliver `decodeWire(data)` as the new value                                                                                                                                                                                                                        |
+| `delta`              | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId?, more? }`                   | merge delta into server base; the LAST frame of a run carries the cursor                                                                                                                                                                                           |
+| `resume`             | `{ type, id, cursor?, epoch?, lastMutationId? }`                                         | nothing changed; keep value, advance cursor                                                                                                                                                                                                                        |
+| `settled`            | `{ type, id, cursor?, epoch?, lastMutationId? }`                                         | write touched tables, byte-identical result; advance only                                                                                                                                                                                                          |
+| `error`              | `{ type, id?, error: { code?, message?, hint?, why? }, message? }`                       | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)                                                                                                                                                                                          |
+| `complete`           | `{ type, id }`                                                                           | subscription/stream closed server-side                                                                                                                                                                                                                             |
+| `chunk`              | `{ type, id, data: <wire>, seq?, generation? }`                                          | one streaming-query chunk (`seq` + run `generation` on a durable run only)                                                                                                                                                                                         |
+| `whisper`            | `{ type, topic, data: <wire>, from? }`                                                   | ephemeral relay                                                                                                                                                                                                                                                    |
+| `live`               | `{ type, stream, topic, data: <wire> }`                                                  | a server live publish to a WebSocket member granted the stream (server-only; a client `live` frame is refused)                                                                                                                                                     |
+| `identity`           | `{ type, connectionId, subject: <string \| null>, whisperAck?, revalidateMs?, claims? }` | the user this socket is authenticated as (`null` = anonymous); `connectionId` names the socket for live control; `whisperAck` advertises the live-join ack; `revalidateMs` is the re-auth window (§6.1); `claims` fingerprints the socket's verified claims (§6.1) |
+| `whisper_subscribed` | `{ type, topic }`                                                                        | a live (non-room) `whisper_subscribe` was processed, admitted or not (server-only; additive, an unknown frame is a no-op)                                                                                                                                          |
 
 `identity` is sent in reply to every `connect` frame (§5.1), including a re-sent
 one, and only after the socket has passed the §6 gate. `subject` is the resolved
@@ -864,9 +868,18 @@ the session credential alone is refused (`403`).
 ### 6.1 User identity on the upgrade
 
 The channels above admit the **socket**. The **user** a socket acts as comes from
-the worker's `resolveIdentity` on the upgrade request, once, and holds for the
-socket's life (a past `exp` closes it with `4001`) unless a same-user refresh
-moves the expiry (below). A browser sends its session
+the worker's `resolveIdentity` on the upgrade request. A past `exp` closes the
+socket with `4001` unless a same-user refresh moves the expiry (below). An
+authenticated subscription socket is also held to a **revalidation window**
+(60 s): it must be re-authenticated through the route below within that window,
+or the shard closes it with `4005` (`identity_stale`). Without the window, a revoked
+session or a changed tenant claim would keep receiving on a socket that was
+already open. The `identity` frame announces the window as `revalidateMs`. It is
+absent for an anonymous socket and for a `defineWebSocket` route socket, and
+neither is held to a window. `4005` is an ordinary reconnect, not a
+token expiry: a client MUST NOT report it as one. A client that never
+re-authenticates stays correct and reconnects once per window, re-resolving its
+identity on the upgrade. A browser sends its session
 cookie automatically. A client whose session is a bearer (an external IdP's JWT,
 or a cross-origin API) presents it in one of two ways:
 
@@ -894,16 +907,77 @@ Authorization: Bearer <refreshed token>
 
 The worker resolves the credential as it would an upgrade — a lapsed one is
 `401 TOKEN_EXPIRED`, none at all `401 UNAUTHENTICATED` — and forwards only the
-server-minted identity to the shard. The shard moves the socket's expiry when the
-socket belongs to the same user and every claim except `exp`, `expiresAtMs`,
-`iat`, `nbf` and `jti` is unchanged, and answers `200 { ok: true }`; nothing is
-re-sent on the socket. It refuses an unknown or another user's socket (`404`), a
-credential older than the one the socket holds or, for a socket that has an
-expiry, one without any (`409 STALE_CREDENTIAL`), and changed claims
-(`409 IDENTITY_CHANGED`). A client counts only the `{ ok: true }` body as success. On any refusal the socket is left as it
-was: it still closes with `4001` at its old expiry, and a client SHOULD reconnect
-it under the new credential, which re-seeds as any upgrade does. A server
+server-minted identity to the shard. The shard moves the socket's expiry and
+restarts its revalidation window when the socket belongs to the same user and
+every claim except `exp`, `expiresAtMs`, `iat`, `nbf` and `jti` is unchanged, and
+answers `200 { ok: true }`. Nothing is re-sent on the socket. It refuses an unknown or another
+user's socket (`404`), and a credential older than the one the socket holds or,
+for a socket that has an expiry, one without any (`409 STALE_CREDENTIAL`). Those
+refusals leave the socket as it was, still closing at its old expiry or window.
+Changed claims (`409 IDENTITY_CHANGED`) also close the socket at once with `4005` and the
+reason `identity_changed`: the identity it was delivering under no longer holds. The close can
+reach the client before the `409`, so a client MUST treat that close reason as `IDENTITY_CHANGED`
+too (a socket it already retired for it needs nothing more). A client counts only the
+`{ ok: true }` body as success. On any refusal it SHOULD reconnect the socket
+under the current credential, which re-seeds as any upgrade does. After
+`IDENTITY_CHANGED` the reconnect MUST be cold (no `sinceSeq`, shape views
+emptied): the rows held were resolved under the old claims, and a resumed diff
+would not remove the ones the new claims cannot see. A server
 without the route answers `404`, so the same fallback covers it.
+
+**Admin sockets.** A socket admitted with an admin credential (the master bearer, or the
+short-lived `?token=` ticket) that also carries a user is re-authenticated with the admin
+credential as well: the client puts a freshly minted ticket in `?token=` on
+`POST /_lunora/ws/reauth`, as its upgrade did. The worker checks it exactly as the upgrade
+does (a constant-time verify against the current admin token) and exempts it from the
+per-shard user gate, so a user the gate would refuse does not make the socket reconnect each
+half window. The shard keeps such a socket only when it was admitted by the admin token that
+is current now AND the worker verified an admin credential on this request; otherwise (a
+rotated or missing credential) it closes the socket with `4005` (`identity_stale`,
+`409 IDENTITY_STALE`). If the user is gone or its claims changed it closes with
+`identity_changed`, so the client reconnects holding only what the admin credential grants.
+A client that does not present the credential on re-auth loses an admin socket that carries a
+user at its first window; a socket with no user is never held to a window. This is a
+protocol change for admin clients that re-auth (the reference client and Studio do).
+
+**Claims fingerprint route.** A cross-tab follower tab has no socket and so no `identity` frame of
+its own. `POST /_lunora/claims` (no body needed) answers a caller, resolved with the same
+credential check as `POST /_lunora/ws/reauth` (a missing or lapsed credential is `401`), with
+`{ "claims": "<fingerprint>" }` and nothing else: the fingerprint of the caller's own verified
+claims, from the same function and the same forwarded identity the shard uses for a socket's
+`identity` frame, so the two agree. A follower reads it on a credential change and drops leader
+data (and cached values) stamped with other `claims`; until it knows its own it shows nothing
+a leader stamped with `claims`. A frame without `claims`, and a tab with no credential, behave
+as before. The route is an HTTP route of the worker, not a `ctx.*` surface or a binding, so it
+has no entry in `PlatformCapabilities`, like the re-auth route. The non-JS SDKs have no
+leader/follower model and do not call it.
+
+**Resuming under the claims a cursor was read under.** A socket can close with `4005`
+because its window lapsed while the client was away, and the claims it holds can change in
+that gap, so a cursor read before it may describe rows the new claims cannot see. The
+`identity` frame therefore carries `claims`, an opaque fingerprint of the socket's verified
+claims (the user id and every claim except `exp`, `expiresAtMs`, `iat`, `nbf` and `jti`; the
+claims themselves are never sent). A client stores it beside every value and cursor it
+commits, and puts it on `subscribe.query.sinceClaims` / `shape_subscribe.sinceClaims` when it
+resumes from that cursor with `sinceSeq` / `sinceCheckpoint`. The shard fingerprints the
+socket's claims as they are now and resumes only when the two are equal. When they differ,
+or when `sinceClaims` is absent (an older client), it drops `sinceSeq`/`sinceEpoch`
+(`sinceCheckpoint`/`sinceEpoch`) and answers with a full snapshot, so the client holds
+nothing resolved under the old claims once that snapshot lands. A client that was never told a
+fingerprint (an older shard) sends none, and every resume is then cold on a shard that
+enforces this; that is the safe direction. The client never computes a fingerprint.
+
+`connectionId` is opaque to a client: a server MAY put routing in it. The Cloudflare shard does so for
+a socket held by a fan-out relay, prefixing the id with `r<index>.` so the owner sends that socket's
+re-auth to the one relay named, not to every relay. A re-auth whose holding relay does not answer is
+refused (`404`) and the socket lapses at its window with `4005`; an id with no prefix, or one naming a
+relay the owner has not attached, is asked of every relay. The relay tier is a Durable Object
+mechanism: other targets have no relay, so their ids stay bare and nothing about it is advertised in
+`PlatformCapabilities`.
+
+A cookie session re-authenticates the same way, with no `Authorization` header:
+the request carries the cookie. The reference client re-authenticates each socket
+at half its `revalidateMs`, presenting the credential its upgrade presented.
 
 A client SHOULD accept an **async token provider** (`() -> token`) for both
 credentials, resolved fresh on every (re)connect. The TS contract is

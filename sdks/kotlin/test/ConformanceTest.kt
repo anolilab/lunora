@@ -414,7 +414,7 @@ private fun closeCodesDriveTokenExpiry() {
     val cases = (fixture("ws-frames.json")["closeSequences"] as Map<*, *>)["cases"] as List<*>
 
     // The fixture's full set. A shorter list means cases were dropped, not that the run is faster.
-    check(cases.size == 9, "closeSequences must carry its full case set, got ${cases.size}")
+    check(cases.size == 10, "closeSequences must carry its full case set, got ${cases.size}")
 
     var casesWithErrors = 0
 

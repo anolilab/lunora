@@ -170,9 +170,7 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
             frameworkBuild: options.frameworkBuild,
             lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
             // So the drift gate names `build` and offers only the flags `build`
-            // registers — it does NOT accept `--update-schema-baseline`, because it
-            // publishes nothing and re-blessing a baseline for an artifact that never
-            // shipped is what lets a breaking change through on the retry.
+            // registers. It publishes nothing, so it never advances the baseline.
             commandName: "build",
             clientBuildOutputJson: jsonMode,
             cwd: options.cwd,

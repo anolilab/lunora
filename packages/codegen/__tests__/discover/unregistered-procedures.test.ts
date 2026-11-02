@@ -19,6 +19,7 @@ import type { FunctionIR } from "../../src/ir";
  * `.stream()` hangs off the QUERY builder, exactly as it does in the real
  * types, because that asymmetry is what the remediation has to get right.
  */
+// eslint-disable-next-line no-secrets/no-secrets -- a type-declaration fixture of server signatures, not a credential
 const SERVER = `
 export interface RegisteredFunction<A, R, Kind extends "query" | "mutation" | "action"> {
     handler: (context: unknown, args: A) => R;
@@ -41,9 +42,11 @@ export declare const action: {
     input<A>(validators: A): { action<R>(handler: (options: { args: A }) => R): RegisteredAction<A, Awaited<R>> };
 };
 export type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor";
-export type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "mutation"> & { readonly lifecycle: LifecycleEventKind };
+export type RegisteredLifecycleHook<Moment extends LifecycleEventKind = LifecycleEventKind> = RegisteredFunction<Record<string, never>, void, "mutation"> & {
+    readonly lifecycle: Moment;
+};
 export type RegisteredReactor = RegisteredFunction<Record<string, never>, { digest: string }, "mutation"> & { readonly lifecycle: "reactor" };
-export declare const onConnect: (handler: () => Promise<void>) => RegisteredLifecycleHook;
+export declare const onConnect: (handler: () => Promise<void>) => RegisteredLifecycleHook<"connect">;
 export declare const onQueryChange: <T>(select: () => Promise<T>, handler: (context: unknown, result: T) => Promise<void>) => RegisteredReactor;
 export interface RegisteredMutator { readonly __lunoraMutator: true }
 export interface RegisteredShape { readonly table: string }
@@ -266,8 +269,8 @@ describe("discoverUnregisteredProcedures", () => {
         // exist` at a call site, while a dropped `onConnect` has no caller at
         // all — the hook simply never fires, forever, with no error anywhere.
         expect(finding("viaFactoryHook")?.remediation).toContain("onConnect(handler)");
-        // `onConnect`, `onDisconnect` and `onShardInit` share one type, so the
-        // finding must not claim to know which was written.
+        // The finding's call names `onConnect` for all three hook factories, so it
+        // asks for the one actually written rather than claiming to know it.
         expect(finding("viaFactoryHook")?.remediation).toContain("Substitute the hook you called");
         expect(finding("viaFactoryReactor")?.remediation).toContain("onQueryChange(select, handler)");
         expect(finding("viaFactoryReactor")?.remediation).toContain("never runs");

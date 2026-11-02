@@ -10,6 +10,7 @@ import { isServerPackageModule } from "../module-specifiers";
 import { parseObjectShape } from "../parse-validator";
 import { findObjectProperty } from "./ast";
 import { addressableExportNameOf } from "./attribution";
+import mayReadIp from "./ip-reads";
 
 /** The only file shapes may be declared in — mirrors `lunora/queues.ts`. */
 const SHAPES_FILENAME = "shapes.ts";
@@ -140,6 +141,30 @@ const argsFrom = (call: CallExpression): Record<string, ValidatorIR> => {
     return parseObjectShape(initializer);
 };
 
+/**
+ * Whether the shape's `where` may read `ctx.ip`. Failing closed: a `where` that is not an inline function (a reference,
+ * a method) or whose context parameter is used under another name than `ctx` is a body or a binding the scan cannot follow.
+ */
+const shapeMayReadIp = (call: CallExpression): boolean => {
+    const [config] = call.getArguments();
+    const where = Node.isObjectLiteralExpression(config) ? findObjectProperty(config, "where") : undefined;
+    const whereFunction = Node.isPropertyAssignment(where) ? where.getInitializer() : undefined;
+
+    if (where === undefined) {
+        return mayReadIp(call);
+    }
+
+    if (!Node.isArrowFunction(whereFunction) && !Node.isFunctionExpression(whereFunction)) {
+        return true;
+    }
+
+    const name = whereFunction.getParameters()[0]?.getNameNode();
+    // A context bound under another name and then used is one the scan cannot follow; an unused one reads nothing.
+    const renamedAndUsed = Node.isIdentifier(name) && name.getText() !== "ctx" && name.findReferencesAsNodes().length > 0;
+
+    return renamedAndUsed || mayReadIp(call);
+};
+
 /** Collect exported `defineShape` declarations from one source file. */
 const shapesFromSource = (source: SourceFile): ShapeIR[] => {
     const shapes: ShapeIR[] = [];
@@ -175,7 +200,13 @@ const shapesFromSource = (source: SourceFile): ShapeIR[] => {
             continue;
         }
 
-        shapes.push({ args: argsFrom(callExpression), exportName, filePath: "shapes", table: tableLiteralFrom(callExpression) });
+        shapes.push({
+            args: argsFrom(callExpression),
+            exportName,
+            filePath: "shapes",
+            ...(shapeMayReadIp(callExpression) ? { readsIp: true as const } : {}),
+            table: tableLiteralFrom(callExpression),
+        });
     }
 
     return shapes;

@@ -1,7 +1,8 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { exportEndLine } from "../../../../../shared/export-end";
 import { ExportImportPanel } from "../../../src/features/database/export-import";
 import type { ColumnMeta, ExportRow } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
@@ -75,9 +76,18 @@ const renderPanel = (mock: MockClientHooks) => (
     </LunoraProvider>
 );
 
+/** `text` as an export file: its rows, then the end marker an import requires. A text that already ends with one is left alone. */
+const withEnd = (text: string): string => {
+    if (text.includes('"end":true')) {
+        return text;
+    }
+
+    return `${text}\n${exportEndLine(text.split("\n").filter((line) => line.trim() !== "").length)}`;
+};
+
 /** Pick `text` as the import file, then confirm the import. */
-const importText = (text: string): void => {
-    fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([text], "shard.ndjson")] } });
+const importText = (text: string, marked = true): void => {
+    fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([marked ? withEnd(text) : text], "shard.ndjson")] } });
     fireEvent.click(screen.getByTestId("ei-import"));
     fireEvent.click(screen.getByTestId("ei-import-confirm"));
 };
@@ -113,6 +123,50 @@ const dryChecks = (mock: MockClientHooks): ImportArgs[] =>
     callsTo(mock, ADMIN_FUNCTIONS.importShard)
         .map((call) => call[1] as ImportArgs)
         .filter((args) => args.dryRun === true && args.rows.length > 0);
+
+/** Pick an import mode in the panel's mode select. */
+const chooseMode = (mode: string): void => {
+    fireEvent.change(screen.getByTestId("ei-mode"), { target: { value: mode } });
+};
+
+/** A file of `messages` rows, one `_id` per line. */
+const messageRows = (...ids: string[]): string => ids.map((id) => JSON.stringify({ doc: { _id: id, text: id }, table: "messages" })).join("\n");
+
+/** A shard that holds `stored` ids in `messages`, honours dry runs, replace and delete rows, and reports what each call did. */
+const createModeClient = (stored: string[], options: { failDeletes?: boolean } = {}): MockClientHooks =>
+    createMockClient({
+        query: (reference, args): unknown => {
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [{ name: "messages", rowCount: stored.length }];
+            }
+
+            if (reference === ADMIN_FUNCTIONS.exportShard) {
+                return {
+                    rows: stored.map((id) => {
+                        return { doc: { _id: id, text: id }, table: "messages" };
+                    }),
+                };
+            }
+
+            const { dryRun, rows } = args as { dryRun?: boolean; rows: (ExportRow & { op?: string })[] };
+            const deleted = rows.filter((row) => row.op === "delete").length;
+
+            if (options.failDeletes === true && dryRun !== true && deleted > 0) {
+                throw new Error("connection reset");
+            }
+            const written = rows.length - deleted;
+
+            return dryRun === true
+                ? { conflicts: 0, deleted: 0, dryRun: true, errors: [], inserted: {}, replaced: 0 }
+                : { conflicts: 0, deleted, errors: [], inserted: { messages: written }, replaced: 0 };
+        },
+    });
+
+/** The `importShard` calls that carried delete rows. */
+const deleteCalls = (mock: MockClientHooks): { deletes?: boolean; dryRun?: boolean; rows: (ExportRow & { op?: string })[] }[] =>
+    callsTo(mock, ADMIN_FUNCTIONS.importShard)
+        .map((call) => call[1] as { deletes?: boolean; dryRun?: boolean; rows: (ExportRow & { op?: string })[] })
+        .filter((args) => args.rows.some((row) => row.op === "delete"));
 
 /** The columns of the CSV test table: two text columns, so every cell is kept as the text it was written as. */
 const CSV_COLUMNS: ColumnMeta[] = [
@@ -200,7 +254,7 @@ describe("exportImportPanel", () => {
     });
 
     it("pages the export one table per call into a single Blob", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const mock = createClient({
             messages: EXPORT_ROWS,
@@ -222,7 +276,11 @@ describe("exportImportPanel", () => {
 
         const text = (await blobs[0]?.text()) ?? "";
 
-        expect(text.trim().split("\n")).toHaveLength(4);
+        // Four rows, then the end marker an import requires.
+        const lines = text.trim().split("\n");
+
+        expect(lines).toHaveLength(5);
+        expect(JSON.parse(lines[4] ?? "")).toStrictEqual({ end: true, rows: 4 });
     });
 
     it("rejects malformed NDJSON before calling the server", async () => {
@@ -238,6 +296,208 @@ describe("exportImportPanel", () => {
 
         expect(error.textContent).toContain("Invalid NDJSON");
         expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+    });
+
+    it.each([
+        [
+            "no end marker (cut on a row boundary)",
+            '{"table":"messages","doc":{"__id__":"m1","text":"a"}}\n{"table":"messages","doc":{"__id__":"m2","text":"b"}}\n',
+        ],
+        ["an end marker that counts a different number of rows", `{"table":"messages","doc":{"__id__":"m1","text":"a"}}\n${exportEndLine(2)}`],
+        [
+            "a row after the end marker",
+            `{"table":"messages","doc":{"__id__":"m1","text":"a"}}\n${exportEndLine(1)}{"table":"messages","doc":{"__id__":"m2","text":"b"}}\n`,
+        ],
+    ])("refuses a file with %s, and writes nothing", async (_label, text) => {
+        expect.assertions(2);
+
+        const mock = createClient();
+
+        render(renderPanel(mock));
+
+        importText(text, false);
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toMatch(/end marker/u);
+        expect(importCalls(mock).filter((call) => call.dryRun !== true)).toHaveLength(0);
+    });
+
+    it("replace mode writes the file, then deletes the stored rows it lacks, checking the deletes first and asking for them explicitly", async () => {
+        expect.assertions(6);
+
+        const mock = createModeClient(["m1", "m2"]);
+
+        render(renderPanel(mock));
+        chooseMode("replace");
+        importText(messageRows("m1", "m3"));
+
+        const importResult = await screen.findByTestId("ei-import-result");
+
+        expect(importResult.textContent).toContain("deleted 1");
+
+        const calls = deleteCalls(mock);
+
+        expect(calls.map((call) => call.dryRun)).toStrictEqual([true, false]);
+        expect(calls.every((call) => call.deletes === true)).toBe(true);
+        expect(calls[1]?.rows).toStrictEqual([{ doc: { _id: "m2" }, op: "delete", table: "messages" }]);
+        // The file's rows went in before the prune.
+        expect(importCalls(mock)[0]?.rows.map((row) => (row.doc as { _id: string })._id)).toStrictEqual(["m1", "m3"]);
+        // No delete row is ever sent without the opt-in.
+        expect(
+            callsTo(mock, ADMIN_FUNCTIONS.importShard).every(
+                (call) =>
+                    (call[1] as { deletes?: boolean; rows: { op?: string }[] }).deletes === true ||
+                    (call[1] as { rows: { op?: string }[] }).rows.every((row) => row.op === undefined),
+            ),
+        ).toBe(true);
+    });
+
+    it("reports a failed prune as a prune failure, not as unsent file rows", async () => {
+        expect.assertions(3);
+
+        const mock = createModeClient(["m1", "m2"], { failDeletes: true });
+
+        render(renderPanel(mock));
+        chooseMode("replace");
+        importText(messageRows("m1", "m3"));
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toContain("connection reset");
+        expect(error.textContent).toMatch(/every file row is written/iu);
+        expect(error.textContent).not.toContain("Rows from line");
+    });
+
+    it("drops a shown plan once the mode or the file changes, so it never sits beside inputs it was not made for", async () => {
+        expect.assertions(3);
+
+        render(renderPanel(createModeClient(["m1"])));
+        chooseMode("replace");
+        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([withEnd(messageRows("m1"))], "shard.ndjson")] } });
+        fireEvent.click(screen.getByTestId("ei-plan"));
+        await screen.findByTestId("ei-plan-result");
+
+        chooseMode("upsert");
+
+        expect(screen.queryByTestId("ei-plan-result")).toBeNull();
+
+        fireEvent.click(screen.getByTestId("ei-plan"));
+        await screen.findByTestId("ei-plan-result");
+        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([withEnd(messageRows("m2"))], "other.ndjson")] } });
+
+        expect(screen.queryByTestId("ei-plan-result")).toBeNull();
+        expect(screen.getByTestId("ei-mode")).toHaveProperty("value", "upsert");
+    });
+
+    it("words the upsert option and its confirmation for what upsert does: new _ids inserted, existing ones overwritten, nothing deleted", () => {
+        expect.assertions(2);
+
+        render(renderPanel(createModeClient([])));
+
+        expect(screen.getByRole("option", { name: /new _id values are inserted/u })).toBeInstanceOf(HTMLOptionElement);
+
+        chooseMode("upsert");
+        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([withEnd(messageRows("m1"))], "shard.ndjson")] } });
+        fireEvent.click(screen.getByTestId("ei-import"));
+
+        expect(screen.getByTestId("ei-import-confirm").textContent).not.toMatch(/delete/iu);
+    });
+
+    it("replace refuses rows that carry no _id, which the shard would write under new ids while the prune deleted the old ones", async () => {
+        expect.assertions(2);
+
+        const mock = createModeClient(["m1"]);
+
+        render(renderPanel(mock));
+        chooseMode("replace");
+        importText('{"table":"messages","doc":{"text":"no id"}}');
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toContain("carry an _id");
+        expect(importCalls(mock)).toHaveLength(0);
+    });
+
+    it("does not show a plan that finishes after the mode was changed", async () => {
+        expect.assertions(3);
+
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const mock = createMockClient({
+            query: async (reference): Promise<unknown> => {
+                if (reference === ADMIN_FUNCTIONS.exportShard) {
+                    await gate;
+
+                    return { rows: [{ doc: { _id: "m1", text: "m1" }, table: "messages" }] };
+                }
+
+                return reference === ADMIN_FUNCTIONS.listTables
+                    ? [{ name: "messages", rowCount: 1 }]
+                    : { conflicts: 0, deleted: 0, dryRun: true, errors: [], inserted: {}, replaced: 0 };
+            },
+        });
+
+        render(renderPanel(mock));
+        chooseMode("replace");
+        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([withEnd(messageRows("m1"))], "shard.ndjson")] } });
+        fireEvent.click(screen.getByTestId("ei-plan"));
+        chooseMode("upsert");
+        release();
+
+        await waitFor(() => {
+            expect(screen.getByTestId("ei-plan").hasAttribute("disabled")).toBe(false);
+        });
+
+        expect(screen.queryByTestId("ei-plan-result")).toBeNull();
+    });
+
+    it("require-empty refuses a file whose table already holds rows, and sends nothing", async () => {
+        expect.assertions(2);
+
+        const mock = createModeClient(["m1"]);
+
+        render(renderPanel(mock));
+        chooseMode("require-empty");
+        importText(messageRows("m2"));
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toContain("require-empty");
+        expect(importCalls(mock)).toHaveLength(0);
+    });
+
+    it("require-empty imports into a table that holds no rows", async () => {
+        expect.assertions(1);
+
+        const mock = createModeClient([]);
+
+        render(renderPanel(mock));
+        chooseMode("require-empty");
+        importText(messageRows("m1"));
+
+        const importResult = await screen.findByTestId("ei-import-result");
+
+        expect(importResult.textContent).toContain("Inserted 1");
+    });
+
+    it("shows the plan for a mode and writes nothing", async () => {
+        expect.assertions(3);
+
+        const mock = createModeClient(["m1", "m2"]);
+
+        render(renderPanel(mock));
+        chooseMode("replace");
+        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([withEnd(messageRows("m1", "m3"))], "shard.ndjson")] } });
+        fireEvent.click(screen.getByTestId("ei-plan"));
+
+        const plan = await screen.findByTestId("ei-plan-result");
+
+        expect(plan.textContent).toContain("messages: 2 in file, 2 stored");
+        expect(plan.textContent).toContain("1 to delete");
+        expect(importCalls(mock)).toHaveLength(0);
     });
 
     it("imports an NDJSON file and summarises the result", async () => {
@@ -269,7 +529,7 @@ describe("exportImportPanel", () => {
 
         render(renderPanel(mock));
 
-        fireEvent.click(screen.getByTestId("ei-replace"));
+        chooseMode("upsert");
         importText('{"table":"messages","doc":{"__id__":"m1","text":"changed"}}');
 
         const importResult = await screen.findByTestId("ei-import-result");
@@ -307,7 +567,7 @@ describe("exportImportPanel", () => {
 
         render(renderPanel(mock));
 
-        fireEvent.click(screen.getByTestId("ei-replace"));
+        chooseMode("upsert");
         importText('{"table":"messages","doc":{"__id__":"m1","text":"changed"}}\n{"table":"messages","doc":{"__id__":"m2","text":2}}');
 
         const error = await screen.findByTestId("ei-error");
@@ -322,7 +582,7 @@ describe("exportImportPanel", () => {
 
         render(renderPanel(mock));
 
-        fireEvent.click(screen.getByTestId("ei-replace"));
+        chooseMode("upsert");
         importText('{"table":"messages","doc":{"__id__":"m1","text":"changed"}}');
 
         const error = await screen.findByTestId("ei-error");
@@ -622,7 +882,7 @@ describe("exportImportPanel", () => {
 
         render(renderPanel(mock));
 
-        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new ChangingFile([text], "shard.ndjson")] } });
+        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new ChangingFile([withEnd(text)], "shard.ndjson")] } });
         fireEvent.click(screen.getByTestId("ei-import"));
         fireEvent.click(screen.getByTestId("ei-import-confirm"));
 
@@ -783,7 +1043,7 @@ describe("exportImportPanel", () => {
         fireEvent.click(screen.getByTestId("ei-import-confirm"));
 
         // The two-row result is the milestone: the first import's result read "Inserted 1".
-        await screen.findByText("Inserted 2, replaced 0, 0 conflicts, 0 errors.");
+        await screen.findByText("Inserted 2, replaced 0, deleted 0, 0 conflicts, 0 errors.");
 
         expect(importCalls(mock)).toHaveLength(2);
         expect(importCalls(mock)[1]?.rows).toStrictEqual([

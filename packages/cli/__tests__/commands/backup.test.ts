@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { exportEndLine } from "../../../../shared/export-end";
 import { runBackupCommand } from "../../src/commands/backup/handler";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import type { FetchLike } from "../../src/commands/run/handler";
@@ -42,12 +43,17 @@ const exportFetch =
         return { body: stringStream(ndjson), json: async () => undefined, ok: true, status: 200, text: async () => "" };
     };
 
-const NDJSON = `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n`;
+const NDJSON = `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${exportEndLine(1)}`;
 const FIXED_NOW = (): Date => new Date("2026-06-03T12:00:00.000Z");
 
 const capturingImportFetch =
-    (calls: string[]): StreamingFetchLike =>
+    (calls: string[], stored = exportEndLine(0)): StreamingFetchLike =>
     async (url) => {
+        // The restore reads the target's rows for the snapshot's tables before it writes; `stored` is what the target holds.
+        if (url.endsWith("/_lunora/admin/export")) {
+            return { body: stringStream(stored), json: async () => undefined, ok: true, status: 200, text: async () => "" };
+        }
+
         // The check before the import writes nothing, so it is not one of the calls the import made.
         const { searchParams } = new URL(url);
         const check = searchParams.get("dryRun") === "true";
@@ -61,7 +67,7 @@ const capturingImportFetch =
         return {
             body: null,
             json: async () => {
-                return { inserted: check ? {} : { users: 1 }, ...(check ? { dryRun: true } : {}), ...echo };
+                return { deleted: 0, inserted: check ? {} : { users: 1 }, ...(check ? { dryRun: true } : {}), ...echo };
             },
             ok: true,
             status: 200,
@@ -131,12 +137,12 @@ describe("lunora backup", () => {
         expect(readFileSync(join(directory, "manifest.json"), "utf8")).toBe(
             `[
   {
-    "bytes": 37,
+    "bytes": 59,
     "createdAt": "2026-06-03T12:00:00.000Z",
     "file": "lunora-backup-2026-06-03T12-00-00-000Z.ndjson",
     "id": "2026-06-03T12:00:00.000Z",
     "rows": 1,
-    "sha256": "84528e00c324faff7e650ef1fb502f3afef91ae32a542c2130ae415c242e1708",
+    "sha256": "29a300e1eaa2af3fcb2dfecd2fe33fac057d19ce8801cc0e2585535bcc29b4aa",
     "tables": "users"
   }
 ]
@@ -195,7 +201,78 @@ describe("lunora backup", () => {
         expect(importCalls[0]).toContain("/_lunora/admin/import");
     });
 
-    it("restore --replace imports in overwrite mode", async () => {
+    it("restore refuses by default when the snapshot's tables already hold rows, and writes nothing", async () => {
+        expect.assertions(3);
+
+        const { logger, logs } = capturingLogger();
+        const created = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+        const importCalls: string[] = [];
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: capturingImportFetch(importCalls, `${JSON.stringify({ doc: { _id: "live-1" }, table: "users" })}\n${exportEndLine(1)}`),
+            logger,
+            subcommand: "restore",
+            target: created.entry?.id,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(1);
+        expect(importCalls).toStrictEqual([]);
+        expect(logs.join("\n")).toMatch(/--mode require-empty, and the target already holds users \(1 rows\)/u);
+    });
+
+    it("restore under --format json refuses to prompt even on a TTY, so no prompt reaches the json stdout", async () => {
+        expect.assertions(2);
+
+        const { logger, logs } = capturingLogger();
+        const created = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+        const importCalls: string[] = [];
+        const tty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+
+        Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+
+        try {
+            const result = await runBackupCommand({
+                cwd: workDir,
+                fetchImpl: capturingImportFetch(importCalls, NDJSON),
+                format: "json",
+                logger,
+                mode: "upsert",
+                subcommand: "restore",
+                target: created.entry?.id,
+                token: "t",
+                url: "http://localhost:8787",
+            });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(logs.join("\n")).toContain("cannot prompt here");
+        } finally {
+            if (tty === undefined) {
+                delete (process.stdin as { isTTY?: boolean }).isTTY;
+            } else {
+                Object.defineProperty(process.stdin, "isTTY", tty);
+            }
+        }
+    });
+
+    it("restore --mode upsert imports in overwrite mode", async () => {
         expect.assertions(2);
 
         const { logger } = capturingLogger();
@@ -213,7 +290,7 @@ describe("lunora backup", () => {
             cwd: workDir,
             fetchImpl: capturingImportFetch(importCalls),
             logger,
-            replace: true,
+            mode: "upsert",
             subcommand: "restore",
             target: created.entry?.id,
             token: "t",
@@ -255,6 +332,38 @@ describe("lunora backup", () => {
 
         expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(importCalls).toHaveLength(0);
+    });
+
+    it("restore --dry-run --format json carries the per-table plan in its result document", async () => {
+        expect.assertions(3);
+
+        const { logger } = capturingLogger();
+        const created = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+        const importCalls: string[] = [];
+        const result = await runBackupCommand({
+            cwd: workDir,
+            dryRun: true,
+            fetchImpl: capturingImportFetch(importCalls, NDJSON),
+            format: "json",
+            logger,
+            mode: "upsert",
+            subcommand: "restore",
+            target: created.entry?.id,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(0);
+        expect(importCalls).toStrictEqual([]);
+        expect(result.data?.plan).toStrictEqual([{ add: 0, delete: 0, existing: 1, matched: 1, source: 1, table: "users", target: 1 }]);
     });
 
     it("restore proceeds with --prod when --yes confirms", async () => {

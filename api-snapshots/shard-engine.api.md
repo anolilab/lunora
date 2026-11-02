@@ -665,6 +665,7 @@ interface DatabaseWriterLike {
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
     delete: (table: string, id: string, options?: {
         hard?: boolean;
+        skipOnDelete?: boolean;
     }) => Promise<void>;
     deleteAll?: (tableName: string, options?: {
         chunkSize?: number;
@@ -1244,13 +1245,22 @@ interface ImportError {
 }
 ```
 
+### `ImportRow` (interface)
+
+```ts
+interface ImportRow extends ExportRow {
+    op?: string;
+}
+```
+
 ### `ImportShardAdminArgs` (interface)
 
 ```ts
 interface ImportShardAdminArgs {
+    deletes: boolean;
     dryRun: boolean;
     onConflict: ImportConflictMode;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 ```
@@ -1259,9 +1269,10 @@ interface ImportShardAdminArgs {
 
 ```ts
 interface ImportShardArgs {
+    deletes?: boolean;
     dryRun?: boolean;
     onConflict?: ImportConflictMode;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 ```
@@ -1271,6 +1282,7 @@ interface ImportShardArgs {
 ```ts
 interface ImportShardResult {
     conflicts: number;
+    deleted: number;
     errors: ImportError[];
     inserted: Record<string, number>;
     replaced: number;
@@ -1364,6 +1376,7 @@ interface LifecycleEvent {
 ```ts
 interface LiveSocketControlCall {
     action: unknown;
+    adminReauth?: true;
     callerId: string;
     connectionId: string;
     identity?: Record<string, unknown>;
@@ -2299,6 +2312,7 @@ interface RelayHost {
     deliverLiveLocal: (topic: string, key: string, frame: string) => number;
     deliverWhisperLocal: (topic: string, frame: string, exclude: undefined | ShardSocketLike) => number;
     doName: () => string | undefined;
+    dropIfLapsed: (ws: ShardSocketLike) => boolean;
     env: () => unknown;
     getWebSockets: () => ShardSocketLike[];
     liveControl: (control: LiveSocketControlCall) => Promise<Response>;
@@ -2357,7 +2371,7 @@ interface RelayPokeDelivery {
 
 ```ts
 interface RelayRoomEvent {
-    attachment: Pick<SocketAttachment, "connectionId" | "context" | "identity" | "ip" | "userId">;
+    attachment: Pick<SocketAttachment, "connectionId" | "context" | "expiresAt" | "identity" | "ip" | "revalidateAt" | "userId">;
     connectionId: string;
     data?: unknown;
     kind: "join" | "leave" | "message";
@@ -3004,6 +3018,7 @@ interface SocketAttachment {
     pageDeltas?: boolean;
     pendingSince?: number;
     refreshBatch?: boolean;
+    revalidateAt?: number;
     shapes?: Record<string, ShapeSubscriptionQuery>;
     socketFunction?: string;
     socketPath?: string;
@@ -3194,6 +3209,7 @@ interface SubscriptionEnvelope {
     };
     sinceCheckpoint?: number;
     sinceChunk?: number;
+    sinceClaims?: string;
     sinceEpoch?: string;
     token?: string;
     topic?: string;
@@ -3227,6 +3243,7 @@ interface SubscriptionInfo {
 interface SubscriptionQuery {
     args?: Record<string, unknown>;
     functionPath?: string;
+    sinceClaims?: string;
     sinceEpoch?: string;
     sinceSeq?: number;
     table?: string;

@@ -81,6 +81,13 @@ export interface ValidatorIR {
      * flag, because compiling it would silently skip the predicate.
      */
     unmodelledRefinement?: boolean;
+
+    /**
+     * `true` on a `v.object(...)` whose `shape` is not the whole validator: the
+     * argument is built at runtime, spreads something unreadable, or is absent. An
+     * empty `shape` then stands for "unknown", not "no properties".
+     */
+    unresolvedShape?: boolean;
     valueType?: ValidatorIR;
 }
 
@@ -372,12 +379,24 @@ export interface ExposeCacheIR {
  * tables with breaking drift, so a migration left at `""` covers nothing.
  */
 export interface MigrationIR {
+    /**
+     * The change this migration declares it accounts for, read from `covers: { … }` when every value is a literal. The drift gate
+     * clears a shard-mode flip, a table turned `.memory()` or a jurisdiction change only for a migration naming exactly that change.
+     */
+    covers?: { jurisdiction?: string; memory?: true; shardMode?: string; table?: string; ttl?: { after?: number; field: string } };
     /** Export binding name, used to reference the module member in generated imports. */
     exportName: string;
     /** Path relative to `<projectRoot>/lunora/` without extension, e.g. "migrations". */
     filePath: string;
     /** Stable migration id — the registry key and per-shard run-state key. */
     id: string;
+
+    /**
+     * `true` when `up` returns its document unchanged (`(document) => document`, the
+     * shape `lunora migrate create` scaffolds). Such a migration rewrites no row, so it
+     * cannot by itself account for a schema change on its table.
+     */
+    identity?: true;
     /** Table the migration iterates; `""` when not a static string literal. */
     table: string;
 }

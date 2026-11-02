@@ -915,6 +915,10 @@ interface WriteToolAnnotations extends ToolAnnotationsBase {
 
 ```ts
 interface X402ChargeSettings {
+    readonly facilitator: {
+        readonly headers?: Record<string, string>;
+        readonly url: string;
+    };
     readonly network: string;
     readonly [key: string]: unknown;
     readonly recipient: {

@@ -148,10 +148,12 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 // plane: the rows \`resolveTableSharding\` classifies as \`.global()\`
                 // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
-                // The importer above skips the write for a dry run, and
-                // overwrites an existing \`_id\` under \`onConflict: "replace"\`.
+                // The importer above skips the write for a dry run, overwrites an
+                // existing \`_id\` under \`onConflict: "replace"\`, and removes the row
+                // an \`op: "delete"\` row names.
                 options.importGlobalsSupportsDryRun = true;
                 options.importGlobalsSupportsReplace = true;
+                options.importGlobalsSupportsDelete = true;
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
                 // all, and every one of them fails SILENTLY when unset — export
@@ -199,6 +201,7 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 });
             options.importGlobalsSupportsDryRun = true;
             options.importGlobalsSupportsReplace = true;
+            options.importGlobalsSupportsDelete = true;
             options.exportGlobals = (request) => exportHyperdriveGlobalRows({ engine, exec: exec(), schema: hyperdriveSchema, tables: request.tables });
             options.syncGlobals = async (request) => {
                 const page = await readHyperdriveGlobalCdc(engine, exec(), request);

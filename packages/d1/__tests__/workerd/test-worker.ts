@@ -282,11 +282,59 @@ const importExplicitIds = async (database: D1Database): Promise<Record<string, u
     return { bodies: stored.results.map((row) => row.body), fresh, refusedInserts, replace, skip };
 };
 
+/**
+ * A replace restore against real D1: overwrite what the file carries, then prune the stored rows it lacks. The delete is a dry run
+ * first (which must touch nothing), then real (hard, counted), then repeated (an `_id` already gone is not an error).
+ */
+const importReplacePrune = async (database: D1Database): Promise<Record<string, unknown>> => {
+    await database.prepare(`DROP TABLE IF EXISTS prune`).run();
+
+    const schema: SchemaLike = { tables: { prune: { indexes: [], shape: { body: col("string") }, shardMode: { kind: "global" } } } };
+    const exec = d1CtxExec(database);
+    const db = createD1CtxDb({ exec, idGenerator: () => crypto.randomUUID(), schema });
+    const ids = async (): Promise<string[]> => {
+        const read = await database.prepare(`SELECT "id" FROM "prune" ORDER BY "id"`).all<{ id: string }>();
+
+        return read.results.map((row) => row.id);
+    };
+
+    await importGlobalRows(db, schema, {
+        exec,
+        rows: [
+            { doc: { _id: "a", body: "old" }, table: "prune" },
+            { doc: { _id: "b", body: "stale" }, table: "prune" },
+            { doc: { _id: "c", body: "stale" }, table: "prune" },
+        ],
+    });
+
+    const written = await importGlobalRows(db, schema, {
+        exec,
+        onConflict: "replace",
+        rows: [
+            { doc: { _id: "a", body: "new" }, table: "prune" },
+            { doc: { _id: "d", body: "added" }, table: "prune" },
+        ],
+    });
+    const deletes = [
+        { doc: { _id: "b" }, op: "delete" as const, table: "prune" },
+        { doc: { _id: "c" }, op: "delete" as const, table: "prune" },
+    ];
+    const dryRun = await importGlobalRows(db, schema, { dryRun: true, exec, rows: deletes });
+    const afterDryRun = await ids();
+    const pruned = await importGlobalRows(db, schema, { exec, rows: deletes });
+    const afterPrune = await ids();
+    const again = await importGlobalRows(db, schema, { exec, rows: deletes });
+    const bodies = await database.prepare(`SELECT "id", "body" FROM "prune" ORDER BY "id"`).all<{ body: string; id: string }>();
+
+    return { afterDryRun, afterPrune, again, bodies: bodies.results, dryRun, pruned, written };
+};
+
 const DATABASE_ROUTES: Record<string, ((database: D1Database) => Promise<unknown>) | undefined> = {
     "/cdc-retention": cdcRetention,
     "/cdc-rewind": cdcRewind,
     "/client-id-collision": clientIdCollision,
     "/import-explicit-ids": importExplicitIds,
+    "/import-replace-prune": importReplacePrune,
     "/patch-if-race": async (database) => patchIfRace(database, 20),
     "/unique-over-duplicates": uniqueOverDuplicates,
 };

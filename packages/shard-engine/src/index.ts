@@ -15,6 +15,7 @@ export type {
     ExportShardArgs,
     ImportConflictMode,
     ImportError,
+    ImportRow,
     ImportShardAdminArgs,
     ImportShardArgs,
     ImportShardResult,

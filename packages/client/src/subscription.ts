@@ -153,6 +153,13 @@ export interface SubscriptionState {
     serverBase: unknown;
 
     /**
+     * Fingerprint of the claims the value and cursor were read under, as the shard announced it; replayed
+     * as `sinceClaims` so the server resumes only when the socket's claims are still those. Absent when the
+     * shard announced none, which the server treats as a mismatch (a full snapshot).
+     */
+    serverClaims?: string;
+
+    /**
      * The `__cdc_log` high-watermark (`cursor`) the `lastValue` reflects,
      * captured from the last `data`/`delta`/`resume` frame. Persisted to the
      * durable read cache and replayed as `sinceSeq` on reconnect so the server

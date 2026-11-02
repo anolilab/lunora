@@ -12,7 +12,7 @@ export interface HarnessSocket {
     readyState: number;
     receive: (payload: unknown) => void;
     sent: string[];
-    triggerClose: () => void;
+    triggerClose: (event?: { code?: number; reason?: string }) => void;
     url: string;
 }
 
@@ -95,10 +95,10 @@ export const createSocketHarness = (): { sockets: HarnessSocket[]; WebSocket: ty
             this.sent.push(data);
         }
 
-        public triggerClose(): void {
+        public triggerClose(event?: { code?: number; reason?: string }): void {
             this.readyState = 3;
-            this.onclose?.();
-            this.dispatch("close");
+            this.onclose?.(event);
+            this.dispatch("close", event);
         }
 
         private dispatch(type: string, event?: unknown): void {

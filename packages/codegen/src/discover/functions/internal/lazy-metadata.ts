@@ -3,6 +3,7 @@ import type { CallExpression, Node as AstNode, ObjectLiteralExpression } from "t
 import { Node } from "ts-morph";
 
 import type { ExposeCacheIR, FunctionIR } from "../../../ir";
+import { literalOf, NOT_LITERAL } from "../../../static-literal";
 import staticBuilderChain from "./static-builder-chain";
 
 const unreadable = (node: AstNode, detail: string): never => {
@@ -125,15 +126,37 @@ const x402Literal = (call: CallExpression): NonNullable<FunctionIR["x402"]> => {
     return { price: price.getLiteralValue() };
 };
 
+/**
+ * The chain's merged `.meta(...)` declaration, for `procedureMeta(fn)` on the
+ * unloaded stub. Unlike the gating facts it may be partial: a declaration that is
+ * not a literal becomes `"unloaded"`, which `procedureMeta` refuses to read past
+ * rather than reporting no meta. Steps run terminal-first, so an earlier call
+ * must not override a later one — the runtime's merge order.
+ */
+const metaLiteral = (calls: ReadonlyArray<CallExpression>): NonNullable<FunctionIR["meta"]> => {
+    const values = calls.map((call) => {
+        const argument = call.getArguments()[0];
+
+        return argument === undefined ? NOT_LITERAL : literalOf(argument);
+    });
+    const readable = values.every((value) => value !== null && typeof value === "object" && !Array.isArray(value));
+    // eslint-disable-next-line unicorn/no-array-reduce -- a right-to-left merge reads plainest as a reduce
+    const merged = values.reduce<Record<string, unknown>>((accumulated, value) => {
+        return { ...(value as Record<string, unknown>), ...accumulated };
+    }, {});
+
+    return readable ? merged : "unloaded";
+};
+
 /** These facts gate requests before the module loads, so partial extraction is unsafe. */
-const lazyMetadataFromBuilderChain = (receiver: AstNode): Pick<FunctionIR, "expose" | "x402" | "visibility"> => {
+const lazyMetadataFromBuilderChain = (receiver: AstNode): Pick<FunctionIR, "expose" | "meta" | "x402" | "visibility"> => {
     const { factory, steps } = staticBuilderChain(receiver);
 
     if (!factory) {
         return unreadable(receiver, "metadata from a resolvable Lunora factory root");
     }
 
-    const metadata: Pick<FunctionIR, "expose" | "x402" | "visibility"> = { visibility: factory.startsWith("internal") ? "internal" : "public" };
+    const metadata: Pick<FunctionIR, "expose" | "meta" | "x402" | "visibility"> = { visibility: factory.startsWith("internal") ? "internal" : "public" };
 
     for (const { call, name } of steps) {
         if (!["expose", "input", "meta", "output", "use", "x402"].includes(name)) {
@@ -149,7 +172,9 @@ const lazyMetadataFromBuilderChain = (receiver: AstNode): Pick<FunctionIR, "expo
         }
     }
 
-    return metadata;
+    const metaCalls = steps.filter((step) => step.name === "meta").map((step) => step.call);
+
+    return metaCalls.length === 0 ? metadata : { ...metadata, meta: metaLiteral(metaCalls) };
 };
 
 export default lazyMetadataFromBuilderChain;

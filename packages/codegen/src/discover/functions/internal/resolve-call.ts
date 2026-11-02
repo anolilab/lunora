@@ -9,6 +9,9 @@ import { bindingKeyName } from "../../ast";
  */
 const RE_EXPORT_RESOLVE_LIMIT = 8;
 
+/** Where a re-export's resolution ended: the registration call, or the declaration it could not see past. */
+type Resolution = { call: CallExpression } | { deadEnd: Node };
+
 /**
  * Follow a non-call initializer back to the `query/mutation/action({...})` call
  * that produced it, so a **re-exported** registered function is discovered the
@@ -22,8 +25,9 @@ const RE_EXPORT_RESOLVE_LIMIT = 8;
  * destructured binding → the matching property on the right-hand side — until it
  * reaches a `CallExpression` (then `discoverFromCall` classifies it) or
  * runs out of resolvable steps (then it bails to `undefined`, i.e. skip). A
- * reference into a published component whose value lives only in a `.d.ts` (no
- * call literal) bails cleanly — same as before this resolver existed.
+ * reference into a published component whose value lives only in a `.d.ts` has
+ * no call literal to reach; those are read off their type instead (the
+ * published-bindings lookup below) rather than dropping out of `api.ts`.
  *
  * Guaranteed shapes are the two documented re-export forms —
  * `export const check = component.functions.check` (property access) and
@@ -31,21 +35,21 @@ const RE_EXPORT_RESOLVE_LIMIT = 8;
  * relays (e.g. re-bundling into a fresh object first) may not resolve, but they
  * always **fail safe**: the function is skipped, never mis-attributed.
  */
-// `resolveExpressionToCall` and `resolveDeclarationToCall` are mutually
-// recursive, so one reference is necessarily forward whatever the order — the
-// single disable below covers it (the project's `func-style` rule rules out
-// hoisted `function` declarations that would otherwise avoid it).
-const resolveExpressionToCall = (node: Node, depth = 0): CallExpression | undefined => {
+// `resolveExpression` and `resolveDeclaration` are mutually recursive, so one
+// reference is necessarily forward whatever the order — the single disable
+// below covers it (the project's `func-style` rule rules out hoisted `function`
+// declarations that would otherwise avoid it).
+const resolveExpression = (node: Node, depth = 0): Resolution | undefined => {
     if (depth > RE_EXPORT_RESOLVE_LIMIT) {
         return undefined;
     }
 
     if (Node.isCallExpression(node)) {
-        return node;
+        return { call: node };
     }
 
     if (Node.isParenthesizedExpression(node) || Node.isAsExpression(node) || Node.isSatisfiesExpression(node) || Node.isNonNullExpression(node)) {
-        return resolveExpressionToCall(node.getExpression(), depth + 1);
+        return resolveExpression(node.getExpression(), depth + 1);
     }
 
     if (!Node.isIdentifier(node) && !Node.isPropertyAccessExpression(node)) {
@@ -54,16 +58,17 @@ const resolveExpressionToCall = (node: Node, depth = 0): CallExpression | undefi
 
     const declaration = node.getSymbol()?.getValueDeclaration();
 
-    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion; resolveDeclarationToCall is defined just below
-    return declaration ? resolveDeclarationToCall(declaration, depth + 1) : undefined;
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion; resolveDeclaration is defined just below
+    return declaration ? resolveDeclaration(declaration, depth + 1) : undefined;
 };
 
-/** Continue {@link resolveExpressionToCall} from the declaration a symbol resolved to. */
-const resolveDeclarationToCall = (declaration: Node, depth: number): CallExpression | undefined => {
+/** Continue {@link resolveExpression} from the declaration a symbol resolved to. */
+const resolveDeclaration = (declaration: Node, depth: number): Resolution | undefined => {
     if (Node.isVariableDeclaration(declaration) || Node.isPropertyAssignment(declaration)) {
         const initializer = declaration.getInitializer();
 
-        return initializer ? resolveExpressionToCall(initializer, depth) : undefined;
+        // No initializer is an ambient `declare const x: T` — a value only its type describes.
+        return initializer ? resolveExpression(initializer, depth) : { deadEnd: declaration };
     }
 
     if (Node.isShorthandPropertyAssignment(declaration)) {
@@ -78,7 +83,7 @@ const resolveDeclarationToCall = (declaration: Node, depth: number): CallExpress
         // infinite recursion.
         const value = declaration.getValueSymbol()?.getValueDeclaration();
 
-        return value ? resolveDeclarationToCall(value, depth + 1) : undefined;
+        return value ? resolveDeclaration(value, depth + 1) : undefined;
     }
 
     if (Node.isBindingElement(declaration)) {
@@ -89,10 +94,23 @@ const resolveDeclarationToCall = (declaration: Node, depth: number): CallExpress
         const rightHandSide = variableDeclaration?.getInitializer();
         const propertyDeclaration = rightHandSide?.getType().getProperty(propertyName)?.getValueDeclaration();
 
-        return propertyDeclaration ? resolveDeclarationToCall(propertyDeclaration, depth + 1) : undefined;
+        return propertyDeclaration ? resolveDeclaration(propertyDeclaration, depth + 1) : undefined;
     }
 
-    return undefined;
+    return { deadEnd: declaration };
+};
+
+const resolveExpressionToCall = (node: Node): CallExpression | undefined => {
+    const resolution = resolveExpression(node);
+
+    return resolution !== undefined && "call" in resolution ? resolution.call : undefined;
+};
+
+/** Whether `node` resolves to a value that exists in this program only as a declaration-file type. */
+const resolvesIntoDeclarationFile = (node: Node): boolean => {
+    const resolution = resolveExpression(node);
+
+    return resolution !== undefined && "deadEnd" in resolution && resolution.deadEnd.getSourceFile().isDeclarationFile();
 };
 
 /**
@@ -130,4 +148,28 @@ const exportCallsOfDeclaration = (declaration: VariableDeclaration, isExported: 
     return call ? [[declaration.getName(), call]] : [];
 };
 
-export { exportCallsOfDeclaration, resolveExpressionToCall };
+/**
+ * The exported names of a variable declaration whose value lives in a published
+ * package's `.d.ts` — `export const { heartbeat } = presence.functions` over a
+ * component from `node_modules`. {@link exportCallsOfDeclaration} cannot follow
+ * these to a call; the caller reads them off their type instead. Yields each
+ * export name with the name node its type is read at.
+ */
+const exportPublishedBindingsOfDeclaration = (declaration: VariableDeclaration, isExported: (localName: string) => boolean): [string, Node][] => {
+    const nameNode = declaration.getNameNode();
+
+    if (Node.isObjectBindingPattern(nameNode)) {
+        return nameNode
+            .getElements()
+            .filter((element) => isExported(element.getName()) && resolvesIntoDeclarationFile(element.getNameNode()))
+            .map((element) => [element.getName(), element.getNameNode()]);
+    }
+
+    const initializer = declaration.getInitializer();
+
+    return isExported(declaration.getName()) && initializer !== undefined && resolvesIntoDeclarationFile(initializer)
+        ? [[declaration.getName(), nameNode]]
+        : [];
+};
+
+export { exportCallsOfDeclaration, exportPublishedBindingsOfDeclaration, resolveExpressionToCall };

@@ -354,6 +354,7 @@ class AppBuilder<Env extends object> {
                 });
             options.importGlobalsSupportsDryRun = true;
             options.importGlobalsSupportsReplace = true;
+            options.importGlobalsSupportsDelete = true;
             options.exportGlobals = (request) => exportHyperdriveGlobalRows({ engine, exec: exec(), schema: hyperdriveSchema, tables: request.tables });
             options.syncGlobals = async (request) => {
                 const page = await readHyperdriveGlobalCdc(engine, exec(), request);
