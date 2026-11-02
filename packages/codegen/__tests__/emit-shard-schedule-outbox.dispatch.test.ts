@@ -592,6 +592,26 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         expect(harness.cancelled).toStrictEqual([id]);
     });
 
+    it("tells the operator a dropped job may already have run when the scheduler held nothing under its id", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+
+        harness.setReachable(true);
+        await harness.drop(id);
+
+        // The scheduler answered "not found": never accepted, or accepted with the answer lost and already run.
+        expect(harness.outbox()).toStrictEqual([]);
+        expect(harness.logs("scheduler:outbox")).toStrictEqual([{ level: "warn", message: expect.stringContaining("the job may already have run") }]);
+        expect(harness.audit().at(-1)).toStrictEqual({ detail: JSON.stringify({ outcome: "applied", schedulerHeld: false }), op: "dropOutboxEntry" });
+    });
+
     it("stops handing an entry over when the scheduler cannot be asked to cancel it", async () => {
         expect.assertions(5);
 
@@ -1007,6 +1027,48 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
 
         expect(harness.cancelled.at(-1)).toBe("dup-id");
         expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 0, id: "dup-id" }]);
+    });
+
+    it("does not let a hand-off that lands mid-drop cancel or delete a replacement recorded under the same id", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        const handOff = harness.hold();
+
+        harness.setReachable(true);
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await handOff.entered;
+
+        // The drop's own cancel is held, so the drop is still in flight when a new mutation records the
+        // same id again. Its hand-offs wait for the drop.
+        const dropCancel = harness.holdCancel();
+        const drop = harness.drop("dup-id");
+
+        await dropCancel.entered;
+
+        const replacement = harness.shard.handleRpc("outbox:sameId", {});
+
+        // The old hand-off lands now, against a row that is no longer the one it was made for.
+        handOff.release();
+        await attempt;
+
+        expect(harness.cancelled).toStrictEqual([]);
+        expect(harness.outbox().map((row) => row.id)).toStrictEqual(["dup-id"]);
+
+        dropCancel.release();
+        await drop;
+        await replacement;
+
+        // Only the drop's own cancel went out; the scheduler still holds the job the replacement asked for.
+        expect(harness.cancelled).toStrictEqual(["dup-id"]);
     });
 
     it("reports a drop as failed when an attempt that landed during it could not cancel the job", async () => {

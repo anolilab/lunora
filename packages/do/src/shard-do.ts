@@ -12248,9 +12248,10 @@ abstract class ShardDO {
 
         try {
             let cancelError: Error | undefined;
+            let held = true;
 
             try {
-                await cancelScheduleOutboxJob(this.scheduleOutboxScheduler(), id);
+                held = await cancelScheduleOutboxJob(this.scheduleOutboxScheduler(), id);
             } catch (error) {
                 cancelError = error instanceof Error ? error : new Error(String(error));
             }
@@ -12305,7 +12306,19 @@ abstract class ShardDO {
                 this.parkLiveScheduleOutboxEntry(sql, id);
             }
 
-            this.recordAudit("dropOutboxEntry", { id, detail: { outcome: "applied" } });
+            // "Not found" is the usual answer for a job the scheduler never accepted, and the same answer
+            // it gives once an accepted job has run: an earlier hand-off whose accept was lost on the way
+            // back. The drop cannot tell the two apart, so the operator is told the job may have run.
+            if (!held) {
+                this.logs.push({
+                    functionPath: "scheduler:outbox",
+                    level: "warn",
+                    message: `deferred schedule ${id} was dropped, but the scheduler held no job under that id. Usually it was never accepted; if an earlier hand-off was accepted and only its answer was lost, the job may already have run.`,
+                    timestamp: Date.now(),
+                });
+            }
+
+            this.recordAudit("dropOutboxEntry", { id, detail: held ? { outcome: "applied" } : { outcome: "applied", schedulerHeld: false } });
 
             return adminResponse({ dropped: true });
         } finally {
@@ -16011,7 +16024,7 @@ abstract class ShardDO {
                 { ...envelope.options, id: entry.id } as never,
             );
 
-            await this.settleScheduleOutboxHandOff(sql, scheduler, entry.id, this.wasScheduleOutboxDropped(entry.id, attempt), true, trace);
+            await this.settleScheduleOutboxHandOff(sql, scheduler, entry.id, attempt.version, this.wasScheduleOutboxDropped(entry.id, attempt), true, trace);
         } catch (error) {
             await this.settleFailedScheduleOutboxAttempt(sql, scheduler, { attempt, attempts, envelope, error, forever, id: entry.id }, trace);
         } finally {
@@ -16077,7 +16090,7 @@ abstract class ShardDO {
         } catch (error) {
             try {
                 if (this.wasScheduleOutboxDropped(id, attempt)) {
-                    await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, true, false);
+                    await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, attempt.version, true, false);
                 }
             } catch {
                 // The original failure is the one to report; the row stays for the retry loop.
@@ -16089,7 +16102,7 @@ abstract class ShardDO {
         }
 
         try {
-            await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, this.wasScheduleOutboxDropped(id, attempt), true);
+            await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, attempt.version, this.wasScheduleOutboxDropped(id, attempt), true);
         } catch {
             // The scheduler accepted the job and the mutation committed. A bookkeeping failure here
             // (a storage hiccup, a stub handle) must not surface as a failed mutation: the row that
@@ -16177,7 +16190,7 @@ abstract class ShardDO {
         // dispatch landed and only the bookkeeping was lost. Custody ends the
         // same way an acceptance ends it.
         if (isLunoraError(error) && error.code === "DUPLICATE_SCHEDULE_ID") {
-            await this.settleScheduleOutboxHandOff(sql, scheduler, id, this.wasScheduleOutboxDropped(id, attempt), true, trace);
+            await this.settleScheduleOutboxHandOff(sql, scheduler, id, attempt.version, this.wasScheduleOutboxDropped(id, attempt), true, trace);
 
             return;
         }
@@ -16186,7 +16199,7 @@ abstract class ShardDO {
         // The accept may have been lost on the way back, so the job can still exist: cancel it, and
         // keep the row (parked) if that cannot be confirmed.
         if (this.wasScheduleOutboxDropped(id, attempt)) {
-            await this.settleScheduleOutboxHandOff(sql, scheduler, id, true, false, trace);
+            await this.settleScheduleOutboxHandOff(sql, scheduler, id, attempt.version, true, false, trace);
 
             return;
         }
@@ -16222,6 +16235,7 @@ abstract class ShardDO {
         sql: SqlExec,
         scheduler: SchedulerLike | undefined,
         id: string,
+        version: string | undefined,
         dropped: boolean,
         landed: boolean,
         trace?: TraceRefLike,
@@ -16232,13 +16246,22 @@ abstract class ShardDO {
             return;
         }
 
+        // `version` is the row this attempt was made for. A row recorded since under the same id is a
+        // newer request the drop does not cover, and the retry loop's only copy of that call: it is
+        // neither deleted nor parked, and with an id-only cancel the job the scheduler holds may already
+        // be its, so this hand-off does not cancel either. An absent row is not a replacement.
+        const replaced = (): boolean => {
+            const current = readScheduleOutboxState(sql, id)?.version;
+
+            return current !== undefined && current !== version;
+        };
+
+        if (replaced()) {
+            return;
+        }
+
         // The row goes only once the cancel is confirmed. If it cannot be, the entry stays
         // (parked, so it is never handed over again) and a later drop can finish the cancel.
-        // A call recorded under the same id while the cancel awaits is a newer row the drop does
-        // not cover: it is the retry loop's only copy of that call, so it is neither deleted nor parked.
-        const version = readScheduleOutboxState(sql, id)?.version;
-        const unchanged = (): boolean => readScheduleOutboxState(sql, id)?.version === version;
-
         try {
             const held = await cancelScheduleOutboxJob(scheduler, id);
 
@@ -16249,11 +16272,11 @@ abstract class ShardDO {
                 throw new Error("the scheduler no longer holds the job (it already ran or ended), so the drop could not stop it");
             }
 
-            if (unchanged()) {
+            if (!replaced()) {
                 forgetScheduleOutbox(sql, id);
             }
         } catch (error) {
-            if (unchanged()) {
+            if (!replaced()) {
                 this.parkLiveScheduleOutboxEntry(sql, id);
             }
 
