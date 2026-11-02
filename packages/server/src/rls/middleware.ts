@@ -103,6 +103,8 @@ interface PatchWriteOptions {
  */
 interface QueryArgs {
     baseWhere?: WhereInput;
+    /** Read the authoritative copy, not a replica; the RLS wrapper forwards it unchanged (see `@lunora/do`'s `QueryArgs`). */
+    consistency?: "primary";
     cursor?: null | string;
 
     /**

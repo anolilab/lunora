@@ -1741,6 +1741,7 @@ const QUEUE_TABLE = "__lunora_queue_messages";
 ```ts
 interface QueryArgs {
     baseWhere?: WhereInput;
+    consistency?: "primary";
     cursor?: null | string;
     includeDeleted?: boolean;
     limit?: number;

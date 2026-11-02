@@ -184,6 +184,7 @@ interface SqlCtxExec {
         params: ReadonlyArray<unknown>;
         sql: string;
     }>) => Promise<void>;
+    primary?: SqlCtxExec;
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<SqlRunResult | void>;
     transaction?: <T>(work: (tx: SqlCtxExec) => Promise<T>) => Promise<T>;
 }

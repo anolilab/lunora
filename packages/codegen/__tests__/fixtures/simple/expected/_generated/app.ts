@@ -551,13 +551,12 @@ class AppBuilder<Env extends object> {
  * deployed; the dashboard's own metric is per-database and can't name the query.
  * The emit is best-effort — instrumentation must never fail a served query.
  */
-const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
+const buildSessionExec = (database: D1DatabaseLike, constraint: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
     // Real D1 always exposes `withSession`; guarded the same way as `batch`
     // below so a hand-rolled test double that omits it keeps working via
-    // `prepare()` straight on the raw binding — today's behaviour. With no
-    // inbound bookmark, `"first-unconstrained"` is the documented no-op
-    // equivalent (lowest latency, may read any replica) — see `D1Client.withSession`.
-    const session = typeof database.withSession === "function" ? database.withSession(bookmark ?? "first-unconstrained") : undefined;
+    // `prepare()` straight on the raw binding — today's behaviour. `constraint`
+    // is the Sessions API constraint the session opens with (see `buildExec`).
+    const session = typeof database.withSession === "function" ? database.withSession(constraint) : undefined;
     const target = session ?? database;
     const batchFn = target.batch;
     const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
@@ -636,6 +635,23 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
             onBookmark?.(session?.getBookmark() ?? undefined);
         },
     });
+};
+
+/**
+ * The replica exec reads at the caller's bookmark, or `"first-unconstrained"` (lowest latency,
+ * any replica) without one. `primary` is a `"first-primary"` session for a read that must see
+ * every committed write, such as a policy check on a write path. It reports no bookmark: the
+ * sink keeps the last value it is given, and a later replica read reports an older one, which
+ * would move the client's bookmark backwards.
+ */
+const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
+    const replica = buildSessionExec(database, bookmark ?? "first-unconstrained", onBookmark);
+
+    if (typeof database.withSession !== "function") {
+        return replica;
+    }
+
+    return { ...replica, primary: buildSessionExec(database, "first-primary") };
 };
 
 /** Introspect `.global()` (D1-backed) tables for the studio's global data browser. */

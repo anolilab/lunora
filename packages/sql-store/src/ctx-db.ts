@@ -3492,6 +3492,21 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
     const relationWrites = describeRelationWrites(schema);
 
+    // A `consistency: "primary"` read runs on a second ctx-db built over the exec's primary
+    // session, so the whole read (relation loads included) sees every committed write, not just
+    // its top-level rows. The primary-built ctx-db has no `primary` of its own, so this does not
+    // recurse. It shares `provisionScope`, so the DDL sweep is not repeated.
+    let primaryWriter: DatabaseWriterLike | undefined;
+    const primaryReads = (): DatabaseWriterLike | undefined => {
+        if (options.exec.primary === undefined) {
+            return undefined;
+        }
+
+        primaryWriter ??= createSqlCtxDb({ ...options, exec: options.exec.primary });
+
+        return primaryWriter;
+    };
+
     const writer: DatabaseWriterLike = {
         relationWrites,
 
@@ -3811,6 +3826,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         },
 
         async findFirst(tableName, args = {}) {
+            if (args.consistency === "primary") {
+                const primary = primaryReads();
+
+                if (primary !== undefined) {
+                    return primary.findFirst(tableName, args);
+                }
+            }
+
             const result = await writer.findMany(tableName, { ...args, limit: 1 });
 
             // eslint-disable-next-line unicorn/no-null -- findFirst's public return is `doc | null`; no match returns null.
@@ -3828,6 +3851,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         },
 
         async findMany(tableName, args = {}) {
+            if (args.consistency === "primary") {
+                const primary = primaryReads();
+
+                if (primary !== undefined) {
+                    return primary.findMany(tableName, args);
+                }
+            }
+
             const definition = schema.tables[tableName];
 
             if (!definition) {

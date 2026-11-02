@@ -192,6 +192,8 @@ export type WhereOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM
 
 /** {@link QueryArgs} with the relation-aware {@link WhereOf} `where` typing. */
 export interface QueryArgsOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> {
+    /** Read the authoritative copy, not a replica. Only a `.global()` D1 table can lag; shard-local reads are already authoritative. */
+    consistency?: "primary";
     cursor?: null | string;
 
     /**

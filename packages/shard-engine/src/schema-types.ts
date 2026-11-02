@@ -317,6 +317,14 @@ export type OrderByInput = Record<string, SortDirection | { nulls: NullPlacement
 
 export interface QueryArgs {
     baseWhere?: WhereInput;
+
+    /**
+     * Read the authoritative copy, not a replica. A `.global()` table on D1 otherwise reads
+     * from whichever replica the session can reach, so a row committed a moment ago may be
+     * missing; a policy check on a write path needs this to see the lock it must refuse on.
+     * Shard-local tables are already authoritative, so there it changes nothing.
+     */
+    consistency?: "primary";
     cursor?: null | string;
 
     includeDeleted?: boolean;
