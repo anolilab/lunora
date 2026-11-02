@@ -1,3 +1,18 @@
+## @lunora/shard-engine [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.181...@lunora/shard-engine@1.0.0-alpha.182) (2026-11-02)
+
+### Features
+
+* **scheduler:** add retry.forever and an outbox admin surface ([#1378](https://github.com/anolilab/lunora/issues/1378)) ([b83a9ea](https://github.com/anolilab/lunora/commit/b83a9eacccb29b90981f4b55c30066ef4636e2a2))
+* **shard-engine,do:** read-byte cap, near-limit and unawaited-work warnings, scheduler lag ([#1398](https://github.com/anolilab/lunora/issues/1398)) ([19a42b8](https://github.com/anolilab/lunora/commit/19a42b8c9adf9ecf99b85eab27ceb954a2310687))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+* **@lunora/platform:** upgraded to 1.0.0-alpha.78
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.148
+* **@lunora/values:** upgraded to 1.0.0-alpha.92
+
 ## @lunora/shard-engine [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.180...@lunora/shard-engine@1.0.0-alpha.181) (2026-11-02)
 
 

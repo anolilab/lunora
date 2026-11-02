@@ -1,3 +1,18 @@
+## @lunora/client [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.279...@lunora/client@1.0.0-alpha.280) (2026-11-02)
+
+### Features
+
+* **scheduler:** add retry.forever and an outbox admin surface ([#1378](https://github.com/anolilab/lunora/issues/1378)) ([b83a9ea](https://github.com/anolilab/lunora/commit/b83a9eacccb29b90981f4b55c30066ef4636e2a2))
+* **shard-engine,do:** read-byte cap, near-limit and unawaited-work warnings, scheduler lag ([#1398](https://github.com/anolilab/lunora/issues/1398)) ([19a42b8](https://github.com/anolilab/lunora/commit/19a42b8c9adf9ecf99b85eab27ceb954a2310687))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+* **@lunora/do:** upgraded to 1.0.0-alpha.275
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.270
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.182
+
 ## @lunora/client [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.278...@lunora/client@1.0.0-alpha.279) (2026-11-02)
 
 ### ⚠ BREAKING CHANGES

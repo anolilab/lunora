@@ -1,3 +1,29 @@
+## @lunora/codegen [1.0.0-alpha.387](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.386...@lunora/codegen@1.0.0-alpha.387) (2026-11-02)
+
+### Features
+
+* **scheduler:** add retry.forever and an outbox admin surface ([#1378](https://github.com/anolilab/lunora/issues/1378)) ([b83a9ea](https://github.com/anolilab/lunora/commit/b83a9eacccb29b90981f4b55c30066ef4636e2a2))
+* **shard-engine,do:** read-byte cap, near-limit and unawaited-work warnings, scheduler lag ([#1398](https://github.com/anolilab/lunora/issues/1398)) ([19a42b8](https://github.com/anolilab/lunora/commit/19a42b8c9adf9ecf99b85eab27ceb954a2310687))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.282
+* **@lunora/agent:** upgraded to 1.0.0-alpha.274
+* **@lunora/container:** upgraded to 1.0.0-alpha.106
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+* **@lunora/platform:** upgraded to 1.0.0-alpha.78
+* **@lunora/queue:** upgraded to 1.0.0-alpha.140
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.165
+* **@lunora/values:** upgraded to 1.0.0-alpha.92
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.108
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.148
+* **@lunora/client:** upgraded to 1.0.0-alpha.280
+* **@lunora/do:** upgraded to 1.0.0-alpha.275
+* **@lunora/payment:** upgraded to 1.0.0-alpha.265
+* **@lunora/server:** upgraded to 1.0.0-alpha.263
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.182
+
 ## @lunora/codegen [1.0.0-alpha.386](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.385...@lunora/codegen@1.0.0-alpha.386) (2026-11-02)
 
 ### Bug Fixes

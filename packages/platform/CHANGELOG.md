@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.77...@lunora/platform@1.0.0-alpha.78) (2026-11-02)
+
+### Features
+
+* **scheduler:** add retry.forever and an outbox admin surface ([#1378](https://github.com/anolilab/lunora/issues/1378)) ([b83a9ea](https://github.com/anolilab/lunora/commit/b83a9eacccb29b90981f4b55c30066ef4636e2a2))
+
 ## @lunora/platform [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.76...@lunora/platform@1.0.0-alpha.77) (2026-10-31)
 
 ### ⚠ BREAKING CHANGES

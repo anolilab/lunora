@@ -1,3 +1,15 @@
+## @lunora/queue [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.139...@lunora/queue@1.0.0-alpha.140) (2026-11-02)
+
+### Features
+
+* **shard-engine,do:** read-byte cap, near-limit and unawaited-work warnings, scheduler lag ([#1398](https://github.com/anolilab/lunora/issues/1398)) ([19a42b8](https://github.com/anolilab/lunora/commit/19a42b8c9adf9ecf99b85eab27ceb954a2310687))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+* **@lunora/platform:** upgraded to 1.0.0-alpha.78
+
 ## @lunora/queue [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.138...@lunora/queue@1.0.0-alpha.139) (2026-11-02)
 
 

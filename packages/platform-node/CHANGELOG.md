@@ -1,3 +1,25 @@
+## @lunora/platform-node [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.210...@lunora/platform-node@1.0.0-alpha.211) (2026-11-02)
+
+### Features
+
+* **scheduler:** add retry.forever and an outbox admin surface ([#1378](https://github.com/anolilab/lunora/issues/1378)) ([b83a9ea](https://github.com/anolilab/lunora/commit/b83a9eacccb29b90981f4b55c30066ef4636e2a2))
+* **shard-engine,do:** read-byte cap, near-limit and unawaited-work warnings, scheduler lag ([#1398](https://github.com/anolilab/lunora/issues/1398)) ([19a42b8](https://github.com/anolilab/lunora/commit/19a42b8c9adf9ecf99b85eab27ceb954a2310687))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.229
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+* **@lunora/platform:** upgraded to 1.0.0-alpha.78
+* **@lunora/queue:** upgraded to 1.0.0-alpha.140
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.270
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.230
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.108
+* **@lunora/do:** upgraded to 1.0.0-alpha.275
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.120
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.182
+* **@lunora/storage:** upgraded to 1.0.0-alpha.168
+
 ## @lunora/platform-node [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.209...@lunora/platform-node@1.0.0-alpha.210) (2026-11-02)
 
 
