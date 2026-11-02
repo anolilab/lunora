@@ -373,7 +373,7 @@ describe("startCodegenWatch", () => {
     });
 
     it("regenerates when a lunora.config beside the Lunora folder changes, since codegen reads its settings from it", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-config-"));
 
@@ -394,14 +394,61 @@ describe("startCodegenWatch", () => {
         try {
             await handle.ready;
 
-            // Let the folder watch arm first: a write that lands in the first moments after `watch()` can be missed.
-            await new Promise((resolve) => {
-                setTimeout(resolve, 500);
-            });
-            writeFileSync(join(workdir, "lunora.config.ts"), "export default { codegen: { lazyFunctions: true } };\n", "utf8");
+            // The config folder's watch is registered with its listener. The listener is the observable point at which a save is
+            // reported, so the test drives it directly rather than racing a real folder watch.
+            const configListener = vi.mocked(watch).mock.calls.find((call) => call[0] === workdir && call.length === 2)?.[1] as
+                ((event: string, filename: string) => void) | undefined;
+
+            expect(configListener).toBeDefined();
+
+            configListener?.("rename", "lunora.config.ts");
             await runs.reached(2);
 
             expect(vi.mocked(runCodegen).mock.calls.length).toBeGreaterThanOrEqual(2);
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    it("says so, and keeps the Lunora folder watch, when a config folder cannot be watched", async () => {
+        expect.assertions(3);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-config-fail-"));
+
+        writeFileSync(join(workdir, "package.json"), "{}", "utf8");
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "schema.ts"), "", "utf8");
+
+        const runs = runCounter();
+        vi.mocked(runCodegen).mockImplementation(() => {
+            runs.report();
+
+            return { platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>;
+        });
+
+        // Only the config folder's watch (two arguments) fails; the Lunora folder's recursive watch still starts.
+        const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+        vi.mocked(watch).mockImplementation(((path: string, ...rest: unknown[]) => {
+            if (path === workdir && rest.length === 1) {
+                throw new Error("EPERM: operation not permitted");
+            }
+
+            return (actual.watch as (...args: unknown[]) => unknown)(path, ...rest);
+        }) as typeof watch);
+
+        const { logger, warns } = silentLogger();
+        const handle = startCodegenWatch({ debounceMs: 0, logger, lunoraDirectory: "lunora", projectRoot: workdir });
+
+        try {
+            await handle.ready;
+
+            expect(warns.some((warning) => warning.includes(`could not watch ${workdir}`))).toBe(true);
+            expect(handle.watchAvailable).toBe(true);
+
+            await runs.reached(1);
+
+            expect(vi.mocked(runCodegen)).toHaveBeenCalledWith(expect.objectContaining({ projectRoot: workdir }));
         } finally {
             await handle.close();
             rmSync(workdir, { force: true, recursive: true });

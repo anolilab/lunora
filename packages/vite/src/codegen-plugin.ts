@@ -4,7 +4,6 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
     CodegenDiagnosticError,
     createCodegenProject,
-    findProjectConfigFile,
     findTsconfig,
     fingerprintSchemaSources,
     isTestPath,
@@ -881,11 +880,13 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                     // regenerating here too would race that restart. Only a nearer config, which the restart does not cover, regenerates.
                     const lazyNow = readProjectLazyFunctions(absoluteSchemaDirectory);
                     const flipped = lazyNow !== lazyFunctionsSeen;
-                    const rootConfig = findProjectConfigFile(options.projectRoot);
+                    // A save of any project-root candidate (created, changed or deleted) moves the fingerprint and restarts the server, whose
+                    // first codegen reads the new value. Before the startup baseline settles, no restart follows, so the flip regenerates.
+                    const rootCandidate = PROJECT_CONFIG_FILENAMES.some((name) => resolve(options.projectRoot, name) === normalized);
 
                     lazyFunctionsSeen = lazyNow;
 
-                    return flipped && (rootConfig === undefined || resolve(rootConfig) !== normalized);
+                    return flipped && (!rootCandidate || !configBaselineSettled);
                 }
 
                 // Only a file literally named `tsconfig.json` can possibly be the

@@ -246,7 +246,7 @@ const runOnce = (
  * The watchers for the folders that can hold a `lunora.config` codegen reads, each reporting only the candidate files in it.
  * Best effort: a folder the platform will not watch is skipped, and the Lunora folder's watch still runs.
  */
-const watchConfigFolders = (candidates: ReadonlySet<string>, onConfigChange: (filename: string) => void): FSWatcher[] => {
+const watchConfigFolders = (candidates: ReadonlySet<string>, onConfigChange: (filename: string) => void, warn: (message: string) => void): FSWatcher[] => {
     const watchers: FSWatcher[] = [];
 
     for (const folder of new Set([...candidates].map((candidate) => dirname(candidate)))) {
@@ -258,12 +258,13 @@ const watchConfigFolders = (candidates: ReadonlySet<string>, onConfigChange: (fi
                     }
                 });
 
-                watcher.on("error", () => {
+                watcher.on("error", (error) => {
+                    warn(`codegen watch: stopped watching ${folder} for lunora.config changes (${error.message})`);
                     watcher.close();
                 });
                 watchers.push(watcher);
-            } catch {
-                // Skipped: see above.
+            } catch (error: unknown) {
+                warn(`codegen watch: could not watch ${folder} for lunora.config changes (${error instanceof Error ? error.message : String(error)})`);
             }
         }
     }
@@ -496,6 +497,25 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     // outside the watched tree, so each folder that can hold one is watched for those files alone.
     const configWatchers: FSWatcher[] = [];
     const configCandidates = new Set(projectConfigCandidatePaths(watchDirectory));
+    // A config save that lands while a hook runs, or in its settle window, is replayed once the window is over. The hook's own
+    // writes are dropped there; a save of the config is not one of them, so it must not be lost.
+    let configReplay: ReturnType<typeof setTimeout> | undefined;
+    const replayConfigEvent = (filename: string): void => {
+        if (closed) {
+            return;
+        }
+
+        if (!hookRunning && Date.now() - settledAt >= HOOK_SETTLE_MS) {
+            onEvent(undefined, filename);
+
+            return;
+        }
+
+        clearTimeout(configReplay);
+        configReplay = setTimeout(() => {
+            replayConfigEvent(filename);
+        }, HOOK_SETTLE_MS);
+    };
 
     try {
         watcher = watch(watchDirectory, { recursive: true }, (_event, filename) => {
@@ -532,9 +552,15 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
             }
         }
         configWatchers.push(
-            ...watchConfigFolders(configCandidates, (filename) => {
-                onEvent(undefined, filename);
-            }),
+            ...watchConfigFolders(
+                configCandidates,
+                (filename) => {
+                    replayConfigEvent(filename);
+                },
+                (message) => {
+                    options.logger.warn(message);
+                },
+            ),
         );
     } catch (error: unknown) {
         watcher?.close();
@@ -562,6 +588,8 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
             if (timer) {
                 clearTimeout(timer);
             }
+
+            clearTimeout(configReplay);
 
             liveWatcher.close();
 

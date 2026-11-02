@@ -122,6 +122,47 @@ describe("codegen.lazyFunctions in lunora.config", () => {
         expect(warn).not.toHaveBeenCalled();
     });
 
+    it("says a codegen name bound to a call it cannot read, since the call may set lazyFunctions", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        writeFileSync(join(projectRoot, "lunora.config.ts"), "const sharedCodegen = makeCodegen();\nexport default { codegen: sharedCodegen };\n", "utf8");
+
+        expect(readProjectLazyFunctions(join(projectRoot, "lunora"))).toBe(false);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("not a boolean literal"));
+    });
+
+    it("reads a codegen name that is parenthesized or cast", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        writeFileSync(
+            join(projectRoot, "lunora.config.ts"),
+            "const sharedCodegen = { lazyFunctions: true };\nexport default { codegen: (sharedCodegen as Record<string, unknown>) };\n",
+            "utf8",
+        );
+
+        expect(readProjectLazyFunctions(join(projectRoot, "lunora"))).toBe(true);
+        expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("does not follow a let binding, whose value may change before the config runs", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        writeFileSync(
+            join(projectRoot, "lunora.config.ts"),
+            "let sharedCodegen = { lazyFunctions: true };\nexport default { codegen: sharedCodegen };\n",
+            "utf8",
+        );
+
+        expect(readProjectLazyFunctions(join(projectRoot, "lunora"))).toBe(false);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("not a boolean literal"));
+    });
+
     it("says a codegen name it cannot resolve, since an imported object may set lazyFunctions", () => {
         expect.assertions(2);
 

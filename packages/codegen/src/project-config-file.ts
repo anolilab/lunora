@@ -46,7 +46,7 @@ import { basename } from "node:path";
 
 import { createJiti } from "jiti";
 import type { ObjectLiteralElementLike, ObjectLiteralExpression, PropertyAssignment, ShorthandPropertyAssignment, SourceFile } from "ts-morph";
-import { Node as TsNode, Project } from "ts-morph";
+import { Node as TsNode, Project, VariableDeclarationKind } from "ts-morph";
 
 import type { AcceptedFinding } from "./advisor-accept";
 import { propertyKeyName } from "./discover/property-name";
@@ -396,7 +396,11 @@ const readExclude = (declared: TsNode | undefined, sourceFile: SourceFile): { ex
 };
 
 /** `codegen.lazyFunctions`: a boolean literal, or `lazyFunctionsUnreadable`. */
-const readLazyFunctions = (declared: TsNode | undefined, sourceFile: SourceFile): { lazyFunctions?: boolean; lazyFunctionsUnreadable?: true } => {
+const readLazyFunctions = (
+    declared: TsNode | undefined,
+    sourceFile: SourceFile,
+    named: boolean,
+): { lazyFunctions?: boolean; lazyFunctionsUnreadable?: true } => {
     const member = readPlainMember(declared, sourceFile, "lazyFunctions");
 
     if ("absent" in member) {
@@ -406,8 +410,11 @@ const readLazyFunctions = (declared: TsNode | undefined, sourceFile: SourceFile)
     // The whole `codegen` value is not a literal this reader can walk. Only a value whose text names the key can be the
     // unreadable `lazyFunctions`; anything else (a `codegen` that never mentions it) is not a lazy-functions problem.
     if ("unreadable" in member) {
-        // A name this file cannot resolve (an import, say) may set the key, so it is reported; so is a value whose text names it.
-        const mayName = declared !== undefined && (TsNode.isIdentifier(declared) || declared.getText().includes("lazyFunctions"));
+        // A value reached through a name this file cannot read (an import, a `let`, a call) may set the key, so it is reported; so is
+        // a value whose text names it. An object literal the reader cannot walk is reported only when its text names the key.
+        const mayName =
+            declared !== undefined &&
+            (TsNode.isIdentifier(declared) || declared.getText().includes("lazyFunctions") || (named && !TsNode.isObjectLiteralExpression(declared)));
 
         return mayName ? { lazyFunctionsUnreadable: true } : {};
     }
@@ -421,14 +428,15 @@ const readLazyFunctions = (declared: TsNode | undefined, sourceFile: SourceFile)
 
 /** `codegen.exclude` and `codegen.lazyFunctions` from the `codegen` object literal, each read on its own. */
 const readCodegen = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
-    // `codegen: sharedCodegen` names a `const` in this file: read the object it names. What it does not resolve stays as the name.
-    const named =
-        declared !== undefined && TsNode.isIdentifier(declared)
-            ? unwrapLiteral(sourceFile.getVariableDeclaration(declared.getText())?.getInitializer())
-            : undefined;
-    const value = named ?? declared;
+    // `codegen: sharedCodegen`, parenthesized or cast, names a `const` in this file: read the object it names. Only a `const` is
+    // followed, since a `let` or `var` may hold another value by the time the config runs.
+    const unwrapped = unwrapLiteral(declared);
+    const isName = unwrapped !== undefined && TsNode.isIdentifier(unwrapped);
+    const declaration = unwrapped !== undefined && TsNode.isIdentifier(unwrapped) ? sourceFile.getVariableDeclaration(unwrapped.getText()) : undefined;
+    const isConst = declaration?.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const;
+    const value = isConst ? (unwrapLiteral(declaration.getInitializer()) ?? unwrapped) : unwrapped;
 
-    return { codegen: { ...readExclude(value, sourceFile), ...readLazyFunctions(value, sourceFile) } };
+    return { codegen: { ...readExclude(value, sourceFile), ...readLazyFunctions(value, sourceFile, isName) } };
 };
 
 /** `durableObjects.merge` from the `durableObjects` object literal: a boolean literal, or `unreadable`. */
