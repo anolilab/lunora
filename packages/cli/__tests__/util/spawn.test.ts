@@ -227,4 +227,19 @@ describe("defaultSpawner", () => {
             expect(result.stdout?.length).toBe(size);
         }
     });
+
+    // A child that never exits must not hold the caller forever: the timeout kills it and the run reports failure.
+    it("kills a child that outlives its timeoutMs and reports a failed run", async () => {
+        expect.assertions(2);
+
+        const result = await defaultSpawner({
+            args: ["-e", "setInterval(() => {}, 1000)"],
+            captureStdoutSilently: true,
+            command: process.execPath,
+            timeoutMs: 50,
+        });
+
+        expect(result.code).not.toBe(0);
+        expect(result.code).toBe(1);
+    });
 });

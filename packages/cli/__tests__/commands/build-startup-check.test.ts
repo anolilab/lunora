@@ -1,6 +1,6 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -82,8 +82,8 @@ const fakeWrangler = (
         const outFile = flagValue(descriptor, "--outfile");
 
         if (writeForm && outFile !== undefined) {
-            mkdirSync(dirname(join(workdir, outFile)), { recursive: true });
-            writeFileSync(join(workdir, outFile), "form", "utf8");
+            mkdirSync(dirname(resolve(workdir, outFile)), { recursive: true });
+            writeFileSync(resolve(workdir, outFile), "form", "utf8");
         }
 
         return { code: 0 };
@@ -104,7 +104,7 @@ describe("lunora build startup check", () => {
     });
 
     it("warns with the median, the threshold, the docs page and the lazy fix when an eager build nears the limit", async () => {
-        expect.assertions(8);
+        expect.assertions(9);
 
         const { calls, spawner } = fakeWrangler([900, 450, 300]);
         const { logger, warnings } = recordingLogger();
@@ -128,8 +128,9 @@ describe("lunora build startup check", () => {
         expect(warning).toContain(`${String(STARTUP_WARN_MS)} ms warning line`);
         expect(warning).toContain("https://lunora.sh/docs/startup-cpu-limit");
         expect(warning).toContain("LUNORA_LAZY_FUNCTIONS=1");
-        // The form is scratch: removed after profiling, and never left in the measured out-dir.
-        expect(readdirSync(join(workdir, ".lunora", "startup-check"))).toStrictEqual([]);
+        // The form is scratch in a temp directory outside the project: removed after profiling, never in the measured out-dir.
+        expect(form?.startsWith(workdir)).toBe(false);
+        expect(existsSync(dirname(form ?? ""))).toBe(false);
     });
 
     it("drops the lazy hint when the generated registry is already lazy", async () => {
@@ -170,6 +171,31 @@ describe("lunora build startup check", () => {
         expect(calls.some((descriptor) => isStartupProfile(descriptor))).toBe(false);
     });
 
+    it("removes the upload form when the deploy throws, and keeps it out of the project", async () => {
+        expect.assertions(3);
+
+        const { calls, spawner: fake } = fakeWrangler([900, 900, 900]);
+        const { logger } = recordingLogger();
+        // Wrangler writes the upload form, then the deploy fails: the form must still be removed.
+        const spawner: Spawner = async (descriptor) => {
+            const result = await fake(descriptor);
+
+            if (descriptor.args.includes("deploy")) {
+                throw new Error("deploy failed after writing the form");
+            }
+
+            return result;
+        };
+
+        await expect(runBuildCommand({ cwd: workdir, logger, spawner })).rejects.toThrow("deploy failed after writing the form");
+
+        const deploy = calls.find((descriptor) => descriptor.args.includes("deploy"));
+        const form = deploy === undefined ? undefined : flagValue(deploy, "--outfile");
+
+        expect(form).toBeDefined();
+        expect(existsSync(dirname(resolve(workdir, form ?? "")))).toBe(false);
+    });
+
     it("skips quietly when no upload form was written", async () => {
         expect.assertions(3);
 
@@ -194,6 +220,6 @@ describe("lunora build startup check", () => {
         expect(result.code).toBe(0);
         expect(warnings.filter((message) => message.startsWith("startup:"))).toStrictEqual([]);
         expect(debugs.some((message) => message.includes("could not run"))).toBe(true);
-        expect(existsSync(join(workdir, ".lunora", "startup-check")) && readdirSync(join(workdir, ".lunora", "startup-check")).length > 0).toBe(false);
+        expect(existsSync(join(workdir, ".lunora", "startup-check"))).toBe(false);
     });
 });

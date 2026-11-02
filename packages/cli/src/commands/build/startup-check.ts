@@ -27,8 +27,8 @@ const STARTUP_DOCS_URL = "https://lunora.sh/docs/startup-cpu-limit";
 
 const ACTIVE_LINE = /Active:\s+([\d.]+) ms/u;
 
-/** Where `lunora build` asks wrangler to write the upload form, relative to the project root, kept out of the measured out-dir. */
-const startupBundlePath = (runId: string): string => join(".lunora", "startup-check", runId, "worker.bundle");
+/** One profile that runs longer than this is stalled: it is killed and the check is skipped rather than blocking the build. */
+const STARTUP_PROFILE_TIMEOUT_MS = 120_000;
 
 interface StartupCheckOptions {
     /** The upload form `wrangler deploy --outfile` wrote, relative to `cwd`. */
@@ -59,7 +59,7 @@ const profileStartup = async ({ bundleFile, cwd, spawner }: StartupCheckOptions)
 
         try {
             // eslint-disable-next-line no-await-in-loop -- profiles run one at a time so they do not compete for the CPU they measure
-            const result = await spawner({ args, captureStdoutSilently: true, command, cwd });
+            const result = await spawner({ args, captureStdoutSilently: true, command, cwd, timeoutMs: STARTUP_PROFILE_TIMEOUT_MS });
 
             if (result.code !== 0) {
                 return { skip: `\`wrangler check startup\` exited with code ${String(result.code)}` };
@@ -127,4 +127,4 @@ const checkStartupBudget = async (options: StartupCheckOptions): Promise<number 
     return median;
 };
 
-export { checkStartupBudget, STARTUP_WARN_MS, startupBundlePath };
+export { checkStartupBudget, STARTUP_WARN_MS };

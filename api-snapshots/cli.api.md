@@ -617,6 +617,7 @@ interface SpawnDescriptor {
     env?: Readonly<Record<string, string>>;
     input?: string;
     stdoutToStderr?: boolean;
+    timeoutMs?: number;
 }
 ```
 

@@ -14,7 +14,7 @@ describe("cLOUDFLARE_DRIVER toolchain", () => {
     const { toolchain } = CLOUDFLARE_DRIVER;
 
     it("builds the deploy argv, matching wrangler's expected flag order", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         expect(toolchain?.deploy({})).toStrictEqual({ args: ["deploy"], tool: "wrangler" });
         // Entry positional precedes flags; `--metafile` always rides with `--outdir`.

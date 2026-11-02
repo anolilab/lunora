@@ -73,6 +73,7 @@ export interface SpawnDescriptor {
      * and `stdoutToStderr`.
      */
     captureStdoutSilently?: boolean;
+
     command: string;
     cwd?: string;
     env?: Readonly<Record<string, string>>;
@@ -91,6 +92,12 @@ export interface SpawnDescriptor {
      * — the single JSON document the command prints to stdout.
      */
     stdoutToStderr?: boolean;
+
+    /**
+     * Kill the child (SIGKILL) and count the run as failed after this many milliseconds. Without it a stalled
+     * child keeps the caller waiting with no way to stop it.
+     */
+    timeoutMs?: number;
 }
 
 export interface SpawnResult {
@@ -177,6 +184,7 @@ export const defaultSpawner: Spawner = (descriptor) =>
             shell: exec.shell,
             stdio: [hasInput ? "pipe" : "inherit", stdout, descriptor.captureStderr === true ? "pipe" : "inherit"],
         });
+        const killTimer = descriptor.timeoutMs === undefined ? undefined : setTimeout(() => child.kill("SIGKILL"), descriptor.timeoutMs);
 
         // Decoders, not `chunk.toString()`: a multi-byte character split across
         // two chunks would otherwise decode as two replacement characters.
@@ -209,6 +217,7 @@ export const defaultSpawner: Spawner = (descriptor) =>
         let settled = false;
 
         child.on("error", (error) => {
+            clearTimeout(killTimer);
             settled = true;
 
             // The single chokepoint for "that program isn't installed": every
@@ -242,6 +251,7 @@ export const defaultSpawner: Spawner = (descriptor) =>
 
             settled = true;
             clearTimeout(stdioGrace);
+            clearTimeout(killTimer);
             resolve({
                 code: exitCode,
                 stderr: descriptor.captureStderr === true ? capturedError + stderrDecoder.end() : undefined,

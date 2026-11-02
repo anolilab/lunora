@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import type { DevProcessSpawner } from "@lunora/config";
@@ -20,7 +21,7 @@ import type { BundleSize } from "./bundle-size";
 import { measureBundle, WORKER_SIZE_LIMIT_BYTES } from "./bundle-size";
 import { viteBundleMetaPath } from "./framework-build";
 import type { BuildOptions } from "./index";
-import { checkStartupBudget, startupBundlePath } from "./startup-check";
+import { checkStartupBudget } from "./startup-check";
 
 /** Default artifact directory — gitignored alongside the other `.lunora/` state. */
 const DEFAULT_OUT_DIR = ".lunora/build";
@@ -135,10 +136,36 @@ const outDirectoryFingerprint = (directory: string): string => {
         .join("\n");
 };
 
+/** Weigh the out-dir and say what it weighs; reporting never changes the exit code (`wrangler deploy` is what rejects an oversized upload). */
+const reportBundle = (outDirectoryPath: string, outDirectory: string, logger: Logger): ReturnType<typeof measureBundle> => {
+    const bundle = measureBundle(outDirectoryPath);
+
+    if (bundle === undefined) {
+        // Never report 0 bytes for this: an out-dir layout we no longer
+        // recognise would measure as the healthiest possible bundle.
+        logger.warn(`could not weigh the bundle — nothing uploadable was found in ${outDirectory}`);
+
+        return bundle;
+    }
+
+    const percent = ((bundle.rawBytes / WORKER_SIZE_LIMIT_BYTES) * 100).toFixed(1);
+    const summary =
+        `bundle: ${kib(bundle.rawBytes)} raw across ${String(bundle.files)} file(s) — ${percent}% of Cloudflare's ` +
+        `64 MiB uncompressed Worker size limit (${kib(bundle.gzipBytes)} gzipped, for reference; there is no compressed limit)`;
+
+    if (bundle.rawBytes > WORKER_SIZE_LIMIT_BYTES) {
+        logger.warn(`${summary} — Cloudflare will reject this upload`);
+    } else {
+        logger.info(summary);
+    }
+
+    return bundle;
+};
+
 /** The upload form is scratch for the startup profile; its per-run directory goes whether or not the build succeeded. */
-const discardStartupBundle = (projectRoot: string, startupBundle: string | undefined): void => {
+const discardStartupBundle = (startupBundle: string | undefined): void => {
     if (startupBundle !== undefined) {
-        rmSync(resolve(projectRoot, dirname(startupBundle)), { force: true, recursive: true });
+        rmSync(dirname(startupBundle), { force: true, recursive: true });
     }
 };
 
@@ -150,7 +177,7 @@ const profileStartup = async (projectRoot: string, startupBundle: string | undef
     try {
         await checkStartupBudget({ bundleFile: startupBundle, cwd: projectRoot, logger, spawner });
     } finally {
-        discardStartupBundle(projectRoot, startupBundle);
+        discardStartupBundle(startupBundle);
     }
 };
 
@@ -184,8 +211,9 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     const outDirectoryPath = resolve(projectRoot, outDirectory);
     const outBefore = outDirectoryFingerprint(outDirectoryPath);
     let result: DeployCommandResult | undefined;
-    // Outside the out-dir: `measureBundle` counts every file there, and the upload form would double the reported size.
-    const startupBundle = options.startupCheck === false ? undefined : startupBundlePath(randomUUID());
+    // In a temp directory outside the project: `measureBundle` counts every file in the out-dir, and the upload form would double the
+    // reported size whatever the out-dir is. The directory is removed on every path, see the finally blocks below.
+    const startupBundle = options.startupCheck === false ? undefined : join(mkdtempSync(join(tmpdir(), "lunora-startup-")), "worker.bundle");
 
     try {
         result = await runDeployCommand({
@@ -227,6 +255,11 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
             copyFileSync(source, destination);
         }
     } finally {
+        // A throw from the deploy leaves no profile to take, so the upload form goes here; a successful run keeps it for the profile below.
+        if (result === undefined) {
+            discardStartupBundle(startupBundle);
+        }
+
         rmSync(viteMeta, { force: true });
 
         // `destination` is empty unless this run wrote it, so a failed run puts the previous file back only where nothing new landed
@@ -238,37 +271,22 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     }
 
     if (result.code !== 0) {
-        discardStartupBundle(projectRoot, startupBundle);
+        discardStartupBundle(startupBundle);
 
         return result;
     }
 
-    logger.success(`build complete — bundle written to ${outDirectory}`);
+    try {
+        logger.success(`build complete — bundle written to ${outDirectory}`);
 
-    const bundle = measureBundle(resolve(options.cwd ?? process.cwd(), outDirectory));
+        const bundle = reportBundle(resolve(options.cwd ?? process.cwd(), outDirectory), outDirectory, logger);
 
-    if (bundle === undefined) {
-        // Never report 0 bytes for this: an out-dir layout we no longer
-        // recognise would measure as the healthiest possible bundle.
-        logger.warn(`could not weigh the bundle — nothing uploadable was found in ${outDirectory}`);
-    } else {
-        const percent = ((bundle.rawBytes / WORKER_SIZE_LIMIT_BYTES) * 100).toFixed(1);
-        const summary =
-            `bundle: ${kib(bundle.rawBytes)} raw across ${String(bundle.files)} file(s) — ${percent}% of Cloudflare's ` +
-            `64 MiB uncompressed Worker size limit (${kib(bundle.gzipBytes)} gzipped, for reference; there is no compressed limit)`;
+        await profileStartup(projectRoot, startupBundle, logger, options.spawner ?? defaultSpawner);
 
-        // Measuring is reporting: an oversized bundle warns but never changes the
-        // exit code — `wrangler deploy` is what rejects it at upload.
-        if (bundle.rawBytes > WORKER_SIZE_LIMIT_BYTES) {
-            logger.warn(`${summary} — Cloudflare will reject this upload`);
-        } else {
-            logger.info(summary);
-        }
+        return { ...result, bundle };
+    } finally {
+        discardStartupBundle(startupBundle);
     }
-
-    await profileStartup(projectRoot, startupBundle, logger, options.spawner ?? defaultSpawner);
-
-    return { ...result, bundle };
 };
 
 /** `lunora build` handler (lazy-loaded via the command's `loader`). */
