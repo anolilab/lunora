@@ -105,7 +105,11 @@ loop do
     rescue ThreadError
       nil # the thread finished between the last check and this wakeup
     end
-    retry_thread&.join # so a requeued write is seen by the next run's flush
+    begin
+      retry_thread&.join # so a requeued write is seen by the next run's flush
+    rescue StandardError
+      nil # a flush that raised must not skip the close below
+    end
     socket&.close # assumed: connect returns an IO-like socket; close it so each reconnect frees the last one
   end
   client.detach_socket(close_code, close_reason)

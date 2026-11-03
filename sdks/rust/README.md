@@ -186,6 +186,9 @@ loop {
                 if failed.load(Ordering::SeqCst) { break; }
             }
         }
+        // Every exit lands here: a failed connect write, a resend error, a bad frame and a normal close
+        // alike. Shutting the socket down unblocks the reader, so no run leaves a thread in `recv()`.
+        writer.lock().unwrap().shutdown();
         client.detach_socket(close.0, close.1.as_deref());
         if let Some(err) = resend_error {
             eprintln!("lunora: stopping the reconnect loop, a subscription cannot be resent: {err:?}");
