@@ -226,16 +226,28 @@ const documentDescriptionOf = (call: CallExpression): string | undefined =>
     descriptionOfStatement(call.getFirstAncestor((ancestor): ancestor is VariableStatement => Node.isVariableStatement(ancestor)));
 
 /**
- * The JSDoc of the exported statement that names `exportName`. A re-export such as
+ * The JSDoc of the exported statement that names each export. A re-export such as
  * `export const query = bundle.query` is documented there, while the registration call
  * sits in an earlier declaration of the bundle, so the call's own comment is the wrong one.
+ * Indexed once per file: a lookup per export would rescan every statement.
  */
-const exportedDescriptionOf = (source: SourceFile, exportName: string): string | undefined =>
-    descriptionOfStatement(
-        source
-            .getVariableStatements()
-            .find((statement) => statement.isExported() && statement.getDeclarations().some((declaration) => declaration.getName() === exportName)),
-    );
+const exportedDescriptionsOf = (source: SourceFile): ((exportName: string) => string | undefined) => {
+    const statements = new Map<string, VariableStatement>();
+
+    for (const statement of source.getVariableStatements()) {
+        if (!statement.isExported()) {
+            continue;
+        }
+
+        for (const declaration of statement.getDeclarations()) {
+            if (!statements.has(declaration.getName())) {
+                statements.set(declaration.getName(), statement);
+            }
+        }
+    }
+
+    return (exportName) => descriptionOfStatement(statements.get(exportName));
+};
 
 /** Build a {@link FunctionIR} entry from one classified registration call, or `undefined` when it isn't a Lunora registration. */
 const functionIrFromCall = (
@@ -318,6 +330,7 @@ const defaultExportFunctions = (source: SourceFile, relativePath: string, lazyFu
  */
 const discoverFileFunctions = (source: SourceFile, relativePath: string, lazyFunctions: boolean): FunctionIR[] => {
     const exportNames = exportNamesByLocalOf(source);
+    const exportedDescriptionOf = exportedDescriptionsOf(source);
     // The call each room name was first registered by. Two export names of one call are aliases of
     // one room; two different calls under one name are a clash, which the emitters cannot represent.
     const roomCalls = new Map<string, CallExpression>();
@@ -345,7 +358,7 @@ const discoverFileFunctions = (source: SourceFile, relativePath: string, lazyFun
             (exportNames.get(localName) ?? [])
                 .filter((name) => isAddressableExportName(name))
                 .flatMap((name) => {
-                    const entry = functionIrFromCall(call, name, relativePath, lazyFunctions, exportedDescriptionOf(source, name));
+                    const entry = functionIrFromCall(call, name, relativePath, lazyFunctions, exportedDescriptionOf(name));
                     rememberRoomCall(entry, call);
 
                     return entry ? [entry] : [];
@@ -357,7 +370,7 @@ const discoverFileFunctions = (source: SourceFile, relativePath: string, lazyFun
     for (const declaration of source.getVariableStatements().flatMap((statement) => statement.getDeclarations())) {
         for (const [localName, at] of exportPublishedBindingsOfDeclaration(declaration, (name) => exportNames.has(name))) {
             for (const name of (exportNames.get(localName) ?? []).filter((candidate) => isAddressableExportName(candidate) && !named.has(candidate))) {
-                const entry = publishedFunctionIr(at, name, relativePath, exportedDescriptionOf(source, name));
+                const entry = publishedFunctionIr(at, name, relativePath, exportedDescriptionOf(name));
 
                 if (entry) {
                     found.push(entry);
