@@ -1277,7 +1277,7 @@ const toFilterClauses: (filters: ReadonlyArray<EditableFilter>) => FilterClause[
 ### `useAutoRefresh` (const)
 
 ```ts
-const useAutoRefresh: (onTick: () => unknown, enabled: boolean, intervalMs?: number) => void;
+const useAutoRefresh: (onTick: () => unknown, enabled: boolean, intervalMs?: number, restartKey?: string) => void;
 ```
 
 ### `useDebounced` (const)
