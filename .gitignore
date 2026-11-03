@@ -74,6 +74,8 @@ typings/
 # templates from there for `vis generate`.
 .vis/*
 !.vis/templates/
+# vis release change files are committed by the release job; its state and lock stay local (below).
+!.vis/release/
 # Committed git hooks live at .vis/hooks/<stage> (moved from .vis-hooks).
 # The generated dispatcher under .vis/hooks/_/ stays out of version control.
 !.vis/hooks/
