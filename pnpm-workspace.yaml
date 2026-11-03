@@ -898,7 +898,7 @@ catalogs:
     typescript: 6.0.3
     unplugin-fonts: 2.0.0
     use-count-up: 3.0.1
-    vite: 8.3.3
+    vite: 8.3.2
     vite-imagetools: 12.0.1
     vite-plugin-svgr: 5.2.0
     vitest: 4.1.11
