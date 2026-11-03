@@ -79,8 +79,6 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "oxfmt --check . --ignore-path ../../.prettierignore && prettier --check \"**/*.{md,mdx}\" --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "oxfmt . --ignore-path ../../.prettierignore && prettier --write \"**/*.{md,mdx}\" --ignore-path ../../.prettierignore",
         "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",

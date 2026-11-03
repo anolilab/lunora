@@ -234,7 +234,7 @@ const outputPath = join(webRoot, "src", "data", "packages.ts");
 // Format before writing. This script emits raw `JSON.stringify` output and runs
 // as the first step of `apps/docs`'s `build`, so without this every build
 // rewrote the committed file with unformatted source — dirtying the working tree
-// and failing `lint:prettier` on a file nobody had edited.
+// and failing `lint:oxfmt` on a file nobody had edited.
 const prettierConfig = await resolveConfig(outputPath);
 
 writeFileSync(outputPath, await format(generateTypeScript(sorted), { ...prettierConfig, filepath: outputPath }));

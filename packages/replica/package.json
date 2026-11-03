@@ -66,8 +66,6 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "oxfmt --check . --ignore-path ../../.prettierignore && prettier --check \"**/*.{md,mdx}\" --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "oxfmt . --ignore-path ../../.prettierignore && prettier --write \"**/*.{md,mdx}\" --ignore-path ../../.prettierignore",
         "lint:types": "tsrs --noEmit && tsrs -p __tests__/workerd/tsconfig.json --noEmit",
         "test": "vitest run",
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",
