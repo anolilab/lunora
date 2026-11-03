@@ -10,6 +10,7 @@ import { acceptsConnection, resolveSchemaDirectory, startDevProcess } from "@lun
 import { detectPackageManager, toolchainExecArgs } from "@lunora/config/cli";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { bindingsNeedingDatabase, findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
+import { ts } from "ts-morph";
 
 import { sanitizeNamespace } from "../../../../shared/dispatch-namespace";
 import { generatedConfigPath } from "../commands/deploy/hyperdrive";
@@ -214,11 +215,28 @@ const findDeferredModules = (cwd: string, schemaDirectory: string): DeferredModu
 const JS_EXTENSION = /\.[cm]?js$/u;
 
 /**
- * A value-position `import("<specifier>")`, which is how every lazy loader the generator emits pulls a module in
- * (`await import(…)`, `() => import(…)`, `import(…).then(…)`, an element of `Promise.all([…])`). A type-position
- * `import("./dataModel.js").Doc` is followed by a member access other than a promise method and never matches.
+ * The specifiers of every value-position `import("<specifier>")` in a generated file, found in its syntax tree: an `import()` inside a
+ * comment is not a load, and a type-position `import("./dataModel.js").Doc` is an import type rather than a call, so neither matches.
+ * Every loader the generator emits is a call: `await import(…)`, `() => import(…)`, `import(…).then(…)`, a `Promise.all([…])` element.
  */
-const LOADER_IMPORT = /(?:await|=>|return|[=[,])\s*import\(\s*"([^"]+)"\s*\)(?!\s*\.(?!(?:then|catch|finally)\b))/gu;
+const loaderSpecifiers = (file: string, text: string): string[] => {
+    const specifiers: string[] = [];
+    const visit = (node: ts.Node): void => {
+        if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+            const [argument] = node.arguments;
+
+            if (argument !== undefined && ts.isStringLiteralLike(argument)) {
+                specifiers.push(argument.text);
+            }
+        }
+
+        ts.forEachChild(node, visit);
+    };
+
+    visit(ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS));
+
+    return specifiers;
+};
 
 /**
  * Every other module a generated lazy loader evaluates on first use: the inbound email runtime, MCP, payment,
@@ -239,8 +257,7 @@ const findLoaderImports = (cwd: string, schemaDirectory: string, known: Readonly
     }
 
     for (const name of names.toSorted((a, b) => a.localeCompare(b))) {
-        for (const match of readFileSync(join(generated, name), "utf8").matchAll(LOADER_IMPORT)) {
-            const specifier = match[1] ?? "";
+        for (const specifier of loaderSpecifiers(join(generated, name), readFileSync(join(generated, name), "utf8"))) {
             const isRelative = specifier.startsWith(".");
             // A generated `./x.js` names the `./x.ts` source; a bare specifier resolves from the project like the generated file's does.
             const file = isRelative ? resolveSourceModule(resolve(generated, specifier.replace(JS_EXTENSION, ""))) : specifier;
@@ -614,12 +631,29 @@ const groupAlive = (pid: number): boolean => {
     }
 };
 
+/** The system's `taskkill` for a Windows tree, by its absolute path, so a PATH entry cannot stand in for it. */
+const taskkillCommand = (pid: number): { args: string[]; command: string } => {
+    return {
+        args: ["/pid", String(pid), "/T", "/F"],
+        command: join(process.env.SystemRoot ?? String.raw`C:\Windows`, "System32", "taskkill.exe"),
+    };
+};
+
 /**
- * Kills the group if the CLI exits, or is interrupted, before the check stops it. Interrupts are re-raised once the group
- * is gone, so the CLI still dies with the signal it was sent.
+ * Kills the smoke process tree if the CLI exits, or is interrupted, before the check stops it: the group on POSIX, the tree from its
+ * pid on Windows. Exit handlers run synchronously, so the Windows kill there is `spawnSync`. Interrupts are re-raised once the tree is
+ * gone, so the CLI still dies with the signal it was sent.
  */
-const killGroupOnExit = (pid: number): (() => void) => {
+const killTreeOnExit = (pid: number): (() => void) => {
     const kill = (): void => {
+        if (process.platform === "win32") {
+            const { args, command } = taskkillCommand(pid);
+
+            spawnSync(command, args, { stdio: "ignore" });
+
+            return;
+        }
+
         signalGroup(pid, "SIGKILL");
     };
     // A `once` listener is gone by the time it runs, so re-raising the signal reaches the default action.
@@ -640,6 +674,20 @@ const killGroupOnExit = (pid: number): (() => void) => {
     return dispose;
 };
 
+/** Ends a Windows tree from its pid without blocking the event loop. A kill that fails is ignored: the tree may already be gone. */
+const runTaskkill = (pid: number): Promise<void> =>
+    new Promise((_resolve) => {
+        const { args, command } = taskkillCommand(pid);
+        const child = spawn(command, args, { stdio: "ignore", windowsHide: true });
+
+        child.once("error", () => {
+            _resolve();
+        });
+        child.once("exit", () => {
+            _resolve();
+        });
+    });
+
 /**
  * `stop()` signals only the package-manager process it spawned, and the `wrangler` under it can outlive that and keep
  * serving after the run directory is gone. Stopping the whole group clears the tree: SIGTERM, then SIGKILL past the grace.
@@ -655,8 +703,7 @@ const stopSmokeGroup = async (group: SmokeGroup | undefined): Promise<void> => {
     const { pid } = group;
 
     if (process.platform === "win32") {
-        // By its absolute path, so a PATH entry cannot stand in for the system tool.
-        spawnSync(join(process.env.SystemRoot ?? String.raw`C:\Windows`, "System32", "taskkill.exe"), ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
+        await runTaskkill(pid);
 
         return;
     }
@@ -675,20 +722,36 @@ const stopSmokeGroup = async (group: SmokeGroup | undefined): Promise<void> => {
     }
 };
 
+/** What a check evaluates, for its opening log line: lazy functions, deferred modules and integration SDKs. */
+const describeChecked = (lazyFunctions: boolean, deferred: number, integrations: number): string =>
+    [
+        lazyFunctions ? "lazy function modules" : undefined,
+        deferred === 0 ? undefined : `${String(deferred)} deferred module(s)`,
+        integrations === 0 ? undefined : `${String(integrations)} integration module(s)`,
+    ]
+        .filter((part): part is string => part !== undefined)
+        .join(", ");
+
 /**
  * Stops one attempt's `wrangler dev` and the tree under it. Windows walks the tree down from the pid, which resolves only
  * while the shell that started it is alive, so there the tree goes before `stop()`; elsewhere the group goes after it.
  */
 const stopAttempt = async (server: { stop: () => Promise<void> }, group: SmokeGroup | undefined): Promise<void> => {
     if (process.platform === "win32") {
-        await stopSmokeGroup(group);
-        await server.stop();
+        try {
+            await stopSmokeGroup(group);
+        } finally {
+            await server.stop();
+        }
 
         return;
     }
 
-    await server.stop();
-    await stopSmokeGroup(group);
+    try {
+        await server.stop();
+    } finally {
+        await stopSmokeGroup(group);
+    }
 };
 
 /**
@@ -966,7 +1029,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     const target = locateSmokeEntry(options);
 
     if ("skip" in target) {
-        logger.warn(`smoke-load skipped: ${target.skip}, so lazy modules and import()ed integration modules are not evaluated before deploy`);
+        logger.warn(`smoke-load skipped: ${target.skip}, so the modules the Worker loads on demand are not evaluated before deploy`);
 
         return undefined;
     }
@@ -985,8 +1048,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
         const child = spawn(command, [...args], { cwd: spawnOptions.cwd, detached: grouped, shell: spawnOptions.shell, stdio: ["ignore", "pipe", "pipe"] });
 
         if (child.pid !== undefined) {
-            // Windows has no group to signal when the CLI exits; the stop still walks the tree.
-            group = { dispose: grouped ? killGroupOnExit(child.pid) : () => undefined, pid: child.pid };
+            group = { dispose: killTreeOnExit(child.pid), pid: child.pid };
         }
 
         return child;
@@ -995,7 +1057,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     try {
         directory = createRunDirectory(cwd);
 
-        logger.info(functionsFile === undefined ? "smoke-loading import()ed integration modules in workerd" : "smoke-loading lazy function modules in workerd");
+        logger.info(`smoke-loading ${describeChecked(functionsFile !== undefined, deferred.length, integrationModules.length)} in workerd`);
 
         // The free-port check and `wrangler dev`'s bind are not atomic, so another run can take the port in between.
         // Its Worker then answers the probe; that attempt is dropped and retried on the next port.

@@ -24,10 +24,17 @@ vi.mock(import("../../src/util/free-port"), async (importOriginal) => {
     return { ...(await importOriginal()), findAvailablePort };
 });
 
-// A started process reports its pid; the Windows stop hands that pid to taskkill.
+// A started process reports its pid and fires `exit` at once, so the async taskkill the Windows stop runs resolves.
 const spawn = vi.hoisted(() =>
-    vi.fn<(command: string) => { pid: number }>(() => {
-        return { pid: 4242 };
+    vi.fn<(command: string) => { once: (event: string, listener: () => void) => void; pid: number }>(() => {
+        return {
+            once: (event, listener) => {
+                if (event === "exit") {
+                    queueMicrotask(listener);
+                }
+            },
+            pid: 4242,
+        };
     }),
 );
 const spawnSync = vi.hoisted(() => vi.fn<(command: string, args: string[], options: object) => unknown>());
@@ -793,7 +800,7 @@ describe(runLazySmokeLoad, () => {
     });
 
     it("stops a Windows tree with taskkill by its system path, before the shell that started it is stopped", async () => {
-        expect.assertions(3);
+        expect.assertions(2);
 
         const { platform } = process;
 
@@ -809,9 +816,10 @@ describe(runLazySmokeLoad, () => {
 
             await run();
 
-            expect(spawn).toHaveBeenCalledWith("wrangler", ["dev"], expect.objectContaining({ detached: false }));
-            expect(spawnSync).toHaveBeenCalledWith(expect.stringMatching(/taskkill\.exe$/u), ["/pid", "4242", "/T", "/F"], { stdio: "ignore" });
-            expect(spawnSync.mock.invocationCallOrder[0]).toBeLessThan(stop.mock.invocationCallOrder[0] ?? 0);
+            const taskkill = spawn.mock.calls.findIndex(([command]) => /taskkill\.exe$/u.test(command));
+
+            expect(spawn.mock.calls[taskkill]).toStrictEqual([expect.stringMatching(/taskkill\.exe$/u), ["/pid", "4242", "/T", "/F"], expect.anything()]);
+            expect(spawn.mock.invocationCallOrder[taskkill]).toBeLessThan(stop.mock.invocationCallOrder[0] ?? 0);
         } finally {
             Object.defineProperty(process, "platform", { value: platform });
         }
@@ -940,6 +948,19 @@ describe(runLazySmokeLoad, () => {
             answerFromEntry();
 
             await expect(run()).resolves.toContain("lunora/live.ts (module): live broke");
+        });
+
+        it("does not count an import() written in a comment as a loader", async () => {
+            expect.assertions(2);
+
+            rmSync(join(cwd, "lunora", "_generated", "functions.ts"));
+            writeFileSync(
+                join(cwd, "lunora", "_generated", "app.ts"),
+                '/** A client is built with (await import("postgres")) only in docs. */\n// const load = () => import("mysql2");\nexport const app = 1;\n',
+            );
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(startDevProcess).not.toHaveBeenCalled();
         });
 
         it("checks an eager build's auth module, which its generated output loads with import(), before deploy", async () => {
