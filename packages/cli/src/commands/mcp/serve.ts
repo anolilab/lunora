@@ -316,7 +316,8 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
         const directory = watchTarget();
         const identity = identityOf(directory);
 
-        if (watched?.directory === directory && watched.identity === identity) {
+        // A directory that cannot be stat'ed right now is not evidence that it was recreated, so the watch stays.
+        if (watched?.directory === directory && (identity === "" || watched.identity === identity)) {
             return;
         }
 
