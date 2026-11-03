@@ -36,7 +36,7 @@ import { defineNotify, webPushFromEnv, fcmFromEnv, d1SubscriptionStore } from "@
 
 export default defineNotify({
     webPush: (env) => webPushFromEnv(env), // VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT
-    fcm: (env) => fcmFromEnv(env), // FCM_PROJECT_ID / FCM_ACCESS_TOKEN (prefer a getAccessToken in prod)
+    fcm: (env) => fcmFromEnv(env), // FCM_SERVICE_ACCOUNT (+ optional FCM_PROJECT_ID)
     store: (env) => d1SubscriptionStore(env.DB),
 });
 ```
@@ -51,9 +51,30 @@ package-secrets registry — only for the channels `defineNotify` configures. Ge
 VAPID_PUBLIC_KEY=<your-vapid-public-key>
 VAPID_PRIVATE_KEY=<your-vapid-private-key>
 VAPID_SUBJECT=mailto:you@example.com
+FCM_SERVICE_ACCOUNT={"type":"service_account","project_id":"<your-firebase-project-id>","client_email":"…","private_key":"<PEM private key, newlines written as \n>"}
 FCM_PROJECT_ID=<your-firebase-project-id>
-FCM_ACCESS_TOKEN=<your-fcm-access-token>
 ```
+
+`FCM_SERVICE_ACCOUNT` is the Google service-account key file, pasted as JSON.
+`fcmFromEnv` mints FCM access tokens from it on demand (edge-safe, via Web Crypto)
+and caches each token until shortly before it expires, so the same
+`fcmFromEnv(env)` line is correct in production. `FCM_PROJECT_ID` is optional; it
+overrides the `project_id` in the key. A static `FCM_ACCESS_TOKEN` is still accepted
+when no service account is set, for local work only: it expires within the hour.
+
+A push payload must fit in 4096 bytes, the limit for both FCM and Web Push. A larger
+send is rejected with `PAYLOAD_TOO_LARGE` before any device is contacted.
+
+## Native devices (Android and iOS)
+
+Native FCM tokens come from the device, not from Expo's push service:
+
+- **Android:** `getDevicePushTokenAsync()` from `expo-notifications` returns the FCM
+  registration token. Register it with `ctx.push.register({ kind: "fcm", token, userId })`.
+- **iOS:** `getDevicePushTokenAsync()` returns an APNs token, which FCM v1 does not
+  accept. Get an FCM token from the Firebase Messaging SDK instead (with your APNs key
+  uploaded to the Firebase project) and register that the same way. Direct APNs
+  delivery uses `node:http2`, so it is not on the edge facade.
 
 ## Register a browser push subscription
 

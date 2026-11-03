@@ -274,7 +274,7 @@ describe("lunora deploy", () => {
                     "LUNORA_ADMIN_TOKEN",
                     "LUNORA_RELAY_SECRET",
                     "FCM_PROJECT_ID",
-                    "FCM_ACCESS_TOKEN",
+                    "FCM_SERVICE_ACCOUNT",
                     "VAPID_PUBLIC_KEY",
                     "VAPID_PRIVATE_KEY",
                     "VAPID_SUBJECT",

@@ -52,3 +52,55 @@ describe("fcmFromEnv", () => {
         expect(config?.accessToken).toBeUndefined();
     });
 });
+
+describe("fcmFromEnv with a service account", () => {
+    const keyFile = JSON.stringify({ client_email: "svc@acme.iam", private_key: "PEM", project_id: "acme" });
+
+    it("mints tokens from the key file and targets its project id", () => {
+        expect.hasAssertions();
+
+        const config = fcmFromEnv({ FCM_SERVICE_ACCOUNT: keyFile });
+
+        expect(config?.projectId).toBe("acme");
+        expect(config?.accessToken).toBeUndefined();
+        expect(config?.getAccessToken).toBeTypeOf("function");
+    });
+
+    it("prefers FCM_PROJECT_ID over the key file's project id", () => {
+        expect.hasAssertions();
+
+        expect(fcmFromEnv({ FCM_PROJECT_ID: "override", FCM_SERVICE_ACCOUNT: keyFile })?.projectId).toBe("override");
+    });
+
+    it("returns undefined when neither the env nor the key file names a project", () => {
+        expect.hasAssertions();
+
+        const noProject = JSON.stringify({ client_email: "svc@acme.iam", private_key: "PEM" });
+
+        expect(fcmFromEnv({ FCM_SERVICE_ACCOUNT: noProject })).toBeUndefined();
+    });
+
+    it("does not throw on a malformed key, so other channels still build; the token source rejects instead", async () => {
+        expect.hasAssertions();
+
+        const config = fcmFromEnv({ FCM_PROJECT_ID: "proj", FCM_SERVICE_ACCOUNT: "{oops" });
+
+        expect(config?.projectId).toBe("proj");
+        await expect(config?.getAccessToken?.()).rejects.toThrow("not valid JSON");
+    });
+
+    it("returns undefined for a malformed key when no project id can be resolved", () => {
+        expect.hasAssertions();
+
+        expect(fcmFromEnv({ FCM_SERVICE_ACCOUNT: "{oops" })).toBeUndefined();
+    });
+
+    it("prefers the service account over a static token when both are set", () => {
+        expect.hasAssertions();
+
+        const config = fcmFromEnv({ FCM_ACCESS_TOKEN: "dev-only", FCM_SERVICE_ACCOUNT: keyFile });
+
+        expect(config?.accessToken).toBeUndefined();
+        expect(config?.getAccessToken).toBeTypeOf("function");
+    });
+});

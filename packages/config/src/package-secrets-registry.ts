@@ -214,10 +214,10 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
         },
         {
             description:
-                "OAuth2 access token for FCM (HTTP v1). Convenient for dev but expires — in production supply a getAccessToken() in defineNotify instead. Obtain via the Google Cloud SDK / a service account.",
+                "Google service-account key file (JSON) for FCM HTTP v1. fcmFromEnv mints and caches access tokens from it. Download it from the Firebase console (Project settings → Service accounts).",
             docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
-            key: "FCM_ACCESS_TOKEN",
-            placeholderValue: "<your-fcm-access-token>",
+            key: "FCM_SERVICE_ACCOUNT",
+            placeholderValue: '{"type":"service_account","project_id":"<your-firebase-project-id>","client_email":"…","private_key":"…"}',
         },
     ],
     "@lunora/notify:webPush": [

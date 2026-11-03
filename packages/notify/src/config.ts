@@ -1,6 +1,7 @@
 import type { FcmConfig } from "@visulima/notification/providers/fcm";
 import type { WebPushConfig } from "@visulima/notification/providers/web-push";
 
+import { fcmServiceAccountTokenSource, parseServiceAccount } from "./fcm-service-account";
 import type { NotifyEnv } from "./types";
 
 /**
@@ -17,6 +18,7 @@ const WEB_PUSH_ENV_KEYS = {
 const FCM_ENV_KEYS = {
     accessToken: "FCM_ACCESS_TOKEN",
     projectId: "FCM_PROJECT_ID",
+    serviceAccount: "FCM_SERVICE_ACCOUNT",
 } as const;
 
 const readString = (env: NotifyEnv, key: string): string | undefined => {
@@ -46,25 +48,44 @@ const webPushFromEnv = (env: NotifyEnv, overrides?: Partial<WebPushConfig>): Web
     return { vapidPrivateKey, vapidPublicKey, vapidSubject, ...overrides };
 };
 
+/** The key file's own project id, or `undefined` when the key cannot be read. The token source reports the parse error when it is used. */
+const projectIdOf = (rawServiceAccount: string): string | undefined => {
+    try {
+        return parseServiceAccount(rawServiceAccount).project_id;
+    } catch {
+        return undefined;
+    }
+};
+
 /**
- * Resolve an {@link FcmConfig} from the Worker `env` (`FCM_PROJECT_ID` plus a
- * static `FCM_ACCESS_TOKEN`). Returns `undefined` when the project id is missing.
+ * Resolve an {@link FcmConfig} from the Worker `env`.
  *
- * The static token is convenient for local dev but expires; in production prefer
- * passing your own `getAccessToken` (e.g. wrapping `google-auth-library`) via
- * `defineNotify({ fcm: (env) => ({ ...fcmFromEnv(env), getAccessToken }) })` —
- * that keeps the provider edge-safe (no Google SDK / `node:crypto` bundled).
+ * Production: `FCM_SERVICE_ACCOUNT` holds the Google service-account key file as JSON.
+ * The access token is minted from it on demand and cached until shortly before it
+ * expires, so `defineNotify({ fcm: (env) => fcmFromEnv(env) })` is correct as written.
+ * `FCM_PROJECT_ID` overrides the project id in the key file.
+ *
+ * Dev: a static `FCM_ACCESS_TOKEN` is accepted when no service account is set. It
+ * expires within the hour, so it is only a stopgap for local work.
+ *
+ * Returns `undefined` when no project id can be resolved. A malformed service account
+ * does not throw here: the token source rejects instead, so only FCM sends fail, not the
+ * other channels that share this engine.
  */
 const fcmFromEnv = (env: NotifyEnv, overrides?: Partial<FcmConfig>): FcmConfig | undefined => {
-    const projectId = readString(env, FCM_ENV_KEYS.projectId); // secret-scanner:allow -- `projectId` is a config field name, not a credential
+    const envProjectId = readString(env, FCM_ENV_KEYS.projectId); // secret-scanner:allow -- `projectId` is a config field name, not a credential
+    const rawServiceAccount = readString(env, FCM_ENV_KEYS.serviceAccount);
+    const projectId = envProjectId ?? (rawServiceAccount === undefined ? undefined : projectIdOf(rawServiceAccount));
 
     if (projectId === undefined) {
         return undefined;
     }
 
-    const accessToken = readString(env, FCM_ENV_KEYS.accessToken);
+    if (rawServiceAccount !== undefined) {
+        return { getAccessToken: fcmServiceAccountTokenSource(rawServiceAccount), projectId, ...overrides };
+    }
 
-    return { accessToken, projectId, ...overrides };
+    return { accessToken: readString(env, FCM_ENV_KEYS.accessToken), projectId, ...overrides };
 };
 
 export { FCM_ENV_KEYS, fcmFromEnv, WEB_PUSH_ENV_KEYS, webPushFromEnv };
