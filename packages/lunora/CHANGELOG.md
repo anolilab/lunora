@@ -1,3 +1,14 @@
+## lunorash [1.0.0-alpha.475](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.474...lunorash@1.0.0-alpha.475) (2026-11-03)
+
+### Build System
+
+* **lint:** add oxlint and switch formatting to oxfmt ([#1322](https://github.com/anolilab/lunora/issues/1322)) ([f59a03f](https://github.com/anolilab/lunora/commit/f59a03ffeae9227f4aa258b8c0b82e12b663c6c3))
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.477
+
 ## lunorash [1.0.0-alpha.474](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.473...lunorash@1.0.0-alpha.474) (2026-11-03)
 
 ### Build System

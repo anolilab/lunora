@@ -1,3 +1,13 @@
+## @lunora/cli [1.0.0-alpha.477](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.476...@lunora/cli@1.0.0-alpha.477) (2026-11-03)
+
+### Features
+
+* **cli:** smoke-load deferred modules for eager builds ([#1410](https://github.com/anolilab/lunora/issues/1410)) ([49f4baa](https://github.com/anolilab/lunora/commit/49f4baab2bb810cda980afba28f24d1493b09530))
+
+### Build System
+
+* **lint:** add oxlint and switch formatting to oxfmt ([#1322](https://github.com/anolilab/lunora/issues/1322)) ([f59a03f](https://github.com/anolilab/lunora/commit/f59a03ffeae9227f4aa258b8c0b82e12b663c6c3))
+
 ## @lunora/cli [1.0.0-alpha.476](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.475...@lunora/cli@1.0.0-alpha.476) (2026-11-03)
 
 ### Build System
