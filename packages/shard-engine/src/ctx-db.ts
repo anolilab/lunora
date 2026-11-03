@@ -65,7 +65,7 @@ import { createCompanionSync } from "./ctx-db-companions";
 import { isMemoryTable } from "./ctx-db-memory";
 import type { RankPageDeps } from "./ctx-db-rank-page";
 import { computeRankPage } from "./ctx-db-rank-page";
-import { SCAN_DEP } from "./dependency-tracker";
+import { PRIMARY_READ, SCAN_DEP } from "./dependency-tracker";
 import { runDrizzle, runSql } from "./do-exec";
 import {
     AGG_COUNT,
@@ -2659,10 +2659,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * IS the row count. Marker deps — `SCAN_DEP` and the `~r:` range suffix —
      * describe a read's SHAPE, not its size, and would each otherwise be
      * miscounted as a single row; the fluent reader meters its own terminals
-     * instead (see `meterRows` in `buildReader`).
+     * instead (see `meterRows` in `buildReader`). A by-id read is flagged `exact`,
+     * so a row whose id happens to spell a marker is still charged.
      */
     const onRead: ReadHook = (table, idOrScan, exact) => {
-        if (idOrScan !== undefined && idOrScan !== SCAN_DEP) {
+        if (idOrScan !== undefined && (exact === true || idOrScan !== SCAN_DEP)) {
             headroom?.recordRead(1);
         }
 
@@ -3925,6 +3926,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // can't track per-row deps across the D1 boundary, so stamp the
                 // conservative `*scan` marker: any write to the table re-runs it.
                 onRead(tableName, SCAN_DEP);
+
+                if (args.consistency === "primary") {
+                    reportRead(tableName, PRIMARY_READ);
+                }
 
                 return global.findMany(tableName, args);
             }

@@ -549,6 +549,11 @@ interface SqlCtxExec {
     // `queryBatch` falls back to the sequential `run()` loop every companion
     // write used before this existed.
     batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<void>;
+    // Optional. An exec over a replicated store (D1 sessions) exposes a sibling
+    // that reads the primary, for a read that must see every committed write
+    // (a policy check on a write path). Absent, every read already hits the
+    // authoritative store, so a primary read is the same read.
+    primary?: SqlCtxExec;
     // `void` for D1/node:sqlite (the result is ignored on those paths); a
     // `SqlRunResult` ({ rowsAffected }) for engines whose OCC needs the affected
     // count (MySQL, which has no `RETURNING`). The union lets a PlanetScale
