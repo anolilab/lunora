@@ -3,6 +3,8 @@
     "name": "{{name}}",
     "main": "src/server.ts",
     "compatibility_date": "2026-10-01",
+    // Minify the bundle: the unminified build carries full identifier names and path comments on every module.
+    "minify": true,
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
         "bindings": [
