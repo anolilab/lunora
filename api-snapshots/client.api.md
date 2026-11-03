@@ -1383,6 +1383,7 @@ interface SubscriptionState {
         payload: unknown;
     };
     serverBase: unknown;
+    serverBaseCommitted?: boolean;
     serverClaims?: string;
     serverCursor?: number;
     serverEpoch?: string;
