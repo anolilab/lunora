@@ -271,6 +271,8 @@ class AppBuilder<Env extends object> {
             options.logArchive = logArchive;
         }
 
+        options.agentWorkflows = [];
+
         for (const fn of this.extendFns) {
             Object.assign(options, fn(env, { ...options }));
         }

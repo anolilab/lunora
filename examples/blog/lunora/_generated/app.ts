@@ -738,6 +738,8 @@ class AppBuilder<Env extends object> {
             options.resolveIdentity = memo;
         }
 
+        options.agentWorkflows = [];
+
         for (const fn of this.extendFns) {
             Object.assign(options, fn(env, { ...options }));
         }
