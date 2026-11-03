@@ -5153,6 +5153,7 @@ class LunoraClient {
 
             if (state !== undefined) {
                 state.serverBase = undefined;
+                state.serverBaseCommitted = false;
                 state.serverCursor = undefined;
                 state.serverEpoch = undefined;
                 refoldSubscription(state, undefined);
@@ -7752,6 +7753,7 @@ class LunoraClient {
 
             if (state.serverClaims !== undefined) {
                 state.serverBase = undefined;
+                state.serverBaseCommitted = false;
                 state.serverCursor = undefined;
                 state.serverClaims = undefined;
                 refoldSubscription(state, undefined);
@@ -7783,6 +7785,7 @@ class LunoraClient {
         for (const state of this.subscriptions.all()) {
             if (state.serverClaims !== undefined && state.serverClaims !== claims) {
                 state.serverBase = undefined;
+                state.serverBaseCommitted = false;
                 state.serverCursor = undefined;
                 state.serverClaims = undefined;
                 refoldSubscription(state, undefined);
@@ -9083,6 +9086,7 @@ class LunoraClient {
     private reconnectCold(): void {
         for (const state of this.subscriptions.all()) {
             state.serverBase = undefined;
+            state.serverBaseCommitted = false;
             state.serverCursor = undefined;
             state.serverEpoch = undefined;
             state.pendingDeltaRun = undefined;

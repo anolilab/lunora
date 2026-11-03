@@ -134,6 +134,17 @@ describe("isStaleDataFrame", () => {
         expect(isStaleDataFrame(held({ serverBase: undefined }), { cursor: 5, epoch: "e1" })).toBe(false);
         expect(isStaleDataFrame(held({ serverCursor: undefined }), { cursor: 5, epoch: "e1" })).toBe(false);
     });
+
+    it("flags an older seed after a committed result that is itself undefined", () => {
+        expect.assertions(2);
+
+        const state = subscription({ serverCursor: 10, serverEpoch: "e1" });
+
+        commitDataFrame(state, undefined, { cursor: 10, epoch: "e1" });
+
+        expect(isStaleDataFrame(state, { cursor: 5, epoch: "e1" })).toBe(true);
+        expect(isStaleDataFrame(subscription({ serverCursor: 10, serverEpoch: "e1" }), { cursor: 5, epoch: "e1" })).toBe(false);
+    });
 });
 
 describe("isForeignStamp", () => {

@@ -104,6 +104,17 @@ describe("onBecomeLeader", () => {
         expect(state.valueReceived).toBe(false);
     });
 
+    it("forgets an ack a mirrored settled frame gave while this tab followed", () => {
+        expect.assertions(1);
+
+        const state = liveSubscription({ ack: "acked" });
+        const { host } = fakeHost({ activeSubscriptions: () => [state] });
+
+        onBecomeLeader(host);
+
+        expect(state.ack).toBe("idle");
+    });
+
     it("opens the socket of a shard with a queued write even when no subscription uses it", () => {
         expect.assertions(2);
 
