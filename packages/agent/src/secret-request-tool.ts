@@ -219,6 +219,13 @@ const redactCallbackError = (error: unknown, secret: string, seen: Set<unknown> 
             error.stack = redactText(error.stack, secret);
         }
 
+        // `name` is usually inherited, so the own-property walk below never sees it, yet telemetry reads it.
+        const { name } = error;
+
+        if (typeof name === "string" && containsSecret(name, secret)) {
+            Object.defineProperty(error, "name", { configurable: true, value: redactText(name, secret), writable: true });
+        }
+
         const fields = error as unknown as Record<string, unknown>;
 
         for (const key of Object.getOwnPropertyNames(error)) {

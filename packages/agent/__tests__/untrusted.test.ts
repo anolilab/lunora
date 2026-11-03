@@ -72,6 +72,13 @@ describe(wrapUntrusted, () => {
         expect(inside).toContain("user@example.com");
     });
 
+    it("leaves prices and file paths untouched", () => {
+        const wrapped = wrapUntrusted("total $5 or $12.50, see /docs/index.html and /var/log");
+        const inside = enclosedBy(wrapped, tagIdOf(wrapped));
+
+        expect(inside).toContain("total $5 or $12.50, see /docs/index.html and /var/log");
+    });
+
     it("leaves addresses and word-glued triggers alone when the preceding letter is not ASCII", () => {
         const wrapped = wrapUntrusted("josé@example.com, café$TSLA, 日本@alice, π@x, then @alice");
         const inside = enclosedBy(wrapped, tagIdOf(wrapped));

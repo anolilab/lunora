@@ -11,14 +11,14 @@ const ZERO_WIDTH_SPACE = "\u200B";
 const ANGLE_BRACKET = /[<>]/gu;
 
 /**
- * A mention or cashtag (`@`, `$`) not glued to a preceding word, so `user@example.com` is left alone.
+ * A mention (`@`) or cashtag (`$` before a letter, so `$5` is left alone) not glued to a preceding word, so `user@example.com` is left alone.
  * `\B` is not used: its word test is ASCII-only, so a letter like `é` would count as a non-word
  * character and an address such as `josé@example.com` would be altered.
  */
-const MENTION_TRIGGER = /(?<![\p{L}\p{M}\p{N}_])([$@])/gu;
+const MENTION_TRIGGER = /(?<![\p{L}\p{M}\p{N}_])(@|\$(?=\p{L}))/gu;
 
-/** A slash-command `/` at the start of the text or after whitespace, so URL paths are left alone. */
-const COMMAND_TRIGGER = /(^|\s)(\/)/gu;
+/** A slash-command `/name` as a whole token, so URL and file paths such as `/docs/index.html` are left alone. */
+const COMMAND_TRIGGER = /(^|\s)(\/)(?=\p{L}[\p{L}\p{N}_-]*(?:[\s.,;:!?)]|$))/gu;
 
 /** Line breaks inside a header value, which would otherwise start a fake header line. */
 const LINE_BREAKS = /[\r\n]+/gu;
