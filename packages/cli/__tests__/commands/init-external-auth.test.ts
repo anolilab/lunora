@@ -218,6 +218,17 @@ describe(wireExternalAuth, () => {
         expect(readFileSync(join(project, "src", "app", "other.config.ts"), "utf8")).toBe("providers: [provideLunora({ authTokenOnUpgrade: false })],\n");
     });
 
+    it("finds an upper-case SCRIPT block in a Svelte component", () => {
+        expect.assertions(1);
+
+        mkdirSync(join(project, "src", "routes"), { recursive: true });
+        writeFileSync(join(project, "src", "routes", "+layout.svelte"), '<SCRIPT>\nconst client = new LunoraClient({ url: "/x" });\n</SCRIPT>\n', "utf8");
+
+        wireExternalAuth(project, "clerk", silentLogger().logger);
+
+        expect(readFileSync(join(project, "src", "routes", "+layout.svelte"), "utf8")).toContain('new LunoraClient({ url: "/x", authTokenOnUpgrade: true })');
+    });
+
     it("turns on authTokenOnUpgrade inside a Svelte component's script block and leaves its markup alone", () => {
         expect.assertions(1);
 

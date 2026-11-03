@@ -336,7 +336,7 @@ const findClientFiles = (directory: string, depth = 0): string[] => {
 };
 
 /** The `<script>` blocks of a Svelte or Vue component, as the opening tag, the code, and the closing tag. */
-const SCRIPT_BLOCK = /(<script\b[^>]*>)([\s\S]*?)<\/script>/gu;
+const SCRIPT_BLOCK = /(<script\b[^>]*>)([\s\S]*?)<\/script>/giu;
 
 /** Svelte and Vue components, whose client sits in a `<script>` block rather than in the file. */
 const SFC_FILE = /\.(?:svelte|vue)$/u;
