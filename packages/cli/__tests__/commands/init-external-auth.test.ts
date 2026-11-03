@@ -199,8 +199,37 @@ describe(wireExternalAuth, () => {
 
         wireExternalAuth(project, "clerk", logger);
 
-        expect(readFileSync(join(project, "src", "client.ts"), "utf8")).toContain("new LunoraClient({ authTokenOnUpgrade: true, url: location.origin })");
+        expect(readFileSync(join(project, "src", "client.ts"), "utf8")).toContain("new LunoraClient({ url: location.origin, authTokenOnUpgrade: true })");
         expect(lines.join("\n")).toContain("setAuthTokenProvider(client, getToken, { subject: userId })");
+    });
+
+    it("puts the setting after a spread so a spread cannot overwrite it, and skips a call that already sets it", () => {
+        expect.assertions(2);
+
+        mkdirSync(join(project, "src", "app"), { recursive: true });
+        writeFileSync(join(project, "src", "app", "app.config.ts"), 'providers: [provideLunora({ ...imported, url: "/x" })],\n');
+        writeFileSync(join(project, "src", "app", "other.config.ts"), "providers: [provideLunora({ authTokenOnUpgrade: false })],\n");
+
+        wireExternalAuth(project, "clerk", silentLogger().logger);
+
+        expect(readFileSync(join(project, "src", "app", "app.config.ts"), "utf8")).toContain(
+            'provideLunora({ ...imported, url: "/x", authTokenOnUpgrade: true })',
+        );
+        expect(readFileSync(join(project, "src", "app", "other.config.ts"), "utf8")).toBe("providers: [provideLunora({ authTokenOnUpgrade: false })],\n");
+    });
+
+    it("turns on authTokenOnUpgrade inside a Svelte component's script block and leaves its markup alone", () => {
+        expect.assertions(1);
+
+        mkdirSync(join(project, "src", "routes"), { recursive: true });
+        const layout = '<script lang="ts">\n  const client = new LunoraClient({ url: location.origin });\n</script>\n<p>{client.url}</p>\n';
+        writeFileSync(join(project, "src", "routes", "+layout.svelte"), layout, "utf8");
+
+        wireExternalAuth(project, "clerk", silentLogger().logger);
+
+        expect(readFileSync(join(project, "src", "routes", "+layout.svelte"), "utf8")).toBe(
+            '<script lang="ts">\n  const client = new LunoraClient({ url: location.origin, authTokenOnUpgrade: true });\n</script>\n<p>{client.url}</p>\n',
+        );
     });
 
     it("leaves a comment or string that names a client construction alone, and patches only the real call", () => {
@@ -214,7 +243,7 @@ describe(wireExternalAuth, () => {
         wireExternalAuth(project, "clerk", silentLogger().logger);
 
         expect(readFileSync(join(project, "src", "note.ts"), "utf8")).toBe(comment);
-        expect(readFileSync(join(project, "src", "client.ts"), "utf8")).toContain('new LunoraClient({ authTokenOnUpgrade: true, url: "/x" })');
+        expect(readFileSync(join(project, "src", "client.ts"), "utf8")).toContain('new LunoraClient({ url: "/x", authTokenOnUpgrade: true })');
     });
 
     it("turns on authTokenOnUpgrade in an Analog app that builds its client through provideLunora", () => {
@@ -227,7 +256,7 @@ describe(wireExternalAuth, () => {
         wireExternalAuth(project, "clerk", silentLogger().logger);
 
         expect(readFileSync(join(project, "src", "app", "app.config.ts"), "utf8")).toContain("provideLunora({ authTokenOnUpgrade: true })");
-        expect(readFileSync(join(project, "src", "app", "other.config.ts"), "utf8")).toContain('provideLunora({ authTokenOnUpgrade: true, url: "/x" })');
+        expect(readFileSync(join(project, "src", "app", "other.config.ts"), "utf8")).toContain('provideLunora({ url: "/x", authTokenOnUpgrade: true })');
     });
 });
 

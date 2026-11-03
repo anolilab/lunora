@@ -335,17 +335,40 @@ const findClientFiles = (directory: string, depth = 0): string[] => {
     });
 };
 
+/** The `<script>` blocks of a Svelte or Vue component, as the opening tag, the code, and the closing tag. */
+const SCRIPT_BLOCK = /(<script\b[^>]*>)([\s\S]*?)<\/script>/gu;
+
+/** Svelte and Vue components, whose client sits in a `<script>` block rather than in the file. */
+const SFC_FILE = /\.(?:svelte|vue)$/u;
+
+/** Whether `object` already sets the option, so a call the app configured itself is left as written. */
+const setsUpgradeBearer = (object: ts.ObjectLiteralExpression, file: ts.SourceFile): boolean =>
+    object.properties.some(
+        (property) => (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) && property.name.getText(file) === "authTokenOnUpgrade",
+    );
+
 /**
- * Add `authTokenOnUpgrade: true` to each client construction in `source`: `new LunoraClient({ … })`, and Analog's `provideLunora(…)`
- * call, with options or without. The call sites come from the parsed syntax tree, so a comment or string that names one is left
- * alone. Returns the patched text, or `undefined` when the file has no such call.
+ * Add `authTokenOnUpgrade: true` to each client construction in `source` that does not set it: `new LunoraClient({ … })`, and
+ * Analog's `provideLunora(…)` call, with options or without. The setting goes after the last property or spread, so a spread
+ * before it cannot overwrite it. The call sites come from the parsed syntax tree, so a comment or string that names one is left
+ * alone. Returns the patched text, or `undefined` when no call needed the setting.
  */
 const patchClientSource = (source: string): string | undefined => {
     const file = ts.createSourceFile("client.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const insertions: { at: number; text: string }[] = [];
 
-    const optionsInsertion = (options: ts.ObjectLiteralExpression): { at: number; text: string } => {
-        return { at: options.getStart(file) + 1, text: " authTokenOnUpgrade: true," };
+    const withBearer = (options: ts.ObjectLiteralExpression): void => {
+        if (setsUpgradeBearer(options, file)) {
+            return;
+        }
+
+        const last = options.properties.at(-1);
+
+        insertions.push(
+            last === undefined
+                ? { at: options.getStart(file) + 1, text: " authTokenOnUpgrade: true " }
+                : { at: last.getEnd(), text: ", authTokenOnUpgrade: true" },
+        );
     };
 
     const visit = (node: ts.Node): void => {
@@ -353,7 +376,7 @@ const patchClientSource = (source: string): string | undefined => {
             const [options] = node.arguments ?? [];
 
             if (options !== undefined && ts.isObjectLiteralExpression(options)) {
-                insertions.push(optionsInsertion(options));
+                withBearer(options);
             }
         } else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "provideLunora") {
             const [options] = node.arguments;
@@ -361,7 +384,7 @@ const patchClientSource = (source: string): string | undefined => {
             if (options === undefined) {
                 insertions.push({ at: node.getEnd() - 1, text: "{ authTokenOnUpgrade: true }" });
             } else if (ts.isObjectLiteralExpression(options)) {
-                insertions.push(optionsInsertion(options));
+                withBearer(options);
             }
         }
 
@@ -385,18 +408,42 @@ const patchClientSource = (source: string): string | undefined => {
 };
 
 /**
+ * The patched text of a client file, or `undefined` when nothing in it needed the setting. A Svelte or Vue component keeps its
+ * client in a `<script>` block, which is not TypeScript as a whole, so each block is patched on its own.
+ */
+const patchClientFile = (path: string, source: string): string | undefined => {
+    if (!SFC_FILE.test(path)) {
+        return patchClientSource(source);
+    }
+
+    let out = "";
+    let cursor = 0;
+
+    for (const match of source.matchAll(SCRIPT_BLOCK)) {
+        const [, opening = "", code = ""] = match;
+        const codeStart = match.index + opening.length;
+        const patched = patchClientSource(code);
+
+        if (patched !== undefined) {
+            out += `${source.slice(cursor, codeStart)}${patched}`;
+            cursor = codeStart + code.length;
+        }
+    }
+
+    if (cursor === 0) {
+        return undefined;
+    }
+
+    return `${out}${source.slice(cursor)}`;
+};
+
+/**
  * Turn on `authTokenOnUpgrade` where the app builds its client (`new LunoraClient`, or Analog's `provideLunora()`), so the
  * live-query sockets carry the bearer too (a browser cannot set `Authorization` on a WebSocket). Returns the patched files.
  */
 const enableUpgradeBearer = (projectDirectory: string): string[] =>
     CLIENT_DIRECTORIES.flatMap((directory) => findClientFiles(join(projectDirectory, directory))).filter((path) => {
-        const source = readFileSync(path, "utf8");
-
-        if (source.includes("authTokenOnUpgrade")) {
-            return false;
-        }
-
-        const patched = patchClientSource(source);
+        const patched = patchClientFile(path, readFileSync(path, "utf8"));
 
         if (patched === undefined) {
             return false;
@@ -464,8 +511,14 @@ const wireExternalAuth = (projectDirectory: string, provider: ExternalAuthProvid
         logger.success(`auth: listed ${spec.envVars.join(", ")} in ${DEV_VARS_EXAMPLE_FILE}`);
     }
 
-    for (const file of enableUpgradeBearer(projectDirectory)) {
+    const bearerFiles = enableUpgradeBearer(projectDirectory);
+
+    for (const file of bearerFiles) {
         logger.success(`auth: turned on authTokenOnUpgrade in ${relative(projectDirectory, file)}`);
+    }
+
+    if (bearerFiles.length === 0) {
+        logger.warn("auth: no client construction found to turn on authTokenOnUpgrade; set it on your client by hand");
     }
 
     logger.info(
