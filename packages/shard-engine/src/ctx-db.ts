@@ -2659,10 +2659,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * IS the row count. Marker deps — `SCAN_DEP` and the `~r:` range suffix —
      * describe a read's SHAPE, not its size, and would each otherwise be
      * miscounted as a single row; the fluent reader meters its own terminals
-     * instead (see `meterRows` in `buildReader`).
+     * instead (see `meterRows` in `buildReader`). A by-id read is flagged `exact`,
+     * so a row whose id happens to spell a marker is still charged.
      */
     const onRead: ReadHook = (table, idOrScan, exact) => {
-        if (idOrScan !== undefined && idOrScan !== SCAN_DEP) {
+        if (idOrScan !== undefined && (exact === true || idOrScan !== SCAN_DEP)) {
             headroom?.recordRead(1);
         }
 
