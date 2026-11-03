@@ -411,7 +411,7 @@ describe("tabCoordinator — promotion after yield-leadership (plan 266 S1)", ()
 
 describe("tabCoordinator — subscription-data/subscription-settled wire frames (CLIENT-01)", () => {
     it("re-announces the leader's connection status when a new tab claims leadership", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         // `emitConnectionStatus` fires only on a CHANGE and `onBecomeLeader`
         // announces once, so a tab opened later heard nothing and sat on
@@ -451,7 +451,7 @@ describe("tabCoordinator — subscription-data/subscription-settled wire frames 
     });
 
     it("delivers a leader-broadcast subscription error to a follower's onSubscriptionError", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         // `broadcastSubscriptionError` shipped with no caller, so this handler
         // was unreachable: a `subscribe(..., { onError })` on a follower tab
@@ -661,7 +661,7 @@ describe("lunoraClient — a follower's online-only write that fails on the netw
 
 describe("lunoraClient — cross-tab follower drops confirmed optimistic layers (CLIENT-01)", () => {
     it("a follower drops a per-call optimistic layer once a leader-broadcast cursor reaches its commit cursor", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ commitCursor: 10, result: { ok: true } }));
         const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: "https://app.example" });
@@ -686,11 +686,11 @@ describe("lunoraClient — cross-tab follower drops confirmed optimistic layers 
 
             rogue.postMessage({ cursor: 10, data: 11, key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
 
-            await delay(30);
-
             // The overlay is dropped; the leader's authoritative value shows —
             // not 12 (which a still-applied +1 layer would fold on top of 11).
-            expect(received.at(-1)).toBe(11);
+            await vi.waitFor(() => {
+                expect(received.at(-1)).toBe(11);
+            });
         } finally {
             rogue.close();
             client.close();
@@ -698,7 +698,7 @@ describe("lunoraClient — cross-tab follower drops confirmed optimistic layers 
     });
 
     it("a follower's setQuery overlay is released once a leader-broadcast cursor reaches its commit cursor", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ commitCursor: 10, result: { ok: true } }));
         const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: "https://app.example" });
@@ -726,10 +726,10 @@ describe("lunoraClient — cross-tab follower drops confirmed optimistic layers 
 
             rogue.postMessage({ cursor: 10, data: 99, key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
 
-            await delay(30);
-
             // The overlay is released; the leader's authoritative value shows.
-            expect(received.at(-1)).toBe(99);
+            await vi.waitFor(() => {
+                expect(received.at(-1)).toBe(99);
+            });
         } finally {
             rogue.close();
             client.close();
@@ -737,7 +737,7 @@ describe("lunoraClient — cross-tab follower drops confirmed optimistic layers 
     });
 
     it("a cursor-less subscription-data frame (mixed-version leader) keeps the historical fold-without-drop behavior", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ commitCursor: 10, result: { ok: true } }));
         const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: "https://app.example" });
@@ -758,12 +758,12 @@ describe("lunoraClient — cross-tab follower drops confirmed optimistic layers 
 
             rogue.postMessage({ data: 5, key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
 
-            await delay(30);
-
             // 5 (new base) folded through the still-active +1 layer = 6, not the
             // raw leader value — the historical no-cursor behavior, preserved for
             // backward compat with a mixed-version deploy.
-            expect(received.at(-1)).toBe(6);
+            await vi.waitFor(() => {
+                expect(received.at(-1)).toBe(6);
+            });
         } finally {
             rogue.close();
             client.close();
@@ -1020,7 +1020,7 @@ describe("lunoraClient — cross-tab settled watermark scoped to the owning clie
     });
 
     it("a matching clientId applies the mutationId half, monotonically (never regresses)", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ commitCursor: 10, result: { ok: true } }));
         const client = new LunoraClient({ clientId: "client-X", crossTabSync: true, fetch: fetchMock, url: "https://app.example" });
@@ -1041,9 +1041,9 @@ describe("lunoraClient — cross-tab settled watermark scoped to the owning clie
                 tabId: "leader-tab",
                 type: "subscription-settled",
             } satisfies RawLeaderMessage);
-            await delay(30);
-
-            expect(checkpoints.at(-1)).toStrictEqual({ checkpoint: 10, mutationId: 6 });
+            await vi.waitFor(() => {
+                expect(checkpoints.at(-1)).toStrictEqual({ checkpoint: 10, mutationId: 6 });
+            });
 
             // A later, LOWER watermark from the same (matching) clientId must
             // never move `lastMutationId` backwards.
@@ -1055,9 +1055,9 @@ describe("lunoraClient — cross-tab settled watermark scoped to the owning clie
                 tabId: "leader-tab",
                 type: "subscription-settled",
             } satisfies RawLeaderMessage);
-            await delay(30);
-
-            expect(checkpoints.at(-1)).toStrictEqual({ checkpoint: 11, mutationId: 6 });
+            await vi.waitFor(() => {
+                expect(checkpoints.at(-1)).toStrictEqual({ checkpoint: 11, mutationId: 6 });
+            });
         } finally {
             rogue.close();
             client.close();
@@ -1092,7 +1092,7 @@ describe("lunoraClient — cross-tab settled watermark scoped to the owning clie
 
 describe("lunoraClient — cross-tab channel scoped to deployment + identity (plan 263 S1)", () => {
     it("two same-origin clients with different identities land on different channels — no cross-identity leak", async () => {
-        expect.assertions(3);
+        expect.hasAssertions();
 
         const url = "https://app.example";
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: {} }));
@@ -1131,9 +1131,9 @@ describe("lunoraClient — cross-tab channel scoped to deployment + identity (pl
             const probeOnB = new BroadcastChannel(channelB);
 
             probeOnB.postMessage({ data: "own-channel-row", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
-            await delay(30);
-
-            expect(receivedB).toStrictEqual(["own-channel-row"]);
+            await vi.waitFor(() => {
+                expect(receivedB).toStrictEqual(["own-channel-row"]);
+            });
 
             probeOnA.close();
             probeOnB.close();
@@ -1182,7 +1182,7 @@ describe("lunoraClient — cross-tab channel scoped to deployment + identity (pl
     });
 
     it("restarts the coordinator on an identity change, moving to the re-derived channel", async () => {
-        expect.assertions(4);
+        expect.hasAssertions();
 
         const url = "https://app.example";
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: {} }));
@@ -1225,9 +1225,9 @@ describe("lunoraClient — cross-tab channel scoped to deployment + identity (pl
             const probeOnSignedIn = new BroadcastChannel(signedInChannel);
 
             probeOnSignedIn.postMessage({ data: "signed-in-row", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
-            await delay(30);
-
-            expect(received).toStrictEqual(["anon-row", "signed-in-row"]);
+            await vi.waitFor(() => {
+                expect(received).toStrictEqual(["anon-row", "signed-in-row"]);
+            });
 
             probeOnAnon.close();
             probeOnSignedIn.close();
@@ -1239,7 +1239,7 @@ describe("lunoraClient — cross-tab channel scoped to deployment + identity (pl
 
 describe("lunoraClient — identity stamp on data-bearing frames (plan 263 S2)", () => {
     it("drops a data frame whose identity stamp mismatches this follower's own fingerprint, even on its own channel", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: {} }));
         const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: TEST_URL });
@@ -1272,9 +1272,9 @@ describe("lunoraClient — identity stamp on data-bearing frames (plan 263 S2)",
             // An absent stamp (mixed-version / old leader) is still accepted
             // — today's behavior, unchanged.
             rogue.postMessage({ data: "old-leader-row", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
-            await delay(30);
-
-            expect(received).toStrictEqual(["old-leader-row"]);
+            await vi.waitFor(() => {
+                expect(received).toStrictEqual(["old-leader-row"]);
+            });
 
             rogue.close();
         } finally {
@@ -1424,7 +1424,7 @@ describe("lunoraClient — a follower throws only on the surfaces an app calls d
     });
 
     it("delivers the leader's broadcast to a follower that subscribed while the leader was already known", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: {} }));
         const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: TEST_URL });
@@ -1445,12 +1445,12 @@ describe("lunoraClient — a follower throws only on the surfaces an app calls d
             const key = SubscriptionRegistry.key("q:list", { channel: "general" });
 
             leader.postMessage({ data: { rows: [1, 2] }, key, tabId: SMALLER_ID, type: "subscription-data" } satisfies RawLeaderMessage);
-            await delay(30);
-
             // Registration is the whole mechanism: without it `onSubscriptionData`
             // cannot find a `SubscriptionState` for `key` and drops the broadcast.
-            expect(seen).toHaveLength(1);
-            expect(seen[0]).toStrictEqual({ rows: [1, 2] });
+            await vi.waitFor(() => {
+                expect(seen).toHaveLength(1);
+                expect(seen[0]).toStrictEqual({ rows: [1, 2] });
+            });
 
             leader.close();
         } finally {
