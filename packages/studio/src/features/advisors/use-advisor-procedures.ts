@@ -8,7 +8,7 @@ import { errorMessage } from "../../lib/internal";
  * Dev-host route that serves `_generated/advisor-procedures.json` (see
  * `@lunora/config/studio-host`). Kept out of the worker: the procedure list is
  * Studio-only data, so the health map reads it from the local host instead of
- * an admin RPC. Only the dev hosts mount it; a static deploy has no such route.
+ * an admin RPC.
  */
 const ADVISOR_PROCEDURES_ENDPOINT = "/__lunora/advisor-procedures";
 
