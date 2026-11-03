@@ -5916,7 +5916,13 @@ class LunoraClient {
             }
 
             openManagedSocket(conn, this.wsUrlFor(handlers.shardKey, token, base), this.managedSocketOptions, {
-                onClose: () => {
+                onClose: (event) => {
+                    // A route socket opened on a lapsed credential is accepted and closed with 4001; telling the
+                    // listener is what gets the token refreshed before the reconnect repeats the same bearer.
+                    if (event?.code === 4001) {
+                        this.notifyTokenExpired();
+                    }
+
                     scheduleReconnect();
                     handlers.onClose?.();
                 },
