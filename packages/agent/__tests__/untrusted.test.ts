@@ -72,6 +72,19 @@ describe(wrapUntrusted, () => {
         expect(inside).toContain("user@example.com");
     });
 
+    it("neutralises slash commands whatever character follows the name, except a path segment", () => {
+        const wrapped = wrapUntrusted("/approve@bot now\n/run\"now\" /kick'x' /cmd] /cmd* and /cmd> then /docs/index.html");
+        const inside = enclosedBy(wrapped, tagIdOf(wrapped));
+
+        expect(inside).toContain(`/${ZERO_WIDTH_SPACE}approve@bot`);
+        expect(inside).toContain(`/${ZERO_WIDTH_SPACE}run"now"`);
+        expect(inside).toContain(`/${ZERO_WIDTH_SPACE}kick'x'`);
+        expect(inside).toContain(`/${ZERO_WIDTH_SPACE}cmd]`);
+        expect(inside).toContain(`/${ZERO_WIDTH_SPACE}cmd*`);
+        expect(inside).toContain(`/${ZERO_WIDTH_SPACE}cmd&gt;`);
+        expect(inside).toContain("/docs/index.html");
+    });
+
     it("leaves prices and file paths untouched", () => {
         const wrapped = wrapUntrusted("total $5 or $12.50, see /docs/index.html and /var/log");
         const inside = enclosedBy(wrapped, tagIdOf(wrapped));
