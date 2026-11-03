@@ -159,6 +159,28 @@ describe("sendStudioAsset", () => {
         expect(made.end).toHaveBeenCalledWith();
     });
 
+    it("gives an out-of-range q its full weight, so a malformed weight cannot drop a coding", () => {
+        expect.assertions(1);
+
+        const made = send("br;q=-1");
+
+        expect(made.headers()["Content-Encoding"]).toBe("br");
+    });
+
+    it("answers 406, not 304, to a conditional request for a version the client cannot encode", () => {
+        expect.assertions(2);
+
+        const made = makeResponse();
+        const request = {
+            headers: { "accept-encoding": "br;q=0, gzip;q=0, identity;q=0", "if-none-match": 'W/"studio.js-1"' },
+        } as unknown as IncomingMessage;
+
+        sendStudioAsset(request, made.response, body, "text/javascript; charset=utf-8", "studio.js", 1);
+
+        expect(made.response.statusCode).toBe(406);
+        expect(made.end).toHaveBeenCalledWith();
+    });
+
     it("compresses a tiny body for a client that refuses identity", () => {
         expect.assertions(2);
 

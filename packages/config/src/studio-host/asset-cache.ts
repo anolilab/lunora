@@ -72,7 +72,7 @@ const qualityOf = (parameters: ReadonlyArray<string>): number => {
     const parameter = parameters.find((candidate) => candidate.startsWith("q="));
     const quality = parameter === undefined ? Number.NaN : Number(parameter.slice(2));
 
-    return Number.isNaN(quality) ? 1 : quality;
+    return Number.isNaN(quality) || quality < 0 || quality > 1 ? 1 : quality;
 };
 
 /**
@@ -170,10 +170,6 @@ const sendStudioAsset = (
 ): void => {
     response.setHeader("Vary", "Accept-Encoding");
 
-    if (applyStudioAssetCache(request, response, fileName, stamp)) {
-        return;
-    }
-
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `headers` is typed required but partial/mocked requests omit it
     const { encodings, identityAllowed } = chooseEncoding(rawHeader(request.headers?.["accept-encoding"]));
     const encoding = identityAllowed && body.length < MIN_COMPRESS_BYTES ? undefined : encodings[0];
@@ -183,6 +179,11 @@ const sendStudioAsset = (
         response.statusCode = 406;
         response.end();
 
+        return;
+    }
+
+    // A `304` answers only a request that would otherwise get a `200` (RFC 9110 §15.4.5), so the refusal above comes first.
+    if (applyStudioAssetCache(request, response, fileName, stamp)) {
         return;
     }
 
