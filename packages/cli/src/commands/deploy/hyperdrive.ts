@@ -61,6 +61,8 @@ interface ProvisionHyperdriveOptions {
     logger: Logger;
     /** The `--env` being deployed. */
     wranglerEnvironment?: string;
+    /** The config to provision, when it is not the `wrangler.jsonc` found in `cwd` (a service's own). */
+    wranglerPath?: string;
 }
 
 type Request = (path: string, init?: RequestInit) => ReturnType<typeof cloudflareRestRequest>;
@@ -415,8 +417,8 @@ const deployedName = (parsed: HyperdriveWrangler, wranglerEnvironment: string | 
     return typeof own === "string" && own !== "" ? own : `${base}-${wranglerEnvironment}`;
 };
 
-const scanPlaceholders = (cwd: string, wranglerEnvironment: string | undefined): PlaceholderScan | undefined => {
-    const wranglerPath = findWranglerFile(cwd);
+const scanPlaceholders = (cwd: string, wranglerEnvironment: string | undefined, configPath?: string): PlaceholderScan | undefined => {
+    const wranglerPath = configPath ?? findWranglerFile(cwd);
     const parsed = wranglerPath === undefined ? undefined : readWranglerJsonc<HyperdriveWrangler>(wranglerPath).parsed;
 
     if (wranglerPath === undefined || parsed === undefined) {
@@ -516,10 +518,10 @@ const warnIfCaching = async (request: Request, binding: string, id: string, logg
  * them; it never changes the config, since the user chose that id.
  */
 const warnCachingOn = async (
-    options: Pick<ProvisionHyperdriveOptions, "cwd" | "fetch" | "logger" | "wranglerEnvironment">,
+    options: Pick<ProvisionHyperdriveOptions, "cwd" | "fetch" | "logger" | "wranglerEnvironment" | "wranglerPath">,
     environment: CloudflareEnvironment,
 ): Promise<void> => {
-    const wranglerPath = findWranglerFile(options.cwd);
+    const wranglerPath = options.wranglerPath ?? findWranglerFile(options.cwd);
     const parsed = wranglerPath === undefined ? undefined : readWranglerJsonc<HyperdriveWrangler>(wranglerPath).parsed;
     const scope = options.wranglerEnvironment === undefined ? parsed : parsed?.env?.[options.wranglerEnvironment];
     const { accountId, token } = resolveCloudflareCredentials(environment, scope?.account_id ?? parsed?.account_id);
@@ -559,7 +561,7 @@ const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise
         await warnCachingOn(options, environment);
     }
 
-    const scan = scanPlaceholders(options.cwd, options.wranglerEnvironment);
+    const scan = scanPlaceholders(options.cwd, options.wranglerEnvironment, options.wranglerPath);
 
     if (scan === undefined) {
         return undefined;
@@ -673,6 +675,7 @@ const provisionDeployHyperdrive = async (
     command: PreDeployCommand,
     target: string,
     phase: "check" | "create" = "create",
+    wranglerPath?: string,
 ): Promise<string | undefined> => {
     if (target !== "cloudflare") {
         return undefined;
@@ -706,6 +709,7 @@ const provisionDeployHyperdrive = async (
         environment,
         logger: options.logger,
         wranglerEnvironment: options.env,
+        wranglerPath,
     });
 };
 
