@@ -1475,6 +1475,15 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 type WorkflowInstanceAction = "pause" | "restart" | "resume" | "terminate";
 ```
 
+### `WorkflowInstanceCreated` (interface)
+
+```ts
+interface WorkflowInstanceCreated {
+    id: string;
+    status: WorkflowInstanceStatus;
+}
+```
+
 ### `WorkflowInstanceDetail` (interface)
 
 ```ts
@@ -1801,6 +1810,20 @@ class LunoraAdminClient extends LunoraClient {
         id: string;
         name: string;
     }): Promise<WorkflowInstanceDetail>;
+    createWorkflowInstance(options: {
+        id?: string;
+        name: string;
+        params?: unknown;
+    }): Promise<WorkflowInstanceCreated>;
+    sendWorkflowEvent(options: {
+        id: string;
+        name: string;
+        payload?: unknown;
+        type: string;
+    }): Promise<{
+        instanceId: string;
+        timestamp?: string;
+    }>;
     setWorkflowInstanceStatus(options: {
         action: WorkflowInstanceAction;
         id: string;

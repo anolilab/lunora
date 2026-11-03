@@ -89,8 +89,14 @@ const toStep = (raw: Record<string, unknown>): WorkflowStepDetail => {
     };
 };
 
-/** The lifecycle mutations the REST API exposes via `PATCH .../instances/{id}`. */
+/** The lifecycle mutations the REST API exposes via `PATCH .../instances/{id}/status`. */
 export type WorkflowInstanceAction = "pause" | "restart" | "resume" | "terminate";
+
+/** The instance `POST .../instances` created: its id and the status it starts in. */
+export interface WorkflowInstanceCreated {
+    id: string;
+    status: WorkflowInstanceStatus;
+}
 
 /** Configuration for a {@link WorkflowsRestClient}. */
 export interface WorkflowsRestConfig {
@@ -161,8 +167,17 @@ export class WorkflowsRestError extends LunoraError {
 
 /** The observe client: list instances, read one instance's steps, and (with Edit scope) mutate its status. */
 export interface WorkflowsRestClient {
+    /** Start a new instance. `params` is sent JSON-encoded, as the instance's event payload. */
+    createInstance: (args: { instanceId?: string; params?: unknown; workflowName: string }) => Promise<WorkflowInstanceCreated>;
     getInstance: (args: { instanceId: string; workflowName: string }) => Promise<WorkflowInstanceDetail>;
     listInstances: (args: { page?: number; perPage?: number; status?: WorkflowInstanceStatus; workflowName: string }) => Promise<WorkflowInstancePage>;
+    /** Deliver an event to a running instance's matching `waitForEvent`. `payload` is the JSON body. */
+    sendEvent: (args: {
+        eventType: string;
+        instanceId: string;
+        payload?: unknown;
+        workflowName: string;
+    }) => Promise<{ instanceId: string; timestamp?: string }>;
     setInstanceStatus: (args: { action: WorkflowInstanceAction; instanceId: string; workflowName: string }) => Promise<{ status: WorkflowInstanceStatus }>;
 }
 
@@ -248,6 +263,23 @@ export const createWorkflowsRestClient = (config: WorkflowsRestConfig): Workflow
             const result = (body["result"] ?? {}) as Record<string, unknown>;
 
             return { status: toStatus(result["status"]) };
+        },
+        createInstance: async ({ instanceId, params, workflowName }) => {
+            const payload = {
+                ...(instanceId === undefined ? {} : { instance_id: instanceId }),
+                ...(params === undefined ? {} : { params: JSON.stringify(params) }),
+            };
+            const body = await request(`/${encodeURIComponent(workflowName)}/instances`, { body: JSON.stringify(payload), method: "POST" });
+            const result = (body["result"] ?? {}) as Record<string, unknown>;
+
+            return { id: asString(result["id"]) ?? instanceId ?? "", status: toStatus(result["status"]) };
+        },
+        sendEvent: async ({ eventType, instanceId, payload, workflowName }) => {
+            const path = `/${encodeURIComponent(workflowName)}/instances/${encodeURIComponent(instanceId)}/events/${encodeURIComponent(eventType)}`;
+            const body = await request(path, { body: JSON.stringify(payload ?? {}), method: "POST" });
+            const result = (body["result"] ?? {}) as Record<string, unknown>;
+
+            return { instanceId: asString(result["instanceId"]) ?? instanceId, timestamp: asString(result["timestamp"]) };
         },
     };
 };

@@ -1,7 +1,14 @@
 import type { WorkflowsRestClient } from "@lunora/workflow";
 import { describe, expect, it } from "vitest";
 
-import { buildWorkflowsAdminRoutes, WORKFLOWS_INSTANCE_PATH, WORKFLOWS_INSTANCES_PATH, WORKFLOWS_STATUS_PATH } from "../src/workflows-admin-routes";
+import {
+    buildWorkflowsAdminRoutes,
+    WORKFLOWS_CREATE_PATH,
+    WORKFLOWS_EVENT_PATH,
+    WORKFLOWS_INSTANCE_PATH,
+    WORKFLOWS_INSTANCES_PATH,
+    WORKFLOWS_STATUS_PATH,
+} from "../src/workflows-admin-routes";
 
 /** A fake REST client (typed against the real interface) that records its calls and returns canned payloads. */
 const fakeClient = (): { calls: { args: unknown; method: string }[]; client: WorkflowsRestClient } => {
@@ -22,6 +29,16 @@ const fakeClient = (): { calls: { args: unknown; method: string }[]; client: Wor
             calls.push({ args, method: "setInstanceStatus" });
 
             return { status: "paused" };
+        },
+        createInstance: async (args) => {
+            calls.push({ args, method: "createInstance" });
+
+            return { id: args.instanceId ?? "generated", status: "queued" };
+        },
+        sendEvent: async (args) => {
+            calls.push({ args, method: "sendEvent" });
+
+            return { instanceId: args.instanceId, timestamp: "2026-11-03T00:00:00Z" };
         },
     };
 
@@ -110,6 +127,63 @@ describe("workflows admin routes", () => {
 
         expect(response?.status).toBe(200);
         expect(calls[0]).toStrictEqual({ args: { action: "restart", instanceId: "i1", workflowName: "orders" }, method: "setInstanceStatus" });
+    });
+
+    it("creates an instance, forwarding the optional id and params", async () => {
+        expect.assertions(2);
+
+        const { calls, client } = fakeClient();
+        const routes = buildWorkflowsAdminRoutes({ assertAdmin: allow, resolveWorkflowsClient: () => client });
+
+        const response = await routes[WORKFLOWS_CREATE_PATH]?.(
+            post(WORKFLOWS_CREATE_PATH, { id: "order-1", name: "orders", params: { sku: "a" } }),
+            {},
+            new URL(`https://app.test${WORKFLOWS_CREATE_PATH}`),
+        );
+
+        expect(response?.status).toBe(200);
+        expect(calls[0]).toStrictEqual({ args: { instanceId: "order-1", params: { sku: "a" }, workflowName: "orders" }, method: "createInstance" });
+    });
+
+    it("rejects a create without a workflow name", async () => {
+        expect.assertions(1);
+
+        const { client } = fakeClient();
+        const routes = buildWorkflowsAdminRoutes({ assertAdmin: allow, resolveWorkflowsClient: () => client });
+
+        await expect(
+            routes[WORKFLOWS_CREATE_PATH]?.(post(WORKFLOWS_CREATE_PATH, { id: "order-1" }), {}, new URL(`https://app.test${WORKFLOWS_CREATE_PATH}`)),
+        ).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("sends an event to a running instance with its type and payload", async () => {
+        expect.assertions(2);
+
+        const { calls, client } = fakeClient();
+        const routes = buildWorkflowsAdminRoutes({ assertAdmin: allow, resolveWorkflowsClient: () => client });
+
+        const response = await routes[WORKFLOWS_EVENT_PATH]?.(
+            post(WORKFLOWS_EVENT_PATH, { id: "i1", name: "orders", payload: { approved: true }, type: "approval" }),
+            {},
+            new URL(`https://app.test${WORKFLOWS_EVENT_PATH}`),
+        );
+
+        expect(response?.status).toBe(200);
+        expect(calls[0]).toStrictEqual({
+            args: { eventType: "approval", instanceId: "i1", payload: { approved: true }, workflowName: "orders" },
+            method: "sendEvent",
+        });
+    });
+
+    it("rejects an event without a type", async () => {
+        expect.assertions(1);
+
+        const { client } = fakeClient();
+        const routes = buildWorkflowsAdminRoutes({ assertAdmin: allow, resolveWorkflowsClient: () => client });
+
+        await expect(
+            routes[WORKFLOWS_EVENT_PATH]?.(post(WORKFLOWS_EVENT_PATH, { id: "i1", name: "orders" }), {}, new URL(`https://app.test${WORKFLOWS_EVENT_PATH}`)),
+        ).rejects.toMatchObject({ status: 400 });
     });
 
     it("returns a 200 `configured: false` sentinel from the instances list when no client is resolvable", async () => {

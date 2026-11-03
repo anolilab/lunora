@@ -2195,6 +2195,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `WorkflowInstanceCreated` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `WorkflowInstanceDetail` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.

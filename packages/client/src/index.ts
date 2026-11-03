@@ -144,6 +144,7 @@ export type {
     VectorIndexSummary,
     VectorQueryMatch,
     WorkflowInstanceAction,
+    WorkflowInstanceCreated,
     WorkflowInstanceDetail,
     WorkflowInstancePage,
     WorkflowInstanceStatus,

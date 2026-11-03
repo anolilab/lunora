@@ -12,6 +12,8 @@ import {
     SCHEDULED_JOB_PATH,
     SCHEDULED_PATH,
     SCHEDULED_STATUS_PATH,
+    WORKFLOWS_CREATE_PATH,
+    WORKFLOWS_EVENT_PATH,
     WORKFLOWS_INSTANCE_PATH,
     WORKFLOWS_INSTANCES_PATH,
     WORKFLOWS_STATUS_PATH,
@@ -22,6 +24,7 @@ import type {
     ScheduledJobView,
     ScheduleRecord,
     SchedulerStatus,
+    WorkflowInstanceCreated,
     WorkflowInstanceDetail,
     WorkflowInstancePage,
     WorkflowInstanceStatus,
@@ -213,6 +216,37 @@ export const getWorkflowInstance = async (
         status: body.status ?? "unknown",
         steps: body.steps ?? [],
     };
+};
+
+export const createWorkflowInstance = async (
+    host: AdminHost,
+    options: Parameters<LunoraAdminClient["createWorkflowInstance"]>[0],
+): ReturnType<LunoraAdminClient["createWorkflowInstance"]> => {
+    host.assertOpen();
+
+    const body = (await host.adminFetch(WORKFLOWS_CREATE_PATH, "POST", {
+        id: options.id,
+        name: options.name,
+        params: options.params,
+    })) as Partial<WorkflowInstanceCreated>;
+
+    return { id: body.id ?? options.id ?? "", status: body.status ?? "unknown" };
+};
+
+export const sendWorkflowEvent = async (
+    host: AdminHost,
+    options: Parameters<LunoraAdminClient["sendWorkflowEvent"]>[0],
+): ReturnType<LunoraAdminClient["sendWorkflowEvent"]> => {
+    host.assertOpen();
+
+    const body = (await host.adminFetch(WORKFLOWS_EVENT_PATH, "POST", {
+        id: options.id,
+        name: options.name,
+        payload: options.payload,
+        type: options.type,
+    })) as { instanceId?: string; timestamp?: string };
+
+    return { instanceId: body.instanceId ?? options.id, timestamp: body.timestamp };
 };
 
 export const setWorkflowInstanceStatus = async (
