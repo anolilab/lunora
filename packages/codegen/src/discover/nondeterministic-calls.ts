@@ -177,6 +177,7 @@ const contextNamesOf = (handler: TsNode): Set<string> => {
     };
 
     const [first] = Node.isParametered(handler) ? handler.getParameters() : [];
+    const requestName = first !== undefined && Node.isIdentifier(first.getNameNode()) ? first.getNameNode().getText() : undefined;
 
     if (first !== undefined) {
         const parameter = first.getNameNode();
@@ -188,8 +189,13 @@ const contextNamesOf = (handler: TsNode): Set<string> => {
         }
     }
 
+    // Only a destructuring of the request argument carries its context; `const { ctx } = other` is some other object's `ctx`.
     for (const declaration of descendantsOfKind(handler, SyntaxKind.VariableDeclaration)) {
-        addContextBinding(declaration.getNameNode());
+        const initializer = declaration.getInitializer();
+
+        if (requestName !== undefined && initializer !== undefined && Node.isIdentifier(initializer) && initializer.getText() === requestName) {
+            addContextBinding(declaration.getNameNode());
+        }
     }
 
     return names;
