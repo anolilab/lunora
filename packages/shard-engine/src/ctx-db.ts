@@ -2656,13 +2656,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     /**
      * Charge reads as they are stamped. The object-form readers (`get`,
      * `findFirst`, `findMany`) stamp one dependency per row, so counting those
-     * IS the row count. Marker deps — `SCAN_DEP` and the `~r:` range suffix —
-     * describe a read's SHAPE, not its size, and would each otherwise be
+     * IS the row count. Marker deps — `SCAN_DEP`, `PRIMARY_READ` and the `~r:` range
+     * suffix — describe a read's SHAPE, not its size, and would each otherwise be
      * miscounted as a single row; the fluent reader meters its own terminals
      * instead (see `meterRows` in `buildReader`).
      */
     const onRead: ReadHook = (table, idOrScan, exact) => {
-        if (idOrScan !== undefined && idOrScan !== SCAN_DEP) {
+        if (idOrScan !== undefined && idOrScan !== SCAN_DEP && idOrScan !== PRIMARY_READ) {
             headroom?.recordRead(1);
         }
 

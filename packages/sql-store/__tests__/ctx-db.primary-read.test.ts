@@ -159,4 +159,17 @@ describe("a global read that asks for the primary", () => {
         await expect(router.findFirst(TABLE, { consistency: "primary" })).resolves.toMatchObject({ label: "locked" });
         await expect(router.findMany(TABLE, { consistency: "primary" })).resolves.toMatchObject({ page: [{ label: "locked" }] });
     });
+
+    it("charges no rows to the read headroom for a primary read that matches nothing", async () => {
+        expect.assertions(1);
+
+        const provisionScope = await provisionAndWrite();
+        const globalDb = createSqlCtxDb({ clock, dialect: makeSqliteDialect(), exec: laggingReplicaOf(harness.exec), provisionScope, schema });
+        const headroom = new TransactionHeadroomTracker({});
+        const router = createShardCtxDb({ clock, globalDb, headroom, schema, sql: noLocalSql });
+
+        await router.findMany(TABLE, { consistency: "primary", where: { label: "absent" } });
+
+        expect(headroom.headroom().readRows).toBe(0);
+    });
 });
