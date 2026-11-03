@@ -794,6 +794,99 @@ describe("lunora deploy", () => {
                     expect(errors.join(" ")).toContain("LUNORA_HYPERDRIVE_URL");
                     expect(calls).toHaveLength(0);
                 });
+
+                /** A prebuilt service: wrangler reads the copy its build left behind, through the redirect. */
+                const writePrebuiltService = (generated: unknown): string => {
+                    const redirectDir = join(workdir, "services", "parser", ".wrangler", "deploy");
+
+                    mkdirSync(redirectDir, { recursive: true });
+                    writeFileSync(join(redirectDir, "config.json"), JSON.stringify({ configPath: "../../generated.wrangler.json" }), "utf8");
+
+                    const generatedPath = join(workdir, "services", "parser", "generated.wrangler.json");
+
+                    writeFileSync(generatedPath, JSON.stringify(generated), "utf8");
+
+                    return generatedPath;
+                };
+
+                it("refuses a prebuilt service whose generated config still has a D1 placeholder the source has resolved, before any service or the app is deployed", async () => {
+                    expect.assertions(2);
+
+                    declareParser();
+                    writeFileSync(
+                        parserConfig(),
+                        JSON.stringify({
+                            d1_databases: [{ binding: "DB", database_id: "resolved-id", database_name: "parser" }],
+                            main: "src/index.ts",
+                            name: "parser",
+                        }),
+                        "utf8",
+                    );
+                    writePrebuiltService({
+                        d1_databases: [{ binding: "DB", database_id: D1_PLACEHOLDER_ID, database_name: "parser" }],
+                        main: "src/index.ts",
+                        name: "parser",
+                    });
+
+                    const { calls, spawner } = createRecordingSpawner();
+                    const { logger } = silentLogger();
+                    const result = await runDeployCommand({
+                        cwd: workdir,
+                        dryRun: true,
+                        frameworkBuild: false,
+                        logger,
+                        secretLister: noRemoteSecrets,
+                        spawner,
+                    });
+
+                    expect(result.error).toContain('service parser (parser): deploy blocked: the "DB" D1 binding has a placeholder database_id');
+                    expect(calls).toHaveLength(0);
+                });
+
+                it("writes the Hyperdrive id a prebuilt service's generated config needs into that config, before the service deploys", async () => {
+                    expect.assertions(2);
+
+                    declareParser();
+                    writeFileSync(
+                        parserConfig(),
+                        JSON.stringify({ hyperdrive: [{ binding: "HYPERDRIVE", id: "resolved-id" }], main: "src/index.ts", name: "parser" }),
+                        "utf8",
+                    );
+
+                    const generatedPath = writePrebuiltService({
+                        hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }],
+                        main: "src/index.ts",
+                        name: "parser",
+                    });
+
+                    vi.stubEnv("LUNORA_HYPERDRIVE_URL", "postgres://u:p@h/db");
+                    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                    const fetchStub = vi.fn<typeof globalThis.fetch>(async (_url, init) =>
+                        Response.json({ errors: [], result: init?.method === "POST" ? { id: "created-id" } : [], success: true }),
+                    );
+
+                    vi.stubGlobal("fetch", fetchStub);
+
+                    // The app's own deploy fails after the service's, so the run stops there and the service's spawn is all that is read.
+                    const idAtServiceDeploy: unknown[] = [];
+                    const spawner: Spawner = async (descriptor) => {
+                        if (descriptor.args.join(" ").includes("services/parser")) {
+                            idAtServiceDeploy.push((parseJsonc(readFileSync(generatedPath, "utf8")) as { hyperdrive: { id: string }[] }).hyperdrive[0]?.id);
+
+                            return { code: 0 };
+                        }
+
+                        return { code: 1 };
+                    };
+                    const { logger } = silentLogger();
+
+                    await runDeployCommand({ cwd: workdir, frameworkBuild: false, logger, secretLister: noRemoteSecrets, spawner });
+
+                    expect(idAtServiceDeploy).toStrictEqual(["created-id"]);
+                    expect(fetchStub.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+                });
             });
         });
 
