@@ -43,6 +43,7 @@
         "generate:labeler": "node scripts/generate-labeler-config.js",
         "generate:og": "node scripts/generate-package-og-images.js",
         "generate:packages-list": "node scripts/list-packages.js && prettier --write README.md",
+        "lint": "node scripts/run-lint-parallel.mjs lint:oxlint lint:eslint lint:oxfmt",
         "lint:affected:eslint": "vis affected lint:eslint --fail-fast",
         "lint:affected:types": "vis affected lint:types --fail-fast",
         "lint:batch-cap": "node scripts/check-batch-cap-drift.js",
