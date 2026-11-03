@@ -77,6 +77,19 @@ overrides:
   # `catalogs.auth.jose`; better-auth peers `^6.1.0`, so a 6.x catalog bump is safe
   # to mirror here.
   jose: 6.2.15
+  # One copy of `@opentelemetry/api` across the graph. `@better-auth/core` declares it
+  # as an optional peer (`^1.9.0`), and with autoInstallPeers pnpm fills that peer at
+  # the newest matching release (1.10.0), so drizzle and better-auth then resolve
+  # against two different `@opentelemetry/api` instances and their types diverge.
+  "@opentelemetry/api": 1.9.1
+  # One copy of `kysely`. `@better-auth/core` takes it as a peer, and one consumer still
+  # resolves 0.29.6 while the `sql` catalog is 0.29.8; the two instances give
+  # `@better-auth/core` two peer contexts whose types do not unify in @lunora/auth.
+  kysely: 0.29.8
+  # One copy of `postgres`. `drizzle-orm` 1.0 takes it as an optional peer, and with
+  # autoInstallPeers pnpm fills the peer at 4.0.0 in one context while `@lunora/hyperdrive`
+  # uses 3.x, so the two drizzle instances' `SQL` types stop unifying.
+  postgres: ^3.4.9
   # h3 stays on v1. v2 is a different framework (srvx/rou3 core, `event.req` instead
   # of `toWebRequest`), Nuxt 4 / Nitro 2 run v1, and @lunora/nuxt peers `h3: ^1.15.0`.
   # 2.0.0 is deprecated upstream and 2.0.1 is rc-only, so there is nothing stable to
