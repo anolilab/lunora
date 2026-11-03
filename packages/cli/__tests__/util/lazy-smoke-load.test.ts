@@ -1062,7 +1062,7 @@ describe(runLazySmokeLoad, () => {
 describe(taskkillEndedTree, () => {
     it.each([
         ["exit 0 killed the tree", { status: 0 }, true],
-        ["exit 128 found no such process, so the tree is gone", { status: 128 }, true],
+        ["exit 128 found no such process, which does not show the descendants ended", { status: 128 }, false],
         ["another exit leaves the tree unknown", { status: 1 }, false],
         ["a signal leaves the tree unknown", { status: null }, false],
         ["a timeout leaves the tree unknown", { error: new Error("spawnSync taskkill.exe ETIMEDOUT"), status: null }, false],
@@ -1090,6 +1090,25 @@ describe(killWindowsTreeOnExit, () => {
                 expect.objectContaining({ timeout: 5000 }),
             );
             expect(write).toHaveBeenCalledWith(expect.stringContaining("may still be running; end it with taskkill /PID 4242 /T /F"));
+        } finally {
+            write.mockRestore();
+        }
+    });
+
+    it("names the spawn failure on one stderr line, so a taskkill that could not start is diagnosable", () => {
+        expect.assertions(2);
+
+        const write = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+        spawnSync.mockReturnValueOnce({ error: new Error("spawnSync taskkill.exe EPERM"), status: null });
+
+        try {
+            killWindowsTreeOnExit(4242);
+
+            const [line = ""] = write.mock.calls.map((call) => String(call[0]));
+
+            expect(line).toContain("spawnSync taskkill.exe EPERM");
+            expect(line.endsWith("\n") && line.indexOf("\n") === line.length - 1).toBe(true);
         } finally {
             write.mockRestore();
         }

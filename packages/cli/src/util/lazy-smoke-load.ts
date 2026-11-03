@@ -640,15 +640,19 @@ const taskkillCommand = (pid: number): { args: string[]; command: string } => {
 };
 
 /**
- * Whether a finished `taskkill /T /F` ended the tree: exit 0 killed it, and exit 128 says there was no such process, so it is gone already.
- * A spawn error or any other exit leaves the tree unknown.
+ * Whether a finished `taskkill /T /F` ended the tree. Only exit 0 reports that it did: exit 128 says the root pid was already gone, which
+ * does not show that its descendants ended. A spawn error or any other exit leaves the tree unknown.
  */
-const taskkillEndedTree = (result: { error?: Error; status: number | null }): boolean =>
-    result.error === undefined && (result.status === 0 || result.status === 128);
+const taskkillEndedTree = (result: { error?: Error; status: number | null }): boolean => result.error === undefined && result.status === 0;
 
-/** Written when the tree was not confirmed gone, so the run never reports a smoke process it may have left serving as stopped. */
-const warnTreeMayRun = (pid: number): void => {
-    process.stderr.write(`lunora: the smoke process tree ${String(pid)} may still be running; end it with taskkill /PID ${String(pid)} /T /F\n`);
+/**
+ * Written when the tree was not confirmed gone, so the run never reports a smoke process it may have left serving as stopped. The
+ * failure, when there is one, follows the command on the same line: a stack can span lines, so its newlines are escaped.
+ */
+const warnTreeMayRun = (pid: number, failure?: Error): void => {
+    const reason = failure === undefined ? "" : ` (${(failure.stack ?? failure.message).replaceAll(/\r?\n/gu, String.raw`\n`)})`;
+
+    process.stderr.write(`lunora: the smoke process tree ${String(pid)} may still be running; end it with taskkill /PID ${String(pid)} /T /F${reason}\n`);
 };
 
 /**
@@ -660,7 +664,7 @@ const killWindowsTreeOnExit = (pid: number): void => {
     const result = spawnSync(command, args, { stdio: "ignore", timeout: GROUP_STOP_MS });
 
     if (!taskkillEndedTree(result)) {
-        warnTreeMayRun(pid);
+        warnTreeMayRun(pid, result.error ?? new Error(`taskkill exited with status ${String(result.status)}`));
     }
 };
 
@@ -698,19 +702,19 @@ const killTreeOnExit = (pid: number): (() => void) => {
 };
 
 /**
- * Ends a Windows tree from its pid without blocking the event loop. Resolves `true` only when taskkill ended the tree; a spawn error or any
- * other exit resolves `false`.
+ * Ends a Windows tree from its pid without blocking the event loop. Resolves `undefined` only when taskkill ended the tree; otherwise it
+ * resolves the failure: the spawn error, or the exit status that did not end the tree.
  */
-const runTaskkill = (pid: number): Promise<boolean> =>
+const runTaskkill = (pid: number): Promise<Error | undefined> =>
     new Promise((_resolve) => {
         const { args, command } = taskkillCommand(pid);
         const child = spawn(command, args, { stdio: "ignore", windowsHide: true });
         // No timeout: the server is only stopped once the tree is gone, so a timed-out kill would leave the tree serving the port.
-        child.once("error", () => {
-            _resolve(false);
+        child.once("error", (error: Error) => {
+            _resolve(error);
         });
         child.once("exit", (code: number | null) => {
-            _resolve(taskkillEndedTree({ status: code }));
+            _resolve(taskkillEndedTree({ status: code }) ? undefined : new Error(`taskkill exited with status ${String(code)}`));
         });
     });
 
@@ -729,8 +733,10 @@ const stopSmokeGroup = async (group: SmokeGroup | undefined): Promise<void> => {
     const { pid } = group;
 
     if (process.platform === "win32") {
-        if (!(await runTaskkill(pid))) {
-            warnTreeMayRun(pid);
+        const failure = await runTaskkill(pid);
+
+        if (failure !== undefined) {
+            warnTreeMayRun(pid, failure);
         }
 
         return;
