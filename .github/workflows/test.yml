@@ -40,7 +40,7 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             # checkout-with-retry absorbs the transient mid-checkout GITHUB_TOKEN 401,
             # so this call needs no retry handling of its own.
@@ -82,12 +82,12 @@
 
             - "name": "Git checkout"
               # Full history so `vis affected` can resolve the PR base.
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "${{ matrix.node_version }}"
                   # The action's key already holds node-version; named per leg to make that explicit.
@@ -230,12 +230,12 @@
 
             - "name": "Git checkout"
               # Full history so `vis affected` can resolve the PR base.
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   # Per leg: the vis cache key has the job id but not the matrix.
@@ -322,7 +322,7 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             # After checkout, which cleans the workspace. No blobs = nothing affected; the
             # steps below skip.
@@ -352,7 +352,7 @@
 
             - "name": "Setup resources and environment"
               "if": "hashFiles('blob-reports/**') != ''"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "test"
@@ -432,10 +432,10 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "test-workerd"
@@ -517,10 +517,10 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "test-celld"
@@ -586,10 +586,10 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "test-mysql"
@@ -666,12 +666,12 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "e2e"
@@ -753,7 +753,7 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "id": "list"
               "name": "List the templates"
@@ -781,12 +781,12 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             # Astro refuses to run below Node 22.23.4 and its check exits without a diagnostic on 22.22, which hid the
             # real result, so this job pins the first Node 22 release Astro accepts.
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.23.4"
                   "cache-prefix": "templates"
@@ -841,10 +841,10 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "templates-expo"
@@ -892,10 +892,10 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "worker-size"
@@ -930,10 +930,10 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "client-size"
@@ -968,10 +968,10 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "studio-size"
@@ -1011,10 +1011,10 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "worker-startup"
@@ -1090,7 +1090,7 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             # A fourth hardcoded copy of the language list — `sdks/lint-all.sh`,
             # `sdks/generated-check.sh` and `sdks/run-all.sh` hold the other three —
@@ -1251,7 +1251,7 @@
             # encode` on first invocation, Ruby one whose every method raised
             # NoMethodError — both with the compile gate green throughout.
             - "name": "Setup node"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "sdk-generate"
