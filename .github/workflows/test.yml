@@ -811,7 +811,7 @@
             - "name": "Run the template scaffold"
               "env":
                   "TEMPLATE": "${{ matrix.template }}"
-              "run": 'pnpm run test:templates "$TEMPLATE"'
+              "run": "pnpm run test:templates $TEMPLATE"
 
             - "name": "Upload scaffold logs on failure"
               "if": "failure()"
