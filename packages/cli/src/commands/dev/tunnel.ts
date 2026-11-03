@@ -19,6 +19,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { updateDevServerState } from "@lunora/config";
 import { isLunoraError } from "@lunora/errors";
+// eslint-disable-next-line e18e/ban-dependencies -- semver's coerce/gte are the version comparison the tunnel binary check is written against; swapping the package is a migration, not a lint fix.
 import { coerce, gte } from "semver";
 
 import type { Logger } from "../../util/logger";
