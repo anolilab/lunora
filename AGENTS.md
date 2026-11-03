@@ -44,7 +44,7 @@ own `vitest.config.ts`, `tsconfig.json` (extends `tsconfig.base.json`),
 ```bash
 pnpm run build                    # :packages / :affected also exist
 pnpm run test                     # :coverage / :affected
-pnpm run lint:eslint              # :fix; also lint:prettier, lint:types, lint:affected:*
+pnpm run lint:eslint              # :fix; also lint:oxfmt, lint:types, lint:affected:*
 pnpm --filter "@lunora/runtime" run test    # single package
 
 # Gates with their own CI jobs that lint/test do NOT cover

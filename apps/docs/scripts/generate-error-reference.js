@@ -113,7 +113,7 @@ const renderErrorReference = (catalog, hints, isInternal) => {
 /**
  * Replace the marked block in `source` with the reference rendered from
  * `catalog`, then format the whole page through the repo's Prettier config —
- * without which `pnpm run lint:prettier` and this generator disagree and every
+ * without which `pnpm run lint:oxfmt` and this generator disagree and every
  * regeneration re-dirties the file.
  * @param source
  * @param catalog

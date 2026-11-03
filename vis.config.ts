@@ -102,11 +102,11 @@ export default defineConfig({
             cache: true,
             dependsOn: ["default"],
         },
-        "lint:prettier": {
+        "lint:oxfmt": {
             cache: true,
             dependsOn: ["default", "^public"],
         },
-        "lint:prettier:fix": {
+        "lint:oxfmt:fix": {
             cache: true,
             dependsOn: ["default", "^public"],
         },
