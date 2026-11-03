@@ -158,7 +158,9 @@ export default defineConfig({
         baseBranch: "alpha",
         // vis's default formatter. Its flat entry list is not grouped by commit type, so apps/docs
         // cannot read section kinds from it; see .agents/docs/workflow.md.
-        changelog: ["default", { heading: "## {name} [{version}]({compareUrl}) ({date})" }],
+        // `repo` is pinned: otherwise vis looks it up with `gh repo view`, and a failed lookup drops
+        // every compare link from the headings without any error.
+        changelog: ["default", { heading: "## {name} [{version}]({compareUrl}) ({date})", repo: "anolilab/lunora" }],
         channels: {
             alpha: { mode: "auto-publish", prerelease: "alpha", tag: "alpha" },
             beta: { mode: "auto-publish", prerelease: "beta", tag: "beta" },
@@ -181,7 +183,7 @@ export default defineConfig({
             packManager: "auto",
             protocolResolution: "pack",
             publishArgs: ["--provenance"],
-            publishStrategy: "npm-publish-tarball",
+            publishStrategy: "native",
         },
         // Rebase-and-retry the release commit when the branch moved mid-run.
         pushRetries: 5,
