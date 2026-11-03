@@ -1,3 +1,7 @@
+## @lunora/seed [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/seed@1.0.0-alpha.281...@lunora/seed@1.0.0-alpha.282) (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+
 ## @lunora/seed 1.0.0-alpha.282 (2026-11-03)
 
 - fix: resolve open review defects across agent, client, codegen and SDKs (#1460)

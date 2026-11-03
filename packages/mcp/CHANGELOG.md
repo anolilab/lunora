@@ -1,3 +1,7 @@
+## @lunora/mcp [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.290...@lunora/mcp@1.0.0-alpha.291) (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+
 ## @lunora/mcp 1.0.0-alpha.291 (2026-11-03)
 
 - fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
