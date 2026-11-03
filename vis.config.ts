@@ -154,9 +154,11 @@ export default defineConfig({
     staged: {
         // Reject a raw NUL byte (which turns a source file binary, hiding it from
         // diff/blame/review), then format the staged code and data files with oxfmt.
-        // oxfmt skips TOML and Markdown by config, so those stay out of its glob.
+        // oxfmt skips TOML and Markdown by config, so those stay out of its glob. A staged
+        // lockfile is ignored by .prettierignore, which leaves oxfmt nothing to format; that
+        // must not fail the commit.
         "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,toml,json,json5,jsonc}": ["node scripts/no-nul-bytes.mjs"],
-        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,json,json5,jsonc,svelte}": ["pnpm exec oxfmt"],
+        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,json,json5,jsonc,svelte}": ["pnpm exec oxfmt --no-error-on-unmatched-pattern"],
         // ESLint lives only in packages/* (each owns an eslint.config.js).
         // @anolilab/eslint-config picks plugins from the cwd's package.json, so
         // staged package files must be linted from INSIDE their package.
