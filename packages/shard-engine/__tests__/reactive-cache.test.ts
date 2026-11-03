@@ -702,6 +702,22 @@ describe("reactiveCache", () => {
 });
 
 describe("a query that read a .global() row at primary consistency", () => {
+    it("does not treat a row whose id is spelled *primary as the marker", async () => {
+        expect.assertions(2);
+
+        const cache = new ReactiveCache();
+        const run = vi.fn<() => Promise<{ found: boolean }>>(async () => {
+            return { found: true };
+        });
+        const deps = new Set([depKey("items", "*primary")]);
+
+        await cache.run("items:get:{}", deps, run);
+        await cache.run("items:get:{}", deps, run);
+
+        expect(run).toHaveBeenCalledTimes(1);
+        expect(cache.stats().hits).toBe(1);
+    });
+
     it("is re-run on every call instead of memoized, since another shard can change the row", async () => {
         expect.assertions(3);
 

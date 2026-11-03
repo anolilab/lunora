@@ -34,9 +34,10 @@ export const SCAN_DEP = "*scan";
  * Reserved marker for a read of a `.global()` table at primary consistency. The
  * row it answers from can change under a write from another shard, which this
  * shard's reactive cache is never told about, so a query that records it must
- * not be memoized.
+ * not be memoized. A row id cannot hold a NUL character (`assertStorableRowId`),
+ * so no row dependency can spell this key.
  */
-export const PRIMARY_READ = "*primary";
+export const PRIMARY_READ = "\0primary";
 
 /** True for a dep key recorded by {@link PRIMARY_READ} (`${table}:*primary`). */
 export const isPrimaryReadDep = (dep: string): boolean => dep.slice(dep.indexOf(":") + 1) === PRIMARY_READ;
