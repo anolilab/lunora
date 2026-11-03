@@ -129,13 +129,13 @@ export const GlobalDataBrowser = ({
     // and the open facets.
     // One timer per read: a failing facet backs off only the facet refresh, not the table list or the page.
     useAutoRefresh(() => tablesQuery.poll(), true);
-    // A filter the server rejects (a masked column) stops its poller; the key restarts it once the filters change.
-    useAutoRefresh(() => pageQuery.poll(), selectedTable !== null, undefined, JSON.stringify(filters));
+    // A poller a server rejection stopped restarts once the request it makes changes: the table, the page, or the filters.
+    useAutoRefresh(() => pageQuery.poll(), selectedTable !== null, undefined, JSON.stringify([selectedTable, offset, pageSize, filters]));
     useAutoRefresh(
         () => (selectedTable === null ? undefined : refetchFacets(selectedTable, filtersRef.current)),
         selectedTable !== null,
         undefined,
-        JSON.stringify(filters),
+        JSON.stringify([selectedTable, filters]),
     );
 
     // The table last applied to the selection (cross-tier jump, deep link, or
