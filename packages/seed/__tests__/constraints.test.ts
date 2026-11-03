@@ -156,6 +156,19 @@ describe("generateValue — validator constraints the generator must honour", ()
         });
     });
 
+    it("deals 2^53 after the top safe integer when an exclusive minimum sits just below it", () => {
+        expect.hasAssertions();
+
+        const validator = { ...v.number(), _meta: { constraints: { exclusiveMinimum: Number.MAX_SAFE_INTEGER - 1, type: "integer" } } } as unknown as Validator;
+        const { capacity, valueAt } = planUniqueDeal(
+            { hasServerDefault: false, kind: "number", name: "amount", nullable: false, optional: false, unique: true, uniqueFromIndex: false, validator },
+            { now: NOW, table: "t" },
+        );
+
+        expect(capacity).toBe(2);
+        expect([valueAt(0, () => 0), valueAt(1, () => 0)]).toStrictEqual([Number.MAX_SAFE_INTEGER, 2 ** 53]);
+    });
+
     it("caps an exclusive minimum at the top of the safe integers so a dealt value never repeats", () => {
         expect.hasAssertions();
 

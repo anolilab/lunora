@@ -295,8 +295,11 @@ const boundedNumeric = (constraints: Constraints, defaults: { max: number; min: 
             return { capacity: 1, valueAt: () => constraints.minimum };
         }
 
-        // Capacity stops at 2^53 - 1: beyond it `first + index` rounds onto a value already dealt.
-        return { capacity: Number.MAX_SAFE_INTEGER - first + 1, valueAt: (index) => first + index };
+        // Above a positive first value, 2^53 is exact and still above the bound, so it closes the range. From a
+        // non-positive first, `first + index` can round past it, so the range stops at 2^53 - 1 there.
+        const capacity = first > 0 ? Number.MAX_SAFE_INTEGER - first + 2 : Number.MAX_SAFE_INTEGER - first + 1;
+
+        return { capacity, valueAt: (index) => first + index };
     }
 
     const { max, min } = resolveRange(constraints, defaults, column);
