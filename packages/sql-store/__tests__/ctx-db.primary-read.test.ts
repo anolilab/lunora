@@ -97,15 +97,13 @@ describe("a global read that asks for the primary", () => {
         await expect(store.findFirst(TABLE, { consistency: "primary" })).resolves.toMatchObject({ label: "locked" });
     });
 
-    it("sees a commit made between two primary reads in one request, because each read opens a fresh session", async () => {
+    it("sees a commit made between two primary reads in one request, because each statement opens a fresh session", async () => {
         expect.assertions(2);
 
         const provisionScope = await provisionAndWrite();
         const exec: SqlCtxExec = {
             ...laggingReplicaOf(harness.exec),
-            get primary() {
-                return firstPrimarySession(harness.exec);
-            },
+            primary: { ...harness.exec, all: (text, parameters) => firstPrimarySession(harness.exec).all(text, parameters) },
         };
         const store = createSqlCtxDb({ clock, dialect: makeSqliteDialect(), exec, provisionScope, schema });
 
