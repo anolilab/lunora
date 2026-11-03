@@ -210,6 +210,20 @@ describe("discoverNondeterministicCalls", () => {
         expect(calls).toStrictEqual([expect.objectContaining({ callee: "ctx.random", exportName: "drawQuery", kind: "query" })]);
     });
 
+    it("does not record a random() on a nested callback's own parameter that shadows the handler's context", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "draws.ts"),
+            `import { query } from "@lunora/server";\nexport const shadowQuery = query({ args: {}, handler: async (context) => [1, 2].map((context) => context.random()) });\n`,
+            "utf8",
+        );
+
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
+
+        expect(calls).toStrictEqual([]);
+    });
+
     it("records nothing for a deterministic mutation", () => {
         expect.assertions(1);
 
