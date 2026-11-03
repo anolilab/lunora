@@ -1515,30 +1515,73 @@ const buildNestedLeafClause = (clause: FilterClause, expression: string, pathPar
     return undefined;
 };
 
+/** A SQL fragment with the parameters its `?` placeholders bind, in order. */
+type BoundSql = { params: unknown[]; sql: string };
+
 /**
- * Excludes the codec's own elements from a search. A wire frame such as
- * `["$lunora.wire$","bigint","123"]` holds its tag and type name at elements 0 and 1, and a
- * search for `bigint` or `date` must not select the row, nor a bulk delete remove it. The
- * payload from element 2 on stays searchable: the digits of a bigint, the epoch of a date. A
- * sibling lookup by `parent` id rather than by `path`, so no stored key is ever parsed as a
- * JSON path.
+ * Whether a `__doc__` value matches a leaf predicate, with the codec's own elements excluded.
+ * A wire frame such as `["$lunora.wire$","bigint","123"]` holds its tag and type name at
+ * elements 0 and 1, and a search for `bigint` or `date` must not select the row, nor a bulk
+ * delete remove it. The payload from element 2 on stays searchable: the digits of a bigint, the
+ * epoch of a date.
  *
  * A user array that starts with the sentinel is stored as an `arr` escape frame,
  * `["$lunora.wire$","arr",payload]`, and its payload is a plain list of user data. Whether a
  * container is a frame or a payload depends on how many arr frames it is nested under at
- * element 2: an odd count is a payload, an even count a frame. The count walks up the parent
- * chain with a recursive CTE, so it is exact at any nesting depth.
+ * element 2 in one unbroken run: an odd count is a payload, an even count a frame. The run is
+ * computed top-down in one pass over the document, so the cost is linear in its size (#1343).
  *
- * `documentExpression` is walked three times, so a caller that binds a path there binds it
- * three times. Each evaluation walks the document, so a search costs time roughly quadratic in
- * the number of frames that match the term (#1343).
+ * Only a document that holds the tag, or a `\u` escape that may hide it, can hold a frame. Such
+ * a document is classified by the set subquery, which is not correlated with the outer row, so
+ * SQLite evaluates it at most once per statement, and only when a framed row is reached; a
+ * correlated form would re-run the classification for every use of its CTEs, which grows
+ * exponentially with the frame count. Every other document has no frame to exclude, so it is
+ * walked once in place, streaming as it always has.
+ *
+ * Documents are keyed by their position `n` in the set rather than by a rowid, so a
+ * `WITHOUT ROWID` table is covered too. The CTEs carry the `__wf_` prefix, which
+ * {@link isInternalTableName} reserves, so no user table can shadow one.
+ * @param document the quoted `__doc__` column of the outer row
+ * @param table the quoted table name, scanned by the set subquery
+ * @param leaf the predicate over the leaves, read through the alias `j`
+ * @param scope where the walk starts
+ * @param scope.prefilter a raw-text pre-filter over `__doc__`, applied before any walk
+ * @param scope.root a JSON path the walk starts at, rather than the document's root
+ * @returns the predicate and its bound parameters
  */
-const wireFrameTagExclusion = (documentExpression: string): string => {
-    const walk = `json_tree(${documentExpression})`;
-    const arrayShaped = (alias: string, parent: string): string =>
-        `(SELECT count(*) FROM ${walk} AS ${alias} WHERE ${alias}.parent = ${parent} AND typeof(${alias}.key) = 'integer' AND ((${alias}.key = 0 AND ${alias}.atom = '${WIRE_TAG}') OR (${alias}.key = 1 AND ${alias}.atom = 'arr'))) = 2`;
+const documentMatchSql = (document: string, table: string, leaf: BoundSql, scope: { prefilter?: string; root?: unknown }): BoundSql => {
+    const tag = `'${WIRE_TAG}'`;
+    const isFramed = (column: string): string => `(instr(${column}, ${tag}) > 0 OR instr(${column}, ${String.raw`'\u'`}) > 0)`;
+    const framed = isFramed(document);
+    const prefilterParams = scope.prefilter === undefined ? [] : [scope.prefilter];
+    const rootSql = scope.root === undefined ? "" : ", ?";
+    const rootParams = scope.root === undefined ? [] : [scope.root];
+    // A framed document is decided by the set, a plain one by walking it in place. The set is
+    // only evaluated for a framed row, so a table without frames never scans for them.
+    const walkConditions = [
+        ...(scope.prefilter === undefined ? [] : [containsSql(document)]),
+        `EXISTS (SELECT 1 FROM json_tree(${document}${rootSql}) AS j WHERE ${leaf.sql})`,
+    ];
+    const setConditions = [isFramed(`t.${document}`), ...(scope.prefilter === undefined ? [] : [containsSql(`t.${document}`)])];
+    const walked = `(${walkConditions.join(" AND ")})`;
 
-    return `NOT (typeof(j.key) = 'integer' AND j.key IN (0, 1) AND EXISTS (SELECT 1 FROM ${walk} AS f WHERE f.parent = j.parent AND f.key = 0 AND f.type = 'text' AND f.atom = '${WIRE_TAG}') AND (WITH RECURSIVE links(node, k) AS (SELECT j.parent, 0 UNION ALL SELECT c.parent, links.k + 1 FROM links JOIN ${walk} AS c ON c.id = links.node WHERE typeof(c.key) = 'integer' AND c.key = 2 AND ${arrayShaped("h", "c.parent")}) SELECT max(k) FROM links) % 2 = 0)`;
+    return {
+        params: [...prefilterParams, ...rootParams, ...leaf.params, ...prefilterParams, ...rootParams, ...leaf.params],
+        sql: `CASE WHEN ${framed} THEN ${document} IN (WITH RECURSIVE
+        __wf_framed AS MATERIALIZED (SELECT DISTINCT t.${document} AS doc FROM ${table} AS t WHERE ${setConditions.join(" AND ")}),
+        __wf_docs AS MATERIALIZED (SELECT doc, row_number() OVER () AS n FROM __wf_framed),
+        __wf_raw AS (SELECT d.n, j.id, j.parent, j.key, j.type, j.atom, j.value, j.fullkey FROM __wf_docs AS d, json_tree(d.doc${rootSql}) AS j),
+        __wf_flags AS MATERIALIZED (SELECT n, parent AS id,
+            max(CASE WHEN typeof(key) = 'integer' AND key = 0 AND type = 'text' AND atom = ${tag} THEN 1 ELSE 0 END) AS tagged,
+            count(CASE WHEN typeof(key) = 'integer' AND ((key = 0 AND atom = ${tag}) OR (key = 1 AND atom = 'arr')) THEN 1 END) = 2 AS shaped
+            FROM __wf_raw WHERE parent IS NOT NULL GROUP BY n, parent),
+        __wf_tree AS MATERIALIZED (SELECT __wf_raw.*, coalesce(f.tagged, 0) AS tagged_parent, coalesce(f.shaped, 0) AS shaped_parent FROM __wf_raw LEFT JOIN __wf_flags AS f ON f.n = __wf_raw.n AND f.id = __wf_raw.parent),
+        __wf_steps AS MATERIALIZED (SELECT n, id, parent FROM __wf_tree WHERE typeof(key) = 'integer' AND key = 2 AND shaped_parent),
+        __wf_runs(n, id, k) AS MATERIALIZED (SELECT s.n, s.id, 1 FROM __wf_steps AS s LEFT JOIN __wf_steps AS p ON p.n = s.n AND p.id = s.parent WHERE p.id IS NULL UNION ALL SELECT c.n, c.id, r.k + 1 FROM __wf_runs AS r JOIN __wf_steps AS c ON c.n = r.n AND c.parent = r.id),
+        __wf_excluded AS MATERIALIZED (SELECT j.n, j.id FROM __wf_tree AS j LEFT JOIN __wf_runs AS p ON p.n = j.n AND p.id = j.parent WHERE typeof(j.key) = 'integer' AND j.key IN (0, 1) AND j.tagged_parent AND coalesce(p.k, 0) % 2 = 0),
+        __wf_framedMatches AS (SELECT d.doc FROM __wf_docs AS d JOIN (SELECT DISTINCT j.n FROM __wf_tree AS j LEFT JOIN __wf_excluded AS e ON e.n = j.n AND e.id = j.id WHERE ${leaf.sql} AND e.id IS NULL) AS m ON m.n = d.n)
+        SELECT doc FROM __wf_framedMatches) ELSE ${walked} END`,
+    };
 };
 
 /**
@@ -1548,22 +1591,33 @@ const wireFrameTagExclusion = (documentExpression: string): string => {
  * or 0. An array or object is walked with `json_tree`, and only its text, integer, real and
  * boolean leaves are tested, never its keys or JSON punctuation; a boolean leaf is tested by its
  * type name the same way. A Date, Map or Set is a wire-tagged array, so the tag and type name at
- * elements 0 and 1 are excluded ({@link wireFrameTagExclusion}): a search for `date` must not
- * select the row, and a bulk delete must not remove it. Both trees are rooted at the same bound
- * path so their node ids line up. A missing field matches nothing.
+ * elements 0 and 1 are excluded ({@link documentMatchSql}): a search for `date` must not
+ * select the row, and a bulk delete must not remove it. A missing field matches nothing.
  * @returns the SQL conjunct and bound params
  */
-const buildTopLevelContains = (document: string, path: unknown, term: string): { params: unknown[]; sql: string } => {
+const buildTopLevelContains = (table: string, document: string, path: unknown, term: string): { params: unknown[]; sql: string } => {
+    const leaf: BoundSql = {
+        params: [term],
+        sql: `j.type IN ('text', 'integer', 'real', 'true', 'false') AND ${containsSql("CASE WHEN j.type IN ('true', 'false') THEN j.type ELSE j.value END")}`,
+    };
+    const match = documentMatchSql(document, table, leaf, { root: path });
+
     return {
-        params: [path, path, term, path, path, term, path, path, term, path, path, path],
-        sql: `CASE WHEN json_type(${document}, ?) IN ('text', 'integer', 'real') THEN ${containsSql(`json_extract(${document}, ?)`)} WHEN json_type(${document}, ?) IN ('true', 'false') THEN ${containsSql(`json_type(${document}, ?)`)} WHEN json_type(${document}, ?) IN ('array', 'object') THEN EXISTS (SELECT 1 FROM json_tree(${document}, ?) AS j WHERE j.type IN ('text', 'integer', 'real', 'true', 'false') AND ${containsSql("CASE WHEN j.type IN ('true', 'false') THEN j.type ELSE j.value END")} AND ${wireFrameTagExclusion(`${document}, ?`)}) ELSE 0 END`,
+        params: [path, path, term, path, path, term, path, ...match.params],
+        sql: `CASE WHEN json_type(${document}, ?) IN ('text', 'integer', 'real') THEN ${containsSql(`json_extract(${document}, ?)`)} WHEN json_type(${document}, ?) IN ('true', 'false') THEN ${containsSql(`json_type(${document}, ?)`)} WHEN json_type(${document}, ?) IN ('array', 'object') THEN ${match.sql} ELSE 0 END`,
     };
 };
 
 /** Compile a `contains` clause; see the per-shape notes inline. */
 const buildContainsClause = (
     clause: FilterClause,
-    { expression, kind, pathParameters, physical }: { expression: string; kind: string | undefined; pathParameters: unknown[]; physical: boolean },
+    {
+        expression,
+        kind,
+        pathParameters,
+        physical,
+        table,
+    }: { expression: string; kind: string | undefined; pathParameters: unknown[]; physical: boolean; table: string },
 ): { params: unknown[]; sql: string } => {
     const path = clause.path ?? [];
     // The stored text of a bigint is a zero-padded sort key, so a substring
@@ -1579,7 +1633,7 @@ const buildContainsClause = (
     }
 
     if (path.length === 0) {
-        return buildTopLevelContains(quoteIdentifier(DOC_COLUMN), pathParameters[0], term);
+        return buildTopLevelContains(table, quoteIdentifier(DOC_COLUMN), pathParameters[0], term);
     }
 
     // A nested leaf has no declared kind, so its stored shape is checked here: a
@@ -1615,7 +1669,12 @@ const buildContainsClause = (
  * projection, so it compares against the form actually stored at `$.field`.
  * @returns the SQL conjunct and bound params, or `undefined` for an unknown column on a non-doc table
  */
-const buildFilterClause = (clause: FilterClause, physicalColumns: string[], kinds: ColumnKinds | undefined): { params: unknown[]; sql: string } | undefined => {
+const buildFilterClause = (
+    clause: FilterClause,
+    physicalColumns: string[],
+    kinds: ColumnKinds | undefined,
+    table: string,
+): { params: unknown[]; sql: string } | undefined => {
     if (clause.operator === "has") {
         return buildArrayContains(clause, physicalColumns, kinds);
     }
@@ -1633,7 +1692,7 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[], kind
     const kind = physicalColumns.includes(clause.column) || path.length > 0 ? undefined : kinds?.[clause.column];
 
     if (clause.operator === "contains") {
-        return buildContainsClause(clause, { expression, kind, pathParameters, physical: physicalColumns.includes(clause.column) });
+        return buildContainsClause(clause, { expression, kind, pathParameters, physical: physicalColumns.includes(clause.column), table });
     }
 
     if (clause.value === null && (clause.operator === "eq" || clause.operator === "ne")) {
@@ -1664,6 +1723,22 @@ const ORIGINALS_SUBTREE_EXCLUSION = [`$.${DOC_ORIGINALS_KEY}`, `$."${DOC_ORIGINA
     .map((prefix) => `substr(j.fullkey, 1, ${String(prefix.length + 1)}) NOT IN ('${prefix}.', '${prefix}[')`)
     .join(" AND ");
 
+/** A character `JSON.stringify` escapes, so it never appears literally in stored JSON text. */
+// eslint-disable-next-line no-control-regex -- matching the control characters JSON escapes is the point
+const JSON_ESCAPED_CHARACTER = /["\\\u0000-\u001F]/u;
+
+/**
+ * The term the raw-text pre-filter of {@link documentValuesContainSql} binds: the
+ * search term itself, or `''` (which every row contains) when the term holds a
+ * character the stored JSON only carries escaped.
+ *
+ * ponytail: a number SQLite renders differently from its JSON text (`1e+21` is
+ * `1.0e+21` to `CAST`) can fail the pre-filter on the rendering-only characters;
+ * searching those is not a real use.
+ * @returns the pre-filter term
+ */
+const rawTextPrefilter = (needle: string): string => (JSON_ESCAPED_CHARACTER.test(needle) ? "" : needle);
+
 /**
  * A case-insensitive substring test over the VALUES of a `__doc__` JSON object,
  * at any depth — never its keys.
@@ -1683,31 +1758,20 @@ const ORIGINALS_SUBTREE_EXCLUSION = [`$.${DOC_ORIGINALS_KEY}`, `$."${DOC_ORIGINA
  * key is a user field and is searched like any other.
  *
  * `json_tree` costs several times a plain `instr` over the text, so the raw text
- * is tested first as a cheap pre-filter: a value containing the term makes the
- * JSON text contain it too — unless the term holds a character JSON escapes
- * (`"`, `\`, a control character), for which {@link rawTextPrefilter} binds `''`
- * and the pre-filter passes every row. Two bound parameters: the pre-filter term,
- * then the term. The value test runs before the originals check, so `fullkey` —
- * a string built per leaf — is only materialised for leaves that matched.
+ * is tested first as a cheap pre-filter, applied to each document before any walk:
+ * a value containing the term makes the JSON text contain it too — unless the term
+ * holds a character JSON escapes (`"`, `\`, a control character), for which
+ * {@link rawTextPrefilter} binds `''` and the pre-filter passes every row. The set
+ * binds the pre-filter term, then the term.
  */
-const documentValuesContainSql = (documentExpression: string): string =>
-    `(${containsSql(documentExpression)} AND EXISTS (SELECT 1 FROM json_tree(${documentExpression}) AS j WHERE j.type IN ('text', 'integer', 'real', 'true', 'false') AND ${containsSql("CASE WHEN j.type IN ('true', 'false') THEN j.type ELSE j.value END")} AND ${ORIGINALS_SUBTREE_EXCLUSION} AND ${wireFrameTagExclusion(documentExpression)}))`;
+const documentValuesContainSql = (table: string, needle: string): BoundSql => {
+    const leaf: BoundSql = {
+        params: [needle],
+        sql: `j.type IN ('text', 'integer', 'real', 'true', 'false') AND ${containsSql("CASE WHEN j.type IN ('true', 'false') THEN j.type ELSE j.value END")} AND ${ORIGINALS_SUBTREE_EXCLUSION}`,
+    };
 
-/** A character `JSON.stringify` escapes, so it never appears literally in stored JSON text. */
-// eslint-disable-next-line no-control-regex -- matching the control characters JSON escapes is the point
-const JSON_ESCAPED_CHARACTER = /["\\\u0000-\u001F]/u;
-
-/**
- * The term the raw-text pre-filter of {@link documentValuesContainSql} binds: the
- * search term itself, or `''` (which every row contains) when the term holds a
- * character the stored JSON only carries escaped.
- *
- * ponytail: a number SQLite renders differently from its JSON text (`1e+21` is
- * `1.0e+21` to `CAST`) can fail the pre-filter on the rendering-only characters;
- * searching those is not a real use.
- * @returns the pre-filter term
- */
-const rawTextPrefilter = (needle: string): string => (JSON_ESCAPED_CHARACTER.test(needle) ? "" : needle);
+    return documentMatchSql(quoteIdentifier(DOC_COLUMN), table, leaf, { prefilter: rawTextPrefilter(needle) });
+};
 
 /** `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` — the prefixes worth treating as a range. */
 const DATE_PREFIX = /^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?$/u;
@@ -1768,6 +1832,42 @@ const datePrefixRange = (needle: string): undefined | { from: number; to: number
 };
 
 /**
+ * The substring disjunct for each physical column: a `__doc__` column matches over its field
+ * values ({@link documentValuesContainSql}), every other column over its text.
+ * @returns the disjuncts, in column order
+ */
+const searchDisjuncts = (table: string, columns: string[], needle: string): BoundSql[] =>
+    columns.map((name) => {
+        if (name === DOC_COLUMN) {
+            return documentValuesContainSql(table, needle);
+        }
+
+        return { params: [needle], sql: containsSql(quoteIdentifier(name)) };
+    });
+
+/**
+ * The date-range disjuncts: each physical column, then the schema's `timestamp`/`date` fields
+ * inside `__doc__`, which are epoch millis too. The field names ride as ONE JSON parameter, so
+ * the document disjunct costs three bound parameters however many date fields the table declares.
+ * @returns the disjuncts, in the order they are ANDed into the predicate
+ */
+const dateRangeDisjuncts = (columns: string[], kinds: ColumnKinds | undefined, range: { from: number; to: number }): BoundSql[] => {
+    const disjuncts: BoundSql[] = columns.map((name) => {
+        return { params: [range.from, range.to], sql: `(${quoteIdentifier(name)} >= ? AND ${quoteIdentifier(name)} < ?)` };
+    });
+    const dateFields = Object.keys(kinds ?? {}).filter((field) => !columns.includes(field) && DATE_KINDS.has(kinds?.[field] ?? ""));
+
+    if (dateFields.length > 0 && columns.includes(DOC_COLUMN)) {
+        disjuncts.push({
+            params: [JSON.stringify(dateFields), range.from, range.to],
+            sql: `EXISTS (SELECT 1 FROM json_each(${quoteIdentifier(DOC_COLUMN)}) AS j WHERE j.key IN (SELECT value FROM json_each(?)) AND j.type IN ('integer', 'real') AND j.value >= ? AND j.value < ?)`,
+        });
+    }
+
+    return disjuncts;
+};
+
+/**
  * Compile the active substring `search` + structured `filters` into a single
  * AND-combined SQL predicate (or `undefined` when none apply). Shared by
  * {@link readTablePage} and {@link selectMatchingIds} so the "delete matching"
@@ -1786,6 +1886,7 @@ const datePrefixRange = (needle: string): undefined | { from: number; to: number
  * timestamp is an accident rather than a month filter.
  */
 const buildTablePredicate = (
+    table: string,
     columns: string[],
     needle: string,
     filters: FilterClause[] | undefined,
@@ -1795,40 +1896,22 @@ const buildTablePredicate = (
     const parameters: unknown[] = [];
 
     if (needle !== "" && columns.length > 0) {
-        const disjuncts = columns.map((name) => (name === DOC_COLUMN ? documentValuesContainSql(quoteIdentifier(name)) : containsSql(quoteIdentifier(name))));
-
-        parameters.push(...columns.flatMap((name) => (name === DOC_COLUMN ? [rawTextPrefilter(needle), needle] : [needle])));
-
+        const disjuncts = searchDisjuncts(table, columns, needle);
         // A date-shaped term additionally matches timestamp columns by RANGE, so
         // `2026-07` finds July's rows rather than only those whose rendered text
         // literally contains "2026-07".
         const range = datePrefixRange(needle);
 
         if (range !== undefined) {
-            for (const name of columns) {
-                disjuncts.push(`(${quoteIdentifier(name)} >= ? AND ${quoteIdentifier(name)} < ?)`);
-                parameters.push(range.from, range.to);
-            }
-
-            // …and the schema's `v.timestamp()`/`v.date()` fields inside `__doc__`,
-            // which are epoch millis too. The field names ride as ONE JSON
-            // parameter, so the disjunct costs three bound parameters however many
-            // date fields the table declares.
-            const dateFields = Object.keys(kinds ?? {}).filter((field) => !columns.includes(field) && DATE_KINDS.has(kinds?.[field] ?? ""));
-
-            if (dateFields.length > 0 && columns.includes(DOC_COLUMN)) {
-                disjuncts.push(
-                    `EXISTS (SELECT 1 FROM json_each(${quoteIdentifier(DOC_COLUMN)}) AS j WHERE j.key IN (SELECT value FROM json_each(?)) AND j.type IN ('integer', 'real') AND j.value >= ? AND j.value < ?)`,
-                );
-                parameters.push(JSON.stringify(dateFields), range.from, range.to);
-            }
+            disjuncts.push(...dateRangeDisjuncts(columns, kinds, range));
         }
 
-        conjuncts.push(`(${disjuncts.join(" OR ")})`);
+        conjuncts.push(`(${disjuncts.map((disjunct) => disjunct.sql).join(" OR ")})`);
+        parameters.push(...disjuncts.flatMap((disjunct) => disjunct.params));
     }
 
     for (const clause of filters ?? []) {
-        const built = buildFilterClause(clause, columns, kinds);
+        const built = buildFilterClause(clause, columns, kinds, table);
 
         if (built !== undefined) {
             conjuncts.push(`(${built.sql})`);
@@ -1902,7 +1985,7 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
         return Object.keys(references).length > 0 ? { ...page, refs: references } : page;
     };
 
-    const predicate = buildTablePredicate(columns, needle, options.filters, options.columnKinds);
+    const predicate = buildTablePredicate(quoted, columns, needle, options.filters, options.columnKinds);
     const order = buildOrderBy(options.orderBy, columns);
 
     // Assemble WHERE / ORDER BY fragments and their bound params in SQL order
@@ -1982,7 +2065,7 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
         }
     }
 
-    const predicate = buildTablePredicate(columns, needle, options.filters, options.columnKinds);
+    const predicate = buildTablePredicate(quoted, columns, needle, options.filters, options.columnKinds);
 
     if (predicate === undefined && (options.filters?.length ?? 0) > 0) {
         throw new LunoraError("BAD_REQUEST", `the filters on ${table} are all empty, so the predicate constrains no rows — refusing to select the whole table`);
@@ -2096,7 +2179,7 @@ const facetColumn = (sql: SqlExec, options: FacetColumnOptions): FacetColumnResu
 
     const limit = clamp(Math.trunc(options.limit ?? DEFAULT_FACET_LIMIT), 1, MAX_FACET_LIMIT);
     const needle = options.search?.trim() ?? "";
-    const predicate = buildTablePredicate(physicalColumns, needle, options.filters, options.columnKinds);
+    const predicate = buildTablePredicate(quoted, physicalColumns, needle, options.filters, options.columnKinds);
 
     const whereSql = predicate === undefined ? "" : ` WHERE ${predicate.where}`;
     const whereParams = predicate?.parameters ?? [];
