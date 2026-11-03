@@ -1041,6 +1041,55 @@ describe("withSecret — a callback that throws never exposes the value", () => 
         expect(event?.toolOutput.error.name).toContain("[redacted]");
     });
 
+    it("pins an inherited error name on first read, so a later read of a changing getter cannot expose the value", async () => {
+        expect.assertions(2);
+
+        let leaked = "";
+        let reads = 0;
+
+        // Clean on the first read, the secret on every later one: the scrub must not leave the live accessor in place.
+        const namedPrototype = Object.create(Error.prototype, {
+            name: {
+                get: () => {
+                    reads += 1;
+
+                    return reads === 1 ? "Rejected" : `Rejected:${leaked}`;
+                },
+            },
+        }) as object;
+
+        const ended: unknown[] = [];
+        const agent = consumerAgent(
+            (secret) => {
+                leaked = secret;
+
+                throw Object.setPrototypeOf(new Error("the gateway rejected the key"), namedPrototype);
+            },
+            {
+                integrations: {
+                    onToolExecutionEnd: (event) => {
+                        ended.push(event);
+                    },
+                },
+            },
+        );
+        const { host, journal, runtime } = await setup();
+        const generate = scriptedGenerate([
+            toolTurn("call_1", "requestKey", { label: "API key" }),
+            toolTurn("call_2", "charge", { secretRef: "0:call_1" }),
+            finalTurn("done"),
+        ]);
+
+        await pauseAt(agent, journal, runtime, generate);
+        await host.supply("call_1", SECRET);
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal })).catch(() => undefined);
+
+        const [event] = ended as { toolOutput: { error: Error } }[];
+
+        expect(event?.toolOutput.error.name).not.toContain(SECRET);
+        expect(event?.toolOutput.error.name).toBe("Rejected");
+    });
+
     it("withholds an error whose field getter throws the value", async () => {
         expect.assertions(2);
 
