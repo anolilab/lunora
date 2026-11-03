@@ -970,6 +970,19 @@ describe("approval resolution", () => {
         await expect(callMutation(functions.agentApprovalGrants, ctx, { key: "t-1" })).resolves.toStrictEqual([]);
     });
 
+    it("does not list a grant written before grants carried an agent, because the gate cannot match it", async () => {
+        const { functions } = agentComponent();
+        const owner = fakeDatabase({ userId: "user-a" });
+        const { agents } = fakeAgents();
+        const ctx = { ...owner.ctx, agents };
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-1", key: "t-1", owner: "user-a" });
+        owner.rows.set("approval_grants", [{ _id: "legacy-1", createdAt: 1, threadKey: "t-1", toolName: "charge" }]);
+
+        await expect(callMutation(functions.agentApprovalGrants, ctx, { key: "t-1" })).resolves.toStrictEqual([]);
+        await expect(callMutation(functions.agentApprovalGranted, ctx, { agent: "support", key: "t-1", toolName: "charge" })).resolves.toBe(false);
+    });
+
     it("two approve_for_thread decisions on different calls to one tool keep one grant", async () => {
         const { functions } = agentComponent();
         const owner = fakeDatabase({ userId: "user-a" });

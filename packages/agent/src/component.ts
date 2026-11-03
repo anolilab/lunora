@@ -1916,6 +1916,12 @@ export const agentComponent = (): AgentComponent => {
         const byTool = new Map<string, { createdAt: number; toolName: string }>();
 
         for (const grant of grants) {
+            // A row written before grants carried an agent can never match the gate, so listing it would show a
+            // tool as approved while every call to it still prompts.
+            if ((grant["agent"] as string | undefined) === undefined) {
+                continue;
+            }
+
             const toolName = grant["toolName"] as string;
             const createdAt = grant["createdAt"] as number;
             const seen = byTool.get(toolName);
