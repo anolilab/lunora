@@ -140,6 +140,44 @@ describe("sendStudioAsset", () => {
         expect(small.end).toHaveBeenCalledWith(tiny);
     });
 
+    it("answers the coding the client weights highest, not the one we prefer", () => {
+        expect.assertions(2);
+
+        const made = send("br;q=0.1, gzip;q=1");
+
+        expect(made.headers()["Content-Encoding"]).toBe("gzip");
+        expect(gunzipSync(sentBody(made)).equals(body)).toBe(true);
+    });
+
+    it("answers 406 when the client refuses identity and every coding we produce", () => {
+        expect.assertions(3);
+
+        const made = send("br;q=0, gzip;q=0, identity;q=0");
+
+        expect(made.response.statusCode).toBe(406);
+        expect(made.headers().Vary).toBe("Accept-Encoding");
+        expect(made.end).toHaveBeenCalledWith();
+    });
+
+    it("compresses a tiny body for a client that refuses identity", () => {
+        expect.assertions(2);
+
+        const made = send("gzip, identity;q=0", Buffer.from("body {}\n"));
+
+        expect(made.response.statusCode).toBe(200);
+        expect(made.headers()["Content-Encoding"]).toBe("gzip");
+    });
+
+    it("does not serve one install's compressed bytes for another's body under the same stamp", () => {
+        expect.assertions(1);
+
+        sentBody(send("gzip", body, 77));
+
+        const other = Buffer.from("export const studio = 'other install';\n".repeat(200));
+
+        expect(gunzipSync(sentBody(send("gzip", other, 77))).equals(other)).toBe(true);
+    });
+
     it("compresses once per file and stamp, and recompresses after a rebuild", () => {
         expect.assertions(3);
 
