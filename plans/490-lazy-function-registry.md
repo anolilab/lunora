@@ -1,7 +1,7 @@
 # Plan 490 — Lazy function registry (Worker startup CPU scales with procedure count)
 
 **Baseline:** `947c714aa` (2026-10-13); email-guard prerequisite re-checked against `3e8806fd3` (2026-10-14)
-**Status:** PARTIAL — the lazy registry shipped opt-in (`--lazy-functions`, #1236/#1239). The pre-deploy smoke-load of §7 (error timing) is `lunora build|deploy`'s default for lazy builds, and for eager builds that load a package with `import()` (§3.2). The §9 startup budget shipped as `pnpm run worker-startup:check` (#1165) It also builds the reference app with `--lazy-functions` against its own baseline, so a loader turned back into a static import fails CI.. Cheap levers shipped: the
+**Status:** PARTIAL — the lazy registry shipped opt-in (`--lazy-functions`, #1236/#1239). The pre-deploy smoke-load of §7 (error timing) is `lunora build|deploy|prepare`'s default, and covers eager builds too: it evaluates every lazy function module plus every `import()` target of the generated `app.ts` / `shard.ts` (§3.2). The §9 startup budget shipped as `pnpm run worker-startup:check` (#1165) It also builds the reference app with `--lazy-functions` against its own baseline, so a loader turned back into a static import fails CI.. Cheap levers shipped: the
 `shard.ts` admin payloads parse on first use (#1175, §6 4(a)), and the generated `app.ts` loads
 `@lunora/auth` (through a generated `_generated/authModule.ts` that names the exports it uses) and
 the OpenAPI / OpenRPC / architecture documents with `import()` on the first event (§6 4(b)(c), §8;
@@ -20,9 +20,8 @@ the payment provider SDKs, the Hyperdrive drivers including `mysql2` for `.hyper
 integrations await on first use, in eager and lazy builds alike; with those integrations wired, the
 gate fixture's lazy graph went from 1,299 modules / 9,100 KiB to 808 / 4,801 KiB. The smoke-load
 of a lazy build also evaluates every package the app loads with a literal `import()` (§3.2).
-Still open: the lazy registry as the default, lighter shared builders (§8 last paragraph), the
-`@lunora/agent` barrel that the shard imports for `ctx.agents` (§3.1), and extending the smoke-load
-to eager builds now that `authModule.ts` and the spec modules evaluate on the first event.
+Still open: the lazy registry as the default, lighter shared builders (§8 last paragraph), and the
+`@lunora/agent` barrel that the shard imports for `ctx.agents` (§3.1).
 The email-guard prerequisite (§8) has shipped (#1159). Measurement scripts are not committed; §6 says
 what to add.
 
