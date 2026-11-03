@@ -74,7 +74,7 @@ describe("the generated companion Worker", () => {
     });
 
     it("writes the wrangler config, the self-contained worker and the payload when on, and removes them when off", () => {
-        expect.assertions(12);
+        expect.assertions(13);
 
         runCodegen({ projectRoot, studioCompanion: true, wranglerQueueProducers: [] });
 
@@ -86,7 +86,8 @@ describe("the generated companion Worker", () => {
         expect(wrangler).not.toHaveProperty("bindings");
         expect(Array.isArray(JSON.parse(payload))).toBe(true);
         expect(worker).toContain(JSON.stringify(payload));
-        expect(worker).toContain("LUNORA_ADMIN_TOKEN");
+        expect(wrangler).toMatchObject({ workers_dev: false });
+        expect(worker).not.toContain("LUNORA_ADMIN_TOKEN");
         expect(worker).toContain("/__lunora/advisor-procedures");
         expect(worker).toContain("export default");
         expect(worker).not.toMatch(/^import /mu);
