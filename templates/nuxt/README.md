@@ -81,7 +81,7 @@ cross-origin call. Open `http://localhost:3000`. `Ctrl-C` stops both.
 ## Build and deploy
 
 ```bash
-pnpm deploy        # nuxt build && wrangler deploy
+pnpm run deploy   # nuxt build && lunora deploy
 ```
 
 ## Verify before deploy
