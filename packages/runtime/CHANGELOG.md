@@ -1,3 +1,9 @@
+## @lunora/runtime [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.272...@lunora/runtime@1.0.0-alpha.273) (2026-11-02)
+
+### Bug Fixes
+
+* **agent:** run agent tools on the shard the run started from ([#1416](https://github.com/anolilab/lunora/issues/1416)) ([2a2d233](https://github.com/anolilab/lunora/commit/2a2d233dc53973fffb5d4df2ccbf0755d52a7923))
+
 ## @lunora/runtime [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.271...@lunora/runtime@1.0.0-alpha.272) (2026-11-02)
 
 ### Features

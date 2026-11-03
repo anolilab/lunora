@@ -1,3 +1,9 @@
+## @lunora/agent [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.277...@lunora/agent@1.0.0-alpha.278) (2026-11-02)
+
+### Bug Fixes
+
+* **agent:** run agent tools on the shard the run started from ([#1416](https://github.com/anolilab/lunora/issues/1416)) ([2a2d233](https://github.com/anolilab/lunora/commit/2a2d233dc53973fffb5d4df2ccbf0755d52a7923))
+
 ## @lunora/agent [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.276...@lunora/agent@1.0.0-alpha.277) (2026-11-02)
 
 ### Performance Improvements

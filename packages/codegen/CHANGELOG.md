@@ -1,3 +1,15 @@
+## @lunora/codegen [1.0.0-alpha.394](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.393...@lunora/codegen@1.0.0-alpha.394) (2026-11-02)
+
+### Bug Fixes
+
+* **agent:** run agent tools on the shard the run started from ([#1416](https://github.com/anolilab/lunora/issues/1416)) ([2a2d233](https://github.com/anolilab/lunora/commit/2a2d233dc53973fffb5d4df2ccbf0755d52a7923))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.278
+* **@lunora/client:** upgraded to 1.0.0-alpha.283
+
 ## @lunora/codegen [1.0.0-alpha.393](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.392...@lunora/codegen@1.0.0-alpha.393) (2026-11-02)
 
 ### Bug Fixes

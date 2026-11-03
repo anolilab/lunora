@@ -1,3 +1,14 @@
+## @lunora/platform-node [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.213...@lunora/platform-node@1.0.0-alpha.214) (2026-11-02)
+
+### Bug Fixes
+
+* **agent:** run agent tools on the shard the run started from ([#1416](https://github.com/anolilab/lunora/issues/1416)) ([2a2d233](https://github.com/anolilab/lunora/commit/2a2d233dc53973fffb5d4df2ccbf0755d52a7923))
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.273
+
 ## @lunora/platform-node [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.212...@lunora/platform-node@1.0.0-alpha.213) (2026-11-02)
 
 ### Features
