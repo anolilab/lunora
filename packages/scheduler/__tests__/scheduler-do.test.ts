@@ -1701,6 +1701,25 @@ describe("schedulerDO — per-record drain isolation (storage throw)", () => {
             expect(listedPrefixes()).not.toContain("id:");
         });
 
+        it("drops the queue row of a pool a job's header no longer names", async () => {
+            expect.assertions(3);
+
+            const state = createFakeState();
+            const record: ScheduleRecord = { args: {}, enqueuedAt: Date.now(), functionPath: "f", id: "moved", pool: "b", scheduledFor: Date.now() + 60_000 };
+
+            // The retry that revived the job wrote a row for pool `a`; a new schedule then rewrote the header into pool `b`.
+            state.storageMap.set("id:moved", record);
+            state.storageMap.set(`t:${String(record.scheduledFor).padStart(16, "0")}:moved`, "moved");
+            state.storageMap.set("pq:0061:moved", "moved");
+            state.storageMap.set("pq:0062:moved", "moved");
+
+            await new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }).fetch(get("/status"));
+
+            expect(state.storageMap.has("pq:0061:moved")).toBe(false);
+            expect(state.storageMap.has("pq:0062:moved")).toBe(true);
+            expect(state.storageMap.has("id:moved")).toBe(true);
+        });
+
         it("walks on the successor of an instance that died mid-drain", async () => {
             expect.assertions(2);
 
