@@ -3492,6 +3492,27 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
     const relationWrites = describeRelationWrites(schema);
 
+    // A `consistency: "primary"` read runs on a second ctx-db built over the exec's primary, so
+    // the whole read (relation loads included) is served from the primary, not just its top-level
+    // rows. The primary exec opens its own session per statement (see `buildPrimaryExec`), so the
+    // writer carries no read state and is built once. The primary-built ctx-db has no `primary` of
+    // its own, so this does not recurse. It shares `provisionScope`, so the DDL sweep is not
+    // repeated, and the gate runs on the replica so no DDL goes through the primary exec.
+    let primaryWriter: DatabaseWriterLike | undefined;
+    const primaryReads = async (): Promise<DatabaseWriterLike | undefined> => {
+        const { primary } = options.exec;
+
+        if (primary === undefined) {
+            return undefined;
+        }
+
+        await ensureMigrated();
+
+        primaryWriter ??= createSqlCtxDb({ ...options, exec: primary, provisionScope });
+
+        return primaryWriter;
+    };
+
     const writer: DatabaseWriterLike = {
         relationWrites,
 
@@ -3811,6 +3832,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         },
 
         async findFirst(tableName, args = {}) {
+            if (args.consistency === "primary") {
+                const primary = await primaryReads();
+
+                if (primary !== undefined) {
+                    return primary.findFirst(tableName, args);
+                }
+            }
+
             const result = await writer.findMany(tableName, { ...args, limit: 1 });
 
             // eslint-disable-next-line unicorn/no-null -- findFirst's public return is `doc | null`; no match returns null.
@@ -3828,6 +3857,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         },
 
         async findMany(tableName, args = {}) {
+            if (args.consistency === "primary") {
+                const primary = await primaryReads();
+
+                if (primary !== undefined) {
+                    return primary.findMany(tableName, args);
+                }
+            }
+
             const definition = schema.tables[tableName];
 
             if (!definition) {

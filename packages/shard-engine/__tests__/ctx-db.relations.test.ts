@@ -807,6 +807,30 @@ describe("ctx-db relations", () => {
             expect(page[0]?.["remote"]).toMatchObject({ _id: "g1", value: "alpha" });
         });
 
+        it("forwards consistency: primary on a direct .global() read to the global writer", async () => {
+            expect.assertions(2);
+
+            const received: unknown[] = [];
+            const fake = {
+                async findMany(_table: string, query?: unknown) {
+                    received.push(query);
+
+                    return { continueCursor: null, isDone: true, page: [{ _id: "g1", value: "alpha" }] };
+                },
+            };
+            const writer = createShardContextDatabase({
+                clock: () => 1_700_000_000_000,
+                globalDb: fake as unknown as DatabaseWriterLike,
+                schema,
+                sql: harness.sql,
+            });
+
+            const { page } = await writer.findMany("globals", { consistency: "primary" });
+
+            expect(page).toHaveLength(1);
+            expect(received).toStrictEqual([expect.objectContaining({ consistency: "primary" })]);
+        });
+
         it("throws a wiring error when the global child has no globalDb to route to", async () => {
             expect.assertions(1);
 

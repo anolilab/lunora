@@ -1,3 +1,36 @@
+## @lunora/codegen [1.0.0-alpha.395](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.394...@lunora/codegen@1.0.0-alpha.395) (2026-11-03)
+
+### Bug Fixes
+
+* **sql-store:** let global reads ask for the primary ([#1449](https://github.com/anolilab/lunora/issues/1449)) ([490a8fa](https://github.com/anolilab/lunora/commit/490a8fa203fe2f170e62d71239ca5d54b0b28051))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.285
+* **@lunora/agent:** upgraded to 1.0.0-alpha.279
+* **@lunora/platform:** upgraded to 1.0.0-alpha.80
+* **@lunora/queue:** upgraded to 1.0.0-alpha.143
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.168
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.151
+* **@lunora/client:** upgraded to 1.0.0-alpha.284
+* **@lunora/do:** upgraded to 1.0.0-alpha.279
+* **@lunora/payment:** upgraded to 1.0.0-alpha.267
+* **@lunora/server:** upgraded to 1.0.0-alpha.266
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.185
+
+## @lunora/codegen [1.0.0-alpha.394](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.393...@lunora/codegen@1.0.0-alpha.394) (2026-11-02)
+
+### Bug Fixes
+
+* **agent:** run agent tools on the shard the run started from ([#1416](https://github.com/anolilab/lunora/issues/1416)) ([2a2d233](https://github.com/anolilab/lunora/commit/2a2d233dc53973fffb5d4df2ccbf0755d52a7923))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.278
+* **@lunora/client:** upgraded to 1.0.0-alpha.283
+
 ## @lunora/codegen [1.0.0-alpha.393](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.392...@lunora/codegen@1.0.0-alpha.393) (2026-11-02)
 
 ### Bug Fixes

@@ -20,7 +20,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         shardedState: { level: "native", note: "Durable Objects with SQLite" },
         globalTables: {
             level: "native",
-            note: "D1 with Sessions API. D1 has a documented, expected baseline error rate — Cloudflare's own team calls a handful of transient errors every few hours 'not unexpected' on a healthy database — so read-only statements are retried automatically; writes are not, because every one of those errors is ambiguous about whether the statement applied and D1 has no interactive transactions to resolve it",
+            note: "D1 with Sessions API. D1 has a documented, expected baseline error rate — Cloudflare's own team calls a handful of transient errors every few hours 'not unexpected' on a healthy database — so read-only statements are retried automatically; writes are not, because every one of those errors is ambiguous about whether the statement applied and D1 has no interactive transactions to resolve it. A read with consistency: 'primary' runs on a first-primary Sessions session, so it sees every committed write; a plain read may come from any replica",
         },
         websocketHibernation: { level: "native", note: "DO WebSocket hibernation" },
         liveStreams: {

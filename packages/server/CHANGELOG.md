@@ -1,3 +1,17 @@
+## @lunora/server [1.0.0-alpha.266](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.265...@lunora/server@1.0.0-alpha.266) (2026-11-03)
+
+### Bug Fixes
+
+* **sql-store:** let global reads ask for the primary ([#1449](https://github.com/anolilab/lunora/issues/1449)) ([490a8fa](https://github.com/anolilab/lunora/commit/490a8fa203fe2f170e62d71239ca5d54b0b28051))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.168
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.185
+* **@lunora/observability:** upgraded to 1.0.0-alpha.199
+* **@lunora/storage:** upgraded to 1.0.0-alpha.171
+
 ## @lunora/server [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.264...@lunora/server@1.0.0-alpha.265) (2026-11-02)
 
 

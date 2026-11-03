@@ -1,3 +1,22 @@
+## @lunora/agent [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.278...@lunora/agent@1.0.0-alpha.279) (2026-11-03)
+
+### Bug Fixes
+
+* **sql-store:** let global reads ask for the primary ([#1449](https://github.com/anolilab/lunora/issues/1449)) ([490a8fa](https://github.com/anolilab/lunora/commit/490a8fa203fe2f170e62d71239ca5d54b0b28051))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.80
+* **@lunora/server:** upgraded to 1.0.0-alpha.266
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.185
+
+## @lunora/agent [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.277...@lunora/agent@1.0.0-alpha.278) (2026-11-02)
+
+### Bug Fixes
+
+* **agent:** run agent tools on the shard the run started from ([#1416](https://github.com/anolilab/lunora/issues/1416)) ([2a2d233](https://github.com/anolilab/lunora/commit/2a2d233dc53973fffb5d4df2ccbf0755d52a7923))
+
 ## @lunora/agent [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.276...@lunora/agent@1.0.0-alpha.277) (2026-11-02)
 
 ### Performance Improvements

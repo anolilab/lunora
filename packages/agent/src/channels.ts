@@ -287,8 +287,13 @@ const parseSignedBody = (body: string): Record<string, unknown> | undefined => {
  * Whether a signed body is refused before the mapper: it must carry a JSON object. A `payload=` form wrapper is judged by its
  * payload (GitHub's form delivery, Slack's interactive payloads). Slack's other form bodies, its slash commands, are legitimate.
  */
-const isMalformedBody = (channel: string, body: string): boolean =>
-    (body.startsWith("payload=") ? parseSignedBody(body) === undefined : channel !== "slack" && parseJsonObject(body) === undefined);
+const isMalformedBody = (channel: string, body: string): boolean => {
+    if (body.startsWith("payload=")) {
+        return parseSignedBody(body) === undefined;
+    }
+
+    return channel !== "slack" && parseJsonObject(body) === undefined;
+};
 
 const idString = (value: unknown): string | undefined => {
     if (typeof value === "string" && value !== "") {
