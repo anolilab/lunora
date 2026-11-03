@@ -552,6 +552,7 @@ describe("lunoraClient polling fallback", () => {
         expect.assertions(3);
 
         vi.useFakeTimers();
+        vi.stubGlobal("navigator", { onLine: false });
 
         let originReachable = false;
         const fetchMock = vi.fn<typeof fetch>(async (input) => {
@@ -607,6 +608,64 @@ describe("lunoraClient polling fallback", () => {
         expect(outcome).toBe("done");
 
         client.close();
+        vi.unstubAllGlobals();
+    });
+
+    it("settles the caller at the ambiguous-send cap when the device is online and the send keeps failing", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+        vi.stubGlobal("navigator", { onLine: true });
+
+        const originReachable = false;
+        const fetchMock = vi.fn<typeof fetch>(async (input) => {
+            if ((input as string).includes("rpc-batch")) {
+                return jsonResponse({ results: [{ body: { result: [] }, id: 0, status: 200 }] });
+            }
+
+            if (!originReachable) {
+                throw new TypeError("Failed to fetch");
+            }
+
+            return jsonResponse({ result: "done" });
+        });
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("todos:list"), {}, () => {});
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(10);
+        sockets.at(-1)?.triggerClose();
+        await vi.advanceTimersByTimeAsync(STEP_MS);
+        await failOpens(2);
+
+        expect(client.connectionStatus()).toBe("polling");
+
+        let outcome = "pending";
+
+        const written = client.mutation(fnRef("todos:add"), { text: "x" }).then(
+            (value) => {
+                outcome = String(value);
+
+                return undefined;
+            },
+            () => {
+                outcome = "rejected";
+            },
+        );
+
+        await vi.advanceTimersByTimeAsync(600_000);
+        await written;
+
+        expect(outcome).toBe("rejected");
+
+        client.close();
+        vi.unstubAllGlobals();
     });
 
     it("replays a write whose response was lost after it committed, without its precondition", async () => {
