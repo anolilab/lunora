@@ -303,18 +303,21 @@ const agentExtension: SchemaExtension<
 
         /**
          * Thread-scoped approval grants: a tool named here skips its
-         * `needsApproval` gate for every later call in the thread. Written only by
+         * `needsApproval` gate for every later call by the same agent in the thread. The
+         * agent is part of the key because two agents can share a thread and a tool name
+         * while their tools do different things. Written only by
          * `agentResolveApproval` (an `approve` for the thread) and removed only by
          * `agentRevokeApprovalGrant`; the gate reads it inside its own durable step,
          * so a grant made after a call's gate resolved never changes that call.
          */
         [GRANTS_BARE_TABLE]: defineTable({
+            agent: v.string(),
             createdAt: v.number(),
             threadKey: v.string(),
             toolName: v.string(),
         })
-            // One grant per tool per thread; unique makes a repeated approve a no-op.
-            .index("byThreadTool", ["threadKey", "toolName"], { unique: true })
+            // One grant per tool per agent per thread; unique makes a repeated approve a no-op.
+            .index("byThreadAgentTool", ["threadKey", "agent", "toolName"], { unique: true })
             // See the threads table for why the agent tables are `.public()`.
             .public(),
 
@@ -391,7 +394,7 @@ type QueueDatabase = DatabaseWriter;
  * no pending marker (already decided, timed out, or a stale instance) there is
  * nothing to grant, and the decision is refused before the run is woken.
  */
-const grantApprovalForThread = async (database: QueueDatabase, threadKey: string, instanceId: string, toolCallId: string): Promise<void> => {
+const grantApprovalForThread = async (database: QueueDatabase, threadKey: string, agent: string, instanceId: string, toolCallId: string): Promise<void> => {
     const marker = await database
         .query(MESSAGES_TABLE)
         .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).eq("messageKey", `${instanceId}:approval:${toolCallId}`))
@@ -422,11 +425,11 @@ const grantApprovalForThread = async (database: QueueDatabase, threadKey: string
     const toolName = marker["toolName"] as string;
     const existing = await database
         .query(GRANTS_TABLE)
-        .withIndex("byThreadTool", (q) => q.eq("threadKey", threadKey).eq("toolName", toolName))
+        .withIndex("byThreadAgentTool", (q) => q.eq("threadKey", threadKey).eq("agent", agent).eq("toolName", toolName))
         .first();
 
     if (!existing) {
-        await database.insert(GRANTS_TABLE, { createdAt: Date.now(), threadKey, toolName });
+        await database.insert(GRANTS_TABLE, { agent, createdAt: Date.now(), threadKey, toolName });
     }
 };
 
@@ -1525,7 +1528,7 @@ export const agentComponent = (): AgentComponent => {
                 // thread is readable by anyone who knows its key, which is fine for a one-off
                 // approve or reject but not for skipping the gate on every later call.
                 ownedSecretThread(thread, context.auth, "grant a lasting approval for a tool");
-                await grantApprovalForThread(context.db, args.threadKey, args.instanceId, args.toolCallId);
+                await grantApprovalForThread(context.db, args.threadKey, agentName, args.instanceId, args.toolCallId);
             }
 
             await retireApprovalMarker(context.db, args.threadKey, args.instanceId, args.toolCallId);
@@ -1879,10 +1882,10 @@ export const agentComponent = (): AgentComponent => {
      * gated, because the workflow dispatching it carries no caller identity.
      */
     const agentApprovalGranted = asInternal(
-        query.input({ key: v.string(), toolName: v.string() }).query(async ({ args, ctx: context }): Promise<boolean> => {
+        query.input({ agent: v.string(), key: v.string(), toolName: v.string() }).query(async ({ args, ctx: context }): Promise<boolean> => {
             const grant = await context.db
                 .query(GRANTS_TABLE)
-                .withIndex("byThreadTool", (q) => q.eq("threadKey", args.key).eq("toolName", args.toolName))
+                .withIndex("byThreadAgentTool", (q) => q.eq("threadKey", args.key).eq("agent", args.agent).eq("toolName", args.toolName))
                 .first();
 
             return grant !== null;
@@ -1906,12 +1909,23 @@ export const agentComponent = (): AgentComponent => {
 
         const grants = await context.db
             .query(GRANTS_TABLE)
-            .withIndex("byThreadTool", (q) => q.eq("threadKey", args.key))
+            .withIndex("byThreadAgentTool", (q) => q.eq("threadKey", args.key))
             .collect();
 
-        return grants.map((grant) => {
-            return { createdAt: grant["createdAt"] as number, toolName: grant["toolName"] as string };
-        });
+        // One entry per tool: the same name granted to two agents is still one thing to revoke.
+        const byTool = new Map<string, { createdAt: number; toolName: string }>();
+
+        for (const grant of grants) {
+            const toolName = grant["toolName"] as string;
+            const createdAt = grant["createdAt"] as number;
+            const seen = byTool.get(toolName);
+
+            if (seen === undefined || createdAt < seen.createdAt) {
+                byTool.set(toolName, { createdAt, toolName });
+            }
+        }
+
+        return [...byTool.values()];
     });
 
     /**
@@ -1932,18 +1946,18 @@ export const agentComponent = (): AgentComponent => {
                 throw new LunoraError("FORBIDDEN", `@lunora/agent: not allowed to revoke approvals on thread "${args.threadKey}"`);
             }
 
-            const grant = await context.db
+            const stored = await context.db
                 .query(GRANTS_TABLE)
-                .withIndex("byThreadTool", (q) => q.eq("threadKey", args.threadKey).eq("toolName", args.toolName))
-                .first();
+                .withIndex("byThreadAgentTool", (q) => q.eq("threadKey", args.threadKey))
+                .collect();
+            const grants = stored.filter((grant) => grant["toolName"] === args.toolName);
 
-            if (!grant) {
-                return { revoked: false };
+            for (const grant of grants) {
+                // eslint-disable-next-line no-await-in-loop -- a handful of rows, deleted in order
+                await context.db.delete(GRANTS_TABLE, grant["_id"] as never);
             }
 
-            await context.db.delete(GRANTS_TABLE, grant["_id"] as never);
-
-            return { revoked: true };
+            return { revoked: grants.length > 0 };
         });
 
     /**

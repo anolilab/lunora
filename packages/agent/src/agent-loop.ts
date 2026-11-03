@@ -118,6 +118,8 @@ const normalizeDepth = (depth: number | undefined): number => (isPositiveInteger
 /** Everything one turn (and its tool calls) needs, prepared once per run. */
 interface TurnContext {
     agent: AgentDefinition;
+    /** The agent's export name; keys its approval grants so a same-named tool of another agent on the thread is not covered. */
+    agentName: string;
     /** Dispatch ref of `agents:agentApprovalGranted` — whether a tool is granted for the thread (read inside the gate's step). */
     approvalGrantedRef: ReturnType<typeof toFunctionReference>;
     /** History-compaction seam, when the runtime provided one (else `undefined`). */
@@ -579,6 +581,7 @@ const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCal
 const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: number): Promise<void> => {
     const {
         agent,
+        agentName,
         approvalGrantedRef,
         depth,
         env,
@@ -678,7 +681,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: 
     // turn can recover instead of stalling.
     let status: "approved" | undefined;
     let approvalScope: "thread" | undefined;
-    const isGranted = async (): Promise<boolean> => (await run(approvalGrantedRef, { key: threadKey, toolName: call.name })) === true;
+    const isGranted = async (): Promise<boolean> => (await run(approvalGrantedRef, { agent: agentName, key: threadKey, toolName: call.name })) === true;
 
     if (await resolveNeedsApproval(tool, call.input, step, gateStepName, gateContext, isGranted)) {
         const { decision, note, scope } = await awaitApproval(turnContext, call);
@@ -1747,6 +1750,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 
     const turnContext: TurnContext = {
         agent,
+        agentName: exportName,
         approvalGrantedRef,
         openSecretRef,
         settleSecretRef,

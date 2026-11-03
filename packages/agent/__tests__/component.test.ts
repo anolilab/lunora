@@ -957,14 +957,16 @@ describe("approval resolution", () => {
         const listed = await callMutation(functions.agentApprovalGrants, ctx, { key: "t-1" });
 
         expect(listed).toMatchObject([{ toolName: "charge" }]);
-        await expect(callMutation(functions.agentApprovalGranted, ctx, { key: "t-1", toolName: "charge" })).resolves.toBe(true);
-        await expect(callMutation(functions.agentApprovalGranted, ctx, { key: "t-1", toolName: "other" })).resolves.toBe(false);
+        await expect(callMutation(functions.agentApprovalGranted, ctx, { agent: "support", key: "t-1", toolName: "charge" })).resolves.toBe(true);
+        // Another agent on the same thread with a same-named tool is not covered by this grant.
+        await expect(callMutation(functions.agentApprovalGranted, ctx, { agent: "billing", key: "t-1", toolName: "charge" })).resolves.toBe(false);
+        await expect(callMutation(functions.agentApprovalGranted, ctx, { agent: "support", key: "t-1", toolName: "other" })).resolves.toBe(false);
 
         await expect(callMutation(functions.agentRevokeApprovalGrant, ctx, { threadKey: "t-1", toolName: "charge" })).resolves.toStrictEqual({ revoked: true });
         await expect(callMutation(functions.agentRevokeApprovalGrant, ctx, { threadKey: "t-1", toolName: "charge" })).resolves.toStrictEqual({
             revoked: false,
         });
-        await expect(callMutation(functions.agentApprovalGranted, ctx, { key: "t-1", toolName: "charge" })).resolves.toBe(false);
+        await expect(callMutation(functions.agentApprovalGranted, ctx, { agent: "support", key: "t-1", toolName: "charge" })).resolves.toBe(false);
         await expect(callMutation(functions.agentApprovalGrants, ctx, { key: "t-1" })).resolves.toStrictEqual([]);
     });
 
