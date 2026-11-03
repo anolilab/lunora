@@ -2065,6 +2065,19 @@ const MIGRATE_PATH = "/_lunora/migrate";
  */
 const STATUS_PATH = "/_lunora/status";
 
+/**
+ * Hosted Studio's advisor-procedure list. Mirrors the companion Worker's route
+ * (`@lunora/config` studio-host) so the main Worker can forward it unchanged.
+ */
+const ADVISOR_PROCEDURES_PATH = "/__lunora/advisor-procedures";
+
+interface ServiceBindingLike {
+    fetch: (request: Request) => Promise<Response>;
+}
+
+const isServiceBinding = (value: unknown): value is ServiceBindingLike =>
+    typeof value === "object" && value !== null && "fetch" in value && typeof value.fetch === "function";
+
 /** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
 /** The reserved prefix every worker- and shard-served admin op shares. */
 const ADMIN_FUNCTION_PREFIX = "__lunora_admin__";
@@ -6461,6 +6474,22 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             }
 
             return Response.json({ ok: true }, { headers: { "cache-control": "no-store" } });
+        },
+        // Forwarded to the companion Worker over its service binding, which holds the
+        // embedded procedure list. Absent binding means no companion: 404, so the hosted
+        // Studio shows its notice. The caller's Authorization header travels intact.
+        [ADVISOR_PROCEDURES_PATH]: async (request, env) => {
+            const companion: unknown = typeof env === "object" && env !== null ? Reflect.get(env, "ADVISOR_COMPANION") : undefined;
+
+            if (!isServiceBinding(companion)) {
+                return Response.json({ error: "not found" }, { status: 404 });
+            }
+
+            assertMethod(request, "GET", "Advisor procedures");
+
+            assertAdminAuthorized(request);
+
+            return companion.fetch(request);
         },
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [SOCKET_REAUTH_PATH]: (request, env, url, context) => handleSocketReauth(request, env, context, url),
