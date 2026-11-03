@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import { isDuplicateInstanceError } from "@lunora/workflow";
 
 import { fnv1a64Hex } from "../../../shared/fnv1a";
+import { withRunShard } from "../../../shared/run-shard";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import jsonSchema from "./json-schema";
 import { agentClassName } from "./naming";
@@ -204,7 +205,9 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
         // out of the instance id only — `childThreadKey` is not an instance id
         // and stays readable.
         const childThreadKey = `${context.threadKey}::sub::${name}::${context.toolCallId}`;
-        const childInstanceId = `sub-${name}-${fnv1a64Hex(context.toolCallId)}`;
+        // The parent run's instance id is part of the digest: a tool-call id can repeat across runs on different shards, and a child keyed by
+        // it alone would be attached to another tenant's run.
+        const childInstanceId = `sub-${name}-${fnv1a64Hex(`${context.instanceId}:${name}:${context.toolCallId}`)}`;
         // The child thread inherits the PARENT's verified owner. Created without
         // one it was ownerless, so `agents:agentThread`/`agentMessages` admitted
         // any caller who knew the (derivable) key — a sub-thread of an owned
@@ -219,7 +222,8 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
         let instance: AgentWorkflowInstanceLike;
 
         try {
-            const handle = await binding.create({ id: childInstanceId, params });
+            // The child works for the same tenant, so its tools read the parent's shard.
+            const handle = await binding.create({ id: childInstanceId, params: withRunShard(params, context.shardKey) });
 
             instance = await binding.get(handle.id);
         } catch (error) {

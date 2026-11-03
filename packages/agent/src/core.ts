@@ -12,6 +12,7 @@ export { defineAgent, defineAgentTool, isAgentDefinition } from "./define-agent"
 export type { FunctionToolOptions } from "./function-tool";
 export { functionTool } from "./function-tool";
 export { default as jsonSchema } from "./json-schema";
+export { default as withAgentScheduleShard } from "./schedule-shard";
 export { defineSkill, isSkillDefinition } from "./skill";
 export type {
     AgentApprovalContext,

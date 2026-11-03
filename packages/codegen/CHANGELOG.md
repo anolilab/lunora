@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.393](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.392...@lunora/codegen@1.0.0-alpha.393) (2026-11-02)
+
+### Bug Fixes
+
+* **codegen:** type lazy manifest cache policy as required ([#1448](https://github.com/anolilab/lunora/issues/1448)) ([dfb3df4](https://github.com/anolilab/lunora/commit/dfb3df4d06a184327a728f40e19bb939fec6f93f))
+
 ## @lunora/codegen [1.0.0-alpha.392](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.391...@lunora/codegen@1.0.0-alpha.392) (2026-11-02)
 
 ### Bug Fixes

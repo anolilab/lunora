@@ -140,6 +140,54 @@ describe("createWorker — scheduled workflow/agent dispatch", () => {
         expect(sched.calls.some((call) => call.path === "/complete")).toBe(false);
     });
 
+    it("starts a scheduled agent run on the record's shard, ignoring a shardKey in its args", async () => {
+        expect.assertions(1);
+
+        const created: Record<string, unknown>[] = [];
+        const binding = {
+            create: async (options: { params?: Record<string, unknown> }) => {
+                created.push(options.params ?? {});
+
+                return { id: "wf-1" };
+            },
+        };
+        const env = { ReportWorkflow: binding, SupportAgentWorkflow: binding };
+        const worker = createWorker({ adminToken: ADMIN, agentWorkflows: ["SupportAgentWorkflow"], schedulerDO: schedulerSpy().namespace, shardDO: okShard() });
+        // The args can come from a public mutation forwarding a client's input, so a
+        // `shardKey` in them is forged; the record's own `shardKey` was stamped by the
+        // scheduling shard and is signed with the dispatch.
+        const forged = { input: "follow up", shardKey: "org-b", threadKey: "t-1" };
+
+        await dispatchWithEnv(worker, { args: forged, id: "job-a", shardKey: "org-a", workflow: "SupportAgentWorkflow" }, env);
+        await dispatchWithEnv(worker, { args: forged, id: "job-b", workflow: "SupportAgentWorkflow" }, env);
+        // A plain workflow's params are its own; a `shardKey` among them is not a run shard.
+        await dispatchWithEnv(worker, { args: forged, id: "job-c", shardKey: "org-a", workflow: "ReportWorkflow" }, env);
+
+        expect(created).toStrictEqual([{ input: "follow up", shardKey: "org-a", threadKey: "t-1" }, { input: "follow up", threadKey: "t-1" }, forged]);
+    });
+
+    it("does not trust a shardKey in a scheduled workflow's args when the worker declares no agent list", async () => {
+        expect.assertions(1);
+
+        // A hand-written worker does not say which of its workflows are agents, so no workflow's args can carry a shard.
+        const created: Record<string, unknown>[] = [];
+        const binding = {
+            create: async (options: { params?: Record<string, unknown> }) => {
+                created.push(options.params ?? {});
+
+                return { id: "wf-1" };
+            },
+        };
+        const env = { SupportAgentWorkflow: binding };
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: schedulerSpy().namespace, shardDO: okShard() });
+        const forged = { input: "follow up", shardKey: "org-b" };
+
+        await dispatchWithEnv(worker, { args: forged, id: "job-a", shardKey: "org-a", workflow: "SupportAgentWorkflow" }, env);
+        await dispatchWithEnv(worker, { args: forged, id: "job-b", workflow: "SupportAgentWorkflow" }, env);
+
+        expect(created).toStrictEqual([{ input: "follow up", shardKey: "org-a" }, { input: "follow up" }]);
+    });
+
     it("hands the workflow binding JSON-safe params, leaving the wire form intact", async () => {
         expect.assertions(2);
 

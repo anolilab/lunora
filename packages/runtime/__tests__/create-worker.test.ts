@@ -224,6 +224,58 @@ describe("createWorker", () => {
         expect(shard.calls[0]!.shardKey).toBe("tenant-1");
     });
 
+    it("refuses agents:agentRun on a non-default shard before forwarding it", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, defaultShardKey: "tenant-1", shardDO: shard.namespace });
+        const agentRun = async (shardKey?: string): Promise<Response> =>
+            worker.fetch(
+                new Request("https://app.example/_lunora/rpc", {
+                    body: JSON.stringify({ args: { agent: "support", input: "hi", threadKey: "t" }, functionPath: "agents:agentRun", shardKey }),
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+        // The agent's thread rows live on the default shard; a run-start check anywhere
+        // else reads an empty table.
+        const refused = await agentRun("org-a");
+
+        await agentRun();
+        await agentRun("tenant-1");
+
+        expect(refused.status).toBe(400);
+        await expect(refused.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+        expect(shard.calls.map((call) => call.shardKey)).toStrictEqual(["tenant-1", "tenant-1"]);
+    });
+
+    it("refuses agents:agentRun sent as a fan-out, even when fan-out is authorized", async () => {
+        expect.assertions(3);
+
+        const fanOut = vi.fn<() => never>();
+        const worker = createWorker({ authorizeFanOut: () => true, queryCoordinator: { fanOut } as never, shardDO: shard.namespace });
+
+        // A fan-out reaches every shard, so it would run the in-flight check on each
+        // shard's empty thread table and start a run per shard.
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({
+                    args: { agent: "support", input: "hi", threadKey: "t" },
+                    fanOut: { merge: { kind: "concat" }, table: "messages" },
+                    functionPath: "agents:agentRun",
+                }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+        expect(fanOut).not.toHaveBeenCalled();
+    });
+
     it("rejects non-POST RPC requests with 405", async () => {
         expect.assertions(2);
 
@@ -2450,6 +2502,34 @@ describe("createWorker — HTTP actions", () => {
         expect(denied).toMatchObject({ code: "FORBIDDEN_SHARD" });
         expect(authorizeShard).toHaveBeenCalledWith(expect.objectContaining({ shardKey: "victim-shard" }));
         // The gate must short-circuit before the system-trusted shard dispatch.
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("refuses `ctx.forShard(key).runMutation` on `agents:agentRun` off the default shard, before dispatch", async () => {
+        expect.assertions(3);
+
+        // The agent's thread rows live on the default shard. A run started from another shard reads an empty table, so the in-flight check
+        // misses the thread and a retry starts a second run.
+        const worker = createWorker({
+            authorizeShard: () => true,
+            httpRouter: honoApp((app) =>
+                app.get("/channels/:id/agent", async (c) => {
+                    try {
+                        await c.var.lunora.forShard(c.req.param("id")).runMutation({ __lunoraRef: "agents:agentRun" }, { threadKey: "t" });
+                    } catch (error) {
+                        return Response.json({ code: (error as { code?: string }).code }, { status: 400 });
+                    }
+
+                    return new Response("ran", { status: 200 });
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/channels/tenant-42/agent"), {}, fakeContext);
+
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toStrictEqual({ code: "BAD_REQUEST" });
         expect(shard.calls).toHaveLength(0);
     });
 
