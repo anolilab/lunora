@@ -28,7 +28,7 @@
             "benchmarks": "${{ steps.changes.outputs.benchmarks }}"
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -37,7 +37,7 @@
 
             - "name": "Check for file changes"
               "id": "changes"
-              "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
+              "uses": "dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d" # v4.0.3
               "with":
                   "token": "${{ github.token }}"
                   "filters": ".github/file-filters.yml"
@@ -48,9 +48,7 @@
         # skipped on push/dispatch, which would otherwise skip this job too.
         "if": "!cancelled() && (github.event_name != 'pull_request' || needs.files-changed.outputs.benchmarks == 'true')"
         "needs": "files-changed"
-        # CodSpeedHQ/action v4 (runner 4.x) fails with "Unsupported system" on
-        # ubuntu-26.04, which ubuntu-latest now resolves to. Runner 5.5+ supports it.
-        "runs-on": "ubuntu-24.04"
+        "runs-on": "ubuntu-latest"
         # A low-level package change (scheduler, do, codegen) makes nearly every
         # package `affected`, and the full suite under CodSpeed instrumentation
         # already took 25-29 minutes on alpha; 30 cancelled runs that touched
@@ -64,7 +62,7 @@
             "id-token": "write" # required for OIDC authentication with CodSpeed
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -76,14 +74,14 @@
                   "fetch-depth": "0"
 
             - "name": "Setup pnpm"
-              "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
+              "uses": "pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413" # v6.1.0
               "with":
                   # No "version" — the action reads the pinned pnpm from package.json's
                   # `packageManager` field, so CI can't drift from the repo's version.
                   "run_install": false
 
             - "name": "Use Node.js 22.22"
-              "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e" # v6.4.0
+              "uses": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1" # v7.1.0
               "with":
                   "node-version": "22.22"
 
@@ -94,7 +92,7 @@
                   echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
             - "name": "Restore pnpm cache"
-              "uses": "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
+              "uses": "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" # v6.1.0
               "with":
                   "path": "${{ steps.pnpm-store.outputs.path }}"
                   "key": "pnpm-${{ runner.os }}-node22.22-${{ hashFiles('pnpm-lock.yaml') }}"
@@ -149,7 +147,7 @@
                   fi
 
             - "name": "Run benchmarks"
-              "uses": "CodSpeedHQ/action@63f3e98b61959fe67f146a3ff022e4136fe9bb9c" # v4.17.6
+              "uses": "CodSpeedHQ/action@61efe07e57e55bedeab750c434504de272a56e8c" # v5.6.1
               "with":
                   "mode": "simulation"
                   # `vis affected test:bench` legitimately runs nothing when no affected package

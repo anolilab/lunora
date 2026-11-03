@@ -39,7 +39,7 @@
 
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               # SECURITY TODO: this job holds NPM_TOKEN + a GitHub PAT, and `audit` only
               # logs egress. Switching to `block` needs an allowlist confirmed from a real
               # audit run — an incomplete one breaks the release. Known-required hosts:
@@ -49,7 +49,7 @@
 
             # Persist credentials so multi-semantic-release can push tags and this job the release commit.
             - "name": "Git checkout" # zizmor: ignore[artipacked]
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
               "with":
                   "fetch-depth": 0
                   "token": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
@@ -67,14 +67,14 @@
               "run": "git fetch origin '+refs/notes/*:refs/notes/*'"
 
             - "name": "Setup pnpm"
-              "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
+              "uses": "pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413" # v6.1.0
               "with":
                   # No "version" — the action reads the pinned pnpm from package.json's
                   # `packageManager` field, so CI can't drift from the repo's version.
                   "run_install": false
 
             - "name": "Use Node.js 22.22"
-              "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e" # v6.4.0
+              "uses": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1" # v7.1.0
               "with":
                   "node-version": "22.22"
                   "registry-url": "https://registry.npmjs.org"
@@ -87,7 +87,7 @@
 
             - "name": "Restore pnpm store"
               "id": "pnpm-cache"
-              "uses": "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
+              "uses": "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" # v6.1.0
               "with":
                   "path": "${{ steps.pnpm-store.outputs.path }}"
                   "key": "pnpm-store-release-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}"
@@ -100,7 +100,7 @@
 
             - "name": "Save pnpm store"
               "if": "steps.pnpm-cache.outputs.cache-hit != 'true'"
-              "uses": "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
+              "uses": "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" # v6.1.0
               "with":
                   "path": "${{ steps.pnpm-store.outputs.path }}"
                   "key": "${{ steps.pnpm-cache.outputs.cache-primary-key }}"
@@ -245,7 +245,7 @@
 
             - "name": "Upload the unpushed release commit"
               "if": "failure()"
-              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "uses": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" # v7.0.2
               "with":
                   "name": "release-commit"
                   "path": "${{ runner.temp }}/release-commit.patch"

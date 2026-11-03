@@ -35,7 +35,7 @@
             "celld": "${{ steps.changes.outputs.celld }}"
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -46,7 +46,7 @@
             # so this call needs no retry handling of its own.
             - "name": "Check for file changes"
               "id": "changes"
-              "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
+              "uses": "dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d" # v4.0.3
               "with":
                   "token": "${{ github.token }}"
                   "filters": ".github/file-filters.yml"
@@ -76,7 +76,7 @@
                       "fts5": "present"
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -196,7 +196,7 @@
               # Same-repo PRs only: forks have no token.
               "if": "matrix.node_version == '22.22' && github.event.pull_request.head.repo.full_name == github.repository"
               "continue-on-error": true
-              "uses": "codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac" # v5.5.5
+              "uses": "codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5" # v7.1.1
               "with":
                   "token": "${{ secrets.CODECOV_TOKEN }}"
                   "fail_ci_if_error": false
@@ -224,7 +224,7 @@
                     - { "project": "hyperdrive", "shard": 1, "shards": 1 }
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -297,7 +297,7 @@
 
             - "name": "Upload the shard's blob report"
               "if": "steps.affected.outputs.run == 'true'"
-              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "uses": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" # v7.0.2
               "with":
                   "name": "blob-${{ matrix.project }}-${{ matrix.shard }}"
                   "path": "blob-reports"
@@ -317,7 +317,7 @@
         "timeout-minutes": 15
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -327,7 +327,7 @@
             # After checkout, which cleans the workspace. No blobs = nothing affected; the
             # steps below skip.
             - "name": "Download the shard blob reports"
-              "uses": "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" # v4.3.0
+              "uses": "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333" # v8.0.2
               "with":
                   "pattern": "blob-*"
                   "path": "blob-reports"
@@ -381,7 +381,7 @@
             - "name": "Upload coverage to Codecov"
               "if": "hashFiles('blob-reports/**') != '' && github.event.pull_request.head.repo.full_name == github.repository"
               "continue-on-error": true
-              "uses": "codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac" # v5.5.5
+              "uses": "codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5" # v7.1.1
               "with":
                   "token": "${{ secrets.CODECOV_TOKEN }}"
                   "fail_ci_if_error": false
@@ -427,7 +427,7 @@
                     ]
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -512,7 +512,7 @@
             "MOTO_VERSION": "5.2.3"
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -580,7 +580,7 @@
         "timeout-minutes": 20
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   # `mysql-memory-server` fetches mysqld from cdn.mysql.com on first use.
                   "egress-policy": "audit"
@@ -661,7 +661,7 @@
         "timeout-minutes": 45
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -719,7 +719,7 @@
 
             - "name": "Upload Playwright report on failure"
               "if": "failure()"
-              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "uses": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" # v7.0.2
               "with":
                   "name": "playwright-report"
                   "path": |
@@ -748,7 +748,7 @@
             "list": "${{ steps.list.outputs.list }}"
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -776,7 +776,7 @@
                 "template": "${{ fromJSON(needs.templates-matrix.outputs.list) }}"
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -815,7 +815,7 @@
 
             - "name": "Upload scaffold logs on failure"
               "if": "failure()"
-              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "uses": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" # v7.0.2
               "with":
                   "name": "template-smoke-logs-${{ matrix.template }}"
                   "path": ".template-smoke-logs"
@@ -838,7 +838,7 @@
         "timeout-minutes": 30
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -867,7 +867,7 @@
 
             - "name": "Upload scaffold logs on failure"
               "if": "failure()"
-              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "uses": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" # v7.0.2
               "with":
                   "name": "template-smoke-logs-expo"
                   "path": ".template-smoke-logs"
@@ -889,7 +889,7 @@
         "timeout-minutes": 30
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -927,7 +927,7 @@
         "timeout-minutes": 30
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -965,7 +965,7 @@
         "timeout-minutes": 30
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -1008,7 +1008,7 @@
         "timeout-minutes": 30
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -1087,7 +1087,7 @@
                       "timeoutMinutes": 30
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -1113,13 +1113,13 @@
 
             - "name": "Setup python"
               "if": "matrix.sdk.language == 'python'"
-              "uses": "actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c" # v6.0.0
+              "uses": "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0" # v7.1.0
               "with":
                   "python-version": "3.13"
 
             - "name": "Setup go"
               "if": "matrix.sdk.language == 'go'"
-              "uses": "actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00" # v6.0.0
+              "uses": "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e" # v7.0.0
               "with":
                   "go-version": "1.22"
 
@@ -1128,7 +1128,7 @@
             # the generated-code check alone needs the gems.
             - "name": "Setup java"
               "if": "matrix.sdk.language == 'java'"
-              "uses": "actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00" # v4.7.1
+              "uses": "actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad" # v6.1.0
               "with":
                   "distribution": "temurin"
                   "java-version": "21"
@@ -1137,7 +1137,7 @@
             # JetBrains release, keeping a third-party action SHA out of the chain.
             - "name": "Setup java for kotlin"
               "if": "matrix.sdk.language == 'kotlin'"
-              "uses": "actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00" # v4.7.1
+              "uses": "actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad" # v6.1.0
               "with":
                   "distribution": "temurin"
                   "java-version": "21"
@@ -1159,13 +1159,13 @@
             # ship with the SDK, so it has no linter step below.
             - "name": "Setup dart"
               "if": "matrix.sdk.language == 'dart'"
-              "uses": "dart-lang/setup-dart@7654d458321ee25acccccfdb86cd48bd95768ff1" # v1.8.0
+              "uses": "dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d" # v1.8.1
               "with":
                   "sdk": "3.13.0"
 
             - "name": "Setup ruby"
               "if": "matrix.sdk.language == 'ruby'"
-              "uses": "ruby/setup-ruby@90be1154f987f4dc0fe0dd0feedac9e473aa4ba8" # v1.286.0
+              "uses": "ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94" # v1.336.0
               "with":
                   "ruby-version": "3.3"
 
