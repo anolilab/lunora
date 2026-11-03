@@ -627,4 +627,16 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(ratios[1]).toBeCloseTo(0.500_001, 12);
         expect(ratios[2]).toBeCloseTo(0.500_002, 12);
     });
+
+    it("deals NULL as one more value of a nullable unique enum and boolean column", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            tags: defineTable({ flag: v.boolean().nullable().unique(), kind: v.union(v.literal("a"), v.literal("b")).nullable().unique() }),
+        });
+        const rows = rowsOf(seedPlan(schema, { counts: { tags: 3 } }), "tags");
+
+        expect(new Set(rows.map((row) => row.flag)).size).toBe(3);
+        expect(new Set(rows.map((row) => row.kind)).size).toBe(3);
+    });
 });

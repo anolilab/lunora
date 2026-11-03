@@ -295,7 +295,8 @@ const boundedNumeric = (constraints: Constraints, defaults: { max: number; min: 
             return { capacity: 1, valueAt: () => constraints.minimum };
         }
 
-        return { capacity: Number.POSITIVE_INFINITY, valueAt: (index) => first + index };
+        // Capacity stops at 2^53 - 1: beyond it `first + index` rounds onto a value already dealt.
+        return { capacity: Number.MAX_SAFE_INTEGER - first + 1, valueAt: (index) => first + index };
     }
 
     const { max, min } = resolveRange(constraints, defaults, column);
@@ -588,6 +589,11 @@ const arrayDeal = (field: FieldSpec, constraints: Constraints, table: string): U
     };
 };
 
+/** A nullable column admits NULL on top of its closed domain, and a unique index never compares NULLs. */
+const nullableDomain = (field: FieldSpec, domain: ReadonlyArray<unknown>): ReadonlyArray<unknown> =>
+    // eslint-disable-next-line unicorn/no-null -- NULL is one more value a nullable column takes
+    field.nullable ? [...domain, null] : domain;
+
 /**
  * Decide how one `.unique()` column deals its values.
  *
@@ -604,7 +610,7 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
     const enumValues = constraints.enum;
 
     if (Array.isArray(enumValues) && enumValues.length > 0) {
-        return domainDeal(acceptedBy(field.validator, enumValues), table, field.name);
+        return domainDeal(nullableDomain(field, acceptedBy(field.validator, enumValues)), table, field.name);
     }
 
     switch (field.kind) {
@@ -630,7 +636,7 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
         }
 
         case "boolean": {
-            return domainDeal(acceptedBy(field.validator, [false, true]), table, field.name);
+            return domainDeal(nullableDomain(field, acceptedBy(field.validator, [false, true])), table, field.name);
         }
 
         case "bytes": {
