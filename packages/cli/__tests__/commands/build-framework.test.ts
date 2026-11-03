@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { DEFAULT_BUNDLE_META_PATH } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { frameworkBuildFor, runClientBuild, viteBundleMetaPath } from "../../src/commands/build/framework-build";
+import { frameworkBuildFor, pluginBuildRuns, runClientBuild, viteBundleMetaPath } from "../../src/commands/build/framework-build";
 import { runBuildCommand } from "../../src/commands/build/handler";
 import type { Logger } from "../../src/util/logger";
 import type { SpawnDescriptor, Spawner } from "../../src/util/spawn";
@@ -636,6 +636,32 @@ describe("lunora build — client build", () => {
             writeFileSync(join(workdir, ".wrangler", "deploy", "config.json"), "{}\n", "utf8");
 
             expect(frameworkBuildFor(workdir)).toBe("vite");
+        });
+    });
+
+    describe("pluginBuildRuns", () => {
+        it("is false for a Vite config that never loads the plugin, so the deploy keeps its own codegen", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ assets: { directory: "./dist" }, main: "src/server.ts" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+
+            expect(frameworkBuildFor(workdir)).toBe("vite");
+            expect(pluginBuildRuns(workdir, undefined)).toBe(false);
+        });
+
+        it("is true when the config loads the Lunora plugin or the worker is the Vite-composed entry", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ assets: { directory: "./dist" }, main: "src/server.ts" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), 'import { lunora } from "@lunora/vite";\nexport default { plugins: [lunora()] };\n', "utf8");
+
+            expect(pluginBuildRuns(workdir, undefined)).toBe(true);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+
+            expect(pluginBuildRuns(workdir, undefined)).toBe(true);
         });
     });
 });

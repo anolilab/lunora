@@ -199,12 +199,38 @@ interface ClientBuildOptions {
 const clientBuildRuns = (cwd: string, frameworkBuild: boolean | undefined, environment?: string): boolean =>
     frameworkBuild !== false && frameworkBuildFor(cwd, environment) !== undefined;
 
+const CONFIG_EXTENSIONS = ["ts", "mts", "cts", "js", "mjs", "cjs"];
+
+/** Whether the tool's config file names the Lunora plugin; a plugin-less SPA build writes no `_generated/*` files. */
+const configLoadsPlugin = (cwd: string, tool: "rsbuild" | "vite"): boolean => {
+    const specifier = tool === "vite" ? "@lunora/vite" : "@lunora/rspack";
+
+    return CONFIG_EXTENSIONS.some((extension) => {
+        try {
+            return readFileSync(join(cwd, `${tool}.config.${extension}`), "utf8").includes(specifier);
+        } catch {
+            return false;
+        }
+    });
+};
+
 /**
  * Whether the client build for `cwd` is a bundler plugin build. Only then did the plugin run codegen and the post-codegen hook,
- * so the deploy's own run must not write the same outputs again.
+ * so the deploy's own run must not write the same outputs again. A Vite or rsbuild config that never loads the plugin, and is not
+ * the composed entry's build, is a plain client build and leaves codegen to the deploy.
  */
-const pluginBuildRuns = (cwd: string, frameworkBuild: boolean | undefined, environment?: string): boolean =>
-    clientBuildRuns(cwd, frameworkBuild, environment) && frameworkBuildFor(cwd, environment) !== "script";
+const pluginBuildRuns = (cwd: string, frameworkBuild: boolean | undefined, environment?: string): boolean => {
+    const tool = frameworkBuild === false ? undefined : frameworkBuildFor(cwd, environment);
+
+    if (tool === undefined || tool === "script") {
+        return false;
+    }
+
+    const wranglerPath = findWranglerFile(cwd);
+    const composed = wranglerPath !== undefined && readWranglerJsonc<WranglerShape>(wranglerPath).parsed?.main === COMPOSED_MAIN;
+
+    return composed || configLoadsPlugin(cwd, tool);
+};
 
 /**
  * The reason the client build cannot run with these options, or `undefined` when it can. A refusal is a usage error, so
