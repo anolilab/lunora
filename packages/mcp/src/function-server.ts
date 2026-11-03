@@ -215,9 +215,12 @@ const runStream = async (
     // where the documented PAYLOAD_TOO_LARGE belongs. A failed send cancels the stream.
     let sent: Promise<unknown> = Promise.resolve();
     let sendFailure: { error: unknown } | undefined;
+    // Set when a cap ends the call: the result is returned without waiting for slow sends, so the
+    // ones still queued must not go out for a request that has already been answered.
+    let answered = false;
     const queueProgress = (chunkIndex: number, chunkJson: string): void => {
         sent = sent
-            .then(() => (sendFailure === undefined ? progress?.(chunkIndex, chunkJson) : undefined))
+            .then(() => (sendFailure === undefined && !answered ? progress?.(chunkIndex, chunkJson) : undefined))
             .catch((error: unknown) => {
                 sendFailure = { error };
                 iterable.cancel();
@@ -228,6 +231,7 @@ const runStream = async (
         for await (const chunk of iterable) {
             // Refused on the chunk past the cap, so a stream of exactly the cap still completes.
             if (chunks.length === MAX_STREAM_CHUNKS) {
+                answered = true;
                 iterable.cancel();
 
                 return errorResult(
@@ -241,6 +245,7 @@ const runStream = async (
             collectedLength += chunkJson.length;
 
             if (collectedLength > MAX_STREAM_BYTES) {
+                answered = true;
                 iterable.cancel();
 
                 return errorResult(
