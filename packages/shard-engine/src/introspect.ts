@@ -1515,6 +1515,22 @@ const buildNestedLeafClause = (clause: FilterClause, expression: string, pathPar
     return undefined;
 };
 
+/** A character `JSON.stringify` escapes, so it never appears literally in stored JSON text. */
+// eslint-disable-next-line no-control-regex -- matching the control characters JSON escapes is the point
+const JSON_ESCAPED_CHARACTER = /["\\\u0000-\u001F]/u;
+
+/**
+ * The term the raw-text pre-filter of {@link documentValuesContainSql} binds: the
+ * search term itself, or `''` (which every row contains) when the term holds a
+ * character the stored JSON only carries escaped.
+ *
+ * ponytail: a number SQLite renders differently from its JSON text (`1e+21` is
+ * `1.0e+21` to `CAST`) can fail the pre-filter on the rendering-only characters;
+ * searching those is not a real use.
+ * @returns the pre-filter term
+ */
+const rawTextPrefilter = (needle: string): string => (JSON_ESCAPED_CHARACTER.test(needle) ? "" : needle);
+
 /** A SQL fragment with the parameters its `?` placeholders bind, in order. */
 type BoundSql = { params: unknown[]; sql: string };
 
@@ -1567,8 +1583,8 @@ const documentMatchSql = (document: string, table: string, leaf: BoundSql, scope
 
     return {
         params: [...prefilterParams, ...rootParams, ...leaf.params, ...prefilterParams, ...rootParams, ...leaf.params],
-        sql: `CASE WHEN ${framed} THEN ${document} IN (WITH RECURSIVE
-        __wf_framed AS MATERIALIZED (SELECT DISTINCT t.${document} AS doc FROM ${table} AS t WHERE ${setConditions.join(" AND ")}),
+        sql: `CASE WHEN ${framed} THEN ${document} COLLATE BINARY IN (WITH RECURSIVE
+        __wf_framed AS MATERIALIZED (SELECT DISTINCT t.${document} COLLATE BINARY AS doc FROM ${table} AS t WHERE ${setConditions.join(" AND ")}),
         __wf_docs AS MATERIALIZED (SELECT doc, row_number() OVER () AS n FROM __wf_framed),
         __wf_raw AS (SELECT d.n, j.id, j.parent, j.key, j.type, j.atom, j.value, j.fullkey FROM __wf_docs AS d, json_tree(d.doc${rootSql}) AS j),
         __wf_flags AS MATERIALIZED (SELECT n, parent AS id,
@@ -1600,7 +1616,7 @@ const buildTopLevelContains = (table: string, document: string, path: unknown, t
         params: [term],
         sql: `j.type IN ('text', 'integer', 'real', 'true', 'false') AND ${containsSql("CASE WHEN j.type IN ('true', 'false') THEN j.type ELSE j.value END")}`,
     };
-    const match = documentMatchSql(document, table, leaf, { root: path });
+    const match = documentMatchSql(document, table, leaf, { prefilter: rawTextPrefilter(term), root: path });
 
     return {
         params: [path, path, term, path, path, term, path, ...match.params],
@@ -1722,22 +1738,6 @@ const DATE_KINDS: ReadonlySet<string> = new Set(["date", "timestamp"]);
 const ORIGINALS_SUBTREE_EXCLUSION = [`$.${DOC_ORIGINALS_KEY}`, `$."${DOC_ORIGINALS_KEY}"`]
     .map((prefix) => `substr(j.fullkey, 1, ${String(prefix.length + 1)}) NOT IN ('${prefix}.', '${prefix}[')`)
     .join(" AND ");
-
-/** A character `JSON.stringify` escapes, so it never appears literally in stored JSON text. */
-// eslint-disable-next-line no-control-regex -- matching the control characters JSON escapes is the point
-const JSON_ESCAPED_CHARACTER = /["\\\u0000-\u001F]/u;
-
-/**
- * The term the raw-text pre-filter of {@link documentValuesContainSql} binds: the
- * search term itself, or `''` (which every row contains) when the term holds a
- * character the stored JSON only carries escaped.
- *
- * ponytail: a number SQLite renders differently from its JSON text (`1e+21` is
- * `1.0e+21` to `CAST`) can fail the pre-filter on the rendering-only characters;
- * searching those is not a real use.
- * @returns the pre-filter term
- */
-const rawTextPrefilter = (needle: string): string => (JSON_ESCAPED_CHARACTER.test(needle) ? "" : needle);
 
 /**
  * A case-insensitive substring test over the VALUES of a `__doc__` JSON object,

@@ -106,6 +106,22 @@ const runWireSearchScenarios = (factory: () => SqlHarness): void => {
             expect(matchedIds("framed words")).toStrictEqual(["f1"]);
         });
 
+        it("keeps two documents apart that differ only in case, on a case-insensitive document column", () => {
+            expect.assertions(1);
+
+            harness.raw(`CREATE TABLE "nocase_docs" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL COLLATE NOCASE)`);
+            // Under `__originals__` the leaf is excluded; under `__ORIGINALS__` it is user data. The
+            // documents differ only in that key's case, so a NOCASE comparison must not merge them.
+            const frame = [TAG, "date", "stamp"];
+
+            harness.sql.exec(`INSERT INTO "nocase_docs" VALUES (?, ?, ?)`, "a", 1, JSON.stringify({ f: frame, __originals__: { n: "zebra" } }));
+            harness.sql.exec(`INSERT INTO "nocase_docs" VALUES (?, ?, ?)`, "b", 1, JSON.stringify({ f: frame, __ORIGINALS__: { n: "zebra" } }));
+
+            const ids = readTablePage(harness.sql, { search: "zebra", table: "nocase_docs" }).rows.map((row) => (row as { id: string }).id);
+
+            expect(ids).toStrictEqual(["b"]);
+        });
+
         it("still excludes the codec's own tag and type name from a table-wide search", () => {
             expect.assertions(2);
 
