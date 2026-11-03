@@ -393,6 +393,9 @@ catalogs:
     # Pinned to 6.0.3 — see the `typescript` override above. Bumping this to 7.x
     # installs nothing (the override wins) and only makes the catalog lie.
     typescript: 6.0.3
+    # Beta, exact pin. The `typescript` pin above stays for tooling (ESLint, vue-tsc,
+    # svelte-check, ngc); `tsrs` is the type checker behind `lint:types`.
+    tsrs: 0.20.1-ts7.1.0-beta
   types:
     "@standard-schema/spec": 1.1.0
     "@types/dockerode": ^4.0.1

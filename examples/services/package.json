@@ -10,7 +10,7 @@
         "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
         "deploy": "node node_modules/lunorash/dist/bin.mjs deploy",
         "dev": "vite",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix"
     },

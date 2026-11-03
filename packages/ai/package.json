@@ -63,7 +63,7 @@
         "lint:eslint:fix": "pnpm exec eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "pnpm exec tsc --noEmit",
+        "lint:types": "pnpm exec tsrs --noEmit",
         "test": "pnpm exec vitest run",
         "test:coverage": "pnpm exec vitest run --coverage",
         "fallow:audit": "fallow audit",

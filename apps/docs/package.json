@@ -16,7 +16,7 @@
         "lint:prettier": "prettier --config=prettier.config.js --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --config=prettier.config.js --write . --ignore-path ../../.prettierignore",
         "lint:secrets": "secretlint **/*",
-        "lint:types": "fumadocs-mdx && tsc --project tsconfig.json --noEmit",
+        "lint:types": "fumadocs-mdx && tsrs --project tsconfig.json --noEmit",
         "serve": "vite preview",
         "start": "node .output/server/index.mjs",
         "fallow:audit": "fallow audit",
