@@ -1,3 +1,9 @@
+## @lunora/cli [1.0.0-alpha.479](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.478...@lunora/cli@1.0.0-alpha.479) (2026-11-03)
+
+### Bug Fixes
+
+* **cli:** check and provision the config a service deploys ([#1462](https://github.com/anolilab/lunora/issues/1462)) ([d654016](https://github.com/anolilab/lunora/commit/d654016cb20c1b0c262e09ef420dae582884b4be))
+
 ## @lunora/cli [1.0.0-alpha.478](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.477...@lunora/cli@1.0.0-alpha.478) (2026-11-03)
 
 ### Bug Fixes
