@@ -1,0 +1,69 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { handleAdvisorProceduresRequest } from "../../src/studio-host/advisor-procedures-handler";
+
+const PROCEDURES = { procedures: [{ exportName: "list", file: "todos", kind: "query", visibility: "public" }] };
+
+describe("handleAdvisorProceduresRequest", () => {
+    let projectRoot: string;
+    let generatedDirectory: string;
+
+    beforeEach(() => {
+        projectRoot = mkdtempSync(join(tmpdir(), "lunora-advisor-procedures-"));
+        generatedDirectory = join(projectRoot, "lunora", "_generated");
+        mkdirSync(generatedDirectory, { recursive: true });
+    });
+
+    afterEach(() => {
+        rmSync(projectRoot, { force: true, recursive: true });
+    });
+
+    it("serves the generated procedure list on GET", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(generatedDirectory, "advisor-procedures.json"), JSON.stringify(PROCEDURES));
+
+        const response = handleAdvisorProceduresRequest({ method: "GET", projectRoot });
+
+        expect(response.status).toBe(200);
+        expect(response.body).toStrictEqual(PROCEDURES);
+    });
+
+    it("answers 404 with a reason when codegen has not written the file yet", () => {
+        expect.assertions(2);
+
+        const response = handleAdvisorProceduresRequest({ method: "GET", projectRoot });
+
+        expect(response.status).toBe(404);
+        expect(response.body).toStrictEqual({ error: "advisor-procedures.json is not generated yet; run `lunora codegen`." });
+    });
+
+    it("answers 500 when the file has no procedures array rather than an empty list", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(generatedDirectory, "advisor-procedures.json"), JSON.stringify({ something: true }));
+
+        const response = handleAdvisorProceduresRequest({ method: "GET", projectRoot });
+
+        expect(response.status).toBe(500);
+        expect(response.body).toStrictEqual({ error: "advisor-procedures.json has no procedures array; re-run `lunora codegen`." });
+    });
+
+    it("answers 500 when the file is not JSON", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(generatedDirectory, "advisor-procedures.json"), "{ not json");
+
+        expect(handleAdvisorProceduresRequest({ method: "GET", projectRoot }).status).toBe(500);
+    });
+
+    it("refuses any method other than GET", () => {
+        expect.assertions(1);
+
+        expect(handleAdvisorProceduresRequest({ method: "POST", projectRoot }).status).toBe(405);
+    });
+});

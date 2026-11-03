@@ -149,6 +149,8 @@ export interface CodegenResult {
     cronTriggers: ReadonlyArray<string>;
 
     generated: {
+        /** Studio-only advisor procedure list (`_generated/advisor-procedures.json`). */
+        advisorProceduresJson: string;
         /** WorkflowEntrypoint classes for declared agents (`_generated/agents.ts`); `""` (and not written) when no agents are declared. */
         agents: string;
         api: string;
@@ -169,6 +171,7 @@ export interface CodegenResult {
         functions: string;
         /** `internal.*` references to the internal functions (`_generated/internal.ts`), kept out of `api.ts` so a client bundle never carries them. */
         internal: string;
+
         /** Typed live-topic references (`_generated/live.ts`); `""` (and not written) when no live stream is declared. */
         live: string;
 
@@ -182,7 +185,6 @@ export interface CodegenResult {
          * alongside `openapi.json` whenever `apiSpec` includes `openapi`.
          */
         openApiModule: string;
-
         /** OpenRPC 1.x document (`_generated/openrpc.json`), pretty-printed JSON. Always computed; written only when `apiSpec` includes `openrpc`. */
         openRpc: string;
 

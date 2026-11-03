@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { detectAgentRules } from "../agent-rules";
 import { resolveAdminToken } from "./admin-token";
+import { ADVISOR_PROCEDURES_ENDPOINT, handleAdvisorProceduresRequest } from "./advisor-procedures-handler";
 import { sendStudioAsset, sendStudioDocument } from "./asset-cache";
 import { assetContentType, isStandaloneModulePath, loadStudioAssets, readStandaloneAsset, studioAssetsStamp } from "./assets";
 import createStudioDocumentCache from "./document-cache";
@@ -27,6 +28,7 @@ const JSON_ENDPOINT_HANDLERS: Readonly<Record<string, LocalEndpointHandler>> = {
     [POLICY_SCAFFOLD_ENDPOINT]: handlePolicyScaffoldRequest,
     [SCHEMA_EDIT_ENDPOINT]: handleSchemaEditRequest,
     [SEED_ENDPOINT]: handleSeedRequest,
+    [ADVISOR_PROCEDURES_ENDPOINT]: handleAdvisorProceduresRequest,
 };
 
 interface StudioMiddlewareOptions extends LocalEndpointContext {

@@ -1,6 +1,6 @@
-import type { AdvisorProcedureProtection, Finding } from "@lunora/advisor";
+import type { Finding } from "@lunora/advisor";
 import { LunoraError } from "@lunora/errors";
-import type { AdvisorProcedure, AdvisoryFinding, MaskPoliciesResult, RlsPoliciesResult, StorageRulesResult, StudioFeaturesResult } from "@lunora/shard-engine";
+import type { AdvisoryFinding, MaskPoliciesResult, RlsPoliciesResult, StorageRulesResult, StudioFeaturesResult } from "@lunora/shard-engine";
 
 import type { SchemaSnapshot } from "../../../../shared/schema-snapshot";
 import { hashSchemaSnapshot, serializeSchemaSnapshot } from "../../../../shared/schema-snapshot";
@@ -61,8 +61,6 @@ import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, IMPORT_PATH_RE, ren
 
 interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
-    /** Every declared procedure — the health map's denominator, served via `getAdvisorProcedures`. */
-    advisorProcedures?: ReadonlyArray<AdvisorProcedureProtection>;
     /** Agents declared via `defineAgent` exports in `lunora/agents.ts` — wires the typed `ctx.agents` producers. */
     agents?: ReadonlyArray<AgentIR>;
     /** The package-backed capabilities the app uses (post platform gate) — each row of the `CAPABILITIES` table it names is wired per its `shardBinding` / `tier`. */
@@ -155,7 +153,6 @@ interface EmitShardOptions {
 /* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each declaration-driven fragment behind its own flag/length check to assemble dense generated TS; the branching is the per-feature emission contract, not refactorable logic */
 const emitShard = ({
     advisories = [],
-    advisorProcedures = [],
     agents = [],
     capabilities = new Set(),
     containers = [],
@@ -256,12 +253,6 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // `@lunora/do` hand-mirrors `Finding` to avoid depending on `@lunora/advisor`.
     const advisoryData: ReadonlyArray<AdvisoryFinding> = advisories;
     const { advisoryRules, advisoryRows } = splitAdvisoryRules(advisoryData);
-    // Typed as the DO's shape on purpose: the generated file declares
-    // `LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[]`, so without this assignment
-    // a field added to the advisor's type and forgotten in `@lunora/do` compiles
-    // here and breaks in the *user's* tsc. Mirrors the `AdvisoryFinding` guard above.
-    const advisorProcedureData: ReadonlyArray<AdvisorProcedure> = advisorProcedures;
-
     // Same drift guard for the RLS inspector's metadata: codegen's `RlsMetadataIR`
     // must stay assignable to the DO's `RlsPoliciesResult` (the generated
     // `LUNORA_RLS_METADATA` is typed against it and fed straight to the
@@ -1041,9 +1032,6 @@ const LUNORA_ADVISORIES = ((): (() => AdvisoryFinding[]) => {
     return () => (cached ??= LUNORA_ADVISORY_ROWS().map((row) => ({ ...LUNORA_ADVISORY_RULES()[row.name], ...row }) as AdvisoryFinding));
 })();
 
-/** Every declared procedure (discovered by @lunora/codegen) served via \`__lunora_admin__:getAdvisorProcedures\` — the health map's denominator. */
-const LUNORA_ADVISOR_PROCEDURES = ${renderLazyJsonData(advisorProcedureData, "AdvisorProcedure[]")};
-
 /** Read-only RLS metadata (policies + roles discovered from \`.use(rls(...))\` chains) served via \`__lunora_admin__:rlsPolicies\` for the studio's RLS inspector. */
 const LUNORA_RLS_METADATA = ${renderLazyJsonData(rlsData, "RlsPoliciesResult")};
 ${shapeReadPolicyAssertion}
@@ -1197,10 +1185,6 @@ ${lazyFunctions ? '            const requestScope = this.captureRequestScope();\
 ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workflowsMetadataOverride}${workflowEventOverride}${queuesMetadataOverride}
         protected override advisories(): AdvisoryFinding[] {
             return LUNORA_ADVISORIES();
-        }
-
-        protected override advisorProcedures(): AdvisorProcedure[] {
-            return LUNORA_ADVISOR_PROCEDURES();
         }
 
 ${ADMIN_WRITE_METHODS}

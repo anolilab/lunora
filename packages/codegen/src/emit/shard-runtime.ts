@@ -833,7 +833,6 @@ const emitPaymentFragments = (
  * vector-free app's import line stays minimal.
  */
 const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueues: boolean, hasFlags: boolean, hasShardSearchIndexes: boolean): string[] => [
-    "AdvisorProcedure",
     "AdvisoryFinding",
     "DatabaseWriterLike",
     "DataMigrationLike",

@@ -3134,6 +3134,12 @@ const wranglerToAlchemy: (config: WranglerConfigShape) => AlchemyTranslation;
 
 ## `@lunora/config/studio-host`
 
+### `ADVISOR_PROCEDURES_ENDPOINT` (const)
+
+```ts
+const ADVISOR_PROCEDURES_ENDPOINT = "/__lunora/advisor-procedures";
+```
+
 ### `ALLOW_FORWARDED_ENV` (const)
 
 ```ts
@@ -3377,6 +3383,12 @@ const createStudioMiddleware: (options: StudioMiddlewareOptions) => ((request: I
 
 ```ts
 const devVariablesStamp: (root: string) => string;
+```
+
+### `handleAdvisorProceduresRequest` (const)
+
+```ts
+const handleAdvisorProceduresRequest: (request: LocalEndpointRequest) => LocalEndpointResponse;
 ```
 
 ### `handlePolicyScaffoldRequest` (const)

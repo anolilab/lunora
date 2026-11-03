@@ -14,6 +14,7 @@
  * the transport, and load the prebuilt asset bytes.
  */
 export { devVariablesStamp, parseDevVariable, resolveAdminToken } from "./admin-token";
+export { ADVISOR_PROCEDURES_ENDPOINT, handleAdvisorProceduresRequest } from "./advisor-procedures-handler";
 export { sendStudioAsset, sendStudioDocument } from "./asset-cache";
 export { assetContentType, isStandaloneModulePath, loadStudioAssets, readStandaloneAsset, resolveStandaloneDirectory, studioAssetsStamp } from "./assets";
 export { default as createStudioDocumentCache } from "./document-cache";
