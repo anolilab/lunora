@@ -649,8 +649,8 @@ const killTreeOnExit = (pid: number): (() => void) => {
         if (process.platform === "win32") {
             const { args, command } = taskkillCommand(pid);
 
-            // Bounded: an exit handler that never returns would hold the CLI open after the check was interrupted.
-            spawnSync(command, args, { stdio: "ignore", timeout: GROUP_STOP_MS });
+            // Unbounded on purpose: a timed-out kill would leave the tree running while the CLI exits. `taskkill /F` returns at once in practice.
+            spawnSync(command, args, { stdio: "ignore" });
 
             return;
         }
@@ -680,18 +680,13 @@ const runTaskkill = (pid: number): Promise<void> =>
     new Promise((_resolve) => {
         const { args, command } = taskkillCommand(pid);
         const child = spawn(command, args, { stdio: "ignore", windowsHide: true });
-        // A taskkill that never exits must not hold the check's cleanup: past the limit it is abandoned, and so is the child.
-        const timer = setTimeout(() => {
-            child.kill();
+        // No timeout: the server is only stopped once the tree is gone, so a timed-out kill would leave the tree serving the port.
+        child.once("error", () => {
             _resolve();
-        }, GROUP_STOP_MS);
-        const finish = (): void => {
-            clearTimeout(timer);
+        });
+        child.once("exit", () => {
             _resolve();
-        };
-
-        child.once("error", finish);
-        child.once("exit", finish);
+        });
     });
 
 /**
