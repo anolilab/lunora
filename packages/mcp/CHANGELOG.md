@@ -1,3 +1,16 @@
+## @lunora/mcp [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.289...@lunora/mcp@1.0.0-alpha.290) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.285
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.186
+* **@lunora/auth:** upgraded to 1.0.0-alpha.256
+
 ## @lunora/mcp [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.288...@lunora/mcp@1.0.0-alpha.289) (2026-11-03)
 
 

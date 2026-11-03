@@ -1,3 +1,14 @@
+## @lunora/cloudflare-access [1.0.0-alpha.257](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.256...@lunora/cloudflare-access@1.0.0-alpha.257) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.267
+
 ## @lunora/cloudflare-access [1.0.0-alpha.256](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.255...@lunora/cloudflare-access@1.0.0-alpha.256) (2026-11-03)
 
 

@@ -1,3 +1,15 @@
+## @lunora/react [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.294...@lunora/react@1.0.0-alpha.295) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.285
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.196
+
 ## @lunora/react [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.293...@lunora/react@1.0.0-alpha.294) (2026-11-03)
 
 

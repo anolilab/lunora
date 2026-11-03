@@ -1,3 +1,13 @@
+## @lunora/shard-engine [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.185...@lunora/shard-engine@1.0.0-alpha.186) (2026-11-03)
+
+### Bug Fixes
+
+* **shard-engine:** classify wire frames once per document in search ([#1451](https://github.com/anolilab/lunora/issues/1451)) ([370ed18](https://github.com/anolilab/lunora/commit/370ed188a35431bfa9854e16a30fcb77ba572927))
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
 ## @lunora/shard-engine [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.184...@lunora/shard-engine@1.0.0-alpha.185) (2026-11-03)
 
 ### Bug Fixes

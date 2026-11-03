@@ -1,3 +1,15 @@
+## @lunora/nuxt [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.301...@lunora/nuxt@1.0.0-alpha.302) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.285
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.275
+
 ## @lunora/nuxt [1.0.0-alpha.301](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.300...@lunora/nuxt@1.0.0-alpha.301) (2026-11-03)
 
 

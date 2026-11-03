@@ -1,3 +1,15 @@
+## @lunora/angular [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.266...@lunora/angular@1.0.0-alpha.267) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.285
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.196
+
 ## @lunora/angular [1.0.0-alpha.266](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.265...@lunora/angular@1.0.0-alpha.266) (2026-11-03)
 
 

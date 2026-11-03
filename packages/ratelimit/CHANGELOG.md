@@ -1,3 +1,16 @@
+## @lunora/ratelimit [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.195...@lunora/ratelimit@1.0.0-alpha.196) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.232
+* **@lunora/server:** upgraded to 1.0.0-alpha.267
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.186
+
 ## @lunora/ratelimit [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.194...@lunora/ratelimit@1.0.0-alpha.195) (2026-11-03)
 
 

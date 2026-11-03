@@ -1,3 +1,15 @@
+## @lunora/react-native [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.260...@lunora/react-native@1.0.0-alpha.261) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.285
+* **@lunora/react:** upgraded to 1.0.0-alpha.295
+
 ## @lunora/react-native [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.259...@lunora/react-native@1.0.0-alpha.260) (2026-11-03)
 
 

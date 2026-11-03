@@ -1,3 +1,16 @@
+## @lunora/auth [1.0.0-alpha.256](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.255...@lunora/auth@1.0.0-alpha.256) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.452
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.275
+* **@lunora/server:** upgraded to 1.0.0-alpha.267
+
 ## @lunora/auth [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.254...@lunora/auth@1.0.0-alpha.255) (2026-11-03)
 
 

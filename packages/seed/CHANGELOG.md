@@ -1,3 +1,15 @@
+## @lunora/seed [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/seed@1.0.0-alpha.280...@lunora/seed@1.0.0-alpha.281) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.267
+* **@lunora/testing:** upgraded to 1.0.0-alpha.332
+
 ## @lunora/seed [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/seed@1.0.0-alpha.279...@lunora/seed@1.0.0-alpha.280) (2026-11-03)
 
 

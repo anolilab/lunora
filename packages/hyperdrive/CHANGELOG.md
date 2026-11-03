@@ -1,3 +1,15 @@
+## @lunora/hyperdrive [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.227...@lunora/hyperdrive@1.0.0-alpha.228) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.186
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.233
+
 ## @lunora/hyperdrive [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.226...@lunora/hyperdrive@1.0.0-alpha.227) (2026-11-03)
 
 

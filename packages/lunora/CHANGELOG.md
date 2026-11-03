@@ -1,3 +1,20 @@
+## lunorash [1.0.0-alpha.474](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.473...lunorash@1.0.0-alpha.474) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.476
+* **@lunora/client:** upgraded to 1.0.0-alpha.285
+* **@lunora/do:** upgraded to 1.0.0-alpha.280
+* **@lunora/observability:** upgraded to 1.0.0-alpha.200
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.196
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.275
+* **@lunora/server:** upgraded to 1.0.0-alpha.267
+
 ## lunorash [1.0.0-alpha.473](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.472...lunorash@1.0.0-alpha.473) (2026-11-03)
 
 

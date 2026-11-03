@@ -1,3 +1,14 @@
+## @lunora/db [1.0.0-alpha.284](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.283...@lunora/db@1.0.0-alpha.284) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.285
+
 ## @lunora/db [1.0.0-alpha.283](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.282...@lunora/db@1.0.0-alpha.283) (2026-11-03)
 
 

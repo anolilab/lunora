@@ -1,3 +1,15 @@
+## @lunora/payment [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.267...@lunora/payment@1.0.0-alpha.268) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.267
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.186
+
 ## @lunora/payment [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.266...@lunora/payment@1.0.0-alpha.267) (2026-11-03)
 
 

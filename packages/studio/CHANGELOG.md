@@ -1,3 +1,18 @@
+## @lunora/studio [1.0.0-alpha.375](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.374...@lunora/studio@1.0.0-alpha.375) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.286
+* **@lunora/client:** upgraded to 1.0.0-alpha.285
+* **@lunora/react:** upgraded to 1.0.0-alpha.295
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.275
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.186
+
 ## @lunora/studio [1.0.0-alpha.374](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.373...@lunora/studio@1.0.0-alpha.374) (2026-11-03)
 
 

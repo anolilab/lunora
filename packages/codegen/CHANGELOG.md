@@ -1,3 +1,20 @@
+## @lunora/codegen [1.0.0-alpha.396](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.395...@lunora/codegen@1.0.0-alpha.396) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.286
+* **@lunora/agent:** upgraded to 1.0.0-alpha.280
+* **@lunora/client:** upgraded to 1.0.0-alpha.285
+* **@lunora/do:** upgraded to 1.0.0-alpha.280
+* **@lunora/payment:** upgraded to 1.0.0-alpha.268
+* **@lunora/server:** upgraded to 1.0.0-alpha.267
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.186
+
 ## @lunora/codegen [1.0.0-alpha.395](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.394...@lunora/codegen@1.0.0-alpha.395) (2026-11-03)
 
 ### Bug Fixes

@@ -1,3 +1,18 @@
+## @lunora/platform-node [1.0.0-alpha.216](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.215...@lunora/platform-node@1.0.0-alpha.216) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.232
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.275
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.233
+* **@lunora/do:** upgraded to 1.0.0-alpha.280
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.186
+
 ## @lunora/platform-node [1.0.0-alpha.215](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.214...@lunora/platform-node@1.0.0-alpha.215) (2026-11-03)
 
 

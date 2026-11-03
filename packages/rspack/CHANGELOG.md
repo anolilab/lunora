@@ -1,3 +1,16 @@
+## @lunora/rspack [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.147...@lunora/rspack@1.0.0-alpha.148) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.396
+* **@lunora/config:** upgraded to 1.0.0-alpha.452
+* **@lunora/studio:** upgraded to 1.0.0-alpha.375
+
 ## @lunora/rspack [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.146...@lunora/rspack@1.0.0-alpha.147) (2026-11-03)
 
 
