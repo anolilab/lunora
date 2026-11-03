@@ -85,6 +85,15 @@ describe(wrapUntrusted, () => {
         expect(inside).toContain("/docs/index.html");
     });
 
+    it("keeps a path whose segment has a combining mark inside it intact", () => {
+        expect.assertions(1);
+
+        const wrapped = wrapUntrusted("see /cafe\u0301/menu for the list");
+        const inside = enclosedBy(wrapped, tagIdOf(wrapped));
+
+        expect(inside).toContain("see /cafe\u0301/menu for the list");
+    });
+
     it("leaves prices and file paths untouched", () => {
         const wrapped = wrapUntrusted("total $5 or $12.50, see /docs/index.html and /var/log");
         const inside = enclosedBy(wrapped, tagIdOf(wrapped));
