@@ -23,11 +23,39 @@ const schema = {
 
 const clock = (): number => 1_700_000_000_000;
 
+const noLocalSql: SqlExec = {
+    exec: () => {
+        throw new Error("a global read must not touch the shard-local SQLite");
+    },
+};
+
+/** A replica session that has not caught up: every read of the table comes back empty, while `primary` reads the store. */
+const laggingReplicaOf = (plain: SqlCtxExec): SqlCtxExec => {
+    return {
+        ...plain,
+        all: async (text, parameters) => (text.includes(`"${TABLE}"`) ? [] : plain.all(text, parameters)),
+        primary: plain,
+    };
+};
+
 /**
- * A D1-shaped exec whose replica session has not caught up: every read of the table comes back
- * empty, while `primary` reads the store the write went to. The write goes through the plain exec.
+ * A D1 `first-primary` session: only its first read reaches the primary. Later reads come from a
+ * replica that has not caught up, so a session reused across primary reads can miss a later commit.
  */
-describe("a global findMany that asks for a primary read", () => {
+const firstPrimarySession = (plain: SqlCtxExec): SqlCtxExec => {
+    let reads = 0;
+
+    return {
+        ...plain,
+        all: async (text, parameters) => {
+            reads += 1;
+
+            return reads === 1 || !text.includes(`"${TABLE}"`) ? plain.all(text, parameters) : [];
+        },
+    };
+};
+
+describe("a global read that asks for the primary", () => {
     let harness: ReturnType<typeof createSqliteHarness>;
 
     beforeEach(() => {
@@ -38,6 +66,7 @@ describe("a global findMany that asks for a primary read", () => {
         harness.close();
     });
 
+    /** Provision the table and commit one row through the plain exec, as the primary would hold it. */
     const provisionAndWrite = async (): Promise<object> => {
         const provisionScope = {};
         const store = createSqlCtxDb({ clock, dialect: makeSqliteDialect(), exec: harness.exec, provisionScope, schema });
@@ -52,13 +81,7 @@ describe("a global findMany that asks for a primary read", () => {
         expect.assertions(2);
 
         const provisionScope = await provisionAndWrite();
-        const plain = harness.exec;
-        const laggingReplica: SqlCtxExec = {
-            ...plain,
-            all: async (text, parameters) => (text.includes(`"${TABLE}"`) ? [] : plain.all(text, parameters)),
-            primary: plain,
-        };
-        const store = createSqlCtxDb({ clock, dialect: makeSqliteDialect(), exec: laggingReplica, provisionScope, schema });
+        const store = createSqlCtxDb({ clock, dialect: makeSqliteDialect(), exec: laggingReplicaOf(harness.exec), provisionScope, schema });
 
         await expect(store.findMany(TABLE, {})).resolves.toMatchObject({ page: [] });
         await expect(store.findMany(TABLE, { consistency: "primary" })).resolves.toMatchObject({ page: [{ label: "locked" }] });
@@ -68,16 +91,31 @@ describe("a global findMany that asks for a primary read", () => {
         expect.assertions(2);
 
         const provisionScope = await provisionAndWrite();
-        const plain = harness.exec;
-        const laggingReplica: SqlCtxExec = {
-            ...plain,
-            all: async (text, parameters) => (text.includes(`"${TABLE}"`) ? [] : plain.all(text, parameters)),
-            primary: plain,
-        };
-        const store = createSqlCtxDb({ clock, dialect: makeSqliteDialect(), exec: laggingReplica, provisionScope, schema });
+        const store = createSqlCtxDb({ clock, dialect: makeSqliteDialect(), exec: laggingReplicaOf(harness.exec), provisionScope, schema });
 
         await expect(store.findFirst(TABLE, {})).resolves.toBeNull();
         await expect(store.findFirst(TABLE, { consistency: "primary" })).resolves.toMatchObject({ label: "locked" });
+    });
+
+    it("sees a commit made between two primary reads in one request, because each read opens a fresh session", async () => {
+        expect.assertions(2);
+
+        const provisionScope = await provisionAndWrite();
+        const exec: SqlCtxExec = {
+            ...laggingReplicaOf(harness.exec),
+            get primary() {
+                return firstPrimarySession(harness.exec);
+            },
+        };
+        const store = createSqlCtxDb({ clock, dialect: makeSqliteDialect(), exec, provisionScope, schema });
+
+        await expect(store.findMany(TABLE, { consistency: "primary" })).resolves.toMatchObject({ page: [{ label: "locked" }] });
+
+        await harness.exec.run(`INSERT INTO "${TABLE}" (id, _creationTime, _version, bucket, label) VALUES ('b', 2, 0, 1, 'second')`, []);
+
+        const { page } = await store.findMany(TABLE, { consistency: "primary" });
+
+        expect(page.map((row) => row["label"]).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual(["locked", "second"]);
     });
 
     it("reads the same store when the exec has no primary session", async () => {
@@ -88,40 +126,12 @@ describe("a global findMany that asks for a primary read", () => {
 
         await expect(store.findMany(TABLE, { consistency: "primary" })).resolves.toMatchObject({ page: [{ label: "locked" }] });
     });
-});
 
-describe("a primary read through the shard router, which is how ctx.db reaches a .global() table", () => {
-    let harness: ReturnType<typeof createSqliteHarness>;
-
-    beforeEach(() => {
-        harness = createSqliteHarness();
-    });
-
-    afterEach(() => {
-        harness.close();
-    });
-
-    it("forwards consistency: primary from findFirst and an unlimited findMany to the global writer", async () => {
+    it("forwards consistency: primary from findFirst and an unlimited findMany through the shard router", async () => {
         expect.assertions(3);
 
-        const provisionScope = {};
-        const plain = harness.exec;
-        const provisioned = createSqlCtxDb({ clock, dialect: makeSqliteDialect(), exec: plain, provisionScope, schema });
-
-        await provisioned.findMany(TABLE, { limit: 1 });
-        await plain.run(`INSERT INTO "${TABLE}" (id, _creationTime, _version, bucket, label) VALUES ('a', 1, 0, 1, 'locked')`, []);
-
-        const laggingReplica: SqlCtxExec = {
-            ...plain,
-            all: async (text, parameters) => (text.includes(`"${TABLE}"`) ? [] : plain.all(text, parameters)),
-            primary: plain,
-        };
-        const globalDb = createSqlCtxDb({ clock, dialect: makeSqliteDialect(), exec: laggingReplica, provisionScope, schema });
-        const noLocalSql: SqlExec = {
-            exec: () => {
-                throw new Error("a global read must not touch the shard-local SQLite");
-            },
-        };
+        const provisionScope = await provisionAndWrite();
+        const globalDb = createSqlCtxDb({ clock, dialect: makeSqliteDialect(), exec: laggingReplicaOf(harness.exec), provisionScope, schema });
         const router = createShardCtxDb({
             clock,
             globalDb,

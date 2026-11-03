@@ -4174,6 +4174,7 @@ interface QueryArgs<TDocument> {
 
 ```ts
 interface QueryArgsOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> {
+    consistency?: "primary";
     cursor?: null | string;
     includeDeleted?: boolean;
     limit?: number;
@@ -7166,6 +7167,7 @@ interface QueryArgs {
 ```ts
 interface QueryArgs$1 {
     baseWhere?: WhereInput;
+    consistency?: "primary";
     cursor?: null | string;
     includeDeleted?: boolean;
     limit?: number;

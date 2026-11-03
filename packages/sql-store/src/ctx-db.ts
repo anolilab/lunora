@@ -3492,19 +3492,21 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
     const relationWrites = describeRelationWrites(schema);
 
-    // A `consistency: "primary"` read runs on a second ctx-db built over the exec's primary
-    // session, so the whole read (relation loads included) sees every committed write, not just
-    // its top-level rows. The primary-built ctx-db has no `primary` of its own, so this does not
-    // recurse. It shares `provisionScope`, so the DDL sweep is not repeated.
-    let primaryWriter: DatabaseWriterLike | undefined;
-    const primaryReads = (): DatabaseWriterLike | undefined => {
-        if (options.exec.primary === undefined) {
+    // A `consistency: "primary"` read runs on a second ctx-db built over a fresh primary session,
+    // so the whole read (relation loads included) sees every committed write, not just its
+    // top-level rows. The primary-built ctx-db has no `primary` of its own, so this does not
+    // recurse. It shares `provisionScope`, so the DDL sweep is not repeated. The migration gate
+    // runs on the replica first, so its reads do not spend the session's one primary read.
+    const primaryReads = async (): Promise<DatabaseWriterLike | undefined> => {
+        const { primary } = options.exec;
+
+        if (primary === undefined) {
             return undefined;
         }
 
-        primaryWriter ??= createSqlCtxDb({ ...options, exec: options.exec.primary });
+        await ensureMigrated();
 
-        return primaryWriter;
+        return createSqlCtxDb({ ...options, exec: primary });
     };
 
     const writer: DatabaseWriterLike = {
@@ -3827,7 +3829,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         async findFirst(tableName, args = {}) {
             if (args.consistency === "primary") {
-                const primary = primaryReads();
+                const primary = await primaryReads();
 
                 if (primary !== undefined) {
                     return primary.findFirst(tableName, args);
@@ -3852,7 +3854,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         async findMany(tableName, args = {}) {
             if (args.consistency === "primary") {
-                const primary = primaryReads();
+                const primary = await primaryReads();
 
                 if (primary !== undefined) {
                     return primary.findMany(tableName, args);

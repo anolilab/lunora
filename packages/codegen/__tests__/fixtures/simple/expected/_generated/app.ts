@@ -642,7 +642,9 @@ const buildSessionExec = (database: D1DatabaseLike, constraint: string, onBookma
  * any replica) without one. `primary` is a `"first-primary"` session for a read that must see
  * every committed write, such as a policy check on a write path. It reports no bookmark: the
  * sink keeps the last value it is given, and a later replica read reports an older one, which
- * would move the client's bookmark backwards.
+ * would move the client's bookmark backwards. `first-primary` constrains only a session's first
+ * read, so each access opens a new session: a later primary read in the same request must not
+ * reuse a session whose bookmark may predate a commit made in between.
  */
 const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
     const replica = buildSessionExec(database, bookmark ?? "first-unconstrained", onBookmark);
@@ -651,7 +653,12 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
         return replica;
     }
 
-    return { ...replica, primary: buildSessionExec(database, "first-primary") };
+    return {
+        ...replica,
+        get primary() {
+            return buildSessionExec(database, "first-primary");
+        },
+    };
 };
 
 /** Introspect `.global()` (D1-backed) tables for the studio's global data browser. */
