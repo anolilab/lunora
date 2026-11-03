@@ -173,6 +173,25 @@ describe("workflows admin routes", () => {
         ).rejects.toMatchObject({ status: 400 });
     });
 
+    it("rejects malformed JSON text with 400 on the create and event routes", async () => {
+        expect.assertions(2);
+
+        const { client } = fakeClient();
+        const routes = buildWorkflowsAdminRoutes({ assertAdmin: allow, resolveWorkflowsClient: () => client });
+        const malformed = (path: string): Request => new Request(`https://app.test${path}`, { body: "{", method: "POST" });
+
+        await expect(
+            routes[WORKFLOWS_CREATE_PATH]?.(malformed(WORKFLOWS_CREATE_PATH), {}, new URL(`https://app.test${WORKFLOWS_CREATE_PATH}`)),
+        ).rejects.toMatchObject({
+            status: 400,
+        });
+        await expect(
+            routes[WORKFLOWS_EVENT_PATH]?.(malformed(WORKFLOWS_EVENT_PATH), {}, new URL(`https://app.test${WORKFLOWS_EVENT_PATH}`)),
+        ).rejects.toMatchObject({
+            status: 400,
+        });
+    });
+
     it("sends an event to a running instance with its type and payload", async () => {
         expect.assertions(2);
 
