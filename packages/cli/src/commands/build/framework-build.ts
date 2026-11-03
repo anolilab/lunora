@@ -10,6 +10,7 @@ import {
     DEFAULT_BUNDLE_META_PATH,
     detectFramework,
     LAZY_FUNCTIONS_ENV,
+    readApiSpecMarker,
     resolveTargetOrThrow,
     STRICT_ADVISORIES_ENV,
 } from "@lunora/config";
@@ -199,25 +200,11 @@ interface ClientBuildOptions {
 const clientBuildRuns = (cwd: string, frameworkBuild: boolean | undefined, environment?: string): boolean =>
     frameworkBuild !== false && frameworkBuildFor(cwd, environment) !== undefined;
 
-const CONFIG_EXTENSIONS = ["ts", "mts", "cts", "js", "mjs", "cjs"];
-
-/** Whether the tool's config file names the Lunora plugin; a plugin-less SPA build writes no `_generated/*` files. */
-const configLoadsPlugin = (cwd: string, tool: "rsbuild" | "vite"): boolean => {
-    const specifier = tool === "vite" ? "@lunora/vite" : "@lunora/rspack";
-
-    return CONFIG_EXTENSIONS.some((extension) => {
-        try {
-            return readFileSync(join(cwd, `${tool}.config.${extension}`), "utf8").includes(specifier);
-        } catch {
-            return false;
-        }
-    });
-};
-
 /**
  * Whether the client build for `cwd` is a bundler plugin build. Only then did the plugin run codegen and the post-codegen hook,
- * so the deploy's own run must not write the same outputs again. A Vite or rsbuild config that never loads the plugin, and is not
- * the composed entry's build, is a plain client build and leaves codegen to the deploy.
+ * so the deploy's own run must not write the same outputs again. The plugin records the API spec it emitted, and deploy clears
+ * that record before each client build, so a record present afterwards means this build's codegen ran. The config's text is
+ * not searched: a plugin registered through an imported local module is still recognised. The composed entry always runs it.
  */
 const pluginBuildRuns = (cwd: string, frameworkBuild: boolean | undefined, environment?: string): boolean => {
     const tool = frameworkBuild === false ? undefined : frameworkBuildFor(cwd, environment);
@@ -229,7 +216,7 @@ const pluginBuildRuns = (cwd: string, frameworkBuild: boolean | undefined, envir
     const wranglerPath = findWranglerFile(cwd);
     const composed = wranglerPath !== undefined && readWranglerJsonc<WranglerShape>(wranglerPath).parsed?.main === COMPOSED_MAIN;
 
-    return composed || configLoadsPlugin(cwd, tool);
+    return composed || readApiSpecMarker(cwd) !== undefined;
 };
 
 /**

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DEFAULT_BUNDLE_META_PATH } from "@lunora/config";
+import { DEFAULT_BUNDLE_META_PATH, writeApiSpecMarker } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { frameworkBuildFor, pluginBuildRuns, runClientBuild, viteBundleMetaPath } from "../../src/commands/build/framework-build";
@@ -650,13 +650,27 @@ describe("lunora build — client build", () => {
             expect(pluginBuildRuns(workdir, undefined)).toBe(false);
         });
 
-        it("is true when the config loads the Lunora plugin or the worker is the Vite-composed entry", () => {
-            expect.assertions(2);
+        it("is true when the plugin's build recorded its API spec, even if the config reaches the plugin through a local module", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ assets: { directory: "./dist" }, main: "src/server.ts" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), 'import { lunora } from "./lunora.plugin";\nexport default { plugins: [lunora()] };\n', "utf8");
+            writeApiSpecMarker(workdir, "openapi");
+
+            expect(pluginBuildRuns(workdir, undefined)).toBe(true);
+        });
+
+        it("is false when the config names the plugin but the build recorded nothing, so deploy runs its own codegen", () => {
+            expect.assertions(1);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ assets: { directory: "./dist" }, main: "src/server.ts" }), "utf8");
             writeFileSync(join(workdir, "vite.config.ts"), 'import { lunora } from "@lunora/vite";\nexport default { plugins: [lunora()] };\n', "utf8");
 
-            expect(pluginBuildRuns(workdir, undefined)).toBe(true);
+            expect(pluginBuildRuns(workdir, undefined)).toBe(false);
+        });
+
+        it("is true when the worker is the Vite-composed entry", () => {
+            expect.assertions(1);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
             writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
