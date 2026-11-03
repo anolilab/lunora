@@ -945,7 +945,8 @@ catalogs:
     # the plugin packages peer on an exact `better-auth`/`@better-auth/core`
     # version — so a caret on one member and not another resolves a split tree.
     #
-    # On 1.7.7 (GA). 1.7.2 and 1.7.3 reverted the `(issuer, accountId)` account
+    # On 1.7.16 (the 2026-11-03 security release, which fixes 12 advisories across the
+    # family). 1.7.2 and 1.7.3 reverted the `(issuer, accountId)` account
     # re-keying 1.7.0 introduced — see `packages/auth/src/legacy-issuer.ts`, which drops
     # the column a 1.7.0-1.7.2 database still carries.
     #
@@ -967,13 +968,13 @@ catalogs:
     # API keys — programmatic, non-session credentials with their own rate limits,
     # expiry, and permissions. Shipped as its own package in the 1.7 line; there is
     # no `apiKey` in better-auth's own plugin barrel.
-    "@better-auth/api-key": 1.7.7
+    "@better-auth/api-key": 1.7.16
     # Client ID Metadata Documents — the client-registration path MCP 2026-07-28
     # pins (`metadataProfile: "mcp-2026-07-28"`), re-exported as `cimd` from
     # `@lunora/auth/plugins` (plan 461). Lockstep with the family like the rest; note
     # that 1.7.7 changes what `metadataFetchPolicy.minimumFetchInterval` means (a
     # pacing interval for failed fetches only), so re-read it on the family bump.
-    "@better-auth/cimd": 1.7.7
+    "@better-auth/cimd": 1.7.16
     # Direct dependency: the DO/D1 schema builders read better-auth's own table and
     # index resolution out of `@better-auth/core/db/internal`
     # (`getAuthTablesWithResolvedIndexes`, `getDatabaseFieldIndexName`), and
@@ -982,17 +983,17 @@ catalogs:
     #
     # (This note used to cite `createLocalAccountIssuer`, which 1.7.3 removed along with
     # the `issuer` column. The dependency outlived its original reason.)
-    "@better-auth/core": 1.7.7
-    "@better-auth/expo": 1.7.7
+    "@better-auth/core": 1.7.16
+    "@better-auth/expo": 1.7.16
     # `mcp` / `withMcpAuth` and `oidcProvider` left better-auth's core barrel in 1.7
     # (the latter was already `@deprecated` in 1.6 in favour of the oauth-provider
     # package). They live in these two packages now.
-    "@better-auth/mcp": 1.7.7
-    "@better-auth/oauth-provider": 1.7.7
-    "@better-auth/passkey": 1.7.7
-    "@better-auth/scim": 1.7.7
-    "@better-auth/sso": 1.7.7
-    "better-auth": 1.7.7
+    "@better-auth/mcp": 1.7.16
+    "@better-auth/oauth-provider": 1.7.16
+    "@better-auth/passkey": 1.7.16
+    "@better-auth/scim": 1.7.16
+    "@better-auth/sso": 1.7.16
+    "better-auth": 1.7.16
     jose: ^6.2.15
   drizzle:
     # Exact-pinned to the `rc` dist-tag: caret ranges also match the suffixed
@@ -1133,6 +1134,24 @@ allowBuilds:
 #   - 'better-auth@1.6.13 || 1.6.14'
 # When bumping a dependency, UPDATE its existing line — do not append a new one.
 minimumReleaseAgeExclude:
+  # better-auth 1.7.16 security release, published 2026-11-03 (UTC); drop each once it ages past the 24h window.
+  - 'better-auth@1.7.16'
+  - '@better-auth/api-key@1.7.16'
+  - '@better-auth/cimd@1.7.16'
+  - '@better-auth/core@1.7.16'
+  - '@better-auth/expo@1.7.16'
+  - '@better-auth/mcp@1.7.16'
+  - '@better-auth/oauth-provider@1.7.16'
+  - '@better-auth/passkey@1.7.16'
+  - '@better-auth/scim@1.7.16'
+  - '@better-auth/sso@1.7.16'
+  - '@better-auth/drizzle-adapter@1.7.16'
+  - '@better-auth/kysely-adapter@1.7.16'
+  - '@better-auth/memory-adapter@1.7.16'
+  - '@better-auth/mongo-adapter@1.7.16'
+  - '@better-auth/prisma-adapter@1.7.16'
+  - '@better-auth/telemetry@1.7.16'
+  - 'better-call@1.4.5'
   # oxlint/oxfmt presets published 2026-10-21 and 2026-11-03; drop once they age past the window.
   # Published 2026-11-03 (UTC) for the vis 6.5.1 bump; drop each entry once it ages past the 24h window.
   - '@visulima/vis@6.5.1'
