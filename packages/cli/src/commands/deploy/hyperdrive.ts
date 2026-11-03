@@ -713,5 +713,9 @@ const provisionDeployHyperdrive = async (
     });
 };
 
+/** Whether the config at `configPath` still has a placeholder Hyperdrive id for the environment `environment` names. */
+const hasHyperdrivePlaceholder = (cwd: string, environment: string | undefined, configPath: string): boolean =>
+    scanPlaceholders(cwd, environment, configPath) !== undefined;
+
 export type { ProvisionHyperdriveOptions };
-export { connectionStringVariable, generatedConfigPath, provisionDeployHyperdrive, provisionHyperdrive };
+export { connectionStringVariable, generatedConfigPath, hasHyperdrivePlaceholder, provisionDeployHyperdrive, provisionHyperdrive };

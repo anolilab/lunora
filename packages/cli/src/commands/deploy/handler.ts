@@ -66,7 +66,7 @@ import { clientBuildRefusal, clientBuildRuns, pluginBuildRuns, runClientBuild } 
 import type { ExportTarget } from "../data-transfer/export-rows";
 import type { PreDeployCommand } from "./checks";
 import { checkD1Placeholder, resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
-import { generatedConfigPath, provisionDeployHyperdrive } from "./hyperdrive";
+import { generatedConfigPath, hasHyperdrivePlaceholder, provisionDeployHyperdrive } from "./hyperdrive";
 import type { DeployOptions } from "./index";
 import completeDeploy from "./post-deploy";
 import { offerMissingSecrets, warnDevVariablesNotPushed } from "./secrets";
@@ -985,6 +985,8 @@ const checkServiceBindings = async (wranglerPath: string, options: DeployCommand
 
 /** A service's deploy config: the copy its build left, or a prebuilt one, when wrangler reads that, else its source config. */
 interface ServiceDeployTarget {
+    /** Whether this run's build wrote the generated copy. */
+    built: boolean;
     /** The config wrangler deploys: its bindings are checked and provisioned here. */
     config: string;
     /** A generated copy is already resolved for one environment, so its bindings are read without `--env`. */
@@ -998,16 +1000,18 @@ const serviceDeployTargets = (
     frameworkBuild: boolean | undefined,
 ): ServiceDeployTarget[] =>
     workers.map((service, index) => {
-        const generated = serviceDeployConfig(service.wranglerPath, builds[index] === true, frameworkBuild);
+        const built = builds[index] === true;
+        const generated = serviceDeployConfig(service.wranglerPath, built, frameworkBuild);
 
-        return { config: generated ?? service.wranglerPath, resolved: generated !== undefined, service };
+        return { built, config: generated ?? service.wranglerPath, resolved: generated !== undefined, service };
     });
 
 /**
- * Check a service's deploy config for D1 placeholders and create the Hyperdrive configs it still needs, writing their ids into that
- * config. The config is checked where wrangler reads it: a prebuilt copy can hold a placeholder its source no longer has.
+ * The read-only checks for a service's deploy config: its D1 placeholders, and the Hyperdrive "check" phase. A prebuilt copy can hold a
+ * placeholder its source no longer has, and its environment is unknown, so a Hyperdrive placeholder in it cannot be resolved for a
+ * named `--env`. Returns the failure that stops the deploy, if any.
  */
-const prepareServiceBindings = async (
+const checkServiceTarget = async (
     target: ServiceDeployTarget,
     options: DeployCommandOptions,
     driver: DeployDriver,
@@ -1027,9 +1031,82 @@ const prepareServiceBindings = async (
         return { code: EXIT_CODE.USAGE, error: `service ${service.name} (${service.worker}): ${placeholder}` };
     }
 
-    const hyperdriveError = await provisionDeployHyperdrive(directory, { ...options, env: environment }, "deploy", driver.id, "create", config);
+    if (resolved && !target.built && options.env !== undefined && hasHyperdrivePlaceholder(directory, undefined, config)) {
+        const error = `service ${service.name} (${service.worker}): its prebuilt config ${config} still has a Hyperdrive placeholder, and it was not built for --env ${options.env}, so it cannot be resolved here. Build it with CLOUDFLARE_ENV=${options.env}.`;
 
-    return hyperdriveError === undefined ? undefined : { code: EXIT_CODE.FAILURE, error: `service ${service.name} (${service.worker}): ${hyperdriveError}` };
+        options.logger.error(error);
+
+        return { code: EXIT_CODE.USAGE, error };
+    }
+
+    const hyperdriveError = await provisionDeployHyperdrive(
+        directory,
+        { ...options, clientBuildEnvironment: undefined, env: environment },
+        "deploy",
+        driver.id,
+        "check",
+        config,
+    );
+
+    return hyperdriveError === undefined ? undefined : { code: EXIT_CODE.USAGE, error: `service ${service.name} (${service.worker}): ${hyperdriveError}` };
+};
+
+/** The read-only checks of every service's deploy config, in service order. The first refusal is returned, before any service is created or deployed. */
+const checkServiceTargets = async (
+    targets: ServiceDeployTarget[],
+    options: DeployCommandOptions,
+    driver: DeployDriver,
+): Promise<BeforeSpawnFailure | undefined> => {
+    for (const target of targets) {
+        // eslint-disable-next-line no-await-in-loop -- checks run in service order, and the first refusal stops before any service is created or deployed
+        const failure = await checkServiceTarget(target, options, driver);
+
+        if (failure !== undefined) {
+            return failure;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * Create a service's Hyperdrive configs and write their ids into its deploy config. The source config gets the same ids when it is not the
+ * config wrangler deploys, so a later deploy that reads the source needs no credentials for them.
+ */
+const createServiceBindings = async (
+    target: ServiceDeployTarget,
+    options: DeployCommandOptions,
+    driver: DeployDriver,
+): Promise<BeforeSpawnFailure | undefined> => {
+    const { config, resolved, service } = target;
+
+    if (!existsSync(config)) {
+        return undefined;
+    }
+
+    const directory = dirname(service.wranglerPath);
+    const environment = resolved ? undefined : options.env;
+    const clientBuildEnvironment = target.built ? options.env : undefined;
+    const error = await provisionDeployHyperdrive(directory, { ...options, clientBuildEnvironment, env: environment }, "deploy", driver.id, "create", config);
+
+    if (error !== undefined) {
+        return { code: EXIT_CODE.FAILURE, error: `service ${service.name} (${service.worker}): ${error}` };
+    }
+
+    if (config === service.wranglerPath) {
+        return undefined;
+    }
+
+    const sourceError = await provisionDeployHyperdrive(
+        directory,
+        { ...options, clientBuildEnvironment: undefined },
+        "deploy",
+        driver.id,
+        "create",
+        service.wranglerPath,
+    );
+
+    return sourceError === undefined ? undefined : { code: EXIT_CODE.FAILURE, error: `service ${service.name} (${service.worker}): ${sourceError}` };
 };
 
 /**
@@ -1175,19 +1252,24 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
 
     const targets = serviceDeployTargets(workers, builds, frameworkBuild);
 
-    // Every service's bindings are prepared before the first deploy, so a refused binding leaves none of the services live.
-    for (const target of targets) {
-        // eslint-disable-next-line no-await-in-loop -- bindings are prepared in service order, and the first failure stops before any service deploys
-        const failure = await prepareServiceBindings(target, options, driver);
+    // Every service's deploy config is checked before the first service is created or deployed, so a refusal leaves none of them live.
+    const checkFailure = await checkServiceTargets(targets, options, driver);
 
-        if (failure !== undefined) {
-            return failure;
-        }
+    if (checkFailure !== undefined) {
+        return checkFailure;
     }
 
     const run: ServiceDeployRun = { driver, manager, options, spawner, toolchain };
 
+    // Each service's Hyperdrive configs are created just before its own deploy, so a failed deploy leaves later services with none.
     for (const target of targets) {
+        // eslint-disable-next-line no-await-in-loop -- services are created and deployed in order: a failure stops the later services and the app deploy, which must not start on a partial set
+        const createFailure = await createServiceBindings(target, options, driver);
+
+        if (createFailure !== undefined) {
+            return createFailure;
+        }
+
         // eslint-disable-next-line no-await-in-loop -- services deploy in order: a failed deploy stops the later services and the app deploy, which must not start on a partial set
         const failure = await deployService(target, run);
 
