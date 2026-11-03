@@ -153,7 +153,6 @@ describe("emitted artifacts for a sensitive function", () => {
         expect(emitShard({ schema })).not.toContain("lunora.admitSensitiveArgs");
     });
 
-    /* eslint-disable no-template-curly-in-string -- the assertions are over emitted TypeScript text, whose `${name}` is not a template here */
     it("scopes a shape's resolve to its raw args only when a shape declares a marked argument", () => {
         expect.assertions(6);
 
@@ -172,13 +171,15 @@ describe("emitted artifacts for a sensitive function", () => {
         expect(marked).toContain(
             "private resolveShapeWithScope(name: string, args: Record<string, unknown>, identity: SubscriptionIdentity | undefined, sensitive: SensitiveScope)",
         );
+        // eslint-disable-next-line no-template-curly-in-string -- the assertion is over emitted TypeScript text, whose `${name}` is not a template here
         expect(marked).toContain("const sensitive = this.openSensitiveScope(`__shape__:${name}`, args);");
         expect(marked).toContain("throw this.maskSensitiveError(error, sensitive);");
+        // eslint-disable-next-line no-template-curly-in-string -- the assertion is over emitted TypeScript text, whose `${name}` is not a template here
         expect(marked).toContain("const ctx = this.buildCtx({ functionPath: `__shape__:${name}`, identity, sensitive });");
         expect(plain).not.toContain("resolveShapeWithScope");
+        // eslint-disable-next-line no-template-curly-in-string -- the assertion is over emitted TypeScript text, whose `${name}` is not a template here
         expect(plain).toContain("const ctx = this.buildCtx({ functionPath: `__shape__:${name}`, identity });");
     });
-    /* eslint-enable no-template-curly-in-string */
 
     it("hands the dispatch's scope to every telemetry maker and composed call, and opens one for a dispatch that has none", () => {
         expect.assertions(8);
