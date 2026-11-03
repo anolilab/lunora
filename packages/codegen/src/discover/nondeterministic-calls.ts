@@ -154,13 +154,23 @@ const exportedProcedureHandler = (declaration: VariableDeclaration): ResolvedPro
     return handler ? { exportName: exportedNameOf(declaration) ?? declaration.getName(), handler, kind: classified.kind } : undefined;
 };
 
+/** The name a handler binds its context parameter to, so `context.random()` is read like `ctx.random()`. */
+const contextParameterName = (handler: TsNode): string => {
+    const name = Node.isParametered(handler) ? handler.getParameters()[0]?.getNameNode() : undefined;
+
+    return name !== undefined && Node.isIdentifier(name) ? name.getText() : "ctx";
+};
+
 /** Non-deterministic call IRs lexically inside one resolved procedure handler. */
 const callsInHandler = (procedure: ResolvedProcedure, file: string): NondeterministicCallIR[] => {
     const found: NondeterministicCallIR[] = [];
 
+    const contextName = contextParameterName(procedure.handler);
+
     for (const callNode of descendantsOfKind(procedure.handler, SyntaxKind.CallExpression)) {
         // A query's `ctx.random()` is an unkeyed `Math.random()` draw, so a live re-run can differ. A mutation's draw is replay-stable.
-        const callee = procedure.kind === "query" && callNode.getExpression().getText() === "ctx.random" ? "ctx.random" : nondeterministicCalleeOf(callNode);
+        const callee =
+            procedure.kind === "query" && callNode.getExpression().getText() === `${contextName}.random` ? "ctx.random" : nondeterministicCalleeOf(callNode);
 
         if (callee !== undefined) {
             found.push({ callee, exportName: procedure.exportName, file, kind: procedure.kind, line: callNode.getStartLineNumber() });
