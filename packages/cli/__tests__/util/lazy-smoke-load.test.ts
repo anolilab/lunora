@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
 import type { DevProcess, DevProcessOptions, DevProcessSpawner, DriverToolchain } from "@lunora/config";
+import { ts } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import literal from "../../src/util/js-literal";
@@ -566,6 +567,25 @@ describe(runLazySmokeLoad, () => {
             expect(entry.read().content).toContain("export class Flow2 extends WorkflowEntrypoint");
             expect(entry.read().content).not.toContain("Gone");
             expect(entry.read().content.match(/export class ShardDO /gu)).toHaveLength(1);
+        });
+
+        it("exports a configured default worker as the probe's default class, and the entry still parses", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(cwd, "wrangler.jsonc"), JSON.stringify({ exports: { default: { type: "worker" } }, main: "src/index.ts", name: "app" }));
+            mkdirSync(join(cwd, ".wrangler", "deploy"), { recursive: true });
+            writeFileSync(join(cwd, ".wrangler", "deploy", "config.json"), JSON.stringify({ configPath: "../../dist/server/wrangler.json" }));
+            respondWith({ checked: 1, failures: [] });
+
+            const entry = captureEntry();
+
+            await run();
+
+            const { content } = entry.read();
+
+            expect(content).not.toContain("export class default");
+            expect(content).toContain("export default class extends WorkerEntrypoint");
+            expect(ts.transpileModule(content, { reportDiagnostics: true }).diagnostics ?? []).toHaveLength(0);
         });
 
         it("checks against an empty assets directory in place of the configured one, which a clean checkout has not built yet", async () => {

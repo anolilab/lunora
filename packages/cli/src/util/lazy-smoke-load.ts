@@ -649,7 +649,8 @@ const killTreeOnExit = (pid: number): (() => void) => {
         if (process.platform === "win32") {
             const { args, command } = taskkillCommand(pid);
 
-            spawnSync(command, args, { stdio: "ignore" });
+            // Bounded: an exit handler that never returns would hold the CLI open after the check was interrupted.
+            spawnSync(command, args, { stdio: "ignore", timeout: GROUP_STOP_MS });
 
             return;
         }
@@ -679,13 +680,18 @@ const runTaskkill = (pid: number): Promise<void> =>
     new Promise((_resolve) => {
         const { args, command } = taskkillCommand(pid);
         const child = spawn(command, args, { stdio: "ignore", windowsHide: true });
+        // A taskkill that never exits must not hold the check's cleanup: past the limit it is abandoned, and so is the child.
+        const timer = setTimeout(() => {
+            child.kill();
+            _resolve();
+        }, GROUP_STOP_MS);
+        const finish = (): void => {
+            clearTimeout(timer);
+            _resolve();
+        };
 
-        child.once("error", () => {
-            _resolve();
-        });
-        child.once("exit", () => {
-            _resolve();
-        });
+        child.once("error", finish);
+        child.once("exit", finish);
     });
 
 /**
@@ -863,7 +869,8 @@ const smokeBaseSource = (cwd: string, base: SmokeBase): string => {
     // A class named by both a binding and `exports` is exported once: a duplicate export does not parse.
     const exported = new Set<string>();
     const stub = (name: string, extendsClause: string): string[] => {
-        if (exported.has(name)) {
+        // `default` cannot be a class declaration, and the probe's own default export is the one that answers for it.
+        if (name === "default" || exported.has(name)) {
             return [];
         }
 
@@ -914,6 +921,9 @@ const prepareSmokeProcess = async (input: {
         // Each integration module gets a literal `import()`, so the bundler resolves and bundles it as the app's own does.
         const loaders = integrationModules.map((specifier) => `    [${literal(specifier)}, () => import(${literal(specifier)})],`).join("\n");
 
+        // A configured `default` WorkerEntrypoint is the probe's default export, as a class, so the project's `exports` still holds.
+        const defaultIsEntrypoint = "stubs" in base && base.stubs.entrypoints.includes("default");
+
         writeFileSync(
             entry,
             `${smokeBaseSource(cwd, base)}
@@ -929,7 +939,7 @@ const integrationLoaders = new Map<string, () => Promise<unknown>>([
 ${loaders}
 ]);
 
-export default {
+const smokeProbe = {
     async fetch(request: Request) {
         const url = new URL(request.url);
         const step = url.searchParams.get("step");
@@ -956,6 +966,8 @@ export default {
         return Response.json({ run: runId });
     },
 };
+
+${defaultIsEntrypoint ? "export default class extends WorkerEntrypoint {\n    fetch(request: Request) {\n        return smokeProbe.fetch(request);\n    }\n}" : "export default smokeProbe;"}
 `,
         );
 
