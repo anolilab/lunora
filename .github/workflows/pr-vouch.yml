@@ -24,6 +24,6 @@
             "contents": "read"
             "issues": "write" # to create the labels
             "pull-requests": "write" # to apply them
-        "uses": "anolilab/workflows/.github/workflows/vouch.yml@fb7a881926480723026a1deaa587ceaaaee7bf12" # v24.2.0
+        "uses": "anolilab/workflows/.github/workflows/vouch.yml@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
         "with":
             "target-repo": "anolilab/lunora"

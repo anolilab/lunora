@@ -23,6 +23,6 @@
         "permissions":
             "contents": "read"
             "pull-requests": "write" # to post the sticky comment with instructions
-        "uses": "anolilab/workflows/.github/workflows/cla.yml@fb7a881926480723026a1deaa587ceaaaee7bf12" # v24.2.0
+        "uses": "anolilab/workflows/.github/workflows/cla.yml@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
         "with":
             "target-repo": "anolilab/lunora"

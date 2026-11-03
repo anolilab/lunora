@@ -16,14 +16,14 @@
         "runs-on": "ubuntu-latest"
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
               # react-doctor's PR scan compares against the base branch, which needs
               # full history — a shallow clone (default depth 1) makes the diff fail.
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "fetch-depth": "0"
             # SHA-pinned to the commit behind the action's v2.2.7 tag; bump by
@@ -44,6 +44,6 @@
             # warns about unexpected inputs if given one. `scope: changed` (the default)
             # derives its base SHA from the PR event, which is what fetch-depth:0 above
             # is for.
-            - "uses": "millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784" # react-doctor@v2.2.7
+            - "uses": "millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784" # v2.2.7
               "with":
                   "version": "0.9.14"
