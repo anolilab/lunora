@@ -361,6 +361,15 @@ type WorkflowHandler<Params = Record<string, unknown>, Output = unknown> = (cont
 type WorkflowInstanceAction = "pause" | "restart" | "resume" | "terminate";
 ```
 
+### `WorkflowInstanceCreated` (interface)
+
+```ts
+interface WorkflowInstanceCreated {
+    id: string;
+    status: WorkflowInstanceStatus;
+}
+```
+
 ### `WorkflowInstanceDetail` (interface)
 
 ```ts
@@ -638,6 +647,11 @@ interface Workflows {
 
 ```ts
 interface WorkflowsRestClient {
+    createInstance: (args: {
+        instanceId?: string;
+        params?: unknown;
+        workflowName: string;
+    }) => Promise<WorkflowInstanceCreated>;
     getInstance: (args: {
         instanceId: string;
         workflowName: string;
@@ -648,6 +662,15 @@ interface WorkflowsRestClient {
         status?: WorkflowInstanceStatus;
         workflowName: string;
     }) => Promise<WorkflowInstancePage>;
+    sendEvent: (args: {
+        eventType: string;
+        instanceId: string;
+        payload?: unknown;
+        workflowName: string;
+    }) => Promise<{
+        instanceId: string;
+        timestamp?: string;
+    }>;
     setInstanceStatus: (args: {
         action: WorkflowInstanceAction;
         instanceId: string;

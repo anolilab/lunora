@@ -1509,6 +1509,12 @@ export type WorkflowInstanceStatus =
 /** The lifecycle mutations the status endpoint accepts. */
 export type WorkflowInstanceAction = "pause" | "restart" | "resume" | "terminate";
 
+/** The instance a create call started: its id and the status it begins in. */
+export interface WorkflowInstanceCreated {
+    id: string;
+    status: WorkflowInstanceStatus;
+}
+
 /** One row of the workflow-instances list. */
 export interface WorkflowInstanceSummary {
     createdOn?: string;

@@ -22,6 +22,7 @@
  */
 import type { WorkflowInstanceStatus, WorkflowsRestClient } from "@lunora/workflow";
 
+import { isPlainObject } from "../../../shared/is-plain-object";
 import { readLooseJsonBody } from "./body-readers";
 import { LunoraError } from "./errors";
 import { assertMethod } from "./method-guard";
@@ -29,6 +30,8 @@ import { assertMethod } from "./method-guard";
 const WORKFLOWS_INSTANCES_PATH = "/_lunora/admin/workflows/instances";
 const WORKFLOWS_INSTANCE_PATH = "/_lunora/admin/workflows/instance";
 const WORKFLOWS_STATUS_PATH = "/_lunora/admin/workflows/status";
+const WORKFLOWS_CREATE_PATH = "/_lunora/admin/workflows/create";
+const WORKFLOWS_EVENT_PATH = "/_lunora/admin/workflows/event";
 
 /**
  * The instance-status union as an exhaustive lookup, for validating the
@@ -191,13 +194,73 @@ const buildWorkflowsAdminRoutes = (
         return Response.json(await client.setInstanceStatus({ action, instanceId: body.id, workflowName: body.name }));
     };
 
+    const handleCreate = async (request: Request, env: unknown): Promise<Response> => {
+        assertMethod(request, "POST", "Workflows create");
+
+        assertAdmin(request);
+        const client = resolveWorkflowsClient(env);
+
+        if (!client) {
+            return throwNotConfigured();
+        }
+
+        const raw: unknown = await readLooseJsonBody(request, "Workflows create");
+
+        if (!isPlainObject(raw)) {
+            throw new LunoraError("Workflows create body must be a JSON object", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const body = raw as { id?: unknown; name?: unknown; params?: unknown };
+
+        if (typeof body.name !== "string" || body.name === "") {
+            throw new LunoraError("Workflows create action requires a string `name`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        if (body.id !== undefined && (typeof body.id !== "string" || body.id === "")) {
+            throw new LunoraError("Workflows create action `id`, when given, must be a non-empty string", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        return Response.json(await client.createInstance({ instanceId: body.id, params: body.params, workflowName: body.name }));
+    };
+
+    const handleEvent = async (request: Request, env: unknown): Promise<Response> => {
+        assertMethod(request, "POST", "Workflows event");
+
+        assertAdmin(request);
+        const client = resolveWorkflowsClient(env);
+
+        if (!client) {
+            return throwNotConfigured();
+        }
+
+        const raw: unknown = await readLooseJsonBody(request, "Workflows event");
+
+        if (!isPlainObject(raw)) {
+            throw new LunoraError("Workflows event body must be a JSON object", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const body = raw as { id?: unknown; name?: unknown; payload?: unknown; type?: unknown };
+
+        if (typeof body.name !== "string" || body.name === "" || typeof body.id !== "string" || body.id === "") {
+            throw new LunoraError("Workflows event action requires string `name` and `id`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        if (typeof body.type !== "string" || body.type === "") {
+            throw new LunoraError("Workflows event action requires a string `type`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        return Response.json(await client.sendEvent({ eventType: body.type, instanceId: body.id, payload: body.payload, workflowName: body.name }));
+    };
+
     return {
         [WORKFLOWS_INSTANCE_PATH]: handleInstance,
         [WORKFLOWS_INSTANCES_PATH]: handleInstances,
         [WORKFLOWS_STATUS_PATH]: handleStatus,
+        [WORKFLOWS_CREATE_PATH]: handleCreate,
+        [WORKFLOWS_EVENT_PATH]: handleEvent,
     };
 };
 
 export type { WorkflowsRestClient } from "@lunora/workflow";
 export type { WorkflowsAdminRouteDeps };
-export { buildWorkflowsAdminRoutes, WORKFLOWS_INSTANCE_PATH, WORKFLOWS_INSTANCES_PATH, WORKFLOWS_STATUS_PATH };
+export { buildWorkflowsAdminRoutes, WORKFLOWS_CREATE_PATH, WORKFLOWS_EVENT_PATH, WORKFLOWS_INSTANCE_PATH, WORKFLOWS_INSTANCES_PATH, WORKFLOWS_STATUS_PATH };

@@ -34,6 +34,10 @@ const WORKFLOWS_INSTANCE_PATH = "/_lunora/admin/workflows/instance";
 
 const WORKFLOWS_STATUS_PATH = "/_lunora/admin/workflows/status";
 
+const WORKFLOWS_CREATE_PATH = "/_lunora/admin/workflows/create";
+
+const WORKFLOWS_EVENT_PATH = "/_lunora/admin/workflows/event";
+
 const STORAGE_PATH = "/_lunora/admin/storage";
 
 const STORAGE_URL_PATH = "/_lunora/admin/storage/url";
@@ -259,6 +263,8 @@ export {
     STORAGE_URL_PATH,
     VECTOR_INDEXES_PATH,
     VECTOR_QUERY_PATH,
+    WORKFLOWS_CREATE_PATH,
+    WORKFLOWS_EVENT_PATH,
     WORKFLOWS_INSTANCE_PATH,
     WORKFLOWS_INSTANCES_PATH,
     WORKFLOWS_STATUS_PATH,

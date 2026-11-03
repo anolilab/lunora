@@ -77,6 +77,7 @@ import type {
     VectorIndexSummary,
     VectorQueryMatch,
     WorkflowInstanceAction,
+    WorkflowInstanceCreated,
     WorkflowInstanceDetail,
     WorkflowInstancePage,
     WorkflowInstanceStatus,
@@ -88,6 +89,7 @@ import { deleteKvKey, getKvValue, listKvKeys, listKvNamespaces, putKvValue } fro
 import { queryLogArchive, shardTraffic } from "./observability";
 import {
     cancelScheduledJob,
+    createWorkflowInstance,
     getDeploymentPause,
     getScheduledJob,
     getWorkflowInstance,
@@ -99,6 +101,7 @@ import {
     removeDeadJob,
     retryDeadJob,
     schedulerStatus,
+    sendWorkflowEvent,
     setDeploymentPause,
     setWorkflowInstanceStatus,
 } from "./scheduler";
@@ -270,6 +273,21 @@ class LunoraAdminClient extends LunoraClient {
     /** Read one workflow instance with its step timeline (`/_lunora/admin/workflows/instance`). */
     public async getWorkflowInstance(options: { id: string; name: string }): Promise<WorkflowInstanceDetail> {
         return getWorkflowInstance(this.adminHost, options);
+    }
+
+    /** Start a workflow instance (`/_lunora/admin/workflows/create`). `params` is the instance's JSON-encoded event payload. Needs an Edit-scoped Cloudflare token. */
+    public async createWorkflowInstance(options: { id?: string; name: string; params?: unknown }): Promise<WorkflowInstanceCreated> {
+        return createWorkflowInstance(this.adminHost, options);
+    }
+
+    /** Deliver an event to a running instance's matching `waitForEvent` (`/_lunora/admin/workflows/event`). Needs an Edit-scoped Cloudflare token. */
+    public async sendWorkflowEvent(options: {
+        id: string;
+        name: string;
+        payload?: unknown;
+        type: string;
+    }): Promise<{ instanceId: string; timestamp?: string }> {
+        return sendWorkflowEvent(this.adminHost, options);
     }
 
     /** Pause / resume / restart / terminate a workflow instance (`/_lunora/admin/workflows/status`). Needs an Edit-scoped Cloudflare token. */
