@@ -45,6 +45,7 @@ import {
 import { resolveLazyFunctions } from "@lunora/config";
 import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
 import { consumeStudioWrite, STUDIO_WRITE_TEMP_SUFFIX } from "@lunora/config/studio-host";
+import { LunoraError } from "@lunora/errors";
 import type { Project } from "ts-morph";
 import { ts } from "ts-morph";
 
@@ -218,6 +219,13 @@ const runOnce = (
     const { apiSpec, lazyFunctions, logger, projectRoot, target } = options;
 
     try {
+        // Codegen takes a built Project, so a missing schema is reported here, before one is constructed and seeded.
+        const schemaPath = join(projectRoot, lunoraDirectory, "schema.ts");
+
+        if (!existsSync(schemaPath)) {
+            throw new LunoraError("INTERNAL", `schema.ts not found at ${schemaPath}`);
+        }
+
         const result = runCodegen({
             apiSpec,
             lazyFunctions: resolveLazyFunctions(lazyFunctions),

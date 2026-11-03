@@ -153,6 +153,22 @@ describe("startCodegenWatch", () => {
         }
     });
 
+    it("reports a missing schema without building a codegen project", async () => {
+        expect.assertions(2);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-noschema-"));
+        const { errors, logger } = silentLogger();
+
+        try {
+            await startCodegenWatch({ logger, lunoraDirectory: ".", projectRoot: workdir }).close();
+
+            expect(runCodegen).not.toHaveBeenCalled();
+            expect(errors.join(" ")).toContain("schema.ts not found");
+        } finally {
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
     it("reuses one codegen project across runs and drops it after a failed run", async () => {
         expect.hasAssertions();
 
