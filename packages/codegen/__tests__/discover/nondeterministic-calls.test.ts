@@ -238,6 +238,20 @@ describe("discoverNondeterministicCalls", () => {
         expect(calls).toStrictEqual([]);
     });
 
+    it("does not record a random() on a ctx destructured from a call's result", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "draws.ts"),
+            `import { query } from "@lunora/server";\nconst makeGenerator = () => ({ ctx: { random: () => 0.5 } });\nexport const drawQuery = query({ args: {}, handler: async (request) => { const { ctx: generator } = makeGenerator(); return generator.random(); } });\n`,
+            "utf8",
+        );
+
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
+
+        expect(calls).toStrictEqual([]);
+    });
+
     it("records nothing for a deterministic mutation", () => {
         expect.assertions(1);
 
