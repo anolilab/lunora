@@ -24,7 +24,9 @@ interface AdminBatch {
 type ImportRowError = { code: string; line: number; message: string; table: string };
 
 type ParsedImportRow =
-    { end: number; ok: "end" } | { error: ImportRowError; ok: false } | { doc: Record<string, unknown>; ok: true; op?: "delete"; table: string };
+    | { end: number; ok: "end" }
+    | { error: ImportRowError; ok: false }
+    | { doc: Record<string, unknown>; ok: true; op?: "delete"; table: string };
 
 /** Whether the request opted into `op: "delete"` rows (`?deletes=true`). Read once for the parser and again for the shard plane. */
 const importWantsDeletes = (request: Request): boolean => new URL(request.url).searchParams.get("deletes") === "true";

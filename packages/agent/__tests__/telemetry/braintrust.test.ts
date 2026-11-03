@@ -335,7 +335,8 @@ describe(braintrustTelemetry, () => {
         // does the stream die without a callback. That is what leaves the traced
         // callback parked on the gate rather than on `execute()` itself.
         const opened = shared.executeLanguageModelCall?.(evt({ callId: "call-abandoned", execute: () => Promise.resolve({}), modelId: "m", provider: "p" })) as
-            Promise<unknown> | undefined;
+            | Promise<unknown>
+            | undefined;
 
         opened?.catch(() => undefined);
 

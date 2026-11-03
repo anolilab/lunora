@@ -430,7 +430,8 @@ interface LiveHostTriggers {
 
 /** The router a live-stream router hands every other request to: an app with a `fetch`, or a bare `fetch` handler. */
 type LiveRouterFallback =
-    (LiveHostTriggers & LiveRouterApp) | ((request: Request, env?: Record<string, unknown>, context?: ExecutionContext) => Promise<Response> | Response);
+    | (LiveHostTriggers & LiveRouterApp)
+    | ((request: Request, env?: Record<string, unknown>, context?: ExecutionContext) => Promise<Response> | Response);
 
 /**
  * A framework host's triggers, copied by name as the runtime reads them. Spreading the host instead would also copy
