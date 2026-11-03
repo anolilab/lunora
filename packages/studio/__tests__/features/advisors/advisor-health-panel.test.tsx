@@ -7,10 +7,14 @@ import AdvisorHealthPanel from "../../../src/features/advisors/advisor-health-pa
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import { createMockClient } from "../../mock-client";
 
-/** The panel under a mock client whose only admin read is the (empty) advisory list. */
-const renderPanel = (localProcedures: boolean): ReactElement => (
+/**
+ * The panel under a mock client whose only admin read is the (empty) advisory list.
+ * `token` is the admin bearer the client carries (the mock's default is a non-empty one);
+ * `null` models a client with no credential.
+ */
+const renderPanel = (localProcedures: boolean, token: null | string = null): ReactElement => (
     <LunoraProvider
-        client={
+        client={Object.assign(
             createMockClient({
                 query: (reference): unknown => {
                     if (reference === ADMIN_FUNCTIONS.getAdvisories) {
@@ -19,8 +23,9 @@ const renderPanel = (localProcedures: boolean): ReactElement => (
 
                     throw new Error(`unexpected query: ${reference}`);
                 },
-            }).asClient
-        }
+            }).asClient,
+            { getAuthToken: () => token },
+        )}
     >
         <AdvisorHealthPanel localProcedures={localProcedures} />
     </LunoraProvider>
@@ -79,5 +84,31 @@ describe("advisorHealthPanel", () => {
         await waitFor(() => {
             expect(screen.queryByTestId("advisor-health-score")).toBeNull();
         });
+    });
+
+    it("fetches the list from the configured worker with the admin bearer and scores it", async () => {
+        expect.assertions(2);
+
+        const fetchMock = stubProceduresResponse(200, { procedures: [] });
+
+        render(renderPanel(false, "test-token"));
+
+        const score = await screen.findByTestId("advisor-health-score");
+
+        expect(score.textContent).toMatch(/^\d+$/);
+        expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8787/__lunora/advisor-procedures", { headers: { authorization: "Bearer test-token" } });
+    });
+
+    it("says the companion is not deployed when the configured worker answers 404", async () => {
+        expect.assertions(2);
+
+        stubProceduresResponse(404, { error: "not found" });
+
+        render(renderPanel(false, "test-token"));
+
+        const notice = await screen.findByTestId("advisor-health-companion-missing");
+
+        expect(notice.textContent).toContain("companion");
+        expect(screen.queryByTestId("advisor-health-error")).toBeNull();
     });
 });

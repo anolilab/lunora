@@ -856,6 +856,7 @@ const MESSAGE_IDS = [
     "Row {n}",
     "Loading…",
     "The health score needs `lunora dev`: this deployment does not serve the advisor procedure list.",
+    "The health score needs the companion worker: it is not deployed for this Studio, so the advisor procedure list is unavailable.",
     "No matching row.",
     "CSV",
     "SQL",

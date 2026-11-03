@@ -6,9 +6,11 @@ import ErrorAlert from "../../components/error-alert";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import type { AdvisoriesResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
+import { workerBaseUrl } from "../../lib/internal";
 import { cn } from "../../lib/utils";
 import useAdvisorProcedures from "./use-advisor-procedures";
 
@@ -48,8 +50,9 @@ const rankRows = (procedures: ReadonlyArray<ProcedureScore>): ProcedureScore[] =
 
 interface AdvisorHealthPanelProps {
     /**
-     * `true` only on a dev host, which serves the advisor procedure list. A static
-     * deploy has no such route, so the panel says so instead of scoring.
+     * `true` on a dev host, which serves the advisor procedure list from its own origin.
+     * Elsewhere the list is fetched from the client's worker when the client carries an
+     * admin token; without one the panel says so instead of scoring.
      */
     readonly localProcedures?: boolean;
     /** Scopes the `data-testid`s. */
@@ -71,14 +74,29 @@ interface AdvisorHealthPanelProps {
  */
 const AdvisorHealthPanel = ({ localProcedures = false, testId = "advisor-health" }: AdvisorHealthPanelProps): ReactElement => {
     const t = useT();
+    const client = useStudioClient();
     const advisoriesQuery = useAdminQuery<AdvisoriesResult>(ADMIN_FUNCTIONS.getAdvisories, {}, { live: true });
-    const proceduresQuery = useAdvisorProcedures({ enabled: localProcedures, refreshKey: advisoriesQuery.data });
+    // A hosted Studio has no dev host to serve the list, but its client points at a worker
+    // that forwards the route to the companion. Same client and token every admin read uses.
+    const token = client.getAuthToken();
+    const remote = !localProcedures && token !== null && token !== "" ? { baseUrl: workerBaseUrl(client.url), token } : undefined;
+    const proceduresQuery = useAdvisorProcedures({ enabled: localProcedures || remote !== undefined, refreshKey: advisoriesQuery.data, remote });
 
-    if (!localProcedures) {
+    if (!localProcedures && remote === undefined) {
         return (
             <Card>
                 <CardContent className="py-8 text-center text-muted-foreground" data-testid={`${testId}-local-only`}>
                     {t("The health score needs `lunora dev`: this deployment does not serve the advisor procedure list.")}
+                </CardContent>
+            </Card>
+        );
+    }
+
+    if (proceduresQuery.notDeployed) {
+        return (
+            <Card>
+                <CardContent className="py-8 text-center text-muted-foreground" data-testid={`${testId}-companion-missing`}>
+                    {t("The health score needs the companion worker: it is not deployed for this Studio, so the advisor procedure list is unavailable.")}
                 </CardContent>
             </Card>
         );

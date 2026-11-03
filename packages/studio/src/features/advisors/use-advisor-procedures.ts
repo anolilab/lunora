@@ -12,8 +12,33 @@ import { errorMessage } from "../../lib/internal";
  */
 const ADVISOR_PROCEDURES_ENDPOINT = "/__lunora/advisor-procedures";
 
-const fetchAdvisorProcedures = async (): Promise<AdvisorProceduresResult> => {
-    const response = await fetch(ADVISOR_PROCEDURES_ENDPOINT);
+/** A hosted Studio's worker: where to fetch from and the admin bearer to present. */
+interface RemoteProceduresSource {
+    readonly baseUrl: string;
+    readonly token: string;
+}
+
+/**
+ * The worker answered 404 for the remote route: it forwards to the companion
+ * worker, which is not deployed. Distinct from a dev host's 404, which means
+ * `lunora codegen` has not written the list yet.
+ */
+class CompanionNotDeployedError extends Error {
+    public constructor() {
+        super("companion not deployed");
+        this.name = "CompanionNotDeployedError";
+    }
+}
+
+const fetchAdvisorProcedures = async (remote: RemoteProceduresSource | undefined): Promise<AdvisorProceduresResult> => {
+    const response =
+        remote === undefined
+            ? await fetch(ADVISOR_PROCEDURES_ENDPOINT)
+            : await fetch(`${remote.baseUrl}${ADVISOR_PROCEDURES_ENDPOINT}`, { headers: { authorization: `Bearer ${remote.token}` } });
+
+    if (remote !== undefined && response.status === 404) {
+        throw new CompanionNotDeployedError();
+    }
 
     if (!response.ok) {
         const body: unknown = await response.json().catch(() => undefined);
@@ -35,14 +60,30 @@ interface AdvisorProceduresOptions {
      * with a denominator from before a codegen run.
      */
     readonly refreshKey: unknown;
+
+    /** Set on a hosted Studio: fetch from this worker with the bearer instead of the same origin. */
+    readonly remote?: RemoteProceduresSource;
 }
 
 /**
  * The health map's denominator. Returns `error` as a message string, matching
  * the admin query hooks the panel reads next to it.
  */
-const useAdvisorProcedures = ({ enabled, refreshKey }: AdvisorProceduresOptions): { data: AdvisorProceduresResult | undefined; error: string | undefined } => {
-    const query = useQuery({ enabled, queryFn: fetchAdvisorProcedures, queryKey: ["studio", "advisor-procedures"] });
+const useAdvisorProcedures = ({
+    enabled,
+    refreshKey,
+    remote,
+}: AdvisorProceduresOptions): {
+    data: AdvisorProceduresResult | undefined;
+    error: string | undefined;
+    notDeployed: boolean;
+} => {
+    const query = useQuery({
+        enabled,
+        queryFn: () => fetchAdvisorProcedures(remote),
+        // The source is a query input: a new worker or token must not be served the previous one's list.
+        queryKey: ["studio", "advisor-procedures", remote],
+    });
     const { refetch } = query;
     const previousKey = useRef(refreshKey);
 
@@ -54,7 +95,11 @@ const useAdvisorProcedures = ({ enabled, refreshKey }: AdvisorProceduresOptions)
         }
     }, [enabled, refreshKey, refetch]);
 
-    return { data: query.data, error: query.error ? errorMessage(query.error) : undefined };
+    return {
+        data: query.data,
+        error: query.error ? errorMessage(query.error) : undefined,
+        notDeployed: query.error instanceof CompanionNotDeployedError,
+    };
 };
 
 export default useAdvisorProcedures;
