@@ -376,7 +376,7 @@ catalogs:
     "@commitlint/cli": ^21.2.3
     "@commitlint/config-conventional": ^21.2.3
     cz-conventional-changelog: ^3.3.0
-    "@visulima/vis": 6.4.3
+    "@visulima/vis": 6.5.1
     "@visulima/tabular": 4.1.0
     "@visulima/error": 6.1.0
   test:
@@ -1094,6 +1094,34 @@ allowBuilds:
 # When bumping a dependency, UPDATE its existing line — do not append a new one.
 minimumReleaseAgeExclude:
   # oxlint/oxfmt presets published 2026-10-21 and 2026-11-03; drop once they age past the window.
+  # Published 2026-11-03 (UTC) for the vis 6.5.1 bump; drop each entry once it ages past the 24h window.
+  - '@visulima/vis@6.5.1'
+  - '@visulima/vis-binding-darwin-arm64@6.5.1'
+  - '@visulima/vis-binding-darwin-x64@6.5.1'
+  - '@visulima/vis-binding-linux-arm64-gnu@6.5.1'
+  - '@visulima/vis-binding-linux-arm64-musl@6.5.1'
+  - '@visulima/vis-binding-linux-x64-gnu@6.5.1'
+  - '@visulima/vis-binding-linux-x64-musl@6.5.1'
+  - '@visulima/vis-binding-win32-arm64-msvc@6.5.1'
+  - '@visulima/vis-binding-win32-x64-msvc@6.5.1'
+  - '@visulima/secret-scanner-binding-darwin-arm64@2.1.0'
+  - '@visulima/secret-scanner-binding-darwin-x64@2.1.0'
+  - '@visulima/secret-scanner-binding-linux-arm64-gnu@2.1.0'
+  - '@visulima/secret-scanner-binding-linux-arm64-musl@2.1.0'
+  - '@visulima/secret-scanner-binding-linux-x64-gnu@2.1.0'
+  - '@visulima/secret-scanner-binding-linux-x64-musl@2.1.0'
+  - '@visulima/secret-scanner-binding-win32-arm64-msvc@2.1.0'
+  - '@visulima/secret-scanner-binding-win32-x64-msvc@2.1.0'
+  - '@visulima/secret-scanner@2.1.0'
+  - '@visulima/task-runner-binding-darwin-arm64@3.0.3'
+  - '@visulima/task-runner-binding-darwin-x64@3.0.3'
+  - '@visulima/task-runner-binding-linux-arm64-gnu@3.0.3'
+  - '@visulima/task-runner-binding-linux-arm64-musl@3.0.3'
+  - '@visulima/task-runner-binding-linux-x64-gnu@3.0.3'
+  - '@visulima/task-runner-binding-linux-x64-musl@3.0.3'
+  - '@visulima/task-runner-binding-win32-arm64-msvc@3.0.3'
+  - '@visulima/task-runner-binding-win32-x64-msvc@3.0.3'
+  - '@visulima/task-runner@3.0.3'
   - '@anolilab/oxfmt-config@1.0.8'
   - '@anolilab/oxlint-config@2.0.2'
   - '@better-fetch/fetch@1.2.2'
