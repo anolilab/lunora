@@ -1180,7 +1180,7 @@ const buildRouter = ({
             <SchedulePanel initialShardKey={initialShardKey} loadCronJobs={scheduledCron} scheduledCancel={scheduledCancel} scheduledLoad={scheduledLoad} />
         ),
         schema: <SchemaRoutePanel initialShardKey={initialShardKey} schemaEditable={schemaEditable} />,
-        advisorHealth: <AdvisorHealthPanel />,
+        advisorHealth: <AdvisorHealthPanel localProcedures={schemaEditable} />,
         security: <SecurityAdvisorPanel />,
         settings: <SettingsPanel initialShardKey={initialShardKey} />,
         sql: <SqlEditorPanel initialShardKey={initialShardKey} />,

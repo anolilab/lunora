@@ -47,6 +47,11 @@ const rankRows = (procedures: ReadonlyArray<ProcedureScore>): ProcedureScore[] =
     });
 
 interface AdvisorHealthPanelProps {
+    /**
+     * `true` only on a dev host, which serves the advisor procedure list. A static
+     * deploy has no such route, so the panel says so instead of scoring.
+     */
+    readonly localProcedures?: boolean;
     /** Scopes the `data-testid`s. */
     readonly testId?: string;
 }
@@ -64,10 +69,20 @@ interface AdvisorHealthPanelProps {
  * denominator; without the latter there is no way to tell one failing handler
  * out of two from one out of two hundred.
  */
-const AdvisorHealthPanel = ({ testId = "advisor-health" }: AdvisorHealthPanelProps): ReactElement => {
+const AdvisorHealthPanel = ({ localProcedures = false, testId = "advisor-health" }: AdvisorHealthPanelProps): ReactElement => {
     const t = useT();
     const advisoriesQuery = useAdminQuery<AdvisoriesResult>(ADMIN_FUNCTIONS.getAdvisories, {}, { live: true });
-    const proceduresQuery = useAdvisorProcedures();
+    const proceduresQuery = useAdvisorProcedures({ enabled: localProcedures, refreshKey: advisoriesQuery.data });
+
+    if (!localProcedures) {
+        return (
+            <Card>
+                <CardContent className="py-8 text-center text-muted-foreground" data-testid={`${testId}-local-only`}>
+                    {t("The health score needs `lunora dev`: this deployment does not serve the advisor procedure list.")}
+                </CardContent>
+            </Card>
+        );
+    }
 
     const advisories = advisoriesQuery.data?.advisories ?? null;
     const procedures = proceduresQuery.data?.procedures ?? null;
