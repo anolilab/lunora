@@ -338,7 +338,7 @@ catalogs:
     fallow: 3.34.0
     husky: ^9.1.7
     "@anolilab/oxfmt-config": 1.0.8
-    "@anolilab/oxlint-config": 2.0.0
+    "@anolilab/oxlint-config": 2.0.2
     # Pinned to the versions @anolilab/oxlint-config uses. oxlint resolves jsPlugins from
     # the root node_modules, so without these it loads the older copy @anolilab/eslint-config
     # brings in (sonarjs 4.0.3 has no `vitest-mock-at-module-scope`) and fails at config load.
@@ -1100,9 +1100,9 @@ allowBuilds:
 #   - 'better-auth@1.6.13 || 1.6.14'
 # When bumping a dependency, UPDATE its existing line — do not append a new one.
 minimumReleaseAgeExclude:
-  # oxlint/oxfmt presets published 2026-10-21; drop once they age past the window.
+  # oxlint/oxfmt presets published 2026-10-21 and 2026-11-03; drop once they age past the window.
   - '@anolilab/oxfmt-config@1.0.8'
-  - '@anolilab/oxlint-config@2.0.0'
+  - '@anolilab/oxlint-config@2.0.2'
   - '@better-fetch/fetch@1.2.2'
   - '@cloudflare/flagship@0.4.2'
   - '@cloudflare/vite-plugin@1.40.1'
