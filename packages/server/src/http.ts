@@ -183,6 +183,11 @@ const httpAction =
     async (c) =>
         handler(c.get("lunora"), c.req.raw);
 
+/** Apps built by {@link httpRouter}: the only Hono apps known to lift `__lunoraCtx` into `c.var.lunora`. */
+const httpRouters = new WeakSet<object>();
+
+const isHttpRouter = (app: object): boolean => httpRouters.has(app);
+
 /**
  * Create the hono app for HTTP actions. Pre-wired with a middleware that lifts
  * the runtime-injected `c.env.__lunoraCtx` into `c.var.lunora`, so both
@@ -204,6 +209,8 @@ const httpAction =
  */
 const httpRouter = (): LunoraHttpApp => {
     const app = new Hono<LunoraHttpEnv>();
+
+    httpRouters.add(app);
 
     app.use("*", async (c, next) => {
         const injected = c.env.__lunoraCtx;
@@ -885,7 +892,7 @@ const httpRoute: HttpRoute = {
  * `http_action_response_header_injection` advisor lint points to.
  */
 
-export { httpAction, httpRoute, httpRouter, lastEventId, sseEvent };
+export { httpAction, httpRoute, httpRouter, isHttpRouter, lastEventId, sseEvent };
 
 export type {
     HttpActionCtx,
