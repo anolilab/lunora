@@ -221,8 +221,10 @@ class ReactiveCache {
         }
 
         // See PRIMARY_READ: such a query is re-run on every call, never memoized.
-        if ([...deps].some((dep) => isPrimaryReadDep(dep))) {
-            return result;
+        for (const dep of deps) {
+            if (isPrimaryReadDep(dep)) {
+                return result;
+            }
         }
 
         const bytes = estimateBytes(result);

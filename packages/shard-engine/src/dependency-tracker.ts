@@ -23,6 +23,10 @@
  * passing makes that lifetime visible at every call-site.
  */
 
+const PRIMARY_READ_MARKER = "\0primary";
+
+const PRIMARY_READ_DEP_SUFFIX = `:${PRIMARY_READ_MARKER}`;
+
 /**
  * Reserved marker for full-table scans — every write to the table invalidates
  * cache entries that depend on this key. Exported as a constant so call-sites
@@ -37,10 +41,10 @@ export const SCAN_DEP = "*scan";
  * not be memoized. A row id cannot hold a NUL character (`assertStorableRowId`),
  * so no row dependency can spell this key.
  */
-export const PRIMARY_READ = "\0primary";
+export const PRIMARY_READ = PRIMARY_READ_MARKER;
 
-/** True for a dep key recorded by {@link PRIMARY_READ} (`${table}:*primary`). */
-export const isPrimaryReadDep = (dep: string): boolean => dep.slice(dep.indexOf(":") + 1) === PRIMARY_READ;
+/** True for a dep key recorded by {@link PRIMARY_READ} (`${table}:\0primary`). */
+export const isPrimaryReadDep = (dep: string): boolean => dep.endsWith(PRIMARY_READ_DEP_SUFFIX);
 
 /**
  * Build a stable dep key from a table name and a row id (or the {@link SCAN_DEP}
