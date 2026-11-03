@@ -609,6 +609,67 @@ describe("lunoraClient polling fallback", () => {
         client.close();
     });
 
+    it("replays a write whose response was lost after it committed, without its precondition", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        // The origin commits the first send, then the response is lost on the way back.
+        let committed = false;
+        let firstWriteSent = false;
+        const fetchMock = vi.fn<typeof fetch>(async (input) => {
+            if ((input as string).includes("rpc-batch")) {
+                return jsonResponse({ results: [{ body: { result: [] }, id: 0, status: 200 }] });
+            }
+
+            if (!firstWriteSent) {
+                firstWriteSent = true;
+                committed = true;
+
+                throw new TypeError("Failed to fetch");
+            }
+
+            return jsonResponse({ result: "done" });
+        });
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("todos:list"), {}, () => {});
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(10);
+        sockets.at(-1)?.triggerClose();
+        await vi.advanceTimersByTimeAsync(STEP_MS);
+        await failOpens(2);
+
+        let outcome = "pending";
+
+        const written = client.mutation(fnRef("todos:add"), { text: "x" }, { precondition: () => !committed }).then(
+            (value) => {
+                outcome = String(value);
+
+                return undefined;
+            },
+            (error: unknown) => {
+                outcome = `rejected: ${String(error)}`;
+            },
+        );
+
+        await vi.advanceTimersByTimeAsync(120_000);
+        await written;
+
+        // The commit is what the precondition now sees, so a precondition re-check would reject the write
+        // before its replay can deduplicate under the same mutation id.
+        expect(committed).toBe(true);
+        expect(outcome).toBe("done");
+
+        client.close();
+    });
+
     it("drops a confirmed optimistic layer on a poll sent after the ack, never on one sent before", async () => {
         expect.assertions(2);
 

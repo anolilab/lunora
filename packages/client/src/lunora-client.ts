@@ -4607,9 +4607,9 @@ class LunoraClient {
                 (error instanceof TypeError || error instanceof TransportError) &&
                 isEncodable(argsRecord)
             ) {
-                // A network drop seen by a request sent over HTTP never reached the origin, so the write is not ambiguous:
-                // it keeps its precondition and is not charged against the ambiguous-send replay cap while offline.
-                const queued = enqueue(!networkDown);
+                // A failed HTTP send may have committed before its response was lost, so the write is always queued as
+                // ambiguous: it drops its precondition and replays under its mutation id, which the origin deduplicates.
+                const queued = enqueue(true);
 
                 // Over a socket that is still open nothing else will flush the queue.
                 this.noteHeldRetryDelay(options.shardKey);
@@ -10085,9 +10085,11 @@ class LunoraClient {
      * last attempt the write gets.
      *
      * Only a write queued after an ambiguous direct send is capped: its caller is
-     * still waiting, so every transient failure of it except a rate limit or a
-     * refused credential (a transport error, a timeout, `SHARD_UNAVAILABLE`, ...)
-     * counts against {@link MAX_AMBIGUOUS_SEND_ATTEMPTS}. Any other write is never
+     * still waiting, so every transient failure of it except a rate limit, a
+     * refused credential, or a network-level failure (a `TypeError` or a transport
+     * error, which say nothing about the origin's verdict on the write and can last
+     * as long as the device is offline) counts against {@link MAX_AMBIGUOUS_SEND_ATTEMPTS}.
+     * A timeout or `SHARD_UNAVAILABLE` still counts. Any other write is never
      * capped here: a write the shard fails deterministically arrives with a coded
      * verdict (the handler's own code, `RPC_FAILED`, `BATCH_ENTRY_FAILED`) that
      * {@link isTransientReplayFailure} settles terminally on the first attempt, and
@@ -10105,6 +10107,8 @@ class LunoraClient {
             isAuthReplayFailure(error) ||
             code === "RATE_LIMITED" ||
             code === "TOO_MANY_REQUESTS" ||
+            error instanceof TypeError ||
+            error instanceof TransportError ||
             !isTransientReplayFailure(error)
         ) {
             return false;
