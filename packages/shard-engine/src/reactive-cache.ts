@@ -220,9 +220,7 @@ class ReactiveCache {
             return result;
         }
 
-        // A query that read a `.global()` table at primary consistency answers from
-        // rows another shard can change without telling this cache, so it is
-        // re-run on every call rather than memoized.
+        // See PRIMARY_READ: such a query is re-run on every call, never memoized.
         if ([...deps].some((dep) => isPrimaryReadDep(dep))) {
             return result;
         }
