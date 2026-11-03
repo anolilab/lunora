@@ -1,3 +1,15 @@
+## @lunora/shard-engine [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.184...@lunora/shard-engine@1.0.0-alpha.185) (2026-11-03)
+
+### Bug Fixes
+
+* **sql-store:** let global reads ask for the primary ([#1449](https://github.com/anolilab/lunora/issues/1449)) ([490a8fa](https://github.com/anolilab/lunora/commit/490a8fa203fe2f170e62d71239ca5d54b0b28051))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.80
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.151
+
 ## @lunora/shard-engine [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.183...@lunora/shard-engine@1.0.0-alpha.184) (2026-11-02)
 
 ### Features

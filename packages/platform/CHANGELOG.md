@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.79...@lunora/platform@1.0.0-alpha.80) (2026-11-03)
+
+### Bug Fixes
+
+* **sql-store:** let global reads ask for the primary ([#1449](https://github.com/anolilab/lunora/issues/1449)) ([490a8fa](https://github.com/anolilab/lunora/commit/490a8fa203fe2f170e62d71239ca5d54b0b28051))
+
 ## @lunora/platform [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.78...@lunora/platform@1.0.0-alpha.79) (2026-11-02)
 
 ### Features

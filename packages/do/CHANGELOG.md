@@ -1,3 +1,14 @@
+## @lunora/do [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.278...@lunora/do@1.0.0-alpha.279) (2026-11-03)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.199
+* **@lunora/platform:** upgraded to 1.0.0-alpha.80
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.123
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.185
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.151
+
 ## @lunora/do [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.277...@lunora/do@1.0.0-alpha.278) (2026-11-02)
 
 ### Bug Fixes
