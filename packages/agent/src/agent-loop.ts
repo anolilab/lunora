@@ -344,6 +344,7 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
             expiresAt: Date.now() + timeoutMs,
             messageKey: `${instanceId}:approval:${call.id}`,
             role: "tool",
+            approvalAgent: turnContext.agentName,
             status: "awaiting_approval",
             toolCallId: call.id,
             toolName: call.name,
