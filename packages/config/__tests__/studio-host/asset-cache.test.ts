@@ -167,6 +167,23 @@ describe("sendStudioAsset", () => {
         expect(made.headers()["Content-Encoding"]).toBe("br");
     });
 
+    it("treats an empty q= as malformed, so it gets full weight rather than zero", () => {
+        expect.assertions(1);
+
+        const made = send("br;q=");
+
+        expect(made.headers()["Content-Encoding"]).toBe("br");
+    });
+
+    it("sends the raw body when the client ranks identity above every coding we produce", () => {
+        expect.assertions(2);
+
+        const made = send("identity;q=1, gzip;q=0.1");
+
+        expect(made.headers()["Content-Encoding"]).toBeUndefined();
+        expect(sentBody(made)).toStrictEqual(body);
+    });
+
     it("answers 406, not 304, to a conditional request for a version the client cannot encode", () => {
         expect.assertions(2);
 

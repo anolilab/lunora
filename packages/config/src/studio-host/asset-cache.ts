@@ -70,7 +70,9 @@ interface EncodingChoice {
 /** The weight of a coding's `q` parameter; a coding without one has full weight, a malformed one is read the same way. */
 const qualityOf = (parameters: ReadonlyArray<string>): number => {
     const parameter = parameters.find((candidate) => candidate.startsWith("q="));
-    const quality = parameter === undefined ? Number.NaN : Number(parameter.slice(2));
+    const value = parameter?.slice(2).trim() ?? "";
+    // `Number("")` is 0, which would refuse the coding, so an empty weight is malformed like any other.
+    const quality = value === "" ? Number.NaN : Number(value);
 
     return Number.isNaN(quality) || quality < 0 || quality > 1 ? 1 : quality;
 };
@@ -95,9 +97,13 @@ const chooseEncoding = (acceptEncoding: string | undefined): EncodingChoice => {
     const weightOf = (coding: string): number => weights.get(coding) ?? weights.get("*") ?? 0;
     const supported: ReadonlyArray<AssetEncoding> = ["br", "gzip"];
 
+    // An unnamed identity ranks lowest, so a coding the client accepts at any weight beats it on a tie; a named or
+    // wildcard identity ranks the raw body against the codings, which then answer only when they weigh more.
+    const identityQuality = weights.get("identity") ?? weights.get("*") ?? 0;
+
     return {
         // Array.prototype.sort is stable, so the listed order (brotli first) breaks a tie.
-        encodings: supported.filter((coding) => weightOf(coding) > 0).toSorted((left, right) => weightOf(right) - weightOf(left)),
+        encodings: supported.filter((coding) => weightOf(coding) > Math.max(0, identityQuality)).toSorted((left, right) => weightOf(right) - weightOf(left)),
         identityAllowed: (weights.get("identity") ?? weights.get("*") ?? 1) > 0,
     };
 };
