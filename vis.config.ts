@@ -151,6 +151,49 @@ export default defineConfig({
     taskRunner: {
         parallel: 5,
     },
+    // Released by `vis release ci release` in .github/workflows/semantic-release.yml.
+    release: {
+        acknowledgeUnstable: true,
+        // `vis release generate` merge-bases against this on a PR branch.
+        baseBranch: "alpha",
+        // vis's default formatter. Its flat entry list is not grouped by commit type, so apps/docs
+        // cannot read section kinds from it; see .agents/docs/workflow.md.
+        changelog: ["default", { heading: "## {name} [{version}]({compareUrl}) ({date})" }],
+        channels: {
+            alpha: { mode: "auto-publish", prerelease: "alpha", tag: "alpha" },
+            beta: { mode: "auto-publish", prerelease: "beta", tag: "beta" },
+            main: { mode: "auto-publish", tag: "latest" },
+            next: { mode: "auto-publish", prerelease: "next", tag: "next" },
+        },
+        // Continues each package's existing `{name}@{version}` tag stream.
+        currentVersionResolver: "git-tag",
+        defaultManaged: true,
+        formatChangedFiles: true,
+        // vis would release every other type as a patch; breaking commits bypass this pattern.
+        ignoreCommitPattern: ["^(build|chore|ci|deps|docs|refactor|style|test|translation)(\\([^)]*\\))?:"],
+        // Keeps promotion-safe sibling ranges (`>=1.0.0-alpha.76 <2.0.0-0`) that still admit
+        // the new version; the default rewrite drops the ceiling.
+        internalDependencyRanges: "preserve-satisfying",
+        gitUser: { email: "github-actions[bot]@users.noreply.github.com", name: "github-actions-shell" },
+        publish: {
+            catalogResolution: "auto",
+            cleanPackageJson: true,
+            packManager: "auto",
+            protocolResolution: "pack",
+            publishArgs: ["--provenance"],
+            publishStrategy: "npm-publish-tarball",
+        },
+        // Rebase-and-retry the release commit when the branch moved mid-run.
+        pushRetries: 5,
+        // vis's stock walk skips prerelease channels, and every release here is one.
+        successWalk: { skipPrerelease: false },
+        // Tags go on the planned commit, which is already on the branch, so a lost or
+        // rebased release commit never strands a tag (#1054).
+        tagTarget: "source",
+        // A satisfied sibling peer range does not release its consumer; asserted by
+        // scripts/check-sibling-peer-ranges.js.
+        updateInternalDependencies: "out-of-range",
+    },
     staged: {
         // Reject a raw NUL byte (which turns a source file binary, hiding it from
         // diff/blame/review), then format the staged code and data files with oxfmt.

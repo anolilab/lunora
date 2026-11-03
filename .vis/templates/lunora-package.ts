@@ -3,8 +3,11 @@
  * package under `packages/<name>/`.
  *
  * Only useful inside the Lunora monorepo (it writes a project.json with vis
- * tags, a .releaserc.json extending the anolilab pnpm preset, etc.). End
- * users authoring queries/mutations in their own apps don't run this one.
+ * tags, a packem build config, etc.). End users authoring queries/mutations in
+ * their own apps don't run this one.
+ *
+ * No release config is scaffolded: `vis release` releases every non-private
+ * package from the `release` block in the root vis.config.ts.
  */
 import { createTemplate } from "@visulima/vis/generate";
 
@@ -196,11 +199,6 @@ const projectJson = (name: string, category: string): string => `{
 }
 `;
 
-const releaseRc = `{
-    "extends": "@anolilab/semantic-release-preset/pnpm"
-}
-`;
-
 const readme = (name: string, description: string): string => `# @lunora/${name}
 
 ${description}
@@ -264,7 +262,6 @@ export default createTemplate({
             // monorepo root puts everything under packages/<name>/.
             files: {
                 [pkgName]: {
-                    ".releaserc.json": releaseRc,
                     "eslint.config.js": eslintConfig,
                     "package.json": pkgJson(pkgName, description),
                     "packem.config.ts": packemConfig,

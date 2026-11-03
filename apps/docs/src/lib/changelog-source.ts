@@ -90,9 +90,12 @@ const KIND_BY_SECTION: Record<string, ReleaseKind> = {
 
 const isDependencies = (group: ReleaseGroup): boolean => group.name.toLowerCase() === "dependencies";
 
-/** The release's headline section — the first one that is not a dependency bump. */
+// The formatter lists "⚠ BREAKING CHANGES" first; it flags a release and does not name its kind.
+const isBreaking = (group: ReleaseGroup): boolean => group.name.startsWith("⚠");
+
+/** The release's headline section — the first one that is neither a dependency bump nor the breaking flag. */
 const kindOf = (groups: ReleaseGroup[]): ReleaseKind => {
-    const lead = groups.find((group) => !isDependencies(group));
+    const lead = groups.find((group) => !isDependencies(group) && !isBreaking(group));
 
     return (lead === undefined ? undefined : KIND_BY_SECTION[lead.name.toLowerCase()]) ?? "chore";
 };
@@ -105,7 +108,74 @@ const RELEASE_SPLIT = /^## /m;
 // this shape backtrack badly on pathological input.
 const WRAPPED_LINE = /[^\S\n]{0,80}\n[^\S\n]{0,80}/g;
 
-const parseGroups = (body: string): ReleaseGroup[] =>
+const CONVENTIONAL_BULLET = /^(?<type>[a-z]+)(?:\((?<scope>[^)]*)\))?!?: (?<text>.*)$/;
+const BREAKING_BULLET = /^BREAKING CHANGE: (?<text>.*)$/;
+
+// vis's default formatter writes no `###` sections, only `- type(scope): text` bullets, so the
+// commit type names the section the way a heading did.
+const SECTION_BY_TYPE: Record<string, string> = {
+    docs: "Documentation",
+    feat: "Features",
+    fix: "Bug Fixes",
+    perf: "Performance Improvements",
+    refactor: "Code Refactoring",
+};
+
+const INDENTED = /^\s/;
+
+// A bullet runs until a blank line or the next bullet, so wrapped lines stay attached.
+const collectBullets = (body: string): string[] => {
+    const bullets: string[] = [];
+    let current: string | undefined;
+
+    const flush = (): void => {
+        if (current !== undefined) {
+            bullets.push(current);
+            current = undefined;
+        }
+    };
+
+    // The first line is the release heading, which the caller already read.
+    for (const line of body.split("\n").slice(1)) {
+        // The breaking footer is a paragraph, not a bullet, so it cannot ride on the bullet before it.
+        if (BREAKING_BULLET.test(line)) {
+            flush();
+            bullets.push(line);
+        } else if (line.startsWith("- ")) {
+            flush();
+            current = line.slice(2);
+        } else if (current !== undefined && INDENTED.test(line)) {
+            current += ` ${line.trim()}`;
+        } else if (line.trim() === "") {
+            flush();
+        }
+    }
+
+    flush();
+
+    return bullets;
+};
+
+const groupBullets = (bullets: string[]): ReleaseGroup[] => {
+    const groups = new Map<string, string[]>();
+
+    for (const bullet of bullets) {
+        const breaking = BREAKING_BULLET.exec(bullet)?.groups?.text;
+        const conventional = CONVENTIONAL_BULLET.exec(bullet)?.groups;
+        const name = breaking === undefined ? (SECTION_BY_TYPE[conventional?.type ?? ""] ?? "Miscellaneous Chores") : "⚠ BREAKING CHANGES";
+        const item = breaking ?? (conventional?.scope ? `**${conventional.scope}:** ${conventional.text}` : (conventional?.text ?? bullet));
+
+        groups.set(name, [...(groups.get(name) ?? []), item]);
+    }
+
+    return [...groups].map(([name, items]) => {
+        return { items, name };
+    });
+};
+
+const parseFlatGroups = (body: string): ReleaseGroup[] => groupBullets(collectBullets(body));
+
+const parseSectionGroups = (body: string): ReleaseGroup[] =>
     body
         .split(SECTION_SPLIT)
         .slice(1)
@@ -121,6 +191,8 @@ const parseGroups = (body: string): ReleaseGroup[] =>
 
             return items.length > 0 ? [{ items, name: heading.trim() }] : [];
         });
+
+const parseGroups = (body: string): ReleaseGroup[] => (SECTION_SPLIT.test(body) ? parseSectionGroups(body) : parseFlatGroups(body));
 
 /** Splits every changelog into substantive releases and dependency-only days. */
 const readChangelogs = (): { depPackagesByDate: Map<string, Set<string>>; releases: (Release & { type: "release" })[] } => {
@@ -225,4 +297,4 @@ const listFeed = (): FeedItem[] => {
 
 export type { DependencyDay, FeedItem, Release, ReleaseGroup, ReleaseKind };
 
-export { listFeed };
+export { kindOf, listFeed, parseGroups };
