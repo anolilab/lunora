@@ -26,8 +26,8 @@ const renderPanel = (localProcedures: boolean): ReactElement => (
     </LunoraProvider>
 );
 
-const stubProceduresResponse = (status: number, body: unknown): ReturnType<typeof vi.fn> => {
-    const fetchMock = vi.fn(async () => Response.json(body, { status }));
+const stubProceduresResponse = (status: number, body: unknown) => {
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json(body, { status }));
 
     vi.stubGlobal("fetch", fetchMock);
 

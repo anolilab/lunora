@@ -101,7 +101,7 @@ const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 ### `AdvisorHealthPanel` (const)
 
 ```ts
-const AdvisorHealthPanel: ({ testId }: AdvisorHealthPanelProps) => ReactElement;
+const AdvisorHealthPanel: ({ localProcedures, testId }: AdvisorHealthPanelProps) => ReactElement;
 ```
 
 ### `AggregateMetrics` (interface)
@@ -1317,6 +1317,7 @@ public API and is gated as one. Listed once per package, sorted by name.
 
 ```ts
 interface AdvisorHealthPanelProps {
+    readonly localProcedures?: boolean;
     readonly testId?: string;
 }
 ```
@@ -2219,6 +2220,7 @@ const MESSAGE_IDS: readonly [
     "Field",
     "Row {n}",
     "Loading…",
+    "The health score needs `lunora dev`: this deployment does not serve the advisor procedure list.",
     "No matching row.",
     "CSV",
     "SQL",
