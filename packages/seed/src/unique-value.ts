@@ -589,10 +589,13 @@ const arrayDeal = (field: FieldSpec, constraints: Constraints, table: string): U
     };
 };
 
-/** A nullable column admits NULL on top of its closed domain, and a unique index never compares NULLs. */
+/**
+ * A nullable column admits NULL on top of its closed domain, and a unique index never compares NULLs. NULL is added only when the
+ * column's own validator accepts it, so a refinement that rejects NULL keeps it out of the seeded values.
+ */
 const nullableDomain = (field: FieldSpec, domain: ReadonlyArray<unknown>): ReadonlyArray<unknown> =>
-    // eslint-disable-next-line unicorn/no-null -- NULL is one more value a nullable column takes
-    field.nullable ? [...domain, null] : domain;
+    // eslint-disable-next-line unicorn/no-null -- NULL is one more value a nullable column takes, when its validator accepts it
+    field.nullable ? [...domain, ...acceptedBy(field.validator, [null])] : domain;
 
 /**
  * Decide how one `.unique()` column deals its values.

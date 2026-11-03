@@ -355,6 +355,22 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(() => seedPlan(schema, { counts: { slots: 5 } })).toThrow(/by_kind_flag/u);
     });
 
+    it("never seeds NULL into a nullable unique enum whose refinement rejects it", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            slots: defineTable({
+                kind: v
+                    .union(v.literal("x"), v.literal("y"))
+                    .nullable()
+                    .check((kind) => kind !== null),
+            }).index("by_kind", ["kind"], { unique: true }),
+        });
+
+        // Two accepted values, so a third row has no value the refinement accepts and must be refused, not given NULL.
+        expect(() => seedPlan(schema, { counts: { slots: 3 } })).toThrow(/cannot seed 3 rows into "slots"/u);
+    });
+
     it("never leaves an overridden unique array row without a value", () => {
         expect.hasAssertions();
 
