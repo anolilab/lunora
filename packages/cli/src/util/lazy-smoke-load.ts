@@ -640,6 +640,31 @@ const taskkillCommand = (pid: number): { args: string[]; command: string } => {
 };
 
 /**
+ * Whether a finished `taskkill /T /F` ended the tree: exit 0 killed it, and exit 128 says there was no such process, so it is gone already.
+ * A spawn error or any other exit leaves the tree unknown.
+ */
+const taskkillEndedTree = (result: { error?: Error; status: number | null }): boolean =>
+    result.error === undefined && (result.status === 0 || result.status === 128);
+
+/** Written when the tree was not confirmed gone, so the run never reports a smoke process it may have left serving as stopped. */
+const warnTreeMayRun = (pid: number): void => {
+    process.stderr.write(`lunora: the smoke process tree ${String(pid)} may still be running; end it with taskkill /PID ${String(pid)} /T /F\n`);
+};
+
+/**
+ * The Windows kill on exit or interrupt, synchronous. Bounded: an interrupted CLI has to exit, so a taskkill that does not finish in time
+ * is reported with its pid rather than holding the exit open.
+ */
+const killWindowsTreeOnExit = (pid: number): void => {
+    const { args, command } = taskkillCommand(pid);
+    const result = spawnSync(command, args, { stdio: "ignore", timeout: GROUP_STOP_MS });
+
+    if (!taskkillEndedTree(result)) {
+        warnTreeMayRun(pid);
+    }
+};
+
+/**
  * Kills the smoke process tree if the CLI exits, or is interrupted, before the check stops it: the group on POSIX, the tree from its
  * pid on Windows. Exit handlers run synchronously, so the Windows kill there is `spawnSync`. Interrupts are re-raised once the tree is
  * gone, so the CLI still dies with the signal it was sent.
@@ -647,10 +672,7 @@ const taskkillCommand = (pid: number): { args: string[]; command: string } => {
 const killTreeOnExit = (pid: number): (() => void) => {
     const kill = (): void => {
         if (process.platform === "win32") {
-            const { args, command } = taskkillCommand(pid);
-
-            // Unbounded on purpose: a timed-out kill would leave the tree running while the CLI exits. `taskkill /F` returns at once in practice.
-            spawnSync(command, args, { stdio: "ignore" });
+            killWindowsTreeOnExit(pid);
 
             return;
         }
@@ -675,17 +697,20 @@ const killTreeOnExit = (pid: number): (() => void) => {
     return dispose;
 };
 
-/** Ends a Windows tree from its pid without blocking the event loop. A kill that fails is ignored: the tree may already be gone. */
-const runTaskkill = (pid: number): Promise<void> =>
+/**
+ * Ends a Windows tree from its pid without blocking the event loop. Resolves `true` only when taskkill ended the tree; a spawn error or any
+ * other exit resolves `false`.
+ */
+const runTaskkill = (pid: number): Promise<boolean> =>
     new Promise((_resolve) => {
         const { args, command } = taskkillCommand(pid);
         const child = spawn(command, args, { stdio: "ignore", windowsHide: true });
         // No timeout: the server is only stopped once the tree is gone, so a timed-out kill would leave the tree serving the port.
         child.once("error", () => {
-            _resolve();
+            _resolve(false);
         });
-        child.once("exit", () => {
-            _resolve();
+        child.once("exit", (code: number | null) => {
+            _resolve(taskkillEndedTree({ status: code }));
         });
     });
 
@@ -704,7 +729,9 @@ const stopSmokeGroup = async (group: SmokeGroup | undefined): Promise<void> => {
     const { pid } = group;
 
     if (process.platform === "win32") {
-        await runTaskkill(pid);
+        if (!(await runTaskkill(pid))) {
+            warnTreeMayRun(pid);
+        }
 
         return;
     }
@@ -1159,4 +1186,5 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     }
 };
 
+export { killWindowsTreeOnExit, taskkillEndedTree };
 export default runLazySmokeLoad;
