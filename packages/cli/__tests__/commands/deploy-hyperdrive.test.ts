@@ -52,6 +52,8 @@ describe("hyperdrive on deploy", () => {
     });
 
     afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.unstubAllEnvs();
         rmSync(root, { force: true, recursive: true });
     });
 
@@ -183,9 +185,6 @@ describe("hyperdrive on deploy", () => {
 
                 expect(idIn(generated)).toBe(HYPERDRIVE_PLACEHOLDER_ID);
                 expect(messages.join(" ")).toContain("was made for the default environment");
-
-                vi.unstubAllGlobals();
-                vi.unstubAllEnvs();
             });
         });
 
@@ -298,9 +297,6 @@ describe("hyperdrive on deploy", () => {
                     "cloudflare",
                 );
 
-                vi.unstubAllGlobals();
-                vi.unstubAllEnvs();
-
                 expect(bodyOf(api, "POST").caching).toStrictEqual({ disabled: true });
                 expect(messages).toContainEqual(expect.stringContaining("could not read the schema (Unexpected token)"));
             });
@@ -375,9 +371,6 @@ describe("hyperdrive on deploy", () => {
                 vi.stubGlobal("fetch", api);
 
                 await provisionDeployHyperdrive(root, { clientBuildEnvironment: undefined, logger: recordingLogger().logger }, "deploy", "cloudflare");
-
-                vi.unstubAllGlobals();
-                vi.unstubAllEnvs();
 
                 expect(bodyOf(api, "POST").caching).toStrictEqual(expected);
             });

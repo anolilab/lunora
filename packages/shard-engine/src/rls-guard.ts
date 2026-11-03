@@ -67,6 +67,9 @@ interface GuardableSchema {
  * `resolveTableName`). `undefined` ⇒ the id resolves to no table this writer can
  * see (absent row, or another backend) — nothing to leak, so the op passes
  * through to the raw call (which yields `null` / routes on).
+ *
+ * Cost: with no `expectedTable` the resolver has to search every table the writer can see, so an id that matches
+ * nothing pays for all of them. Pass the pinned table whenever the caller knows it.
  */
 type TableOfId = (id: string, expectedTable?: string) => Promise<string | undefined> | string | undefined;
 

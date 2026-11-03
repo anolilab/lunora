@@ -300,11 +300,24 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
         return existsSync(lunoraDirectory) ? lunoraDirectory : options.cwd;
     };
     let documentPresent = existsSync(specPath);
-    let watched: { directory: string; watcher: FSWatcher } | undefined;
+    // A directory removed and recreated at the same path is a different directory to the OS watcher, which stays on the
+    // old one, so the path alone cannot say whether the watch still sits on the directory that is there.
+    const identityOf = (directory: string): string => {
+        try {
+            const { dev, ino } = statSync(directory);
+
+            return `${String(dev)}:${String(ino)}`;
+        } catch {
+            return "";
+        }
+    };
+    let watched: { directory: string; identity: string; watcher: FSWatcher } | undefined;
     const watchChanges = (): void => {
         const directory = watchTarget();
+        const identity = identityOf(directory);
 
-        if (watched?.directory === directory) {
+        // A directory that cannot be stat'ed right now is not evidence that it was recreated, so the watch stays.
+        if (watched?.directory === directory && (identity === "" || watched.identity === identity)) {
             return;
         }
 
@@ -327,7 +340,7 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
             });
 
             watcher.on("error", watchFailed);
-            watched = { directory, watcher };
+            watched = { directory, identity, watcher };
         } catch (error: unknown) {
             watchFailed(error);
         }

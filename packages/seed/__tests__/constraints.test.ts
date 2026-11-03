@@ -70,6 +70,18 @@ describe("generateValue — validator constraints the generator must honour", ()
         expect([...lengths].toSorted((a, b) => a - b)).toStrictEqual([1, 2]);
     });
 
+    it("keeps an array short when maxItems is only a safety cap, but never below minItems", () => {
+        expect.hasAssertions();
+
+        for (let index = 0; index < 50; index += 1) {
+            const capped = generateValue(v.array(v.string()).max(100_000), "tags", ["cap", index], NOW) as unknown[];
+            const floored = generateValue(v.array(v.string()).min(10).max(100_000), "tags", ["floor", index], NOW) as unknown[];
+
+            expect(capped.length).toBeLessThanOrEqual(3);
+            expect(floored).toHaveLength(10);
+        }
+    });
+
     it("treats an infinite array maximum as no maximum", () => {
         expect.hasAssertions();
 
@@ -142,6 +154,33 @@ describe("generateValue — validator constraints the generator must honour", ()
             expect(values.every((value) => value > 1e20)).toBe(true);
             expect(new Set(values).size).toBe(values.length);
         });
+    });
+
+    it("deals 2^53 after the top safe integer when an exclusive minimum sits just below it", () => {
+        expect.hasAssertions();
+
+        const validator = { ...v.number(), _meta: { constraints: { exclusiveMinimum: Number.MAX_SAFE_INTEGER - 1, type: "integer" } } } as unknown as Validator;
+        const { capacity, valueAt } = planUniqueDeal(
+            { hasServerDefault: false, kind: "number", name: "amount", nullable: false, optional: false, unique: true, uniqueFromIndex: false, validator },
+            { now: NOW, table: "t" },
+        );
+
+        expect(capacity).toBe(2);
+        expect([valueAt(0, () => 0), valueAt(1, () => 0)]).toStrictEqual([Number.MAX_SAFE_INTEGER, 2 ** 53]);
+    });
+
+    it("caps an exclusive minimum at the top of the safe integers so a dealt value never repeats", () => {
+        expect.hasAssertions();
+
+        const validator = { ...v.number(), _meta: { constraints: { exclusiveMinimum: Number.MAX_SAFE_INTEGER - 1, type: "integer" } } } as unknown as Validator;
+        const { capacity, valueAt } = planUniqueDeal(
+            { hasServerDefault: false, kind: "number", name: "amount", nullable: false, optional: false, unique: true, uniqueFromIndex: false, validator },
+            { now: NOW, table: "t" },
+        );
+        const values = Array.from({ length: capacity }, (_, index) => valueAt(index, () => 0) as number);
+
+        expect(capacity).toBeLessThanOrEqual(2);
+        expect(new Set(values).size).toBe(values.length);
     });
 
     describe.each([

@@ -403,7 +403,9 @@ export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown =>
         case "from":
         case "union": {
             if (typeof raw !== "string") {
-                return raw;
+                // An untyped column stores arrays and objects as JSON text, so a driver-shaped byte sequence here is
+                // a BLOB: normalise it like a declared `v.bytes()` column rather than hand back a `number[]`/`Buffer`.
+                return raw instanceof ArrayBuffer || ArrayBuffer.isView(raw) || Array.isArray(raw) ? decodeBytes(raw) : raw;
             }
 
             // The wire marker joins `{`/`[` as a shape this branch must decode —

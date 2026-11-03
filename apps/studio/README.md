@@ -12,8 +12,8 @@ worker. Reach for this app when you want to **host** the studio separately
 
 ```bash
 # Defaults to the playground worker on this checkout's playground port (:5173 in the main checkout; the startup line prints it). Point it at a different local
-# worker with LUNORA_DEV_PROXY (vite proxies HTTP + WebSocket to it).
-LUNORA_DEV_PROXY=http://localhost:5173 pnpm --filter @lunora/studio-app dev
+# worker with LUNORA_DEV_PROXY, e.g. LUNORA_DEV_PROXY=http://localhost:<port> (vite proxies HTTP + WebSocket to it).
+pnpm --filter @lunora/studio-app dev
 ```
 
 Then open the studio URL it prints (http://localhost:5174 in the main checkout) and paste your `LUNORA_ADMIN_TOKEN` into the

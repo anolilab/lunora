@@ -107,8 +107,8 @@ export interface TabLeadershipHost {
  */
 export const onBecomeLeader = (host: TabLeadershipHost): void => {
     for (const state of host.activeSubscriptions()) {
-        // A leader is answered by `ack`; what the previous leader delivered no longer counts.
-
+        // A leader is answered by `ack`; what the previous leader delivered, a mirrored `settled` ack included, no longer counts.
+        setSubscriptionAck(state, "idle");
         state.valueReceived = false;
         host.ensureSocket(state.shardKey);
         host.queueResubscribe(state);

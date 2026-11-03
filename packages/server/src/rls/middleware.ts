@@ -94,6 +94,10 @@ interface PatchWriteOptions {
     verify?: PatchVerifier;
 }
 
+/** A caller's own post-image check and the policy's both have to pass; either alone must not replace the other. */
+const bothVerify = (caller: PatchVerifier | undefined, policy: PatchVerifier | undefined): PatchVerifier | undefined =>
+    caller === undefined || policy === undefined ? (caller ?? policy) : (previous, next) => caller(previous, next) && policy(previous, next);
+
 /**
  * Structural mirror of `@lunora/do`'s `QueryArgs` and `CountArgs`. The
  * runtime ORM in `@lunora/do`/`@lunora/d1` reads `baseWhere` /
@@ -1609,7 +1613,10 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return base.insertManyUnsafe(tableName, documents, options);
         },
 
-        patch: (table, id, patch, options) => gatePatchById(table, id, patch, (writer, verify) => writer.patch(table, id, patch, { ...options, ...verify })),
+        patch: (table, id, patch, options) =>
+            gatePatchById(table, id, patch, (writer, verify) =>
+                writer.patch(table, id, patch, { ...options, verify: bothVerify(options?.verify, verify.verify) }),
+            ),
 
         // The update gate with no write behind it: an empty patch leaves the post-image equal to the row as it
         // stands, so only the policy is evaluated. A relation-only patch runs this on its parent row, which it never
@@ -1628,7 +1635,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
                     throw new LunoraError("INTERNAL", `ctx.db.patchIf on "${tableName}" is unsupported: this writer has no conditional write`);
                 }
 
-                return writer.patchIf(tableName, id, { ...args, verify: options.verify });
+                return writer.patchIf(tableName, id, { ...args, verify: bothVerify(args.verify, options.verify) });
             });
 
             if (result.doc === null) {

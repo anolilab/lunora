@@ -129,8 +129,14 @@ export const GlobalDataBrowser = ({
     // and the open facets.
     // One timer per read: a failing facet backs off only the facet refresh, not the table list or the page.
     useAutoRefresh(() => tablesQuery.poll(), true);
-    useAutoRefresh(() => pageQuery.poll(), selectedTable !== null);
-    useAutoRefresh(() => (selectedTable === null ? undefined : refetchFacets(selectedTable, filtersRef.current)), selectedTable !== null);
+    // A poller a server rejection stopped restarts once the request it makes changes: the table, the page, or the filters.
+    useAutoRefresh(() => pageQuery.poll(), selectedTable !== null, undefined, JSON.stringify([selectedTable, offset, pageSize, filters]));
+    useAutoRefresh(
+        () => (selectedTable === null ? undefined : refetchFacets(selectedTable, filtersRef.current)),
+        selectedTable !== null,
+        undefined,
+        JSON.stringify([selectedTable, filters]),
+    );
 
     // The table last applied to the selection (cross-tier jump, deep link, or
     // back/forward). Lets the URL-reconcile effect skip values this component itself

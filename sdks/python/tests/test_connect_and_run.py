@@ -1113,6 +1113,41 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake.options, [{"max_size": MAX_WS_FRAME_BYTES}])
         self.assertEqual(MAX_WS_FRAME_BYTES, 32 * 1024 * 1024)
 
+    async def test_reconnect_forever_raises_on_a_context_json_cannot_encode(self):
+        """The same context goes into every run's ``connect`` frame, so retrying it can never succeed."""
+
+        self._install(_FakeSocket())
+        client = LunoraClient("http://example.invalid")
+
+        async def sleep(_seconds):
+            raise AssertionError("an unencodable context must not reach the backoff")
+
+        with self.assertRaises(TypeError):
+            await asyncio.wait_for(client.reconnect_forever(context={"when": object()}, sleep=sleep), TIMEOUT)
+
+    async def test_a_failing_shape_resubscribe_send_is_not_blamed_on_a_callback(self):
+        client = LunoraClient("http://example.invalid")
+
+        def broken_send(_frame):
+            raise OSError("loop closed")
+
+        client._send = lambda _frame: None
+        rows = []
+        client.subscribe_shape("roomMessages", {"room": "general"}, rows.append)
+        client._send = broken_send
+
+        client.handle_frame({"epoch": "e1", "pokeId": "p1", "type": "pokeStart"})
+        client.handle_frame({"pokeId": "p1", "reset": True, "rowsPatch": [], "shapeId": "shape_1", "type": "pokePart"})
+        client.handle_frame({"checkpoint": 5, "epoch": "e1", "pokeId": "p1", "type": "pokeEnd"})
+        client.handle_frame({"epoch": "e2", "pokeId": "p2", "type": "pokeStart"})
+        client.handle_frame({"pokeId": "p2", "rowsPatch": [], "shapeId": "shape_1", "type": "pokePart"})
+
+        with self.assertLogs("lunora", level="ERROR") as logs:
+            client.handle_frame({"checkpoint": 6, "epoch": "e2", "pokeId": "p2", "type": "pokeEnd"})
+
+        self.assertIn("lunora: shape resubscribe send failed", logs.output[0])
+        self.assertNotIn("subscription callback", logs.output[0])
+
 
 if __name__ == "__main__":
     unittest.main()

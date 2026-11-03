@@ -84,6 +84,7 @@ describe("startCodegenWatch", () => {
     });
 
     afterEach(() => {
+        vi.useRealTimers();
         vi.unstubAllEnvs();
     });
 
@@ -148,6 +149,22 @@ describe("startCodegenWatch", () => {
             expect(runCodegen).toHaveBeenCalledWith(expect.objectContaining({ lazyFunctions: true }));
         } finally {
             await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    it("reports a missing schema without building a codegen project", async () => {
+        expect.assertions(2);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-noschema-"));
+        const { errors, logger } = silentLogger();
+
+        try {
+            await startCodegenWatch({ logger, lunoraDirectory: ".", projectRoot: workdir }).close();
+
+            expect(runCodegen).not.toHaveBeenCalled();
+            expect(errors.join(" ")).toContain("schema.ts not found");
+        } finally {
             rmSync(workdir, { force: true, recursive: true });
         }
     });
@@ -605,9 +622,9 @@ describe("startCodegenWatch", () => {
             //
             // Past HOOK_SETTLE_MS first, or the watcher would (correctly) treat
             // this write as the hook's own.
-            await new Promise((resolve) => {
-                setTimeout(resolve, 350);
-            });
+            // The settle window reads `Date.now()`, so move that clock instead of sleeping through it.
+            vi.useFakeTimers({ toFake: ["Date"] });
+            vi.setSystemTime(Date.now() + 350);
 
             writeFileSync(join(workdir, "schema.ts"), "// edited", "utf8");
             await vi.waitFor(() => {

@@ -108,15 +108,17 @@ resend fails, the socket is dropped and the loop backs off. A flush that requeue
 (or returns `RetryAfterMs`) must schedule its own retry, or those writes wait for the next
 reconnect.
 The retry is a `time.AfterFunc` timer owned by one socket run: the run marks itself
-finished and stops the timer under a mutex, and a flush still in flight at that moment
-schedules no further retry.
+finished and stops the timer under a mutex, a flush still in flight at that moment
+schedules no further retry, and the run waits for it to return before it detaches, so
+its requeue cannot land after the next run has drained newer writes.
 
 ```go
 for attempt := 0; ; attempt++ {
 	if conn, err := dial(); err == nil { // your socket library
 		// One set per socket run: the flush callback runs on its own goroutine, so
-		// `timer` and `alive` are guarded by `mu`.
+		// `timer` and `alive` are guarded by `mu`; `inflight` counts the callbacks past that check.
 		var mu sync.Mutex
+		var inflight sync.WaitGroup
 		var timer *time.Timer // pending flush retry
 		alive := true         // false once this socket run has ended
 		var scheduleFlush func(r lunora.FlushReport, backoff time.Duration)
@@ -136,8 +138,12 @@ for attempt := 0; ; attempt++ {
 			timer = time.AfterFunc(delay, func() {
 				mu.Lock()
 				live := alive
+				if live {
+					inflight.Add(1) // under `mu`, so teardown's Wait never races an Add
+				}
 				mu.Unlock()
 				if live {
+					defer inflight.Done()
 					scheduleFlush(client.FlushOfflineQueue(""), min(2*backoff, 30*time.Second))
 				}
 			})
@@ -175,6 +181,7 @@ for attempt := 0; ; attempt++ {
 			timer.Stop()
 		}
 		mu.Unlock()
+		inflight.Wait() // a flush already running must requeue before the next run drains
 		client.DetachSocket(closeCode, closeReason)
 		conn.Close()
 	}

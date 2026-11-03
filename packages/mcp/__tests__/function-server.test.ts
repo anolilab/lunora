@@ -279,6 +279,33 @@ describe("callFunctionTool — streams", () => {
         expect(result.structuredContent).toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
     });
 
+    it("stops sending queued progress once the cap has answered the call", async () => {
+        expect.assertions(2);
+
+        const stream = streamOf(
+            Array.from({ length: MAX_STREAM_CHUNKS + 2 }, (_, index) => {
+                return { index };
+            }),
+        );
+        const client = { stream: vi.fn<() => unknown>(() => stream), url: "https://app.example.workers.dev" } as unknown as LunoraClient;
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const progress = vi.fn<() => Promise<void>>(() => gate);
+        const result = await callFunctionTool(client, routesFor(false), "feed_tail", { args: { room: "r1" } }, false, { progress });
+
+        release();
+        // The queue drains behind the gate; one await settles the chain it was built on.
+        await gate;
+        await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+        });
+
+        expect(result.structuredContent).toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
+        expect(progress).toHaveBeenCalledTimes(1);
+    });
+
     it("returns every chunk of a stream that yields exactly the cap", async () => {
         expect.assertions(2);
 

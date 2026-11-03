@@ -793,6 +793,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return undefined;
             }
 
+            // A blocked unique index refuses user writes; ingest must not write rows the missing constraint would have rejected.
+            // The alarm tier records the refusal and retries on its poll interval.
+            this.ensureServable();
+
             const shardKey = this.currentShardKey();
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
 

@@ -1174,6 +1174,34 @@ describe("rls — write path", () => {
         expect(operatorCall?.verify?.({ balance: 3 }, { balance: "x" })).toBe(false);
     });
 
+    it("keeps a caller's own post-image check next to the policy's, on a table with and without a policy", async () => {
+        expect.assertions(4);
+
+        const policy = definePolicy<TestContext>({ on: "update", table: "accounts", when: ({ row }) => (row?.["balance"] as number) >= 0 });
+        const database = createFakeDatabase([
+            { _id: "a1", balance: 3, table: "accounts" },
+            { _id: "n1", balance: 3, table: "notes" },
+        ]);
+        const callerVerify = (_previous: Record<string, unknown>, next: Record<string, unknown>): boolean => next["balance"] !== 7;
+        const run = (table: string, id: string) =>
+            lunora.mutation
+                .use(rlsForTest<TestContext>([policy]))
+                .mutation(async ({ ctx }) =>
+                    (ctx.db as unknown as { patch: (...args: unknown[]) => Promise<void> }).patch(table, id, { balance: 9 }, { verify: callerVerify }),
+                )
+                .handler(makeContext(database, "u1"), {});
+
+        await run("accounts", "a1");
+        await run("notes", "n1");
+
+        const [policed, unpoliced] = database.calls.filter((call) => call.method === "patch");
+
+        expect(policed?.verify?.({ balance: 3 }, { balance: 7 })).toBe(false);
+        expect(policed?.verify?.({ balance: 3 }, { balance: -1 })).toBe(false);
+        expect(policed?.verify?.({ balance: 3 }, { balance: 4 })).toBe(true);
+        expect(unpoliced?.verify?.({ balance: 3 }, { balance: 7 })).toBe(false);
+    });
+
     it("checks the merged post-image of a path patch, and hands the store a verdict for it", async () => {
         expect.assertions(4);
 

@@ -444,6 +444,9 @@ const arrayLengths = (constraints: Constraints, fieldName: string): readonly [lo
     return [lowest, highest];
 };
 
+/** The longest array the generator draws on its own, whatever a column's `maxItems` allows. */
+const SEEDED_ARRAY_MAX_ITEMS = 3;
+
 const generateValue = (validator: Validator, fieldName: string, input: unknown, now: number): unknown => {
     const inner = unwrapOptional(validator);
     const constraints = constraintsOf(inner);
@@ -466,7 +469,11 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
 
             const [lowest, highest] = arrayLengths(constraints, fieldName);
 
-            return copycat.times(input, [lowest, highest], (itemInput) => generateValue(element, fieldName, itemInput, now));
+            // `maxItems` is often a safety cap (`.max(100_000)`), not a size to fill: drawing across it would give each
+            // row tens of thousands of items. A seeded array stays short, but never below the declared minimum.
+            return copycat.times(input, [lowest, Math.max(lowest, Math.min(highest, SEEDED_ARRAY_MAX_ITEMS))], (itemInput) =>
+                generateValue(element, fieldName, itemInput, now),
+            );
         }
 
         case "bigint": {

@@ -236,6 +236,22 @@ def _run_callbacks(calls: list, what: str) -> None:
             _log.exception("lunora: %s raised", what)
 
 
+def _require_encodable_context(context: Optional[dict]) -> None:
+    """Raise ``TypeError``/``ValueError`` when ``context`` cannot go into the JSON ``connect`` frame."""
+
+    if context is not None:
+        json.dumps(context)
+
+
+def _send_resubscribe(send: Callable[[dict], None], frame: dict) -> None:
+    """Re-send a shape subscribe through the transport, reporting a failure as the transport's rather than a callback's."""
+
+    try:
+        send(frame)
+    except Exception:
+        _log.exception("lunora: shape resubscribe send failed")
+
+
 def _frame_key(value: Any) -> Optional[str]:
     """A frame's ``id``/``pokeId``/``shapeId`` when it is a string, else ``None``.
 
@@ -1376,7 +1392,7 @@ class LunoraClient:
                     shape.server_epoch = None
                     deferred.extend(partial(cb, []) for cb in shape.callbacks)
                     if self._send is not None:
-                        deferred.append(partial(self._send, build_shape_subscribe_frame(shape.id, shape.name, shape.args)))
+                        deferred.append(partial(_send_resubscribe, self._send, build_shape_subscribe_frame(shape.id, shape.name, shape.args)))
                     touched.append(shape_id)
                     continue
                 # Decoded WHOLE before the view is touched: a poke applies per
@@ -1434,6 +1450,10 @@ class LunoraClient:
         errors are logged and retried; a missing ``websockets`` package raises
         :class:`WebsocketsMissingError`.
         """
+
+        # The same context goes into every run's `connect` frame, so an unencodable one fails every run alike:
+        # surface it here instead of retrying a connection that cannot be announced.
+        _require_encodable_context(context)
 
         attempts = 0
 

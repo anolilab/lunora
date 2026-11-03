@@ -177,6 +177,27 @@ export class Gateway {
         expect(emitLlmGateway()).toBe(emitLlmGateway());
     });
 
+    it("re-emits a service's snapshot when a same-length edit keeps the file's modification time", () => {
+        expect.assertions(1);
+
+        writeServices();
+        writeLlmKitImport();
+
+        const file = join(workdir, "services/llm-gateway/node_modules/llm-kit/index.d.ts");
+        const epoch = new Date("2020-01-01T00:00:00Z");
+
+        write("services/llm-gateway/node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: number }\n`);
+        utimesSync(file, epoch, epoch);
+
+        const first = emitLlmGateway();
+
+        // `string` is the same length as `number`, so the size is equal; the restored mtime leaves only the change time.
+        write("services/llm-gateway/node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: string }\n`);
+        utimesSync(file, epoch, epoch);
+
+        expect(emitLlmGateway()).not.toBe(first);
+    });
+
     it("re-emits a service's snapshot when a file is added to the root of a package it imports", () => {
         expect.assertions(1);
 

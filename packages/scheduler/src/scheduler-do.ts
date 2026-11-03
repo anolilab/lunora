@@ -2890,7 +2890,7 @@ class SchedulerDO {
             ran.set(row.id, row);
         });
 
-        const headerIds = new Set<string>();
+        const headerQueueKeys = new Set<string>();
         const orphans: ScheduleRecord[] = [];
         // Backfill: a pooled header written before `pq:` rows existed has none,
         // and `/pool` would under-count it until it next moves.
@@ -2903,18 +2903,21 @@ class SchedulerDO {
                 orphans.push(record);
             }
 
-            headerIds.add(record.id);
-
             const queueKey = SchedulerDO.poolQueueKey(record);
 
-            if (queueKey !== undefined && !queueRows.has(queueKey)) {
-                missingQueueRows.push([queueKey, record.id]);
+            if (queueKey !== undefined) {
+                headerQueueKeys.add(queueKey);
+
+                if (!queueRows.has(queueKey)) {
+                    missingQueueRows.push([queueKey, record.id]);
+                }
             }
         });
 
-        // A `pq:` row whose header is gone is left by a build that deleted headers without
-        // their queue rows; it would keep `/pool` counting a job that no longer exists.
-        const strayQueueRows = [...queueRows].filter((key) => !headerIds.has(key.slice(key.indexOf(":", POOL_QUEUE_PREFIX.length) + 1)));
+        // A `pq:` row is stray unless it is the row of a header's current pool: its header may be gone (a build that
+        // deleted headers without their queue rows), or may have been rewritten into another pool. Either would keep
+        // `/pool` counting a job there that is not.
+        const strayQueueRows = [...queueRows].filter((key) => !headerQueueKeys.has(key));
 
         for (let start = 0; start < strayQueueRows.length; start += MAX_STORAGE_BATCH) {
             // eslint-disable-next-line no-await-in-loop -- bounded batches of local Durable Object storage writes

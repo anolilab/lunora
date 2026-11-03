@@ -1,4 +1,4 @@
-import type { CallExpression, NewExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
+import type { BindingName, CallExpression, NewExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { NondeterministicCallIR } from "../ir";
@@ -154,13 +154,87 @@ const exportedProcedureHandler = (declaration: VariableDeclaration): ResolvedPro
     return handler ? { exportName: exportedNameOf(declaration) ?? declaration.getName(), handler, kind: classified.kind } : undefined;
 };
 
+/**
+ * The names a handler may bind its context to, so `context.random()` is read like `ctx.random()`: `ctx` itself, a first
+ * parameter that is the context (`(ctx, args)`), a `ctx` taken out of a destructured parameter (`({ ctx: context })`), and a
+ * `ctx` taken out of a destructuring in the body (`const { ctx } = request`).
+ */
+const contextNamesOf = (handler: TsNode): Set<string> => {
+    const names = new Set<string>(["ctx"]);
+    const addContextBinding = (binding: BindingName): void => {
+        if (!Node.isObjectBindingPattern(binding)) {
+            return;
+        }
+
+        for (const element of binding.getElements()) {
+            const key = element.getPropertyNameNode()?.getText() ?? element.getNameNode().getText();
+            const local = element.getNameNode();
+
+            if (key === "ctx" && Node.isIdentifier(local)) {
+                names.add(local.getText());
+            }
+        }
+    };
+
+    const [first] = Node.isParametered(handler) ? handler.getParameters() : [];
+    const requestName = first !== undefined && Node.isIdentifier(first.getNameNode()) ? first.getNameNode().getText() : undefined;
+
+    if (first !== undefined) {
+        const parameter = first.getNameNode();
+
+        if (Node.isIdentifier(parameter)) {
+            names.add(parameter.getText());
+        } else {
+            addContextBinding(parameter);
+        }
+    }
+
+    // Only a destructuring of the request argument carries its context; `const { ctx } = other` is some other object's `ctx`.
+    for (const declaration of descendantsOfKind(handler, SyntaxKind.VariableDeclaration)) {
+        const initializer = declaration.getInitializer();
+
+        if (requestName !== undefined && initializer !== undefined && Node.isIdentifier(initializer) && initializer.getText() === requestName) {
+            addContextBinding(declaration.getNameNode());
+        }
+    }
+
+    return names;
+};
+
+/**
+ * Whether `call` is `<context>.random()` where the receiver is the handler's own context binding. A nested callback that declares
+ * a parameter with the same name is a different value, so its binding must belong to the handler itself.
+ */
+const isContextRandom = (call: CallExpression, contextNames: ReadonlySet<string>, handler: TsNode): boolean => {
+    const callee = call.getExpression();
+
+    if (!Node.isPropertyAccessExpression(callee) || callee.getName() !== "random") {
+        return false;
+    }
+
+    const receiver = callee.getExpression();
+
+    if (!Node.isIdentifier(receiver) || !contextNames.has(receiver.getText())) {
+        return false;
+    }
+
+    const declaration = receiver.getSymbol()?.getDeclarations()[0];
+
+    const owner: TsNode | undefined = declaration?.getFirstAncestor((ancestor) => Node.isFunctionLikeDeclaration(ancestor));
+
+    return owner === handler;
+};
+
 /** Non-deterministic call IRs lexically inside one resolved procedure handler. */
 const callsInHandler = (procedure: ResolvedProcedure, file: string): NondeterministicCallIR[] => {
     const found: NondeterministicCallIR[] = [];
 
+    const contextNames = contextNamesOf(procedure.handler);
+
     for (const callNode of descendantsOfKind(procedure.handler, SyntaxKind.CallExpression)) {
         // A query's `ctx.random()` is an unkeyed `Math.random()` draw, so a live re-run can differ. A mutation's draw is replay-stable.
-        const callee = procedure.kind === "query" && callNode.getExpression().getText() === "ctx.random" ? "ctx.random" : nondeterministicCalleeOf(callNode);
+        const callee =
+            procedure.kind === "query" && isContextRandom(callNode, contextNames, procedure.handler) ? "ctx.random" : nondeterministicCalleeOf(callNode);
 
         if (callee !== undefined) {
             found.push({ callee, exportName: procedure.exportName, file, kind: procedure.kind, line: callNode.getStartLineNumber() });

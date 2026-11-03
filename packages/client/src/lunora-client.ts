@@ -574,6 +574,12 @@ const offlineNotQueuedError = (functionPath: string, cause?: unknown): LunoraErr
 const isWireFailure = (error: unknown, args: Record<string, unknown>): boolean => error instanceof TypeError && isEncodable(args);
 
 /**
+ * Whether the browser reports the device as offline. Only then is a network failure no verdict on the write: an online device
+ * with a closed socket (a CORS or TLS failure, a blocked request, or a follower tab, whose own socket is never open) still counts.
+ */
+const deviceOffline = (): boolean => (globalThis as { navigator?: { onLine?: boolean } }).navigator?.onLine === false;
+
+/**
  * Whether a failed direct send is refused as `OFFLINE_NOT_QUEUED`: a write that would have been queued,
  * or an online-only write whose transport failed while no socket was open. An online-only write is
  * never queued, so a refusal before the first connect is the same refusal.
@@ -4607,6 +4613,8 @@ class LunoraClient {
                 (error instanceof TypeError || error instanceof TransportError) &&
                 isEncodable(argsRecord)
             ) {
+                // A failed HTTP send may have committed before its response was lost, so the write is always queued as
+                // ambiguous: it drops its precondition and replays under its mutation id, which the origin deduplicates.
                 const queued = enqueue(true);
 
                 // Over a socket that is still open nothing else will flush the queue.
@@ -5153,6 +5161,7 @@ class LunoraClient {
 
             if (state !== undefined) {
                 state.serverBase = undefined;
+                state.serverBaseCommitted = false;
                 state.serverCursor = undefined;
                 state.serverEpoch = undefined;
                 refoldSubscription(state, undefined);
@@ -5913,7 +5922,13 @@ class LunoraClient {
             }
 
             openManagedSocket(conn, this.wsUrlFor(handlers.shardKey, token, base), this.managedSocketOptions, {
-                onClose: () => {
+                onClose: (event) => {
+                    // A route socket opened on a lapsed credential is accepted and closed with 4001; telling the
+                    // listener is what gets the token refreshed before the reconnect repeats the same bearer.
+                    if (event?.code === 4001) {
+                        this.notifyTokenExpired();
+                    }
+
                     scheduleReconnect();
                     handlers.onClose?.();
                 },
@@ -7752,6 +7767,7 @@ class LunoraClient {
 
             if (state.serverClaims !== undefined) {
                 state.serverBase = undefined;
+                state.serverBaseCommitted = false;
                 state.serverCursor = undefined;
                 state.serverClaims = undefined;
                 refoldSubscription(state, undefined);
@@ -7783,6 +7799,7 @@ class LunoraClient {
         for (const state of this.subscriptions.all()) {
             if (state.serverClaims !== undefined && state.serverClaims !== claims) {
                 state.serverBase = undefined;
+                state.serverBaseCommitted = false;
                 state.serverCursor = undefined;
                 state.serverClaims = undefined;
                 refoldSubscription(state, undefined);
@@ -9083,6 +9100,7 @@ class LunoraClient {
     private reconnectCold(): void {
         for (const state of this.subscriptions.all()) {
             state.serverBase = undefined;
+            state.serverBaseCommitted = false;
             state.serverCursor = undefined;
             state.serverEpoch = undefined;
             state.pendingDeltaRun = undefined;
@@ -10073,9 +10091,11 @@ class LunoraClient {
      * last attempt the write gets.
      *
      * Only a write queued after an ambiguous direct send is capped: its caller is
-     * still waiting, so every transient failure of it except a rate limit or a
-     * refused credential (a transport error, a timeout, `SHARD_UNAVAILABLE`, ...)
-     * counts against {@link MAX_AMBIGUOUS_SEND_ATTEMPTS}. Any other write is never
+     * still waiting, so every transient failure of it except a rate limit, a
+     * refused credential, or a network failure while the device is offline
+     * (a `TypeError` or a transport error, which say nothing about the origin's verdict
+     * and can last as long as the device is offline) counts against {@link MAX_AMBIGUOUS_SEND_ATTEMPTS}.
+     * A timeout, `SHARD_UNAVAILABLE`, or a network failure while the device is online still counts. Any other write is never
      * capped here: a write the shard fails deterministically arrives with a coded
      * verdict (the handler's own code, `RPC_FAILED`, `BATCH_ENTRY_FAILED`) that
      * {@link isTransientReplayFailure} settles terminally on the first attempt, and
@@ -10093,6 +10113,7 @@ class LunoraClient {
             isAuthReplayFailure(error) ||
             code === "RATE_LIMITED" ||
             code === "TOO_MANY_REQUESTS" ||
+            ((error instanceof TypeError || error instanceof TransportError) && deviceOffline()) ||
             !isTransientReplayFailure(error)
         ) {
             return false;

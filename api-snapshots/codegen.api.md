@@ -1099,8 +1099,7 @@ interface TableSnapshot {
 
 ```ts
 interface TargetScope {
-    readonly origins: Map<Project, Project>;
-    readonly projects: Map<Project, Project>;
+    readonly [targetScopeBrand]: true;
 }
 ```
 

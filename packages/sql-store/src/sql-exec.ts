@@ -527,7 +527,7 @@ const indexState = async (exec: SqlCtxExec, dialect: SqlDialect, table: string, 
             const rows = await queryAll(
                 exec,
                 dialect,
-                sql`SELECT 1 AS ${sql.identifier("present")} FROM sqlite_master WHERE type = 'index' AND name = ${name}`,
+                sql`SELECT 1 AS ${sql.identifier("present")} FROM sqlite_master WHERE type = 'index' AND name = ${name} AND tbl_name = ${table}`,
             );
 
             return rows.length > 0 ? "valid" : "absent";

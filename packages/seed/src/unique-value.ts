@@ -295,7 +295,11 @@ const boundedNumeric = (constraints: Constraints, defaults: { max: number; min: 
             return { capacity: 1, valueAt: () => constraints.minimum };
         }
 
-        return { capacity: Number.POSITIVE_INFINITY, valueAt: (index) => first + index };
+        // Above a positive first value, 2^53 is exact and still above the bound, so it closes the range. From a
+        // non-positive first, `first + index` can round past it, so the range stops at 2^53 - 1 there.
+        const capacity = first > 0 ? Number.MAX_SAFE_INTEGER - first + 2 : Number.MAX_SAFE_INTEGER - first + 1;
+
+        return { capacity, valueAt: (index) => first + index };
     }
 
     const { max, min } = resolveRange(constraints, defaults, column);
@@ -589,6 +593,14 @@ const arrayDeal = (field: FieldSpec, constraints: Constraints, table: string): U
 };
 
 /**
+ * A nullable column admits NULL on top of its closed domain, and a unique index never compares NULLs. NULL is added only when the
+ * column's own validator accepts it, so a refinement that rejects NULL keeps it out of the seeded values.
+ */
+const nullableDomain = (field: FieldSpec, domain: ReadonlyArray<unknown>): ReadonlyArray<unknown> =>
+    // eslint-disable-next-line unicorn/no-null -- NULL is one more value a nullable column takes, when its validator accepts it
+    field.nullable ? [...domain, ...acceptedBy(field.validator, [null])] : domain;
+
+/**
  * Decide how one `.unique()` column deals its values.
  *
  * A string column is the only shape whose value still comes from the normal
@@ -604,7 +616,7 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
     const enumValues = constraints.enum;
 
     if (Array.isArray(enumValues) && enumValues.length > 0) {
-        return domainDeal(acceptedBy(field.validator, enumValues), table, field.name);
+        return domainDeal(nullableDomain(field, acceptedBy(field.validator, enumValues)), table, field.name);
     }
 
     switch (field.kind) {
@@ -630,7 +642,7 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
         }
 
         case "boolean": {
-            return domainDeal(acceptedBy(field.validator, [false, true]), table, field.name);
+            return domainDeal(nullableDomain(field, acceptedBy(field.validator, [false, true])), table, field.name);
         }
 
         case "bytes": {

@@ -46,6 +46,24 @@ describe("runShardMigrations — framework index ownership", () => {
         expect(harness.raw(`SELECT name FROM "${LEDGER}"`).map((row) => row["name"])).not.toContain("notes_by_hand");
     });
 
+    it("leaves a hand-created index named like the ttl index alone when ttl is enabled", () => {
+        expect.assertions(2);
+
+        runShardMigrations(harness.sql, plain);
+        harness.raw(`CREATE UNIQUE INDEX "notes__ttl" ON "notes" (json_extract("__doc__", '$.slug'))`);
+
+        const withTtl = {
+            tables: { notes: { indexes: [], shape: { expiresAt: { kind: "number" }, slug: { kind: "string" } }, ttlPolicy: { field: "expiresAt" } } },
+        } as SchemaLike;
+
+        runShardMigrations(harness.sql, withTtl);
+
+        const held = harness.raw(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'notes__ttl'`).map((row) => String(row["sql"]));
+
+        expect(held).toHaveLength(1);
+        expect(held[0]).toContain("UNIQUE");
+    });
+
     it("re-runs on a migrated shard without rewriting the ledger or re-adding columns", () => {
         expect.assertions(2);
 
