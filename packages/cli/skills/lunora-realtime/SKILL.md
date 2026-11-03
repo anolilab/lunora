@@ -199,8 +199,9 @@ publishes to a declared topic and the browser follows topics over one shared SSE
 connection (shared when the connection options match). Declare the stream and its
 topics once (`defineLiveStream({ id, topics: { post: { key: { postId: v.id("posts") },
 payload: v.object({...}) } }, onSubscribe })`); codegen mounts its connect and control
-routes on the worker (add `liveStreamRouter` yourself only under a framework host that
-owns the fetch handler), and follow topics with the adapter's hook (all return `{ lastEvent, error }`).
+routes on the worker through `.build()` or `.buildFrameworkWorker(host)`. Add `liveStreamRouter` yourself only when you compose the
+host with `withLunora` or `withFrameworkWorker`; the generated `.buildFrameworkWorker(host)` already wraps it. Follow topics with the
+adapter's hook (all return `{ lastEvent, error }`).
 `onSubscribe` receives the parsed `{ ctx, topic, key, raw }`; do not split a string.
 A subscribe for an undeclared name, wrong arity or a non-canonical spelling is denied
 before `onSubscribe` runs. Codegen writes `_generated/live.ts`:
