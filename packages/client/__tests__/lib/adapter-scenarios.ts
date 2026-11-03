@@ -43,8 +43,8 @@ interface ParityClient {
     client: unknown;
     /** Fire `onError` on every live subscription of `ref`. */
     emitError: (ref: string, error: WireError) => void;
-    /** Pretend the client already holds `value` as `ref`'s `lastValue`. */
-    hold: (ref: string, value: unknown) => void;
+    /** Pretend the client already holds `value` as the `lastValue` of the subscription `ref` + `args` (+ `shardKey`) names. */
+    hold: (ref: string, value: unknown, args: Record<string, unknown>, shardKey?: string) => void;
     mutation: MutationMock;
     subscribeCalls: SubscribeCall[];
 }
@@ -82,6 +82,12 @@ const SEND: FakeRef = { __lunoraRef: "messages:send" };
  * synchronously, exactly as the real client does on attach.
  */
 const createParityClient = (): ParityClient => {
+    // Keyed like the real registry (path, args, shard): a value held for one channel or shard must not replay for another.
+    const keyOf = (path: string, args: unknown, shardKey?: string): string => {
+        const sorted = Object.fromEntries(Object.entries((args ?? {}) as Record<string, unknown>).toSorted(([a], [b]) => a.localeCompare(b)));
+
+        return `${path}::${JSON.stringify(sorted)}::${shardKey ?? ""}`;
+    };
     const held = new Map<string, unknown>();
     const subscribeCalls: SubscribeCall[] = [];
     const mutation: MutationMock = vi.fn<(ref: FakeRef, args: unknown, options?: unknown) => Promise<unknown>>(async () => undefined);
@@ -91,8 +97,10 @@ const createParityClient = (): ParityClient => {
 
         subscribeCalls.push(call);
 
-        if (held.has(call.ref)) {
-            callback(held.get(call.ref));
+        const key = keyOf(call.ref, args, options?.shardKey);
+
+        if (held.has(key)) {
+            callback(held.get(key));
         }
 
         return () => {
@@ -119,8 +127,10 @@ const createParityClient = (): ParityClient => {
         onConnectionStatus: () => () => undefined,
         onIdentityChange: () => () => undefined,
         // A held value stands for an already-open subscription's `lastValue`.
-        peekActiveQuerySnapshot: (functionPath: string) => {
-            return { answered: held.has(functionPath), present: held.has(functionPath), value: held.get(functionPath) };
+        peekActiveQuerySnapshot: (functionPath: string, args?: unknown, shardKey?: string) => {
+            const key = keyOf(functionPath, args, shardKey);
+
+            return { answered: held.has(key), present: held.has(key), value: held.get(key) };
         },
         peekHydratedQuery: () => undefined,
         peekHydratedQueryByKey: () => undefined,
@@ -143,8 +153,8 @@ const createParityClient = (): ParityClient => {
                 }
             }
         },
-        hold: (ref, value) => {
-            held.set(ref, value);
+        hold: (ref, value, args, shardKey) => {
+            held.set(keyOf(ref, args, shardKey), value);
         },
         mutation,
         subscribeCalls,
@@ -186,7 +196,7 @@ const presenceRejectsBadInterval = async (driver: AdapterDriver): Promise<void> 
 const queryReplaysHeldValueSynchronously = async (driver: AdapterDriver): Promise<void> => {
     const fake = createParityClient();
 
-    fake.hold(LIST.__lunoraRef, ["held"]);
+    fake.hold(LIST.__lunoraRef, ["held"], { channel: "c1" });
 
     const mounted = driver.query(fake.client, LIST, { channel: "c1" });
 
