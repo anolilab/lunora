@@ -8,7 +8,7 @@ import { ts } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import literal from "../../src/util/js-literal";
-import runLazySmokeLoad from "../../src/util/lazy-smoke-load";
+import runLazySmokeLoad, { killWindowsTreeOnExit, taskkillEndedTree } from "../../src/util/lazy-smoke-load";
 
 const startDevProcess = vi.hoisted(() => vi.fn<(options: DevProcessOptions) => Promise<DevProcess>>());
 
@@ -25,13 +25,24 @@ vi.mock(import("../../src/util/free-port"), async (importOriginal) => {
     return { ...(await importOriginal()), findAvailablePort };
 });
 
-// A started process reports its pid and fires `exit` at once, so the async taskkill the Windows stop runs resolves.
+// The outcome a started process reports at once, so the async taskkill the Windows stop runs resolves: its exit status, or a spawn error.
+const taskkillOutcome = vi.hoisted((): { exitCode: number | null; spawnError: boolean } => {
+    return { exitCode: 0, spawnError: false };
+});
 const spawn = vi.hoisted(() =>
-    vi.fn<(command: string) => { once: (event: string, listener: () => void) => void; pid: number }>(() => {
+    vi.fn<(command: string) => { once: (event: string, listener: (value?: unknown) => void) => void; pid: number }>(() => {
         return {
             once: (event, listener) => {
                 if (event === "exit") {
-                    queueMicrotask(listener);
+                    queueMicrotask(() => {
+                        listener(taskkillOutcome.exitCode);
+                    });
+                }
+
+                if (event === "error" && taskkillOutcome.spawnError) {
+                    queueMicrotask(() => {
+                        listener(new Error("spawn taskkill.exe ENOENT"));
+                    });
                 }
             },
             pid: 4242,
@@ -845,6 +856,36 @@ describe(runLazySmokeLoad, () => {
         }
     });
 
+    it.each([
+        ["taskkill exits with a status that does not end the tree", { exitCode: 1, spawnError: false }],
+        ["taskkill cannot be started", { exitCode: 0, spawnError: true }],
+    ])("says the Windows tree may still run when %s", async (_name, outcome) => {
+        expect.assertions(1);
+
+        const { platform } = process;
+        const write = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+        Object.defineProperty(process, "platform", { value: "win32" });
+        Object.assign(taskkillOutcome, outcome);
+
+        try {
+            respondWith({ checked: 1, failures: [] });
+            startDevProcess.mockImplementation(async (options) => {
+                options.spawn?.("wrangler", ["dev"], { cwd, shell: true });
+
+                return { crashed: new Promise(() => {}), stop };
+            });
+
+            await run();
+
+            expect(write).toHaveBeenCalledWith(expect.stringContaining("may still be running; end it with taskkill /PID 4242 /T /F"));
+        } finally {
+            Object.assign(taskkillOutcome, { exitCode: 0, spawnError: false });
+            write.mockRestore();
+            Object.defineProperty(process, "platform", { value: platform });
+        }
+    });
+
     it("starts the smoke server through the injected launcher", async () => {
         expect.assertions(1);
 
@@ -1015,5 +1056,94 @@ describe(runLazySmokeLoad, () => {
             await expect(run()).resolves.toBeUndefined();
             expect(startDevProcess).not.toHaveBeenCalled();
         });
+    });
+});
+
+describe(taskkillEndedTree, () => {
+    it.each([
+        ["exit 0 killed the tree", { status: 0 }, true],
+        ["exit 128 found no such process, which does not show the descendants ended", { status: 128 }, false],
+        ["another exit leaves the tree unknown", { status: 1 }, false],
+        ["a signal leaves the tree unknown", { status: null }, false],
+        ["a timeout leaves the tree unknown", { error: new Error("spawnSync taskkill.exe ETIMEDOUT"), status: null }, false],
+    ])("%s", (_name, result, expected) => {
+        expect.assertions(1);
+
+        expect(taskkillEndedTree(result)).toBe(expected);
+    });
+});
+
+describe(killWindowsTreeOnExit, () => {
+    it("bounds the exit kill and names the tree when taskkill does not finish in time", () => {
+        expect.assertions(2);
+
+        const write = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+        spawnSync.mockReturnValueOnce({ error: new Error("spawnSync taskkill.exe ETIMEDOUT"), status: null });
+
+        try {
+            killWindowsTreeOnExit(4242);
+
+            expect(spawnSync).toHaveBeenCalledWith(
+                expect.stringMatching(/taskkill\.exe$/u),
+                ["/pid", "4242", "/T", "/F"],
+                expect.objectContaining({ timeout: 5000 }),
+            );
+            expect(write).toHaveBeenCalledWith(expect.stringContaining("may still be running; end it with taskkill /PID 4242 /T /F"));
+        } finally {
+            write.mockRestore();
+        }
+    });
+
+    it("sends a root that taskkill reports gone to the process still holding the port, not back to the missing pid", () => {
+        expect.assertions(2);
+
+        const write = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+        spawnSync.mockReturnValueOnce({ status: 128 });
+
+        try {
+            killWindowsTreeOnExit(4242);
+
+            expect(write).toHaveBeenCalledWith(expect.stringContaining("netstat -ano"));
+            expect(write).not.toHaveBeenCalledWith(expect.stringContaining("end it with taskkill /PID 4242"));
+        } finally {
+            write.mockRestore();
+        }
+    });
+
+    it("names the spawn failure on one stderr line, so a taskkill that could not start is diagnosable", () => {
+        expect.assertions(2);
+
+        const write = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+        spawnSync.mockReturnValueOnce({ error: new Error("spawnSync taskkill.exe EPERM"), status: null });
+
+        try {
+            killWindowsTreeOnExit(4242);
+
+            const [line = ""] = write.mock.calls.map((call) => String(call[0]));
+
+            expect(line).toContain("spawnSync taskkill.exe EPERM");
+            expect(line.endsWith("\n") && line.indexOf("\n") === line.length - 1).toBe(true);
+        } finally {
+            write.mockRestore();
+        }
+    });
+
+    it("stays quiet when taskkill ends the tree", () => {
+        expect.assertions(1);
+
+        const write = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+        spawnSync.mockReturnValueOnce({ status: 0 });
+
+        try {
+            killWindowsTreeOnExit(4242);
+
+            expect(write).not.toHaveBeenCalled();
+        } finally {
+            write.mockRestore();
+        }
     });
 });
