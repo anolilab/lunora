@@ -1,4 +1,4 @@
-import type { CallExpression, NewExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
+import type { BindingName, CallExpression, NewExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { NondeterministicCallIR } from "../ir";
@@ -154,23 +154,56 @@ const exportedProcedureHandler = (declaration: VariableDeclaration): ResolvedPro
     return handler ? { exportName: exportedNameOf(declaration) ?? declaration.getName(), handler, kind: classified.kind } : undefined;
 };
 
-/** The name a handler binds its context parameter to, so `context.random()` is read like `ctx.random()`. */
-const contextParameterName = (handler: TsNode): string => {
-    const name = Node.isParametered(handler) ? handler.getParameters()[0]?.getNameNode() : undefined;
+/**
+ * The names a handler may bind its context to, so `context.random()` is read like `ctx.random()`: `ctx` itself, a first
+ * parameter that is the context (`(ctx, args)`), a `ctx` taken out of a destructured parameter (`({ ctx: context })`), and a
+ * `ctx` taken out of a destructuring in the body (`const { ctx } = request`).
+ */
+const contextNamesOf = (handler: TsNode): Set<string> => {
+    const names = new Set<string>(["ctx"]);
+    const addContextBinding = (binding: BindingName): void => {
+        if (!Node.isObjectBindingPattern(binding)) {
+            return;
+        }
 
-    return name !== undefined && Node.isIdentifier(name) ? name.getText() : "ctx";
+        for (const element of binding.getElements()) {
+            const key = element.getPropertyNameNode()?.getText() ?? element.getNameNode().getText();
+            const local = element.getNameNode();
+
+            if (key === "ctx" && Node.isIdentifier(local)) {
+                names.add(local.getText());
+            }
+        }
+    };
+
+    const [first] = Node.isParametered(handler) ? handler.getParameters() : [];
+
+    if (first !== undefined) {
+        const parameter = first.getNameNode();
+
+        if (Node.isIdentifier(parameter)) {
+            names.add(parameter.getText());
+        } else {
+            addContextBinding(parameter);
+        }
+    }
+
+    for (const declaration of descendantsOfKind(handler, SyntaxKind.VariableDeclaration)) {
+        addContextBinding(declaration.getNameNode());
+    }
+
+    return names;
 };
 
 /** Non-deterministic call IRs lexically inside one resolved procedure handler. */
 const callsInHandler = (procedure: ResolvedProcedure, file: string): NondeterministicCallIR[] => {
     const found: NondeterministicCallIR[] = [];
 
-    const contextName = contextParameterName(procedure.handler);
+    const contextCallees = new Set([...contextNamesOf(procedure.handler)].map((name) => `${name}.random`));
 
     for (const callNode of descendantsOfKind(procedure.handler, SyntaxKind.CallExpression)) {
         // A query's `ctx.random()` is an unkeyed `Math.random()` draw, so a live re-run can differ. A mutation's draw is replay-stable.
-        const callee =
-            procedure.kind === "query" && callNode.getExpression().getText() === `${contextName}.random` ? "ctx.random" : nondeterministicCalleeOf(callNode);
+        const callee = procedure.kind === "query" && contextCallees.has(callNode.getExpression().getText()) ? "ctx.random" : nondeterministicCalleeOf(callNode);
 
         if (callee !== undefined) {
             found.push({ callee, exportName: procedure.exportName, file, kind: procedure.kind, line: callNode.getStartLineNumber() });

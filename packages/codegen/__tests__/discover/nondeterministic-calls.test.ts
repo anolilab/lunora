@@ -182,6 +182,34 @@ describe("discoverNondeterministicCalls", () => {
         expect(calls).toStrictEqual([expect.objectContaining({ callee: "ctx.random", exportName: "drawQuery", kind: "query" })]);
     });
 
+    it("records random() on a builder handler that destructures the context under another name", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "draws.ts"),
+            `import { query } from "@lunora/server";\nexport const drawQuery = query({ args: {}, handler: async ({ ctx: context }) => context.random() });\n`,
+            "utf8",
+        );
+
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
+
+        expect(calls).toStrictEqual([expect.objectContaining({ callee: "ctx.random", exportName: "drawQuery", kind: "query" })]);
+    });
+
+    it("records random() when a bag-parameter handler takes the context out of its body", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "draws.ts"),
+            `import { query } from "@lunora/server";\nexport const drawQuery = query({ args: {}, handler: async (request) => { const { ctx } = request; return ctx.random(); } });\n`,
+            "utf8",
+        );
+
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
+
+        expect(calls).toStrictEqual([expect.objectContaining({ callee: "ctx.random", exportName: "drawQuery", kind: "query" })]);
+    });
+
     it("records nothing for a deterministic mutation", () => {
         expect.assertions(1);
 
