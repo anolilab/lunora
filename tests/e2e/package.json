@@ -12,7 +12,7 @@
         "e2e:headed": "playwright test --headed",
         "e2e:saas": "playwright test --config playwright.saas.config.ts",
         "e2e:ui": "playwright test --ui",
-        "lint:types": "tsc --noEmit"
+        "lint:types": "tsrs --noEmit"
     },
     "devDependencies": {
         "@lunora/mail": "workspace:*",

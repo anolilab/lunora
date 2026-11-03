@@ -60,7 +60,7 @@
         "lint:registry:items": "pnpm --filter \"@lunora/cli\" exec vitest run __tests__/commands/registry-items.test.ts",
         "lint:registry:sync": "node scripts/sync-auth-ui-registry.mjs --check && node scripts/sync-ratelimit-copies.mjs --check && node scripts/sync-saas-ui-registry.mjs --check",
         "lint:types": "vis run lint:types && pnpm run lint:types:registry",
-        "lint:types:registry": "pnpm run build:packages && tsc -p registry/tsconfig.json",
+        "lint:types:registry": "pnpm run build:packages && tsrs -p registry/tsconfig.json",
         "multi-semantic-release": "multi-semantic-release",
         "postinstall": "node scripts/generate-package-og-images.js && node scripts/generate-labeler-config.js --skip-ci && node scripts/check-cerebro-peer-lockstep.js && node scripts/check-sibling-peer-ranges.js && node scripts/check-skill-mirrors.js && node scripts/check-registry-catalog-ranges.js && node scripts/check-agents-md-packages.js && node scripts/check-roadmap-tiers.js && node scripts/no-nul-bytes.mjs && node --test --test-reporter=dot plugins/lunora/scripts/verify-turn.test.mjs",
         "prepare": "vis hook install",
@@ -122,6 +122,7 @@
         "semantic-release": "catalog:web",
         "semver": "catalog:node",
         "ts-morph": "catalog:tooling",
+        "tsrs": "catalog:tsc",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },
