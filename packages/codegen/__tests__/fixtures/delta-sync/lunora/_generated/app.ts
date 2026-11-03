@@ -424,13 +424,6 @@ const buildSessionExec = (database: D1DatabaseLike, constraint: string, onBookma
     const session = typeof database.withSession === "function" ? database.withSession(constraint) : undefined;
     const target = session ?? database;
     const batchFn = target.batch;
-    const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
-        try {
-            emitD1QueryCost(sql, meta);
-        } catch {
-            // Best-effort: never let cost accounting fail the query it measures.
-        }
-    };
 
     return retryingExec({
         all: async (sql, parameters) => {
@@ -502,14 +495,46 @@ const buildSessionExec = (database: D1DatabaseLike, constraint: string, onBookma
     });
 };
 
+/** Best-effort D1 cost accounting: never let it fail the query it measures. */
+const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
+    try {
+        emitD1QueryCost(sql, meta);
+    } catch {
+        // Best-effort: never let cost accounting fail the query it measures.
+    }
+};
+
+/**
+ * The primary exec, for a read that must see every committed write (a policy check on a write
+ * path). Every statement opens its own `"first-primary"` session, and so does every retry:
+ * that constraint covers only a session's first read, so one session shared by two reads, or by
+ * a retry, can serve the later read from a replica that has not caught up. It reports no
+ * bookmark: the sink keeps the last value it is given, and a later replica read reports an older
+ * one, which would move the client's bookmark backwards.
+ */
+const buildPrimaryExec = (database: D1DatabaseLike): D1Exec => {
+    const statement = (sql: string, parameters: ReadonlyArray<unknown>) =>
+        (typeof database.withSession === "function" ? database.withSession("first-primary") : database).prepare(sql).bind(...parameters);
+
+    return retryingExec({
+        all: async (sql, parameters) => {
+            const result = await statement(sql, parameters).all<Record<string, unknown>>();
+
+            meter(sql, result.meta);
+
+            return result.results;
+        },
+        run: async (sql, parameters) => {
+            const result = await statement(sql, parameters).run();
+
+            meter(sql, result.meta);
+        },
+    });
+};
+
 /**
  * The replica exec reads at the caller's bookmark, or `"first-unconstrained"` (lowest latency,
- * any replica) without one. `primary` is a `"first-primary"` session for a read that must see
- * every committed write, such as a policy check on a write path. It reports no bookmark: the
- * sink keeps the last value it is given, and a later replica read reports an older one, which
- * would move the client's bookmark backwards. `first-primary` constrains only a session's first
- * read, so each access opens a new session: a later primary read in the same request must not
- * reuse a session whose bookmark may predate a commit made in between.
+ * any replica) without one. `primary` is the per-statement primary exec (see `buildPrimaryExec`).
  */
 const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
     const replica = buildSessionExec(database, bookmark ?? "first-unconstrained", onBookmark);
@@ -518,12 +543,7 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
         return replica;
     }
 
-    return {
-        ...replica,
-        get primary() {
-            return buildSessionExec(database, "first-primary");
-        },
-    };
+    return { ...replica, primary: buildPrimaryExec(database) };
 };
 
 /** Introspect `.global()` (D1-backed) tables for the studio's global data browser. */

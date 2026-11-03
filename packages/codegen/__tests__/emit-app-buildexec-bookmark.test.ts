@@ -125,17 +125,21 @@ describe("emitApp — buildExec real-output bookmark wiring (plan 336)", () => {
         expect(onBookmark).not.toHaveBeenCalled();
     });
 
-    it("each primary access opens a fresh first-primary session, since the constraint covers only a session's first read", () => {
+    it("each primary statement opens its own first-primary session, since the constraint covers only a session's first read", async () => {
         expect.assertions(2);
 
         const buildExec = compileBuildExec(extractBuildExec(emitApp(baseOptions)));
 
-        const session = fakeSession(fakeStatement());
+        const session = fakeSession(fakeStatement([{ id: "s1" }]));
         const withSession = vi.fn<(bookmark?: string) => unknown>(() => session);
         const exec = buildExec({ prepare: vi.fn<(sql: string) => unknown>(), withSession } as FakeD1Database);
 
-        expect(exec.primary).not.toBe(exec.primary);
+        await exec.primary?.all("select id from settings", []);
+        await exec.primary?.all("select id from settings", []);
+
+        // One replica session opens up front; each primary statement adds its own.
         expect(withSession.mock.calls.filter(([bookmark]) => bookmark === "first-primary")).toHaveLength(2);
+        expect(withSession).toHaveBeenCalledTimes(3);
     });
 
     it("a write pins the D1 Sessions API session to the inbound bookmark and reports the write's bookmark via onBookmark", async () => {

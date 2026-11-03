@@ -106,8 +106,8 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
         // A primary read must not reuse the replica session: the replica pins to the
         // caller's bookmark or first-unconstrained, which can miss a just-committed write.
         expect(output).toContain('const replica = buildSessionExec(database, bookmark ?? "first-unconstrained", onBookmark);');
-        expect(output).toContain("get primary() {");
-        expect(output).toContain('return buildSessionExec(database, "first-primary");');
+        expect(output).toContain("primary: buildPrimaryExec(database) };");
+        expect(output).toContain(".prepare(sql)");
     });
 
     it("omits the admin-import wiring entirely for an app with no .global() table", () => {
