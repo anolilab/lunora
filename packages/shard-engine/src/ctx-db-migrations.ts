@@ -299,6 +299,10 @@ const recordFrameworkIndex = (sql: SqlExec, indexName: string, tableName: string
     known.add(foldIdentifier(indexName));
 };
 
+/** Whether this module recorded `indexName` as its own, as opposed to an index someone created by hand. */
+const isFrameworkIndex = (sql: SqlExec, indexName: string): boolean =>
+    runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(INDEX_LEDGER_TABLE)} WHERE name = ${indexName} COLLATE NOCASE LIMIT 1`).toArray().length > 0;
+
 /**
  * Create the ledger of framework-created indexes. A database that has none yet predates it, so the first run adopts every
  * index the old name-and-SQL-shape rule would have called ours: a stale one is then still dropped exactly once, and from
@@ -376,6 +380,12 @@ const migrateTtlIndex = (sql: SqlExec, tableName: string, definition: TableDefin
     const declaredFolded = new Set([...declared].map((name) => foldIdentifier(name)));
 
     if (definition.ttlPolicy === undefined || declaredFolded.has(foldIdentifier(indexName))) {
+        return;
+    }
+
+    // An index under this name that the ledger does not hold was made by hand; replacing it would drop it, and a
+    // unique one would stop enforcing its constraint.
+    if (indexIsHeld(sql, indexName, tableName) && !isFrameworkIndex(sql, indexName)) {
         return;
     }
 
