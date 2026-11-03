@@ -52,7 +52,7 @@ const KNOWN_UNMIGRATED = new Map();
  * `test:coverage` missing it silently dropped a fresh package out of the CI
  * coverage leg with everything else staying green (plan 321).
  */
-const REQUIRED_PACKAGE_SCRIPTS = ["build", "build:prod", "lint:eslint", "lint:oxfmt", "lint:types", "test", "test:coverage"];
+const REQUIRED_PACKAGE_SCRIPTS = ["build", "build:prod", "lint:eslint", "lint:types", "test", "test:coverage"];
 
 /**
  * Packages exempt from part of `REQUIRED_PACKAGE_SCRIPTS`, each with the

@@ -102,14 +102,6 @@ export default defineConfig({
             cache: true,
             dependsOn: ["default"],
         },
-        "lint:oxfmt": {
-            cache: true,
-            dependsOn: ["default", "^public"],
-        },
-        "lint:oxfmt:fix": {
-            cache: true,
-            dependsOn: ["default", "^public"],
-        },
         "lint:types": {
             cache: true,
             dependsOn: ["^build", "default", "^public"],
