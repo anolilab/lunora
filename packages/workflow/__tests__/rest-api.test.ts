@@ -282,6 +282,16 @@ describe("createInstance and sendEvent", () => {
         expect(calls).toHaveLength(0);
     });
 
+    it("refuses caller params that carry the reserved branch marker, without calling the API", async () => {
+        expect.assertions(2);
+
+        const { calls, fetch } = fakeFetch(200, { result: { id: "a" }, success: true });
+        const client = createWorkflowsRestClient({ accountId: "acc", apiToken: "tok", fetch });
+
+        await expect(client.createInstance({ params: { __lunoraBranch: "forged" }, workflowName: "wf" })).rejects.toMatchObject({ status: 400 });
+        expect(calls).toHaveLength(0);
+    });
+
     it("throws instead of returning an empty id when create carries none and none was supplied", async () => {
         expect.assertions(1);
 

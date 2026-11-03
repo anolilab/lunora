@@ -22,6 +22,7 @@
  */
 import type { WorkflowInstanceStatus, WorkflowsRestClient } from "@lunora/workflow";
 
+import { isPlainObject } from "../../../shared/is-plain-object";
 import { readLooseJsonBody } from "./body-readers";
 import { LunoraError } from "./errors";
 import { assertMethod } from "./method-guard";
@@ -203,9 +204,15 @@ const buildWorkflowsAdminRoutes = (
             return throwNotConfigured();
         }
 
-        const body = (await readLooseJsonBody(request, "Workflows create")) as { id?: unknown; name?: unknown; params?: unknown } | null;
+        const raw: unknown = await readLooseJsonBody(request, "Workflows create");
 
-        if (typeof body?.name !== "string" || body.name === "") {
+        if (!isPlainObject(raw)) {
+            throw new LunoraError("Workflows create body must be a JSON object", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const body = raw as { id?: unknown; name?: unknown; params?: unknown };
+
+        if (typeof body.name !== "string" || body.name === "") {
             throw new LunoraError("Workflows create action requires a string `name`", { code: "BAD_REQUEST", status: 400 });
         }
 
@@ -226,9 +233,15 @@ const buildWorkflowsAdminRoutes = (
             return throwNotConfigured();
         }
 
-        const body = (await readLooseJsonBody(request, "Workflows event")) as { id?: unknown; name?: unknown; payload?: unknown; type?: unknown } | null;
+        const raw: unknown = await readLooseJsonBody(request, "Workflows event");
 
-        if (typeof body?.name !== "string" || body.name === "" || typeof body.id !== "string" || body.id === "") {
+        if (!isPlainObject(raw)) {
+            throw new LunoraError("Workflows event body must be a JSON object", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const body = raw as { id?: unknown; name?: unknown; payload?: unknown; type?: unknown };
+
+        if (typeof body.name !== "string" || body.name === "" || typeof body.id !== "string" || body.id === "") {
             throw new LunoraError("Workflows event action requires string `name` and `id`", { code: "BAD_REQUEST", status: 400 });
         }
 

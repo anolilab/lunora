@@ -20,6 +20,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { capErrorBody } from "../../../shared/cap-error-body";
 import { cloudflareRestRequest } from "../../../shared/cloudflare-rest";
 import { RESERVED_EVENT_TYPE_PREFIX } from "./define-event";
@@ -266,6 +267,11 @@ export const createWorkflowsRestClient = (config: WorkflowsRestConfig): Workflow
             return { status: toStatus(result["status"]) };
         },
         createInstance: async ({ instanceId, params, workflowName }) => {
+            // A forged marker here would reach the child's event.payload and spoof a ctx.parallel completion.
+            if (hasBranchMarker(params)) {
+                throw new LunoraError("BAD_REQUEST", `@lunora/workflow: params ${BRANCH_MARKER_REJECTION}`, { status: 400 });
+            }
+
             const payload = {
                 ...(instanceId === undefined ? {} : { instance_id: instanceId }),
                 ...(params === undefined ? {} : { params: JSON.stringify(params) }),
