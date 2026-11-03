@@ -57,6 +57,12 @@ describe(requireTables, () => {
         }).toThrow(new PortTableMissingError("remaining", "tasks", "tasks"));
     });
 
+    it("refuses a null entry, which would read as zero rows", () => {
+        expect(() => {
+            requireTables({ goals: [], tasks: null }, dataset, "remaining");
+        }).toThrow(new PortTableMissingError("remaining", "tasks", "tasks"));
+    });
+
     it("does not count an inherited property as an entry", () => {
         // A dataset table named like an Object.prototype member must not pass through the prototype.
         const named = defineDataset("labels", { ...base, tables: { toString: {} } });
