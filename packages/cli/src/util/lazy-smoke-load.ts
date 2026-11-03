@@ -639,20 +639,32 @@ const taskkillCommand = (pid: number): { args: string[]; command: string } => {
     };
 };
 
+/** How a finished taskkill went: its exit status, or the spawn error that stopped it from running. */
+interface TaskkillOutcome {
+    error?: Error;
+    status?: number | null;
+}
+
 /**
  * Whether a finished `taskkill /T /F` ended the tree. Only exit 0 reports that it did: exit 128 says the root pid was already gone, which
  * does not show that its descendants ended. A spawn error or any other exit leaves the tree unknown.
  */
-const taskkillEndedTree = (result: { error?: Error; status: number | null }): boolean => result.error === undefined && result.status === 0;
+const taskkillEndedTree = (result: TaskkillOutcome): boolean => result.error === undefined && result.status === 0;
 
 /**
- * Written when the tree was not confirmed gone, so the run never reports a smoke process it may have left serving as stopped. The
- * failure, when there is one, follows the command on the same line: a stack can span lines, so its newlines are escaped.
+ * Written when the tree was not confirmed gone, so the run never reports a smoke process it may have left serving as stopped. Status 128
+ * means the root pid is already gone, so repeating the command against it cannot reach a descendant that still holds the port; the advice
+ * names that port instead. The failure follows on the same line: a stack can span lines, so its newlines are escaped.
  */
-const warnTreeMayRun = (pid: number, failure?: Error): void => {
-    const reason = failure === undefined ? "" : ` (${(failure.stack ?? failure.message).replaceAll(/\r?\n/gu, String.raw`\n`)})`;
+const warnTreeMayRun = (pid: number, outcome: TaskkillOutcome): void => {
+    const pidText = String(pid);
+    const rootGone = outcome.error === undefined && outcome.status === 128;
+    const advice = rootGone
+        ? `the root process ${pidText} has already exited, so a process it started may still hold the smoke server's port; find that port's owner with netstat -ano and end its PID with taskkill /PID <pid> /T /F`
+        : `end it with taskkill /PID ${pidText} /T /F`;
+    const detail = outcome.error === undefined ? `taskkill exited with status ${String(outcome.status)}` : (outcome.error.stack ?? outcome.error.message);
 
-    process.stderr.write(`lunora: the smoke process tree ${String(pid)} may still be running; end it with taskkill /PID ${String(pid)} /T /F${reason}\n`);
+    process.stderr.write(`lunora: the smoke process tree ${pidText} may still be running; ${advice} (${detail.replaceAll(/\r?\n/gu, String.raw`\n`)})\n`);
 };
 
 /**
@@ -664,7 +676,7 @@ const killWindowsTreeOnExit = (pid: number): void => {
     const result = spawnSync(command, args, { stdio: "ignore", timeout: GROUP_STOP_MS });
 
     if (!taskkillEndedTree(result)) {
-        warnTreeMayRun(pid, result.error ?? new Error(`taskkill exited with status ${String(result.status)}`));
+        warnTreeMayRun(pid, result);
     }
 };
 
@@ -703,18 +715,20 @@ const killTreeOnExit = (pid: number): (() => void) => {
 
 /**
  * Ends a Windows tree from its pid without blocking the event loop. Resolves `undefined` only when taskkill ended the tree; otherwise it
- * resolves the failure: the spawn error, or the exit status that did not end the tree.
+ * resolves the outcome that did not end it, so the warning can say why.
  */
-const runTaskkill = (pid: number): Promise<Error | undefined> =>
+const runTaskkill = (pid: number): Promise<TaskkillOutcome | undefined> =>
     new Promise((_resolve) => {
         const { args, command } = taskkillCommand(pid);
         const child = spawn(command, args, { stdio: "ignore", windowsHide: true });
         // No timeout: the server is only stopped once the tree is gone, so a timed-out kill would leave the tree serving the port.
         child.once("error", (error: Error) => {
-            _resolve(error);
+            _resolve({ error });
         });
         child.once("exit", (code: number | null) => {
-            _resolve(taskkillEndedTree({ status: code }) ? undefined : new Error(`taskkill exited with status ${String(code)}`));
+            const outcome: TaskkillOutcome = { status: code };
+
+            _resolve(taskkillEndedTree(outcome) ? undefined : outcome);
         });
     });
 
@@ -733,10 +747,10 @@ const stopSmokeGroup = async (group: SmokeGroup | undefined): Promise<void> => {
     const { pid } = group;
 
     if (process.platform === "win32") {
-        const failure = await runTaskkill(pid);
+        const outcome = await runTaskkill(pid);
 
-        if (failure !== undefined) {
-            warnTreeMayRun(pid, failure);
+        if (outcome !== undefined) {
+            warnTreeMayRun(pid, outcome);
         }
 
         return;

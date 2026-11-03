@@ -1095,6 +1095,23 @@ describe(killWindowsTreeOnExit, () => {
         }
     });
 
+    it("sends a root that taskkill reports gone to the process still holding the port, not back to the missing pid", () => {
+        expect.assertions(2);
+
+        const write = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+        spawnSync.mockReturnValueOnce({ status: 128 });
+
+        try {
+            killWindowsTreeOnExit(4242);
+
+            expect(write).toHaveBeenCalledWith(expect.stringContaining("netstat -ano"));
+            expect(write).not.toHaveBeenCalledWith(expect.stringContaining("end it with taskkill /PID 4242"));
+        } finally {
+            write.mockRestore();
+        }
+    });
+
     it("names the spawn failure on one stderr line, so a taskkill that could not start is diagnosable", () => {
         expect.assertions(2);
 
