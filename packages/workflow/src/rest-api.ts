@@ -22,6 +22,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { capErrorBody } from "../../../shared/cap-error-body";
 import { cloudflareRestRequest } from "../../../shared/cloudflare-rest";
+import { RESERVED_EVENT_TYPE_PREFIX } from "./define-event";
 import type { WorkflowInstanceStatus } from "./types";
 
 /**
@@ -271,12 +272,26 @@ export const createWorkflowsRestClient = (config: WorkflowsRestConfig): Workflow
             };
             const body = await request(`/${encodeURIComponent(workflowName)}/instances`, { body: JSON.stringify(payload), method: "POST" });
             const result = (body["result"] ?? {}) as Record<string, unknown>;
+            const id = asString(result["id"]) ?? instanceId;
 
-            return { id: asString(result["id"]) ?? instanceId ?? "", status: toStatus(result["status"]) };
+            if (id === undefined) {
+                throw new LunoraError("WORKFLOWS_REST_ERROR", "Cloudflare Workflows create response carried no instance id", { status: 502 });
+            }
+
+            return { id, status: toStatus(result["status"]) };
         },
         sendEvent: async ({ eventType, instanceId, payload, workflowName }) => {
+            // `lunora:` is the framework's own namespace: a forged `lunora:branch:<id>` event would complete a parent's ctx.parallel join.
+            if (eventType.startsWith(RESERVED_EVENT_TYPE_PREFIX)) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `Workflows event type "${eventType}" is reserved — the "${RESERVED_EVENT_TYPE_PREFIX}" prefix belongs to the framework`,
+                    { status: 400 },
+                );
+            }
+
             const path = `/${encodeURIComponent(workflowName)}/instances/${encodeURIComponent(instanceId)}/events/${encodeURIComponent(eventType)}`;
-            const body = await request(path, { body: JSON.stringify(payload ?? {}), method: "POST" });
+            const body = await request(path, { body: JSON.stringify(payload === undefined ? {} : payload), method: "POST" });
             const result = (body["result"] ?? {}) as Record<string, unknown>;
 
             return { instanceId: asString(result["instanceId"]) ?? instanceId, timestamp: asString(result["timestamp"]) };

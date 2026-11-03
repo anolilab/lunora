@@ -156,6 +156,23 @@ describe("workflows admin routes", () => {
         ).rejects.toMatchObject({ status: 400 });
     });
 
+    it.each([
+        ["an array", ["orders"]],
+        ["a string", "orders"],
+    ])("rejects %s as the JSON root with 400 on the create and event routes", async (_label, root) => {
+        expect.assertions(2);
+
+        const { client } = fakeClient();
+        const routes = buildWorkflowsAdminRoutes({ assertAdmin: allow, resolveWorkflowsClient: () => client });
+
+        await expect(
+            routes[WORKFLOWS_CREATE_PATH]?.(post(WORKFLOWS_CREATE_PATH, root), {}, new URL(`https://app.test${WORKFLOWS_CREATE_PATH}`)),
+        ).rejects.toMatchObject({ status: 400 });
+        await expect(
+            routes[WORKFLOWS_EVENT_PATH]?.(post(WORKFLOWS_EVENT_PATH, root), {}, new URL(`https://app.test${WORKFLOWS_EVENT_PATH}`)),
+        ).rejects.toMatchObject({ status: 400 });
+    });
+
     it("sends an event to a running instance with its type and payload", async () => {
         expect.assertions(2);
 

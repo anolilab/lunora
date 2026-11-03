@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { decodeWire } from "@lunora/wire";
 
 import { collectPages } from "../../../../shared/collect-pages";
@@ -230,7 +231,13 @@ export const createWorkflowInstance = async (
         params: options.params,
     })) as Partial<WorkflowInstanceCreated>;
 
-    return { id: body.id ?? options.id ?? "", status: body.status ?? "unknown" };
+    const id = body.id ?? options.id;
+
+    if (id === undefined) {
+        throw new LunoraError("WORKFLOWS_REST_ERROR", "Workflows create response carried no instance id", { status: 502 });
+    }
+
+    return { id, status: body.status ?? "unknown" };
 };
 
 export const sendWorkflowEvent = async (

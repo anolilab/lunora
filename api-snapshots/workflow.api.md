@@ -647,6 +647,11 @@ interface Workflows {
 
 ```ts
 interface WorkflowsRestClient {
+    createInstance: (args: {
+        instanceId?: string;
+        params?: unknown;
+        workflowName: string;
+    }) => Promise<WorkflowInstanceCreated>;
     getInstance: (args: {
         instanceId: string;
         workflowName: string;
@@ -657,18 +662,6 @@ interface WorkflowsRestClient {
         status?: WorkflowInstanceStatus;
         workflowName: string;
     }) => Promise<WorkflowInstancePage>;
-    setInstanceStatus: (args: {
-        action: WorkflowInstanceAction;
-        instanceId: string;
-        workflowName: string;
-    }) => Promise<{
-        status: WorkflowInstanceStatus;
-    }>;
-    createInstance: (args: {
-        instanceId?: string;
-        params?: unknown;
-        workflowName: string;
-    }) => Promise<WorkflowInstanceCreated>;
     sendEvent: (args: {
         eventType: string;
         instanceId: string;
@@ -677,6 +670,13 @@ interface WorkflowsRestClient {
     }) => Promise<{
         instanceId: string;
         timestamp?: string;
+    }>;
+    setInstanceStatus: (args: {
+        action: WorkflowInstanceAction;
+        instanceId: string;
+        workflowName: string;
+    }) => Promise<{
+        status: WorkflowInstanceStatus;
     }>;
 }
 ```
