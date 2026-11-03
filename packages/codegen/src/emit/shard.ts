@@ -379,10 +379,6 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         doTypeImports.push("WhereInput");
     }
 
-    if (hasSensitiveShapes) {
-        doTypeImports.push("SensitiveScope");
-    }
-
     // Reverse cross-backend relation override + its `@lunora/do` import fragment
     // (both empty unless the project has `.global()` tables). See `emitRelationFanout`.
     const relationFanout = emitRelationFanout(hasGlobalTables);
@@ -893,16 +889,17 @@ ${ipReaderBootstrap}${sourceBootstrap}${ttlBootstrap}        }
     const renderedPrepareFunctionOverride = prepareFunctionOverride === "" ? "\n\n" : `${prepareFunctionOverride}\n`;
     // Only emitted when some function declares a `v.sensitive` argument, so projects
     // without one keep their output byte-identical. The base class masks nothing.
-    /* eslint-disable no-secrets/no-secrets -- emitted generated-code text referencing the function and shape registries, not credentials */
     // A shape resolves its marked names through its own `__shape__:` path, so the shape registry is read only when one exists.
-    const shapeNamesLookup = hasSensitiveShapes
-        ? `\n            const shape = functionPath.startsWith("__shape__:") ? LUNORA_SHAPES[functionPath.slice("__shape__:".length)] : undefined;`
-        : "";
+    // eslint-disable-next-line no-secrets/no-secrets -- emitted shape-registry lookup, not a credential
+    const shapeLookup = `const shape = functionPath.startsWith("__shape__:") ? LUNORA_SHAPES[functionPath.slice("__shape__:".length)] : undefined;`;
+    const shapeNamesLookup = hasSensitiveShapes ? `\n            ${shapeLookup}` : "";
     const shapeArgsFallback = hasSensitiveShapes ? "shape?.args ?? " : "";
+    // eslint-disable-next-line no-secrets/no-secrets -- emitted function-registry lookup, not a credential
+    const registeredLookup = "const registered = LUNORA_FUNCTIONS[functionPath];";
     const sensitiveArgsOverride = sensitiveArgs
         ? `
         protected override sensitiveArgNames(functionPath: string): ReadonlySet<string> {
-            const registered = LUNORA_FUNCTIONS[functionPath];${shapeNamesLookup}
+            ${registeredLookup}${shapeNamesLookup}
             const fromValidators = sensitiveArgumentNames(registered?.args ?? ${shapeArgsFallback}{});
 
             if (registered?.sensitiveArgs === undefined) {
@@ -914,7 +911,6 @@ ${ipReaderBootstrap}${sourceBootstrap}${ttlBootstrap}        }
 
 `
         : "";
-    /* eslint-enable no-secrets/no-secrets */
     const dispatchRun = dispatchRunSource(lazyFunctions);
     const prepareFunctionCall = lazyFunctions
         ? '            const preparation = this.prepareFunction(functionPath, "subscription");\n            if (preparation !== undefined) await preparation;\n'

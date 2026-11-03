@@ -37,6 +37,10 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
                 return undefined;
             }
 
+            // A blocked unique index refuses user writes; ingest must not write rows the missing constraint would have rejected.
+            // The alarm tier records the refusal and retries on its poll interval.
+            this.ensureServable();
+
             const shardKey = this.currentShardKey();
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
 

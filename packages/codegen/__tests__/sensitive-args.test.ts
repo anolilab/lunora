@@ -181,6 +181,18 @@ describe("emitted artifacts for a sensitive function", () => {
         expect(plain).toContain("const ctx = this.buildCtx({ functionPath: `__shape__:${name}`, identity });");
     });
 
+    it("imports SensitiveScope once when a shape declares a marked argument", () => {
+        expect.assertions(1);
+
+        const shard = emitShard({
+            schema: { tables: [], vectorIndexes: [] },
+            shapes: [{ args: { token: sensitiveString }, exportName: "vault", filePath: "shapes", table: "vault" }],
+        });
+        const importLine = shard.split("\n").find((line) => line.startsWith("import type {") && line.includes("SensitiveScope")) ?? "";
+
+        expect(importLine.split("SensitiveScope")).toHaveLength(2);
+    });
+
     it("hands the dispatch's scope to every telemetry maker and composed call, and opens one for a dispatch that has none", () => {
         expect.assertions(8);
 
