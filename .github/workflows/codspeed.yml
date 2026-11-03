@@ -48,7 +48,9 @@
         # skipped on push/dispatch, which would otherwise skip this job too.
         "if": "!cancelled() && (github.event_name != 'pull_request' || needs.files-changed.outputs.benchmarks == 'true')"
         "needs": "files-changed"
-        "runs-on": "ubuntu-latest"
+        # CodSpeedHQ/action v4 (runner 4.x) fails with "Unsupported system" on
+        # ubuntu-26.04, which ubuntu-latest now resolves to. Runner 5.5+ supports it.
+        "runs-on": "ubuntu-24.04"
         # A low-level package change (scheduler, do, codegen) makes nearly every
         # package `affected`, and the full suite under CodSpeed instrumentation
         # already took 25-29 minutes on alpha; 30 cancelled runs that touched
