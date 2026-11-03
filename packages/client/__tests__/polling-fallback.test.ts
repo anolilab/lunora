@@ -548,6 +548,67 @@ describe("lunoraClient polling fallback", () => {
         client.close();
     });
 
+    it("keeps a write queued past the ambiguous-send cap when its HTTP send never reached the origin", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        let originReachable = false;
+        const fetchMock = vi.fn<typeof fetch>(async (input) => {
+            if ((input as string).includes("rpc-batch")) {
+                return jsonResponse({ results: [{ body: { result: [] }, id: 0, status: 200 }] });
+            }
+
+            if (!originReachable) {
+                throw new TypeError("Failed to fetch");
+            }
+
+            return jsonResponse({ result: "done" });
+        });
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("todos:list"), {}, () => {});
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(10);
+        sockets.at(-1)?.triggerClose();
+        await vi.advanceTimersByTimeAsync(STEP_MS);
+        await failOpens(2);
+
+        expect(client.connectionStatus()).toBe("polling");
+
+        let outcome = "pending";
+
+        const written = client.mutation(fnRef("todos:add"), { text: "x" }).then(
+            (value) => {
+                outcome = String(value);
+
+                return undefined;
+            },
+            () => {
+                outcome = "rejected";
+            },
+        );
+
+        // Far past the replay backoff schedule that exhausts the ambiguous-send cap.
+        await vi.advanceTimersByTimeAsync(120_000);
+
+        expect(outcome).toBe("pending");
+
+        originReachable = true;
+        await vi.advanceTimersByTimeAsync(120_000);
+        await written;
+
+        expect(outcome).toBe("done");
+
+        client.close();
+    });
+
     it("drops a confirmed optimistic layer on a poll sent after the ack, never on one sent before", async () => {
         expect.assertions(2);
 

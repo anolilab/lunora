@@ -4607,7 +4607,9 @@ class LunoraClient {
                 (error instanceof TypeError || error instanceof TransportError) &&
                 isEncodable(argsRecord)
             ) {
-                const queued = enqueue(true);
+                // A network drop seen by a request sent over HTTP never reached the origin, so the write is not ambiguous:
+                // it keeps its precondition and is not charged against the ambiguous-send replay cap while offline.
+                const queued = enqueue(!networkDown);
 
                 // Over a socket that is still open nothing else will flush the queue.
                 this.noteHeldRetryDelay(options.shardKey);
