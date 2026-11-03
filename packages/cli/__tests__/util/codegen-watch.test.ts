@@ -84,6 +84,7 @@ describe("startCodegenWatch", () => {
     });
 
     afterEach(() => {
+        vi.useRealTimers();
         vi.unstubAllEnvs();
     });
 
@@ -605,9 +606,9 @@ describe("startCodegenWatch", () => {
             //
             // Past HOOK_SETTLE_MS first, or the watcher would (correctly) treat
             // this write as the hook's own.
-            await new Promise((resolve) => {
-                setTimeout(resolve, 350);
-            });
+            // The settle window reads `Date.now()`, so move that clock instead of sleeping through it.
+            vi.useFakeTimers({ toFake: ["Date"] });
+            vi.setSystemTime(Date.now() + 350);
 
             writeFileSync(join(workdir, "schema.ts"), "// edited", "utf8");
             await vi.waitFor(() => {
