@@ -48,7 +48,10 @@ const webPushFromEnv = (env: NotifyEnv, overrides?: Partial<WebPushConfig>): Web
     return { vapidPrivateKey, vapidPublicKey, vapidSubject, ...overrides };
 };
 
-/** The key file's own project id, or `undefined` when the key cannot be read. The token source reports the parse error when it is used. */
+/**
+ * The key file's own project id, or `undefined` when the key cannot be read. The token
+ * source reports the parse error when it is used.
+ */
 const projectIdOf = (rawServiceAccount: string): string | undefined => {
     try {
         return parseServiceAccount(rawServiceAccount).project_id;

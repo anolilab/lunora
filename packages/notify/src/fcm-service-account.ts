@@ -158,6 +158,7 @@ const fcmServiceAccountTokenSource = (rawServiceAccount: string, options: FcmSer
             evictOldestEntry(tokenCache, TOKEN_CACHE_CAPACITY);
         }
 
+        // `async` so a malformed key rejects the promise the cache holds, and the failure cleanup below runs.
         const mint = async (): Promise<{ expiresAt: number; token: string }> => exchange(parseServiceAccount(rawServiceAccount), fetchImpl, now);
 
         const entry: CachedToken = {
