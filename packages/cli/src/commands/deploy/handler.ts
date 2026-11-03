@@ -1,4 +1,4 @@
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
@@ -66,7 +66,7 @@ import { clientBuildRefusal, clientBuildRuns, pluginBuildRuns, runClientBuild } 
 import type { ExportTarget } from "../data-transfer/export-rows";
 import type { PreDeployCommand } from "./checks";
 import { checkD1Placeholder, resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
-import { generatedConfigPath, provisionDeployHyperdrive } from "./hyperdrive";
+import { generatedConfigPath, hasHyperdrivePlaceholder, provisionDeployHyperdrive } from "./hyperdrive";
 import type { DeployOptions } from "./index";
 import completeDeploy from "./post-deploy";
 import { offerMissingSecrets, warnDevVariablesNotPushed } from "./secrets";
@@ -983,19 +983,131 @@ const checkServiceBindings = async (wranglerPath: string, options: DeployCommand
     return placeholder ?? provisionDeployHyperdrive(directory, options, "deploy", driver.id, "check", wranglerPath);
 };
 
+/** A service's deploy config: the copy its build left, or a prebuilt one, when wrangler reads that, else its source config. */
+interface ServiceDeployTarget {
+    /** Whether this run's build wrote the generated copy. */
+    built: boolean;
+    /** The config wrangler deploys: its bindings are checked and provisioned here. */
+    config: string;
+    /** A generated copy is already resolved for one environment, so its bindings are read without `--env`. */
+    resolved: boolean;
+    service: { name: string; worker: string; wranglerPath: string };
+}
+
+const serviceDeployTargets = (
+    workers: ReadonlyArray<{ name: string; worker: string; wranglerPath: string }>,
+    builds: boolean[],
+    frameworkBuild: boolean | undefined,
+): ServiceDeployTarget[] =>
+    workers.map((service, index) => {
+        const built = builds[index] === true;
+        const generated = serviceDeployConfig(service.wranglerPath, built, frameworkBuild);
+
+        return { built, config: generated ?? service.wranglerPath, resolved: generated !== undefined, service };
+    });
+
 /**
- * Create the service's Hyperdrive configs and write their ids into the config wrangler deploys. The
- * generated copy is written only when this run built it for the environment being deployed.
+ * The read-only checks for a service's deploy config: its D1 placeholders, and the Hyperdrive "check" phase. A prebuilt copy can hold a
+ * placeholder its source no longer has, and its environment is unknown, so a Hyperdrive placeholder in it cannot be resolved for a
+ * named `--env`. Returns the failure that stops the deploy, if any.
  */
-const provisionServiceBindings = (wranglerPath: string, built: boolean, options: DeployCommandOptions, driver: DeployDriver): Promise<string | undefined> =>
-    provisionDeployHyperdrive(
-        dirname(wranglerPath),
-        { ...options, clientBuildEnvironment: built ? options.env : undefined },
+const checkServiceTarget = async (
+    target: ServiceDeployTarget,
+    options: DeployCommandOptions,
+    driver: DeployDriver,
+): Promise<BeforeSpawnFailure | undefined> => {
+    const { config, resolved, service } = target;
+
+    // A redirect to a file that is not there is wrangler's to report, and there is no config to check.
+    if (!existsSync(config)) {
+        return undefined;
+    }
+
+    const directory = dirname(service.wranglerPath);
+    const environment = resolved ? undefined : options.env;
+    const placeholder = checkD1Placeholder(directory, options.logger, "deploy", driver.id, environment, config);
+
+    if (placeholder !== undefined) {
+        return { code: EXIT_CODE.USAGE, error: `service ${service.name} (${service.worker}): ${placeholder}` };
+    }
+
+    if (resolved && !target.built && options.env !== undefined && hasHyperdrivePlaceholder(directory, undefined, config)) {
+        const error = `service ${service.name} (${service.worker}): its prebuilt config ${config} still has a Hyperdrive placeholder, and it was not built for --env ${options.env}, so it cannot be resolved here. Build it with CLOUDFLARE_ENV=${options.env}.`;
+
+        options.logger.error(error);
+
+        return { code: EXIT_CODE.USAGE, error };
+    }
+
+    const hyperdriveError = await provisionDeployHyperdrive(
+        directory,
+        { ...options, clientBuildEnvironment: undefined, env: environment },
+        "deploy",
+        driver.id,
+        "check",
+        config,
+    );
+
+    return hyperdriveError === undefined ? undefined : { code: EXIT_CODE.USAGE, error: `service ${service.name} (${service.worker}): ${hyperdriveError}` };
+};
+
+/** The read-only checks of every service's deploy config, in service order. The first refusal is returned, before any service is created or deployed. */
+const checkServiceTargets = async (
+    targets: ServiceDeployTarget[],
+    options: DeployCommandOptions,
+    driver: DeployDriver,
+): Promise<BeforeSpawnFailure | undefined> => {
+    for (const target of targets) {
+        // eslint-disable-next-line no-await-in-loop -- checks run in service order, and the first refusal stops before any service is created or deployed
+        const failure = await checkServiceTarget(target, options, driver);
+
+        if (failure !== undefined) {
+            return failure;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * Create a service's Hyperdrive configs and write their ids into its deploy config. The source config gets the same ids when it is not the
+ * config wrangler deploys, so a later deploy that reads the source needs no credentials for them.
+ */
+const createServiceBindings = async (
+    target: ServiceDeployTarget,
+    options: DeployCommandOptions,
+    driver: DeployDriver,
+): Promise<BeforeSpawnFailure | undefined> => {
+    const { config, resolved, service } = target;
+
+    if (!existsSync(config)) {
+        return undefined;
+    }
+
+    const directory = dirname(service.wranglerPath);
+    const environment = resolved ? undefined : options.env;
+    const clientBuildEnvironment = target.built ? options.env : undefined;
+    const error = await provisionDeployHyperdrive(directory, { ...options, clientBuildEnvironment, env: environment }, "deploy", driver.id, "create", config);
+
+    if (error !== undefined) {
+        return { code: EXIT_CODE.FAILURE, error: `service ${service.name} (${service.worker}): ${error}` };
+    }
+
+    if (config === service.wranglerPath) {
+        return undefined;
+    }
+
+    const sourceError = await provisionDeployHyperdrive(
+        directory,
+        { ...options, clientBuildEnvironment: undefined },
         "deploy",
         driver.id,
         "create",
-        wranglerPath,
+        service.wranglerPath,
     );
+
+    return sourceError === undefined ? undefined : { code: EXIT_CODE.FAILURE, error: `service ${service.name} (${service.worker}): ${sourceError}` };
+};
 
 /**
  * Build each service in order, from its folder, and report whether each one built. A failed build
@@ -1031,31 +1143,17 @@ const buildServices = async (
 /** What every service deploy in one run shares. */
 interface ServiceDeployRun {
     driver: DeployDriver;
-    frameworkBuild: boolean | undefined;
     manager: ReturnType<typeof detectPackageManager>;
     options: DeployCommandOptions;
     spawner: Spawner;
     toolchain: NonNullable<DeployDriver["toolchain"]>;
 }
 
-/**
- * Create one service's Hyperdrive configs, then run its deploy command from its folder. Returns the
- * failure that stops the deploy, if any.
- */
-const deployService = async (
-    service: { name: string; worker: string; wranglerPath: string },
-    built: boolean,
-    run: ServiceDeployRun,
-): Promise<BeforeSpawnFailure | undefined> => {
-    const { driver, frameworkBuild, manager, options, spawner, toolchain } = run;
+/** Run one service's deploy command from its folder, against the config its bindings were prepared in. Returns the failure that stops the deploy, if any. */
+const deployService = async (target: ServiceDeployTarget, run: ServiceDeployRun): Promise<BeforeSpawnFailure | undefined> => {
+    const { driver, manager, options, spawner, toolchain } = run;
+    const { config, service } = target;
     const directory = dirname(service.wranglerPath);
-    const hyperdriveError = await provisionServiceBindings(service.wranglerPath, built, options, driver);
-
-    if (hyperdriveError !== undefined) {
-        return { code: EXIT_CODE.FAILURE, error: `service ${service.name} (${service.worker}): ${hyperdriveError}` };
-    }
-
-    const generated = serviceDeployConfig(service.wranglerPath, built, frameworkBuild);
 
     let invocation: ReturnType<typeof planToolchainInvocation>;
 
@@ -1064,7 +1162,7 @@ const deployService = async (
             // Always an explicit config: wrangler left to discover one walks up
             // from the service folder and can find the app's `wrangler.json`
             // or a Vite build's `.wrangler/deploy/config.json` first.
-            toolchain.deploy({ configPath: configPath ?? generated ?? service.wranglerPath, dryRun: options.dryRun === true, environment: options.env }),
+            toolchain.deploy({ configPath: configPath ?? config, dryRun: options.dryRun === true, environment: options.env }),
         );
     } catch (error_: unknown) {
         return {
@@ -1101,9 +1199,8 @@ const deployService = async (
  * `--dry-run` pass through; a target refusing one says so here. Returns the
  * error that stops the deploy, if any.
  *
- * Every service's checks run before any build or deploy, and every build before the first deploy, so a
- * refusal in one service leaves none of them live. Each service's Hyperdrive configs are created just
- * before its own deploy command.
+ * Every service's source checks run before any build, every build before the first binding is prepared, and every binding before the
+ * first deploy, so a refusal in one service leaves none of them live.
  */
 const deployServices = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver, spawner: Spawner): Promise<BeforeSpawnFailure | undefined> => {
     const { error, services } = readServiceBindings(cwd);
@@ -1153,11 +1250,28 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
         return buildFailure;
     }
 
-    const run: ServiceDeployRun = { driver, frameworkBuild, manager, options, spawner, toolchain };
+    const targets = serviceDeployTargets(workers, builds, frameworkBuild);
 
-    for (const [index, service] of workers.entries()) {
-        // eslint-disable-next-line no-await-in-loop -- services deploy in order: a failed create or deploy stops the later services and the app deploy, which must not start on a partial set
-        const failure = await deployService(service, builds[index] === true, run);
+    // Every service's deploy config is checked before the first service is created or deployed, so a refusal leaves none of them live.
+    const checkFailure = await checkServiceTargets(targets, options, driver);
+
+    if (checkFailure !== undefined) {
+        return checkFailure;
+    }
+
+    const run: ServiceDeployRun = { driver, manager, options, spawner, toolchain };
+
+    // Each service's Hyperdrive configs are created just before its own deploy, so a failed deploy leaves later services with none.
+    for (const target of targets) {
+        // eslint-disable-next-line no-await-in-loop -- services are created and deployed in order: a failure stops the later services and the app deploy, which must not start on a partial set
+        const createFailure = await createServiceBindings(target, options, driver);
+
+        if (createFailure !== undefined) {
+            return createFailure;
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- services deploy in order: a failed deploy stops the later services and the app deploy, which must not start on a partial set
+        const failure = await deployService(target, run);
 
         if (failure !== undefined) {
             return failure;
