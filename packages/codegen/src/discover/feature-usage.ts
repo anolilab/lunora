@@ -278,6 +278,15 @@ const boundToolNames = (file: SourceFile): Set<string> => {
         }
     }
 
+    // `const ask = requestSecretTool` (or a call of it) is another local name for the tool, so `export { ask }` carries it.
+    for (const statement of file.getVariableStatements()) {
+        for (const declared of statement.getDeclarations()) {
+            if (isToolReference(declared.getInitializer(), bound)) {
+                bound.add(declared.getName());
+            }
+        }
+    }
+
     return bound;
 };
 
@@ -295,25 +304,40 @@ const toolExports = (names: Iterable<string>): SecretToolExports => {
     return { names: new Set(names), namespaces: new Map() };
 };
 
+declare const targetScopeBrand: unique symbol;
+
 /**
  * The targets one scan follows. A target is parsed at most once per scope, into a project per declaring project: adding it
  * to the declaring project would throw that program away. A target's own relative specifiers resolve with the declaring
  * project's options, so a barrel's next hop keeps its `rootDirs` and `moduleSuffixes`. A scope is made per scan, so an
  * edit between scans is seen and no file is re-read within one.
  */
+/** Opaque: callers only pass it back, so how targets are cached can change without a public API break. */
 interface TargetScope {
+    readonly [targetScopeBrand]: true;
+}
+
+interface TargetScopeState {
     /** Each target project's declaring project, so a target's own hop can still see the declaring project's files. */
     readonly origins: Map<Project, Project>;
     /** The target project each declaring project resolves into. */
     readonly projects: Map<Project, Project>;
 }
 
+const scopeStates = new WeakMap<TargetScope, TargetScopeState>();
+
 /** A fresh scope for one scan: the targets it follows are parsed once and kept for that scan only. */
 const createTargetScope = (): TargetScope => {
-    return { projects: new Map(), origins: new Map() };
+    const scope = Object.freeze({}) as TargetScope;
+
+    scopeStates.set(scope, { projects: new Map(), origins: new Map() });
+
+    return scope;
 };
 
-const targetProjectOf = (scope: TargetScope, project: Project): Project => {
+const targetProjectOf = (handle: TargetScope, project: Project): Project => {
+    const scope = scopeStates.get(handle) as TargetScopeState;
+
     if (scope.origins.has(project)) {
         return project;
     }
@@ -345,7 +369,7 @@ const relativeTargetOf = (scope: TargetScope, declaration: ImportDeclaration | E
     const project = file.getProject();
     // Every hop resolves with the declaring project's options. A target project forces `allowJs` so it can parse a JS
     // file; that must not change which modules a hop finds.
-    const declaring = scope.origins.get(project) ?? project;
+    const declaring = scopeStates.get(scope)?.origins.get(project) ?? project;
     const { resolvedModule } = ts.resolveModuleName(specifier, file.getFilePath(), declaring.getCompilerOptions(), declaring.getModuleResolutionHost());
     const path = resolvedModule?.resolvedFileName;
 

@@ -495,6 +495,24 @@ describe("discover/feature-usage", () => {
             expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
         });
 
+        it("follows a helper that exports a local alias of the tool", () => {
+            expect.assertions(1);
+
+            const project = inMemory();
+
+            project.createSourceFile(
+                "/app/lunora/tools.ts",
+                `import { requestSecretTool } from "@lunora/agent";\nconst ask = requestSecretTool;\nexport { ask };`,
+            );
+
+            const agents = project.createSourceFile(
+                "/app/lunora/agents.ts",
+                `import { ask } from "./tools";\nexport const a = ask({ consumer: "a", description: "d" });`,
+            );
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
+        });
+
         it("follows a relative barrel that exists only in an in-memory project", () => {
             expect.assertions(1);
 
