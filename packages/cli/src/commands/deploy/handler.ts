@@ -47,7 +47,7 @@ import { detectPackageManager, toolchainExecArgs } from "../../util/detect-packa
 import { checkDurableObjectBudget } from "../../util/durable-object-budget";
 import type { ExitCode } from "../../util/exit-code";
 import { EXIT_CODE } from "../../util/exit-code";
-import runLazySmokeLoad from "../../util/lazy-smoke-load";
+import runSmokeLoad from "../../util/lazy-smoke-load";
 import type { Logger } from "../../util/logger";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runPostCodegenHook } from "../../util/post-codegen-hook";
@@ -1244,13 +1244,13 @@ const runBeforeSpawnSteps = async (
 };
 
 /**
- * A lazy registry defers a broken module's error to its first call, where an eager one fails the
- * upload, and an integration SDK handed over as a loader (`() => import("stripe")`) defers it in
- * every build. Evaluating those modules in workerd here keeps that failure ahead of the upload. The
- * generated registry and the app's `import()` calls decide whether there is anything to check, so
- * `--prebuilt` is covered too.
+ * A module the Worker loads on demand (a lazy function module, or what the generated app loads with
+ * `import()` in any build: the auth module, the spec documents) defers its evaluation error to the
+ * first event, where a statically imported one fails the upload. Evaluating them in workerd here
+ * keeps that failure ahead of the upload. The generated output decides whether there is anything to
+ * check, so `--prebuilt` is covered too.
  */
-const smokeLoadLazyModules = async (
+const smokeLoadDeferredModules = async (
     cwd: string,
     options: Pick<DeployCommandOptions, "env" | "logger" | "smokeLauncher" | "smokeLoad">,
     driver: DeployDriver,
@@ -1260,7 +1260,7 @@ const smokeLoadLazyModules = async (
         return undefined;
     }
 
-    return runLazySmokeLoad({
+    return runSmokeLoad({
         composedEntry: resolveComposedWorkerEntry(cwd),
         configPath: wranglerPath,
         cwd,
@@ -1308,7 +1308,7 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
             options.discoveryCache,
             artifactsModeFor(options),
         )) ??
-        (await smokeLoadLazyModules(cwd, options, driver, validation.wranglerPath));
+        (await smokeLoadDeferredModules(cwd, options, driver, validation.wranglerPath));
 
     if (preflightError !== undefined) {
         return abortResult(preflightError);
@@ -1575,4 +1575,4 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
 export { execute };
 // `provisionBindings` is shared with `lunora dev`'s wrangler flavor, which has
 // no `@lunora/vite` to reconcile bindings for it on startup.
-export { provisionBindings, runDeployCommand, runPreDeployPipeline, smokeLoadLazyModules };
+export { provisionBindings, runDeployCommand, runPreDeployPipeline, smokeLoadDeferredModules };

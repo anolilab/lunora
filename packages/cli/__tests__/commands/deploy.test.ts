@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import type { CodegenResult, PlatformDiagnostic } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
-import type { DiscoveryCache } from "@lunora/config";
+import type { DevProcessSpawner, DiscoveryCache } from "@lunora/config";
 import { createDiscoveryCache, probeCelldToolchain } from "@lunora/config";
 import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
@@ -1374,7 +1374,8 @@ export const agentComputer = defineContainer({ schedulingPolicy: "durable_object
             const { calls, spawner } = createRecordingSpawner();
             const { infos, logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
+            // The generated app defers its OpenAPI document, so the smoke check would boot a real `wrangler dev` on this stub entry.
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, smokeLoad: false, spawner });
 
             expect(result.code).toBe(0);
 
@@ -1382,6 +1383,25 @@ export const agentComputer = defineContainer({ schedulingPolicy: "durable_object
 
             expect(args).toContain("src/worker.ts");
             expect(infos.some((line) => line.includes("class-B composition"))).toBe(true);
+        });
+
+        it("runs the default pre-deploy smoke check through the launcher before it deploys", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+            // A lazy registry is the case the check exists for: its functions load on demand, so the check runs and asks for its Worker to be launched.
+            mkdirSync(join(workdir, "src"), { recursive: true });
+            writeFileSync(join(workdir, "src", "index.ts"), "export class ShardDO {}\nexport default { fetch() {} };\n", "utf8");
+            const smokeLauncher = vi.fn<DevProcessSpawner>(() => {
+                throw new Error("no wrangler in this test");
+            });
+
+            await runDeployCommand({ cwd: workdir, lazyFunctions: true, secretLister: noRemoteSecrets, logger, smokeLauncher, spawner });
+
+            expect(smokeLauncher).toHaveBeenCalledWith(expect.any(String), expect.any(Array), expect.objectContaining({ cwd: workdir }));
         });
 
         it("does not add a positional entry when src/worker.ts is absent (class-A/C)", async () => {

@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { extname, join, relative, resolve, sep } from "node:path";
+import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { stripVTControlCharacters } from "node:util";
 
@@ -272,11 +272,15 @@ class SmokeLoadError extends Error {
 const IDENTIFIER = /^[$_\p{ID_Start}][$\u200C\u200D\p{ID_Continue}]*$/u;
 
 interface WorkerConfig {
-    /** Durable Object classes this Worker must export itself (bindings without a `script_name`). */
+    /** The configured assets directory, resolved. `deploy` builds it after the check, so it may not exist yet. */
+    assetsDirectory: string | undefined;
+    /** Durable Object classes this Worker must export itself: its bindings without a `script_name`, and `exports` entries of that type. */
     durableObjectClasses: string[];
+    /** WorkerEntrypoint classes declared in `exports`, which the Worker must export itself. */
+    entrypointClasses: string[];
     hasContainers: boolean;
     main: string | undefined;
-    /** Workflow classes this Worker must export itself. */
+    /** Workflow classes this Worker must export itself: its bindings without a `script_name`, and `exports` entries of that type. */
     workflowClasses: string[];
 }
 
@@ -287,7 +291,7 @@ const readWorkerConfig = (cwd: string, environment: string | undefined, configPa
     const parsed = wranglerFile === undefined ? undefined : readWranglerJsonc<WranglerConfig>(wranglerFile).parsed;
 
     if (parsed === undefined) {
-        return { durableObjectClasses: [], hasContainers: false, main: undefined, workflowClasses: [] };
+        return { assetsDirectory: undefined, durableObjectClasses: [], entrypointClasses: [], hasContainers: false, main: undefined, workflowClasses: [] };
     }
 
     const { merged } = mergeWranglerEnvironment(parsed, environment);
@@ -299,11 +303,23 @@ const readWorkerConfig = (cwd: string, environment: string | undefined, configPa
         ),
     ];
 
+    // The declarative `exports` map: its key is the exported class, and the entry's `type` says which base class it extends. An export
+    // this Worker no longer defines (deleted, renamed, transferred away, or awaiting a transfer) is not its class to stub.
+    const declared: Record<string, { state?: string; type?: string } | null | undefined> =
+        (merged as { exports?: Record<string, { state?: string; type?: string } | null | undefined> }).exports ?? {};
+    const exportedAs = (type: string): string[] =>
+        Object.entries(declared).flatMap(([name, entry]) =>
+            entry?.type === type && (entry.state === undefined || entry.state === "created") && IDENTIFIER.test(name) ? [name] : [],
+        );
+    const directory = merged.assets?.directory;
+
     return {
-        durableObjectClasses: ownClasses(merged.durable_objects?.bindings ?? []),
+        assetsDirectory: directory === undefined || wranglerFile === undefined ? undefined : resolve(dirname(wranglerFile), directory),
+        durableObjectClasses: [...new Set([...ownClasses(merged.durable_objects?.bindings ?? []), ...exportedAs("durable-object")])],
+        entrypointClasses: exportedAs("worker"),
         hasContainers: (merged.containers ?? []).length > 0,
         main: merged.main,
-        workflowClasses: ownClasses(merged.workflows ?? []),
+        workflowClasses: [...new Set([...ownClasses(merged.workflows ?? []), ...exportedAs("workflow")])],
     };
 };
 
@@ -318,7 +334,7 @@ const readWorkerConfig = (cwd: string, environment: string | undefined, configPa
  * entry exports a stub for each class the config binds instead (wrangler refuses to start without
  * them), and the check evaluates the modules on their own against the source config.
  */
-type SmokeBase = { main: string } | { stubs: { durableObjects: string[]; workflows: string[] } };
+type SmokeBase = { main: string } | { stubs: { durableObjects: string[]; entrypoints: string[]; workflows: string[] } };
 
 /** The entry the smoke Worker stands on and the config to run it against, or why there is none. */
 const locateSmokeEntry = ({
@@ -327,24 +343,35 @@ const locateSmokeEntry = ({
     cwd,
     environment,
     toolchain,
-}: SmokeLoadOptions): { base: SmokeBase; configFile: string | undefined } | { skip: string } => {
+}: SmokeLoadOptions): { base: SmokeBase; configFile: string | undefined; missingAssets: boolean } | { skip: string } => {
     if (toolchain.devServer !== "workerd") {
         return { skip: "this deploy target does not run on workerd" };
     }
 
-    const { durableObjectClasses, hasContainers, main: configuredMain, workflowClasses } = readWorkerConfig(cwd, environment, configPath);
+    const {
+        assetsDirectory,
+        durableObjectClasses,
+        entrypointClasses,
+        hasContainers,
+        main: configuredMain,
+        workflowClasses,
+    } = readWorkerConfig(cwd, environment, configPath);
     const main = composedEntry ?? configuredMain;
     // Named explicitly even when the caller did not, so `wrangler dev` never follows a Vite build's redirect.
     const configFile = configPath ?? findWranglerFile(cwd);
     let base: SmokeBase;
 
     if (configFile !== undefined && generatedConfigPath(configFile) !== undefined) {
-        base = { stubs: { durableObjects: durableObjectClasses, workflows: workflowClasses } };
+        base = { stubs: { durableObjects: durableObjectClasses, entrypoints: entrypointClasses, workflows: workflowClasses } };
     } else if (typeof main === "string" && !main.startsWith("virtual:") && existsSync(resolve(cwd, main))) {
         base = { main };
     } else {
         return { skip: "the Worker entry is not a file on disk" };
     }
+
+    // `deploy` runs the client build that writes the assets directory after this check, so a clean checkout has none yet.
+    // `wrangler dev --assets` replaces the configured directory with an empty one for the check; the rest of the `assets` block still applies.
+    const missingAssets = assetsDirectory !== undefined && !existsSync(assetsDirectory);
 
     // `wrangler dev` builds and starts every declared container and has no switch to turn that off.
     if (hasContainers) {
@@ -358,7 +385,7 @@ const locateSmokeEntry = ({
         return { skip: `the Hyperdrive binding ${unbacked.join(", ")} has no local database for wrangler dev` };
     }
 
-    return { base, configFile };
+    return { base, configFile, missingAssets };
 };
 
 /** What wrangler prints for a Worker whose runtime never started; its proxy keeps the port open, so a request would hang instead. */
@@ -435,16 +462,49 @@ const unexpectedAnswer = (response: Response, text: string): SmokeLoadError => {
     );
 };
 
-/** Evaluates one module on the Worker; its error message, or `undefined` when it loaded. Anything but this run's answer blocks. */
-const requestModule = async (input: Parameters<typeof requestStep>[0], runId: string): Promise<string | undefined> => {
+/** A run tag that is a string but not this run's: another run's Worker holds the port, so this attempt is not ours to judge. */
+const answeredByAnotherRun = (run: unknown, runId: string): boolean => typeof run === "string" && run !== runId;
+
+/** What `requestModule` returns when another run's Worker answered, so the probe drops the attempt and retries the port. */
+const ANOTHER_RUN = Symbol("another run's Worker");
+
+/**
+ * Evaluates one module on the Worker: its error message, `undefined` when it loaded, or `ANOTHER_RUN`. Anything else but
+ * this run's answer blocks.
+ */
+const requestModule = async (input: Parameters<typeof requestStep>[0], runId: string): Promise<string | typeof ANOTHER_RUN | undefined> => {
     const step = await requestStep(input);
     const message = step.body?.message;
+
+    if (answeredByAnotherRun(step.body?.run, runId)) {
+        return ANOTHER_RUN;
+    }
 
     if (step.body?.run !== runId || (message !== undefined && typeof message !== "string")) {
         throw unexpectedAnswer(step.response, step.text);
     }
 
     return message;
+};
+
+/** Every lazy function module in one request: its count and failures, or `undefined` when another run's Worker answered. */
+const requestFunctions = async (
+    request: Omit<Parameters<typeof requestStep>[0], "pending" | "query">,
+    runId: string,
+): Promise<{ checked: number; failures: ModuleFailure[] } | undefined> => {
+    const step = await requestStep({ ...request, pending: "the lazy function modules", query: "step=functions" });
+    const { checked, failures } = step.body ?? {};
+
+    // Another run's Worker can take the port after the ping: this attempt is dropped and the next port is tried.
+    if (answeredByAnotherRun(step.body?.run, runId)) {
+        return undefined;
+    }
+
+    if (step.body?.run !== runId || typeof checked !== "number" || !Array.isArray(failures) || !failures.every((item) => isModuleFailure(item))) {
+        throw unexpectedAnswer(step.response, step.text);
+    }
+
+    return { checked, failures };
 };
 
 /**
@@ -480,16 +540,14 @@ const probeLazyModules = async (input: {
     let failures: ModuleFailure[] = [];
 
     if (functions) {
-        const step = await requestStep({ ...request, pending: "the lazy function modules", query: "step=functions" });
-        const { checked: count, failures: found } = step.body ?? {};
+        const found = await requestFunctions(request, runId);
 
-        // Another run's Worker can take the port after the ping; its clean answer must not stand for this run's modules.
-        if (step.body?.run !== runId || typeof count !== "number" || !Array.isArray(found) || !found.every((item) => isModuleFailure(item))) {
-            throw unexpectedAnswer(step.response, step.text);
+        if (found === undefined) {
+            return undefined;
         }
 
-        checked = count;
-        failures = found;
+        checked = found.checked;
+        failures = found.failures;
     }
 
     for (const [index, module] of deferred.entries()) {
@@ -498,6 +556,10 @@ const probeLazyModules = async (input: {
             { ...request, pending: `${module.kind} module ${module.label}`, query: `step=deferred&index=${String(index)}` },
             runId,
         );
+
+        if (message === ANOTHER_RUN) {
+            return undefined;
+        }
 
         if (message !== undefined) {
             failures.push({ deferred: module.kind, functionPath: `${module.kind}:${module.label}`, message });
@@ -512,6 +574,10 @@ const probeLazyModules = async (input: {
             { ...request, pending: `import(${JSON.stringify(specifier)})`, query: new URLSearchParams({ specifier, step: "integration" }).toString() },
             runId,
         );
+
+        if (message === ANOTHER_RUN) {
+            return undefined;
+        }
 
         if (message !== undefined) {
             integrationFailures.push({ message, specifier });
@@ -577,6 +643,7 @@ const killGroupOnExit = (pid: number): (() => void) => {
 /**
  * `stop()` signals only the package-manager process it spawned, and the `wrangler` under it can outlive that and keep
  * serving after the run directory is gone. Stopping the whole group clears the tree: SIGTERM, then SIGKILL past the grace.
+ * Windows has no process groups, so there `taskkill` walks the tree down from the pid instead.
  */
 const stopSmokeGroup = async (group: SmokeGroup | undefined): Promise<void> => {
     if (group === undefined) {
@@ -586,6 +653,13 @@ const stopSmokeGroup = async (group: SmokeGroup | undefined): Promise<void> => {
     group.dispose();
 
     const { pid } = group;
+
+    if (process.platform === "win32") {
+        // By its absolute path, so a PATH entry cannot stand in for the system tool.
+        spawnSync(join(process.env.SystemRoot ?? String.raw`C:\Windows`, "System32", "taskkill.exe"), ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
+
+        return;
+    }
 
     signalGroup(pid, "SIGTERM");
 
@@ -599,6 +673,22 @@ const stopSmokeGroup = async (group: SmokeGroup | undefined): Promise<void> => {
     if (groupAlive(pid)) {
         signalGroup(pid, "SIGKILL");
     }
+};
+
+/**
+ * Stops one attempt's `wrangler dev` and the tree under it. Windows walks the tree down from the pid, which resolves only
+ * while the shell that started it is alive, so there the tree goes before `stop()`; elsewhere the group goes after it.
+ */
+const stopAttempt = async (server: { stop: () => Promise<void> }, group: SmokeGroup | undefined): Promise<void> => {
+    if (process.platform === "win32") {
+        await stopSmokeGroup(group);
+        await server.stop();
+
+        return;
+    }
+
+    await server.stop();
+    await stopSmokeGroup(group);
 };
 
 /**
@@ -663,8 +753,7 @@ const reportProbe = (cwd: string, result: ProbeResult, logger: Logger): void => 
  * What a failed smoke check means. A failure of the project's modules or entry blocks, with the cause. A
  * check that could not say anything (skipped) warns. Anything else means the Worker did not start, which
  * blocks: a broken entry throws at load time, and that must not ship just because local wrangler could not confirm it.
- * Wrangler can also fail for reasons outside the project (a remote-only binding, a missing assets directory), so the
- * message names both causes.
+ * Wrangler can also fail for a reason outside the project (a remote-only binding), so the message names that cause.
  */
 const reportSmokeError = (error: unknown, output: string[], logger: Logger): string | undefined => {
     if (error instanceof SmokeLoadError && !error.skipped) {
@@ -682,7 +771,7 @@ const reportSmokeError = (error: unknown, output: string[], logger: Logger): str
     const tail = output.slice(-5).join("\n");
     const message =
         `the smoke Worker did not start (${error instanceof Error ? error.message : String(error)})${tail === "" ? "" : `\n${tail}`}. ` +
-        "Either the entry fails when it loads, or local wrangler cannot run the project (a remote-only binding or a missing assets directory). " +
+        "Either the entry fails when it loads, or local wrangler cannot run the project (a remote-only binding). " +
         "Fix whichever it is, or pass --no-smoke-load to ship anyway.";
 
     logger.error(message);
@@ -707,12 +796,24 @@ const smokeBaseSource = (cwd: string, base: SmokeBase): string => {
         return `export * from ${literal(resolve(cwd, base.main))};`;
     }
 
-    const { durableObjects, workflows } = base.stubs;
+    const { durableObjects, entrypoints, workflows } = base.stubs;
+    // A class named by both a binding and `exports` is exported once: a duplicate export does not parse.
+    const exported = new Set<string>();
+    const stub = (name: string, extendsClause: string): string[] => {
+        if (exported.has(name)) {
+            return [];
+        }
+
+        exported.add(name);
+
+        return [`export class ${name} ${extendsClause}`];
+    };
 
     return [
-        'import { DurableObject, WorkflowEntrypoint } from "cloudflare:workers";',
-        ...durableObjects.map((name) => `export class ${name} extends DurableObject {}`),
-        ...workflows.map((name) => `export class ${name} extends WorkflowEntrypoint { async run() {} }`),
+        'import { DurableObject, WorkerEntrypoint, WorkflowEntrypoint } from "cloudflare:workers";',
+        ...durableObjects.flatMap((name) => stub(name, "extends DurableObject {}")),
+        ...entrypoints.flatMap((name) => stub(name, "extends WorkerEntrypoint {}")),
+        ...workflows.flatMap((name) => stub(name, "extends WorkflowEntrypoint { async run() {} }")),
     ].join("\n");
 };
 
@@ -731,16 +832,21 @@ const prepareSmokeProcess = async (input: {
     functionsFile: string | undefined;
     /** Package specifiers the Worker loads with `import()`, evaluated alongside the lazy modules. */
     integrationModules: ReadonlyArray<string>;
+    /** The configured assets directory is not there yet, so the check serves an empty one of its own. */
+    missingAssets: boolean;
     /** The first port to try; a retry starts above the port another run's Worker held. */
     preferred: number;
     toolchain: DriverToolchain;
 }): Promise<{ args: string[]; command: string; port: number; runId: string }> => {
-    const { base, configPath, cwd, deferred, directory, environment, functionsFile, integrationModules, preferred, toolchain } = input;
+    const { base, configPath, cwd, deferred, directory, environment, functionsFile, integrationModules, missingAssets, preferred, toolchain } = input;
 
     try {
         const entry = join(directory, "entry.ts");
         // Echoed back by the probe, so an answer from another run's Worker on the same port is recognised.
         const runId = randomUUID();
+        if (missingAssets) {
+            mkdirSync(join(directory, "assets"), { recursive: true });
+        }
 
         // Each integration module gets a literal `import()`, so the bundler resolves and bundles it as the app's own does.
         const loaders = integrationModules.map((specifier) => `    [${literal(specifier)}, () => import(${literal(specifier)})],`).join("\n");
@@ -811,6 +917,8 @@ export default {
                     String(port),
                     "--persist-to",
                     relative(cwd, join(directory, "state")),
+                    // Replaces the configured directory, which is missing; the `assets` block's other settings still apply.
+                    ...(missingAssets ? ["--assets", relative(cwd, join(directory, "assets"))] : []),
                 ],
             }),
         );
@@ -846,14 +954,14 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     const hasManifest = existsSync(generatedFunctions) && readFileSync(generatedFunctions, "utf8").includes("export const loadAllFunctions");
     const functionsFile = hasManifest ? generatedFunctions : undefined;
     const events = findDeferredModules(cwd, schemaDirectory);
+    const deferred = [...events, ...findLoaderImports(cwd, schemaDirectory, events)];
+    // The SDKs a loader hands over. An eager build's `import()` loads run on the first event just the same, so they count too.
+    const integrationModules = collectIntegrationModules(cwd, composedEntry ?? readWorkerConfig(cwd, environment, options.configPath).main, schemaDirectory);
 
-    // Only lazy output starts the check: an eager build also emits loaders (`auth`, the specs, workflow
-    // events) that it is not meant to probe. Once it runs, every loader the generated output reaches is covered.
-    if (!hasManifest && events.length === 0) {
+    // Nothing the Worker loads on demand, in any build: an eager app with no such loader has nothing to evaluate before deploy.
+    if (!hasManifest && deferred.length === 0 && integrationModules.length === 0) {
         return undefined;
     }
-
-    const deferred = [...events, ...findLoaderImports(cwd, schemaDirectory, events)];
 
     const target = locateSmokeEntry(options);
 
@@ -863,9 +971,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
         return undefined;
     }
 
-    const { base, configFile } = target;
-    // Only reached from lazy output (see above); an eager build's loaders are not probed.
-    const integrationModules = collectIntegrationModules(cwd, composedEntry ?? readWorkerConfig(cwd, environment, options.configPath).main, schemaDirectory);
+    const { base, configFile, missingAssets } = target;
 
     const output: string[] = [];
     let directory: string | undefined;
@@ -873,13 +979,14 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     // One budget for booting and evaluating: a slow boot leaves less time for the probe, not a second full allowance.
     const deadline = Date.now() + SMOKE_TIMEOUT_MS;
 
-    // Only when the caller did not inject a launcher. Windows has no process groups to signal, so it spawns plainly.
+    // Only when the caller did not inject a launcher. Windows has no process groups, so it spawns plainly and stops the tree with taskkill.
     const grouped = process.platform !== "win32";
     const spawnInGroup: DevProcessSpawner = (command, args, spawnOptions) => {
         const child = spawn(command, [...args], { cwd: spawnOptions.cwd, detached: grouped, shell: spawnOptions.shell, stdio: ["ignore", "pipe", "pipe"] });
 
-        if (grouped && child.pid !== undefined) {
-            group = { dispose: killGroupOnExit(child.pid), pid: child.pid };
+        if (child.pid !== undefined) {
+            // Windows has no group to signal when the CLI exits; the stop still walks the tree.
+            group = { dispose: grouped ? killGroupOnExit(child.pid) : () => undefined, pid: child.pid };
         }
 
         return child;
@@ -905,6 +1012,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
                 environment,
                 functionsFile,
                 integrationModules,
+                missingAssets,
                 preferred,
                 toolchain,
             });
@@ -960,9 +1068,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
                 }
             } finally {
                 // eslint-disable-next-line no-await-in-loop -- the next attempt must not start while this tree still holds its port
-                await server.stop();
-                // eslint-disable-next-line no-await-in-loop -- the next attempt must not start while this tree still holds its port
-                await stopSmokeGroup(group);
+                await stopAttempt(server, group);
                 group = undefined;
             }
         }

@@ -1,3 +1,4 @@
+import type { spawn as SpawnFunction, spawnSync as SpawnSyncFunction } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
@@ -21,6 +22,22 @@ vi.mock(import("@lunora/config"), async (importOriginal) => {
 
 vi.mock(import("../../src/util/free-port"), async (importOriginal) => {
     return { ...(await importOriginal()), findAvailablePort };
+});
+
+// A started process reports its pid; the Windows stop hands that pid to taskkill.
+const spawn = vi.hoisted(() =>
+    vi.fn<(command: string) => { pid: number }>(() => {
+        return { pid: 4242 };
+    }),
+);
+const spawnSync = vi.hoisted(() => vi.fn<(command: string, args: string[], options: object) => unknown>());
+
+vi.mock(import("node:child_process"), async (importOriginal) => {
+    return {
+        ...(await importOriginal()),
+        spawn: spawn as unknown as typeof SpawnFunction,
+        spawnSync: spawnSync as unknown as typeof SpawnSyncFunction,
+    };
 });
 
 const dev = vi.fn<(request: { extraArgs?: string[] }) => { args: string[]; tool: string }>((request) => {
@@ -146,7 +163,31 @@ describe(runLazySmokeLoad, () => {
         expect(ports.size).toBe(2);
     });
 
-    it("blocks when the functions answer carries another run's id", async () => {
+    /** Answers as this run's Worker, except that the first port's Worker belongs to another run and answers `answer` for `step`. */
+    const otherRunOnFirstPort = (step: string, answer: WorkerResult): void => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn<(url: string) => Promise<Response>>(async (url) => {
+                const { port, searchParams } = new URL(url);
+                const own = runIdOf(resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? ""));
+                const firstPort = Number(port) === startDevProcess.mock.calls[0]?.[0].port;
+
+                return answerStep(url, answer, firstPort && searchParams.get("step") === step ? "another-run" : own);
+            }),
+        );
+    };
+
+    it("retries on the next port when the functions answer carries another run's id", async () => {
+        expect.assertions(3);
+
+        otherRunOnFirstPort("functions", { checked: 1, failures: [] });
+
+        await expect(run()).resolves.toBeUndefined();
+        expect(startDevProcess).toHaveBeenCalledTimes(2);
+        expect(stop).toHaveBeenCalledWith();
+    });
+
+    it("blocks when the functions answer carries a run id that matches neither run", async () => {
         expect.assertions(2);
 
         vi.stubGlobal(
@@ -154,7 +195,7 @@ describe(runLazySmokeLoad, () => {
             vi.fn<(url: string) => Promise<Response>>(async (url) => {
                 const own = runIdOf(resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? ""));
 
-                return answerStep(url, { checked: 1, failures: [] }, new URL(url).searchParams.get("step") === "functions" ? "another-run" : own);
+                return answerStep(url, { checked: 1, failures: [] }, new URL(url).searchParams.get("step") === "functions" ? undefined : own);
             }),
         );
 
@@ -303,6 +344,16 @@ describe(runLazySmokeLoad, () => {
             expect(entry).toContain('["stripe", () => import("stripe")]');
         });
 
+        it("retries on the next port when an integration answer carries another run's id", async () => {
+            expect.assertions(2);
+
+            lazyWithLoader();
+            otherRunOnFirstPort("integration", { checked: 0, failures: [], integrations: { checked: 1, failures: [] } });
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(startDevProcess).toHaveBeenCalledTimes(2);
+        });
+
         it("lists at most ten failing integration modules and counts the rest", async () => {
             expect.assertions(3);
 
@@ -329,14 +380,15 @@ describe(runLazySmokeLoad, () => {
             expect(error).toContain("…and 2 more integration module(s)");
         });
 
-        it("leaves an eager build alone even when it loads an SDK with import()", async () => {
+        it("checks an eager build's SDK loaders too, since its import() loads run on the first event just the same", async () => {
             expect.assertions(2);
 
             lazyWithLoader();
             writeFileSync(join(cwd, "lunora", "_generated", "functions.ts"), "export const LUNORA_FUNCTIONS = {};\n");
+            respondWith({ checked: 0, failures: [], integrations: { checked: 1, failures: [] } });
 
             await expect(run()).resolves.toBeUndefined();
-            expect(startDevProcess).not.toHaveBeenCalled();
+            expect(startDevProcess).toHaveBeenCalledTimes(1);
         });
 
         it("blocks naming the module when an integration SDK fails to evaluate", async () => {
@@ -474,6 +526,60 @@ describe(runLazySmokeLoad, () => {
             expect(entry.read().path).not.toBe(first);
             expect(existsSync(first)).toBe(false);
             expect(readdirSync(join(cwd, ".lunora"))).toStrictEqual([]);
+        });
+
+        it("stubs the classes its exports map declares, once each, and skips the ones it no longer defines", async () => {
+            expect.assertions(5);
+
+            writeFileSync(
+                join(cwd, "wrangler.jsonc"),
+                JSON.stringify({
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    exports: {
+                        Api: { type: "worker" },
+                        Flow2: { type: "workflow" },
+                        Gone: { state: "deleted", type: "durable-object" },
+                        Sess: { type: "durable-object" },
+                        ShardDO: { type: "durable-object" },
+                    },
+                    main: "src/index.ts",
+                    name: "app",
+                }),
+            );
+            mkdirSync(join(cwd, ".wrangler", "deploy"), { recursive: true });
+            writeFileSync(join(cwd, ".wrangler", "deploy", "config.json"), JSON.stringify({ configPath: "../../dist/server/wrangler.json" }));
+            respondWith({ checked: 1, failures: [] });
+
+            const entry = captureEntry();
+
+            await run();
+
+            expect(entry.read().content).toContain("export class Sess extends DurableObject {}");
+            expect(entry.read().content).toContain("export class Api extends WorkerEntrypoint {}");
+            expect(entry.read().content).toContain("export class Flow2 extends WorkflowEntrypoint");
+            expect(entry.read().content).not.toContain("Gone");
+            expect(entry.read().content.match(/export class ShardDO /gu)).toHaveLength(1);
+        });
+
+        it("checks against an empty assets directory in place of the configured one, which a clean checkout has not built yet", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(cwd, "wrangler.jsonc"), JSON.stringify({ assets: { directory: "dist/client" }, main: "src/index.ts", name: "app" }));
+            respondWith({ checked: 1, failures: [] });
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(dev.mock.calls[0]?.[0].extraArgs).toContain("--assets");
+        });
+
+        it("leaves the assets directory alone when the build has already written it", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(cwd, "wrangler.jsonc"), JSON.stringify({ assets: { directory: "dist/client" }, main: "src/index.ts", name: "app" }));
+            mkdirSync(join(cwd, "dist", "client"), { recursive: true });
+            respondWith({ checked: 1, failures: [] });
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(dev.mock.calls[0]?.[0].extraArgs).not.toContain("--assets");
         });
 
         it("skips a project that declares containers instead of building them locally", async () => {
@@ -686,6 +792,31 @@ describe(runLazySmokeLoad, () => {
         expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("could not create a directory for the check"));
     });
 
+    it("stops a Windows tree with taskkill by its system path, before the shell that started it is stopped", async () => {
+        expect.assertions(3);
+
+        const { platform } = process;
+
+        Object.defineProperty(process, "platform", { value: "win32" });
+
+        try {
+            respondWith({ checked: 1, failures: [] });
+            startDevProcess.mockImplementation(async (options) => {
+                options.spawn?.("wrangler", ["dev"], { cwd, shell: true });
+
+                return { crashed: new Promise(() => {}), stop };
+            });
+
+            await run();
+
+            expect(spawn).toHaveBeenCalledWith("wrangler", ["dev"], expect.objectContaining({ detached: false }));
+            expect(spawnSync).toHaveBeenCalledWith(expect.stringMatching(/taskkill\.exe$/u), ["/pid", "4242", "/T", "/F"], { stdio: "ignore" });
+            expect(spawnSync.mock.invocationCallOrder[0]).toBeLessThan(stop.mock.invocationCallOrder[0] ?? 0);
+        } finally {
+            Object.defineProperty(process, "platform", { value: platform });
+        }
+    });
+
     it("starts the smoke server through the injected launcher", async () => {
         expect.assertions(1);
 
@@ -811,15 +942,15 @@ describe(runLazySmokeLoad, () => {
             await expect(run()).resolves.toContain("lunora/live.ts (module): live broke");
         });
 
-        it("stays quiet for an eager build whose generated output still loads auth behind import()", async () => {
-            expect.assertions(2);
+        it("checks an eager build's auth module, which its generated output loads with import(), before deploy", async () => {
+            expect.assertions(1);
 
             rmSync(join(cwd, "lunora", "_generated", "functions.ts"));
             writeFileSync(join(cwd, "lunora", "_generated", "app.ts"), 'const load = async () => ({ auth: await import("./authModule.js") });\n');
             writeFileSync(join(cwd, "lunora", "_generated", "authModule.ts"), 'throw new Error("auth broke");\n');
+            answerFromEntry();
 
-            await expect(run()).resolves.toBeUndefined();
-            expect(startDevProcess).not.toHaveBeenCalled();
+            await expect(run()).resolves.toContain("lunora/_generated/authModule.ts (module): auth broke");
         });
 
         it("reports function failures and deferred failures together", async () => {
