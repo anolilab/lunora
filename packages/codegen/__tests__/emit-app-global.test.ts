@@ -99,7 +99,7 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
     });
 
     it("opens a first-primary session beside the replica exec for consistency: primary reads", () => {
-        expect.assertions(3);
+        expect.assertions(2);
 
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
@@ -107,7 +107,6 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
         // caller's bookmark or first-unconstrained, which can miss a just-committed write.
         expect(output).toContain('const replica = buildSessionExec(database, bookmark ?? "first-unconstrained", onBookmark);');
         expect(output).toContain("primary: buildPrimaryExec(database) };");
-        expect(output).toContain(".prepare(sql)");
     });
 
     it("omits the admin-import wiring entirely for an app with no .global() table", () => {

@@ -632,7 +632,6 @@ const buildSessionExec = (database: D1DatabaseLike, constraint: string, onBookma
     });
 };
 
-/** Best-effort D1 cost accounting: never let it fail the query it measures. */
 const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
     try {
         emitD1QueryCost(sql, meta);
