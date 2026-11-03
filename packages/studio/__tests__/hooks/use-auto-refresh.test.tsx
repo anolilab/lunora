@@ -10,8 +10,18 @@ import { createMockClient } from "../mock-client";
 
 const sharedClient = createMockClient({ query: (): unknown => undefined });
 
-const Probe = ({ enabled, intervalMs, onTick }: { enabled: boolean; intervalMs?: number; onTick: () => unknown }): ReactElement => {
-    useAutoRefresh(onTick, enabled, intervalMs);
+const Probe = ({
+    enabled,
+    intervalMs,
+    onTick,
+    restartKey,
+}: {
+    enabled: boolean;
+    intervalMs?: number;
+    onTick: () => unknown;
+    restartKey?: string;
+}): ReactElement => {
+    useAutoRefresh(onTick, enabled, intervalMs, restartKey);
 
     return <div />;
 };
@@ -21,14 +31,16 @@ const Harness = ({
     enabled,
     intervalMs,
     onTick,
+    restartKey,
 }: {
     client?: MockClientHooks;
     enabled: boolean;
     intervalMs?: number;
     onTick: () => unknown;
+    restartKey?: string;
 }): ReactElement => (
     <LunoraProvider client={client.asClient}>
-        <Probe enabled={enabled} intervalMs={intervalMs} onTick={onTick} />
+        <Probe enabled={enabled} intervalMs={intervalMs} onTick={onTick} restartKey={restartKey} />
     </LunoraProvider>
 );
 
@@ -189,6 +201,23 @@ describe("useAutoRefresh", () => {
         await vi.advanceTimersByTimeAsync(120_000);
 
         expect(onTick).toHaveBeenCalledTimes(1);
+    });
+
+    it("resumes polling after a terminal error once the restart key changes", async () => {
+        expect.assertions(2);
+
+        const onTick = vi.fn<() => Promise<void>>(() => Promise.reject(Object.assign(new Error("masked"), { code: "FORBIDDEN" })));
+
+        const { rerender } = render(<Harness enabled intervalMs={1000} onTick={onTick} restartKey="a" />);
+
+        await vi.advanceTimersByTimeAsync(120_000);
+
+        expect(onTick).toHaveBeenCalledTimes(1);
+
+        rerender(<Harness enabled intervalMs={1000} onTick={onTick} restartKey="b" />);
+        await vi.advanceTimersByTimeAsync(1000);
+
+        expect(onTick).toHaveBeenCalledTimes(2);
     });
 
     it("resumes polling after a terminal error once the client is replaced with new credentials", async () => {

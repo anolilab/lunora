@@ -31,11 +31,12 @@ export const DEFAULT_AUTO_REFRESH_MS = 5000;
  * Ticks are skipped while the tab is hidden (`document.hidden`) so a backgrounded
  * studio doesn't keep hammering the worker. `onTick` is held in a ref so a
  * fresh closure each render doesn't reset the timer. The timer restarts when
- * `enabled`/`intervalMs` change or the Lunora client is replaced (new credentials),
- * so a panel stopped by a terminal error resumes once its client changes. The
+ * `enabled`/`intervalMs`/`restartKey` change or the Lunora client is replaced (new credentials),
+ * so a panel stopped by a terminal error resumes once its client changes. `restartKey` names the
+ * request the tick makes (a filter set, say): a rejection of one request must not silence the next. The
  * timer is cleared on disable and unmount.
  */
-export const useAutoRefresh = (onTick: () => unknown, enabled: boolean, intervalMs: number = DEFAULT_AUTO_REFRESH_MS): void => {
+export const useAutoRefresh = (onTick: () => unknown, enabled: boolean, intervalMs: number = DEFAULT_AUTO_REFRESH_MS, restartKey?: string): void => {
     const client = useStudioClient();
     const tickRef = useRef(onTick);
 
@@ -113,8 +114,8 @@ export const useAutoRefresh = (onTick: () => unknown, enabled: boolean, interval
             stopped = true;
             clearTimeout(id);
         };
-        // `client` is not read in the effect: a replaced client (new credentials) must restart a timer that a terminal error stopped.
-    }, [client, enabled, intervalMs]);
+        // `client` and `restartKey` are not read in the effect: a replaced client (new credentials) or a changed request must restart a timer that a terminal error stopped.
+    }, [client, enabled, intervalMs, restartKey]);
 };
 
 /**
