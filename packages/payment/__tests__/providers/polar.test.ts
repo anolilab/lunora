@@ -221,6 +221,7 @@ describe("polar adapter", () => {
         expect.assertions(4);
 
         // A dashboard-generated secret carries the `polar_whs_` prefix and is not base64 at all.
+        // pragma: allowlist nextline secret
         for (const secret of [SECRET, "polar_whs_3kL9xQ2mV7pR4tY8wZ1nB6cD5fG0hJ"]) {
             const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: secret });
             const payload = JSON.stringify({ data: { id: "sub_1", metadata: { referenceId: "user_1" }, status: "canceled" }, type: "subscription.revoked" });

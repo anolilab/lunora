@@ -7,7 +7,7 @@ import { subjectsToReerase, tombstoneKeyOf } from "../src/tombstones";
 const HEX_DIGEST = /^[0-9a-f]{64}$/u;
 const SECRET = "test-tombstone-secret";
 /** HMAC-SHA256 of "u1" under {@link SECRET}, computed outside the package (openssl dgst -sha256 -hmac). */
-const U1_KEY = "d8f17398947ab20004ba0182ca0911462a689032f31fd433d45d48bfc76d363e";
+const U1_KEY = "d8f17398947ab20004ba0182ca0911462a689032f31fd433d45d48bfc76d363e"; // secret-scanner:allow -- HMAC test vector, not a real key
 
 const memoryTombstones = (): TombstonePort & { stored: Map<string, Date> } => {
     const stored = new Map<string, Date>();

@@ -1544,7 +1544,7 @@ private fun identityChangeEvictsPreviousSession() {
 private fun authTokenRedactedWhenPrinted() {
     covers("auth_token_redacted_when_printed")
 
-    val token = "lunora-secret-7f3a9c"
+    val token = "lunora-secret-7f3a9c" // secret-scanner:allow -- test fixture
     val client = Client("https://app.example", authToken = token)
     val options = SubmitOptions("messages:send")
 
