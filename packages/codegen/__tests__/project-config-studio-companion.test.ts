@@ -1,0 +1,106 @@
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { readProjectConfigLiterals, readProjectStudioCompanion } from "../src/project-config-file";
+import { runCodegen } from "../src/run-codegen";
+
+describe("studio.companion in lunora.config", () => {
+    let projectRoot: string;
+
+    beforeEach(() => {
+        projectRoot = mkdtempSync(join(tmpdir(), "lunora-companion-config-"));
+    });
+
+    afterEach(() => {
+        rmSync(projectRoot, { force: true, recursive: true });
+        vi.restoreAllMocks();
+    });
+
+    const writeConfig = (body: string): void => {
+        writeFileSync(join(projectRoot, "lunora.config.ts"), `export default ${body};\n`, "utf8");
+    };
+
+    it.each([
+        ["{ studio: { companion: true } }", { companion: true }],
+        ["{ studio: { companion: false } }", { companion: false }],
+        ["{ studio: {} }", {}],
+        ["{ studio: { companion: process.env.C === '1' } }", { unreadable: true }],
+        ["{ get studio() { return { companion: true }; } }", { unreadable: true }],
+    ])("reads %s", (body, expected) => {
+        expect.assertions(1);
+
+        writeConfig(body);
+
+        expect(readProjectConfigLiterals(projectRoot).studio).toStrictEqual(expected);
+    });
+
+    it("reads no studio key when the config does not declare one", () => {
+        expect.assertions(2);
+
+        writeConfig("{ target: 'cloudflare' }");
+
+        expect(readProjectConfigLiterals(projectRoot).studio).toBeUndefined();
+        expect(readProjectStudioCompanion(join(projectRoot, "lunora"))).toBe(false);
+    });
+
+    it("treats an unreadable value as off and says so", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        writeConfig("{ studio: { companion: process.env.C === '1' } }");
+
+        expect(readProjectStudioCompanion(join(projectRoot, "lunora"))).toBe(false);
+        expect(warn).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("the generated companion Worker", () => {
+    let projectRoot: string;
+    let companion: string;
+
+    beforeEach(() => {
+        projectRoot = mkdtempSync(join(tmpdir(), "lunora-companion-gen-"));
+        companion = join(projectRoot, "lunora", "_generated", "companion");
+        cpSync(join(import.meta.dirname, "fixtures", "simple", "lunora"), join(projectRoot, "lunora"), { recursive: true });
+        writeFileSync(join(projectRoot, "wrangler.jsonc"), '{ // main\n "name": "my-app", "compatibility_date": "2025-01-01" }\n', "utf8");
+    });
+
+    afterEach(() => {
+        rmSync(projectRoot, { force: true, recursive: true });
+    });
+
+    it("writes the wrangler config, the self-contained worker and the payload when on, and removes them when off", () => {
+        expect.assertions(12);
+
+        runCodegen({ projectRoot, studioCompanion: true, wranglerQueueProducers: [] });
+
+        const wrangler: unknown = JSON.parse(readFileSync(join(companion, "wrangler.jsonc"), "utf8"));
+        const worker = readFileSync(join(companion, "src", "worker.ts"), "utf8");
+        const payload = readFileSync(join(companion, "advisor-procedures.json"), "utf8");
+
+        expect(wrangler).toMatchObject({ compatibility_date: "2025-01-01", main: "src/worker.ts", name: "my-app-advisor" });
+        expect(wrangler).not.toHaveProperty("bindings");
+        expect(Array.isArray(JSON.parse(payload))).toBe(true);
+        expect(worker).toContain(JSON.stringify(payload));
+        expect(worker).toContain("LUNORA_ADMIN_TOKEN");
+        expect(worker).toContain("/__lunora/advisor-procedures");
+        expect(worker).toContain("export default");
+        expect(worker).not.toMatch(/^import /mu);
+        expect(worker).not.toContain('from "@lunora');
+        expect(worker).not.toContain('from "node:');
+
+        runCodegen({ projectRoot, wranglerQueueProducers: [] });
+
+        expect(existsSync(companion)).toBe(false);
+
+        runCodegen({ projectRoot, studioCompanion: true, wranglerQueueProducers: [] });
+        writeFileSync(join(projectRoot, "lunora.config.ts"), "export default { studio: { companion: false } };\n", "utf8");
+        runCodegen({ projectRoot, wranglerQueueProducers: [] });
+
+        expect(existsSync(companion)).toBe(false);
+    });
+});

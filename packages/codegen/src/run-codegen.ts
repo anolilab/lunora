@@ -69,6 +69,7 @@ import {
     LAZY_FUNCTION_DIRECTORY,
     queueAliasFindings,
 } from "./emit";
+import emitCompanion from "./emit/companion";
 import { emitServiceDeclarations } from "./emit/service-declarations";
 import { isSensitiveFunction } from "./emit/shared";
 import { emitApp, emitAuthModule } from "./emit-app";
@@ -76,7 +77,7 @@ import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type { AgentIR, FunctionIR, HttpRouteIR, MaskMetadataIR, MigrationIR, MutatorIR, ShapeIR, WorkflowIR } from "./ir";
 import { setStandardTypeResolver } from "./parse-validator";
 import { gateAdminTokenRevocation, platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
-import { readMergeDurableObjects, readProjectLazyFunctions } from "./project-config-file";
+import { readMergeDurableObjects, readProjectLazyFunctions, readProjectStudioCompanion } from "./project-config-file";
 import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged } from "./run-codegen-files";
 import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
 import { buildSchemaSnapshot, indexReferencesOf } from "./schema-drift";
@@ -397,6 +398,8 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // Read whatever the caller passes, so an unreadable config value is said even when the caller already opts in.
     const projectLazyFunctions = readProjectLazyFunctions(lunoraDirectory);
     const lazyFunctions = options.lazyFunctions === true || projectLazyFunctions;
+    // Same either-opt-in rule as `lazyFunctions`, so an entry point that omits the flag does not delete the folder.
+    const studioCompanion = options.studioCompanion === true || readProjectStudioCompanion(lunoraDirectory);
     const schemaPath = join(lunoraDirectory, "schema.ts");
 
     if (!existsSync(schemaPath)) {
@@ -959,6 +962,8 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: authModuleContent, kind: "optional", name: "authModule.ts" },
               { content: collectionsContent, kind: "optional", name: "collections.ts" },
               { files: serviceDeclarations, kind: "services" },
+              // Off removes the folder, so turning the flag off leaves no stale deployable Worker behind.
+              { files: emitCompanion(options.projectRoot, advisorContext?.procedureProtections ?? [], studioCompanion), kind: "directory", name: "companion" },
               // The `.json` is the portable artifact for external tooling; the `.ts` (same
               // document, inlined) is what the worker imports and passes to `createWorker({
               // openApiSpec })`. Both are gated on the same `apiSpec` choice so they regenerate

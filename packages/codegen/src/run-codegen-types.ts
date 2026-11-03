@@ -65,6 +65,12 @@ export interface CodegenOptions {
     projectRoot: string;
 
     /**
+     * Emit `_generated/companion/`, the Worker that serves the advisor procedure list to a hosted Studio.
+     * `studio.companion: true` in `lunora.config.*` enables it too; with neither, the folder is removed.
+     */
+    studioCompanion?: boolean;
+
+    /**
      * The deploy target codegen tailors the emitted `ctx.*` surface to.
      * Defaults to `"cloudflare"` — whose capability matrix marks every feature
      * native or emulated, so the default output is unchanged (byte-identical
