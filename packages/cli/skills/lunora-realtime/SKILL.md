@@ -198,8 +198,9 @@ For an event with no query behind it ("a comment was posted"), the server
 publishes to a declared topic and the browser follows topics over one shared SSE
 connection (shared when the connection options match). Declare the stream and its
 topics once (`defineLiveStream({ id, topics: { post: { key: { postId: v.id("posts") },
-payload: v.object({...}) } }, onSubscribe })`), mount its two handlers on the HTTP
-router, and follow topics with the adapter's hook (all return `{ lastEvent, error }`).
+payload: v.object({...}) } }, onSubscribe })`); codegen mounts its connect and control
+routes on the worker (add `liveStreamRouter` yourself only under a framework host that
+owns the fetch handler), and follow topics with the adapter's hook (all return `{ lastEvent, error }`).
 `onSubscribe` receives the parsed `{ ctx, topic, key, raw }`; do not split a string.
 A subscribe for an undeclared name, wrong arity or a non-canonical spelling is denied
 before `onSubscribe` runs. Codegen writes `_generated/live.ts`:
