@@ -12,7 +12,7 @@ import { createMockClient } from "../../mock-client";
  * `token` is the admin bearer the client carries (the mock's default is a non-empty one);
  * `null` models a client with no credential.
  */
-const renderPanel = (localProcedures: boolean, token: null | string = null): ReactElement => (
+const renderPanel = (localProcedures: boolean, token: null | string = null, advisorCompanion = true): ReactElement => (
     <LunoraProvider
         client={Object.assign(
             createMockClient({
@@ -27,7 +27,7 @@ const renderPanel = (localProcedures: boolean, token: null | string = null): Rea
             { getAuthToken: () => token },
         )}
     >
-        <AdvisorHealthPanel localProcedures={localProcedures} />
+        <AdvisorHealthPanel advisorCompanion={advisorCompanion} localProcedures={localProcedures} />
     </LunoraProvider>
 );
 
@@ -84,6 +84,19 @@ describe("advisorHealthPanel", () => {
         await waitFor(() => {
             expect(screen.queryByTestId("advisor-health-score")).toBeNull();
         });
+    });
+
+    it("sends no request when the worker has no companion, even with a token", async () => {
+        expect.assertions(2);
+
+        const fetchMock = stubProceduresResponse(200, { procedures: [] });
+
+        render(renderPanel(false, "test-token", false));
+
+        const notice = await screen.findByTestId("advisor-health-local-only");
+
+        expect(notice.textContent).toContain("VITE_LUNORA_ADVISOR_COMPANION");
+        expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it("fetches the list from the configured worker with the admin bearer and scores it", async () => {

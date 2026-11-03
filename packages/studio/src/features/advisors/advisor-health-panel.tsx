@@ -50,6 +50,12 @@ const rankRows = (procedures: ReadonlyArray<ProcedureScore>): ProcedureScore[] =
 
 interface AdvisorHealthPanelProps {
     /**
+     * Set when the worker this Studio talks to has the companion deployed. Without it
+     * a hosted Studio makes no request for the list and says why.
+     */
+    readonly advisorCompanion?: boolean;
+
+    /**
      * `true` on a dev host, which serves the advisor procedure list from its own origin.
      * Elsewhere the list is fetched from the client's worker when the client carries an
      * admin token; without one the panel says so instead of scoring.
@@ -72,21 +78,21 @@ interface AdvisorHealthPanelProps {
  * denominator; without the latter there is no way to tell one failing handler
  * out of two from one out of two hundred.
  */
-const AdvisorHealthPanel = ({ localProcedures = false, testId = "advisor-health" }: AdvisorHealthPanelProps): ReactElement => {
+const AdvisorHealthPanel = ({ advisorCompanion = false, localProcedures = false, testId = "advisor-health" }: AdvisorHealthPanelProps): ReactElement => {
     const t = useT();
     const client = useStudioClient();
     const advisoriesQuery = useAdminQuery<AdvisoriesResult>(ADMIN_FUNCTIONS.getAdvisories, {}, { live: true });
     // A hosted Studio has no dev host to serve the list, but its client points at a worker
     // that forwards the route to the companion. Same client and token every admin read uses.
     const token = client.getAuthToken();
-    const remote = !localProcedures && token !== null && token !== "" ? { baseUrl: workerBaseUrl(client.url), token } : undefined;
+    const remote = advisorCompanion && !localProcedures && token !== null && token !== "" ? { baseUrl: workerBaseUrl(client.url), token } : undefined;
     const proceduresQuery = useAdvisorProcedures({ enabled: localProcedures || remote !== undefined, refreshKey: advisoriesQuery.data, remote });
 
     if (!localProcedures && remote === undefined) {
         return (
             <Card>
                 <CardContent className="py-8 text-center text-muted-foreground" data-testid={`${testId}-local-only`}>
-                    {t("The health score needs `lunora dev`: this deployment does not serve the advisor procedure list.")}
+                    {t("The health score needs `lunora dev`, or a Studio build with VITE_LUNORA_ADVISOR_COMPANION set to true.")}
                 </CardContent>
             </Card>
         );
