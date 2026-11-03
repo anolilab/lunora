@@ -46,7 +46,10 @@ const errorCode = (error: unknown): string | undefined => {
  * the same argument applied to everything the dispatch itself can throw.
  */
 type ProbeOutcome =
-    { kind: "allowed"; value: unknown } | { kind: "denied"; message: string } | { kind: "errored"; message: string } | { kind: "invalid"; message: string };
+    | { kind: "allowed"; value: unknown }
+    | { kind: "denied"; message: string }
+    | { kind: "errored"; message: string }
+    | { kind: "invalid"; message: string };
 
 interface RunAsProbeArgs {
     /** Parsed JSON args passed to the probed function. */

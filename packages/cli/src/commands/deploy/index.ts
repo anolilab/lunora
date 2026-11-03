@@ -102,12 +102,11 @@ const deployCommand: Command = {
         },
         // Both halves declared explicitly, like `typecheck` on `verify`: the handler reads `!== false`.
         {
-            description:
-                "Evaluate every lazy function module and import()ed integration SDK in workerd before shipping (default; nothing to check when there are none)",
+            description: "Evaluate the modules the Worker loads on demand (lazy functions, auth, API specs) in workerd before shipping (default)",
             name: "smoke-load",
             type: Boolean,
         },
-        { description: "Skip evaluating lazy function modules and import()ed integration SDKs before shipping", name: "no-smoke-load", type: Boolean },
+        { description: "Skip evaluating on-demand modules before shipping", name: "no-smoke-load", type: Boolean },
         TARGET_OPTION,
         {
             description:

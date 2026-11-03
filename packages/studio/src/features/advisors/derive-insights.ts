@@ -14,7 +14,13 @@ type InsightSeverity = "error" | "info" | "warning";
  * slowness an unattributed symptom.
  */
 type InsightKind =
-    "high-error-rate" | "high-evictions" | "high-write-contention" | "low-cache-hit-rate" | "missing-index" | "slow-function" | "storage-headroom";
+    | "high-error-rate"
+    | "high-evictions"
+    | "high-write-contention"
+    | "low-cache-hit-rate"
+    | "missing-index"
+    | "slow-function"
+    | "storage-headroom";
 
 /**
  * One detected issue. `value` is the headline number whose meaning depends on

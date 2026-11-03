@@ -120,7 +120,9 @@ interface TabCoordinatorOptions {
 }
 
 type WsFollowerMessage =
-    { tabId: string; ts: number; type: "heartbeat" } | { tabId: string; ts: number; type: "claim-leadership" } | { tabId: string; type: "yield-leadership" };
+    | { tabId: string; ts: number; type: "heartbeat" }
+    | { tabId: string; ts: number; type: "claim-leadership" }
+    | { tabId: string; type: "yield-leadership" };
 
 /**
  * `more` marks every snapshot of one flush but the last, so a follower applies the whole
@@ -211,7 +213,8 @@ class TabCoordinator {
     private readonly onStopBeingLeader: (() => void) | undefined;
     private readonly onConnectionStatus: ((status: ConnectionStatus, identity?: string | null) => void) | undefined;
     private readonly onSubscriptionData:
-        ((key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void) | undefined;
+        | ((key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void)
+        | undefined;
     private readonly onLeaderClaimAnswered: (() => void) | undefined;
     private readonly onSubscriptionError: ((key: string, error: SubscriptionError, identity?: string | null, claims?: string) => void) | undefined;
     private readonly onSubscriptionSettled:
