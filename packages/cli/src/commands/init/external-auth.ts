@@ -14,6 +14,7 @@ import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } 
 import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import { dirname, join, relative } from "@visulima/path";
+import { ts } from "ts-morph";
 
 import type { Logger } from "../../util/logger";
 
@@ -334,8 +335,54 @@ const findClientFiles = (directory: string, depth = 0): string[] => {
     });
 };
 
-/** Where a client is built with options: `new LunoraClient({`, and the Angular/Analog `provideLunora(` call, with or without options. */
-const CLIENT_OPTIONS_SITE = /new LunoraClient\(\{|provideLunora\(\s*\{|provideLunora\(\s*\)/gu;
+/**
+ * Add `authTokenOnUpgrade: true` to each client construction in `source`: `new LunoraClient({ … })`, and Analog's `provideLunora(…)`
+ * call, with options or without. The call sites come from the parsed syntax tree, so a comment or string that names one is left
+ * alone. Returns the patched text, or `undefined` when the file has no such call.
+ */
+const patchClientSource = (source: string): string | undefined => {
+    const file = ts.createSourceFile("client.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const insertions: { at: number; text: string }[] = [];
+
+    const optionsInsertion = (options: ts.ObjectLiteralExpression): { at: number; text: string } => {
+        return { at: options.getStart(file) + 1, text: " authTokenOnUpgrade: true," };
+    };
+
+    const visit = (node: ts.Node): void => {
+        if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "LunoraClient") {
+            const [options] = node.arguments ?? [];
+
+            if (options !== undefined && ts.isObjectLiteralExpression(options)) {
+                insertions.push(optionsInsertion(options));
+            }
+        } else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "provideLunora") {
+            const [options] = node.arguments;
+
+            if (options === undefined) {
+                insertions.push({ at: node.getEnd() - 1, text: "{ authTokenOnUpgrade: true }" });
+            } else if (ts.isObjectLiteralExpression(options)) {
+                insertions.push(optionsInsertion(options));
+            }
+        }
+
+        ts.forEachChild(node, visit);
+    };
+
+    visit(file);
+
+    if (insertions.length === 0) {
+        return undefined;
+    }
+
+    // Applied last-first, so each earlier insertion point is still valid.
+    let patched = source;
+
+    for (const { at, text } of insertions.toSorted((left, right) => right.at - left.at)) {
+        patched = `${patched.slice(0, at)}${text}${patched.slice(at)}`;
+    }
+
+    return patched;
+};
 
 /**
  * Turn on `authTokenOnUpgrade` where the app builds its client (`new LunoraClient`, or Analog's `provideLunora()`), so the
@@ -349,11 +396,9 @@ const enableUpgradeBearer = (projectDirectory: string): string[] =>
             return false;
         }
 
-        const patched = source.replaceAll(CLIENT_OPTIONS_SITE, (site) =>
-            site.endsWith("{") ? `${site} authTokenOnUpgrade: true,` : "provideLunora({ authTokenOnUpgrade: true })",
-        );
+        const patched = patchClientSource(source);
 
-        if (patched === source) {
+        if (patched === undefined) {
             return false;
         }
 

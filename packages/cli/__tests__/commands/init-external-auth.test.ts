@@ -203,6 +203,20 @@ describe(wireExternalAuth, () => {
         expect(lines.join("\n")).toContain("setAuthTokenProvider(client, getToken, { subject: userId })");
     });
 
+    it("leaves a comment or string that names a client construction alone, and patches only the real call", () => {
+        expect.assertions(2);
+
+        mkdirSync(join(project, "src"), { recursive: true });
+        const comment = '// new LunoraClient({ url: "old" }) and provideLunora() were here\nexport const note = "provideLunora()";\n';
+        writeFileSync(join(project, "src", "note.ts"), comment, "utf8");
+        writeFileSync(join(project, "src", "client.ts"), 'export const client = new LunoraClient({ url: "/x" });\n', "utf8");
+
+        wireExternalAuth(project, "clerk", silentLogger().logger);
+
+        expect(readFileSync(join(project, "src", "note.ts"), "utf8")).toBe(comment);
+        expect(readFileSync(join(project, "src", "client.ts"), "utf8")).toContain('new LunoraClient({ authTokenOnUpgrade: true, url: "/x" })');
+    });
+
     it("turns on authTokenOnUpgrade in an Analog app that builds its client through provideLunora", () => {
         expect.assertions(2);
 
