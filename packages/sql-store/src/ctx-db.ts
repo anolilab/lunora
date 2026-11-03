@@ -3492,11 +3492,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
     const relationWrites = describeRelationWrites(schema);
 
-    // A `consistency: "primary"` read runs on a second ctx-db built over a fresh primary session,
-    // so the whole read (relation loads included) sees every committed write, not just its
-    // top-level rows. The primary-built ctx-db has no `primary` of its own, so this does not
-    // recurse. It shares `provisionScope`, so the DDL sweep is not repeated. The migration gate
-    // runs on the replica first, so its reads do not spend the session's one primary read.
+    // A `consistency: "primary"` read runs on a second ctx-db built over the exec's primary, so
+    // the whole read (relation loads included) is served from the primary, not just its top-level
+    // rows. The primary exec opens its own session per statement (see `buildPrimaryExec`). The
+    // primary-built ctx-db has no `primary` of its own, so this does not recurse. It shares
+    // `provisionScope`, so the DDL sweep is not repeated, and the gate runs on the replica so no
+    // DDL goes through the primary exec.
     const primaryReads = async (): Promise<DatabaseWriterLike | undefined> => {
         const { primary } = options.exec;
 
