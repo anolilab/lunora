@@ -48,7 +48,7 @@
 
 import { stableWireKey } from "@lunora/wire";
 
-import { depKey, SCAN_DEP } from "./dependency-tracker";
+import { depKey, isPrimaryReadDep, SCAN_DEP } from "./dependency-tracker";
 import { estimateBytes } from "./estimate-bytes";
 import type { IndexKeyEntry, KeyRange } from "./read-write-set";
 import { isPointRange, keysTouchRanges } from "./read-write-set";
@@ -217,6 +217,13 @@ class ReactiveCache {
         // the interleaved write touched what the handler read. Skip the store and
         // let the next call miss.
         if (this.generation !== generationAtEntry) {
+            return result;
+        }
+
+        // A query that read a `.global()` table at primary consistency answers from
+        // rows another shard can change without telling this cache, so it is
+        // re-run on every call rather than memoized.
+        if ([...deps].some((dep) => isPrimaryReadDep(dep))) {
             return result;
         }
 

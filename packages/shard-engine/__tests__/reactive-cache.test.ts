@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { createDependencyTracker, depKey, SCAN_DEP } from "../src/dependency-tracker";
+import { createDependencyTracker, depKey, PRIMARY_READ, SCAN_DEP } from "../src/dependency-tracker";
 import { ReactiveCache, reactiveCacheKey, stableStringify } from "../src/reactive-cache";
 import { idIndexKey, idRange } from "../src/read-write-set";
 
@@ -698,5 +698,24 @@ describe("reactiveCache", () => {
         await inFlight;
 
         expect(cache.size().entries).toBe(0);
+    });
+});
+
+describe("a query that read a .global() row at primary consistency", () => {
+    it("is re-run on every call instead of memoized, since another shard can change the row", async () => {
+        expect.assertions(3);
+
+        const cache = new ReactiveCache();
+        const run = vi.fn<() => Promise<{ found: boolean }>>(async () => {
+            return { found: true };
+        });
+        const deps = new Set([depKey("orgSettings", PRIMARY_READ), depKey("orgSettings", SCAN_DEP)]);
+
+        await cache.run("orgSettings:lock:{}", deps, run);
+        await cache.run("orgSettings:lock:{}", deps, run);
+
+        expect(run).toHaveBeenCalledTimes(2);
+        expect(cache.stats().hits).toBe(0);
+        expect(cache.stats().entries).toBe(0);
     });
 });
