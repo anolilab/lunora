@@ -3506,7 +3506,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         await ensureMigrated();
 
-        return createSqlCtxDb({ ...options, exec: primary });
+        return createSqlCtxDb({ ...options, exec: primary, provisionScope });
     };
 
     const writer: DatabaseWriterLike = {

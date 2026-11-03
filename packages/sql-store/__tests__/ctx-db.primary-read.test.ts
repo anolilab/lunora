@@ -118,6 +118,21 @@ describe("a global read that asks for the primary", () => {
         expect(page.map((row) => row["label"]).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual(["locked", "second"]);
     });
 
+    it("keeps the migration gate off the primary session when the writer has no provisionScope", async () => {
+        expect.assertions(1);
+
+        await provisionAndWrite();
+        const exec: SqlCtxExec = {
+            ...laggingReplicaOf(harness.exec),
+            get primary() {
+                return firstPrimarySession(harness.exec);
+            },
+        };
+        const store = createSqlCtxDb({ clock, dialect: makeSqliteDialect(), exec, schema });
+
+        await expect(store.findMany(TABLE, { consistency: "primary" })).resolves.toMatchObject({ page: [{ label: "locked" }] });
+    });
+
     it("reads the same store when the exec has no primary session", async () => {
         expect.assertions(1);
 
