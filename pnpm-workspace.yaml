@@ -63,6 +63,11 @@ overrides:
   # not a version it was never tested against. The range also covers 0.7.4, which is
   # vulnerable to the same advisory.
   fflate@>=0.7.0 <0.7.5: 0.7.5
+  # Keep the lockfile's minimatch 10.x at alpha's 10.2.5. A fresh resolve moved the whole
+  # graph to 10.2.6, and dependency-review fails on any new version whose advisory has no
+  # fix inside its own major (GHSA-g3hv-75wg-m249, patched only in 11.0.1). 10.2.5 is
+  # already on alpha, so this PR adds no new exposure. Moving to 11.x is a separate change.
+  "minimatch@>=10.2.6 <11.0.1": 10.2.5
   # Force a single `jose`. `@lunora/cloudflare-access` takes it from the `auth`
   # catalog while better-auth's own dependency range resolves its own copy; two
   # copies split `@better-auth/core` into two peer instances, and its
