@@ -136,7 +136,6 @@ const CONFIG_FILES = ["lunora.config.ts", "lunora.config.mts", "lunora.config.js
 const CLIENT_DIRECTORIES = ["src", "app", "pages", "plugins"];
 
 const CLIENT_FILE = /\.(?:[jt]sx?|svelte|vue)$/u;
-const NEW_CLIENT = "new LunoraClient({";
 
 /** A terminal call on its own line: `.build()` / `.buildFrameworkWorker(host)` return a `ComposedApp`, which has no `.extend`. */
 const TERMINAL_CALL = /\n([\t ]*)\.build(?:FrameworkWorker)?\(/uy;
@@ -335,20 +334,30 @@ const findClientFiles = (directory: string, depth = 0): string[] => {
     });
 };
 
+/** Where a client is built with options: `new LunoraClient({`, and the Angular/Analog `provideLunora(` call, with or without options. */
+const CLIENT_OPTIONS_SITE = /new LunoraClient\(\{|provideLunora\(\s*\{|provideLunora\(\s*\)/gu;
+
 /**
- * Turn on `authTokenOnUpgrade` where the app builds its `LunoraClient`, so the
- * live-query sockets carry the bearer too (a browser cannot set `Authorization`
- * on a WebSocket). Returns the patched files.
+ * Turn on `authTokenOnUpgrade` where the app builds its client (`new LunoraClient`, or Analog's `provideLunora()`), so the
+ * live-query sockets carry the bearer too (a browser cannot set `Authorization` on a WebSocket). Returns the patched files.
  */
 const enableUpgradeBearer = (projectDirectory: string): string[] =>
     CLIENT_DIRECTORIES.flatMap((directory) => findClientFiles(join(projectDirectory, directory))).filter((path) => {
         const source = readFileSync(path, "utf8");
 
-        if (!source.includes(NEW_CLIENT) || source.includes("authTokenOnUpgrade")) {
+        if (source.includes("authTokenOnUpgrade")) {
             return false;
         }
 
-        writeFileSync(path, source.replaceAll(NEW_CLIENT, `${NEW_CLIENT} authTokenOnUpgrade: true,`));
+        const patched = source.replaceAll(CLIENT_OPTIONS_SITE, (site) =>
+            site.endsWith("{") ? `${site} authTokenOnUpgrade: true,` : "provideLunora({ authTokenOnUpgrade: true })",
+        );
+
+        if (patched === source) {
+            return false;
+        }
+
+        writeFileSync(path, patched);
 
         return true;
     });

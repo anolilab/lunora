@@ -202,6 +202,19 @@ describe(wireExternalAuth, () => {
         expect(readFileSync(join(project, "src", "client.ts"), "utf8")).toContain("new LunoraClient({ authTokenOnUpgrade: true, url: location.origin })");
         expect(lines.join("\n")).toContain("setAuthTokenProvider(client, getToken, { subject: userId })");
     });
+
+    it("turns on authTokenOnUpgrade in an Analog app that builds its client through provideLunora", () => {
+        expect.assertions(2);
+
+        mkdirSync(join(project, "src", "app"), { recursive: true });
+        writeFileSync(join(project, "src", "app", "app.config.ts"), "providers: [provideHttpClient(), provideLunora()],\n");
+        writeFileSync(join(project, "src", "app", "other.config.ts"), 'providers: [provideLunora({ url: "/x" })],\n');
+
+        wireExternalAuth(project, "clerk", silentLogger().logger);
+
+        expect(readFileSync(join(project, "src", "app", "app.config.ts"), "utf8")).toContain("provideLunora({ authTokenOnUpgrade: true })");
+        expect(readFileSync(join(project, "src", "app", "other.config.ts"), "utf8")).toContain('provideLunora({ authTokenOnUpgrade: true, url: "/x" })');
+    });
 });
 
 describe("wireExternalAuth outside a composed worker", () => {
