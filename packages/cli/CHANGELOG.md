@@ -1,3 +1,9 @@
+## @lunora/cli [1.0.0-alpha.478](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.477...@lunora/cli@1.0.0-alpha.478) (2026-11-03)
+
+### Bug Fixes
+
+* **cli:** run binding checks and Hyperdrive provisioning for services ([#1459](https://github.com/anolilab/lunora/issues/1459)) ([5178c97](https://github.com/anolilab/lunora/commit/5178c97b45016f3f5bb0d16d9af9a3cdf0866628))
+
 ## @lunora/cli [1.0.0-alpha.477](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.476...@lunora/cli@1.0.0-alpha.477) (2026-11-03)
 
 ### Features

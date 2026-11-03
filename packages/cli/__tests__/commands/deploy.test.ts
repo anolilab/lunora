@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 import type { CodegenResult, PlatformDiagnostic } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
 import type { DevProcessSpawner, DiscoveryCache } from "@lunora/config";
-import { createDiscoveryCache, probeCelldToolchain } from "@lunora/config";
-import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
+import { createDiscoveryCache, D1_PLACEHOLDER_ID, probeCelldToolchain } from "@lunora/config";
+import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV, HYPERDRIVE_PLACEHOLDER_ID } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -702,6 +702,98 @@ describe("lunora deploy", () => {
 
                 expect(calls.some((call) => call.descriptor.args.join(" ").includes("services/parser"))).toBe(false);
                 expect(warns).toContainEqual(expect.stringContaining(`services not deployed (${reason})`));
+            });
+
+            describe("binding checks and Hyperdrive provisioning", () => {
+                const parserConfig = (): string => join(workdir, "services", "parser", "wrangler.jsonc");
+
+                afterEach(() => {
+                    vi.unstubAllEnvs();
+                    vi.unstubAllGlobals();
+                });
+
+                it("refuses a service whose D1 binding still has its placeholder, before any service or the app is deployed", async () => {
+                    expect.assertions(2);
+
+                    declareParser();
+                    writeFileSync(
+                        parserConfig(),
+                        JSON.stringify({
+                            d1_databases: [{ binding: "DB", database_id: D1_PLACEHOLDER_ID, database_name: "parser" }],
+                            main: "src/index.ts",
+                            name: "parser",
+                        }),
+                        "utf8",
+                    );
+
+                    const { calls, spawner } = createRecordingSpawner();
+                    const { logger } = silentLogger();
+                    const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner });
+
+                    expect(result.error).toContain('service parser (parser): deploy blocked: the "DB" D1 binding has a placeholder database_id');
+                    expect(calls).toHaveLength(0);
+                });
+
+                it("creates a service's Hyperdrive config and writes its id into the service's config before that service deploys", async () => {
+                    expect.assertions(2);
+
+                    declareParser();
+                    writeFileSync(
+                        parserConfig(),
+                        JSON.stringify({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], main: "src/index.ts", name: "parser" }),
+                        "utf8",
+                    );
+                    vi.stubEnv("LUNORA_HYPERDRIVE_URL", "postgres://u:p@h/db");
+                    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                    const fetchStub = vi.fn<typeof globalThis.fetch>(async (_url, init) =>
+                        Response.json({ errors: [], result: init?.method === "POST" ? { id: "created-id" } : [], success: true }),
+                    );
+
+                    vi.stubGlobal("fetch", fetchStub);
+
+                    // The app's own deploy fails after the service's, so the run stops there and the service's spawn is all that is read.
+                    const idAtServiceDeploy: unknown[] = [];
+                    const spawner: Spawner = async (descriptor) => {
+                        if (descriptor.args.join(" ").includes("services/parser")) {
+                            idAtServiceDeploy.push((parseJsonc(readFileSync(parserConfig(), "utf8")) as { hyperdrive: { id: string }[] }).hyperdrive[0]?.id);
+
+                            return { code: 0 };
+                        }
+
+                        return { code: 1 };
+                    };
+                    const { logger } = silentLogger();
+
+                    await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner });
+
+                    expect(idAtServiceDeploy).toStrictEqual(["created-id"]);
+                    expect(fetchStub.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+                });
+
+                it("stops before any service deploys when a service's Hyperdrive binding has no connection string", async () => {
+                    expect.assertions(3);
+
+                    declareParser();
+                    writeFileSync(
+                        parserConfig(),
+                        JSON.stringify({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], main: "src/index.ts", name: "parser" }),
+                        "utf8",
+                    );
+                    vi.stubEnv("LUNORA_HYPERDRIVE_URL", "");
+                    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+                    vi.stubGlobal("fetch", vi.fn<typeof globalThis.fetch>());
+
+                    const { calls, spawner } = createRecordingSpawner();
+                    const { errors, logger } = silentLogger();
+                    const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner });
+
+                    expect(result.error).toContain("service parser (parser): deploy blocked");
+                    expect(errors.join(" ")).toContain("LUNORA_HYPERDRIVE_URL");
+                    expect(calls).toHaveLength(0);
+                });
             });
         });
 
