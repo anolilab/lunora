@@ -44,6 +44,6 @@
             # warns about unexpected inputs if given one. `scope: changed` (the default)
             # derives its base SHA from the PR event, which is what fetch-depth:0 above
             # is for.
-            - "uses": "millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784" # react-doctor@v2.2.7
+            - "uses": "millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784" # v2.2.7
               "with":
                   "version": "0.9.14"
