@@ -1,3 +1,7 @@
+## @lunora/client 1.0.0-alpha.286 (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+
 ## @lunora/client [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.284...@lunora/client@1.0.0-alpha.285) (2026-11-03)
 
 ### Build System

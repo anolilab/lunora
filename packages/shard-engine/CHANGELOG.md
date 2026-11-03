@@ -1,3 +1,7 @@
+## @lunora/shard-engine 1.0.0-alpha.187 (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+
 ## @lunora/shard-engine [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.185...@lunora/shard-engine@1.0.0-alpha.186) (2026-11-03)
 
 ### Bug Fixes

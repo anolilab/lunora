@@ -1,3 +1,8 @@
+## @lunora/cli 1.0.0-alpha.480 (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+- fix(cli): report a smoke tree taskkill did not end, on exit and on stop (#1458)
+
 ## @lunora/cli [1.0.0-alpha.479](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.478...@lunora/cli@1.0.0-alpha.479) (2026-11-03)
 
 ### Bug Fixes

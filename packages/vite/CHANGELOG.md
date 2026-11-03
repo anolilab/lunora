@@ -1,3 +1,8 @@
+## @lunora/vite 1.0.0-alpha.426 (2026-11-03)
+
+- Updated dependency @lunora/codegen@1.0.0-alpha.397
+- Updated dependency @lunora/config@1.0.0-alpha.453
+
 ## @lunora/vite [1.0.0-alpha.425](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.424...@lunora/vite@1.0.0-alpha.425) (2026-11-03)
 
 ### Build System

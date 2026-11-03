@@ -1,3 +1,7 @@
+## @lunora/db 1.0.0-alpha.285 (2026-11-03)
+
+- Updated dependency @lunora/client@1.0.0-alpha.286
+
 ## @lunora/db [1.0.0-alpha.284](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.283...@lunora/db@1.0.0-alpha.284) (2026-11-03)
 
 ### Build System

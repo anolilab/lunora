@@ -1,3 +1,8 @@
+## @lunora/rspack 1.0.0-alpha.149 (2026-11-03)
+
+- Updated dependency @lunora/codegen@1.0.0-alpha.397
+- Updated dependency @lunora/config@1.0.0-alpha.453
+
 ## @lunora/rspack [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.147...@lunora/rspack@1.0.0-alpha.148) (2026-11-03)
 
 ### Build System

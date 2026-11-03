@@ -1,3 +1,8 @@
+## @lunora/payment 1.0.0-alpha.269 (2026-11-03)
+
+- Updated dependency @lunora/server@1.0.0-alpha.268
+- Updated dependency @lunora/values@1.0.0-alpha.95
+
 ## @lunora/payment [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.267...@lunora/payment@1.0.0-alpha.268) (2026-11-03)
 
 ### Build System

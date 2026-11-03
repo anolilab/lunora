@@ -1,3 +1,8 @@
+## @lunora/nuxt 1.0.0-alpha.303 (2026-11-03)
+
+- Updated dependency @lunora/client@1.0.0-alpha.286
+- Updated dependency @lunora/runtime@1.0.0-alpha.276
+
 ## @lunora/nuxt [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.301...@lunora/nuxt@1.0.0-alpha.302) (2026-11-03)
 
 ### Build System

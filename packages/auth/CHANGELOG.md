@@ -1,3 +1,7 @@
+## @lunora/auth 1.0.0-alpha.257 (2026-11-03)
+
+- Updated dependency @lunora/values@1.0.0-alpha.95
+
 ## @lunora/auth [1.0.0-alpha.256](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.255...@lunora/auth@1.0.0-alpha.256) (2026-11-03)
 
 ### Build System

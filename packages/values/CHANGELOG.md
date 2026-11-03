@@ -1,3 +1,7 @@
+## @lunora/values 1.0.0-alpha.95 (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+
 ## @lunora/values [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.93...@lunora/values@1.0.0-alpha.94) (2026-11-02)
 
 

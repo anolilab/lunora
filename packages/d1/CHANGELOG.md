@@ -1,3 +1,8 @@
+## @lunora/d1 1.0.0-alpha.233 (2026-11-03)
+
+- Updated dependency @lunora/shard-engine@1.0.0-alpha.187
+- Updated dependency @lunora/sql-store@1.0.0-alpha.234
+
 ## @lunora/d1 [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.231...@lunora/d1@1.0.0-alpha.232) (2026-11-03)
 
 ### Build System

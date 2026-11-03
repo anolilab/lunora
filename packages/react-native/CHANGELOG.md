@@ -1,3 +1,8 @@
+## @lunora/react-native 1.0.0-alpha.262 (2026-11-03)
+
+- Updated dependency @lunora/client@1.0.0-alpha.286
+- Updated dependency @lunora/react@1.0.0-alpha.296
+
 ## @lunora/react-native [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.260...@lunora/react-native@1.0.0-alpha.261) (2026-11-03)
 
 ### Build System

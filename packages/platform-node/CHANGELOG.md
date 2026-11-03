@@ -1,3 +1,10 @@
+## @lunora/platform-node 1.0.0-alpha.217 (2026-11-03)
+
+- Updated dependency @lunora/sql-store@1.0.0-alpha.234
+- Updated dependency @lunora/workflow@1.0.0-alpha.111
+- Updated dependency @lunora/d1@1.0.0-alpha.233
+- Updated dependency @lunora/runtime@1.0.0-alpha.276
+
 ## @lunora/platform-node [1.0.0-alpha.216](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.215...@lunora/platform-node@1.0.0-alpha.216) (2026-11-03)
 
 ### Build System

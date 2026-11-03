@@ -1,3 +1,7 @@
+## @lunora/sql-store 1.0.0-alpha.234 (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+
 ## @lunora/sql-store [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.232...@lunora/sql-store@1.0.0-alpha.233) (2026-11-03)
 
 ### Build System

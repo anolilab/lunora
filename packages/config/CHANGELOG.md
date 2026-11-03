@@ -1,3 +1,7 @@
+## @lunora/config 1.0.0-alpha.453 (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+
 ## @lunora/config [1.0.0-alpha.452](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.451...@lunora/config@1.0.0-alpha.452) (2026-11-03)
 
 ### Build System

@@ -1,3 +1,7 @@
+## @lunora/observability 1.0.0-alpha.201 (2026-11-03)
+
+- Updated dependency @lunora/shard-engine@1.0.0-alpha.187
+
 ## @lunora/observability [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.199...@lunora/observability@1.0.0-alpha.200) (2026-11-03)
 
 ### Build System

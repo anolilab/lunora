@@ -1,3 +1,7 @@
+## @lunora/advisor 1.0.0-alpha.287 (2026-11-03)
+
+- Updated dependency @lunora/server@1.0.0-alpha.268
+
 ## @lunora/advisor [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.285...@lunora/advisor@1.0.0-alpha.286) (2026-11-03)
 
 ### Build System
