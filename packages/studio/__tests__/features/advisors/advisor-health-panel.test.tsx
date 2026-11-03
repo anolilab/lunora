@@ -46,7 +46,9 @@ describe("advisorHealthPanel", () => {
 
         render(renderPanel(false));
 
-        await expect(screen.findByTestId("advisor-health-local-only")).resolves.toBe(true);
+        const notice = await screen.findByTestId("advisor-health-local-only");
+
+        expect(notice.textContent).toContain("lunora dev");
         expect(fetchMock).not.toHaveBeenCalled();
     });
 
@@ -57,7 +59,9 @@ describe("advisorHealthPanel", () => {
 
         render(renderPanel(true));
 
-        await expect(screen.findByTestId("advisor-health-score")).resolves.toBe(true);
+        const score = await screen.findByTestId("advisor-health-score");
+
+        expect(score.textContent).toMatch(/^\d+$/);
         expect(fetchMock).toHaveBeenCalledWith("/__lunora/advisor-procedures");
     });
 
