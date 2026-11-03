@@ -10086,10 +10086,10 @@ class LunoraClient {
      *
      * Only a write queued after an ambiguous direct send is capped: its caller is
      * still waiting, so every transient failure of it except a rate limit, a
-     * refused credential, or a network-level failure (a `TypeError` or a transport
-     * error, which say nothing about the origin's verdict on the write and can last
-     * as long as the device is offline) counts against {@link MAX_AMBIGUOUS_SEND_ATTEMPTS}.
-     * A timeout or `SHARD_UNAVAILABLE` still counts. Any other write is never
+     * refused credential, or a network failure while the shard has no open socket
+     * (a `TypeError` or a transport error, which say nothing about the origin's verdict
+     * and can last as long as the device is offline) counts against {@link MAX_AMBIGUOUS_SEND_ATTEMPTS}.
+     * A timeout, `SHARD_UNAVAILABLE`, or a network failure on an open socket still counts. Any other write is never
      * capped here: a write the shard fails deterministically arrives with a coded
      * verdict (the handler's own code, `RPC_FAILED`, `BATCH_ENTRY_FAILED`) that
      * {@link isTransientReplayFailure} settles terminally on the first attempt, and
@@ -10107,8 +10107,7 @@ class LunoraClient {
             isAuthReplayFailure(error) ||
             code === "RATE_LIMITED" ||
             code === "TOO_MANY_REQUESTS" ||
-            error instanceof TypeError ||
-            error instanceof TransportError ||
+            ((error instanceof TypeError || error instanceof TransportError) && !this.ownSocketOpen(item.shardKey)) ||
             !isTransientReplayFailure(error)
         ) {
             return false;
