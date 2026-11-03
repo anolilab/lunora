@@ -65,7 +65,7 @@ import { validateWrangler } from "../../util/wrangler-validator";
 import { clientBuildRefusal, clientBuildRuns, pluginBuildRuns, runClientBuild } from "../build/framework-build";
 import type { ExportTarget } from "../data-transfer/export-rows";
 import type { PreDeployCommand } from "./checks";
-import { resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
+import { checkD1Placeholder, resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
 import { generatedConfigPath, provisionDeployHyperdrive } from "./hyperdrive";
 import type { DeployOptions } from "./index";
 import completeDeploy from "./post-deploy";
@@ -972,6 +972,126 @@ const serviceDeployConfig = (wranglerPath: string, built: boolean, frameworkBuil
     built || frameworkBuild === false ? generatedConfigPath(wranglerPath) : undefined;
 
 /**
+ * The read-only binding checks for one service, against its own source config. A D1 placeholder
+ * is refused, and the Hyperdrive "check" phase stops on a missing connection string or credentials,
+ * before any create call. Returns the blocking error.
+ */
+const checkServiceBindings = async (wranglerPath: string, options: DeployCommandOptions, driver: DeployDriver): Promise<string | undefined> => {
+    const directory = dirname(wranglerPath);
+    const placeholder = checkD1Placeholder(directory, options.logger, "deploy", driver.id, options.env, wranglerPath);
+
+    return placeholder ?? provisionDeployHyperdrive(directory, options, "deploy", driver.id, "check", wranglerPath);
+};
+
+/**
+ * Create the service's Hyperdrive configs and write their ids into the config wrangler deploys. The
+ * generated copy is written only when this run built it for the environment being deployed.
+ */
+const provisionServiceBindings = (wranglerPath: string, built: boolean, options: DeployCommandOptions, driver: DeployDriver): Promise<string | undefined> =>
+    provisionDeployHyperdrive(
+        dirname(wranglerPath),
+        { ...options, clientBuildEnvironment: built ? options.env : undefined },
+        "deploy",
+        driver.id,
+        "create",
+        wranglerPath,
+    );
+
+/**
+ * Build each service in order, from its folder, and report whether each one built. A failed build
+ * is returned as the failure that stops the deploy before any service is deployed.
+ */
+const buildServices = async (
+    workers: ReadonlyArray<{ name: string; worker: string; wranglerPath: string }>,
+    serviceBuildFor: (directory: string) => Parameters<typeof runClientBuild>[0],
+    frameworkBuild: boolean | undefined,
+    environment: string | undefined,
+    logger: Logger,
+): Promise<{ builds: boolean[]; failure?: BeforeSpawnFailure }> => {
+    const builds: boolean[] = [];
+
+    for (const service of workers) {
+        // eslint-disable-next-line no-await-in-loop -- services build in order: a failed build stops the later services and the app deploy, which must not start on a partial set
+        const { built, error: buildError } = await buildService(serviceBuildFor(dirname(service.wranglerPath)), frameworkBuild, environment);
+
+        if (buildError !== undefined) {
+            const message = `service ${service.name} (${service.worker}): ${buildError}`;
+
+            logger.error(message);
+
+            return { builds, failure: { code: EXIT_CODE.FAILURE, error: message } };
+        }
+
+        builds.push(built);
+    }
+
+    return { builds };
+};
+
+/** What every service deploy in one run shares. */
+interface ServiceDeployRun {
+    driver: DeployDriver;
+    frameworkBuild: boolean | undefined;
+    manager: ReturnType<typeof detectPackageManager>;
+    options: DeployCommandOptions;
+    spawner: Spawner;
+    toolchain: NonNullable<DeployDriver["toolchain"]>;
+}
+
+/**
+ * Create one service's Hyperdrive configs, then run its deploy command from its folder. Returns the
+ * failure that stops the deploy, if any.
+ */
+const deployService = async (
+    service: { name: string; worker: string; wranglerPath: string },
+    built: boolean,
+    run: ServiceDeployRun,
+): Promise<BeforeSpawnFailure | undefined> => {
+    const { driver, frameworkBuild, manager, options, spawner, toolchain } = run;
+    const directory = dirname(service.wranglerPath);
+    const hyperdriveError = await provisionServiceBindings(service.wranglerPath, built, options, driver);
+
+    if (hyperdriveError !== undefined) {
+        return { code: EXIT_CODE.FAILURE, error: `service ${service.name} (${service.worker}): ${hyperdriveError}` };
+    }
+
+    const generated = serviceDeployConfig(service.wranglerPath, built, frameworkBuild);
+
+    let invocation: ReturnType<typeof planToolchainInvocation>;
+
+    try {
+        invocation = planToolchainInvocation(driver, directory, "deploy", (configPath) =>
+            // Always an explicit config: wrangler left to discover one walks up
+            // from the service folder and can find the app's `wrangler.json`
+            // or a Vite build's `.wrangler/deploy/config.json` first.
+            toolchain.deploy({ configPath: configPath ?? generated ?? service.wranglerPath, dryRun: options.dryRun === true, environment: options.env }),
+        );
+    } catch (error_: unknown) {
+        return {
+            code: EXIT_CODE.FAILURE,
+            error: `service ${service.name} (${service.worker}): ${error_ instanceof Error ? error_.message : String(error_)}`,
+        };
+    }
+
+    invocation.commit();
+
+    const exec = toolchainExecArgs(manager, invocation.command);
+
+    options.logger.info(`deploying service ${service.name} (${service.worker}) via ${exec.command} ${exec.args.join(" ")}`);
+
+    const result = await spawner({ args: exec.args, command: exec.command, cwd: directory, stdoutToStderr: options.format === "json" });
+
+    if (result.code !== 0) {
+        return {
+            code: EXIT_CODE.FAILURE,
+            error: `service ${service.name} (${service.worker}): ${exec.command} ${exec.args.join(" ")} exited ${String(result.code)} — stopping before the app`,
+        };
+    }
+
+    return undefined;
+};
+
+/**
  * Deploy each `lunora.config` service (plan 457) before the app, so the app's
  * `services[]` bindings never point at a Worker that does not exist yet, or at
  * an older one missing a method the app now calls. Each one goes through the
@@ -980,6 +1100,10 @@ const serviceDeployConfig = (wranglerPath: string, built: boolean, frameworkBuil
  * service's config — celld's driver projects it like the app's. `--env` and
  * `--dry-run` pass through; a target refusing one says so here. Returns the
  * error that stops the deploy, if any.
+ *
+ * Every service's checks run before any build or deploy, and every build before the first deploy, so a
+ * refusal in one service leaves none of them live. Each service's Hyperdrive configs are created just
+ * before its own deploy command.
  */
 const deployServices = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver, spawner: Spawner): Promise<BeforeSpawnFailure | undefined> => {
     const { error, services } = readServiceBindings(cwd);
@@ -1015,52 +1139,28 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
     }
 
     for (const service of workers) {
-        const directory = dirname(service.wranglerPath);
-        const serviceBuild = serviceBuildFor(directory);
+        // eslint-disable-next-line no-await-in-loop -- checks run in service order, and the first blocking one stops before any service is built or deployed
+        const checkError = await checkServiceBindings(service.wranglerPath, options, driver);
 
-        // eslint-disable-next-line no-await-in-loop -- services build in order: a failed build stops the later services and the app deploy, which must not start on a partial set
-        const { built, error: buildError } = await buildService(serviceBuild, frameworkBuild, options.env);
-
-        if (buildError !== undefined) {
-            const message = `service ${service.name} (${service.worker}): ${buildError}`;
-
-            options.logger.error(message);
-
-            return { code: EXIT_CODE.FAILURE, error: message };
+        if (checkError !== undefined) {
+            return { code: EXIT_CODE.USAGE, error: `service ${service.name} (${service.worker}): ${checkError}` };
         }
+    }
 
-        const generated = serviceDeployConfig(service.wranglerPath, built, frameworkBuild);
+    const { builds, failure: buildFailure } = await buildServices(workers, serviceBuildFor, frameworkBuild, options.env, options.logger);
 
-        let invocation: ReturnType<typeof planToolchainInvocation>;
+    if (buildFailure !== undefined) {
+        return buildFailure;
+    }
 
-        try {
-            invocation = planToolchainInvocation(driver, directory, "deploy", (configPath) =>
-                // Always an explicit config: wrangler left to discover one walks up
-                // from the service folder and can find the app's `wrangler.json`
-                // or a Vite build's `.wrangler/deploy/config.json` first.
-                toolchain.deploy({ configPath: configPath ?? generated ?? service.wranglerPath, dryRun: options.dryRun === true, environment: options.env }),
-            );
-        } catch (error_: unknown) {
-            return {
-                code: EXIT_CODE.FAILURE,
-                error: `service ${service.name} (${service.worker}): ${error_ instanceof Error ? error_.message : String(error_)}`,
-            };
-        }
+    const run: ServiceDeployRun = { driver, frameworkBuild, manager, options, spawner, toolchain };
 
-        invocation.commit();
+    for (const [index, service] of workers.entries()) {
+        // eslint-disable-next-line no-await-in-loop -- services deploy in order: a failed create or deploy stops the later services and the app deploy, which must not start on a partial set
+        const failure = await deployService(service, builds[index] === true, run);
 
-        const exec = toolchainExecArgs(manager, invocation.command);
-
-        options.logger.info(`deploying service ${service.name} (${service.worker}) via ${exec.command} ${exec.args.join(" ")}`);
-
-        // eslint-disable-next-line no-await-in-loop -- services deploy in order: a failed deploy stops the later services and the app deploy, which must not start on a partial set
-        const result = await spawner({ args: exec.args, command: exec.command, cwd: directory, stdoutToStderr: options.format === "json" });
-
-        if (result.code !== 0) {
-            return {
-                code: EXIT_CODE.FAILURE,
-                error: `service ${service.name} (${service.worker}): ${exec.command} ${exec.args.join(" ")} exited ${String(result.code)} — stopping before the app`,
-            };
+        if (failure !== undefined) {
+            return failure;
         }
     }
 
