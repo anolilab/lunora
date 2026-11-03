@@ -20,7 +20,7 @@ const errorsOf = async (options: Parameters<typeof probeCelldToolchain>[0]): Pro
 
     return probe.errors;
 };
-const BUCKET = { CELLD_BUCKET: "s3://fleet" };
+const BUCKET = { CELLD_BUCKET: "s3://fleet" }; // secret-scanner:allow -- test bucket URI, not a real location
 
 describe("probeCelldToolchain", () => {
     it("finds nothing wrong for a deploy with celld, esbuild and a bucket", async () => {
@@ -95,7 +95,7 @@ describe("probeCelldToolchain", () => {
     it("reads CELLD_BUCKET from the host environment when no env is given, as it runs the tools with that environment", async () => {
         expect.assertions(1);
 
-        vi.stubEnv("CELLD_BUCKET", "s3://fleet");
+        vi.stubEnv("CELLD_BUCKET", "s3://fleet"); // secret-scanner:allow -- test bucket URI, not a real location
 
         try {
             await expect(errorsOf({ purpose: "deploy", run: tools(ALL) })).resolves.toStrictEqual([]);

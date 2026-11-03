@@ -947,7 +947,7 @@ func TestAnIdentityChangeEvictsThePreviousSession(t *testing.T) {
 func TestTheAuthTokenIsRedactedWhenPrinted(t *testing.T) {
 	covers("auth_token_redacted_when_printed")
 
-	const token = "lunora-secret-7f3a9c"
+	const token = "lunora-secret-7f3a9c" // secret-scanner:allow -- test fixture
 
 	client := NewClient("https://app.example", nil)
 	client.SetAuthToken(token)

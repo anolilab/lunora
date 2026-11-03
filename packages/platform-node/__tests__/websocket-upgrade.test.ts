@@ -94,7 +94,7 @@ const rawUpgrade = async (server: NodeHttpServer, path: string): Promise<string>
             socket.write(
                 // The RFC 6455 example key: a fixed value, not a credential.
                 // eslint-disable-next-line no-secrets/no-secrets
-                `GET ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`,
+                `GET ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`, // secret-scanner:allow -- RFC 6455 example key, not a credential
             );
         });
 
@@ -407,7 +407,7 @@ describe("node upgrade lifecycle", () => {
                 socket.write(
                     // The RFC 6455 example key: a fixed value, not a credential.
                     // eslint-disable-next-line no-secrets/no-secrets
-                    `GET ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`,
+                    `GET ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`, // secret-scanner:allow -- RFC 6455 example key, not a credential
                 );
                 resolve(socket);
             });

@@ -540,7 +540,7 @@ describe("startStudioServer", () => {
                             "Connection: Upgrade",
                             "Upgrade: websocket",
                             // eslint-disable-next-line no-secrets/no-secrets -- the RFC 6455 example handshake key, not a real secret
-                            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+                            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==", // secret-scanner:allow -- RFC 6455 example key, not a credential
                             "Sec-WebSocket-Version: 13",
                             "X-Forwarded-For: 203.0.113.7",
                             "",
