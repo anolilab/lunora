@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.398](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.397...@lunora/codegen@1.0.0-alpha.398) (2026-11-03)
+
+- fix(ci): mark test fixtures so the secrets scan passes (#1470)
+
 ## @lunora/codegen [1.0.0-alpha.397](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.396...@lunora/codegen@1.0.0-alpha.397) (2026-11-03)
 
 - fix: resolve open review defects across agent, client, codegen and SDKs (#1460)

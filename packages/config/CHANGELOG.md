@@ -1,3 +1,7 @@
+## @lunora/config [1.0.0-alpha.454](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.453...@lunora/config@1.0.0-alpha.454) (2026-11-03)
+
+- fix(ci): mark test fixtures so the secrets scan passes (#1470)
+
 ## @lunora/config [1.0.0-alpha.453](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.452...@lunora/config@1.0.0-alpha.453) (2026-11-03)
 
 - fix: resolve open review defects across agent, client, codegen and SDKs (#1460)

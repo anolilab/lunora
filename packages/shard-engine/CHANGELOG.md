@@ -1,3 +1,7 @@
+## @lunora/shard-engine [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.187...@lunora/shard-engine@1.0.0-alpha.188) (2026-11-03)
+
+- fix(ci): mark test fixtures so the secrets scan passes (#1470)
+
 ## @lunora/shard-engine [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.186...@lunora/shard-engine@1.0.0-alpha.187) (2026-11-03)
 
 - fix: resolve open review defects across agent, client, codegen and SDKs (#1460)

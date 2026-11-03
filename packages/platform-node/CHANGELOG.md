@@ -1,3 +1,7 @@
+## @lunora/platform-node [1.0.0-alpha.217](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.216...@lunora/platform-node@1.0.0-alpha.217) (2026-11-03)
+
+- fix(ci): mark test fixtures so the secrets scan passes (#1470)
+
 ## @lunora/platform-node 1.0.0-alpha.217 (2026-11-03)
 
 - Updated dependency @lunora/sql-store@1.0.0-alpha.234
