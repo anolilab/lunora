@@ -70,6 +70,18 @@ describe("generateValue — validator constraints the generator must honour", ()
         expect([...lengths].toSorted((a, b) => a - b)).toStrictEqual([1, 2]);
     });
 
+    it("keeps an array short when maxItems is only a safety cap, but never below minItems", () => {
+        expect.hasAssertions();
+
+        for (let index = 0; index < 50; index += 1) {
+            const capped = generateValue(v.array(v.string()).max(100_000), "tags", ["cap", index], NOW) as unknown[];
+            const floored = generateValue(v.array(v.string()).min(10).max(100_000), "tags", ["floor", index], NOW) as unknown[];
+
+            expect(capped.length).toBeLessThanOrEqual(3);
+            expect(floored).toHaveLength(10);
+        }
+    });
+
     it("treats an infinite array maximum as no maximum", () => {
         expect.hasAssertions();
 
