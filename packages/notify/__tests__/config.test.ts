@@ -1,3 +1,4 @@
+import { createFcmProvider } from "@visulima/notification/providers/fcm";
 import { describe, expect, it } from "vitest";
 
 import { fcmFromEnv, webPushFromEnv } from "../src/config";
@@ -105,10 +106,18 @@ describe("fcmFromEnv with a service account", () => {
         expect(fcmFromEnv({ FCM_SERVICE_ACCOUNT: noProject }, { projectId: "from-override" })?.projectId).toBe("from-override");
     });
 
-    it("returns undefined for a malformed key when no project id can be resolved", () => {
+    it("keeps FCM wired for a malformed key without FCM_PROJECT_ID, so a send reports the bad key", async () => {
         expect.hasAssertions();
 
-        expect(fcmFromEnv({ FCM_SERVICE_ACCOUNT: "{oops" })).toBeUndefined();
+        const config = fcmFromEnv({ FCM_SERVICE_ACCOUNT: "{oops" });
+
+        expect(config).toBeDefined();
+
+        const result = await createFcmProvider({ ...config, projectId: config?.projectId ?? "" }).send({ body: "hi", to: "device-token" });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toBeInstanceOf(Error);
+        expect(String((result.error as Error).cause)).toContain("neither valid JSON nor base64-encoded JSON");
     });
 
     it("prefers the service account over a static token when both are set", () => {

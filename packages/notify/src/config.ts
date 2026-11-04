@@ -48,12 +48,20 @@ const webPushFromEnv = (env: NotifyEnv, overrides?: Partial<WebPushConfig>): Web
     return { vapidPrivateKey, vapidPublicKey, vapidSubject, ...overrides };
 };
 
-/** The key file's own project id, or `undefined` when the key cannot be read. */
+/**
+ * Stands in for the project id of a key that cannot be parsed. `createFcmProvider` throws on a
+ * missing id, which would fail every channel of the engine; this one is never sent, because the
+ * provider asks for a token before it builds a request and the token source rejects with the
+ * parse error. FCM sends then report the bad key instead of a missing `fcm` channel.
+ */
+const MALFORMED_KEY_PROJECT_ID = "unresolved-malformed-service-account";
+
+/** The key file's own project id, or the placeholder above when the key cannot be parsed. */
 const projectIdOf = (rawServiceAccount: string): string | undefined => {
     try {
         return parseServiceAccount(rawServiceAccount).project_id;
     } catch {
-        return undefined;
+        return MALFORMED_KEY_PROJECT_ID;
     }
 };
 
@@ -68,11 +76,9 @@ const projectIdOf = (rawServiceAccount: string): string | undefined => {
  * Dev: a static `FCM_ACCESS_TOKEN` is accepted when no service account is set. It
  * expires within the hour, so it is only a stopgap for local work.
  *
- * Returns `undefined` when no project id can be resolved, so FCM sends then report that no
- * `fcm` channel is configured. That includes a malformed key with no `FCM_PROJECT_ID`: the
- * FCM provider rejects an empty project id at construction, which would fail every channel
- * built from the same engine. With `FCM_PROJECT_ID` set, a malformed key does not throw here;
- * the token source rejects instead, so only FCM sends fail.
+ * Returns `undefined` when no project id can be resolved. A malformed key does not throw
+ * here: the token source rejects with the parse error instead, so only FCM sends fail, not
+ * the other channels that share this engine.
  */
 const fcmFromEnv = (env: NotifyEnv, overrides?: Partial<FcmConfig>): FcmConfig | undefined => {
     const envProjectId = readString(env, FCM_ENV_KEYS.projectId); // secret-scanner:allow -- `projectId` is a config field name, not a credential
