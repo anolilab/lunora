@@ -233,8 +233,28 @@ describe("consumeQueuedSend with a sent-mail store", () => {
 
         const error = await consumeQueuedSend(mailer, { subject: "Hi", to: "a@x.test" }, { sent: store }).catch((error_: unknown) => error_);
 
-        expect(error).toBeInstanceOf(TypeError);
+        expect(error).toBeInstanceOf(MailSendError);
         expect(isRetryableMailError(error)).toBe(false);
+        expect(mailer.send).not.toHaveBeenCalled();
+    });
+
+    it("refuses a key the provider or store would reject before the store is read", async () => {
+        expect.assertions(4);
+
+        const mailer = noopMailer();
+        // A store that fails on the over-long key, as Workers KV does past 512 bytes.
+        const get = vi.fn<SentMailStore["get"]>(async () => {
+            throw new Error("KV GET failed: 414 UTF-8 encoded length exceeds key length limit");
+        });
+        const store: SentMailStore = { get, put: async () => undefined };
+
+        const error = await consumeQueuedSend(mailer, { idempotencyKey: "k".repeat(600), subject: "Hi", to: "a@x.test" }, { sent: store }).catch(
+            (error_: unknown) => error_,
+        );
+
+        expect(error).toBeInstanceOf(MailSendError);
+        expect(isRetryableMailError(error)).toBe(false);
+        expect(get).not.toHaveBeenCalled();
         expect(mailer.send).not.toHaveBeenCalled();
     });
 

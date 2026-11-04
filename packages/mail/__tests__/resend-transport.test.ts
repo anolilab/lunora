@@ -81,10 +81,16 @@ describe("resend transport error mapping", () => {
         expect(email.idempotencyKey).toBe((bodies[0] as { idempotencyKey: string }).idempotencyKey);
     });
 
-    it("rejects an idempotency key Resend would refuse before any send or enqueue", async () => {
-        expect.assertions(2);
+    it("rejects an idempotency key Resend would refuse before any send or enqueue, as a refusal", async () => {
+        expect.assertions(4);
 
-        await expect(mailer().send({ idempotencyKey: "has a space", subject: "Hi", to: "a@x.test" })).rejects.toThrow(/idempotencyKey/u);
+        const error = await mailer()
+            .send({ idempotencyKey: "has a space", subject: "Hi", to: "a@x.test" })
+            .catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(MailSendError);
+        expect((error as Error).message).toMatch(/idempotencyKey/u);
+        expect(isRetryableMailError(error)).toBe(false);
         expect(sendEmail).not.toHaveBeenCalled();
     });
 

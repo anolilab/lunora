@@ -71,7 +71,7 @@ describe("mail send classification", () => {
 
         const refusal = await consumeQueuedSend(mailer, { to: "a@x.test" }).catch((error: unknown) => error);
 
-        expect(refusal).toBeInstanceOf(TypeError);
+        expect(refusal).toBeInstanceOf(MailSendError);
         expect(isRetryableMailError(refusal)).toBe(false);
     });
 });

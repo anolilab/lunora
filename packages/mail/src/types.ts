@@ -60,6 +60,10 @@ export interface SendOptions {
      * the Cloudflare binding has no such hook and ignores it. See
      * `consumeQueuedSend` for why that is a narrowed at-least-once rather than
      * exactly-once.
+     *
+     * A key names one message, not one recipient: Resend never delivers a repeat
+     * of it within 24 hours, so a key reused for a new message
+     * (`verify:${userId}`) loses that message.
      */
     idempotencyKey?: string;
     react?: ReactElement;

@@ -183,6 +183,18 @@ without an `idempotencyKey` is refused as malformed. Resend also receives the ke
 as its `Idempotency-Key` request header and drops a repeat within its own 24-hour
 window; the Cloudflare binding has no such hook.
 
+**Upgrading.** `send()` and `queue()` now validate the key and forward it to
+Resend. A key must be 1-256 visible ASCII characters (no spaces); anything else is
+refused as a non-retryable `MailSendError`, at enqueue and again in
+`consumeQueuedSend` before the `sent` store is read, so a message an older version
+enqueued with such a key is acked and logged by the consumer above rather than
+sent. Drain the queue before deploying if that matters. A key also names one
+message, not one recipient: Resend never delivers a repeat of a key inside 24
+hours (the same message gets the first send's result, a different one a 409 that
+retries into the dead-letter queue), so a per-user key like `verify:${userId}`
+loses the second verification email. Put something unique to the message in the
+key (a token, a timestamp), or omit it and let `queue()` mint one.
+
 The store narrows the duplicate window rather than closing it, and nothing on
 this path can close it. The mark is written after the provider accepted the
 message, so a crash in between still redelivers and resends, and KV is eventually

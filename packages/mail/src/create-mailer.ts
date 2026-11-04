@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { randomSessionId } from "../../../shared/random-session-id";
-import { assertSafeAddresses, assertSafeHeaderValue } from "./address";
+import { assertSafeAddresses, assertSafeHeaderValue, assertValidIdempotencyKey } from "./address";
 import { isCaptureTransport } from "./capture-transport";
 import { createCloudflareTransport } from "./cloudflare-transport";
 import { toQueuedPayload } from "./queue";
@@ -11,9 +11,6 @@ import { MailSendError } from "./send-error";
 import type { LunoraMailOptions, Mailer, MailTransport, SendOptions, SendPayload } from "./types";
 
 const DEFAULT_SEND_TIMEOUT_MS = 60_000;
-
-/** What Resend accepts as an `Idempotency-Key`, and short enough for a Workers KV key. */
-const IDEMPOTENCY_KEY_PATTERN = /^[\u0021-\u007E]{1,256}$/u;
 
 /**
  * Settle with the transport's answer, or fail as outcome-unknown once the
@@ -131,9 +128,7 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
         assertSafeHeaderValue("subject", options_.subject);
 
         // Checked at enqueue too, so a key the provider would refuse never reaches the consumer.
-        if (options_.idempotencyKey !== undefined && !IDEMPOTENCY_KEY_PATTERN.test(options_.idempotencyKey)) {
-            throw new LunoraError("INTERNAL", "@lunora/mail: `idempotencyKey` must be 1-256 visible ASCII characters");
-        }
+        assertValidIdempotencyKey(options_.idempotencyKey);
 
         if (options_.headers) {
             for (const [name, value] of Object.entries(options_.headers)) {

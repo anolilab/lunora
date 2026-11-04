@@ -1,5 +1,4 @@
-import { LunoraError } from "@lunora/errors";
-
+import { assertValidIdempotencyKey } from "./address";
 import { MailSendError } from "./send-error";
 import type { Mailer, SendOptions } from "./types";
 
@@ -64,13 +63,16 @@ interface ConsumeQueuedSendOptions {
 
 const DEFAULT_SENT_TTL_SECONDS = 86_400;
 
+/** A queue body no redelivery can fix, refused before anything is read or sent. */
+const malformed = (message: string): MailSendError => new MailSendError({ message: `@lunora/mail: ${message}`, retryable: false });
+
 /**
  * Validate an untrusted queue body into `SendOptions`. Every throw here is a
  * malformed message, which no redelivery fixes, so none is retryable.
  */
 const toSendOptions = (payload: unknown): SendOptions => {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-        throw new LunoraError("INTERNAL", "@lunora/mail: queue message body must be an object");
+        throw malformed("queue message body must be an object");
     }
 
     const candidate = payload as Record<string, unknown>;
@@ -80,14 +82,14 @@ const toSendOptions = (payload: unknown): SendOptions => {
     // malformed payload here would otherwise surface as an obscure provider
     // error downstream.
     if (typeof candidate.subject !== "string") {
-        throw new TypeError("@lunora/mail: queue message must have a string `subject`");
+        throw malformed("queue message must have a string `subject`");
     }
 
     const recipientIsString = typeof candidate.to === "string";
     const recipientIsStringArray = Array.isArray(candidate.to) && candidate.to.every((value) => typeof value === "string");
 
     if (!recipientIsString && !recipientIsStringArray) {
-        throw new LunoraError("INTERNAL", "@lunora/mail: queue message `to` must be a string or string[]");
+        throw malformed("queue message `to` must be a string or string[]");
     }
 
     const assertOptionalString = (field: string, value: unknown): string | undefined => {
@@ -96,7 +98,7 @@ const toSendOptions = (payload: unknown): SendOptions => {
         }
 
         if (typeof value !== "string") {
-            throw new TypeError(`@lunora/mail: queue message \`${field}\` must be a string`);
+            throw malformed(`queue message \`${field}\` must be a string`);
         }
 
         return value;
@@ -119,26 +121,30 @@ const toSendOptions = (payload: unknown): SendOptions => {
             return value;
         }
 
-        throw new TypeError(`@lunora/mail: queue message \`${field}\` must be a string or string[]`);
+        throw malformed(`queue message \`${field}\` must be a string or string[]`);
     };
 
     let headers: Record<string, string> | undefined;
 
     if (candidate.headers !== undefined) {
         if (!candidate.headers || typeof candidate.headers !== "object" || Array.isArray(candidate.headers)) {
-            throw new TypeError("@lunora/mail: queue message `headers` must be an object of string values");
+            throw malformed("queue message `headers` must be an object of string values");
         }
 
         const entries = Object.entries(candidate.headers as Record<string, unknown>);
 
         for (const [key, value] of entries) {
             if (typeof value !== "string") {
-                throw new TypeError(`@lunora/mail: queue message header "${key}" must be a string`);
+                throw malformed(`queue message header "${key}" must be a string`);
             }
         }
 
         headers = candidate.headers as Record<string, string>;
     }
+
+    const idempotencyKey = assertOptionalString("idempotencyKey", candidate.idempotencyKey);
+
+    assertValidIdempotencyKey(idempotencyKey);
 
     // Build a typed payload from the validated fields rather than blindly
     // casting the untrusted body — the cast would defeat the type system at
@@ -149,7 +155,7 @@ const toSendOptions = (payload: unknown): SendOptions => {
         from: assertOptionalString("from", candidate.from),
         headers,
         html: assertOptionalString("html", candidate.html),
-        idempotencyKey: assertOptionalString("idempotencyKey", candidate.idempotencyKey),
+        idempotencyKey,
         replyTo: assertOptionalString("replyTo", candidate.replyTo),
         subject: candidate.subject,
         text: assertOptionalString("text", candidate.text),
@@ -225,7 +231,7 @@ const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: Cons
     const key = sendOptions.idempotencyKey;
 
     if (key === undefined) {
-        throw new TypeError("@lunora/mail: queue message has no `idempotencyKey` to dedupe on");
+        throw malformed("queue message has no `idempotencyKey` to dedupe on");
     }
 
     let recorded: string | null;

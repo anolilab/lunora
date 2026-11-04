@@ -6,6 +6,8 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { MailSendError } from "./send-error";
+
 /** RFC 5321 caps the entire mailbox path at 320 chars; reject anything longer. */
 const MAX_EMAIL_LENGTH = 320;
 const MAX_NAME_LENGTH = 256;
@@ -137,4 +139,19 @@ const assertSafeAddresses = (payload: { bcc?: string | string[]; cc?: string | s
     }
 };
 
-export { assertSafeAddresses, assertSafeHeaderValue, toAddress, toAddressList };
+/** What Resend accepts as an `Idempotency-Key`, and short enough for a Workers KV key (512 bytes). */
+const IDEMPOTENCY_KEY_PATTERN = /^[\u0021-\u007E]{1,256}$/u;
+
+/**
+ * Refuse a key the provider or a sent-mail store would reject. Run before the
+ * store is read: a KV read failing on an over-long key would otherwise surface as
+ * a retryable store error and redeliver the message into the dead-letter queue.
+ * The same key fails the same way on every attempt, so the refusal is final.
+ */
+const assertValidIdempotencyKey = (key: string | undefined): void => {
+    if (key !== undefined && !IDEMPOTENCY_KEY_PATTERN.test(key)) {
+        throw new MailSendError({ message: "@lunora/mail: `idempotencyKey` must be 1-256 visible ASCII characters", retryable: false });
+    }
+};
+
+export { assertSafeAddresses, assertSafeHeaderValue, assertValidIdempotencyKey, toAddress, toAddressList };
