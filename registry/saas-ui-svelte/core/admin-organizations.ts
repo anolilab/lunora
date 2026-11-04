@@ -2,12 +2,15 @@
  * The platform admin's organisation list.
  *
  * Reads the `.global()` `saas_organizations` projection, which is the only
- * cross-tenant read the shard model allows — so everything here is a selector
- * over the rows that one query returns. Anything that would need a tenant's own
- * data belongs behind impersonation, not behind a widened admin query.
+ * cross-tenant read the shard model allows. The list is paged (the saas kit's
+ * `saas.listOrganizations` is a cursor query) and the search, filters and sort
+ * run on the server, so nothing here filters rows: this module turns the
+ * admin's view into the query's arguments, and the header's totals come from
+ * `saas.organizationTotals` over the same filter. Anything that would need a
+ * tenant's own data belongs behind impersonation, not behind a widened admin
+ * query.
  */
-import { planLabel } from "./format";
-import type { OrganizationRow } from "./types";
+import type { Plan } from "./billing";
 
 type OrganizationSort = "name" | "plan" | "seats" | "updated";
 
@@ -20,45 +23,43 @@ interface AdminView {
     status: string;
 }
 
+/** What `saas.organizationTotals` resolves to: the whole filtered set, not the pages loaded. */
+interface OrganizationTotals {
+    organizations: number;
+    seats: number;
+}
+
+/** The filter `saas.listOrganizations` and `saas.organizationTotals` share. The list also takes `sort`. */
+interface OrganizationFilterArgs {
+    plan?: string;
+    search?: string;
+    status?: string;
+}
+
 const DEFAULT_ADMIN_VIEW: AdminView = { plan: "all", search: "", sort: "updated", status: "all" };
 
-const COMPARATORS: Record<OrganizationSort, (a: OrganizationRow, b: OrganizationRow) => number> = {
-    name: (a, b) => a.name.localeCompare(b.name),
-    plan: (a, b) => a.plan.localeCompare(b.plan) || a.name.localeCompare(b.name),
-    seats: (a, b) => b.seats - a.seats,
-    updated: (a, b) => b.updatedAt - a.updatedAt,
-};
+/** The view's filter as query arguments: `"all"` and a blank search are simply absent. */
+const organizationFilterArgs = (view: AdminView): OrganizationFilterArgs => {
+    const search = view.search.trim();
 
-const selectOrganizations = (rows: ReadonlyArray<OrganizationRow>, view: AdminView = DEFAULT_ADMIN_VIEW): ReadonlyArray<OrganizationRow> => {
-    const needle = view.search.trim().toLowerCase();
-
-    return rows
-        .filter(
-            (organization) =>
-                (view.plan === "all" || organization.plan === view.plan) &&
-                (view.status === "all" || organization.status === view.status) &&
-                (needle === "" || organization.name.toLowerCase().includes(needle) || organization.slug.toLowerCase().includes(needle)),
-        )
-        .toSorted(COMPARATORS[view.sort]);
-};
-
-/** The distinct plans present, for the filter control. Sorted for a stable UI. */
-const planOptions = (rows: ReadonlyArray<OrganizationRow>): ReadonlyArray<{ label: string; value: string }> => [
-    { label: "All plans", value: "all" },
-    ...[...new Set(rows.map((organization) => organization.plan))]
-        .toSorted((a, b) => a.localeCompare(b))
-        .map((plan) => {
-            return { label: planLabel(plan), value: plan };
-        }),
-];
-
-/** Totals for the admin header. Seats are summed from the projection, not counted per tenant. */
-const adminTotals = (rows: ReadonlyArray<OrganizationRow>): { organizations: number; seats: number } => {
     return {
-        organizations: rows.length,
-        seats: rows.reduce((total, organization) => total + organization.seats, 0),
+        ...(view.plan === "all" ? {} : { plan: view.plan }),
+        ...(search === "" ? {} : { search }),
+        ...(view.status === "all" ? {} : { status: view.status }),
     };
 };
 
-export type { AdminView, OrganizationSort };
-export { adminTotals, DEFAULT_ADMIN_VIEW, planOptions, selectOrganizations };
+/**
+ * The plan filter's options, from the catalog in its own order. The catalog
+ * rather than the rows: a page holds only some tenants, and a filter that
+ * offered only the plans on screen could never reach the rest.
+ */
+const planOptions = (plans: ReadonlyArray<Pick<Plan, "id" | "name">>): ReadonlyArray<{ label: string; value: string }> => [
+    { label: "All plans", value: "all" },
+    ...plans.map((plan) => {
+        return { label: plan.name, value: plan.id };
+    }),
+];
+
+export type { AdminView, OrganizationFilterArgs, OrganizationSort, OrganizationTotals };
+export { DEFAULT_ADMIN_VIEW, organizationFilterArgs, planOptions };

@@ -8,8 +8,8 @@
  */
 export type { ActivityEntry, ActivityGroup } from "./activity";
 export { groupActivityByDay } from "./activity";
-export type { AdminView, OrganizationSort } from "./admin-organizations";
-export { adminTotals, DEFAULT_ADMIN_VIEW, planOptions, selectOrganizations } from "./admin-organizations";
+export type { AdminView, OrganizationFilterArgs, OrganizationSort, OrganizationTotals } from "./admin-organizations";
+export { DEFAULT_ADMIN_VIEW, organizationFilterArgs, planOptions } from "./admin-organizations";
 export type { AdminSubscriptionRow, PastDueSubscriptions, SubscriptionListing, SubscriptionsView } from "./admin-subscriptions";
 export {
     DEFAULT_SUBSCRIPTIONS_VIEW,

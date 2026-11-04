@@ -121,9 +121,15 @@ export const saas = definePlugin("saas", {
                 updatedAt: v.number(),
             })
                 .global()
+                // One index per sort the admin list offers (`saas.listOrganizations`),
+                // each in that sort's key order, so a page is an index range rather
+                // than a sort of every tenant. `byPlanName` also serves the plan filter.
+                .index("byName", ["name", "organizationId"])
                 .index("byOrganization", ["organizationId"], { unique: true })
-                .index("byPlan", ["plan"])
-                .index("bySlug", ["slug"], { unique: true }),
+                .index("byPlanName", ["plan", "name", "organizationId"])
+                .index("bySeats", ["seats", "organizationId"])
+                .index("bySlug", ["slug"], { unique: true })
+                .index("byUpdatedAt", ["updatedAt", "organizationId"]),
         },
     }),
 });

@@ -53,6 +53,21 @@ const equalsAll =
     (row: Row): boolean =>
         Object.entries(bound).every(([field, value]) => row[field] === value);
 
+/** SQLite's order for the values the kit sorts on: numbers numerically, text by code unit (BINARY). */
+const compare = (left: unknown, right: unknown): number => {
+    if (typeof left === "number" && typeof right === "number") {
+        return left - right;
+    }
+
+    const [a, b] = [String(left), String(right)];
+
+    if (a === b) {
+        return 0;
+    }
+
+    return a < b ? -1 : 1;
+};
+
 const createDatabase = (unique: Record<string, string[][]>) => {
     const tables = new Map<string, Row[]>();
     let counter = 0;
@@ -65,13 +80,44 @@ const createDatabase = (unique: Record<string, string[][]>) => {
         return tables.get(table)!;
     };
 
+    // The `where` operators the kit's `findMany` / `count` / `aggregate` calls use. An operator the
+    // fake does not know throws, so a kit that starts relying on one fails here instead of passing.
+    const operators: Record<string, (value: unknown, operand: unknown) => boolean> = {
+        // D1's `contains` folds ASCII case (`instr(lower(…), lower(…))`).
+        contains: (value, operand) => String(value).toLowerCase().includes(String(operand).toLowerCase()),
+        gt: (value, operand) => compare(value, operand) > 0,
+        in: (value, operand) => (operand as unknown[]).includes(value),
+        lt: (value, operand) => compare(value, operand) < 0,
+        ne: (value, operand) => value !== operand,
+    };
+
     const match = (row: Row, where: Row): boolean =>
         Object.entries(where).every(([field, condition]) => {
-            if (typeof condition === "object" && condition !== null && "ne" in condition) {
-                return row[field] !== condition.ne;
+            if (field === "AND") {
+                return (condition as Row[]).every((branch) => match(row, branch));
             }
 
-            return row[field] === condition;
+            if (field === "OR") {
+                return (condition as Row[]).some((branch) => match(row, branch));
+            }
+
+            if (field === "NOT") {
+                return !match(row, condition as Row);
+            }
+
+            if (typeof condition !== "object" || condition === null) {
+                return row[field] === condition;
+            }
+
+            return Object.entries(condition).every(([operator, operand]) => {
+                const test = operators[operator];
+
+                if (!test) {
+                    throw new Error(`fake db: unsupported where operator ${operator}`);
+                }
+
+                return test(row[field], operand);
+            });
         });
 
     const assertUnique = (table: string, candidate: Row): void => {
@@ -87,10 +133,39 @@ const createDatabase = (unique: Record<string, string[][]>) => {
     const find = (table: string, id: unknown): Row | undefined => rows(table).find((row) => row["_id"] === id);
 
     const facade = (table: string) => {
+        const matching = (where: Row): Row[] => rows(table).filter((row) => match(row, where));
+
         return {
+            aggregate: async ({ field, op, where = {} }: { field: string; op: string; where?: Row }) => {
+                if (op !== "sum") {
+                    throw new Error(`fake db: unsupported aggregate ${op}`);
+                }
+
+                const found = matching(where);
+
+                return found.length === 0 ? null : found.reduce((total, row) => total + Number(row[field]), 0);
+            },
+            count: async (where: Row = {}) => matching(where).length,
             findFirst: async ({ where }: { where: Row }) => rows(table).find((row) => match(row, where)) ?? null,
-            findMany: async ({ where = {} }: { where?: Row }) => {
-                return { page: rows(table).filter((row) => match(row, where)) };
+            findMany: async ({ limit, orderBy = [], where = {} }: { limit?: number; orderBy?: Record<string, "asc" | "desc">[]; where?: Row }) => {
+                const sorted = matching(where).toSorted((a, b) => {
+                    for (const entry of orderBy) {
+                        const [field, direction] = Object.entries(entry)[0]!;
+                        const order = compare(a[field], b[field]);
+
+                        if (order !== 0) {
+                            return direction === "asc" ? order : -order;
+                        }
+                    }
+
+                    return 0;
+                });
+
+                if (limit === undefined) {
+                    return { continueCursor: null, isDone: true, page: sorted };
+                }
+
+                return { isDone: sorted.length <= limit, page: sorted.slice(0, limit) };
             },
         };
     };
@@ -221,13 +296,26 @@ const signedIn = (claims: Row) => {
     };
 };
 
+interface OrganizationFilter {
+    plan?: string;
+    search?: string;
+    status?: string;
+}
+
+interface OrganizationListArgs extends OrganizationFilter {
+    paginationOpts: { cursor?: string | null; endCursor?: string | null; numItems: number };
+    sort?: "name" | "plan" | "seats" | "updated";
+}
+
 describe("saas kit functions", () => {
     const NOW = 1_700_000_000_000;
 
     interface Saas {
         archiveProject: Handler<Record<"projectId", string>, void>;
         createProject: Handler<{ name: string }, string>;
-        listOrganizations: (invocation: { ctx: unknown }) => Promise<Row[]>;
+        listOrganizations: Handler<OrganizationListArgs, { continueCursor: string | null; isDone: boolean; page: Row[]; splitCursor?: string | null }>;
+        organizationsById: Handler<{ organizationIds: string[] }, Row[]>;
+        organizationTotals: Handler<OrganizationFilter, { organizations: number; seats: number }>;
         syncOrganization: Handler<{ name: string; organizationId: string; seats?: number; slug: string; status?: string }, void>;
     }
 
@@ -389,11 +477,56 @@ describe("saas kit functions", () => {
 
             expect(rows("saas_organizations")).toHaveLength(1);
             expect(rows("saas_organizations")[0]).toMatchObject({ slug: "~deleted~org-1", status: "deleted" });
-            await expect(saas.listOrganizations({ ctx: admin })).resolves.toStrictEqual([]);
+            await expect(saas.listOrganizations({ args: { paginationOpts: { numItems: 10 } }, ctx: admin })).resolves.toMatchObject({ isDone: true, page: [] });
         });
     });
 
     describe("listOrganizations", () => {
+        /** Five tenants with ties on seats and plan, each synced at its own time. */
+        const seed = async () => {
+            const context = await setup();
+            const { saas, writer } = context;
+            const tenants = [
+                { name: "Globex", organizationId: "org-1", plan: "pro", seats: 3, slug: "globex" },
+                { name: "Acme", organizationId: "org-2", plan: "free", seats: 12, slug: "acme-corp" },
+                { name: "Initech", organizationId: "org-3", plan: "pro", seats: 12, slug: "initech" },
+                { name: "Hooli", organizationId: "org-4", plan: "scale", seats: 40, slug: "hooli" },
+                { name: "Umbrella", organizationId: "org-5", plan: "pro", seats: 3, slug: "umbrella" },
+            ];
+
+            for (const [index, tenant] of tenants.entries()) {
+                // eslint-disable-next-line no-await-in-loop -- each sync stamps its own `now`, in order
+                await saas.syncOrganization({ args: tenant, ctx: { ...writer, now: NOW + index } });
+            }
+
+            const admin = { ...writer, auth: { ...signedIn({ appRole: "admin" }), userId: "admin-1" } };
+
+            return { ...context, admin };
+        };
+
+        type Seeded = Awaited<ReturnType<typeof seed>>;
+
+        /** Every page of a listing, followed through `continueCursor`. */
+        const pageThrough = async ({ admin, saas }: Seeded, args: Omit<OrganizationListArgs, "paginationOpts">, numItems: number): Promise<unknown[]> => {
+            const names: unknown[] = [];
+            let cursor: string | null = null;
+
+            for (;;) {
+                // eslint-disable-next-line no-await-in-loop -- a page's cursor comes from the one before it
+                const result = await saas.listOrganizations({ args: { ...args, paginationOpts: { cursor, numItems } }, ctx: admin });
+
+                names.push(...result.page.map((row) => row["name"]));
+
+                if (result.isDone) {
+                    return names;
+                }
+
+                expect(result.page).toHaveLength(numItems);
+
+                cursor = result.continueCursor;
+            }
+        };
+
         it("leaves deleted organisations out of the admin list", async () => {
             expect.assertions(1);
 
@@ -404,9 +537,135 @@ describe("saas kit functions", () => {
             await saas.syncOrganization({ args: { name: "Beta", organizationId: "org-2", seats: 1, slug: "beta" }, ctx: writer });
             await saas.syncOrganization({ args: { name: "Acme", organizationId: "org-1", seats: 0, slug: "acme", status: "deleted" }, ctx: writer });
 
-            const listed = await saas.listOrganizations({ ctx: admin });
+            const listed = await saas.listOrganizations({ args: { paginationOpts: { numItems: 10 } }, ctx: admin });
 
-            expect(listed.map((row) => row["organizationId"])).toStrictEqual(["org-2"]);
+            expect(listed.page.map((row) => row["organizationId"])).toStrictEqual(["org-2"]);
+        });
+
+        it.each([
+            ["updated", ["Umbrella", "Hooli", "Initech", "Acme", "Globex"]],
+            ["name", ["Acme", "Globex", "Hooli", "Initech", "Umbrella"]],
+            ["plan", ["Acme", "Globex", "Initech", "Umbrella", "Hooli"]],
+            ["seats", ["Hooli", "Initech", "Acme", "Umbrella", "Globex"]],
+        ] as const)("pages through every organisation sorted by %s, two at a time, without repeating or skipping one", async (sort, expected) => {
+            expect.hasAssertions();
+
+            const seeded = await seed();
+
+            await expect(pageThrough(seeded, { sort }, 2)).resolves.toStrictEqual(expected);
+        });
+
+        it("keeps a bounded page's range fixed, so a row landing inside it grows that page instead of shifting the next", async () => {
+            expect.assertions(4);
+
+            const seeded = await seed();
+            const { admin, saas, writer } = seeded;
+            const first = await saas.listOrganizations({ args: { paginationOpts: { numItems: 2 }, sort: "name" }, ctx: admin });
+
+            await saas.syncOrganization({ args: { name: "Aardvark", organizationId: "org-6", seats: 1, slug: "aardvark" }, ctx: writer });
+
+            const grown = await saas.listOrganizations({
+                args: { paginationOpts: { cursor: null, endCursor: first.continueCursor, numItems: 2 }, sort: "name" },
+                ctx: admin,
+            });
+            const next = await saas.listOrganizations({ args: { paginationOpts: { cursor: first.continueCursor, numItems: 2 }, sort: "name" }, ctx: admin });
+
+            expect(grown.page.map((row) => row["name"])).toStrictEqual(["Aardvark", "Acme", "Globex"]);
+            expect(grown).toMatchObject({ continueCursor: first.continueCursor, isDone: true });
+            expect(grown.splitCursor).toStrictEqual(expect.any(String));
+            expect(next.page.map((row) => row["name"])).toStrictEqual(["Hooli", "Initech"]);
+        });
+
+        it("searches the name and slug as a case-insensitive substring, and filters by plan and status", async () => {
+            expect.assertions(4);
+
+            const seeded = await seed();
+            const { writer } = seeded;
+
+            await seeded.saas.syncOrganization({ args: { name: "Initech", organizationId: "org-3", slug: "initech", status: "past_due" }, ctx: writer });
+
+            await expect(pageThrough(seeded, { search: "CORP" }, 10)).resolves.toStrictEqual(["Acme"]);
+            await expect(pageThrough(seeded, { search: "o" }, 10)).resolves.toStrictEqual(["Hooli", "Acme", "Globex"]);
+            await expect(pageThrough(seeded, { plan: "pro", sort: "name" }, 10)).resolves.toStrictEqual(["Globex", "Initech", "Umbrella"]);
+            await expect(pageThrough(seeded, { plan: "pro", status: "active" }, 10)).resolves.toStrictEqual(["Umbrella", "Globex"]);
+        });
+
+        it("caps a page at 100 rows whatever numItems asks for", async () => {
+            expect.assertions(2);
+
+            const { saas, writer } = await setup();
+            const admin = { ...writer, auth: { ...signedIn({ appRole: "admin" }), userId: "admin-1" } };
+
+            for (let index = 0; index < 101; index += 1) {
+                const id = String(index).padStart(3, "0");
+
+                // eslint-disable-next-line no-await-in-loop -- seeding, in order
+                await saas.syncOrganization({ args: { name: `Org ${id}`, organizationId: `org-${id}`, slug: `org-${id}` }, ctx: writer });
+            }
+
+            const page = await saas.listOrganizations({ args: { paginationOpts: { numItems: 1000 } }, ctx: admin });
+
+            expect(page.page).toHaveLength(100);
+            expect(page.isDone).toBe(false);
+        });
+
+        it("refuses a cursor it did not mint", async () => {
+            expect.assertions(2);
+
+            const { admin, saas } = await seed();
+
+            await expect(saas.listOrganizations({ args: { paginationOpts: { cursor: "not json", numItems: 2 } }, ctx: admin })).rejects.toMatchObject({
+                code: "VALIDATION_ERROR",
+            });
+            // A `name` cursor handed to the `seats` sort: the wrong key types for that tuple.
+            await expect(
+                saas.listOrganizations({ args: { paginationOpts: { cursor: JSON.stringify(["Acme", "org-2"]), numItems: 2 }, sort: "seats" }, ctx: admin }),
+            ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        });
+
+        it("refuses everyone but a platform admin", async () => {
+            expect.assertions(3);
+
+            const { saas, writer } = await seed();
+
+            await expect(saas.listOrganizations({ args: { paginationOpts: { numItems: 2 } }, ctx: writer })).rejects.toMatchObject({ code: "FORBIDDEN" });
+            await expect(saas.organizationTotals({ args: {}, ctx: writer })).rejects.toMatchObject({ code: "FORBIDDEN" });
+            await expect(saas.organizationsById({ args: { organizationIds: ["org-1"] }, ctx: writer })).rejects.toMatchObject({ code: "FORBIDDEN" });
+        });
+    });
+
+    describe("organizationTotals", () => {
+        it("counts and sums seats over the whole filtered set, not a page of it", async () => {
+            expect.assertions(3);
+
+            const { saas, writer } = await setup();
+            const admin = { ...writer, auth: { ...signedIn({ appRole: "admin" }), userId: "admin-1" } };
+
+            await saas.syncOrganization({ args: { name: "Acme", organizationId: "org-1", plan: "pro", seats: 12, slug: "acme" }, ctx: writer });
+            await saas.syncOrganization({ args: { name: "Globex", organizationId: "org-2", plan: "pro", seats: 3, slug: "globex" }, ctx: writer });
+            await saas.syncOrganization({ args: { name: "Hooli", organizationId: "org-3", plan: "free", seats: 1, slug: "hooli" }, ctx: writer });
+            await saas.syncOrganization({ args: { name: "Gone", organizationId: "org-4", seats: 0, slug: "gone", status: "deleted" }, ctx: writer });
+
+            await expect(saas.organizationTotals({ args: {}, ctx: admin })).resolves.toStrictEqual({ organizations: 3, seats: 16 });
+            await expect(saas.organizationTotals({ args: { plan: "pro" }, ctx: admin })).resolves.toStrictEqual({ organizations: 2, seats: 15 });
+            await expect(saas.organizationTotals({ args: { search: "nothing" }, ctx: admin })).resolves.toStrictEqual({ organizations: 0, seats: 0 });
+        });
+    });
+
+    describe("organizationsById", () => {
+        it("resolves the named organisations and leaves deleted ones out", async () => {
+            expect.assertions(1);
+
+            const { saas, writer } = await setup();
+            const admin = { ...writer, auth: { ...signedIn({ appRole: "admin" }), userId: "admin-1" } };
+
+            await saas.syncOrganization({ args: { name: "Acme", organizationId: "org-1", slug: "acme" }, ctx: writer });
+            await saas.syncOrganization({ args: { name: "Globex", organizationId: "org-2", slug: "globex" }, ctx: writer });
+            await saas.syncOrganization({ args: { name: "Gone", organizationId: "org-3", seats: 0, slug: "gone", status: "deleted" }, ctx: writer });
+
+            const found = await saas.organizationsById({ args: { organizationIds: ["org-2", "org-3", "org-9", "org-2"] }, ctx: admin });
+
+            expect(found.map((row) => row["name"])).toStrictEqual(["Globex"]);
         });
     });
 });

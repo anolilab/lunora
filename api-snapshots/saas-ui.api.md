@@ -268,6 +268,16 @@ interface ImpersonationSessionLike {
 const NAME_MAX_LENGTH: 120;
 ```
 
+### `OrganizationFilterArgs` (interface)
+
+```ts
+interface OrganizationFilterArgs {
+    plan?: string;
+    search?: string;
+    status?: string;
+}
+```
+
 ### `OrganizationRow` (interface)
 
 ```ts
@@ -288,6 +298,15 @@ interface OrganizationRow {
 
 ```ts
 type OrganizationSort = "name" | "plan" | "seats" | "updated";
+```
+
+### `OrganizationTotals` (interface)
+
+```ts
+interface OrganizationTotals {
+    organizations: number;
+    seats: number;
+}
 ```
 
 ### `OverviewPayload` (interface)
@@ -503,12 +522,6 @@ interface UserActions {
 }
 ```
 
-### `adminTotals` (const)
-
-```ts
-const adminTotals: (rows: ReadonlyArray<OrganizationRow>) => { organizations: number; seats: number; };
-```
-
 ### `adminUsersPage` (const)
 
 ```ts
@@ -629,6 +642,12 @@ const mapError: (error: unknown) => string;
 const notEntitledLabel: (feature: string) => string;
 ```
 
+### `organizationFilterArgs` (const)
+
+```ts
+const organizationFilterArgs: (view: AdminView) => OrganizationFilterArgs;
+```
+
 ### `planLabel` (const)
 
 ```ts
@@ -638,7 +657,7 @@ const planLabel: (plan: string) => string;
 ### `planOptions` (const)
 
 ```ts
-const planOptions: (rows: ReadonlyArray<OrganizationRow>) => ReadonlyArray<{ label: string; value: string; }>;
+const planOptions: (plans: ReadonlyArray<Pick<Plan, "id" | "name">>) => ReadonlyArray<{ label: string; value: string; }>;
 ```
 
 ### `presenceRoster` (const)
@@ -687,12 +706,6 @@ const seatSummary: (usage: SeatUsage) => string;
 
 ```ts
 const seatUsage: (plan: Plan | undefined, memberCount: number) => SeatUsage;
-```
-
-### `selectOrganizations` (const)
-
-```ts
-const selectOrganizations: (rows: ReadonlyArray<OrganizationRow>, view?: AdminView) => ReadonlyArray<OrganizationRow>;
 ```
 
 ### `selectProjects` (const)
@@ -783,7 +796,7 @@ interface ActivityFeedProps {
 ### `AdminOrganizations` (const)
 
 ```ts
-const AdminOrganizations: ({ now, rows, timeZone }: AdminOrganizationsProps) => ReactNode;
+const AdminOrganizations: ({ now, onLoadMore, onViewChange, plans, rows, timeZone, totals, view }: AdminOrganizationsProps) => ReactNode;
 ```
 
 ### `AdminOrganizationsProps` (interface)
@@ -791,8 +804,13 @@ const AdminOrganizations: ({ now, rows, timeZone }: AdminOrganizationsProps) => 
 ```ts
 interface AdminOrganizationsProps {
     now: number;
+    onLoadMore?: () => void;
+    onViewChange: (view: AdminView) => void;
+    plans: ReadonlyArray<Pick<Plan, "id" | "name">>;
     rows: ReadonlyArray<OrganizationRow> | undefined;
     timeZone?: string;
+    totals: OrganizationTotals | undefined;
+    view: AdminView;
 }
 ```
 

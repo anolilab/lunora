@@ -485,7 +485,7 @@ const pageCursor = v.optional(v.union(v.string(), v.null()));
  * It lives beside the payment functions rather than in `lunora/saas` because a
  * kit without billing is a supported shape, and there `payment_subscriptions`
  * does not exist. The admin screen joins the rows to organisation names itself,
- * from `saas.listOrganizations`.
+ * from `saas.organizationsById`.
  *
  * Paged because this table only grows: one response holding every subscription
  * ever written would be re-sent to the admin on each webhook. `numItems` is
