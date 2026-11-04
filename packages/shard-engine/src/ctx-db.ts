@@ -2383,12 +2383,20 @@ const meterGlobalDatabase = (global: DatabaseWriterLike | undefined, headroom: T
 
             return async (...args: unknown[]): Promise<unknown> => {
                 const unprojected = PROJECTED_GLOBAL_READS.has(property) ? withoutSelect(args) : undefined;
-                const callArgs = unprojected?.args ?? args;
+                let callArgs = unprojected?.args ?? args;
                 const table = String(args[0]);
                 const manyArgs = callArgs[1] as { endCursor?: unknown; limit?: unknown } | undefined;
-                // A bounded (`endCursor`) read is one call, charged below like a limited one. Paged, it
-                // would stop at its first page: every page of a fixed range answers `isDone: true`.
-                const unlimitedMany = property === "findMany" && typeof manyArgs?.limit !== "number" && typeof manyArgs?.endCursor !== "string";
+                const bounded = property === "findMany" && typeof manyArgs?.endCursor === "string";
+                const unlimitedMany = property === "findMany" && typeof manyArgs?.limit !== "number" && !bounded;
+
+                // A bounded (`endCursor`) read cannot be walked like an unlimited one: every page of a
+                // fixed range answers `isDone: true`, so the walk would stop at its first page. Without
+                // a `limit` it would instead load the whole range before the meter saw a row, so cap it
+                // at one page. The capped page's `splitCursor` falls among the rows returned, and the
+                // client's split re-reads the half past it, which recovers the rows the cap held back.
+                if (bounded && typeof manyArgs.limit !== "number") {
+                    callArgs = [callArgs[0], { ...manyArgs, limit: GLOBAL_READ_MAX_PAGE }, ...callArgs.slice(2)];
+                }
 
                 if (unlimitedMany) {
                     const paged = await readGlobalPages((pageArgs) => Reflect.apply(member, target, pageArgs) as Promise<unknown>, callArgs, table, headroom);

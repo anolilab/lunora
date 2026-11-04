@@ -62,6 +62,26 @@ describe("an unlimited global findMany under the read meter", () => {
         expect(selects()).toBe(1);
     });
 
+    // Without a `limit` a bounded range is capped at one page (4096 rows) rather than read whole
+    // before the meter sees it; the capped page's splitCursor lets the client recover the rest.
+    it("caps a bounded range with no limit at one page, split inside what it returned", async () => {
+        expect.assertions(4);
+
+        const { selects, store, writer } = await open();
+        const orderBy = [{ bucket: "asc" as const }];
+        const head = await store.findMany("items", { limit: 5000, orderBy });
+        const ids = head.page.map((row) => row["_id"]);
+        const capped = await writer.findMany("items", { endCursor: head.continueCursor, orderBy });
+
+        expect(capped.page.map((row) => row["_id"])).toStrictEqual(ids.slice(0, 4096));
+        expect(capped).toMatchObject({ continueCursor: head.continueCursor, isDone: true });
+
+        const rest = await writer.findMany("items", { cursor: capped.splitCursor, endCursor: head.continueCursor, orderBy });
+
+        expect(rest.page.map((row) => row["_id"])).toStrictEqual(ids.slice(2048));
+        expect(selects()).toBe(2);
+    });
+
     it("charges a bounded range against the read cap", async () => {
         expect.assertions(1);
 
