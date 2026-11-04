@@ -3390,7 +3390,7 @@ const devVariablesStamp: (root: string) => string;
 ### `handleAdvisorProceduresRequest` (const)
 
 ```ts
-const handleAdvisorProceduresRequest: (request: LocalEndpointRequest) => LocalEndpointResponse;
+const handleAdvisorProceduresRequest: (request: LocalEndpointRequest) => Promise<LocalEndpointResponse>;
 ```
 
 ### `handlePolicyScaffoldRequest` (const)
