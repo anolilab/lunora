@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 
 import { runAdvisor } from "@lunora/advisor";
 import { LunoraError } from "@lunora/errors";
+import type { AdvisorProcedure } from "@lunora/shard-engine";
 import type { Project } from "ts-morph";
 
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
@@ -785,11 +786,11 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // projects (and the golden fixtures) keep writing only `openapi.json`.
     const apiSpec = options.apiSpec ?? "openapi";
     const wantsOpenApi = apiSpec === "openapi" || apiSpec === "both";
-    // No advisor evidence (`lint: false`) means there is no list to score against. An empty list would read ~100
-    // with nothing checked, and one left from an earlier run would no longer match its advisories, so the file is
-    // removed and the host reports it as not generated.
-    const advisorProcedureDocument =
-        advisorContext === undefined ? "" : `${JSON.stringify({ procedures: advisorContext.procedureProtections }, undefined, 2)}\n`;
+    const advisorProcedureData: ReadonlyArray<AdvisorProcedure> = advisorContext?.procedureProtections ?? [];
+    const advisorProcedureDocument = `${JSON.stringify({ procedures: advisorProcedureData }, undefined, 2)}\n`;
+    // No advisor evidence (`lint: false`) means the list above is a placeholder, not a result. Writing it would
+    // replace a real list with an empty one and the health score would read ~100 with nothing checked.
+    const hasAdvisorProcedures = advisorContext !== undefined;
     const wantsOpenRpc = apiSpec === "openrpc" || apiSpec === "both";
 
     // The fluent worker-composition builder. Emits one method per package-backed
@@ -972,8 +973,12 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: wantsOpenRpc ? openRpcContent : "", kind: "optional", name: "openrpc.json" },
               { content: wantsOpenRpc ? openRpcModuleContent : "", kind: "optional", name: "openrpc.ts" },
               // Studio-only data (the health map's denominator). The main app Worker never
-              // carries it: the dev hosts serve this file to the studio.
-              { content: advisorProcedureDocument, kind: "optional", name: "advisor-procedures.json" },
+              // carries it: the dev hosts serve this file to the studio, and a hosted Studio
+              // is to get it from an opt-in companion Worker (`studio.companion`, not yet in
+              // this branch). Shape-checked against `@lunora/shard-engine`'s `AdvisorProcedure`
+              // before it is written, so a field added to the advisor's type and forgotten
+              // there fails codegen. Skipped without advisor evidence, leaving any existing file.
+              ...(hasAdvisorProcedures ? [{ content: advisorProcedureDocument, kind: "optional" as const, name: "advisor-procedures.json" }] : []),
               // Same pairing as the specs: the `.json` for tooling, the `.ts` for `createWorker({ architecture })`,
               // both removed when the last module goes.
               {

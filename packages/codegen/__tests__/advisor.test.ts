@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -325,24 +325,24 @@ export const tally = internalMutation.mutation(async ({ ctx }) => {
         expect((emittedAdvisories(shard) as { name: string }[]).map((advisory) => advisory.name)).toContain("unindexed_foreign_key");
     });
 
-    it("removes advisor-procedures.json under `lint: false` and writes it again once the advisor runs", () => {
-        expect.assertions(4);
-
-        const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
-        const sidecar = join(workdir, "lunora", "_generated", "advisor-procedures.json");
-        const written = readFileSync(sidecar, "utf8");
-
-        expect(written).toContain('"procedures"');
-
-        // A list kept from the earlier run would no longer match this run's (empty) advisories.
-        const unlinted = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
-
-        expect(existsSync(sidecar)).toBe(false);
-        expect(unlinted.generated.advisorProceduresJson).toBe("");
+    it("leaves an existing advisor-procedures.json intact under `lint: false`", () => {
+        expect.assertions(3);
 
         runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
-        expect(readFileSync(sidecar, "utf8")).toBe(result.generated.advisorProceduresJson);
+        const sidecar = join(workdir, "lunora", "_generated", "advisor-procedures.json");
+        const written = readFileSync(sidecar, "utf8");
+
+        // Stand in for a real list so an overwrite with the empty placeholder is visible.
+        writeFileSync(sidecar, '{"procedures":[{"exportName":"kept"}]}\n', "utf8");
+        runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(written).toContain('"procedures"');
+        expect(readFileSync(sidecar, "utf8")).toBe('{"procedures":[{"exportName":"kept"}]}\n');
+
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(readFileSync(sidecar, "utf8")).toBe(written);
     });
 
     it("emits an empty advisory list under `lint: false`", () => {

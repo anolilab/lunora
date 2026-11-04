@@ -102,7 +102,7 @@ describe("advisorHealthPanel", () => {
     it("shows the host's reason when the dev host has no generated list yet", async () => {
         expect.assertions(2);
 
-        stubProceduresResponse(404, { error: "advisor-procedures.json is not generated; run `lunora codegen` with the advisor enabled (`lint` not `false`)." });
+        stubProceduresResponse(404, { error: "advisor-procedures.json is not generated yet; run `lunora codegen`." });
 
         render(renderPanel(true));
 

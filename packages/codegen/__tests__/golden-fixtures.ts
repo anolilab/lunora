@@ -121,6 +121,7 @@ const GOLDEN_OUTPUTS: ReadonlyArray<readonly [string, keyof CodegenResult["gener
     ["openapi.ts", "openApiModule"],
     ["openrpc.json", "openRpc"],
     ["openrpc.ts", "openRpcModule"],
+    ["advisor-procedures.json", "advisorProceduresJson"],
 ];
 
 export { GOLDEN_FIXTURES, GOLDEN_OUTPUTS, makeFixtureWorkdir };

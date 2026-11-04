@@ -54,7 +54,7 @@ describe("handleAdvisorProceduresRequest", () => {
 
         expect(response.status).toBe(404);
         expect(response.body).toStrictEqual({
-            error: "advisor-procedures.json is not generated; run `lunora codegen` with the advisor enabled (`lint` not `false`).",
+            error: "advisor-procedures.json is not generated yet; run `lunora codegen`.",
         });
     });
 
