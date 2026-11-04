@@ -17,7 +17,7 @@ import { Node as TsNode } from "ts-morph";
 
 import { closestMatch } from "../../../shared/suggest";
 import { staticPropertyName } from "./discover/property-name";
-import { defaultExportObject, parseConfigSource, unwrapLiteral } from "./project-config-file";
+import { defaultExportObject, noDefaultExportMessage, parseConfigSource, unwrapLiteral } from "./project-config-file";
 
 /** What a literal value can be, as far as a parse can tell. */
 type LiteralKind = "array" | "boolean" | "function" | "null" | "number" | "object" | "string";
@@ -190,6 +190,26 @@ const fieldProblems = (node: TsNode | undefined, field: FieldShape, label: strin
         : [];
 };
 
+/** The names a file exports as values (a type-only export configures nothing), when it has no default export. */
+const namedValueExports = (sourceFile: SourceFile): string[] => {
+    const symbols = sourceFile.getExportSymbols();
+
+    if (symbols.some((symbol) => symbol.getName() === "default")) {
+        return [];
+    }
+
+    return symbols
+        .filter((symbol) => {
+            const declarations = symbol.getDeclarations();
+
+            return (
+                declarations.length === 0 ||
+                !declarations.every((declaration) => TsNode.isInterfaceDeclaration(declaration) || TsNode.isTypeAliasDeclaration(declaration))
+            );
+        })
+        .map((symbol) => symbol.getName());
+};
+
 /** Every problem in one config file; empty when it is valid or cannot be parsed (the readers report that case). */
 const projectConfigProblems = (configPath: string): string[] => {
     const sourceFile = parseConfigSource(configPath);
@@ -201,15 +221,17 @@ const projectConfigProblems = (configPath: string): string[] => {
     const object = defaultExportObject(sourceFile);
 
     if (object === undefined) {
-        return [];
+        const named = namedValueExports(sourceFile);
+
+        return named.length > 0 ? [noDefaultExportMessage(basename(configPath), named)] : [];
     }
 
     return objectProblems(object, { accepts: ["object"], expected: "an object", keys: CONFIG_SHAPE }, "", sourceFile);
 };
 
 /**
- * Refuse a `lunora.config.*` with an unknown key or a literal of the wrong
- * type. Called by `runCodegen`, which every dev server, build
+ * Refuse a `lunora.config.*` with an unknown key, a literal of the wrong type,
+ * or only named exports. Called by `runCodegen`, which every dev server, build
  * and deploy runs first, so a typo stops the run that would have ignored it.
  * @throws LunoraError `PROJECT_CONFIG_INVALID`, listing every problem.
  */

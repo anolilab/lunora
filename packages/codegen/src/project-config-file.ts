@@ -158,6 +158,13 @@ interface LoadedProjectConfig {
     error?: string;
 }
 
+/** A module namespace's export names, minus the interop marker a transpiled module carries. */
+const namedExportNames = (namespace: object): string[] => Object.keys(namespace).filter((name) => name !== "default" && name !== "__esModule");
+
+/** Why a config that exports only named bindings is not read — shared by the evaluating loader and the codegen validator. */
+const noDefaultExportMessage = (fileName: string, named: ReadonlyArray<string>): string =>
+    `${fileName} has no default export, so none of its settings are read (it exports ${named.map((name) => `\`${name}\``).join(", ")}). Lunora reads only the default export: \`export default { ${named.join(", ")} } satisfies LunoraConfig\`.`;
+
 /**
  * Memoized per path, keyed on mtime + size so an edit is picked up and a
  * short-lived process transpiles once. One entry per path, replaced rather than
@@ -205,6 +212,12 @@ const loadProjectConfig = async (projectRoot: string): Promise<LoadedProjectConf
         try {
             const namespace: unknown = await createJiti(configPath, { interopDefault: false, moduleCache: false }).import(configPath);
             const value = (namespace as { default?: unknown } | undefined)?.default;
+            const named = value === undefined && namespace !== null && typeof namespace === "object" ? namedExportNames(namespace) : [];
+
+            // Only named exports: every setting in the file is ignored, the `app` hook included, so say so rather than read it as "no config".
+            if (named.length > 0) {
+                return { error: noDefaultExportMessage(basename(configPath), named) };
+            }
 
             return { config: value !== null && typeof value === "object" ? value : undefined };
         } catch (error: unknown) {
@@ -862,6 +875,7 @@ export { findProjectConfigFile, PROJECT_CONFIG_FILENAMES } from "./project-confi
 export {
     defaultExportObject,
     loadProjectConfig,
+    noDefaultExportMessage,
     parseConfigSource,
     readMergeDurableObjects,
     readProjectConfigLiterals,

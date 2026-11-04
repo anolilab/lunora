@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { loadProjectConfig } from "../src/project-config-file";
 import { projectConfigProblems } from "../src/project-config-validate";
 import { runCodegen } from "../src/run-codegen";
 
@@ -100,6 +101,27 @@ describe("lunora.config validation", () => {
         expect(projectConfigProblems(configPath)).toStrictEqual([
             "unknown key `traget`. Did you mean `target`? Valid keys: advisor, app, codegen, durableObjects, remote, services, studio, target.",
         ]);
+    });
+
+    it("reports a config with only named exports", () => {
+        expect.assertions(1);
+
+        writeConfig("export const app = (app) => app;\nexport const target = 'cloudflare';\nexport type Env = object;\n");
+
+        expect(projectConfigProblems(configPath)).toStrictEqual([
+            "lunora.config.ts has no default export, so none of its settings are read (it exports `app`, `target`). Lunora reads only the default export: `export default { app, target } satisfies LunoraConfig`.",
+        ]);
+    });
+
+    it("makes the evaluating loader report a config with only named exports", async () => {
+        expect.assertions(2);
+
+        writeConfig("export const app = (app) => app;\n");
+
+        const loaded = await loadProjectConfig(projectRoot);
+
+        expect(loaded.config).toBeUndefined();
+        expect(loaded.error).toContain("has no default export");
     });
 
     it("stops codegen on an invalid config, listing every problem", () => {
