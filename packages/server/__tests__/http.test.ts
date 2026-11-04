@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
 import type { HttpActionCtx as HttpActionContext } from "../src/index";
@@ -44,6 +45,42 @@ describe("httpAction", () => {
 
         expect(response.status).toBe(202);
         await expect(response.json()).resolves.toEqual({ ok: true });
+    });
+
+    it("answers a thrown LunoraError with its status and code, as a typed route does", async () => {
+        expect.assertions(2);
+
+        const app = httpRouter();
+
+        app.post(
+            "/raw",
+            httpAction(() => {
+                throw new LunoraError("PAYLOAD_TOO_LARGE", "too big");
+            }),
+        );
+
+        const response = await app.fetch(new Request("https://x/raw", { method: "POST" }), { __lunoraCtx: context });
+
+        expect(response.status).toBe(413);
+        await expect(response.json()).resolves.toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
+    });
+
+    it("still lets anything that is not a LunoraError escape to the host", async () => {
+        expect.assertions(1);
+
+        const app = httpRouter();
+
+        app.post(
+            "/raw",
+            httpAction(() => {
+                throw new TypeError("bug");
+            }),
+        );
+
+        const response = await app.fetch(new Request("https://x/raw", { method: "POST" }), { __lunoraCtx: context });
+
+        // hono's own fallback for an unhandled throw.
+        expect(response.status).toBe(500);
     });
 });
 
