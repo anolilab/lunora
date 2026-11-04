@@ -1,6 +1,11 @@
 {
     "$schema": "./node_modules/oxlint/configuration_schema.json",
     "extends": ["./node_modules/@anolilab/oxlint-config/.oxlintrc.json"],
+    // eslint is the lint authority; oxlint is a fast first pass that enforces only what eslint
+    // enforces (#1455). A rule that flags code eslint accepts belongs in the second "off" list
+    // below, not in a code change. It lints only what eslint lints: each project's own files,
+    // minus the files that project's eslint config ignores, and none of registry/, templates/,
+    // shared/, scripts/ or the tooling directories.
     "ignorePatterns": [
         "**/_generated/**",
         "**/.source/**",
@@ -8,10 +13,427 @@
         "api-snapshots/**",
         "**/__fixtures__/**",
         "**/__tests__/fixtures/**",
+        "**/fixtures/**",
         ".agents/**",
-        ".claude/skills/**"
+        ".claude/skills/**",
+        ".vis/**",
+        "/*.{cjs,mjs,js,cts,mts,ts}",
+        "apps/docs/*",
+        "!apps/docs/src",
+        "apps/docs/src/components/ui/**",
+        "apps/docs/src/data/packages.ts",
+        "apps/docs/src/lib/utils.ts",
+        "examples/*.js",
+        "marketing/**",
+        "packages/codegen/scripts/**",
+        "packages/studio/src/components/evilcharts/**",
+        "packages/studio/src/components/ui/**",
+        "packages/studio/src/hooks/use-mobile.ts",
+        "packages/studio/src/lib/utils.ts",
+        "plans/**",
+        "plugins/**",
+        "protocol/**",
+        "registry/**",
+        "scripts/**",
+        "sdks/**",
+        "shared/**",
+        "templates/**",
+        "tests/**",
+        "tools/**",
+        "**/eslint.config.js",
+        "**/packem.config.ts",
+        "**/prettier.config.js",
+        "**/vite.config.ts",
+        "**/vitest.bench.config.ts",
+        "**/vitest.config.ts"
     ],
     "options": {
         "typeAware": true
-    }
+    },
+    "overrides": [
+        {
+            // An override, not top-level "rules": the preset's own per-extension overrides
+            // (*.tsx, *.jsx, *.{cjs,mjs,js}) would otherwise win over top-level rules.
+            "files": ["**/*"],
+            "rules": {
+                // eslint does not enable these rules under these names in any project. Some it
+                // enforces under another name, such as @typescript-eslint/no-unused-vars.
+                "logical-assignment-operators": "off",
+                "no-shadow": "off",
+                "no-unused-vars": "off",
+                "no-use-before-define": "off",
+                "react-doctor/async-await-in-loop": "off",
+                "react-doctor/async-parallel": "off",
+                "react-doctor/context-provider-value-from-unmemoized-local-literal": "off",
+                "react-doctor/data-table-requires-accessible-name": "off",
+                "react-doctor/design-no-redundant-padding-axes": "off",
+                "react-doctor/design-no-redundant-size-axes": "off",
+                "react-doctor/effect-needs-cleanup": "off",
+                "react-doctor/empty-table-header": "off",
+                "react-doctor/expo-no-non-inlined-env": "off",
+                "react-doctor/forbid-component-props": "off",
+                "react-doctor/form-control-requires-name": "off",
+                "react-doctor/hook-use-state": "off",
+                "react-doctor/js-cache-property-access": "off",
+                "react-doctor/js-combine-iterations": "off",
+                "react-doctor/js-index-maps": "off",
+                "react-doctor/js-length-check-first": "off",
+                "react-doctor/js-set-map-lookups": "off",
+                "react-doctor/jsx-handler-names": "off",
+                "react-doctor/jsx-max-depth": "off",
+                "react-doctor/jsx-no-jsx-as-prop": "off",
+                "react-doctor/jsx-no-new-array-as-prop": "off",
+                "react-doctor/jsx-no-new-function-as-prop": "off",
+                "react-doctor/jsx-no-new-object-as-prop": "off",
+                "react-doctor/jsx-props-no-spreading": "off",
+                "react-doctor/nextjs-no-a-element": "off",
+                "react-doctor/nextjs-no-img-element": "off",
+                "react-doctor/no-all-caps-body-text": "off",
+                "react-doctor/no-arbitrary-px-font-size": "off",
+                "react-doctor/no-array-index-as-key": "off",
+                "react-doctor/no-array-index-key": "off",
+                "react-doctor/no-barrel-import": "off",
+                "react-doctor/no-chain-state-updates": "off",
+                "react-doctor/no-cramped-container-padding": "off",
+                "react-doctor/no-deprecated-tailwind-class": "off",
+                "react-doctor/no-derived-useState": "off",
+                "react-doctor/no-enter-submit-without-ime-composition-guard": "off",
+                "react-doctor/no-event-handler": "off",
+                "react-doctor/no-fetch-response-used-without-status-check": "off",
+                "react-doctor/no-floating-then-in-jsx-handler": "off",
+                "react-doctor/no-full-viewport-width": "off",
+                "react-doctor/no-generic-handler-names": "off",
+                "react-doctor/no-giant-component": "off",
+                "react-doctor/no-gradient-text": "off",
+                "react-doctor/no-hairline-border-wide-shadow": "off",
+                "react-doctor/no-high-complexity-react-function": "off",
+                "react-doctor/no-hover-only-reveal": "off",
+                "react-doctor/no-image-hover-transform": "off",
+                "react-doctor/no-img-without-dimensions": "off",
+                "react-doctor/no-impure-call-at-module-scope": "off",
+                "react-doctor/no-json-parse-stringify-clone": "off",
+                "react-doctor/no-layout-shifting-interaction-state": "off",
+                "react-doctor/no-layout-transition-inline": "off",
+                "react-doctor/no-loading-flag-reset-outside-finally": "off",
+                "react-doctor/no-locale-format-in-render": "off",
+                "react-doctor/no-long-transition-duration": "off",
+                "react-doctor/no-pass-data-to-parent": "off",
+                "react-doctor/no-pass-live-state-to-parent": "off",
+                "react-doctor/no-placeholder-only-field": "off",
+                "react-doctor/no-prop-callback-in-effect": "off",
+                "react-doctor/no-prop-callback-in-render": "off",
+                "react-doctor/no-pure-black-shadow": "off",
+                "react-doctor/no-redundant-display-class": "off",
+                "react-doctor/no-redundant-title-tooltip": "off",
+                "react-doctor/no-ref-current-in-render": "off",
+                "react-doctor/no-secrets-in-client-code": "off",
+                "react-doctor/no-set-state": "off",
+                "react-doctor/no-set-state-after-await-in-effect": "off",
+                "react-doctor/no-side-effect-in-state-updater-function": "off",
+                "react-doctor/no-small-form-control-text": "off",
+                "react-doctor/no-spread-accumulator-in-reduce": "off",
+                "react-doctor/no-tiny-text": "off",
+                "react-doctor/no-tiny-uppercase-tracked-label": "off",
+                "react-doctor/no-transition-all": "off",
+                "react-doctor/no-unescaped-dynamic-string-in-regexp": "off",
+                "react-doctor/no-ungated-tailwind-animation": "off",
+                "react-doctor/no-unsafe-json-parse": "off",
+                "react-doctor/no-uppercase-mono-label": "off",
+                "react-doctor/no-uppercase-tracked-navigation-label": "off",
+                "react-doctor/no-wide-letter-spacing": "off",
+                "react-doctor/only-export-components": "off",
+                "react-doctor/preact-no-react-hooks-import": "off",
+                "react-doctor/preact-prefer-ondblclick": "off",
+                "react-doctor/preact-prefer-oninput": "off",
+                "react-doctor/prefer-dvh-over-vh": "off",
+                "react-doctor/prefer-html-dialog": "off",
+                "react-doctor/prefer-module-scope-pure-function": "off",
+                "react-doctor/prefer-module-scope-static-value": "off",
+                "react-doctor/prefer-motion-transform-property": "off",
+                "react-doctor/prefer-use-effect-event": "off",
+                "react-doctor/prefer-useReducer": "off",
+                "react-doctor/r3f-no-advancing-clock-in-use-frame": "off",
+                "react-doctor/rendering-hydration-mismatch-time": "off",
+                "react-doctor/rerender-memo-before-early-return": "off",
+                "react-doctor/rn-no-dimensions-get": "off",
+                "react-doctor/rn-no-inline-flatlist-renderitem": "off",
+                "react-doctor/role-button-requires-complete-keyboard-activation": "off",
+                "react-doctor/server-sequential-independent-await": "off",
+                "react-doctor/use-lazy-motion": "off",
+                "react/react-in-jsx-scope": "off",
+                "sonarjs/hooks-before-test-cases": "off",
+                "sonarjs/no-floating-point-equality": "off",
+                "sonarjs/no-trivial-assertions": "off",
+                "sonarjs/parameterized-tests": "off",
+                "sonarjs/prefer-specific-assertions": "off",
+                "sonarjs/super-linear-regex": "off",
+                "typescript/consistent-return": "off",
+                "typescript/no-generated-empty-object-type": "off",
+                "typescript/no-restricted-types": "off",
+                "typescript/no-unsafe-type-assertion": "off",
+                "unicorn/max-nested-calls": "off",
+                "unicorn/prefer-number-coercion": "off",
+
+                // eslint enforces these, but oxlint cannot match it: eslint relaxes them per project or
+                // per file, or oxlint's version reports code that eslint accepts. eslint stays the gate.
+                // - arrow-body-style: eslint relaxes it in replica; elsewhere it reports code that eslint accepts
+                // - import/exports-last: eslint relaxes it in privacy, chess, blog and 15 more
+                // - import/no-commonjs: eslint relaxes it in expo
+                // - import/no-named-as-default: reports code that eslint accepts
+                // - import/no-named-as-default-member: reports code that eslint accepts
+                // - import/no-namespace: eslint relaxes it in docs, auth-ui, expo
+                // - import/prefer-default-export: eslint relaxes it in docs, auth-ui, playground and 25 more
+                // - jsdoc/check-tag-names: reports code that eslint accepts
+                // - jsx-a11y/label-has-associated-control: eslint relaxes it in auth-ui
+                // - max-classes-per-file: eslint relaxes it in auth-ui
+                // - no-await-in-loop: eslint relaxes it in replica
+                // - no-bitwise: eslint relaxes it in fingerprint
+                // - no-console: eslint relaxes it in auth-playground, privacy, chess and 3 more
+                // - no-new: eslint relaxes it in replica
+                // - no-param-reassign: eslint relaxes it in platform
+                // - no-plusplus: eslint relaxes it in replica
+                // - no-promise-executor-return: eslint relaxes it in replica
+                // - no-secrets/no-secrets: eslint relaxes it in x402, payment
+                // - no-underscore-dangle: eslint relaxes it in replica, docs, platform; elsewhere it reports code that eslint accepts
+                // - no-unsafe-optional-chaining: reports code that eslint accepts
+                // - no-void: eslint relaxes it in docs, playground; elsewhere it reports code that eslint accepts
+                // - operator-assignment: reports code that eslint accepts
+                // - prefer-destructuring: eslint relaxes it in auth-ui
+                // - preserve-caught-error: reports code that eslint accepts
+                // - promise/always-return: reports code that eslint accepts
+                // - promise/catch-or-return: eslint relaxes it in platform
+                // - promise/param-names: eslint relaxes it in replica
+                // - react-hooks/exhaustive-deps: eslint relaxes it in react, replica, auth-ui
+                // - react-hooks/rules-of-hooks: eslint relaxes it in solid, auth-ui, vue and 4 more
+                // - react/jsx-no-constructed-context-values: eslint relaxes it in studio, auth-ui
+                // - react/no-array-index-key: eslint relaxes it in docs
+                // - react/no-unknown-property: eslint relaxes it in auth-ui
+                // - react/only-export-components: eslint relaxes it in studio, docs, auth-ui and 1 more; elsewhere it reports code that eslint accepts
+                // - react/set-state-in-effect: eslint relaxes it in studio, react; elsewhere it reports code that eslint accepts
+                // - react/style-prop-object: eslint relaxes it in expo
+                // - regexp/no-super-linear-backtracking: eslint relaxes it in replica
+                // - regexp/prefer-w: eslint relaxes it in fingerprint
+                // - regexp/use-ignore-case: eslint relaxes it in fingerprint
+                // - sonarjs/assertions-in-tests: reports code that eslint accepts
+                // - sonarjs/bitwise-operators: reports code that eslint accepts
+                // - sonarjs/cognitive-complexity: eslint relaxes it in replica
+                // - sonarjs/concise-regex: eslint relaxes it in fingerprint
+                // - sonarjs/constructor-for-side-effects: eslint relaxes it in replica
+                // - sonarjs/no-clear-text-protocols: reports code that eslint accepts
+                // - sonarjs/no-collection-size-mischeck: reports code that eslint accepts
+                // - sonarjs/no-hardcoded-passwords: reports code that eslint accepts
+                // - sonarjs/no-implicit-global: eslint relaxes it in auth-ui
+                // - sonarjs/no-nested-assignment: eslint relaxes it in auth-ui, replica
+                // - sonarjs/no-nested-conditional: eslint relaxes it in auth-ui
+                // - sonarjs/no-unused-collection: eslint relaxes it in platform
+                // - sonarjs/unused-import: eslint relaxes it in auth-ui, saas-ui
+                // - sonarjs/void-use: eslint relaxes it in auth-ui; elsewhere it reports code that eslint accepts
+                // - typescript/consistent-generic-constructors: reports code that eslint accepts
+                // - typescript/explicit-member-accessibility: eslint relaxes it in auth-ui
+                // - typescript/no-confusing-void-expression: eslint relaxes it in fingerprint
+                // - typescript/no-explicit-any: eslint relaxes it in docs
+                // - typescript/no-require-imports: eslint relaxes it in expo
+                // - typescript/no-unnecessary-condition: eslint relaxes it in playground, fingerprint; elsewhere it reports code that eslint accepts
+                // - typescript/no-unnecessary-type-assertion: reports code that eslint accepts
+                // - typescript/no-unnecessary-type-conversion: eslint relaxes it in replica
+                // - typescript/no-unnecessary-type-parameters: eslint relaxes it in notify
+                // - typescript/no-unsafe-argument: reports code that eslint accepts
+                // - typescript/no-unsafe-assignment: eslint relaxes it in auth-playground, docs, expo and 4 more; elsewhere it reports code that eslint accepts
+                // - typescript/no-unsafe-call: eslint relaxes it in auth-playground, notify-demo, chess and 3 more; elsewhere it reports code that eslint accepts
+                // - typescript/no-unsafe-member-access: eslint relaxes it in auth-playground, chess, team-chat and 3 more; elsewhere it reports code that eslint accepts
+                // - typescript/no-unsafe-return: eslint relaxes it in expo; elsewhere it reports code that eslint accepts
+                // - typescript/only-throw-error: eslint relaxes it in docs
+                // - typescript/prefer-nullish-coalescing: eslint relaxes it in fingerprint
+                // - typescript/prefer-optional-chain: eslint relaxes it in fingerprint; elsewhere it reports code that eslint accepts
+                // - typescript/prefer-promise-reject-errors: eslint relaxes it in platform
+                // - typescript/require-await: eslint relaxes it in platform, docs
+                // - typescript/restrict-plus-operands: reports code that eslint accepts
+                // - typescript/restrict-template-expressions: eslint relaxes it in replica, platform
+                // - unicorn/consistent-existence-index-check: reports code that eslint accepts
+                // - unicorn/filename-case: eslint relaxes it in auth-ui, saas-ui, playground; elsewhere it reports code that eslint accepts
+                // - unicorn/no-abusive-eslint-disable: reports code that eslint accepts
+                // - unicorn/no-array-callback-reference: eslint relaxes it in platform, fingerprint; elsewhere it reports code that eslint accepts
+                // - unicorn/no-array-sort: eslint relaxes it in replica
+                // - unicorn/no-immediate-mutation: reports code that eslint accepts
+                // - unicorn/no-invalid-fetch-options: reports code that eslint accepts
+                // - unicorn/no-null: eslint relaxes it in studio, auth-ui, docs and 17 more
+                // - unicorn/no-useless-iterator-to-array: reports code that eslint accepts
+                // - unicorn/no-useless-spread: reports code that eslint accepts
+                // - unicorn/numeric-separators-style: eslint relaxes it in fingerprint; elsewhere it reports code that eslint accepts
+                // - unicorn/prefer-code-point: eslint relaxes it in fingerprint
+                // - unicorn/prefer-event-target: eslint relaxes it in replica
+                // - unicorn/prefer-export-from: reports code that eslint accepts
+                // - unicorn/prefer-math-trunc: eslint relaxes it in fingerprint
+                // - unicorn/prefer-module: eslint relaxes it in expo; elsewhere it reports code that eslint accepts
+                // - unicorn/prefer-string-raw: reports code that eslint accepts
+                // - unicorn/prefer-string-replace-all: eslint relaxes it in fingerprint
+                // - unicorn/prefer-string-starts-ends-with: reports code that eslint accepts
+                "arrow-body-style": "off",
+                "import/exports-last": "off",
+                "import/no-commonjs": "off",
+                "import/no-named-as-default": "off",
+                "import/no-named-as-default-member": "off",
+                "import/no-namespace": "off",
+                "import/prefer-default-export": "off",
+                "jsdoc/check-tag-names": "off",
+                "jsx-a11y/label-has-associated-control": "off",
+                "max-classes-per-file": "off",
+                "no-await-in-loop": "off",
+                "no-bitwise": "off",
+                "no-console": "off",
+                "no-new": "off",
+                "no-param-reassign": "off",
+                "no-plusplus": "off",
+                "no-promise-executor-return": "off",
+                "no-secrets/no-secrets": "off",
+                "no-underscore-dangle": "off",
+                "no-unsafe-optional-chaining": "off",
+                "no-void": "off",
+                "operator-assignment": "off",
+                "prefer-destructuring": "off",
+                "preserve-caught-error": "off",
+                "promise/always-return": "off",
+                "promise/catch-or-return": "off",
+                "promise/param-names": "off",
+                "react-hooks/exhaustive-deps": "off",
+                "react-hooks/rules-of-hooks": "off",
+                "react/jsx-no-constructed-context-values": "off",
+                "react/no-array-index-key": "off",
+                "react/no-unknown-property": "off",
+                "react/only-export-components": "off",
+                "react/set-state-in-effect": "off",
+                "react/style-prop-object": "off",
+                "regexp/no-super-linear-backtracking": "off",
+                "regexp/prefer-w": "off",
+                "regexp/use-ignore-case": "off",
+                "sonarjs/assertions-in-tests": "off",
+                "sonarjs/bitwise-operators": "off",
+                "sonarjs/cognitive-complexity": "off",
+                "sonarjs/concise-regex": "off",
+                "sonarjs/constructor-for-side-effects": "off",
+                "sonarjs/no-clear-text-protocols": "off",
+                "sonarjs/no-collection-size-mischeck": "off",
+                "sonarjs/no-hardcoded-passwords": "off",
+                "sonarjs/no-implicit-global": "off",
+                "sonarjs/no-nested-assignment": "off",
+                "sonarjs/no-nested-conditional": "off",
+                "sonarjs/no-unused-collection": "off",
+                "sonarjs/unused-import": "off",
+                "sonarjs/void-use": "off",
+                "typescript/consistent-generic-constructors": "off",
+                "typescript/explicit-member-accessibility": "off",
+                "typescript/no-confusing-void-expression": "off",
+                "typescript/no-explicit-any": "off",
+                "typescript/no-require-imports": "off",
+                "typescript/no-unnecessary-condition": "off",
+                "typescript/no-unnecessary-type-assertion": "off",
+                "typescript/no-unnecessary-type-conversion": "off",
+                "typescript/no-unnecessary-type-parameters": "off",
+                "typescript/no-unsafe-argument": "off",
+                "typescript/no-unsafe-assignment": "off",
+                "typescript/no-unsafe-call": "off",
+                "typescript/no-unsafe-member-access": "off",
+                "typescript/no-unsafe-return": "off",
+                "typescript/only-throw-error": "off",
+                "typescript/prefer-nullish-coalescing": "off",
+                "typescript/prefer-optional-chain": "off",
+                "typescript/prefer-promise-reject-errors": "off",
+                "typescript/require-await": "off",
+                "typescript/restrict-plus-operands": "off",
+                "typescript/restrict-template-expressions": "off",
+                "unicorn/consistent-existence-index-check": "off",
+                "unicorn/filename-case": "off",
+                "unicorn/no-abusive-eslint-disable": "off",
+                "unicorn/no-array-callback-reference": "off",
+                "unicorn/no-array-sort": "off",
+                "unicorn/no-immediate-mutation": "off",
+                "unicorn/no-invalid-fetch-options": "off",
+                "unicorn/no-null": "off",
+                "unicorn/no-useless-iterator-to-array": "off",
+                "unicorn/no-useless-spread": "off",
+                "unicorn/numeric-separators-style": "off",
+                "unicorn/prefer-code-point": "off",
+                "unicorn/prefer-event-target": "off",
+                "unicorn/prefer-export-from": "off",
+                "unicorn/prefer-math-trunc": "off",
+                "unicorn/prefer-module": "off",
+                "unicorn/prefer-string-raw": "off",
+                "unicorn/prefer-string-replace-all": "off",
+                "unicorn/prefer-string-starts-ends-with": "off",
+
+                // Enforced by eslint; these carry eslint's options so the two agree.
+                "curly": ["error", "multi-line"],
+                "func-style": [
+                    "error",
+                    "expression",
+                    {
+                        "allowArrowFunctions": false,
+                        "allowTypeAnnotation": false,
+                        "overrides": {}
+                    }
+                ],
+                "guard-for-in": "error",
+                "import/consistent-type-specifier-style": ["error", "prefer-top-level"],
+                "jsx-a11y/click-events-have-key-events": "error",
+                "jsx-a11y/interactive-supports-focus": "error",
+                "jsx-a11y/no-static-element-interactions": [
+                    "error",
+                    {
+                        "handlers": ["onClick", "onMouseDown", "onMouseUp", "onKeyPress", "onKeyDown", "onKeyUp"]
+                    }
+                ],
+                "no-multi-assign": [
+                    "error",
+                    {
+                        "ignoreNonDeclaration": false
+                    }
+                ],
+                "react/function-component-definition": [
+                    "error",
+                    {
+                        "namedComponents": "arrow-function",
+                        "unnamedComponents": "arrow-function"
+                    }
+                ],
+                "react/jsx-curly-brace-presence": [
+                    "error",
+                    {
+                        "children": "never",
+                        "props": "never"
+                    }
+                ],
+                "react/no-danger": "error",
+                "sonarjs/no-dead-store": "error",
+                "sonarjs/no-empty-test-file": "error",
+                "sonarjs/no-identical-functions": ["error", 3],
+                "sonarjs/no-unused-vars": "error",
+                "sonarjs/pseudo-random": "error",
+                "typescript/ban-ts-comment": [
+                    "error",
+                    {
+                        "minimumDescriptionLength": 3,
+                        "ts-check": false,
+                        "ts-expect-error": "allow-with-description",
+                        "ts-ignore": "allow-with-description",
+                        "ts-nocheck": true
+                    }
+                ],
+                "typescript/explicit-module-boundary-types": "error",
+                "typescript/no-empty-object-type": "error",
+                "typescript/no-floating-promises": "error",
+                "typescript/no-non-null-assertion": "error",
+                "unicorn/no-document-cookie": "error",
+                "unicorn/no-negated-condition": "error"
+            }
+        },
+        {
+            // The test relaxations every project's eslint config applies.
+            "files": ["**/__tests__/**", "**/__bench__/**", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}", "**/*.bench.{ts,tsx}"],
+            "rules": {
+                "sonarjs/no-empty-test-file": "off",
+                "typescript/no-empty-object-type": "off",
+                "typescript/no-non-null-assertion": "off"
+            }
+        }
+    ]
 }

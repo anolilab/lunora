@@ -4,16 +4,16 @@
     "tags": ["type:root"],
     "targets": {
         "lint:all": {
-            "description": "oxlint, oxfmt and every project's eslint, run concurrently",
-            "dependsOn": ["lint:oxlint", "lint:oxfmt", { "projects": "*", "target": "lint:eslint" }]
+            "description": "every project's eslint, then oxlint and oxfmt",
+            "dependsOn": ["lint:oxlint", "lint:oxfmt"]
         },
         "lint:oxlint": {
             "cache": false,
-            "dependsOn": [{ "projects": "*", "target": "build" }]
+            "dependsOn": [{ "projects": "*", "target": "lint:eslint" }]
         },
         "lint:oxfmt": {
             "cache": false,
-            "dependsOn": [{ "projects": "*", "target": "build" }]
+            "dependsOn": [{ "projects": "*", "target": "lint:eslint" }]
         }
     }
 }
