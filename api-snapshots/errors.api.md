@@ -591,6 +591,10 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Socket route path is not a string literal";
     };
+    readonly PROJECT_CONFIG_INVALID: {
+        readonly status: 500;
+        readonly title: "lunora.config has an unknown key or a value of the wrong type";
+    };
     readonly LIVE_STREAM_DUPLICATE: {
         readonly status: 500;
         readonly title: "Duplicate live stream id or export name";

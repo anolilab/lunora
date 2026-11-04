@@ -128,7 +128,7 @@ interface ServiceLiteral {
     rpc?: false;
 }
 
-/** The structural slice of `lunora.config.*` Lunora reads. Unvalidated on purpose — see {@link loadProjectConfig}. */
+/** The structural slice of `lunora.config.*` Lunora reads. The loader does not validate it; `runCodegen` does, by parsing (`project-config-validate.ts`). */
 interface LunoraProjectConfig {
     /** Advisor settings for codegen (`minSeverity`). Read by `runCodegen` through {@link readProjectConfigLiterals}. */
     advisor?: unknown;
@@ -670,14 +670,14 @@ const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile
     return SECTIONS.get(propertyKeyName(property))?.read(property, sourceFile) ?? {};
 };
 
-/** The literals of one config file, read the same way whichever way the file was found. */
-const readConfigLiterals = (configPath: string): ProjectConfigLiterals => {
+/** The config file parsed into a standalone in-memory program, or `undefined` when it cannot be read. */
+const parseConfigSource = (configPath: string): SourceFile | undefined => {
     let source: string;
 
     try {
         source = readFileSync(configPath, "utf8");
     } catch {
-        return { unreadable: true };
+        return undefined;
     }
 
     const project = new Project({
@@ -686,7 +686,18 @@ const readConfigLiterals = (configPath: string): ProjectConfigLiterals => {
         skipLoadingLibFiles: true,
         useInMemoryFileSystem: true,
     });
-    const sourceFile = project.createSourceFile(basename(configPath), source, { overwrite: true });
+
+    return project.createSourceFile(basename(configPath), source, { overwrite: true });
+};
+
+/** The literals of one config file, read the same way whichever way the file was found. */
+const readConfigLiterals = (configPath: string): ProjectConfigLiterals => {
+    const sourceFile = parseConfigSource(configPath);
+
+    if (sourceFile === undefined) {
+        return { unreadable: true };
+    }
+
     const object = defaultExportObject(sourceFile);
 
     if (object === undefined) {
@@ -849,10 +860,13 @@ const readProjectSecurityHeaders = (lunoraDirectory: string): boolean | Security
 export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral };
 export { findProjectConfigFile, PROJECT_CONFIG_FILENAMES } from "./project-config-path";
 export {
+    defaultExportObject,
     loadProjectConfig,
+    parseConfigSource,
     readMergeDurableObjects,
     readProjectConfigLiterals,
     readProjectLazyFunctions,
     readProjectSecurityHeaders,
     readProjectStudioCompanion,
+    unwrapLiteral,
 };
