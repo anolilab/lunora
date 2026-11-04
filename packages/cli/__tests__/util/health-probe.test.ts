@@ -120,4 +120,71 @@ describe("probeHealth", () => {
             globalFetch.mockRestore();
         }
     });
+
+    describe("cloudflare Access", () => {
+        const accessEnv = { CF_ACCESS_CLIENT_ID: "id.access", CF_ACCESS_CLIENT_SECRET: "secret" };
+        const loginRedirect = {
+            headers: new Headers({ location: "https://acme.cloudflareaccess.com/cdn-cgi/access/login/app.example.com" }),
+            ok: false,
+            status: 302,
+        };
+
+        it("sends the service token from CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET and never follows a redirect", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = vi.fn<HealthFetch>(async () => {
+                return { ok: true, status: 200 };
+            });
+
+            const result = await probeHealth({ baseUrl: "https://app.example.com", env: accessEnv, fetchImpl });
+
+            expect(result.error).toBeUndefined();
+            expect(fetchImpl).toHaveBeenCalledWith("https://app.example.com/_lunora/health", {
+                headers: { "CF-Access-Client-Id": "id.access", "CF-Access-Client-Secret": "secret" },
+                redirect: "manual",
+            });
+        });
+
+        it("sends no Access headers when only one variable is set, and names the missing one at the login redirect", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = vi.fn<HealthFetch>(async () => loginRedirect);
+
+            const result = await probeHealth({ baseUrl: "https://app.example.com", env: { CF_ACCESS_CLIENT_ID: "id.access" }, fetchImpl });
+
+            expect(fetchImpl).toHaveBeenCalledWith("https://app.example.com/_lunora/health", { headers: {}, redirect: "manual" });
+            expect(result.error).toContain("set CF_ACCESS_CLIENT_SECRET too");
+        });
+
+        it("says the host is behind Access when the probe is sent to its login, instead of a bare status", async () => {
+            expect.assertions(2);
+
+            const result = await probeHealth({ baseUrl: "https://app.example.com", env: {}, fetchImpl: async () => loginRedirect });
+
+            expect(result.error).toContain("returned HTTP 302: the host is behind Cloudflare Access");
+            expect(result.error).toContain("Set CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET");
+        });
+
+        it("says the token was refused when Access still redirects with it sent", async () => {
+            expect.assertions(1);
+
+            const result = await probeHealth({ baseUrl: "https://app.example.com", env: accessEnv, fetchImpl: async () => loginRedirect });
+
+            expect(result.error).toContain("Cloudflare Access refused the service token");
+        });
+
+        it("reads any other redirect as red, not as the deployment answering", async () => {
+            expect.assertions(1);
+
+            const result = await probeHealth({
+                baseUrl: "https://app.example.com",
+                env: {},
+                fetchImpl: async () => {
+                    return { headers: new Headers({ location: "https://elsewhere.example.com/" }), ok: false, status: 301 };
+                },
+            });
+
+            expect(result.error).toContain("returned HTTP 301 redirecting to https://elsewhere.example.com/ — the health route does not redirect");
+        });
+    });
 });

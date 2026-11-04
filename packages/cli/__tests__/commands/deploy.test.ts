@@ -2677,7 +2677,10 @@ export const backfillNames = defineMigration({
                 expect(result.code).toBe(0);
                 expect(result.healthCheck?.ok).toBe(true);
                 // Probed at the URL THIS run published to, readiness gate first.
-                expect(healthFetch).toHaveBeenCalledWith("https://lunora-app.acme.workers.dev/_lunora/health/ready");
+                expect(healthFetch).toHaveBeenCalledWith(
+                    "https://lunora-app.acme.workers.dev/_lunora/health/ready",
+                    expect.objectContaining({ redirect: "manual" }),
+                );
                 expect(result.healthCheck?.error).toBeUndefined();
             });
 

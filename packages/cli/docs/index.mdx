@@ -736,6 +736,14 @@ A red probe exits non-zero and says which half failed: the deploy succeeded,
 the probe did not. The probe runs **before** `--migrate`, so a worker that can't
 serve is never migrated.
 
+For a host behind Cloudflare Access, set `CF_ACCESS_CLIENT_ID` and
+`CF_ACCESS_CLIENT_SECRET` to a service token that a Service Auth policy on the
+Access application allows. The probe sends them as `CF-Access-Client-Id` /
+`CF-Access-Client-Secret` on each request, and `lunora verify --health-url`
+does the same. The probe never follows a redirect, so the token goes only to the
+probed origin. A redirect to the Access login page is reported as Access, with
+what to set, rather than as a deployment that did not answer.
+
 #### Machine-readable output
 
 `--format json` writes exactly one JSON document to stdout (every human line,

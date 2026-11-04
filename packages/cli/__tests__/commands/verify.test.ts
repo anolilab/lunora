@@ -427,7 +427,7 @@ describe("lunora verify", () => {
                 });
 
                 expect(result.code).toBe(0);
-                expect(healthFetch).toHaveBeenCalledWith("https://my-app.workers.dev/_lunora/health");
+                expect(healthFetch).toHaveBeenCalledWith("https://my-app.workers.dev/_lunora/health", expect.objectContaining({ redirect: "manual" }));
                 expect(recorded.successes.join("\n")).toContain("health probe ok");
             });
 
@@ -451,7 +451,7 @@ describe("lunora verify", () => {
                 expect(result.code).toBe(1);
                 expect(result.errors.some((error) => error.includes("health probe failed"))).toBe(true);
                 // A trailing slash on the base URL doesn't double up in the probed URL.
-                expect(healthFetch).toHaveBeenCalledWith("https://my-app.workers.dev/_lunora/health");
+                expect(healthFetch).toHaveBeenCalledWith("https://my-app.workers.dev/_lunora/health", expect.objectContaining({ redirect: "manual" }));
             });
 
             it("fails red when the probe can't reach the deployment", async () => {
