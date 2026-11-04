@@ -70,4 +70,34 @@ describe("createWorker — advisor companion route", () => {
         await expect(worker.fetch(request({ method: "POST" }), env, fakeContext)).resolves.toHaveProperty("status", 405);
         expect(companionFetch).not.toHaveBeenCalled();
     });
+
+    it("answers 403, not 404, to an unauthenticated caller when the binding is absent", async () => {
+        expect.assertions(2);
+
+        const { worker } = setup();
+
+        // A 404 here would tell an unauthenticated caller whether a companion is bound.
+        await expect(worker.fetch(request({ token: false }), {}, fakeContext)).resolves.toHaveProperty("status", 403);
+        await expect(worker.fetch(request({ method: "POST", token: false }), {}, fakeContext)).resolves.toHaveProperty("status", 405);
+    });
+
+    it("forwards for a caller the adminGate admits without the root bearer (Access / named-token path)", async () => {
+        expect.assertions(2);
+
+        const companionFetch = vi.fn(async (_request: Request) => new Response('{"procedures":[]}', { status: 200 }));
+        const worker = createWorker({ adminGate: () => true, adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
+        const response = await worker.fetch(request({ token: false }), { ADVISOR_COMPANION: { fetch: companionFetch } }, fakeContext);
+
+        expect(response.status).toBe(200);
+        expect(companionFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("marks the forwarded response no-store", async () => {
+        expect.assertions(1);
+
+        const { env, worker } = setup();
+        const response = await worker.fetch(request(), env, fakeContext);
+
+        expect(response.headers.get("cache-control")).toBe("no-store");
+    });
 });

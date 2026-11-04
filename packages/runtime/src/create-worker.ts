@@ -2066,8 +2066,8 @@ const MIGRATE_PATH = "/_lunora/migrate";
 const STATUS_PATH = "/_lunora/status";
 
 /**
- * Hosted Studio's advisor-procedure list. Mirrors the companion Worker's route
- * (`@lunora/config` studio-host) so the main Worker can forward it unchanged.
+ * Hosted Studio's advisor-procedure list. The generated companion Worker (`@lunora/codegen` `emit/companion.ts`) serves the same
+ * path, so the main Worker forwards it unchanged; a codegen test pins the two strings together.
  */
 const ADVISOR_PROCEDURES_PATH = "/__lunora/advisor-procedures";
 
@@ -2078,11 +2078,12 @@ interface ServiceBindingLike {
 const isServiceBinding = (value: unknown): value is ServiceBindingLike =>
     typeof value === "object" && value !== null && "fetch" in value && typeof value.fetch === "function";
 
-/** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
 /** The reserved prefix every worker- and shard-served admin op shares. */
 const ADMIN_FUNCTION_PREFIX = "__lunora_admin__";
 
-const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
+// The advisor route is outside both prefixes but is admin-only, so it takes the same async gate: without it a named admin token or
+// Cloudflare Access caller is refused here while every other admin call works.
+const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH || pathname === ADVISOR_PROCEDURES_PATH;
 
 /**
  * Refuse a `__lunora_relation__:*` dispatch that is NOT a fan-out.
@@ -6475,21 +6476,27 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             return Response.json({ ok: true }, { headers: { "cache-control": "no-store" } });
         },
-        // Forwarded to the companion Worker over its service binding, which holds the
-        // embedded procedure list. Absent binding means no companion: 404, so the hosted
-        // Studio shows its notice. The caller's Authorization header travels intact.
+        // Forwarded to the companion Worker over its service binding, which holds the embedded procedure list. Method and admin
+        // auth come first so an unauthenticated caller cannot tell from the answer whether a companion is bound; an absent binding
+        // is then a 404 and the hosted Studio shows its notice. The caller's Authorization header travels intact.
         [ADVISOR_PROCEDURES_PATH]: async (request, env) => {
-            const companion: unknown = typeof env === "object" && env !== null ? Reflect.get(env, "ADVISOR_COMPANION") : undefined;
-
-            if (!isServiceBinding(companion)) {
-                return Response.json({ error: "not found" }, { status: 404 });
-            }
-
             assertMethod(request, "GET", "Advisor procedures");
 
             assertAdminAuthorized(request);
 
-            return companion.fetch(request);
+            const companion: unknown = typeof env === "object" && env !== null ? Reflect.get(env, "ADVISOR_COMPANION") : undefined;
+
+            if (!isServiceBinding(companion)) {
+                return Response.json({ error: "not found" }, { headers: { "cache-control": "no-store" }, status: 404 });
+            }
+
+            // Rebuilt rather than mutated: a service-binding response can have immutable headers.
+            const forwarded = await companion.fetch(request);
+            const headers = new Headers(forwarded.headers);
+
+            headers.set("cache-control", "no-store");
+
+            return new Response(forwarded.body, { headers, status: forwarded.status, statusText: forwarded.statusText });
         },
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [SOCKET_REAUTH_PATH]: (request, env, url, context) => handleSocketReauth(request, env, context, url),
