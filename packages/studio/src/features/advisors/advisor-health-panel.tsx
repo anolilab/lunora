@@ -92,6 +92,7 @@ const AdvisorHealthPanel = ({ advisorCompanion = false, localProcedures = false,
     const advisoriesQuery = useAdminQuery<AdvisoriesResult>(ADMIN_FUNCTIONS.getAdvisories, {}, { enabled: source.kind !== "none", live: true });
     const proceduresQuery = useAdvisorProcedures({
         enabled: source.kind !== "none",
+        refreshKey: advisoriesQuery.data,
         remote: source.kind === "remote" ? source.remote : undefined,
     });
 

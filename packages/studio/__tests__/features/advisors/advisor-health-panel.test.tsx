@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import AdvisorHealthPanel from "../../../src/features/advisors/advisor-health-panel";
+import type { AdvisoryFinding } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import { createMockClient } from "../../mock-client";
 
@@ -20,12 +21,28 @@ const defaultQuery = (reference: string): unknown => {
     throw new Error(`unexpected query: ${reference}`);
 };
 
+/** The mock client the last `renderPanel` built, so a case can assert its admin reads or push a live value. */
+let lastClient: ReturnType<typeof createMockClient> | undefined;
 /** The `query` mock the last `renderPanel` built, so a case can assert which admin reads were issued. */
 let queryMock: ReturnType<typeof vi.fn> | undefined;
+
+const NEW_FINDING: AdvisoryFinding = {
+    cacheKey: "unindexed_foreign_key:todos",
+    categories: ["PERFORMANCE"],
+    description: "",
+    detail: "",
+    facing: "INTERNAL",
+    level: "WARN",
+    metadata: {},
+    name: "unindexed_foreign_key",
+    remediation: "",
+    title: "Unindexed foreign key",
+};
 
 const renderPanel = (localProcedures: boolean, token: null | string = null, advisorCompanion = true, query = defaultQuery): ReactElement => {
     const client = createMockClient({ query });
 
+    lastClient = client;
     queryMock = client.query;
 
     return (
@@ -60,6 +77,23 @@ describe("advisorHealthPanel", () => {
         expect(notice.textContent).toContain("lunora dev");
         expect(fetchMock).not.toHaveBeenCalled();
         expect(queryMock).not.toHaveBeenCalled();
+    });
+
+    it("fetches the procedure list again when the live advisories change", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = stubProceduresResponse(200, { procedures: [] });
+
+        render(renderPanel(true));
+
+        await screen.findByTestId("advisor-health-score");
+
+        // A different list: React Query keeps the old reference for deep-equal data, which is no change.
+        lastClient?.emit(ADMIN_FUNCTIONS.getAdvisories, { advisories: [NEW_FINDING] });
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+        });
     });
 
     it("scores the deployment when the dev host serves the procedure list", async () => {

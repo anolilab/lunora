@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 
 import type { AdvisorProceduresResult } from "../../lib/admin";
 import { errorMessage, workerBaseUrl } from "../../lib/internal";
@@ -98,6 +99,13 @@ interface AdvisorProceduresOptions {
     /** `false` on a host that cannot serve the route: no request is made. */
     readonly enabled: boolean;
 
+    /**
+     * Changes whenever the numerator changes (the live advisories). A new value
+     * refetches the procedures too, so the score never mixes a fresh finding list
+     * with a denominator from before a codegen run.
+     */
+    readonly refreshKey: unknown;
+
     /** Set on a hosted Studio: fetch from this worker with the bearer instead of the same origin. */
     readonly remote?: RemoteProceduresSource;
 }
@@ -108,17 +116,32 @@ interface AdvisorProceduresOptions {
  */
 const useAdvisorProcedures = ({
     enabled,
+    refreshKey,
     remote,
 }: AdvisorProceduresOptions): {
     data: AdvisorProceduresResult | undefined;
     error: string | undefined;
     notDeployed: boolean;
 } => {
+    // Bump a revision when the advisories change and key the query on it, so React
+    // Query fetches once per change. The first value (advisories still loading →
+    // loaded) is not a change: the mount fetch already covers it.
+    const [seenKey, setSeenKey] = useState(refreshKey);
+    const [revision, setRevision] = useState(0);
+
+    if (seenKey !== refreshKey) {
+        setSeenKey(refreshKey);
+
+        if (seenKey !== undefined) {
+            setRevision((current) => current + 1);
+        }
+    }
+
     const query = useQuery({
         enabled,
         queryFn: () => fetchAdvisorProcedures(remote),
         // The source is a query input: a new worker or token must not be served the previous one's list.
-        queryKey: ["studio", "advisor-procedures", remote],
+        queryKey: ["studio", "advisor-procedures", remote, revision],
         refetchInterval: ADVISOR_PROCEDURES_REFRESH_MS,
         // No retries: a 404/500 is a state the host reports, and retrying would keep the panel on "Loading" for seconds first.
         retry: false,
