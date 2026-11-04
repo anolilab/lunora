@@ -33,8 +33,8 @@ const setup = () => {
 };
 
 describe("createWorker — advisor companion route", () => {
-    it("forwards to the companion binding with the caller's Authorization intact", async () => {
-        expect.assertions(4);
+    it("forwards a bare GET to the companion binding, without the caller's credentials", async () => {
+        expect.assertions(5);
 
         const { companionFetch, env, worker } = setup();
         const response = await worker.fetch(request(), env, fakeContext);
@@ -42,7 +42,44 @@ describe("createWorker — advisor companion route", () => {
         expect(response.status).toBe(200);
         await expect(response.text()).resolves.toBe('{"procedures":[]}');
         expect(companionFetch).toHaveBeenCalledTimes(1);
-        expect(companionFetch.mock.calls[0]![0].headers.get("authorization")).toBe(`Bearer ${ADMIN_TOKEN}`);
+        expect(companionFetch.mock.calls[0]![0].headers.get("authorization")).toBeNull();
+        expect(new URL(companionFetch.mock.calls[0]![0].url).pathname).toBe("/__lunora/advisor-procedures");
+    });
+
+    it("answers a hosted Studio's cross-origin preflight and marks the response for its origin", async () => {
+        expect.assertions(3);
+
+        const { env } = setup();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, security: { cors: { allowedOrigins: ["https://studio.example"] } }, shardDO: noopNamespace });
+        const preflight = await worker.fetch(
+            new Request("https://app.example/__lunora/advisor-procedures", {
+                headers: { "access-control-request-headers": "authorization", "access-control-request-method": "GET", origin: "https://studio.example" },
+                method: "OPTIONS",
+            }),
+            env,
+            fakeContext,
+        );
+
+        expect(preflight.status).toBe(204);
+        expect(preflight.headers.get("access-control-allow-headers")?.toLowerCase()).toContain("authorization");
+
+        const response = await worker.fetch(
+            new Request("https://app.example/__lunora/advisor-procedures", {
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, origin: "https://studio.example" },
+            }),
+            env,
+            fakeContext,
+        );
+
+        expect(response.headers.get("access-control-allow-origin")).toBe("https://studio.example");
+    });
+
+    it("refuses an app route registered on the advisor path", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            createWorker({ adminToken: ADMIN_TOKEN, routes: { "/__lunora/advisor-procedures": () => new Response("app") }, shardDO: noopNamespace }),
+        ).toThrow(/advisor endpoint/u);
     });
 
     it("answers 404 when the binding is absent", async () => {

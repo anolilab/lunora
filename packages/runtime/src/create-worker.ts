@@ -3056,6 +3056,13 @@ const assertNoReservedRoutes = (routes: Readonly<Record<string, unknown>> | unde
         // key IS the pathname.
         const pathname = key.slice(key.indexOf(" ") + 1);
 
+        if (pathname === ADVISOR_PROCEDURES_PATH) {
+            throw new LunoraError(`route "${key}" is the framework's advisor endpoint, which carries its own admin gate — pick a different path.`, {
+                code: "MISCONFIGURED",
+                status: 500,
+            });
+        }
+
         if (pathname.startsWith(RESERVED_PATH_PREFIX)) {
             throw new LunoraError(
                 `route "${key}" is under the reserved ${RESERVED_PATH_PREFIX} prefix, which the framework owns. App routes registered there shadow the internal endpoint AND its admin gate — pick a path outside the prefix.`,
@@ -6478,7 +6485,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         },
         // Forwarded to the companion Worker over its service binding, which holds the embedded procedure list. Method and admin
         // auth come first so an unauthenticated caller cannot tell from the answer whether a companion is bound; an absent binding
-        // is then a 404 and the hosted Studio shows its notice. The caller's Authorization header travels intact.
+        // is then a 404 and the hosted Studio shows its notice. The companion gets a bare GET: it checks nothing, so the caller's
+        // credentials have no reason to reach a second Worker's logs.
         [ADVISOR_PROCEDURES_PATH]: async (request, env) => {
             assertMethod(request, "GET", "Advisor procedures");
 
@@ -6491,7 +6499,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             }
 
             // Rebuilt rather than mutated: a service-binding response can have immutable headers.
-            const forwarded = await companion.fetch(request);
+            const forwarded = await companion.fetch(new Request(new URL(ADVISOR_PROCEDURES_PATH, request.url), { method: "GET" }));
             const headers = new Headers(forwarded.headers);
 
             headers.set("cache-control", "no-store");
