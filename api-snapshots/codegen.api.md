@@ -1721,6 +1721,15 @@ const readBoundServiceBindings: (projectRoot: string, lunoraDirectory?: string) 
 };
 ```
 
+### `readDevServiceBindings` (const)
+
+```ts
+const readDevServiceBindings: (projectRoot: string, lunoraDirectory?: string) => {
+    error?: string;
+    services: ServiceBindingIR[];
+};
+```
+
 ### `readPackageDependencies` (const)
 
 ```ts
