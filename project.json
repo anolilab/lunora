@@ -1,0 +1,79 @@
+{
+    "$schema": "./node_modules/@visulima/vis/schemas/project.schema.json",
+    "name": "root",
+    "tags": ["type:root"],
+    "targets": {
+        "lint:all": {
+            "description": "every project's eslint, then oxlint and oxfmt",
+            "dependsOn": ["lint:oxlint", "lint:oxfmt"]
+        },
+        "lint:oxlint": {
+            "cache": false,
+            "dependsOn": [
+                {
+                    "projects": "*",
+                    "target": "lint:eslint"
+                }
+            ]
+        },
+        "lint:oxfmt": {
+            "cache": false,
+            "dependsOn": [
+                {
+                    "projects": "*",
+                    "target": "lint:eslint"
+                }
+            ]
+        },
+        "e2e:headed": {
+            "description": "alias: `pnpm run e2e:headed` keeps the script; under vis only lunora-e2e runs Playwright",
+            "command": "",
+            "dependsOn": [
+                {
+                    "projects": "lunora-e2e",
+                    "target": "e2e:headed"
+                }
+            ]
+        },
+        "e2e": {
+            "description": "alias: `pnpm run e2e` keeps the script; under vis only lunora-e2e runs Playwright",
+            "command": "",
+            "dependsOn": [
+                {
+                    "projects": "lunora-e2e",
+                    "target": "e2e"
+                }
+            ]
+        },
+        "e2e:examples": {
+            "description": "alias: `pnpm run e2e:examples` keeps the script; under vis only lunora-e2e runs Playwright",
+            "command": "",
+            "dependsOn": [
+                {
+                    "projects": "lunora-e2e",
+                    "target": "e2e:examples"
+                }
+            ]
+        },
+        "e2e:saas": {
+            "description": "alias: `pnpm run e2e:saas` keeps the script; under vis only lunora-e2e runs Playwright",
+            "command": "",
+            "dependsOn": [
+                {
+                    "projects": "lunora-e2e",
+                    "target": "e2e:saas"
+                }
+            ]
+        },
+        "e2e:ui": {
+            "description": "alias: `pnpm run e2e:ui` keeps the script; under vis only lunora-e2e runs Playwright",
+            "command": "",
+            "dependsOn": [
+                {
+                    "projects": "lunora-e2e",
+                    "target": "e2e:ui"
+                }
+            ]
+        }
+    }
+}
