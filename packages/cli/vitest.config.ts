@@ -22,6 +22,7 @@ const registryItemAliases = {
     "@lunora/payment": fileURLToPath(import.meta.resolve("@lunora/payment")),
     "@lunora/ratelimit": join(fixtures, "lunora-ratelimit.ts"),
     "@lunora/storage": join(fixtures, "lunora-storage.ts"),
+    "better-auth/api": join(fixtures, "better-auth-api.ts"),
     "cloudflare:workers": join(fixtures, "cloudflare-workers.ts"),
 };
 

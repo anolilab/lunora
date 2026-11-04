@@ -22,6 +22,7 @@ import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, isDevEnvironment, lunoraD1Adapter } from "@lunora/auth";
 import { admin, organization, uiConfig } from "@lunora/auth/plugins";
 import { createMailerFromEnv } from "@lunora/mail";
+import { APIError } from "better-auth/api";
 import type { ShardNamespaceLike } from "lunorash/runtime";
 import { createShardClient } from "lunorash/runtime";
 
@@ -179,16 +180,42 @@ const projectOrganization = async (env: AuthEnv, organization: OrganizationRecor
 };
 
 /**
- * The organisation's seat cap for better-auth's `membershipLimit`, which checks it
- * before an invitation is sent or accepted and before a member is added. The plan
- * comes from billing on the root shard (`payment:seatAllowance`); an unmetered
- * plan has no cap. A failed lookup throws, so the addition is refused rather
- * than let through unchecked.
+ * The organisation's seat cap. better-auth's `membershipLimit` checks it when a
+ * member is added or an invitation is accepted, and {@link refuseInvitationPastSeats}
+ * when one is sent. The plan comes from billing on the root shard
+ * (`payment:seatAllowance`); an unmetered plan has no cap. A failed lookup
+ * throws, so the addition is refused rather than let through unchecked.
  */
 const seatLimit = async (env: AuthEnv, organizationId: string): Promise<number> => {
     const allowance = await createShardClient(env.SHARD, { shardKey: "__root__" }).call(internal.payment.seatAllowance, { referenceId: organizationId });
 
     return allowance ?? Number.POSITIVE_INFINITY;
+};
+
+/**
+ * Refuse an invitation the organisation has no seat left for. better-auth checks
+ * `membershipLimit` only when an invitation is accepted, so without this an
+ * owner could send invitations every invitee would then fail to accept. A
+ * pending invitation holds a seat until it is accepted or lapses.
+ */
+const refuseInvitationPastSeats = async (env: AuthEnv, organizationId: string): Promise<void> => {
+    const { adapter } = await getAuth(env).$context;
+    const [limit, members, pending] = await Promise.all([
+        seatLimit(env, organizationId),
+        adapter.count({ model: "member", where: [{ field: "organizationId", value: organizationId }] }),
+        adapter.count({
+            model: "invitation",
+            where: [
+                { field: "organizationId", value: organizationId },
+                { field: "status", value: "pending" },
+                { field: "expiresAt", operator: "gt", value: new Date() },
+            ],
+        }),
+    ]);
+
+    if (members + pending >= limit) {
+        throw new APIError("FORBIDDEN", { message: "every seat on this plan is taken or invited — upgrade the plan to invite more" });
+    }
 };
 
 /**
@@ -246,6 +273,7 @@ export const authOptions = (env: AuthEnv): LunoraAuthOptions => {
                 membershipLimit: async (_user, record) => seatLimit(env, record.id),
                 // Keep the admin projection in step with the records it mirrors.
                 organizationHooks: {
+                    beforeCreateInvitation: async ({ organization: record }) => refuseInvitationPastSeats(env, record.id),
                     afterAcceptInvitation: async ({ organization: record }) => projectOrganization(env, record),
                     afterAddMember: async ({ organization: record }) => projectOrganization(env, record),
                     afterCreateOrganization: async ({ organization: record }) => projectOrganization(env, record),
