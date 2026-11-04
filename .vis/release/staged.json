@@ -93,8 +93,40 @@
     {
       "at": "2026-11-04T12:24:17.906Z",
       "key": "@lunora/studio@1.0.0-alpha.377"
+    },
+    {
+      "at": "2026-11-04T13:19:35.391Z",
+      "key": "@lunora/advisor@1.0.0-alpha.288"
+    },
+    {
+      "at": "2026-11-04T13:19:35.391Z",
+      "key": "@lunora/shard-engine@1.0.0-alpha.189"
+    },
+    {
+      "at": "2026-11-04T13:19:35.391Z",
+      "key": "@lunora/codegen@1.0.0-alpha.399"
+    },
+    {
+      "at": "2026-11-04T13:19:35.391Z",
+      "key": "@lunora/config@1.0.0-alpha.455"
+    },
+    {
+      "at": "2026-11-04T13:19:35.391Z",
+      "key": "@lunora/runtime@1.0.0-alpha.277"
+    },
+    {
+      "at": "2026-11-04T13:19:35.391Z",
+      "key": "@lunora/cli@1.0.0-alpha.482"
+    },
+    {
+      "at": "2026-11-04T13:19:35.391Z",
+      "key": "@lunora/do@1.0.0-alpha.282"
+    },
+    {
+      "at": "2026-11-04T13:19:35.391Z",
+      "key": "@lunora/vite@1.0.0-alpha.427"
     }
   ],
-  "updatedAt": "2026-11-04T12:24:17.907Z",
+  "updatedAt": "2026-11-04T13:19:35.391Z",
   "version": 1
 }
