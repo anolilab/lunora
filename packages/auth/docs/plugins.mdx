@@ -135,7 +135,7 @@ refresh token: the client gets a new one and the old one is marked used.
 Presenting a used refresh token again is treated as theft, as RFC 9700 §4.14.2
 recommends. The request fails with `invalid_grant`, and every refresh token
 and opaque access token that **user** holds for that **client** is revoked,
-including the rotated token the replay came from. The user has to authorize
+including the newer token it was rotated into. The user has to authorize
 the client again. better-auth implements this; Lunora pins it with a test
 against its own SQL store.
 
@@ -145,9 +145,10 @@ Four details decide how it behaves in practice:
   one device also signs that user's other devices out of the same client. Other
   users' grants, and the user's grants to other clients, are left alone.
 - **JWT access tokens survive.** When a grant carries a `resource`, the
-  provider issues JWT access tokens, and a JWT cannot be revoked. It stays valid until it expires, so keep access-token lifetimes
-  short when resources are in play. Opaque access tokens, issued when no
-  `resource` is requested, are revoked immediately.
+  provider issues JWT access tokens, and a JWT cannot be revoked. It stays
+  valid until it expires, so keep access-token lifetimes short when resources
+  are in play. Opaque access tokens, issued when no `resource` is requested,
+  are revoked immediately.
 - **Expiry slides.** Each rotation gives the new refresh token a fresh
   `refreshTokenExpiresIn`, 30 days by default. A client that keeps refreshing
   never hits it, and a refresh token family has no absolute lifetime. An expired
@@ -158,7 +159,9 @@ Four details decide how it behaves in practice:
   seconds makes a retry inside that window return the same response instead.
   A replay after the window still revokes the family.
 
-Both options go straight to `oauthProvider`:
+`mcp()` is `oauthProvider` underneath and behaves the same, except that it
+defaults `refreshTokenReuseInterval` to 30 seconds. Both options go on
+`oauthProvider({ … })` or `mcp({ … })`:
 
 ```ts
 oauthProvider({
