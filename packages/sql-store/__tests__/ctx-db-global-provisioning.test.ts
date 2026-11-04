@@ -1,8 +1,11 @@
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
+import { aggregateTableName } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
 import { columnNamesOfCreateTable, runSqlGlobalTableMigrations } from "../src/ctx-db-global-provisioning";
+import { runSqlAggregateMigrations } from "../src/ctx-db-migrations";
 import type { SqlCtxExec } from "../src/sql-exec";
+import { OCC_VERSION_COLUMN } from "../src/sql-exec";
 import { BIGINT_KEY_LENGTH } from "../src/value-codec";
 import { createSqliteBatchHarness, createSqliteHarness, makeSqliteDialect } from "./_helpers/sqlite";
 
@@ -400,6 +403,106 @@ describe("batched .global() provisioning", () => {
         expect(catalogOf(harness.database)).toEqual({ markers: sequential.markers, objects: sequential.objects });
 
         harness.close();
+    });
+});
+
+/**
+ * Execs for two isolates over one database whose first `ADD COLUMN`s each wait until both have asked for one, so both
+ * are past their probe: the interleaving two cold isolates hit, made deterministic instead of left to microtask order.
+ */
+const racingIsolates = (base: SqlCtxExec): { alters: () => number; isolate: () => SqlCtxExec } => {
+    const waiting: (() => void)[] = [];
+    let alters = 0;
+    const arrive = async (): Promise<void> =>
+        new Promise<void>((resolve) => {
+            waiting.push(resolve);
+
+            if (waiting.length === 2) {
+                for (const release of waiting) {
+                    release();
+                }
+            }
+        });
+
+    return {
+        alters: () => alters,
+        isolate: () => {
+            return {
+                all: (query, parameters) => base.all(query, parameters),
+                run: async (query, parameters) => {
+                    const isAlter = /add column/iu.test(query);
+
+                    alters += isAlter ? 1 : 0;
+                    await (isAlter && waiting.length < 2 ? arrive() : undefined);
+
+                    return base.run(query, parameters);
+                },
+            };
+        },
+    };
+};
+
+describe("two isolates provisioning one database at once", () => {
+    it("adds a missing column once and fails neither, though both probed before either altered", async () => {
+        expect.assertions(3);
+
+        const base = createSqliteHarness();
+
+        await base.exec.run(
+            `CREATE TABLE "notes" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "${OCC_VERSION_COLUMN}" INTEGER, "body" TEXT NOT NULL)`,
+            [],
+        );
+
+        const { alters, isolate } = racingIsolates(base.exec);
+
+        const schema = {
+            tables: { notes: { indexes: [], shape: { body: column("string"), slug: column("string") }, shardMode: { kind: "global" } } },
+        } as unknown as SchemaLike;
+
+        const results = await Promise.allSettled([
+            runSqlGlobalTableMigrations(isolate(), schema, dialect),
+            runSqlGlobalTableMigrations(isolate(), schema, dialect),
+        ]);
+        const columns = await base.exec.all(`SELECT name FROM pragma_table_info('notes') WHERE name = 'slug'`, []);
+
+        expect(alters()).toBe(2);
+        expect(results.map((result) => result.status)).toStrictEqual(["fulfilled", "fulfilled"]);
+        expect(columns).toHaveLength(1);
+
+        base.close();
+    });
+
+    it("adds `__count__` to a legacy aggregate companion once and fails neither", async () => {
+        expect.assertions(2);
+
+        const base = createSqliteHarness();
+        const companion = aggregateTableName("notes", "byBody");
+
+        // The companion shape from before `__count__` existed.
+        await base.exec.run(`CREATE TABLE "${companion}" ("__key__" TEXT PRIMARY KEY, "__value__" REAL)`, []);
+
+        const { isolate } = racingIsolates(base.exec);
+        const schema = {
+            tables: {
+                notes: {
+                    aggregateIndexes: [{ by: ["body"], name: "byBody", on: "notes", op: "count" }],
+                    indexes: [],
+                    shape: { body: column("string") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as unknown as SchemaLike;
+
+        const results = await Promise.allSettled([
+            runSqlAggregateMigrations(isolate(), schema, dialect),
+            runSqlAggregateMigrations(isolate(), schema, dialect),
+        ]);
+        const columns = await base.exec.all(`SELECT name FROM pragma_table_info('${companion}') WHERE name = '__count__'`, []);
+
+        expect(results.map((result) => result.status)).toStrictEqual(["fulfilled", "fulfilled"]);
+        expect(columns).toHaveLength(1);
+
+        base.close();
     });
 });
 

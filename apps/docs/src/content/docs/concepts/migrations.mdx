@@ -217,7 +217,9 @@ itself from the schema the worker is running:
   (`ALTER TABLE … ADD COLUMN`), so rows written before the deploy stay readable
   and read the new field as absent.
 - **`.global()` tables** are provisioned on the first request that touches them,
-  with the same additive rules.
+  with the same additive rules. Several isolates cold-starting at once may all
+  try to add the same column; the ones that lose see it already there and carry
+  on, so no request fails on it.
 
 ### Adding a required field to a table that has rows
 

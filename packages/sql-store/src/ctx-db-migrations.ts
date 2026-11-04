@@ -1152,8 +1152,18 @@ const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, defini
             continue;
         }
 
-        // eslint-disable-next-line no-await-in-loop -- same connection, and a failure here must surface rather than race the next ALTER.
-        await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(tableName)} ADD COLUMN ${sql.identifier(column)} ${sql.raw(type)}`);
+        try {
+            // eslint-disable-next-line no-await-in-loop -- same connection, and a failure here must surface rather than race the next ALTER.
+            await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(tableName)} ADD COLUMN ${sql.identifier(column)} ${sql.raw(type)}`);
+        } catch (error) {
+            // Two isolates cold-starting on one database both probe, both miss, and the slower `ALTER` fails with
+            // a duplicate-column error. Re-probing instead of matching that error keeps this dialect-blind (drivers
+            // disagree on errno vs code); any other failure leaves the column missing and still surfaces.
+            // eslint-disable-next-line no-await-in-loop -- one re-probe on the same connection, only after a failed ALTER.
+            if (!(await probe([column]))) {
+                throw error;
+            }
+        }
 
         if (validator !== undefined) {
             // eslint-disable-next-line no-await-in-loop -- one UPDATE per added column, on the same connection.
@@ -1321,6 +1331,32 @@ const provisionGlobalTablesSequentially = async (exec: SqlCtxExec, schema: Schem
 const companionsBelongHere = (definition: SchemaLike["tables"][string]): boolean =>
     definition.shardMode === undefined || definition.shardMode.kind === "global";
 
+/** Add `__count__` to a legacy `__agg_` table that lacks it: PRAGMA-check, then ALTER. */
+const addAggregateCountColumn = async (exec: SqlCtxExec, dialect: SqlDialect, aggTable: string): Promise<void> => {
+    const hasCount = async (): Promise<boolean> => {
+        const columns = await queryAll(exec, dialect, sql`PRAGMA table_info(${sql.identifier(aggTable)})`);
+
+        return columns.some((column) => column["name"] === "__count__");
+    };
+
+    if (await hasCount()) {
+        return;
+    }
+
+    try {
+        await queryRun(
+            exec,
+            dialect,
+            sql`ALTER TABLE ${sql.identifier(aggTable)} ADD COLUMN ${sql.identifier("__count__")} ${sql.raw(dialect.companionTypes.integer)} NOT NULL DEFAULT 0`,
+        );
+    } catch (error) {
+        // Another isolate added it between the check and the ALTER; see `alterGlobalTableDrift`.
+        if (!(await hasCount())) {
+            throw error;
+        }
+    }
+};
+
 /**
  * Materialize the `__agg_<index>` companion tables for every declared
  * `aggregateIndex` on a global table. Global tables in Lunora ship their own
@@ -1357,21 +1393,11 @@ const runSqlAggregateMigrations = async (exec: SqlCtxExec, schema: SchemaLike, d
             // Alpha-era companion-rebuild caveat (SQLite/D1 only): a binding that
             // materialized this table before `__count__` existed gets the column
             // added here (defaulted 0). `CREATE TABLE IF NOT EXISTS` won't reshape
-            // an existing table, so we pragma-check then ALTER. Fresh PG/MySQL
-            // tables are created with `__count__` already, so this legacy reshape
-            // is skipped off SQLite.
+            // an existing table. Fresh PG/MySQL tables are created with `__count__`
+            // already, so this legacy reshape is skipped off SQLite.
             if (dialect.name === "sqlite") {
                 // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
-                const columns = await queryAll(exec, dialect, sql`PRAGMA table_info(${sql.identifier(aggTable)})`);
-
-                if (!columns.some((column) => column["name"] === "__count__")) {
-                    // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
-                    await queryRun(
-                        exec,
-                        dialect,
-                        sql`ALTER TABLE ${sql.identifier(aggTable)} ADD COLUMN ${sql.identifier("__count__")} ${sql.raw(integer)} NOT NULL DEFAULT 0`,
-                    );
-                }
+                await addAggregateCountColumn(exec, dialect, aggTable);
             }
         }
     }
