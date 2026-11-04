@@ -540,3 +540,28 @@ bound on what all first calls together would pay.
   else, the same in both modes. The cause is not established. Candidates are
   better-auth's per-isolate migration check (finding 12) and the identity
   lookup; this was not profiled.
+
+## 19. Three defects in the registry copies the bench mirrors (medium)
+
+PR review on #1420 turned these up. The bench keeps its copies identical to
+`registry/*` and `templates/saas`, so each is fixed upstream or not at all.
+
+- **`mail`: a Resend-only deployment cannot send.** `registry/mail/mail.ts`
+  passes `cloudflareSend` to `createMailerFromEnv` unconditionally, and
+  `createMailer` prefers it over `RESEND_API_KEY`, so a worker without the
+  `SEND_EMAIL` binding fails every send. The file's own comment says
+  `cloudflareSend` is used only when the binding exists. Fix: pass it only when
+  `env.SEND_EMAIL` is set.
+- **`storage`: the key an upload returns does not address the object.**
+  `generateUploadUrl` returns the user-scoped key, `getDownloadUrl` and
+  `deleteObject` run `scopeKey` over their input again (it is not idempotent),
+  and `listObjects` returns keys relative to the user. Passing an upload's key
+  to either targets `user/user/key`. Fix: return the relative key everywhere and
+  scope only when building the R2 key.
+- **`saas`: two reads grow with the tenant.** `overview` reads every project
+  of the organisation with `.collect()`, on every live update of the dashboard,
+  and `listOrganizations` returns every organisation in one unpaged result (its
+  comment says so). Fix: page both.
+
+**Repro (storage):** call `storage:generateUploadUrl({ key: "a.txt", … })`, then
+`storage:deleteObject({ key })` with the returned key; the object stays.
