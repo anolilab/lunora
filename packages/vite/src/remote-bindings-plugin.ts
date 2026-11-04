@@ -29,6 +29,8 @@ interface RemoteCloudflareOptions {
 
 /** The decision a {@link planViteRemoteBindings} call returns. */
 interface ViteRemotePlan {
+    /** The bindings flipped to remote, as `NAME (kind)` labels — the same list `lunora dev` prints. */
+    bindings: string[];
     /** Idempotent disposer for the temp config; always present + safe to call. */
     cleanup: () => void;
 
@@ -79,13 +81,14 @@ const planViteRemoteBindings = (options: PlanViteRemoteOptions): ViteRemotePlan 
     });
 
     if (!enabled) {
-        return { cleanup: noopCleanup, enabled: false, withheld: [] };
+        return { bindings: [], cleanup: noopCleanup, enabled: false, withheld: [] };
     }
 
     const materialize = options.materialize ?? materializeDevWranglerConfig;
     const result = materialize({ projectRoot: options.projectRoot, remote: true });
 
     return {
+        bindings: result.remoteBindings.map((binding) => `${binding.binding} (${binding.kind})`),
         // The materializer always returns an idempotent, never-throwing `cleanup`.
         cleanup: result.cleanup,
         configPath: result.configPath,
@@ -119,6 +122,26 @@ const withRemoteBindings = (options: CloudflarePluginOptions, plan: ViteRemotePl
     }
 
     return { ...options, configPath: plan.configPath };
+};
+
+/**
+ * On the BYO path (`cloudflare: false`) Lunora has no options object to inject
+ * into, so print the materialized path with what to do with it, rather than
+ * leaving `LUNORA_REMOTE` looking like it took effect.
+ */
+const announceUnwired = (plan: ViteRemotePlan): void => {
+    if (!plan.enabled || plan.configPath === undefined) {
+        return;
+    }
+
+    const flipped = plan.bindings.length > 0 ? ` (${plan.bindings.join(", ")})` : "";
+
+    // eslint-disable-next-line no-console -- surface the degradation; the dev server's logger isn't available in the `config` hook.
+    console.info(
+        lunoraLine(
+            `remote bindings${flipped} are materialized at ${plan.configPath} — this project adds @cloudflare/vite-plugin itself (\`cloudflare: false\`), so pass that path as its \`configPath\` to use them.`,
+        ),
+    );
 };
 
 /**
@@ -166,7 +189,7 @@ const withRemoteBindings = (options: CloudflarePluginOptions, plan: ViteRemotePl
  * than leaving `LUNORA_REMOTE` looking like it took effect.
  */
 const remoteBindingsPlugin = (options: CloudflarePluginOptions | undefined, planOptions: PlanViteRemoteOptions): Plugin => {
-    let plan: ViteRemotePlan = { cleanup: noopCleanup, enabled: false, withheld: [] };
+    let plan: ViteRemotePlan = { bindings: [], cleanup: noopCleanup, enabled: false, withheld: [] };
     /** The path THIS plugin injected, so a re-entrant `config` can tell it from a user-supplied one. */
     let injected: string | undefined;
 
@@ -194,14 +217,7 @@ const remoteBindingsPlugin = (options: CloudflarePluginOptions | undefined, plan
             }
 
             if (options === undefined) {
-                if (plan.enabled && plan.configPath !== undefined) {
-                    // eslint-disable-next-line no-console -- surface the degradation; the dev server's logger isn't available in the `config` hook.
-                    console.info(
-                        lunoraLine(
-                            `remote bindings are materialized at ${plan.configPath} — this project adds @cloudflare/vite-plugin itself (\`cloudflare: false\`), so pass that path as its \`configPath\` to use them.`,
-                        ),
-                    );
-                }
+                announceUnwired(plan);
 
                 return;
             }
@@ -222,6 +238,12 @@ const remoteBindingsPlugin = (options: CloudflarePluginOptions | undefined, plan
             if (merged.configPath !== undefined && target.configPath === undefined) {
                 target.configPath = merged.configPath;
                 injected = merged.configPath;
+
+                // Only on our own injection: a user-supplied `configPath` runs their file, not the flipped copy.
+                if (plan.bindings.length > 0) {
+                    // eslint-disable-next-line no-console -- the dev server's logger isn't available in the `config` hook.
+                    console.info(lunoraLine(`remote bindings: ${plan.bindings.join(", ")} → deployed resources`));
+                }
             } else if (plan.enabled && plan.configPath === undefined && plan.reason !== undefined) {
                 // eslint-disable-next-line no-console -- surface the silent degradation; the dev server's logger isn't available in the `config` hook.
                 console.info(lunoraLine(`remote bindings requested but not applied: ${plan.reason}`));

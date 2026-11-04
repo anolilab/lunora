@@ -1,5 +1,5 @@
 import type { Plugin } from "vite";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { PlanViteRemoteOptions } from "../src/remote-bindings-plugin";
 import { planViteRemoteBindings, remoteBindingsPlugin, withRemoteBindings } from "../src/remote-bindings-plugin";
@@ -101,6 +101,61 @@ describe("planViteRemoteBindings", () => {
     });
 });
 
+describe("remote binding banner", () => {
+    /** A materializer that flipped `DB` (D1) and `FILES` (R2) to remote. */
+    const flippedMaterializer = () => {
+        return {
+            cleanup: (): void => {},
+            configPath: "/work/wrangler.remote.jsonc",
+            remoteBindings: [
+                { binding: "DB", kind: "D1", path: [0], section: "d1_databases" as const },
+                { binding: "FILES", kind: "R2", path: [0], section: "r2_buckets" as const },
+            ],
+            withheld: [],
+        };
+    };
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("labels each flipped binding as `NAME (kind)`", () => {
+        expect.assertions(1);
+
+        expect(planViteRemoteBindings(remoteOnOptions(flippedMaterializer)).bindings).toStrictEqual(["DB (D1)", "FILES (R2)"]);
+    });
+
+    it("prints the flipped bindings when it injects the temp config", () => {
+        expect.assertions(1);
+
+        const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+        callConfig(remoteBindingsPlugin({}, remoteOnOptions(flippedMaterializer)), "serve");
+
+        expect(info.mock.calls.some(([line]) => String(line).endsWith("remote bindings: DB (D1), FILES (R2) → deployed resources"))).toBe(true);
+    });
+
+    it("prints nothing about remote bindings when the project's own configPath wins", () => {
+        expect.assertions(1);
+
+        const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+        callConfig(remoteBindingsPlugin({ configPath: "/user/wrangler.jsonc" }, remoteOnOptions(flippedMaterializer)), "serve");
+
+        expect(info).not.toHaveBeenCalled();
+    });
+
+    it("names the flipped bindings on the BYO path", () => {
+        expect.assertions(1);
+
+        const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+        callConfig(remoteBindingsPlugin(undefined, remoteOnOptions(flippedMaterializer)), "serve");
+
+        expect(String(info.mock.calls[0]?.[0])).toContain("remote bindings (DB (D1), FILES (R2)) are materialized at /work/wrangler.remote.jsonc");
+    });
+});
+
 describe("withRemoteBindings", () => {
     it("sets configPath on the cloudflare options when remote is on", () => {
         expect.assertions(1);
@@ -108,6 +163,7 @@ describe("withRemoteBindings", () => {
         const options = withRemoteBindings(
             {},
             {
+                bindings: [],
                 cleanup: () => {},
                 configPath: "/work/wrangler.remote.jsonc",
                 enabled: true,
@@ -121,7 +177,7 @@ describe("withRemoteBindings", () => {
     it("is a no-op when remote mode is disabled", () => {
         expect.assertions(1);
 
-        const options = withRemoteBindings({}, { cleanup: () => {}, enabled: false, withheld: [] });
+        const options = withRemoteBindings({}, { bindings: [], cleanup: () => {}, enabled: false, withheld: [] });
 
         expect((options as { configPath?: string }).configPath).toBeUndefined();
     });
@@ -132,6 +188,7 @@ describe("withRemoteBindings", () => {
         const options = withRemoteBindings(
             { configPath: "/user/wrangler.jsonc" },
             {
+                bindings: [],
                 cleanup: () => {},
                 configPath: "/work/wrangler.remote.jsonc",
                 enabled: true,

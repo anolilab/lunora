@@ -165,6 +165,7 @@ const VERSION: string;
 
 ```ts
 interface ViteRemotePlan {
+    bindings: string[];
     cleanup: () => void;
     configPath?: string;
     enabled: boolean;
