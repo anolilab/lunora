@@ -197,8 +197,8 @@ interface SessionRecord {
 
 ## Hibernation
 
-`ShardDO` runs with WebSocket hibernation enabled: inactive sockets cost zero CPU
-until a message arrives. Exposed via the `HibernatableWebSocket` type for unit tests.
+`ShardDO` runs with WebSocket hibernation enabled: inactive sockets stay connected
+while the Durable Object can hibernate until a message arrives. Exposed via the `HibernatableWebSocket` type for unit tests.
 (`SessionDO` has no WebSocket surface at all: it is HTTP-only, so hibernation does not
 apply to it.)
 
@@ -216,8 +216,7 @@ one minute later**, one millisecond past the window so the previous window has b
 decay. That wake runs the poll and sweep tiers, so an idle shard resumes polling and
 sweeping (global-shape refresh, source pulls, TTL deletes) once the window drains. A
 shard whose workload never drains is throttled, never stopped. It re-arms in bursts of
-about the limit, with quieter windows between them. Measured on a loop that is always due,
-it averaged about 60% of the limit per window, with no window empty. Each trip logs one `error` record, whose message begins
+about the limit, with quieter windows between them. Each trip logs one `error` record, whose message begins
 `alarm re-arm breaker tripped` and carries the `limit` and `rearms` fields, and counts
 `shard.alarm_rearm.refused`. That is about one record per window, not one per refused
 re-arm.

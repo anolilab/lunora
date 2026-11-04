@@ -384,8 +384,8 @@ bridge above, on your own schedule).
 
 **Delete detection: `mode`.** The default `mode: "full-pull"` reads the whole tenant
 slice each tick and diffs it, so upstream deletes are observed for free, but it
-costs a full read per tick (bench ceiling ~10k rows). For a large, low-churn slice
-past that cap, `mode: "incremental"` pulls **only rows changed since a durable
+costs a full read per tick. For a large, low-churn slice,
+`mode: "incremental"` pulls **only rows changed since a durable
 watermark**:
 
 ```ts

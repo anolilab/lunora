@@ -246,10 +246,6 @@ an SSR value into a live subscription.
 | `@lunora/vue`     | composables (`ref` / `reactive`) | preview |
 | `@lunora/angular` | signals + DI                     | preview |
 
-<Callout type="info">
-    Solid lands first after React: its fine-grained signals map most directly onto Lunora deltas, so it needs the least glue to run live loaders.
-</Callout>
-
 The Solid, Svelte, Vue, and Angular adapter **packages exist** and expose the
 same hydrate-then-subscribe handoff under their idiom, but they are
 **preview**: not yet proven end-to-end against a running app. The React

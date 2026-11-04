@@ -247,9 +247,8 @@ The adapter's embedded `@cloudflare/vite-plugin` builds `src/server.ts` into
 ships the adapter-built bundle. Run the Astro build first, then deploy.
 
 Do **not** name that file `src/worker.ts`: `lunora deploy` treats that exact path
-as a SvelteKit-shaped composed entry and passes it to wrangler positionally, and
-the adapter redirect's `no_bundle: true` then uploads the raw TypeScript source
-as the worker. See
+as a SvelteKit-shaped composed entry and passes it to wrangler positionally,
+which bypasses the adapter-built bundle. See
 [Deploy your framework](/docs/frameworks/deploy) for the one-worker deploy story.
 
 <Callout type="info">

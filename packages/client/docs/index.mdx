@@ -65,8 +65,9 @@ both the encode and decode sides, so the sender sees it at the call site.
 > subscriptions whose args differ only by such a value get distinct keys. Two
 > caveats: `Map`/`Set` args key by **insertion order** (two equal Maps built in
 > different orders open separate subscriptions, so prefer plain objects), and a
-> `URL` arg can't survive the server's hibernation attachment (you'll get a
-> structured `SUBSCRIPTION_PERSIST_FAILED` error; pass `url.href` instead).
+> `URL` arg is best passed as `url.href` (the server stores each subscription in
+> its socket attachment, and a failure there surfaces as a structured
+> `SUBSCRIPTION_PERSIST_FAILED` error).
 > Values the wire refuses (`RegExp`, class instances, …) still fail loud with a
 > `TypeError` at the call site, and over-deep nesting with a `RangeError`.
 

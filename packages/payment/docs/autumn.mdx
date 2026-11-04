@@ -3,7 +3,7 @@ title: "@lunora/payment — Autumn"
 description: End-to-end tutorial for wiring the Autumn adapter into ctx.payments — attach a product, check/track features Autumn owns, verify Svix webhooks, and reconcile.
 ---
 
-[Autumn](https://useautumn.com) is an open-source, **entitlement-first** billing
+[Autumn](https://useautumn.com) is an open-source billing
 layer that runs on **your own** Stripe account. This page is a standalone,
 copy-pasteable walkthrough: install the adapter, wire it onto `ctx.payments`,
 attach your first product, gate features and meter usage (both of which Autumn
@@ -12,7 +12,7 @@ maps to a real method on the adapter; nothing is invented. For the
 provider-agnostic concepts (`ctx.payments` surface, the state machine, the store,
 `reconcile`) read the [package overview](/docs/packages/payment) first.
 
-## Autumn is entitlement-first and runs on your own Stripe
+## Autumn runs on your own Stripe
 
 Autumn sits between your app and **your** Stripe account and becomes your source
 of truth for subscription state, credit balances, feature entitlements, and usage

@@ -10,7 +10,7 @@ when a later step throws, only that step retries; the completed ones don't run
 again.
 
 It wraps [Cloudflare Workflows](https://developers.cloudflare.com/workflows/)
-(a first-party, GA durable-execution engine) with type-safe authoring: you
+(Cloudflare's durable-execution engine) with type-safe authoring: you
 write a `defineWorkflow` and codegen emits the `WorkflowEntrypoint` class, wires
 a typed `ctx.workflows` handle, and declares each workflow in the `exports` map of
 `wrangler.jsonc` for you.
@@ -310,7 +310,7 @@ still need an explicit `dedupId`.
 
 ### Fan-out with child-DO isolation (`ctx.parallel` / `ctx.spawn`)
 
-A workflow instance is one Durable Object (DO): ~128 MB memory and a 5-minute CPU
+A workflow instance is one Durable Object (DO) with a single memory and CPU
 budget, shared across everything it runs. Fanning out heavy work with
 `Promise.all(branches.map((b) => ctx.runStep(b, …)))` therefore crowds every
 branch onto that **one** budget: one OOM or timeout takes the whole batch down.

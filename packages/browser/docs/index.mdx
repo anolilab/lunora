@@ -54,7 +54,7 @@ export const ShardDO = createShardDO({
 ```
 
 The `playwright` loader runs on the first call that drives a browser and its
-module is reused, so the ~3 MiB SDK stays out of the Worker's startup graph
+module is reused, so the SDK (about 1.8 MiB minified) stays out of the Worker's startup graph
 (Cloudflare rejects a Worker whose global scope takes more than 1 s of CPU). A
 static `import { launch } from "@cloudflare/playwright"` in the entry is evaluated
 at startup and defeats this. A failed load rejects that call; the next one
@@ -142,7 +142,7 @@ Browser Run sessions accept several connections at once. Hold a session open wit
 
 ### Production posture: set `allowedHosts`
 
-**`allowedHosts` is the supported production configuration.** Browser Run enforces it on the session itself (`guardrails.allowedDomains`): every request the browser makes, redirect hops, sub-resources, service workers and raw Chrome DevTools Protocol (CDP) included, is checked by Cloudflare, not by code in your Worker.
+**`allowedHosts` is the supported production configuration.** Browser Run enforces it on the session itself (`guardrails.allowedDomains`), not by code in your Worker. The policy is set when the session is acquired and latched for its lifetime, so later connections cannot change or remove it, and an invalid policy fails closed.
 
 ```ts
 createBrowser({ binding: env.BROWSER, playwright: () => import("@cloudflare/playwright"), allowedHosts: ["example.com", "cdn.example.com"] });
@@ -179,7 +179,7 @@ What a Worker-fetched request looks like, so it matches a native load:
 - **Cookies are written once.** Playwright's request client stores every hop's `Set-Cookie` in the context's jar as it fetches; the guard does not hand those headers to the browser again, which would store a second copy under Chromium's own parsing. Not verified here: how a cookie without a `Domain` attribute is scoped when Playwright stores it (`context.addCookies` with the response host).
 - **Service workers are blocked.** A service worker fetches outside every route handler, so every context the factory opens, and every one opened from a guarded `launch()` / `connect()` browser, is created with `serviceWorkers: "block"`. A context another connection opened in a shared session keeps whatever it was created with.
 
-Every browser the factory launches also receives `allowedHosts` as Browser Run session guardrails (`guardrails.allowedDomains`), so Cloudflare itself blocks every off-list request the session makes, sub-resource redirects included. Guardrails accept at most 50 entries; a longer list is refused before launch.
+Every browser the factory launches also receives `allowedHosts` as Browser Run session guardrails (`guardrails.allowedDomains`), so Browser Run enforces the list on the session itself. Guardrails accept at most 50 entries; a longer list is refused before launch.
 
 **Session ids are bearer secrets.** Browser Run cannot tag a session with an owner, so whoever holds an id can `connect` to it, read its pages and cookies, and close it. Keep ids server-side, keyed by the identity of the caller that opened the session; never send one to a client or accept one from it. The browser `connect` hands you carries the same SSRF guard as `launch`.
 

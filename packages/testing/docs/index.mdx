@@ -45,8 +45,8 @@ bun add -D @lunora/testing
 `lunoraTest(schema)` runs the migrations against a fresh in-memory SQLite
 database, builds the same `ctx.db` writer the real Durable Object builds, and
 returns a harness whose methods execute a registered function's `handler`
-directly. It mirrors the first five methods of Convex's `convexTest`, and all
-of them share one database, so a write from a mutation is visible to a later
+directly. It follows the shape of Convex's `convexTest`, and all
+of its methods share one database, so a write from a mutation is visible to a later
 query.
 
 ```ts

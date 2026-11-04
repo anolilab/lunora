@@ -9,8 +9,8 @@ error model, but deliberately not extending it (see
 [Rendering](#rendering)) — plus a
 central catalog mapping each machine `code` to its transport `status`, a human
 `title`, and, where useful, a Markdown `hint` and `docsUrl`. Those
-hints render consistently in the CLI, the Vite error overlay, the Studio UI, and
-the client SDK.
+hints render in the CLI and the Studio UI, and the client SDK derives its error
+codes from the same catalog.
 
 ```ts
 import { LunoraError, isLunoraError, resolveHint } from "@lunora/errors";

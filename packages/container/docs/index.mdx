@@ -225,8 +225,9 @@ await ctx.containers.agentComputer.get(otherTaskId).start({ snapshot: saved }); 
   replaces every instance.
 
 <Callout type="warn">
-    Needs wrangler 4.131.0 or newer: older releases reject `scheduling_policy: "durable_object"` and the `images` map at `wrangler deploy`. Only Cloudflare
-    supports this. Codegen refuses `schedulingPolicy: "durable_object"` with a `platform_unsupported_feature` diagnostic on the Node and celld targets.
+    Needs a wrangler release that knows the new config: older releases may reject `scheduling_policy: "durable_object"` and the `images` map at `wrangler
+    deploy`. Only Cloudflare supports this. Codegen refuses `schedulingPolicy: "durable_object"` with a `platform_unsupported_feature` diagnostic on the Node
+    and celld targets.
 </Callout>
 
 ## Sandbox helpers: files, backups and bucket mounts
@@ -237,7 +238,7 @@ already is. Its three helpers, `Files`, `DirectoryBackup` and `S3Mount`, are
 built in. Opt a container in with `sandbox: true`. The helpers run Cloudflare's
 `sandbox-shim` binary inside the container, which must be at
 `/usr/local/bin/sandbox-shim`. Cloudflare publishes it as the image
-`cloudflare/sandbox`, which contains nothing but the shim. Copy it into your own
+`cloudflare/sandbox`, which ships the shim. Copy it into your own
 image, pinned to the version matching `@cloudflare/sandbox`:
 
 ```dockerfile title="containers/workspace/Dockerfile"
@@ -1173,7 +1174,7 @@ listed here.
 - **No autoscaling or location-aware routing.** Pools are a fixed size and
   `.any()`/`.pool()` pick uniformly at random, ignoring instance region. Drive
   batch work from a [scheduler](/docs/packages/scheduler) cron and prefer
-  `.pool()` for stateless requests. (cloudflare/containers#226)
+  `.pool()` for stateless requests.
 - **Disk is ephemeral.** Every (re)start gives a fresh filesystem; persist to
   [`@lunora/storage`](/docs/packages/storage) (R2). FUSE (filesystem in userspace) mounts, a writable
   `tmpfs`, and some low-level `node:net` socket modes are not available in the

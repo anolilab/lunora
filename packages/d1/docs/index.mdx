@@ -194,13 +194,11 @@ and only for an operation that is safe to run twice.
 
 ### Retrying without a timeout makes a stall worse
 
-D1's reported failure mode is not only a fast error — it is a **stall**.
-Operators report the storage object hanging for 30+ seconds before resetting,
-several times a day, on databases holding tens of megabytes of data with simple
-queries.
+D1's failure mode is not only a fast error — it can be a **stall**, a call
+that hangs before it fails.
 
-A retry loop wrapped around a stall _amplifies_ it: three attempts at 30 seconds
-each is a 90-second request instead of a 30-second one. So when you call
+A retry loop wrapped around a stall _amplifies_ it: if one attempt hangs for 30
+seconds, three attempts are a 90-second request instead of a 30-second one. So when you call
 `withD1Retry` yourself, bound it:
 
 ```ts
@@ -230,7 +228,7 @@ watching a spinner for half a minute.
 ### Retries are not enough on a critical write path
 
 If a write must not surface a 500 to a user, retrying harder is the wrong lever.
-Cloudflare's own guidance is to **decouple the write from the HTTP response**:
+The fix is to **decouple the write from the HTTP response**:
 accept the request, enqueue the write, and let the queue consumer absorb the
 storage event.
 
@@ -294,8 +292,8 @@ result, and the exec layer records them instead of discarding them.
 bills and the number a missing index inflates: a query filtering on an
 unindexed column scans the table to find its subset, so one that cost 200 rows
 against a small table costs 200k once the table grows — nothing deployed, and
-the spend went up a thousandfold. The dashboard's own `rowsRead` metric is
-per-DATABASE, so it can say the total moved but never which query moved it.
+the spend went up a thousandfold. A database-wide total can say that
+reads moved but never which query moved them.
 
 Each statement is emitted to Workers Logs under a **low-cardinality** tag from
 `d1QueryTag` — `select:users`, `insert:orders`, `select:unknown` when no table

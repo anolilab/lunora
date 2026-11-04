@@ -99,8 +99,8 @@ timeline wrote below it, permanently and without an error.
 
 So treat re-seeding every change-feed consumer as part of the restore, in the
 same way you would clear the [R2 archive](#archiving-trimmed-entries-to-r2). Do
-not wait to be told: on a busy deployment the window in which you would be told
-is minutes wide.
+not wait to be told: the window in which you would be told closes once
+new writes pass the old cursor.
 
 #### Storing the epoch beside the cursor widens that window
 

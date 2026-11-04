@@ -467,13 +467,13 @@ pnpm lunora build --format json | jq .data.bundle
 
 Only the uploaded files are counted: the sourcemap and the esbuild metafile
 sitting in the same out-dir are not part of the script, and counting them would
-roughly triple the number. Compare `rawBytes` against the 64 MiB limit; a bundle
+inflate the number. Compare `rawBytes` against the 64 MiB limit; a bundle
 over it is reported as a warning. `gzipBytes` matches the `gzip:` figure in
 wrangler's `Total Upload: … / gzip: …` line and is useful for tracking what
 crosses the wire, but Cloudflare does not limit it.
 
-A starter app is around **1.7 MiB raw**, so most projects have a lot of room.
-Bundle size still affects cold-start time, so if yours is growing:
+A starter app is small next to that limit, so most projects have a lot of room.
+A large bundle can also add to startup time, so if yours is growing:
 
 - **Drop add-ons you no longer import.** Every `@lunora/*` add-on your Worker
   entry reaches is bundled, whether or not a request ever uses it.
@@ -484,7 +484,7 @@ Bundle size still affects cold-start time, so if yours is growing:
   prints the largest modules, which is usually enough to name the culprit.
 
 Size is not the only upload check. A Worker whose global scope takes more than
-1 s of CPU to evaluate is rejected with error 10021 however small it is; see
+1 second to evaluate is rejected with error 10021 however small it is; see
 [Worker startup CPU limit](/docs/startup-cpu-limit).
 
 ## Streaming logs

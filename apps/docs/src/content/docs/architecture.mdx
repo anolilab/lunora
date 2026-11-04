@@ -121,8 +121,8 @@ Worker dispatches to every shard and merges results.
 against the resolving DO. The DO registers the subscription on the socket via
 `state.serializeAttachment(...)`, so it survives **hibernation**. When a
 mutation later writes a matching row, the DO computes a delta and pokes only the
-sockets whose registered predicate matches. Idle subscribers pay for storage,
-not compute, which is why the bill drops to near-zero between bursts.
+sockets whose registered predicate matches. While the DO hibernates, idle subscribers keep their sockets without the
+DO running code.
 
 </Step>
 

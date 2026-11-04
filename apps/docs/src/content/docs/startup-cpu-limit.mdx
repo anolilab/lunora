@@ -14,7 +14,7 @@ bug in your code:
 ScriptStartupError: Script startup exceeded CPU time limit [code: 10021]
 ```
 
-A Worker must evaluate its whole global scope within **1 s of CPU**. Past
+A Worker must evaluate its whole global scope within **1 second of CPU**. Past
 that, Cloudflare rejects the upload. The limit is not configurable, and every
 Worker that shares the bundle (the app, workflow and queue consumers) fails with
 it. Apps usually reach it gradually as they grow, so a deploy that worked
@@ -31,14 +31,15 @@ helper is paid by every module that uses the helper.
 The registry itself is cheap (about 50 µs per procedure in a synthetic app).
 What makes a real app fail is the module graph the function modules reach:
 auth, SDK clients, a rate limiter, validator libraries. In a large app (about
-1,000 procedures, 130 tables, an 11 MB bundle) startup measured about 0.4 s
-locally with no single hot spot, and was rejected on Cloudflare.
+1,000 procedures, 130 tables, an 11 MiB minified bundle) `wrangler check startup`
+measured a median of 421 ms locally with no single hot spot.
 
 ## Measure it locally
 
-Cloudflare's CPU is slower than a laptop, so a figure that looks comfortable
-locally can still fail. Treat anything above a few hundred milliseconds locally
-as a warning.
+The ratio between a local profile and Cloudflare's startup measurement is not
+known: one app that profiled at about 0.7 s locally was rejected on upload. A
+figure that looks comfortable locally can still fail, so treat anything above a
+few hundred milliseconds locally as a warning.
 
 ```bash
 lunora build --out-dir .lunora/build        # writes the bundle and bundle-meta.json
@@ -150,14 +151,10 @@ imported by every function module, so what it imports statically stays on the
 startup path. If that builder imports the auth stack, auth stays eager however
 the registry loads.
 
-Measured on a synthetic app with 1,000 procedures over 130 tables, in
-`wrangler check startup` medians:
-
-| What the function modules import from `@lunora/auth` | Startup |
-| ---------------------------------------------------- | ------- |
-| Nothing (auth wired only through `.auth()`)          | 29 ms   |
-| A light helper such as `isDevEnvironment`            | 29 ms   |
-| `createAuth`                                         | 48 ms   |
+On a synthetic app with 1,000 procedures, wiring auth only through
+`defineApp().auth()` cut the `wrangler check startup` median from 50 ms to
+37 ms, and function modules that import `@lunora/auth` themselves add about 6 ms
+on top.
 
 The cost follows what you import, not the package name. In practice:
 

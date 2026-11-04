@@ -24,8 +24,8 @@ shard (full-scan attribution, index hit counts, per-shard traffic, row samples).
 
 Findings surface in the Studio's **Advisors** domain (Security, row-level security (RLS), and
 Insights panels) and on the Home overview. Static findings ride along in the
-generated code; runtime findings are computed by the Studio backend from each
-shard's durable metrics.
+generated code; runtime findings are computed by Studio from the signal each shard
+reports.
 
 ## Static lints
 
@@ -99,7 +99,7 @@ studio.
 
 ## Runtime lints
 
-Need observed signal from a live shard, aggregated by the Studio backend.
+Need observed signal from a live shard, computed by Studio.
 
 | Lint                | Level     | Detects                                                                                                                                     |
 | ------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------- |

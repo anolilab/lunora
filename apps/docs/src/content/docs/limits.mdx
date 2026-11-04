@@ -13,16 +13,17 @@ or `.global()`.
 
 ## Durable Objects
 
-| Limit                | Value         | Implication                                          |
-| -------------------- | ------------- | ---------------------------------------------------- |
-| SQLite size / DO     | **10 GB**     | Plan to shard before you cross 1 GB                  |
-| Sustained req/s / DO | **~1 000**    | Hot DO = sharding signal                             |
-| CPU per request      | **30 s**      | Long tasks → action + scheduler, not mutation        |
-| Alarm handler        | **15 min**    | Wall-clock, per invocation                           |
-| WebSockets / DO      | **~32 000**   | Hibernated, this is generous; pre-hibernate, less so |
-| WS message size      | **32 MiB**    | Received messages                                    |
-| Outgoing connections | **6**         | Simultaneous, per request                            |
-| DOs / account        | **Unlimited** | Sharding is free of administrative overhead          |
+| Limit                | Value                              | Implication                                                       |
+| -------------------- | ---------------------------------- | ----------------------------------------------------------------- |
+| SQLite size / DO     | **10 GB** (Paid) / **1 GB** (Free) | Plan to shard before you cross 1 GB; on Free, 1 GB is the ceiling |
+| Storage / account    | Unlimited (Paid) / **5 GB** (Free) | Every shard counts toward it on Free                              |
+| Sustained req/s / DO | **~1 000**                         | Hot DO = sharding signal                                          |
+| CPU per request      | **30 s**                           | Long tasks → action + scheduler, not mutation                     |
+| Alarm handler        | **15 min**                         | Wall-clock, per invocation                                        |
+| WebSockets / DO      | **~32 000**                        | Hibernated, this is generous; pre-hibernate, less so              |
+| WS message size      | **32 MiB**                         | Received messages                                                 |
+| Outgoing connections | **6**                              | Simultaneous, per request                                         |
+| DOs / account        | **Unlimited**                      | Sharding is free of administrative overhead                       |
 
 ## Statement limits (Durable Objects **and** D1)
 
@@ -89,12 +90,11 @@ Raise them by overriding `transactionLimits()` on the generated shard class.
 
 ## D1
 
-| Limit                         | Value                                              | Implication                               |
-| ----------------------------- | -------------------------------------------------- | ----------------------------------------- |
-| Database size                 | **10 GB**                                          | Use for global indexes, not bulk data     |
-| Databases / account           | **1 000 000** (Paid; 100 000 included, 1 TB total) | Each app gets its own                     |
-| Queries per Worker invocation | **1 000**                                          | Watch your query fan-out in fan-out reads |
-| Bookmark window               | **~24 h**                                          | Sessions API consistency window           |
+| Limit                         | Value                                                                          | Implication                               |
+| ----------------------------- | ------------------------------------------------------------------------------ | ----------------------------------------- |
+| Database size                 | **10 GB** (Paid) / **500 MB** (Free)                                           | Use for global indexes, not bulk data     |
+| Databases / account           | **1 000 000** (Paid; 100 000 included, 1 TB total) / **10** (Free; 5 GB total) | Each app gets its own                     |
+| Queries per Worker invocation | **1 000** (Paid) / **50** (Free)                                               | Watch your query fan-out in fan-out reads |
 
 ## R2
 

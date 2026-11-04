@@ -1,14 +1,13 @@
 ---
 title: "@lunora/fingerprint"
-description: Zero-dependency error fingerprinting — one stable grouping hash that collapses noisy errors into Issues for Studio and the Cloud.
+description: Zero-dependency error fingerprinting — one stable grouping hash that collapses noisy errors into Issues for Studio.
 ---
 
 `@lunora/fingerprint` is Lunora's deterministic error-grouping core: it folds
 every occurrence of "the same" error onto one stable 16-character hash (an
 **Issue**), no matter where the error was observed. A live observability sink
 event and a request-log row persisted hours earlier compute the same hash, so
-the local Studio Issues panel and a Lunora Cloud incident describe the same
-object.
+the Studio Issues panel describes the same object.
 
 The core algorithm is vendored from Superlog Labs' `@superlog/fingerprint`
 (Apache-2.0, see the package `NOTICE`), with the Node-only crypto backend
@@ -90,8 +89,6 @@ errors carry no stack frames on the wire.
 - **`@lunora/do`** serves the `getIssues` admin RPC over that readout.
 - **Studio** renders the grouped result in the Issues panel: one row per
   hash, with occurrence counts, first/last seen, and the `code` badge.
-- **Lunora Cloud** computes the same hash over durable OTLP telemetry, so a
-  local Issue and a cloud incident share an identity.
 
 You normally don't install this package directly; it arrives as a dependency
 of `@lunora/observability`. Reach for it yourself only to group errors in

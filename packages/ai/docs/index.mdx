@@ -409,8 +409,8 @@ boundary — so the account-global-namespace hazard that Vectorize forces you to
 guard against does not exist here, rather than being filtered away.
 
 **Search is brute force by default.** Every vector in the namespace is read and scored in
-JS; there is no approximate nearest-neighbour (ANN) index by default, because SQLite has no vector type and `sqlite-vec` is
-not loadable inside workerd. That is linear in namespace size, so this suits
+JS; there is no approximate nearest-neighbour (ANN) index by default, because SQLite has no vector type and the optional
+`sqlite-vec` index (below) is available only on celld and `node:sqlite`. That is linear in namespace size, so this suits
 **many small per-tenant indexes** — the shape most sharded apps already have —
 and not one large shared corpus. A namespace past `maxScan` (default 50,000)
 throws a named error rather than letting a Worker get killed on CPU with nothing
@@ -429,7 +429,7 @@ namespace) in `<table>_ann`, backfilled from the table the first time, and an
 unfiltered query is a k-nearest-neighbour (KNN) lookup instead of a scan. A query with a `filter`
 still scans: `vec0` filters after choosing the `k` nearest, which would return
 a short page. Without the extension the first operation throws naming the
-missing `vec0` module. Workerd cannot load `sqlite-vec`, so this does not apply
+missing `vec0` module. Lunora loads `sqlite-vec` only on those two, so this does not apply
 on Cloudflare.
 
 Limits of the index:

@@ -13,7 +13,7 @@ tier modifier. This is the Zeroback shape, and the right answer for the first
 
 ## When to shard
 
-The per-DO ceiling is **10 GB of SQLite** and roughly 1 000 sustained req/s.
+The per-DO ceiling is **10 GB of SQLite** on Workers Paid (1 GB on the Free plan) and roughly 1 000 sustained req/s.
 When the `__root__` DO crosses 1 GB, the runtime emits a `console.warn` once
 per isolate so you can plan the migration before you hit the wall. The
 threshold (`1 073 741 824` bytes) is 10% of the per-DO ceiling, far enough
