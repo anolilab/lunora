@@ -44,7 +44,7 @@
  * never served once a new version answers. Nothing purges on deploy: the old
  * version's entries are simply never looked up again and age out on their own
  * `max-age`. Without the binding the key has no version segment and a deploy
- * keeps serving the old entries until they expire — see {@link deploymentIdOf}.
+ * keeps serving the old entries until they expire — see {@link workerVersionId}.
  *
  * - **Neither path can fail a request.** Every cache interaction — including
  * building the key, which reads request headers by policy-supplied name — is
@@ -57,10 +57,11 @@ import type { HttpCacheLike } from "@lunora/platform";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import type { RestCachePolicy } from "../../../shared/rest-surface";
 import { cacheSeconds, cacheVaryValue } from "../../../shared/rest-surface";
+import { workerVersionId } from "../../../shared/worker-version";
 import { effectiveRestScope } from "./rest-cache";
 
-/** Query parameter carrying the varying header values folded into a cache key. Stripped from procedure args by `rest-routes`, and re-set (never appended to) here, so a caller cannot smuggle a value into it either way. */
-const VARY_KEY_PARAM = "__lunora_vary";
+/** Query parameter carrying everything a cache key is scoped by beyond the URL: the deploy id and the varying header values. Stripped from procedure args by `rest-routes`, and re-set (never appended to) here, so a caller cannot smuggle a value into it either way. */
+const KEY_SCOPE_PARAM = "__lunora_key";
 
 /** Response header stamped on a cache hit, so the effect is observable in production rather than only inferable from latency. */
 const EDGE_CACHE_HEADER = "x-lunora-edge-cache";
@@ -95,31 +96,7 @@ const defaultHttpCache = (): HttpCacheLike | undefined => {
 };
 
 /**
- * The running Worker version's id, or `undefined` when the `version_metadata`
- * binding is not declared (most `lunora init` templates declare it).
- *
- * The `id`, never the `tag`: a tag is user-set, optional and may be reused
- * across uploads, and an unchanged tag would quietly let a new deploy read the
- * old one's entries.
- */
-const deploymentIdOf = (env: unknown): string | undefined => {
-    if (typeof env !== "object" || env === null) {
-        return undefined;
-    }
-
-    const metadata = (env as Record<string, unknown>)["CF_VERSION_METADATA"];
-
-    if (typeof metadata !== "object" || metadata === null) {
-        return undefined;
-    }
-
-    const { id } = metadata as Record<string, unknown>;
-
-    return typeof id === "string" && id !== "" ? id : undefined;
-};
-
-/**
- * The key segment carrying the deploy id inside {@link VARY_KEY_PARAM}. A `:` is
+ * The key segment carrying the deploy id inside {@link KEY_SCOPE_PARAM}. A `:` is
  * not a valid header-name character, so no policy `vary` name can produce an
  * entry that collides with it.
  */
@@ -152,6 +129,14 @@ const fencedBy = (response: Response, fenced: ReadonlyArray<string>): boolean =>
     return varyNames(advertised).every((name) => name !== "*" && fenced.includes(name));
 };
 
+/** One request's view of a route's edge cache: the key and the shareability decision are already made. */
+interface RestEdgeExchange {
+    /** The stored response for this request, or `undefined` on a miss. */
+    lookup: () => Promise<Response | undefined>;
+    /** Store `response` when it may be shared; returns the response the caller should return. */
+    store: (response: Response) => Response;
+}
+
 /**
  * A route's edge cache, or `undefined` when this route can never use one.
  *
@@ -160,10 +145,13 @@ const fencedBy = (response: Response, fenced: ReadonlyArray<string>): boolean =>
  * decided at construction rather than re-derived on every request.
  */
 interface RestEdgeCache {
-    /** A stored response for `request`, or `undefined` on a miss. `env` supplies the deploy id the key is scoped by. */
-    lookup: (request: Request, context?: ExecutionContextLike, env?: unknown) => Promise<Response | undefined>;
-    /** Store `response` when the exchange is shared-cacheable; returns the response the caller should return. */
-    store: (response: Response, request: Request, context?: ExecutionContextLike, env?: unknown) => Response;
+    /**
+     * This request's exchange with the cache, or `undefined` when it may not touch
+     * the shared cache at all. `env` is required, not optional: it supplies the
+     * deploy id the key is scoped by, and a caller that forgot it would silently
+     * serve one deploy's entries to the next.
+     */
+    forRequest: (request: Request, env: unknown, context?: ExecutionContextLike) => RestEdgeExchange | undefined;
 }
 
 /**
@@ -182,7 +170,6 @@ const restEdgeCacheFor = (policy: RestCachePolicy | undefined, edgeCache: HttpCa
         return undefined;
     }
 
-    const resolve = (): HttpCacheLike | undefined => edgeCache ?? defaultHttpCache();
     // The same list the emitted `Vary` is built from, so what fences the key and
     // what the response advertises are two views of one value.
     const fenced = varyNames(cacheVaryValue(policy) ?? "");
@@ -191,34 +178,33 @@ const restEdgeCacheFor = (policy: RestCachePolicy | undefined, edgeCache: HttpCa
      * The cache key for one exchange: the request URL plus the running deploy's
      * id and the values of every header the policy varies on.
      *
-     * The deploy id and header values are folded under a single reserved query parameter as
-     * `name=value` pairs joined by NUL — a byte that cannot appear in a header
-     * field-value, so no combination of values can be made to collide with a
-     * different one. Absent headers contribute an empty value rather than being
-     * skipped, otherwise `{a: "", b: "x"}` and `{a: "x", b: ""}` would key alike.
-     * Any caller-supplied copy of the parameter is deleted first: `set` replaces
-     * only the first occurrence, so a second one would otherwise ride into the
-     * key.
+     * The deploy id and header values are folded under a single reserved query
+     * parameter as `name=value` pairs joined by NUL — a byte that cannot appear in
+     * a header field-value, so no combination of values can be made to collide
+     * with a different one. Absent headers contribute an empty value rather than
+     * being skipped, otherwise `{a: "", b: "x"}` and `{a: "x", b: ""}` would key
+     * alike. Any caller-supplied copy of the parameter is deleted first: `set`
+     * replaces only the first occurrence, so a second one would otherwise ride
+     * into the key.
      */
     const keyFor = (request: Request, env: unknown): Request => {
         const url = new URL(request.url);
 
-        url.searchParams.delete(VARY_KEY_PARAM);
+        url.searchParams.delete(KEY_SCOPE_PARAM);
         // Procedure args are read by name, so `?a=1&b=2` and `?b=2&a=1` are the
         // same call and must share one entry. The sort is stable: a repeated name
         // keeps its values' relative order, which matters because the last one
         // is the arg (`argsFromQuery`), so `?a=1&a=2` and `?a=2&a=1` stay apart.
         url.searchParams.sort();
 
-        const deploymentId = deploymentIdOf(env);
-        const segments = fenced.map((name) => `${name}=${request.headers.get(name) ?? ""}`);
-
-        if (deploymentId !== undefined) {
-            segments.unshift(`${DEPLOY_KEY_SEGMENT}=${deploymentId}`);
-        }
+        const deploymentId = workerVersionId(env);
+        const segments = [
+            ...(deploymentId === undefined ? [] : [`${DEPLOY_KEY_SEGMENT}=${deploymentId}`]),
+            ...fenced.map((name) => `${name}=${request.headers.get(name) ?? ""}`),
+        ];
 
         if (segments.length > 0) {
-            url.searchParams.set(VARY_KEY_PARAM, segments.join("\0"));
+            url.searchParams.set(KEY_SCOPE_PARAM, segments.join("\0"));
         }
 
         // A cache key is a lookup token, never a request that gets sent: method and
@@ -227,93 +213,98 @@ const restEdgeCacheFor = (policy: RestCachePolicy | undefined, edgeCache: HttpCa
         return new Request(url.toString(), { method: "GET" });
     };
 
-    /** Whether THIS request may be served from, or written to, the shared cache. */
-    const shareable = (request: Request, context?: ExecutionContextLike): boolean =>
-        request.method === "GET" && effectiveRestScope(policy, request, context) === "public";
-
     return {
-        lookup: async (request, context, env) => {
-            const cache = resolve();
+        forRequest: (request, env, context) => {
+            const cache = edgeCache ?? defaultHttpCache();
 
-            if (cache === undefined || !shareable(request, context)) {
+            // Only a GET whose effective scope is still `public` may be served from,
+            // or written to, the shared cache.
+            if (cache === undefined || request.method !== "GET" || effectiveRestScope(policy, request, context) !== "public") {
                 return undefined;
             }
 
-            let hit: Response | undefined;
+            let key: Request;
 
             try {
-                hit = await cache.match(keyFor(request, env));
+                key = keyFor(request, env);
             } catch {
+                // Building the key reads request headers by policy-supplied name, and a
+                // malformed `vary` throws — that is a miss, never a 500.
                 return undefined;
             }
 
-            if (hit === undefined) {
-                return undefined;
-            }
+            return {
+                lookup: async () => {
+                    let hit: Response | undefined;
 
-            // The stored response's headers are immutable, and mutating the cached
-            // entry in place would be wrong anyway — stamp a copy.
-            const served = new Response(hit.body, hit);
+                    try {
+                        hit = await cache.match(key);
+                    } catch {
+                        return undefined;
+                    }
 
-            served.headers.set(EDGE_CACHE_HEADER, "hit");
+                    if (hit === undefined) {
+                        return undefined;
+                    }
 
-            return served;
-        },
+                    // The stored response's headers are immutable, and mutating the cached
+                    // entry in place would be wrong anyway — stamp a copy.
+                    const served = new Response(hit.body, hit);
 
-        store: (response, request, context, env) => {
-            const cache = resolve();
+                    served.headers.set(EDGE_CACHE_HEADER, "hit");
 
-            if (cache === undefined || !shareable(request, context)) {
-                return response;
-            }
+                    return served;
+                },
 
-            // `put` rejects a 206 and a `Set-Cookie`-bearing response, and neither is
-            // something to store anyway: a partial body is not the resource, and a
-            // response minting a cookie is caller-specific whatever its declared scope.
-            // An x402 settlement receipt is the same in kind — a paid exchange is
-            // already unshareable via the payment credential header, and this is
-            // another lock on a money path. `payment-response` is the x402 v2 receipt
-            // name; `x-payment-response` is v1's.
-            if (
-                response.status !== 200 ||
-                response.headers.has("set-cookie") ||
-                response.headers.has("payment-response") ||
-                response.headers.has("x-payment-response")
-            ) {
-                return response;
-            }
+                store: (response) => {
+                    // `put` rejects a 206 and a `Set-Cookie`-bearing response, and neither is
+                    // something to store anyway: a partial body is not the resource, and a
+                    // response minting a cookie is caller-specific whatever its declared scope.
+                    // An x402 settlement receipt is the same in kind — a paid exchange is
+                    // already unshareable via the payment credential header, and this is
+                    // another lock on a money path. `payment-response` is the x402 v2 receipt
+                    // name; `x-payment-response` is v1's.
+                    if (
+                        response.status !== 200 ||
+                        response.headers.has("set-cookie") ||
+                        response.headers.has("payment-response") ||
+                        response.headers.has("x-payment-response")
+                    ) {
+                        return response;
+                    }
 
-            if (!fencedBy(response, fenced)) {
-                return response;
-            }
+                    if (!fencedBy(response, fenced)) {
+                        return response;
+                    }
 
-            try {
-                // Rebuilt rather than `clone()`d alone: the copy needs mutable headers
-                // so the per-caller ones can be dropped before it is shared.
-                const stored = new Response(response.clone().body, response);
+                    try {
+                        // Rebuilt rather than `clone()`d alone: the copy needs mutable headers
+                        // so the per-caller ones can be dropped before it is shared.
+                        const stored = new Response(response.clone().body, response);
 
-                for (const name of PER_CALLER_HEADERS) {
-                    stored.headers.delete(name);
-                }
+                        for (const name of PER_CALLER_HEADERS) {
+                            stored.headers.delete(name);
+                        }
 
-                const write = Promise.resolve(cache.put(keyFor(request, env), stored)).catch(() => {
-                    // A cache write is an optimization, and a host that refuses one must
-                    // not turn a served response into an error.
-                });
+                        const write = Promise.resolve(cache.put(key, stored)).catch(() => {
+                            // A cache write is an optimization, and a host that refuses one must
+                            // not turn a served response into an error.
+                        });
 
-                if (context?.waitUntil) {
-                    context.waitUntil(write);
-                }
-            } catch {
-                // Same reasoning, for the synchronous half: building the key reads
-                // request headers by policy-supplied name (a malformed `vary` throws),
-                // and a host's `put` may throw rather than reject.
-            }
+                        if (context?.waitUntil) {
+                            context.waitUntil(write);
+                        }
+                    } catch {
+                        // Same reasoning, for the synchronous half: a host's `put` may throw
+                        // rather than reject.
+                    }
 
-            return response;
+                    return response;
+                },
+            };
         },
     };
 };
 
-export type { RestEdgeCache };
-export { defaultHttpCache, EDGE_CACHE_HEADER, restEdgeCacheFor, VARY_KEY_PARAM };
+export type { RestEdgeCache, RestEdgeExchange };
+export { defaultHttpCache, EDGE_CACHE_HEADER, KEY_SCOPE_PARAM, restEdgeCacheFor };

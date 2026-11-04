@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
-import { defaultHttpCache, VARY_KEY_PARAM } from "../src/rest-edge-cache";
+import { defaultHttpCache, KEY_SCOPE_PARAM } from "../src/rest-edge-cache";
 import { argsFromQuery, createRestRateLimit } from "../src/rest-routes";
 import { fakeCache } from "./helpers/edge-cache";
 
@@ -328,13 +328,13 @@ describe("createWorker — REST edge cache", () => {
         const { context, settled } = collectingContext();
         const worker = createWorker({ functions: cachedFunctions, restEdgeCache: cache, shardDO: shard.namespace });
 
-        await worker.fetch(new Request(`https://app.example/_lunora/rest/messages/list?${VARY_KEY_PARAM}=evil`), {}, context);
+        await worker.fetch(new Request(`https://app.example/_lunora/rest/messages/list?${KEY_SCOPE_PARAM}=evil`), {}, context);
         await settled();
 
         const forwarded = (await shard.calls[0]?.request.clone().json()) as { args?: Record<string, unknown> };
 
         // It is reserved, so it is not an argument...
-        expect(forwarded.args ?? {}).not.toHaveProperty(VARY_KEY_PARAM);
+        expect(forwarded.args ?? {}).not.toHaveProperty(KEY_SCOPE_PARAM);
 
         // ...and it keyed where the clean request keys, so a hit answers that one.
         const clean = await worker.fetch(listRequest(), {}, context);
