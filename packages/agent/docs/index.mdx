@@ -1486,6 +1486,402 @@ non-streaming turn with that reason fails too. Every other finish reason, `other
 included, completes the turn. A retried turn re-streams its deltas from the start, so
 a live consumer must reset accumulated text per turn (see `AgentTokenSink`).
 
+## API reference
+
+Each entry gives the signature as your code writes it. Where a section above
+already explains an export in depth, the entry links to it.
+
+### Declaring agents
+
+#### `defineAgent(config)`
+
+**Type:** `(config: AgentConfig) => AgentDefinition`
+
+Declares a durable agent. Codegen compiles the definition onto a Workflow and
+registers the `agents:*` runtime functions, so you do not export them yourself.
+The call throws at declaration time when `model` is missing. See
+[details](#declaring-an-agent).
+
+#### `AgentConfig`
+
+**Type:** `AgentConfig`
+
+The options object for `defineAgent`. The only required key is `model`. Other
+keys you set often are `instructions`, `tools`, `skills`, `memory`, `maxTurns`,
+`output`, `onConcurrentRun`, `publicRun`, `approvalTimeout` and `voice`. Set
+`publicRun` only when an RPC client may start the agent, because it is `false`
+by default.
+
+#### `defineAgentTool(config)`
+
+**Type:** `<Input, Output>(config: AgentToolConfig<Input, Output>) => AgentToolDefinition<Input, Output>`
+
+Declares one tool inline in the `tools` map. The `description` must be a
+non-empty string, since the model chooses the tool from it. The `execute`
+function runs inside the loop's durable step, so a completed call is not re-run
+when the workflow replays.
+
+#### `AgentToolContext`
+
+**Type:** `AgentToolContext`
+
+The second argument to a tool's `execute`. It carries `env`, `run` for calling
+Lunora functions, `setState` and `getState` for the thread's synced state,
+`reportProgress`, `threadKey`, `toolCallId`, `owner` and `shardKey`.
+
+#### `defineSkill(config)`
+
+**Type:** `(config: SkillConfig) => SkillDefinition`
+
+Declares a reusable skill from a `name`, plus optional `instructions`, `tools`
+and `knowledge` (an `AgentMemoryOptions`). Pass the result in
+`defineAgent({ skills })`. The name must be an identifier, and `"default"` is
+reserved. See [Skills](#skills).
+
+#### `skillFromMarkdown(markdown, extras?)`
+
+**Type:** `(markdown: string, extras?: SkillMarkdownExtras) => SkillDefinition`
+
+Imported from `@lunora/agent/skill-markdown`. Builds a skill from a markdown
+string whose frontmatter sets the `name`. The `extras` argument carries `tools`
+and `knowledge`. Import the file yourself (for example with `?raw` under Vite),
+because a Worker has no filesystem to read it from at runtime. See
+[details](#authoring-a-skill-as-markdown).
+
+### Tools
+
+#### `functionTool(reference, options)`
+
+**Type:** `<Input, Output>(reference: AgentFunctionReference | string, options: FunctionToolOptions<Input>) => AgentToolDefinition<Input, Output>`
+
+Exposes a query, mutation or action as an agent tool. The `reference` is a typed
+`api.*` reference or a `"module:name"` string. The model's input becomes the
+function's arguments, so `inputSchema` should mirror the function's validator.
+See [details](#tools-from-anywhere).
+
+#### `agentAsTool(options)`
+
+**Type:** `(options: AgentAsToolOptions) => AgentToolDefinition<AgentSubToolInput, string>`
+
+Adapts a declared agent into a tool, so a supervisor agent can delegate to it.
+Each call starts a child run, waits for it to finish and returns its final
+answer. The `name` option is the child's export name, and `description` tells
+the parent model when to delegate.
+
+**Default:** `maxPolls` is 600 and `pollIntervalMs` is 500.
+
+See [details](#tools-from-anywhere).
+
+#### `mcpTools(options)`
+
+**Type:** `(options: McpToolsOptions) => Promise<Record<string, AgentToolDefinition<Record<string, unknown>>>>`
+
+Connects to an MCP server, lists its tools and returns one tool per entry.
+Spread the result into `tools`. Pass a `url`, or inject a connected `client`.
+The `only` and `prefix` options filter and namespace the tools. Every adapted
+tool runs without approval unless you set `needsApproval`. See
+[details](#tools-from-anywhere).
+
+#### `webSearchTool(options?)`
+
+**Type:** `(options?: WebSearchToolOptions) => AgentToolDefinition<WebSearchToolInput, AiWebSearchItem[] | string>`
+
+A batteries-included tool over the Cloudflare Web Search API. It bills the
+`byokAlias` provider key when one is set, and otherwise uses the `default`
+alias. The `provider`, `gatewayId` and `description` options set the search
+backend and the tool's description.
+
+**Default:** `limit` is 5.
+
+See [details](#web-search-websearchtool).
+
+#### `codeTool(tools, options?)`
+
+**Type:** `(tools: Record<string, AnyAgentTool>, options?: CodeToolOptions) => AgentToolDefinition<ToolScript, ToolScriptResult>`
+
+Gives the model one tool that runs a script which composes the given tools in
+a single turn. The script can feed one call's output into the next. Tools with
+a `needsApproval` gate are rejected at construction, so gate the whole script
+with `options.needsApproval` instead.
+
+**Default:** `maxSteps` is 16.
+
+See [details](#code-mode-codetool).
+
+#### `jsCodeTool(options?)`
+
+**Type:** `(options?: JsCodeToolOptions) => AgentToolDefinition<JsCodeToolInput, JsCodeToolResult>`
+
+Runs model-written JavaScript in a Worker Loader isolate. The script has no
+network access, no bindings and no tools, so use it for computation only. A
+script failure comes back as a result with `error` set, not as a thrown error.
+Importing the tool makes codegen provision the `LOADER` binding.
+
+**Default:** `cpuMs` is 1000.
+
+See [details](#sandboxed-javascript-jscodetool).
+
+#### `requestSecretTool(options)`
+
+**Type:** `(options: { consumer: string; description: string }) => AgentToolDefinition<SecretRequestInput, { secretRef: string }>`
+
+Asks the human for a secret, such as an API key, and gives the model only an
+opaque `secretRef`. The run pauses until the value is supplied or declined.
+The `consumer` option names the one tool allowed to read the value. See
+[details](#human-supplied-secrets-requestsecrettool).
+
+#### `withSecret(context, secretRef, use)`
+
+**Type:** `<Result>(context: AgentToolContext, secretRef: string, use: (secret: string) => Promise<Result> | Result) => Promise<Result>`
+
+Reads a supplied secret inside the `execute` of the consumer tool and passes it
+to `use`. Only the value `use` returns leaves the callback. The call throws
+`SecretUnavailableError` when the request is unknown, unsupplied, declared for
+another consumer or owned by another thread. See
+[details](#human-supplied-secrets-requestsecrettool).
+
+#### `wrapUntrusted(value, headers?)`
+
+**Type:** `(value: string, headers?: Headers | Readonly<Record<string, string>>) => string`
+
+Wraps untrusted text, such as an email body, for inclusion in a prompt. The
+text sits inside a tag with a random id, and angle brackets in it are escaped,
+so the payload cannot close the block. Headers, when given, render above the
+body with credential-like values redacted. See [Inbound email](#inbound-email).
+
+### Sandbox tools
+
+Imported from `@lunora/agent/sandbox`. See the
+[sandbox section](#sandbox-tools-batteries-included-browser--containers--filesystem)
+for the approval defaults and the bindings each tool needs.
+
+#### `fsTool(bucket, options?)`
+
+**Type:** `(bucket: string, options?: FsToolOptions) => AgentToolDefinition<FsToolInput>`
+
+Exposes an R2-backed virtual filesystem under the pinned `root`. The model
+chooses the operation (`ls`, `read`, `write`, `rm` or `stat`). The `bucket`
+argument is the name of the `r2_bucket` binding in `wrangler.jsonc`. Writes and
+deletes pause for approval by default.
+
+#### `containerTool(name, options?)`
+
+**Type:** `(name: string, options?: ContainerToolOptions) => AgentToolDefinition<ContainerToolInput, string>`
+
+Gives the model `fetch` and `exec` operations against a declared container. The
+`name` is the `ctx.containers` key. Each thread uses one container instance, so
+a multi-step session shares a filesystem.
+
+#### `containerFsTool(name, options?)`
+
+**Type:** `(name: string, options?: ContainerFsToolOptions) => AgentToolDefinition<FsToolInput>`
+
+File operations on a container's own disk, addressed to the same per-thread
+instance that `containerTool` uses. A file the model writes here is the file its
+next `exec` reads, which `fsTool` does not guarantee.
+
+**Default:** `root` is `"/workspace"`.
+
+#### `browserTool(options?)`
+
+**Type:** `(options?: BrowserToolOptions) => AgentToolDefinition<BrowserToolInput, BrowserRenderResult | string>`
+
+Drives Cloudflare Browser Rendering with `content`, `scrape`, `screenshot` and
+`pdf` operations. The `screenshot` and `pdf` operations need a `bucket` and
+return the stored key, not the bytes. The model chooses any URL, so gate calls
+with `needsApproval` when the agent can reach internal endpoints.
+
+### Inbound triggers
+
+#### `dispatchAgentEmail(targets)`
+
+**Type:** `(targets: ReadonlyArray<AgentEmailTarget>) => InboundAgentEmailHandler`
+
+Imported from `@lunora/agent/inbound`. Builds the worker `email()` handler. Each
+target is `{ agent, className }`. The handler starts a run for the first agent
+whose `onEmail` mapper claims the message. See [details](#inbound-email).
+
+#### `dispatchAgentChannel(targets)`
+
+**Type:** `(targets: ReadonlyArray<AgentChannelTarget>) => InboundChannelHandler`
+
+Imported from `@lunora/agent/channels`. Builds the webhook handler for Slack,
+GitHub and Discord. Each target verifies its own signing secret before its
+mapper sees the event. The handler returns `401` when no target verifies and
+`400` for an unrecognized webhook. See
+[details](#inbound-channels-slack--github--discord).
+
+#### `verifySlack(options)`
+
+**Type:** `(options: { body: string; signature: string | undefined; signingSecret: string; timestamp: string | undefined; now?: number; tolerance?: number }) => Promise<boolean>`
+
+Checks a Slack request signature over the raw body and rejects a stale
+timestamp. The `now` option exists for tests.
+
+**Default:** `tolerance` is 300 seconds.
+
+#### `verifyGithub(options)`
+
+**Type:** `(options: { body: string; secret: string; signature: string | undefined }) => Promise<boolean>`
+
+Checks the `sha256=` HMAC of the raw request body against the webhook secret.
+
+#### `verifyDiscord(options)`
+
+**Type:** `(options: { body: string; publicKey: string; signature: string | undefined; timestamp: string | undefined; now?: number; tolerance?: number }) => Promise<boolean>`
+
+Checks a Discord interaction signature, which is Ed25519 over the timestamp and
+the body. The `publicKey` is the application's public key from the Discord
+developer portal.
+
+**Default:** `tolerance` is 300 seconds.
+
+### Telemetry
+
+Imported from `@lunora/agent/telemetry`. Each factory returns an AI SDK
+`Telemetry` object for the `integrations` array. See
+[details](#telemetry-integrations).
+
+#### `consoleTelemetry(options?)`
+
+**Type:** `(options?: ConsoleTelemetryOptions) => Telemetry`
+
+A zero-dependency structured tracer that writes lifecycle events to a console
+logger. It records structural metadata only, unless `recordInputs` or
+`recordOutputs` is set.
+
+**Default:** `recordInputs` and `recordOutputs` are `false`.
+
+#### `sentryTelemetry(options)`
+
+**Type:** `(options: SentryTelemetryOptions) => Telemetry`
+
+Wraps model calls and tool executions in Sentry spans, and routes errors to
+`captureException`. Pass your own Sentry namespace as `Sentry`, because the
+package does not import the SDK.
+
+**Default:** `recordInputs` and `recordOutputs` are `false`.
+
+#### `braintrustTelemetry(options)`
+
+**Type:** `(options: BraintrustTelemetryOptions) => Telemetry`
+
+Logs model calls and tool executions to Braintrust as traced spans, with token
+usage as metrics. Pass your initialized Braintrust logger as `logger`.
+
+**Default:** `recordInputs` and `recordOutputs` are `false`.
+
+#### `otlpTelemetry(options)`
+
+**Type:** `(options: OtlpTelemetryOptions) => Telemetry`
+
+Sends one `gen_ai.*` span per model call and per tool execution to an
+OTLP-over-HTTP collector. The `endpoint` is required. The optional `token` and
+`headers` authenticate the export.
+
+**Default:** `recordInputs` and `recordOutputs` are `false`.
+
+#### `combineTelemetry(...integrations)`
+
+**Type:** `(...integrations: Telemetry[]) => Telemetry`
+
+Fans every lifecycle callback out to several integrations, so one agent can
+report to a console, Sentry and OTLP at once.
+
+### Runtime handles and results
+
+#### `AgentHandle`
+
+**Type:** `AgentHandle`
+
+The `ctx.agents.<name>` producer, available in mutations and actions. Its `run`
+method starts a durable run and returns an `AgentRunHandle`. The `status`,
+`sendEvent` and `cancel` methods act on a run by its instance id. The
+`publicRun` flag reports whether RPC clients may start the agent. See
+[Running + observing](#running--observing).
+
+#### `AgentRunHandle`
+
+**Type:** `{ id: string }`
+
+The handle `run` returns. The `id` is the workflow instance id, which you pass
+to `cancel`, `status` or `sendEvent`.
+
+#### `AgentRunResult`
+
+**Type:** `AgentRunResult`
+
+The output of a completed run. The `stopped` field is `"final"`,
+`"maxTurns"` or `"stopCondition"`. The `text` field holds the final assistant
+answer and is absent when the run hit `maxTurns`. The `output` field is set when
+`output` is configured. The `turns` and `usage` fields report the work done.
+
+#### `AgentThreadStatus`
+
+**Type:** `"awaiting_input" | "cancelled" | "error" | "idle" | "running"`
+
+The value of a thread's `status`, which `agents:agentThread` returns. A thread
+in `"awaiting_input"` is paused for a tool approval.
+
+### Hooks
+
+#### `AgentPrepareStep`
+
+**Type:** `(input: AgentPrepareStepInput) => AgentPrepareStepResult | Promise<AgentPrepareStepResult | undefined> | undefined`
+
+Set as `prepareStep`. It runs before each turn and can change the request for
+that turn, such as the model or the tool choice. See [Loop control](#loop-control).
+
+#### `AgentOnStepFinish`
+
+**Type:** `(info: AgentStepFinishInfo) => Promise<void> | void`
+
+Set as `onStepFinish`. It runs after each turn, for observability or side
+effects. See [Loop control](#loop-control).
+
+#### `AgentOnReply`
+
+**Type:** `(info: AgentReplyInfo) => Promise<void> | void`
+
+Set as `onReply`. It receives the final answer when a run started from a
+channel with a `replyRef`, which is how an inbound-triggered agent answers where
+it was asked. See [Inbound channels](#inbound-channels-slack--github--discord).
+
+#### `AgentTokenSink`
+
+**Type:** `(event: AgentLiveEvent) => void`
+
+Receives progress and token events from a live run. The server-side token path
+is not yet connected to a live transport, so `streamingText` stays empty and
+messages arrive per turn. See [Token streaming](#client-hooks).
+
+### Memory options
+
+#### `AgentMemoryOptions`
+
+**Type:** `AgentMemoryOptions`
+
+The shape of an agent's `memory` key, and of a skill's `knowledge`. The `source`
+names the retrieval action and is required unless `kind` is `"graph"` or
+`"episodic"`. The `topK` and `snippetChars` options bound the retrieved context.
+The `kind` option selects the tier: `"semantic"` (the default), `"graph"` or
+`"episodic"`. The `mode` option selects `"agentic"` or `"inject"` retrieval.
+The `graph` and `episodic` objects bound their own tiers. See
+[Memory (RAG)](#memory-rag), [agentic retrieval](#agentic-retrieval-mode-agentic),
+[graph memory](#graph-memory-kind-graph) and
+[episodic memory](#episodic-memory-kind-episodic).
+
+### Errors
+
+#### `SecretUnavailableError`
+
+**Type:** `class SecretUnavailableError extends Error`
+
+Thrown by `withSecret` when the value is no longer available: it expired, a
+previous call already used it, it was never supplied, or it was declared for
+another consumer or thread. Its `code` is `"SECRET_UNAVAILABLE"`. Catch it to
+See [details](#human-supplied-secrets-requestsecrettool).
+
 ## See also
 
 - [@lunora/ai](/docs/packages/ai): the model surface (`ctx.ai`) + `defineRag`

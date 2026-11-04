@@ -571,3 +571,493 @@ stalling the shard**: the tap is a reader, so writes proceed. `POST` body:
 `cursors`, `failures`, and `hasMore` (poll again while `true`). Managed
 Snowflake / BigQuery / Airbyte / Fivetran connectors are a Lunora Cloud concern;
 the framework ships the tap.
+
+## API reference
+
+Signatures below come from the public API snapshot. Entries that the sections
+above already explain link to them.
+
+### Worker entry points
+
+#### `createWorker(options)`
+
+**Type:** `(options: WorkerOptions) => LunoraWorker`
+
+Builds the Worker's `fetch`, `scheduled` and `serverQuery` handlers from a
+single options bag. [details](#createworkeroptions)
+
+#### `composeWorker(options)`
+
+**Type:** `(options: WorkerOptions) => LunoraWorker`
+
+Same as `createWorker`, with the same options and return value. Use it when a
+meta-framework SSR handler is passed as `httpRouter`. [details](#composeworker--withframeworkworker)
+
+#### `withFrameworkWorker(host, options)`
+
+**Type:** `(host: FrameworkHostHandler, options: FrameworkWorkerOptionsInput) => LunoraWorker`
+
+Composes a framework's own Cloudflare handler with Lunora into one worker. The
+`options` argument can be an object or an `(env) => options` factory.
+[details](#composeworker--withframeworkworker)
+
+#### `createLunoraHandler(options?)`
+
+**Type:** `(options?: LunoraHandlerOptions) => (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<Response>`
+
+Returns a handler that serves Lunora's `/_lunora/*` realtime plane. Mount it
+under that path in a web-standard framework's router. [details](#createlunorahandleroptions)
+
+#### `defineRpcEnvelope(envelope)`
+
+**Type:** `(envelope: RpcEnvelope) => RpcEnvelope`
+
+Returns the envelope unchanged, typed so a custom transport builds the same
+`{ functionPath, args?, shardKey?, fanOut? }` shape `@lunora/client` sends.
+[details](#definerpcenvelope)
+
+#### `LunoraWorker`
+
+**Type:** `interface LunoraWorker { fetch; scheduled; serverQuery; email?; queue? }`
+
+The object `createWorker` returns. `fetch` and `scheduled` are the Cloudflare
+module handlers. `serverQuery` dispatches a query or mutation in process, with
+the same identity and RLS semantics as the HTTP path.
+
+#### `resolveLunoraOptions(options, env)`
+
+**Type:** `(options: LunoraHandlerOptions, env: unknown) => FrameworkWorkerOptions`
+
+Resolves a `LunoraHandlerOptions` value, either a plain object or an
+`(env) => options` factory, into the options `createWorker` takes. Adapters
+call it when they need the resolved options before building the worker.
+
+#### `WorkerOptions`
+
+**Type:** `interface WorkerOptions`
+
+The options bag for `createWorker`, `composeWorker` and `withFrameworkWorker`.
+Only `shardDO` is required. [details](#rpcenvelope--route--workeroptions)
+
+### Sharding and registries
+
+#### `resolveShard(namespace, shardKey)`
+
+**Type:** `(namespace: ShardNamespaceInput, shardKey: string, locationHint?: RegionHint) => ResolvedShard`
+
+Returns the stub for one shard key. It uses `namespace.getByName` when the
+namespace has it, and falls back to `idFromName` and `get` otherwise.
+[details](#resolveshardnamespace-shardkey)
+
+#### `createShardClient(namespace, options?)`
+
+**Type:** `(namespace: ShardNamespaceLike, options?: ShardClientOptions) => ShardClient`
+
+Creates a typed server-side caller over a `ShardDO` binding. Call `.as(identity)`
+or `.asSystem()` to choose the caller identity, and `.forShard(key)` to target a
+specific shard.
+
+#### `createQueryCoordinator(options)`
+
+**Type:** `(options: QueryCoordinatorOptions) => QueryCoordinator`
+
+Fans a request out across every shard the registry lists for a table, and
+runs the export, import, migration and rank orchestrations. The coordinator
+runs at most `maxConcurrency` shards at once. Each shard gets `perShardTimeoutMs`.
+
+**Default:** `maxConcurrency` is `16`, `perShardTimeoutMs` is `5000`.
+
+#### `createStaticShardRegistry(table_to_keys)`
+
+**Type:** `(table_to_keys: Readonly<Record<string, ReadonlyArray<string>>>) => ShardRegistry`
+
+Builds a registry from a fixed map of table names to shard keys. Use it in tests
+and in small deployments whose shard keys are known up front.
+
+#### `createDynamicShardRegistry(options)`
+
+**Type:** `(options: DynamicShardRegistryOptions) => DynamicShardRegistry`
+
+Builds a registry that reads the shard list from a registry Durable Object or a
+service binding, and caches the result per table. The cache is invalidated when
+the coordinator releases shards.
+
+**Default:** `cacheTtlMs` is `30000`.
+
+#### `createCrossShardRelationCapabilities(options)`
+
+**Type:** `(options: CrossShardRelationOptions) => CrossShardRelationCapabilities`
+
+Returns the `crossShardReader` and `crossShardCounter` pair for one request.
+Pass the pair to `createD1CtxDb` so reverse-relation reads reach every shard.
+If one shard fails, the read throws rather than return a partial result.
+
+#### `applyJurisdiction(namespace, jurisdiction?)`
+
+**Type:** `(namespace: ShardNamespaceLike, jurisdiction?: DurableObjectJurisdiction) => ShardNamespaceLike`
+
+Returns a namespace pinned to a data-residency jurisdiction, or the namespace
+unchanged when none is set. It throws when a jurisdiction is requested but the
+binding cannot pin one, so data does not route outside the requested boundary.
+
+#### `DurableObjectJurisdiction`
+
+**Type:** `type DurableObjectJurisdiction = "eu" | "fedramp" | "us"`
+
+The residency values Cloudflare accepts for a Durable Object namespace.
+
+### REST and HTTP edge
+
+#### `createRestRateLimit(limiter, options)`
+
+**Type:** `(limiter: RateLimiterLike, options: { name: string; key?: (request: Request, functionPath: string) => string | undefined; trustedClientIpHeader?: string }) => RestRateLimit`
+
+Wraps a rate limiter as the `restRateLimit` gate for public REST routes. A rate
+rejection returns `429` with `Retry-After`, and a deny-list hit returns `403`.
+Off Cloudflare, pass `key` or `trustedClientIpHeader`, because the gate refuses
+requests with no caller key. [details](#opt-in-public-rest-surface)
+
+#### `applyRestCache(response, policy, request, context?)`
+
+**Type:** `(response: Response, policy: RestCachePolicy | undefined, request: Request, context?: ExecutionContextLike) => Response`
+
+Applies the declared cache headers to a REST response. It returns the original
+response when the exchange is not cacheable, and a rebuilt copy otherwise,
+because a shard response has immutable headers.
+
+#### `resolveSecurity(security, env?)`
+
+**Type:** `(security: SecurityOptions | undefined, env?: Record<string, unknown>) => ResolvedSecurity`
+
+Normalizes the `security` option into the form the request path applies. It
+throws at construction when the configuration is invalid, for example wildcard
+CORS with credentials. Values in code override the matching `LUNORA_*` variable
+in `env`.
+
+#### `SecurityOptions`
+
+**Type:** `interface SecurityOptions { cors?: CorsOptions | false; csrf?: boolean | CsrfOptions; headers?: boolean | SecurityHeadersOptions }`
+
+The `security` option of `createWorker`. Each layer can be turned off, set to
+`true` for defaults, or configured with its own options object.
+
+#### `CorsOptions`
+
+**Type:** `interface CorsOptions { allowedOrigins: string[] | ((origin: string) => boolean); allowCredentials?: boolean; allowedHeaders?: string[]; allowedMethods?: string[]; maxAge?: number }`
+
+Controls which origins can call the worker from a browser. `allowedOrigins` is
+required. Wildcard origins cannot be combined with `allowCredentials`.
+
+#### `CsrfOptions`
+
+**Type:** `interface CsrfOptions { allowLoopback?: boolean; trustedOrigins?: string[] }`
+
+Configures the CSRF check on state-changing requests. Add origins to
+`trustedOrigins` for other frontends that call the worker. `allowLoopback`
+defaults to `true`, which accepts loopback origins.
+
+### Identity
+
+#### `composeIdentityResolvers(resolvers, options?)`
+
+**Type:** `(resolvers: ReadonlyArray<IdentityResolver>, options?: ComposeIdentityResolversOptions) => IdentityResolver`
+
+Combines several identity resolvers into one. The first resolver that returns an
+identity wins. A throwing resolver fails the request by default, so a broken
+verifier cannot fall through to a weaker one. Set `onError` to `"skip"` only when
+a failure means "not my scheme".
+
+#### `routeIdentityResolvers(routes)`
+
+**Type:** `(routes: Record<string, IdentityResolver>) => IdentityResolver`
+
+Picks a resolver by the request path. The longest matching prefix wins, and the
+`"*"` key is the fallback.
+
+#### `memoizeIdentity(resolver, options?)`
+
+**Type:** `(resolver: IdentityResolver, options?: MemoizeIdentityOptions) => IdentityResolver`
+
+Caches a resolver's result across requests, keyed on the credential, for
+`ttlMs`. Use it when verification is expensive and a short revocation delay is
+acceptable. Anonymous requests are never cached. If the resolver reads any
+attribute besides the `Cookie` and `Authorization` headers, pass `cacheKey`.
+Otherwise the cache can serve one principal's identity to another.
+
+#### `memoizeIdentityPerRequest(resolver)`
+
+**Type:** `(resolver: IdentityResolver) => IdentityResolver`
+
+Reuses one resolver result for the rest of a single request. Use it when several
+parts of the same request ask for the identity.
+
+#### `IdentityResolver`
+
+**Type:** `type IdentityResolver = (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null`
+
+A function that maps a request to an identity, or to `null` for an anonymous
+caller. It is the `resolveIdentity` option of `createWorker`.
+
+#### `MemoizeIdentityOptions`
+
+**Type:** `interface MemoizeIdentityOptions { cacheKey?: (request: Request) => string | undefined; maxEntries?: number; ttlMs?: number }`
+
+Tuning for `memoizeIdentity`. `ttlMs` sets how long a result stays valid.
+`cacheKey` replaces the default credential key, and `maxEntries` caps the cache size.
+
+### Health
+
+#### `durableObjectProbe(name, namespace, shardKey)`
+
+**Type:** `(name: string, namespace: ShardNamespaceLike, shardKey: string) => HealthProbe`
+
+A critical probe that reports healthy when the shard Durable Object answers any
+request. It never reads the response body. [details](#health--readiness-probe)
+
+#### `d1Probe(name, database)`
+
+**Type:** `(name: string, database: { prepare: (sql: string) => { first: () => Promise<unknown> } }) => HealthProbe`
+
+A critical probe that runs `SELECT 1` on a D1 binding. The binding is typed
+structurally, so the runtime does not depend on the Workers types.
+[details](#health--readiness-probe)
+
+#### `presenceProbe(name, bound)`
+
+**Type:** `(name: string, bound: boolean) => HealthProbe`
+
+A probe that checks only that a binding is configured. It makes no remote call,
+so it costs nothing. It is non-critical by default, so a missing binding
+degrades the status and does not return `503`.
+
+#### `HealthProbe`
+
+**Type:** `interface HealthProbe { name: string; check: () => Promise<HealthProbeResult> | HealthProbeResult; critical?: boolean; kind?: HealthProbeKind }`
+
+A named check for the `/_lunora/health` routes. Add a custom probe through the
+`health.probes` option of `createWorker`.
+
+#### `HealthOptions`
+
+**Type:** `interface HealthOptions { appName?: string; appVersion?: string; auth?: "admin" | "public"; cacheTtlMs?: number; disableBindingProbes?: boolean; probes?: ReadonlyArray<HealthProbe> }`
+
+The `health` option of `createWorker`. `auth` controls whether per-check
+messages are included, and `probes` adds your own checks.
+
+### Errors
+
+#### `LunoraError`
+
+**Type:** `class LunoraError`
+
+The transport-level error for HTTP routes, middleware and host adapters. Its
+message comes first, and `code` and `status` are options. Do not throw it from a
+query, mutation or action. [details](#lunoraerror--toerrorresponse--lunoraerrorbody)
+
+#### `toErrorResponse(error)`
+
+**Type:** `(error: unknown) => Response`
+
+Converts any thrown value into a JSON error response. An internal error keeps its
+status, but its message is replaced with a generic one, so internal details do
+not leak. [details](#lunoraerror--toerrorresponse--lunoraerrorbody)
+
+#### `LunoraErrorBody`
+
+**Type:** `interface LunoraErrorBody { error: ErrorBody }`
+
+The JSON body that `toErrorResponse` writes. [details](#lunoraerror--toerrorresponse--lunoraerrorbody)
+
+### Observability sinks
+
+#### `ObservabilitySink`
+
+**Type:** `interface ObservabilitySink { onRpc?; onLog?; onMetric?; onSpan?; flush?; traceFetch?; instrumentDatabase?; metricHistory?; fuseCloudflareTraces? }`
+
+A destination for RPC events, log lines, metrics and spans. Each sink implements
+the callbacks it needs.
+
+#### `consoleSink(options?)`
+
+**Type:** `(options?: OnlyErrorsOption) => ObservabilitySink`
+
+Logs each event with `console`. Successful events use `console.log`, and error
+events use `console.error`. Set `onlyErrors` to log errors only. It is useful
+during development.
+
+#### `webhookSink(options)`
+
+**Type:** `(options: WebhookSinkOptions) => ObservabilitySink`
+
+POSTs each event as JSON to `url`. Use it for Axiom, Datadog, PostHog and other
+ingestion endpoints. A failed send is swallowed, so a flaky endpoint never
+reaches the caller. Use `transform` to remove fields before they leave the
+worker, because the full event includes `error.message`.
+
+#### `otlpSink(options)`
+
+**Type:** `(options: OtlpSinkOptions) => ObservabilitySink`
+
+Exports RPC dispatches as OTLP spans and log lines as OTLP log records, over
+OTLP/HTTP JSON. Spans and logs share a trace ID, so a handler's logs and its RPC
+span appear in one trace. Point `endpoint` only at a collector you trust.
+
+#### `analyticsEngineSink(options)`
+
+**Type:** `(options: AnalyticsEngineSinkOptions) => ObservabilitySink`
+
+Writes one Analytics Engine data point per event, for high-volume RPC metrics.
+The data points carry the function path, shard key and error code as blobs, and
+latency and error counts as doubles. Set `onlyErrors` to write error events
+only.
+
+#### `pipelineLogSink(options)`
+
+**Type:** `(options: PipelineLogSinkOptions) => ObservabilitySink`
+
+Sends log lines to a Cloudflare Pipeline, which stores them in an R2 Data
+Catalog table. It implements `onLog` only. Use `analyticsEngineSink` for RPC
+metrics. Set `serializeFields` to store the structured fields as a JSON string.
+
+#### `combineSinks(...sinks)`
+
+**Type:** `(...sinks: ObservabilitySink[]) => ObservabilitySink`
+
+Fans each event out to every sink in argument order. A throwing sink does not
+stop the others. The sink configuration fields are taken from the first sink that
+sets them.
+
+#### `filterSink(sink, options)`
+
+**Type:** `(sink: ObservabilitySink, options: SinkRouteOptions) => ObservabilitySink`
+
+Passes only the events whose function path matches the include and exclude
+patterns to `sink`. It applies to logs, metrics, spans and RPC events.
+
+#### `enrichSink(sink, enrich)`
+
+**Type:** `(sink: ObservabilitySink, enrich: SinkEnricher) => ObservabilitySink`
+
+Adds attributes to every event before it reaches `sink`. Log lines get them under
+`fields`, and other signals get them under `attributes`. The enricher's output is
+redacted before it is attached.
+
+#### `createPipelineLogReader(client, options)`
+
+**Type:** `(client: R2SqlClient, options: PipelineLogReaderOptions) => PipelineLogReader`
+
+Reads log records back from the R2 Data Catalog table that `pipelineLogSink`
+writes. The reader returns keyset-paginated pages, filtered by the query you
+pass. `options.table` names the Iceberg table.
+
+### Export tap
+
+#### `runExportTap(options)`
+
+**Type:** `(options: RunExportTapOptions) => Promise<ExportTapResult>`
+
+Runs one drain pass for one sink. It reads the cursor, delivers each shard's
+batch, and advances only the cursors the sink accepted. [details](#continuous-cdc-export-tap)
+
+#### `ExportSink`
+
+**Type:** `interface ExportSink { name: string; deliver: (batch: ExportBatch) => Promise<void> }`
+
+A named destination for CDC batches. `deliver` must resolve only once the batch
+is durably accepted, and reject otherwise, so the tap retries it.
+
+#### `defineExportSink(config)`
+
+**Type:** `(config: ExportSink) => ExportSink`
+
+Validates a custom sink's `name` and `deliver` and returns it. It throws when
+`name` is empty or `deliver` is not a function.
+
+#### `webhookExportSink(config)`
+
+**Type:** `(config: { fetchImpl?: FetchLike; headers?: Record<string, string>; name: string; url: string }) => ExportSink`
+
+POSTs each shard's changes as an NDJSON body to `url`. A non-2xx response counts
+as a failure. The headers `x-lunora-sink`, `x-lunora-shard` and `x-lunora-cursor`
+let the receiver deduplicate a replayed batch.
+
+#### `r2Sink(config)`
+
+**Type:** `(config: { bucket: R2PutLike; name: string; prefix?: string }) => ExportSink`
+
+Writes each shard's changes as an NDJSON object at
+`<prefix>/<shardKey>/<cursor>.ndjson`. Because the cursor is in the key, a replay
+overwrites the same object instead of adding a second one.
+
+**Default:** `prefix` is `cdc`.
+
+#### `createKvCursorStore(kv, options?)`
+
+**Type:** `(kv: KvLike, options?: { keyPrefix?: string }) => ExportCursorStore`
+
+Stores the export cursors in a KV namespace. A missing or malformed value reads as
+empty, so the tap starts from the beginning of the log.
+
+#### `createMemoryCursorStore()`
+
+**Type:** `() => ExportCursorStore & { snapshot: () => Record<string, Record<string, number>> }`
+
+An in-memory cursor store for tests. `snapshot` returns the stored cursors so a
+test can assert on them.
+
+### Backups
+
+#### `BackupManifest`
+
+**Type:** `interface BackupManifest extends BackupManifestEntry`
+
+The sidecar JSON written beside each snapshot. It records the snapshot's `id`,
+`createdAt`, `cron`, `file`, `rows`, `bytes`, `sha256` and `scheduledTime`, and
+optionally `tables`. [details](#scheduled-backups)
+
+#### `BackupStore`
+
+**Type:** `interface BackupStore { put; list; delete }`
+
+The R2 bucket surface the scheduled backup needs. Pass an R2 bucket binding as
+`backupStore`, and it matches this shape.
+
+#### `BackupRetentionPreview`
+
+**Type:** `interface BackupRetentionPreview { eligible: number; keep: number; prefix: string; wouldDelete: string[]; cron?: string }`
+
+What a retention check would delete. It deletes nothing, and `lunora backup
+retention` prints this result. [details](#retention-does-not-delete-on-its-own)
+
+#### `PrunedBackups`
+
+**Type:** `interface PrunedBackups { deleted: string[]; failed: string[]; ignored: number; remaining: number }`
+
+The result of `lunora backup prune`. It lists the snapshots removed, the ones
+that failed to delete, and how many snapshots remain.
+[details](#retention-does-not-delete-on-its-own)
+
+### Connectors
+
+#### `toAirbyteMessages(page, emittedAt?)`
+
+**Type:** `(page: ConnectorSyncPage, emittedAt?: number) => AirbyteMessage[]`
+
+Formats a sync page as Airbyte protocol messages, one `RECORD` per change and a
+trailing `STATE` message with the cursor. A delete is emitted as a `RECORD` with
+`_lunora_deleted: true`.
+
+**Default:** `emittedAt` is `Date.now()`.
+
+#### `toFivetranResponse(page, primaryKey?)`
+
+**Type:** `(page: ConnectorSyncPage, primaryKey?: Record<string, string> | string) => FivetranResponse`
+
+Formats a sync page as the response body a Fivetran custom connector expects.
+
+#### `ConnectorSyncPage`
+
+**Type:** `interface ConnectorSyncPage { changes: ReadonlyArray<ConnectorChange>; hasMore: boolean; nextCursor: string }`
+
+One page of changes from the connector sync endpoint. Pass `hasMore` through, so
+the connector keeps paging until it is `false`.
