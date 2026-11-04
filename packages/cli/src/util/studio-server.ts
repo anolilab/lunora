@@ -233,6 +233,9 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     // loopback-only; off a loopback bind they answer 403 with a clear reason.
     // On a loopback bind the request is routed through the shared transport glue
     // (`@lunora/config/studio-host`), so the CLI and Vite hosts stay in lockstep.
+    // Parses `vite.config.*`, and the answer cannot change while the server runs.
+    const schemaDirectory = resolveSchemaDirectory(options.cwd);
+
     const serveLoopbackOnly = (request: IncomingMessage, response: ServerResponse, handle: LocalEndpointHandler, deniedMessage: string): void => {
         if (isLoopback) {
             // `apiSpec` travels with the request for the same reason the Vite host
@@ -243,7 +246,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
             serveJsonHandler(request, response, handle, options.cwd, {
                 apiSpec: options.apiSpec,
                 lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
-                schemaDirectory: resolveSchemaDirectory(options.cwd),
+                schemaDirectory,
             });
 
             return;
