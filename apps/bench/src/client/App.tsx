@@ -120,7 +120,7 @@ const Tasks = ({ organizationId }: { organizationId: string }): ReactElement => 
                                 }}
                                 type="button"
                             >
-                                Done
+                                Mark done
                             </button>
                         )}
                     </li>
