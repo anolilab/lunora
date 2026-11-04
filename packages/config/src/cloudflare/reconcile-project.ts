@@ -40,7 +40,8 @@ interface ReconcileLogger {
  * Infer the Cloudflare bindings the project's code implies and reconcile them
  * into `wrangler.jsonc` (Durable Objects, their migration classes, and the
  * `DB` D1 binding for `.global()` schemas). Best-effort and idempotent — runs
- * once at startup so the user never hand-writes binding boilerplate. A failure
+ * at dev startup (and on every `@lunora/rspack` pass) so the user never
+ * hand-writes binding boilerplate. A failure
  * here must never abort codegen; the wrangler validator reports real problems.
  *
  * `onExportGaps` (dev only) is invoked when a declared container/workflow isn't
@@ -83,6 +84,25 @@ const reconcileBindingsSafely = async (
         const message = error instanceof Error ? error.message : String(error);
 
         logger.warn(`${LUNORA_TAG} binding inference skipped: ${message}`);
+    }
+};
+
+/**
+ * The bindings a {@link reconcileBindingsSafely} pass would add or retune right
+ * now, as its log labels — without writing anything. For a dev server that
+ * provisions only at startup: a save that declares a queue, reads `ctx.kv` or
+ * exports a workflow leaves the running worker without that binding until the
+ * server restarts, and this is how the watcher finds out. Empty when the config
+ * is in sync or the scan fails (a half-typed source must not read as a change).
+ */
+const pendingBindingChanges = async (options: ReconcileProject): Promise<string[]> => {
+    try {
+        const inferred = await inferLunoraBindings({ cache: options.cache, projectRoot: options.projectRoot, schemaDir: options.schemaDir });
+        const { added, updated } = reconcileWranglerBindings(options.projectRoot, inferred, { dryRun: true, target: options.target });
+
+        return [...added, ...updated];
+    } catch {
+        return [];
     }
 };
 
@@ -143,4 +163,4 @@ const reconcileWranglerExtras = (projectRoot: string, cronTriggers: ReadonlyArra
 };
 
 export type { ReconcileProject };
-export { reconcileBindingsSafely, reconcileWranglerExtras };
+export { pendingBindingChanges, reconcileBindingsSafely, reconcileWranglerExtras };

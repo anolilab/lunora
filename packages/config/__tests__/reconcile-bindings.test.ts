@@ -1786,6 +1786,33 @@ describe("reconcileWranglerBindings", () => {
             expect(readConfig().queues.consumers).toHaveLength(1);
         });
 
+        it("reports a dry run's additions and retunes without writing the config or the ownership record", () => {
+            expect.assertions(4);
+
+            seedConsumer(`{ "queue": "receipt-queue", "max_retries": 3 }`);
+
+            const manifest = `{ "name": "app", "lunora": {} }\n`;
+
+            writeFileSync(join(root, "package.json"), manifest, "utf8");
+
+            const wrangler = readFileSync(join(root, "wrangler.jsonc"), "utf8");
+            const inferred = baseInferred({ needsD1: true, queues: [receiptQueue({ maxRetries: 5 })] });
+            const result = reconcileWranglerBindings(root, inferred, { dryRun: true });
+
+            expect({ added: result.added, changed: result.changed, updated: result.updated }).toStrictEqual({
+                added: ["DB (D1)"],
+                changed: true,
+                updated: ["queues.consumers/receipt-queue (max_retries)"],
+            });
+            expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toBe(wrangler);
+            expect(readFileSync(join(root, "package.json"), "utf8")).toBe(manifest);
+
+            // The same pass for real writes both — the dry run is what kept them untouched.
+            reconcileWranglerBindings(root, inferred);
+
+            expect(readFileSync(join(root, "package.json"), "utf8")).not.toBe(manifest);
+        });
+
         it("leaves a field defineQueue does not declare exactly as the user wrote it", () => {
             expect.assertions(1);
 

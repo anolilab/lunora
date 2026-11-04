@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createCodegenProject, findTsconfig, PROJECT_CONFIG_FILENAMES, runCodegen } from "@lunora/codegen";
 import type { DiscoveryCache } from "@lunora/config";
 import { createDiscoveryCache, runPostCodegenHook } from "@lunora/config";
+import { pendingBindingChanges } from "@lunora/config/cloudflare";
 import { consumeStudioWrite } from "@lunora/config/studio-host";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
@@ -46,6 +47,14 @@ vi.mock(import("@lunora/config"), async (importOriginal) => {
     const actual = await importOriginal();
 
     return { ...actual, runPostCodegenHook: vi.fn<typeof actual.runPostCodegenHook>(actual.runPostCodegenHook) };
+});
+
+// What the binding scan answers is `@lunora/config`'s to test; here a test only
+// says which pending changes a save finds. Defaults to the real scan.
+vi.mock(import("@lunora/config/cloudflare"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, pendingBindingChanges: vi.fn<typeof actual.pendingBindingChanges>(actual.pendingBindingChanges) };
 });
 
 const CRONS_SOURCE = `import { cronJobs } from "@lunora/scheduler";
@@ -803,6 +812,46 @@ export const schema = defineSchema({
 
             // The old blanket browser `full-reload` on the server-level channel is gone.
             expect(send.mock.calls.some((call) => (call[0] as { type?: string }).type === "full-reload")).toBe(false);
+        });
+
+        it("a save that needs a binding the worker was not started with says so once, after the client is told", async () => {
+            expect.assertions(4);
+
+            writeFixture(workdir);
+
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            const restartHints = (): string[] =>
+                warn.mock.calls.map(([message]) => message).filter((message) => message.includes("not in the running worker yet"));
+
+            vi.mocked(pendingBindingChanges)
+                .mockResolvedValueOnce(["QUEUE_EMAILS (Queue)"])
+                .mockResolvedValueOnce(["QUEUE_EMAILS (Queue)", "KV (KV namespace)"]);
+
+            wireServer(plugin, server);
+
+            const changeListener = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.find((args) => args[0] === "change")?.[1] as (
+                file: string,
+            ) => void;
+
+            changeListener(schemaPath);
+            await vi.runAllTimersAsync();
+
+            expect(clientSend).toHaveBeenCalledTimes(1);
+            expect(restartHints()).toStrictEqual([
+                expect.stringContaining("QUEUE_EMAILS (Queue) — not in the running worker yet. Restart the dev server to write it"),
+            ]);
+
+            // The second save finds the queue again plus a new KV binding: only the KV one is news.
+            changeListener(schemaPath);
+            await vi.runAllTimersAsync();
+
+            expect(restartHints()).toHaveLength(2);
+            expect(restartHints()[1]).toMatch(/KV \(KV namespace\) — not in the running worker yet/u);
         });
 
         it("failure then success → recovery reloads the client once (clears overlay), still evicts the worker", async () => {

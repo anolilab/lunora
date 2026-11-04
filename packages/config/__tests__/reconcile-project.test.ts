@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { reconcileBindingsSafely } from "../src/cloudflare/reconcile-project";
+import { pendingBindingChanges, reconcileBindingsSafely } from "../src/cloudflare/reconcile-project";
 
 describe("reconcileBindingsSafely target gate", () => {
     let root: string;
@@ -37,5 +37,40 @@ describe("reconcileBindingsSafely target gate", () => {
         await reconcileBindingsSafely({ projectRoot: root, schemaDir: "lunora", target: "cloudflare" }, logger);
 
         expect(sourceMaps()).toBe(true);
+    });
+});
+
+describe("pendingBindingChanges", () => {
+    let root: string;
+
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), "lunora-pending-bindings-"));
+        mkdirSync(join(root, "lunora"), { recursive: true });
+        writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "app", "compatibility_date": "2026-04-07" }\n`, "utf8");
+    });
+
+    afterEach(() => {
+        rmSync(root, { force: true, recursive: true });
+    });
+
+    const project = (): { projectRoot: string; schemaDir: string; target: string } => {
+        return { projectRoot: root, schemaDir: "lunora", target: "cloudflare" };
+    };
+
+    it("names a binding the code started to need after the startup reconcile, without writing it", async () => {
+        expect.assertions(3);
+
+        await reconcileBindingsSafely(project(), { info: (): void => {}, warn: (): void => {} });
+
+        await expect(pendingBindingChanges(project())).resolves.toStrictEqual([]);
+
+        writeFileSync(join(root, "lunora", "cache.ts"), `import { kv } from "@lunora/bindings/kv";\n\nexport const store = kv;\n`, "utf8");
+
+        const before = readFileSync(join(root, "wrangler.jsonc"), "utf8");
+
+        const pending = await pendingBindingChanges(project());
+
+        expect(pending.some((label) => label.startsWith("KV"))).toBe(true);
+        expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toBe(before);
     });
 });

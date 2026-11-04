@@ -922,11 +922,16 @@ const reconcileWorkflows = (
  * steps below reads AND writes the top-level path) that this fix does not
  * attempt — `lunora deploy --env <name>` now VALIDATES the env-scoped view
  * (closing the reported gap), it just doesn't yet auto-provision it.
+ *
+ * `dryRun` answers what a real pass would add or retune without writing
+ * anything — not `wrangler.jsonc`, not the ownership records in the manifest,
+ * not a dev sidecar config — so a watcher can tell a running dev server that its
+ * config is a binding short without rewriting the file under it.
  */
 const reconcileWranglerBindings = (
     projectRoot: string,
     inferred: InferredBindings,
-    { environment, target }: { environment?: string; target?: string } = {},
+    { dryRun = false, environment, target }: { dryRun?: boolean; environment?: string; target?: string } = {},
 ): ReconcileBindingsResult => {
     const wranglerPath = findWranglerFile(projectRoot);
 
@@ -1158,6 +1163,10 @@ const reconcileWranglerBindings = (
         updated.push(...(result.updated ?? []));
         warnings.push(...(result.warnings ?? []));
         records.push(...[result.record].filter((record) => record !== undefined));
+    }
+
+    if (dryRun) {
+        return { added, changed: text !== original, exportGaps, updated, warnings, wranglerPath };
     }
 
     // Ownership is recorded only once the config it describes is on disk, never

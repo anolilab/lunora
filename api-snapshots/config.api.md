@@ -3092,6 +3092,12 @@ const materializeServiceDevConfigs: (wranglerPaths: ReadonlyArray<string>, optio
 const mergeWranglerEnvironment: (wrangler: WranglerConfig, environment: string | undefined) => WranglerEnvironmentMerge;
 ```
 
+### `pendingBindingChanges` (const)
+
+```ts
+const pendingBindingChanges: (options: ReconcileProject) => Promise<string[]>;
+```
+
 ### `planRemoteBindings` (const)
 
 ```ts
@@ -3119,7 +3125,8 @@ const reconcileBindingsSafely: (options: ReconcileProject, logger: ReconcileLogg
 ### `reconcileWranglerBindings` (const)
 
 ```ts
-const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings, { environment, target }?: {
+const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings, { dryRun, environment, target }?: {
+    dryRun?: boolean;
     environment?: string;
     target?: string;
 }) => ReconcileBindingsResult;
