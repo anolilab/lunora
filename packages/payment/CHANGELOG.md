@@ -1,3 +1,7 @@
+## @lunora/payment [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.268...@lunora/payment@1.0.0-alpha.269) (2026-11-03)
+
+- fix(ci): mark test fixtures so the secrets scan passes (#1470)
+
 ## @lunora/payment 1.0.0-alpha.269 (2026-11-03)
 
 - Updated dependency @lunora/server@1.0.0-alpha.268

@@ -1,6 +1,6 @@
 {
     "name": "@lunora/shard-engine",
-    "version": "1.0.0-alpha.187",
+    "version": "1.0.0-alpha.188",
     "description": "Host-neutral reactive engine for Lunora: per-shard state, OCC, CDC, reactive subscriptions, and the poke protocol. Consumes @lunora/platform host contracts and can be mounted on any platform host.",
     "keywords": [
         "cloudflare",
@@ -55,8 +55,6 @@
         "fallow:health": "fallow health --score",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "oxfmt --check . --ignore-path ../../.prettierignore && prettier --check \"**/*.{md,mdx}\" --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "oxfmt . --ignore-path ../../.prettierignore && prettier --write \"**/*.{md,mdx}\" --ignore-path ../../.prettierignore",
         "lint:types": "tsrs --noEmit && tsrs --noEmit -p __tests__/workerd",
         "test": "vitest run",
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",

@@ -210,13 +210,13 @@ describe("planDevVariablesScaffold", () => {
         const plan = generatePlan(
             planDevVariablesScaffold({
                 devVarsExists: false,
-                exampleContent: 'SHARED_TOKEN="abc123def456"\n',
+                exampleContent: 'SHARED_TOKEN="abc123def456"\n', // secret-scanner:allow -- test fixture, not a real credential
                 randomHex: fixedHex,
             }),
         );
 
         expect(plan.generatedKeys).toStrictEqual([]);
-        expect(plan.content).toContain('SHARED_TOKEN="abc123def456"');
+        expect(plan.content).toContain('SHARED_TOKEN="abc123def456"'); // secret-scanner:allow -- test fixture, not a real credential
     });
 
     it("never mints provider-issued keys — their placeholders survive so they stay detectable as unfilled", () => {

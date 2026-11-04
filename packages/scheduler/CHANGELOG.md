@@ -1,3 +1,7 @@
+## @lunora/scheduler [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.168...@lunora/scheduler@1.0.0-alpha.169) (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+
 ## @lunora/scheduler 1.0.0-alpha.169 (2026-11-03)
 
 - fix: resolve open review defects across agent, client, codegen and SDKs (#1460)

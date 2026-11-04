@@ -75,8 +75,6 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "oxfmt --check . --ignore-path ../../.prettierignore && prettier --check \"**/*.{md,mdx}\" --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "oxfmt . --ignore-path ../../.prettierignore && prettier --write \"**/*.{md,mdx}\" --ignore-path ../../.prettierignore",
         "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
@@ -93,7 +91,7 @@
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@lunora/shard-engine": "^1.0.0-alpha.187",
+        "@lunora/shard-engine": "^1.0.0-alpha.188",
         "@polar-sh/sdk": "catalog:payment",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

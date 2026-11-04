@@ -1,3 +1,7 @@
+## @lunora/server [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.267...@lunora/server@1.0.0-alpha.268) (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+
 ## @lunora/server 1.0.0-alpha.268 (2026-11-03)
 
 - fix: resolve open review defects across agent, client, codegen and SDKs (#1460)

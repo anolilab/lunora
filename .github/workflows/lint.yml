@@ -258,8 +258,8 @@
             - "name": "Verify no development-build artifacts"
               "run": "pnpm run dist:check"
 
-    "prettier":
-        "name": "Lint (prettier)"
+    "oxfmt":
+        "name": "Lint (oxfmt)"
         "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
@@ -284,8 +284,41 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            - "name": "Lint (prettier)"
-              "run": "pnpm run lint:prettier"
+            - "name": "Lint (oxfmt)"
+              "run": "pnpm run lint:oxfmt"
+
+    # Advisory: oxlint reports tens of thousands of problems today, so this job never
+    # gates the PR and stays out of `Check Lint Run`. Remove `continue-on-error` and add
+    # "oxlint" to that job's `needs` to make it a gate.
+    "oxlint":
+        "name": "Lint (oxlint)"
+        "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 15
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "lint"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Lint (oxlint)"
+              "continue-on-error": true
+              "run": "pnpm run lint:oxlint"
 
     "package-json-sort":
         "name": "Lint (package.json sort)"
@@ -638,7 +671,7 @@
                 "fallow",
                 "api-surface",
                 "dist-production",
-                "prettier",
+                "oxfmt",
                 "package-json-sort",
                 "secrets",
                 "registry-items",

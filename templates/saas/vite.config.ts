@@ -71,5 +71,8 @@ export default defineConfig({
         // Vite 8 resolves tsconfig paths natively — no vite-tsconfig-paths plugin needed.
         tsconfigPaths: true,
     },
+    // The Worker is built by the Cloudflare plugin's `ssr` environment, which Vite leaves
+    // unminified by default; wrangler's `minify` key never reaches it.
+    environments: { ssr: { build: { minify: true } } },
     plugins: [cloudflare({ viteEnvironment: { name: "ssr" } }), tanstackStart(), react(), lunora({ cloudflare: false }), ssrOrigin()],
 });

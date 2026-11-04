@@ -1,6 +1,6 @@
 {
     "name": "@lunora/cli",
-    "version": "1.0.0-alpha.480",
+    "version": "1.0.0-alpha.481",
     "description": "The Lunora CLI: init, dev, deploy, codegen, migrate, seed, doctor, insights, logs, registry, and the rest of the project commands",
     "keywords": [
         "agent-skills",
@@ -59,8 +59,6 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "oxfmt --check . --ignore-path ../../.prettierignore && prettier --check \"**/*.{md,mdx}\" --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "oxfmt . --ignore-path ../../.prettierignore && prettier --write \"**/*.{md,mdx}\" --ignore-path ../../.prettierignore",
         "lint:types": "tsrs --noEmit",
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "test": "vitest run",
@@ -73,8 +71,8 @@
         "@bomb.sh/tab": "catalog:cli",
         "@lunora/advisor": "^1.0.0-alpha.287",
         "@lunora/bindings": "1.0.0-alpha.151",
-        "@lunora/codegen": "^1.0.0-alpha.397",
-        "@lunora/config": "^1.0.0-alpha.453",
+        "@lunora/codegen": "^1.0.0-alpha.398",
+        "@lunora/config": "^1.0.0-alpha.454",
         "@lunora/container": "1.0.0-alpha.108",
         "@lunora/d1": "^1.0.0-alpha.233",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",

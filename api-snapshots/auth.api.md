@@ -2455,7 +2455,7 @@ type WhereValue = boolean | number | string;
 ### `acsEndpoint` (const)
 
 ```ts
-const acsEndpoint: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/saml2/sp/acs/:providerId", {
+const acsEndpoint: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/saml2/sp/acs/:providerId", {
     method: ("GET" | "POST")[];
     body: z.ZodOptional<z.ZodObject<{
         SAMLResponse: z.ZodString;
@@ -2490,7 +2490,7 @@ const acsEndpoint: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso
 ### `callbackSSO` (const)
 
 ```ts
-const callbackSSO: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/callback/:providerId", {
+const callbackSSO: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/callback/:providerId", {
     method: "GET";
     query: z.ZodObject<{
         code: z.ZodOptional<z.ZodString>;
@@ -2521,7 +2521,7 @@ const callbackSSO: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso
 ### `callbackSSOShared` (const)
 
 ```ts
-const callbackSSOShared: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/callback", {
+const callbackSSOShared: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/callback", {
     metadata: {
         openapi: {
             operationId: string;
@@ -2552,9 +2552,9 @@ const callbackSSOShared: (options?: SSOOptions) => _$better_call0.StrictEndpoint
 ### `deleteSSOProvider` (const)
 
 ```ts
-const deleteSSOProvider: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/delete-provider", {
+const deleteSSOProvider: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/delete-provider", {
     method: "POST";
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;
@@ -2606,9 +2606,9 @@ const deleteSSOProvider: (options?: SSOOptions) => _$better_call0.StrictEndpoint
 ### `getSSOProvider` (const)
 
 ```ts
-const getSSOProvider: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/get-provider", {
+const getSSOProvider: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/get-provider", {
     method: "GET";
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;
@@ -2689,12 +2689,12 @@ const getSSOProvider: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/
 ### `initiateSLO` (const)
 
 ```ts
-const initiateSLO: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/saml2/logout/:providerId", {
+const initiateSLO: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/saml2/logout/:providerId", {
     method: "POST";
     body: z.ZodObject<{
         callbackURL: z.ZodOptional<z.ZodString>;
     }, z.core.$strip>;
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;
@@ -2726,9 +2726,9 @@ const initiateSLO: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso
 ### `listSSOProviders` (const)
 
 ```ts
-const listSSOProviders: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/providers", {
+const listSSOProviders: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/providers", {
     method: "GET";
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;
@@ -2813,12 +2813,12 @@ function parseCertificate(certPem: string): {
 ### `registerSSOProvider` (const)
 
 ```ts
-const registerSSOProvider: <O extends SSOOptions>(options: O) => _$better_call0.StrictEndpoint<"/sso/register", {
+const registerSSOProvider: <O extends SSOOptions>(options: O) => import("better-call").StrictEndpoint<"/sso/register", {
     method: "POST";
     body: z.ZodObject<{
         [x: string]: z.ZodOptional<z.ZodAny>;
     }, z.core.$strip>;
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;
@@ -2968,7 +2968,6 @@ const registerSSOProvider: <O extends SSOOptions>(options: O) => _$better_call0.
                                                         description: string;
                                                     };
                                                 };
-                                                required: string[];
                                             };
                                         };
                                         required: string[];
@@ -3020,7 +3019,7 @@ const registerSSOProvider: <O extends SSOOptions>(options: O) => _$better_call0.
 ### `requestDomainVerification` (const)
 
 ```ts
-const requestDomainVerification: (options: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/request-domain-verification", {
+const requestDomainVerification: (options: SSOOptions) => import("better-call").StrictEndpoint<"/sso/request-domain-verification", {
     method: "POST";
     body: z.ZodObject<{
         providerId: z.ZodString;
@@ -3042,7 +3041,7 @@ const requestDomainVerification: (options: SSOOptions) => _$better_call0.StrictE
             };
         };
     };
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;
@@ -3073,7 +3072,7 @@ const requestDomainVerification: (options: SSOOptions) => _$better_call0.StrictE
 ### `signInSSO` (const)
 
 ```ts
-const signInSSO: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sign-in/sso", {
+const signInSSO: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sign-in/sso", {
     method: "POST";
     body: z.ZodObject<{
         email: z.ZodOptional<z.ZodString>;
@@ -3200,7 +3199,7 @@ const signInSSO: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sign-
 ### `sloEndpoint` (const)
 
 ```ts
-const sloEndpoint: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/saml2/sp/slo/:providerId", {
+const sloEndpoint: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/saml2/sp/slo/:providerId", {
     method: ("GET" | "POST")[];
     body: z.ZodOptional<z.ZodObject<{
         SAMLRequest: z.ZodOptional<z.ZodString>;
@@ -3226,7 +3225,7 @@ const sloEndpoint: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso
 ### `spMetadata` (const)
 
 ```ts
-const spMetadata: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/saml2/sp/metadata", {
+const spMetadata: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/saml2/sp/metadata", {
     method: "GET";
     query: z.ZodObject<{
         providerId: z.ZodString;
@@ -3283,9 +3282,9 @@ function sso$1<O extends SSOOptions>(options?: O | undefined): {
 ### `updateSSOProvider` (const)
 
 ```ts
-const updateSSOProvider: (options: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/update-provider", {
+const updateSSOProvider: (options: SSOOptions) => import("better-call").StrictEndpoint<"/sso/update-provider", {
     method: "POST";
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;
@@ -3331,19 +3330,18 @@ const updateSSOProvider: (options: SSOOptions) => _$better_call0.StrictEndpoint<
             pkce: z.ZodOptional<z.ZodOptional<z.ZodDefault<z.ZodBoolean>>>;
             overrideUserInfo: z.ZodOptional<z.ZodOptional<z.ZodBoolean>>;
             mapping: z.ZodOptional<z.ZodOptional<z.ZodObject<{
-                email: z.ZodString;
+                email: z.ZodOptional<z.ZodString>;
                 emailVerified: z.ZodOptional<z.ZodString>;
-                name: z.ZodString;
+                name: z.ZodOptional<z.ZodString>;
                 image: z.ZodOptional<z.ZodString>;
                 extraFields: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodAny>>;
             }, z.core.$strict>>>;
         }, z.core.$strip>>;
         samlConfig: z.ZodOptional<z.ZodObject<{
-            audience: z.ZodOptional<z.ZodOptional<z.ZodString>>;
             mapping: z.ZodOptional<z.ZodOptional<z.ZodObject<{
-                email: z.ZodString;
+                email: z.ZodOptional<z.ZodString>;
                 emailVerified: z.ZodOptional<z.ZodString>;
-                name: z.ZodString;
+                name: z.ZodOptional<z.ZodString>;
                 firstName: z.ZodOptional<z.ZodString>;
                 lastName: z.ZodOptional<z.ZodString>;
                 extraFields: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodAny>>;
@@ -3364,6 +3362,7 @@ const updateSSOProvider: (options: SSOOptions) => _$better_call0.StrictEndpoint<
                 z.ZodArray<z.ZodString>
             ]>>>;
             entryPoint: z.ZodOptional<z.ZodString>;
+            audience: z.ZodOptional<z.ZodOptional<z.ZodString>>;
             callbackUrl: z.ZodOptional<z.ZodOptional<z.ZodString>>;
             wantAssertionsSigned: z.ZodOptional<z.ZodOptional<z.ZodBoolean>>;
             authnRequestsSigned: z.ZodOptional<z.ZodOptional<z.ZodBoolean>>;
@@ -3450,7 +3449,7 @@ const updateSSOProvider: (options: SSOOptions) => _$better_call0.StrictEndpoint<
 ### `verifyDomain` (const)
 
 ```ts
-const verifyDomain: (options: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/verify-domain", {
+const verifyDomain: (options: SSOOptions) => import("better-call").StrictEndpoint<"/sso/verify-domain", {
     method: "POST";
     body: z.ZodObject<{
         providerId: z.ZodString;
@@ -3475,7 +3474,7 @@ const verifyDomain: (options: SSOOptions) => _$better_call0.StrictEndpoint<"/sso
             };
         };
     };
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;

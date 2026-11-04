@@ -1633,7 +1633,7 @@ public final class ConformanceTest {
     private static void authTokenRedactedWhenPrinted() {
         covers("auth_token_redacted_when_printed");
 
-        String token = "lunora-secret-7f3a9c";
+        String token = "lunora-secret-7f3a9c"; // secret-scanner:allow -- test fixture
         Client client = new Client("https://app.example", null);
 
         client.authToken(token);

@@ -1395,7 +1395,9 @@ describe("dataBrowser — editable", () => {
             mock.emit(ADMIN_FUNCTIONS.readTablePage, { columns: ["__id__", "text"], rows: [{ __id__: "m9", text: "LIVE ROW" }], total: 1 });
         });
 
-        expect(screen.getByTestId("db-page").textContent).toContain("LIVE ROW");
+        // The push lands in the query cache; observers are notified on react-query's
+        // scheduler, so the re-render follows the act() rather than happening inside it.
+        await expect(within(screen.getByTestId("db-page")).findByText("LIVE ROW")).resolves.toBeDefined();
     });
 
     it("keeps the live subscription bound to the loaded page, ignoring shard-input keystrokes", async () => {
@@ -1447,8 +1449,10 @@ describe("dataBrowser — editable", () => {
             ]);
         });
 
-        expect(screen.getByTestId("db-table-invoices")).toBeDefined();
-        expect(screen.getByTestId("db-table-invoices").textContent).toContain("invoices");
+        const invoices = await screen.findByTestId("db-table-invoices");
+
+        expect(invoices).toBeDefined();
+        expect(invoices.textContent).toContain("invoices");
     });
 
     /**

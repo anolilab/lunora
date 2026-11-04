@@ -118,8 +118,6 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "oxfmt --check . --ignore-path ../../.prettierignore && prettier --check \"**/*.{md,mdx}\" --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "oxfmt . --ignore-path ../../.prettierignore && prettier --write \"**/*.{md,mdx}\" --ignore-path ../../.prettierignore",
         "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
@@ -167,7 +165,7 @@
         "@better-auth/core": ">=1.7.3 <2.0.0-0",
         "@better-auth/sso": ">=1.7.3 <2.0.0-0",
         "@lunora/server": ">=1.0.0-alpha.24 <2.0.0-0",
-        "better-auth": ">=1.7.3 <2.0.0-0"
+        "better-auth": ">=1.7.16 <2.0.0-0"
     },
     "peerDependenciesMeta": {
         "@better-auth/sso": {

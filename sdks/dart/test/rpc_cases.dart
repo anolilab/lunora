@@ -169,7 +169,7 @@ Future<void> caseRpcUnreadableSuccessBodyRaisesSdkError() async {
 void caseAuthTokenRedactedWhenPrinted() {
   covers('auth_token_redacted_when_printed');
 
-  const token = 'lunora-secret-7f3a9c';
+  const token = 'lunora-secret-7f3a9c'; // secret-scanner:allow -- test fixture
   final client = LunoraClient(url: 'https://app.example', authToken: token);
 
   for (final (what, printed) in <(String, String)>[

@@ -75,6 +75,8 @@ frontend_lintable:
     - "**/*.{css,html}"
     - "**/*.{md,mdx}"
     - "**/tsconfig*.json"
+    # The oxlint job reads this config, so its rules changing must run that job.
+    - ".oxlintrc.json"
     - "**/package.json"
     # A project.json decides whether eslint runs a project at all — an nx-shaped
     # target silently turns that gate into a no-op — so an edit to one must reach the

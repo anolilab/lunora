@@ -1,3 +1,7 @@
+## @lunora/workflow [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.110...@lunora/workflow@1.0.0-alpha.111) (2026-11-03)
+
+- feat(workflow): create instances and send events via admin api (#1461)
+
 ## @lunora/workflow 1.0.0-alpha.111 (2026-11-03)
 
 - feat(workflow): create instances and send events via admin api (#1461)

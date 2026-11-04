@@ -17,12 +17,12 @@
         "lint:types": "lunora codegen && tsc --noEmit"
     },
     "dependencies": {
-        "@better-auth/expo": "^1.7.1",
+        "@better-auth/expo": "1.7.16",
         "@lunora/auth": "^0.0.0",
         "@lunora/react-native": "^0.0.0",
         "@react-native-async-storage/async-storage": "2.2.0",
         "@tanstack/react-query": "^5.101.2",
-        "better-auth": "^1.7.1",
+        "better-auth": "1.7.16",
         "expo": "~57.0.4",
         "expo-constants": "~57.0.3",
         "expo-linking": "~57.0.2",
@@ -40,7 +40,7 @@
         "@types/node": "^26.1.2",
         "@types/react": "^19.2.18",
         "typescript": "^6.0.3",
-        "wrangler": "^4.147.0"
+        "wrangler": "^4.156.1"
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

@@ -39,7 +39,7 @@ const HEX_KEY = `
 /** A secret split across `+`-concatenated string literals — folded into one token before matching. */
 // eslint-disable-next-line no-secrets/no-secrets -- synthetic fixture, not a real credential
 const CONCAT_SECRET = `
-    export const key = "a3f9c2e1b7d8049f5c6a1e2d3b" + "4c5f6071829304a1b2c3d4e5f60718293a4b5c6";
+    export const key = "a3f9c2e1b7d8049f5c6a1e2d3b" + "4c5f6071829304a1b2c3d4e5f60718293a4b5c6"; // secret-scanner:allow -- synthetic fixture inside a scanned snippet, not a real credential
 `;
 
 /**

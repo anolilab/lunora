@@ -98,8 +98,8 @@ LUNORA_WORKERD_TESTS=1 pnpm test
 ```bash
 pnpm lint:eslint        # all
 pnpm lint:eslint:fix
-pnpm lint:prettier
-pnpm lint:prettier:fix
+pnpm lint:oxfmt
+pnpm lint:oxfmt:fix
 pnpm lint:types         # tsc --noEmit
 pnpm lint:package-json  # canonical package.json key order (read-only check)
 pnpm lint:package-json:fix
