@@ -150,7 +150,9 @@ const tableDefinitions = (key, shape) => {
             .index("byOrgState", ["organizationId", "state", "updatedAt"])
             .index("byOrgCode", ["organizationId", "code"], { unique: true })
             .index("byOrgOwner", ["organizationId", "ownerId", "createdAt"])
-            .searchIndex("search_title", { field: "title", filterFields: ["organizationId", "state"] }),`,
+            .searchIndex("search_title", { field: "title", filterFields: ["organizationId", "state"] })
+            .aggregateIndex("countByOrgState", { by: ["organizationId", "state"] })
+            .aggregateIndex("amountByOrg", { by: ["organizationId"], field: "amount", op: "sum" }),`,
         `        ${key}Lines: defineTable({
             createdAt: v.number(),
             label: v.string(),
@@ -292,17 +294,15 @@ export const stats = orgQuery
     .use(tenantRead("${table}"))
     .query(async ({ ctx }) => {
         const { organizationId } = await requireOrg(ctx);
-        const rows = await ctx.db
-            .query("${table}")
-            .withIndex("byOrgState", (q) => q.eq("organizationId", organizationId))
-            .take(1000);
+        // \`groupBy\` rather than \`count\`: under tenant RLS it is scoped to the rows the caller may read.
+        const groups = await ctx.db.${table}.groupBy({ agg: { op: "count" }, by: ["state"], where: { organizationId } });
         const byState: Record<string, number> = {};
 
-        for (const row of rows) {
-            byState[row.state] = (byState[row.state] ?? 0) + 1;
+        for (const { key, value } of groups) {
+            byState[String(key.state)] = value ?? 0;
         }
 
-        return { byState, total: rows.length };
+        return { byState, total: Object.values(byState).reduce((sum, count) => sum + count, 0) };
     });
 `;
 };
@@ -559,14 +559,11 @@ const jobsModule = (key, shape) => `${header(key)}import { internalMutation, int
 
 /** Rolls the open count into the activity feed; scheduled after writes in hooked domains. */
 export const recount = internalMutation.input({ organizationId: v.string() }).mutation(async ({ args, ctx }) => {
-    const open = await ctx.db
-        .query("dom_${key}Records")
-        .withIndex("byOrgState", (q) => q.eq("organizationId", args.organizationId).eq("state", "open"))
-        .take(1000);
+    const open = await ctx.db.dom_${key}Records.count({ organizationId: args.organizationId, state: "open" });
 
-    await ctx.db.insert("saas_activity", { action: "${key}.recount", actorId: "system", createdAt: Date.now(), meta: { open: open.length }, organizationId: args.organizationId, subjectType: "${key}" });
+    await ctx.db.insert("saas_activity", { action: "${key}.recount", actorId: "system", createdAt: Date.now(), meta: { open }, organizationId: args.organizationId, subjectType: "${key}" });
 
-    return { open: open.length };
+    return { open };
 });
 
 export const sweepVoid = internalMutation.input({ before: v.number(), organizationId: v.string() }).mutation(async ({ args, ctx }) => {
@@ -583,12 +580,10 @@ export const sweepVoid = internalMutation.input({ before: v.number(), organizati
 });
 
 export const totals = internalQuery.input({ organizationId: v.string() }).query(async ({ args, ctx }) => {
-    const rows = await ctx.db
-        .query("dom_${key}Records")
-        .withIndex("byOrgState", (q) => q.eq("organizationId", args.organizationId))
-        .take(1000);
+    const where = { organizationId: args.organizationId };
+    const [amount, count] = await Promise.all([ctx.db.dom_${key}Records.aggregate({ field: "amount", op: "sum", where }), ctx.db.dom_${key}Records.count(where)]);
 
-    return { amount: rows.reduce((sum, row) => sum + (row.amount ?? 0), 0), count: rows.length };
+    return { amount: amount ?? 0, count };
 });
 ${
     shape.catalog

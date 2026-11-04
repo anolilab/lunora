@@ -29,7 +29,7 @@ import { gzipSync } from "node:zlib";
 
 import { eagerGraph, eagerPackages, registrySplit, startupActiveMs, summarize } from "./worker-startup-measure.js";
 import { appDirectory, sizeFromArgs } from "./generate.mjs";
-import { benchDirectory, buildMode, parseModes, quietEnv, sizeLabel, withSizedApp, wrangler } from "./sized-app.mjs";
+import { benchDirectory, buildMode, parseModes, quietEnv, rotated, sizeLabel, withSizedApp, wrangler } from "./sized-app.mjs";
 
 const { values } = parseArgs({
     options: {
@@ -58,6 +58,7 @@ mkdirSync(join(benchDirectory, "results"), { recursive: true });
 
 const loadBefore = loadavg();
 const results = {};
+const runOrders = [];
 const shape = await withSizedApp(size, { keep: values.keep }, (generated) => {
     for (const mode of modes) {
         process.stderr.write(`[bench] ${presetName}: building ${mode}…\n`);
@@ -84,7 +85,11 @@ const shape = await withSizedApp(size, { keep: values.keep }, (generated) => {
     }
 
     for (let run = 0; run < runs; run++) {
-        for (const mode of modes) {
+        const order = rotated(modes, run);
+
+        runOrders.push(order);
+
+        for (const mode of order) {
             results[mode].samples.push(
                 startupActiveMs(appDirectory, { profile: join(benchDirectory, `${mode}.cpuprofile`), wrangler, workerBundle: results[mode].workerBundle }),
             );
@@ -105,6 +110,7 @@ const report = {
     loadavg: { after: loadavg(), before: loadBefore },
     modes: Object.fromEntries(Object.entries(results).map(([mode, result]) => [mode, { ...result, active: summarize(result.samples) }])),
     preset: presetName,
+    runOrders,
     runs,
     shape,
 };

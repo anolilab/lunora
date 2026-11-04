@@ -96,7 +96,14 @@ const boot = async (mode) => {
         entrypoint: join(benchDirectory, `out-${mode}`, "server.js"),
     });
 
-    await worker.ready;
+    try {
+        await worker.ready;
+    } catch (error) {
+        // Nothing else holds the handle yet, so a runtime that never got ready is disposed here.
+        await worker.dispose().catch(() => undefined);
+
+        throw error;
+    }
 
     return { bootMs: performance.now() - started, origin: new URL(await worker.url).origin, started, worker };
 };
@@ -355,11 +362,14 @@ const summary = Object.fromEntries(
                 coldCall: stats(cold.map((result) => result.ms)),
                 coldCallHeavy: stats(cold.filter((result) => result.heavy).map((result) => result.ms)),
                 coldCallPlain: stats(cold.filter((result) => !result.heavy).map((result) => result.ms)),
-                coldSweep: stats(list.map((run) => run.cold.reduce((sum, result) => sum + result.ms, 0))),
+                // A sweep with a failed call is not a whole sweep.
+                coldSweep: stats(
+                    list.filter((run) => run.cold.every((result) => result.ok)).map((run) => run.cold.reduce((sum, result) => sum + result.ms, 0)),
+                ),
                 coldToFirst: stats(list.map((run) => run.coldToFirstMs)),
                 failures: failures.length,
                 firstErrors: [...new Set(failures.map((result) => result.error))].slice(0, 5),
-                firstResponse: stats(list.map((run) => run.first.ms)),
+                firstResponse: stats(list.filter((run) => run.first.ok).map((run) => run.first.ms)),
                 warmCall: stats(warm.map((result) => result.ms)),
             },
         ];

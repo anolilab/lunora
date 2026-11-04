@@ -136,8 +136,9 @@ For each mode, the script:
 1. Runs `lunora build --no-framework-build`, which produces the same wrangler
    single-file esbuild bundle that plan 490 §5.1 measured, plus its metafile.
 2. Freezes that bundle with `wrangler deploy --dry-run --outfile`.
-3. Runs `wrangler check startup --workerBundle` with the modes interleaved, so
-   machine load hits both modes equally.
+3. Runs `wrangler check startup --workerBundle` with the modes interleaved, and
+   rotates which goes first each run, so machine load and position hit every mode
+   equally. The report records each run's order.
 
 The figures, in the order to read them:
 

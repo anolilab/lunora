@@ -15,6 +15,9 @@ export const cli = join(appDirectory, "node_modules", "lunorash", "dist", "bin.m
 export const wrangler = join(appDirectory, "node_modules", ".bin", "wrangler");
 export const quietEnv = measureEnv();
 
+/** `list` rotated by `run`, so no candidate always runs first and position effects average out. */
+export const rotated = (list, run) => list.map((_, index) => list[(index + run) % list.length]);
+
 export const parseModes = (list) => {
     const modes = list.split(",").map((mode) => mode.trim());
 
@@ -45,10 +48,8 @@ export const withSizedApp = async (size, { keep }, measure) => {
     // `lunora build` advances the schema baseline; the committed one describes the core-only app.
     const schemaBaseline = join(appDirectory, "lunora", ".lunora-schema.json");
     const committedBaseline = readFileSync(schemaBaseline, "utf8");
-    const shape = generate(size);
-
     try {
-        return await measure(shape);
+        return await measure(generate(size));
     } finally {
         if (!keep) {
             generate({ domains: 0 });

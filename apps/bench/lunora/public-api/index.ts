@@ -5,6 +5,9 @@
  *
  * Paying proves nothing about who the caller is, so the feed is aggregate only:
  * how many organisations are on each plan, never a row of any one tenant.
+ *
+ * Still needs a session: `authorizeShard` in `lunora/server.ts` refuses anonymous
+ * callers on every shard and cannot single this procedure out (FINDINGS.md 20).
  */
 import { query } from "../_generated/server.js";
 import { PLANS } from "../plans";

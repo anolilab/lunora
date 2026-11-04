@@ -32,7 +32,7 @@ export const buildWorker = (appDirectory, { cli, extraArgs = [], outDir = "out" 
     }
 
     try {
-        execFileSync(process.execPath, [cli, "build", "--no-strict-advisories", "--format", "json", "--out-dir", outDir, ...extraArgs], {
+        execFileSync(process.execPath, [cli, "build", "--no-strict-advisories", "--no-startup-check", "--format", "json", "--out-dir", outDir, ...extraArgs], {
             cwd: appDirectory,
             encoding: "utf8",
             env: quietEnv(),

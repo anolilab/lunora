@@ -541,7 +541,7 @@ bound on what all first calls together would pay.
   better-auth's per-isolate migration check (finding 12) and the identity
   lookup; this was not profiled.
 
-## 19. Three defects in the registry copies the bench mirrors (medium)
+## 19. Defects in the registry and template copies the bench mirrors (medium)
 
 PR review on #1420 turned these up. The bench keeps its copies identical to
 `registry/*` and `templates/saas`, so each is fixed upstream or not at all.
@@ -563,5 +563,31 @@ PR review on #1420 turned these up. The bench keeps its copies identical to
   and `listOrganizations` returns every organisation in one unpaged result (its
   comment says so). Fix: page both.
 
+- **`templates/saas`: plan seat limits are shown, not enforced.** `PLANS`
+  gives Free one seat and Pro ten, and the auth hooks recount `member` rows into
+  `saas_organizations.seats` after a member joins, but nothing refuses an
+  invitation or addition past the plan's allowance. Fix: check the allowance in
+  the organization plugin's before-add hook, or stop presenting the numbers as
+  limits.
+- **`templates/saas`: the payment webhook buffers any body.** `lunora/http.ts`
+  reads `request.text()` with no size cap before the signature is verified, so
+  an anonymous caller can make the Worker hold an arbitrarily large body. Fix:
+  refuse a large `content-length` and cap the stream read.
+
 **Repro (storage):** call `storage:generateUploadUrl({ key: "a.txt", … })`, then
 `storage:deleteObject({ key })` with the returned key; the object stays.
+
+## 20. A paid public procedure cannot be reached once `authorizeShard` is set (medium)
+
+`authorizeShard` receives only `{ identity, shardKey }`, not the procedure being
+called. An app that refuses anonymous callers there (as `templates/saas` and the
+bench do) therefore refuses them for every procedure, including an `.x402()`
+query meant for anonymous agents: `public-api:planMix` is unreachable without a
+session. The only way to admit it is to admit anonymous callers to the whole
+shard, which on `__root__` also opens presence's shared no-organisation room.
+
+**Repro:** with the bench running, call `public-api:planMix` without a session
+cookie; the RPC is refused before the charge gate runs.
+
+**Suggestion:** pass the procedure path (or its `.x402()` marker) to
+`authorizeShard`, or let paid procedures bypass it once the charge settles.

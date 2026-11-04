@@ -152,6 +152,12 @@ export const comment = orgMutation
     .input({ body: v.string().min(1).max(5000), taskId: v.id("tasks") })
     .mutation(async ({ args, ctx }): Promise<Id<"taskComments">> => {
         const { organizationId, userId } = await requireOrg(ctx);
+        const task = await ctx.db.get("tasks", args.taskId);
+
+        // The comment's own policy checks only its organisation; a missing or foreign task is refused here.
+        if (task?.organizationId !== organizationId) {
+            throw new LunoraError("NOT_FOUND", "task not found");
+        }
 
         return ctx.db.insert("taskComments", { authorId: userId, body: args.body, createdAt: Date.now(), organizationId, taskId: args.taskId });
     });

@@ -34,7 +34,7 @@ import { gzipSync } from "node:zlib";
 
 import { startupActiveMs, summarize } from "./worker-startup-measure.js";
 import { appDirectory, sizeFromArgs } from "./generate.mjs";
-import { benchDirectory, buildMode, quietEnv, sizeLabel, withSizedApp, wrangler } from "./sized-app.mjs";
+import { benchDirectory, buildMode, quietEnv, rotated, sizeLabel, withSizedApp, wrangler } from "./sized-app.mjs";
 
 const { values } = parseArgs({
     options: {
@@ -113,6 +113,7 @@ export default (env) => mergeConfig(base(env), { build: { rolldownOptions: { out
 
 const loadBefore = loadavg();
 const artifacts = {};
+const runOrders = [];
 const shape = await withSizedApp(size, { keep: values.keep }, (generated) => {
     try {
         // The single-file builds first: `buildWorker` refuses while a Vite redirect exists.
@@ -143,7 +144,11 @@ const shape = await withSizedApp(size, { keep: values.keep }, (generated) => {
     }
 
     for (let run = 0; run < runs; run++) {
-        for (const artifact of Object.values(artifacts)) {
+        const order = rotated(Object.values(artifacts), run);
+
+        runOrders.push(order.map((artifact) => artifact.name));
+
+        for (const artifact of order) {
             if (artifact.errors.length > 0) {
                 continue;
             }
@@ -175,6 +180,7 @@ const report = {
     gitSha,
     loadavg: { after: loadavg(), before: loadBefore },
     preset: presetName,
+    runOrders,
     runs,
     shape,
 };
