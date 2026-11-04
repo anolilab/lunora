@@ -86,7 +86,7 @@ describe("fcmFromEnv with a service account", () => {
         const config = fcmFromEnv({ FCM_PROJECT_ID: "proj", FCM_SERVICE_ACCOUNT: "{oops" });
 
         expect(config?.projectId).toBe("proj");
-        await expect(config?.getAccessToken?.()).rejects.toThrow("not valid JSON");
+        await expect(config?.getAccessToken?.()).rejects.toThrow("neither valid JSON nor base64-encoded JSON");
     });
 
     it("returns undefined for a malformed key when no project id can be resolved", () => {

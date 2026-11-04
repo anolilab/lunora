@@ -28,9 +28,13 @@ export default defineNotify({
 VAPID_PUBLIC_KEY=<your-vapid-public-key>
 VAPID_PRIVATE_KEY=<your-vapid-private-key>
 VAPID_SUBJECT=mailto:you@example.com
-FCM_SERVICE_ACCOUNT={"type":"service_account","project_id":"<your-firebase-project-id>","client_email":"…","private_key":"<PEM private key, newlines written as \n>"}
-FCM_PROJECT_ID=<your-firebase-project-id>
+FCM_SERVICE_ACCOUNT=<base64-of-your-service-account-key-json>
 ```
+
+`.dev.vars` cannot hold the JSON's quotes, so store the key file base64-encoded:
+`lunora env set FCM_SERVICE_ACCOUNT "$(base64 < key.json | tr -d '\n')"`. In production
+the raw JSON works too: `wrangler secret put FCM_SERVICE_ACCOUNT < key.json`.
+`FCM_PROJECT_ID` is optional and overrides the key file's `project_id`.
 
 Generate a VAPID keypair once: `npx web-push generate-vapid-keys`.
 

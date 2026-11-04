@@ -67,8 +67,10 @@ describe("fcmServiceAccountTokenSource", () => {
             aud: TOKEN_URL,
             iss: "claims@proj.iam",
             scope: "https://www.googleapis.com/auth/firebase.messaging",
-            sub: "claims@proj.iam",
         });
+        // `sub` names a user to impersonate (domain-wide delegation); a plain service-account grant omits it.
+        expect(claims).not.toHaveProperty("sub");
+        expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
         expect(body.get("grant_type")).toBe("urn:ietf:params:oauth:grant-type:jwt-bearer");
     });
 
@@ -125,7 +127,7 @@ describe("fcmServiceAccountTokenSource", () => {
         const fetchMock = vi.fn<typeof fetch>();
         const getAccessToken = fcmServiceAccountTokenSource("{oops", { fetch: fetchMock, now: () => 0 });
 
-        await expect(getAccessToken()).rejects.toThrow("not valid JSON");
+        await expect(getAccessToken()).rejects.toThrow("neither valid JSON nor base64-encoded JSON");
         expect(fetchMock).not.toHaveBeenCalled();
     });
 
@@ -152,6 +154,15 @@ describe("parseServiceAccount", () => {
         const raw = JSON.stringify({ client_email: "a@p.iam", private_key: "PEM", project_id: "p", type: "service_account" });
 
         expect(parseServiceAccount(raw)).toStrictEqual({ client_email: "a@p.iam", private_key: "PEM", project_id: "p" });
+    });
+
+    it("accepts the key file base64-encoded, the form .dev.vars can hold", () => {
+        expect.hasAssertions();
+
+        const json = JSON.stringify({ client_email: "a@p.iam", private_key: String.raw`line1\nline2`, project_id: "p" });
+        const encoded = btoa(json);
+
+        expect(parseServiceAccount(encoded)).toStrictEqual({ client_email: "a@p.iam", private_key: "line1\nline2", project_id: "p" });
     });
 
     it(String.raw`restores newlines escaped as \n in the private key`, () => {

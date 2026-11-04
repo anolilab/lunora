@@ -22,6 +22,9 @@ const ASSERTION_TTL_SECONDS = 3600;
 /** Refresh this long before the token expires, so a send never starts with a stale one. */
 const REFRESH_MARGIN_MS = 60_000;
 
+/** Bounds the token exchange, so one stalled request cannot hold every FCM send queued behind it. */
+const TOKEN_EXCHANGE_TIMEOUT_MS = 10_000;
+
 /** Service accounts whose access token one isolate keeps. Bounded like the other per-isolate memos. */
 const TOKEN_CACHE_CAPACITY = 16;
 
@@ -47,8 +50,19 @@ interface FcmServiceAccountTokenOptions {
 }
 
 /**
- * Parse the JSON key file held in an env secret. Throws on a malformed key rather
- * than returning `undefined`, so the failure is visible on the first FCM send.
+ * The key file as JSON text. `.dev.vars` cannot hold a `"` or a backslash, so the secret may also be
+ * the key file base64-encoded; anything not starting with `{` is decoded as base64 first.
+ */
+const decodeServiceAccountText = (raw: string): string => {
+    const trimmed = raw.trim();
+
+    return trimmed.startsWith("{") ? trimmed : new TextDecoder().decode(fromBase64(trimmed));
+};
+
+/**
+ * Parse the key file held in an env secret, given as JSON or as base64 of that JSON.
+ * Throws on a malformed key rather than returning `undefined`, so the failure is
+ * visible on the first FCM send.
  *
  * A PEM pasted into a `.dev.vars` file usually has its newlines escaped as the two
  * characters `\n`; they are restored here so either form works.
@@ -57,10 +71,10 @@ const parseServiceAccount = (raw: string): FcmServiceAccount => {
     let parsed: unknown;
 
     try {
-        parsed = JSON.parse(raw);
+        parsed = JSON.parse(decodeServiceAccountText(raw));
     } catch {
-        // No `cause`: V8's JSON error quotes a fragment of the input, and the input is key material.
-        throw new TypeError("FCM_SERVICE_ACCOUNT is not valid JSON (paste the service-account key file as-is)");
+        // No `cause`: V8's JSON and base64 errors can quote a fragment of the input, and the input is key material.
+        throw new TypeError("FCM_SERVICE_ACCOUNT is neither valid JSON nor base64-encoded JSON (use the service-account key file as-is, or base64 of it)");
     }
 
     const candidate = parsed as Partial<FcmServiceAccount> | null;
@@ -111,7 +125,6 @@ const exchange = async (account: FcmServiceAccount, fetchImpl: typeof fetch, now
             iat: issuedAt,
             iss: account.client_email,
             scope: FCM_SCOPE,
-            sub: account.client_email,
         },
         key,
     );
@@ -120,6 +133,7 @@ const exchange = async (account: FcmServiceAccount, fetchImpl: typeof fetch, now
         body: new URLSearchParams({ assertion, grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer" }),
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         method: "POST",
+        signal: AbortSignal.timeout(TOKEN_EXCHANGE_TIMEOUT_MS),
     });
 
     if (!response.ok) {
