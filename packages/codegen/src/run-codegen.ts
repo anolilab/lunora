@@ -788,6 +788,9 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const wantsOpenApi = apiSpec === "openapi" || apiSpec === "both";
     const advisorProcedureData: ReadonlyArray<AdvisorProcedure> = advisorContext?.procedureProtections ?? [];
     const advisorProcedureDocument = `${JSON.stringify({ procedures: advisorProcedureData }, undefined, 2)}\n`;
+    // No advisor evidence (`lint: false`) means the list above is a placeholder, not a result. Writing it would
+    // replace a real list with an empty one and the health score would read ~100 with nothing checked.
+    const hasAdvisorProcedures = advisorContext !== undefined;
     const wantsOpenRpc = apiSpec === "openrpc" || apiSpec === "both";
 
     // The fluent worker-composition builder. Emits one method per package-backed
@@ -969,15 +972,13 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: wantsOpenApi ? openApiModuleContent : "", kind: "optional", name: "openapi.ts" },
               { content: wantsOpenRpc ? openRpcContent : "", kind: "optional", name: "openrpc.json" },
               { content: wantsOpenRpc ? openRpcModuleContent : "", kind: "optional", name: "openrpc.ts" },
-              // Studio-only data (the health map's denominator). Served to the studio by the
-              // host, not by the worker, so it stays out of the deployed bundle. Shape-checked
-              // against `@lunora/shard-engine`'s `AdvisorProcedure` before it is written, so a
-              // field added to the advisor's type and forgotten there fails codegen.
-              {
-                  content: advisorProcedureDocument,
-                  kind: "optional",
-                  name: "advisor-procedures.json",
-              },
+              // Studio-only data (the health map's denominator). The main app Worker never
+              // carries it: the dev hosts serve this file to the studio, and a hosted Studio
+              // is to get it from an opt-in companion Worker (`studio.companion`, not yet in
+              // this branch). Shape-checked against `@lunora/shard-engine`'s `AdvisorProcedure`
+              // before it is written, so a field added to the advisor's type and forgotten
+              // there fails codegen. Skipped without advisor evidence, leaving any existing file.
+              ...(hasAdvisorProcedures ? [{ content: advisorProcedureDocument, kind: "optional" as const, name: "advisor-procedures.json" }] : []),
               // Same pairing as the specs: the `.json` for tooling, the `.ts` for `createWorker({ architecture })`,
               // both removed when the last module goes.
               {

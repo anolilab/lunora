@@ -41,6 +41,11 @@ const renderStudioHtml = (config: StudioHtmlConfig): string => {
         settings.push("window.__LUNORA_SCHEMA_EDITABLE__=true;");
     }
 
+    if (config.advisorProcedures === true) {
+        // eslint-disable-next-line no-secrets/no-secrets -- a static JS assignment string, not a credential
+        settings.push("window.__LUNORA_ADVISOR_PROCEDURES__=true;");
+    }
+
     if (config.rulesInstalled === false) {
         // Only emitted when explicitly missing, so a static deploy (flag unset) never nags.
         // eslint-disable-next-line no-secrets/no-secrets -- a static JS assignment string, not a credential

@@ -524,7 +524,8 @@ export interface AdvisoriesResult {
 }
 
 /**
- * Payload of a `__lunora_admin__:getAdvisorProcedures` call.
+ * Body of the host's `/__lunora/advisor-procedures` route: the contents of the
+ * generated `advisor-procedures.json`, the health map's denominator.
  *
  * Reuses `@lunora/advisor`'s type rather than re-declaring the 20-field shape:
  * studio already depends on that package, so a local copy would be one more

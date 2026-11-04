@@ -399,11 +399,11 @@ is why the three levers (registry, lazy `app.ts` auth, lighter shared builders) 
 Cheaper levers, measured as upper bounds (payload replaced by an empty value) on top of the
 lazy+split build — all within noise individually, ~8–15 ms together:
 
-| Lever                                                                                                                                                                                  | Result                        |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| `shard.ts` metadata (`LUNORA_ADVISORIES` 1.4 MiB, `LUNORA_ADVISOR_PROCEDURES` 0.4 MiB, `TABLE_COLUMNS`, `TABLE_INDEXES`) is already `JSON.parse("…")` but still parsed at module scope | stubbing: 38 vs 32 ms (noise) |
-| `openapi.ts` is an object literal (0.6 MiB at 138 tables) evaluated at module scope                                                                                                    | stubbing: 41 vs 32 ms (noise) |
-| both                                                                                                                                                                                   | 24 vs 32 ms (min 10 vs 25)    |
+| Lever                                                                                                                                                                                                                                                                                             | Result                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `shard.ts` metadata (`LUNORA_ADVISORIES` 1.4 MiB, `LUNORA_ADVISOR_PROCEDURES` 0.4 MiB (since moved out of the bundle into `_generated/advisor-procedures.json`; measured while it was a literal), `TABLE_COLUMNS`, `TABLE_INDEXES`) is already `JSON.parse("…")` but still parsed at module scope | stubbing: 38 vs 32 ms (noise) |
+| `openapi.ts` is an object literal (0.6 MiB at 138 tables) evaluated at module scope                                                                                                                                                                                                               | stubbing: 41 vs 32 ms (noise) |
+| both                                                                                                                                                                                                                                                                                              | 24 vs 32 ms (min 10 vs 25)    |
 
 → worth doing because they are O(tables) and cheap (§6 step 4), but they are not what
 decides whether a large app deploys.

@@ -162,6 +162,14 @@ const WorkflowsPanel = lazy(() => import("../features/workflows/workflows-panel"
 
 interface StudioProps {
     /**
+     * The host serves `/__lunora/advisor-procedures`, which the Advisors Health tab
+     * reads as its score denominator. Off by default. Set by the dev hosts only; kept
+     * apart from {@link StudioProps.schemaEditable} because a host can serve the
+     * schema editor without this route.
+     */
+    readonly advisorProcedures?: boolean;
+
+    /**
      * Resolve one Analytics tab panel by its key (`"volume"`, `"latency"`,
      * `"hotShards"`). Supply a runner that calls an action in your app which
      * builds the statement server-side and runs it through `ctx.analyticsSql`:
@@ -1103,6 +1111,7 @@ const NotFoundRedirect = (): null => {
  * rebuilt only when those change.
  */
 const buildRouter = ({
+    advisorProcedures = false,
     analyticsSqlQuery,
     basePath,
     privacyRequests,
@@ -1180,7 +1189,7 @@ const buildRouter = ({
             <SchedulePanel initialShardKey={initialShardKey} loadCronJobs={scheduledCron} scheduledCancel={scheduledCancel} scheduledLoad={scheduledLoad} />
         ),
         schema: <SchemaRoutePanel initialShardKey={initialShardKey} schemaEditable={schemaEditable} />,
-        advisorHealth: <AdvisorHealthPanel localProcedures={schemaEditable} />,
+        advisorHealth: <AdvisorHealthPanel localProcedures={advisorProcedures} />,
         security: <SecurityAdvisorPanel />,
         settings: <SettingsPanel initialShardKey={initialShardKey} />,
         sql: <SqlEditorPanel initialShardKey={initialShardKey} />,
@@ -1237,6 +1246,7 @@ const buildRouter = ({
  * so navigation state survives unrelated re-renders.
  */
 const StudioShell = ({
+    advisorProcedures,
     analyticsSqlQuery,
     basePath,
     chrome,
@@ -1256,6 +1266,7 @@ const StudioShell = ({
     // individual props, not the unstable `props` identity), so navigation state
     // survives unrelated re-renders.
     const router = buildRouter({
+        advisorProcedures,
         analyticsSqlQuery,
         basePath,
         privacyRequests,

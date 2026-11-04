@@ -48,8 +48,8 @@ const rankRows = (procedures: ReadonlyArray<ProcedureScore>): ProcedureScore[] =
 
 interface AdvisorHealthPanelProps {
     /**
-     * `true` only on a dev host, which serves the advisor procedure list. A static
-     * deploy has no such route, so the panel says so instead of scoring.
+     * `true` only when the host mounts the advisor procedure route (`StudioProps.advisorProcedures`).
+     * Without it the panel says so instead of scoring.
      */
     readonly localProcedures?: boolean;
     /** Scopes the `data-testid`s. */

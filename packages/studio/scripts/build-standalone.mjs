@@ -33,7 +33,7 @@ const entry = [
     // Editing and the run-as tool are opt-in: the loopback dev hosts inject
     // `__LUNORA_DATA_EDITABLE__` / `__LUNORA_RUN_AS_IDENTITY__`, so a plain static
     // deploy stays read-only and can't forge an identity unless the embedder opts in.
-    "  studio: { dataEditable: g.__LUNORA_DATA_EDITABLE__ === true, runAsIdentity: g.__LUNORA_RUN_AS_IDENTITY__ === true, schemaEditable: g.__LUNORA_SCHEMA_EDITABLE__ === true },",
+    "  studio: { dataEditable: g.__LUNORA_DATA_EDITABLE__ === true, runAsIdentity: g.__LUNORA_RUN_AS_IDENTITY__ === true, schemaEditable: g.__LUNORA_SCHEMA_EDITABLE__ === true, advisorProcedures: g.__LUNORA_ADVISOR_PROCEDURES__ === true },",
     // The loopback dev hosts inject `__LUNORA_RULES_INSTALLED__=false` when the
     // project's agent skills are missing; absent (static deploy) means installed.
     "  rulesInstalled: g.__LUNORA_RULES_INSTALLED__ !== false,",

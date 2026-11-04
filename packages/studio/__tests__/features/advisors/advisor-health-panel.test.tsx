@@ -80,4 +80,42 @@ describe("advisorHealthPanel", () => {
             expect(screen.queryByTestId("advisor-health-score")).toBeNull();
         });
     });
+
+    it("fetches the list once when the advisories arrive after the first request", async () => {
+        expect.assertions(1);
+
+        const fetchMock = stubProceduresResponse(200, { procedures: [] });
+
+        render(renderPanel(true));
+        await screen.findByTestId("advisor-health-score");
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports a failing list at once instead of retrying behind a loading state", async () => {
+        expect.assertions(2);
+
+        const fetchMock = stubProceduresResponse(500, { error: "advisor-procedures.json is not valid JSON; re-run `lunora codegen`." });
+
+        render(renderPanel(true));
+        await screen.findByTestId("advisor-health-error");
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(screen.queryByTestId("advisor-health-loading")).toBeNull();
+    });
+
+    it("says the route is missing when the host answers the SPA shell with 200", async () => {
+        expect.assertions(1);
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn<typeof fetch>(async () => new Response("<!doctype html><html></html>", { headers: { "content-type": "text/html" }, status: 200 })),
+        );
+
+        render(renderPanel(true));
+
+        const alert = await screen.findByTestId("advisor-health-error");
+
+        expect(alert.textContent).toContain("not available on this host");
+    });
 });
