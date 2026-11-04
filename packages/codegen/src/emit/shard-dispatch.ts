@@ -183,7 +183,17 @@ __PREPARE_FUNCTION__            const registered = LUNORA_FUNCTIONS[functionPath
                 });
             }
 
-            const result = await registered.handler(ctx, args);
+            // An action's unawaited I/O can be cancelled after the response, so its
+            // ctx counts what is still in flight when the handler returns.
+            // Reported on a throw too: the pending calls are just as abandoned.
+            const finishActionWork = registered.kind === "action" ? this.watchActionWork(functionPath, ctx) : undefined;
+            let result: unknown;
+
+            try {
+                result = await registered.handler(ctx, args);
+            } finally {
+                finishActionWork?.();
+            }
 
             // Composed mutations settle their own delete queues. An action can
             // also queue deletes outside those mutations; drain its own queue here.
@@ -313,10 +323,9 @@ __COMMITTED_CATCH__            } finally {
         // parked it, and there is nothing to park — an app with no scheduler has no
         // \`ctx.scheduler\` call that reached the buffer in the first place.
         protected override scheduleOutboxScheduler(): SchedulerLike | undefined {
-            return config.scheduler?.((this.env ?? {}) as Record<string, unknown>) as SchedulerLike | undefined;
-        }`;
+__OUTBOX_SCHEDULER__        }`;
 
-const SUBSCRIPTION_METHODS = `        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): Promise<{ ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
+const SUBSCRIPTION_METHODS = `        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): Promise<{ identityTracked?: boolean; ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "query" || registered.visibility === "internal") {
@@ -329,14 +338,17 @@ __PREPARE_FUNCTION__            this.ensureServable();
             // Identity is threaded EXPLICITLY from the (deferred/interleaved)
             // subscription caller — never read from the shared per-request field
             // here — so a concurrent RPC can't leak its identity into this re-run.
-            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange });
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange });
             const result = await registered.handler(ctx, args);
 
             // Ranges come from THIS run's reads, never a shared field on the DO:
             // a deferred re-run interleaves with unrelated dispatches.
             const ranges = footprint.ranges();
 
-            return { ...(ranges === undefined ? {} : { ranges }), result, tables: footprint.tables };
+            // \`identityTracked\`: this ctx reports every read of its caller through
+            // \`noteIdentityRead\`, so the base may share the run across subscribers
+            // of a path observed never reading it.
+            return { identityTracked: true, ...(ranges === undefined ? {} : { ranges }), result, tables: footprint.tables };
         }
 
         protected override executeStream(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
@@ -355,7 +367,11 @@ __PREPARE_FUNCTION__            this.ensureServable();
                 // frame returned, interleaved with unrelated dispatches, so
                 // \`buildCtx\`'s per-request fallback would run an \`rls()\` /
                 // \`ctx.auth\` stream as nobody — or as a concurrent RPC's caller.
-                iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath, identity }), args, signal),
+                iterator: (signal) => {
+                    const headroom = this.streamHeadroom(functionPath, identity);
+
+                    return this.windowStreamReads(headroom, (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath, headroom, identity }), args, signal));
+                },
             };
         }`;
 /* eslint-enable no-secrets/no-secrets */
@@ -376,7 +392,7 @@ const COMMITTED_CATCH = `            } catch (error) {
 `;
 
 /** The dispatch methods for a shard: the committed-marker in the post-commit step only for a rooms app. */
-const dispatchMethods = (hasRooms: boolean, lazyFunctions = false): string => {
+const dispatchMethods = (hasRooms: boolean, lazyFunctions = false, stampsOutbox = false): string => {
     const preflightVisibility = lazyFunctions
         ? '            const registeredBeforeLoad = LUNORA_FUNCTIONS[functionPath];\n\n            if (registeredBeforeLoad?.visibility === "internal" && !this.isSystemDispatch()) {\n                throw new LunoraError("FUNCTION_NOT_FOUND", "function not registered: " + functionPath);\n            }\n\n'
         : "";
@@ -384,10 +400,16 @@ const dispatchMethods = (hasRooms: boolean, lazyFunctions = false): string => {
         ? '            const requestScope = this.captureRequestScope();\n            const preparation = this.prepareFunction(functionPath, "rpc");\n\n            if (preparation !== undefined) {\n                try {\n                    await preparation;\n                } finally {\n                    this.restoreRequestScope(requestScope);\n                }\n            }\n\n'
         : "";
 
-    return DISPATCH_METHODS_TEMPLATE.replace("__COMMITTED_CATCH__", hasRooms ? COMMITTED_CATCH : "").replace(
-        "__PREPARE_FUNCTION__",
-        `${preflightVisibility}${preparation}`,
-    );
+    // A retry replays the recorded options through the raw scheduler, so the agent stamp that the live scheduler applies is
+    // applied again here: a scheduled agent run keeps the shard it started on, not the one its record lacks.
+    const outboxScheduler = stampsOutbox
+        ? "            const configured = config.scheduler?.((this.env ?? {}) as Record<string, unknown>) as SchedulerLike | undefined;\n" +
+          "            return configured === undefined ? undefined : withAgentScheduleShard(configured, LUNORA_AGENTS, this.currentShardKey());\n"
+        : "            return config.scheduler?.((this.env ?? {}) as Record<string, unknown>) as SchedulerLike | undefined;\n";
+
+    return DISPATCH_METHODS_TEMPLATE.replace("__COMMITTED_CATCH__", hasRooms ? COMMITTED_CATCH : "")
+        .replace("__PREPARE_FUNCTION__", `${preflightVisibility}${preparation}`)
+        .replace("__OUTBOX_SCHEDULER__", outboxScheduler);
 };
 
 export { DISPATCH_RUN_SOURCE, dispatchMethods, dispatchRunSource, SUBSCRIPTION_METHODS };

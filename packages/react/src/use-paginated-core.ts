@@ -5,7 +5,7 @@ import type { Page, PaginatedCoreResult, PaginationResult } from "@lunora/client
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 import type { QueryKey } from "@tanstack/react-query";
 import { CancelledError, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
 import { useLunora } from "./lunora-provider";
@@ -115,19 +115,38 @@ const usePaginatedCore = function <T>(
         setError(undefined);
     }
 
+    // Every frame on any page re-renders the whole feed, so the entries are cached
+    // per `Page` object: re-deriving them costs two full serialisations of each
+    // loaded page's args per render. `Page` objects survive renders untouched
+    // until a boundary moves, and a `resetKey` change (fn, base-args content,
+    // shard, page size) starts a fresh map, so a cached entry always carries the
+    // current generation's base args.
+    const pageEntryCache = useMemo(
+        () => new WeakMap<Page, { args: Record<string, unknown>; hash: string; key: QueryKey }>(),
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: `resetKey` is the content hash of every input the entries derive from; keying on it rather than the raw `function_`/`baseArgs` identities is what lets the cache survive an inline args object.
+        [resetKey],
+    );
     // Build the (queryKey, args) pair for each loaded page. `cursor`/`endCursor`
     // carry the page's fixed `(lower, upper]` range so the client opens one
     // dedup'd subscription per range.
     // react-doctor-disable-next-line react-doctor/no-event-handler -- false positive: `pageEntries` is derived render state (the per-page (queryKey, args) list), not a faked event handler; the attach effect below reads it via `desiredRef` and keys on `pageKeysHash`. No user event triggers this derivation.
     const pageEntries = pages.map((page) => {
-        const pageArgs = { ...baseArgs, paginationOpts: { cursor: page.lower, endCursor: page.upper, numItems: page.numItems } };
-        const key: QueryKey = lunoraQueryKey(function_, pageArgs, shardKey);
+        let entry = pageEntryCache.get(page);
 
-        return { args: pageArgs, key };
+        if (entry === undefined) {
+            const pageArgs = { ...baseArgs, paginationOpts: { cursor: page.lower, endCursor: page.upper, numItems: page.numItems } };
+            const key: QueryKey = lunoraQueryKey(function_, pageArgs, shardKey);
+
+            entry = { args: pageArgs, hash: serializeQueryKey(key), key };
+            // react-doctor-disable-next-line react-hooks-js/immutability -- intentional: an idempotent memo cache keyed by the immutable `Page`; a discarded render only leaves an entry the next render would compute identically. The render-phase `resetKeyRef` read already bails React Compiler for this hook.
+            pageEntryCache.set(page, entry);
+        }
+
+        return entry;
     });
     // Stable hash of every loaded page key — the effect dep so we only re-attach
     // when the page set actually changes.
-    const pageKeysHash = pageEntries.map(({ key }) => serializeQueryKey(key)).join("|");
+    const pageKeysHash = pageEntries.map(({ hash }) => hash).join("|");
 
     // Read latest desired entries from a ref so the attach effect's dep list can
     // stay keyed on `pageKeysHash` alone — args/fn changes already move the hash.
@@ -206,7 +225,7 @@ const usePaginatedCore = function <T>(
 
         const desired = desiredRef.current;
         const registry = getSubscriptionRegistry(client);
-        const wanted = new Set(desired.entries.map(({ key }) => serializeQueryKey(key)));
+        const wanted = new Set(desired.entries.map(({ hash }) => hash));
 
         for (const [hash, detach] of detaches) {
             if (!wanted.has(hash)) {
@@ -216,7 +235,7 @@ const usePaginatedCore = function <T>(
         }
 
         for (const entry of desired.entries) {
-            const hash = serializeQueryKey(entry.key);
+            const { hash } = entry;
 
             if (detaches.has(hash)) {
                 continue;
@@ -342,7 +361,7 @@ const usePaginatedCore = function <T>(
     // triggers a re-render here.
     useEffect(() => {
         const cache = queryClient.getQueryCache();
-        const pageHashes = new Set(pageEntries.map(({ key }) => serializeQueryKey(key)));
+        const pageHashes = new Set(pageEntries.map(({ hash }) => hash));
         const pageFunctionRef = function_.__lunoraRef;
         const unsubscribe = cache.subscribe((event) => {
             // The registry pushes page data via `setQueryData`, which emits an

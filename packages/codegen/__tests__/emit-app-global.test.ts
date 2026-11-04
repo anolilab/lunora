@@ -93,9 +93,20 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
         // `D1Client` — so an unwrapped exec means the app eats D1's documented
         // baseline error rate on every read no matter what the client offers.
         expect(output).toContain(
-            "const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {",
+            "const buildSessionExec = (database: D1DatabaseLike, constraint: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {",
         );
         expect(output).toContain("return retryingExec({");
+    });
+
+    it("opens a first-primary session beside the replica exec for consistency: primary reads", () => {
+        expect.assertions(2);
+
+        const output = emitApp({ ...baseOptions, hasGlobal: true });
+
+        // A primary read must not reuse the replica session: the replica pins to the
+        // caller's bookmark or first-unconstrained, which can miss a just-committed write.
+        expect(output).toContain('const replica = buildSessionExec(database, bookmark ?? "first-unconstrained", onBookmark);');
+        expect(output).toContain("primary: buildPrimaryExec(database) };");
     });
 
     it("omits the admin-import wiring entirely for an app with no .global() table", () => {

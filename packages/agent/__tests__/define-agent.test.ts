@@ -4,6 +4,7 @@ import { defineAgent, defineAgentTool, isAgentDefinition } from "../src/define-a
 import { agentClassName, agentDefaultName } from "../src/naming";
 import { defineSkill } from "../src/skill";
 
+const NAME_PATTERN = /`name` must be a non-empty string/u;
 const MODEL_PATTERN = /model/u;
 const MAX_TURNS_PATTERN = /maxTurns/u;
 const VOICE_MAX_TURNS_PATTERN = /`voice\.maxTurns` must be a positive integer/u;
@@ -16,6 +17,9 @@ const ACTIVE_TOOLS_MEMORY_PATTERN = /`activeTools` omits the agentic-memory tool
 const MEMORY_SOURCE_PATTERN = /`memory` requires a `source`/u;
 const SKILL_KNOWLEDGE_SOURCE_PATTERN = /skill "billing" `knowledge` requires a `source`/u;
 
+const EMAIL_SHARD_HOOK_PATTERN = /`resolveEmailShard` must be a function/u;
+const CHANNEL_SHARD_HOOK_PATTERN = /`onInbound.resolveShard` must be a function/u;
+
 describe(defineAgent, () => {
     it("brands the definition and preserves the config", () => {
         const agent = defineAgent({ instructions: "hi", maxTurns: 4, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
@@ -24,6 +28,13 @@ describe(defineAgent, () => {
         expect(agent.maxTurns).toBe(4);
         expect(isAgentDefinition(agent)).toBe(true);
         expect(isAgentDefinition({})).toBe(false);
+    });
+
+    it("rejects a provided name that is empty or not a string, and accepts a valid one", () => {
+        expect(() => defineAgent({ model: "m", name: "" })).toThrow(NAME_PATTERN);
+        expect(() => defineAgent({ model: "m", name: 7 as unknown as string })).toThrow(NAME_PATTERN);
+        expect(defineAgent({ model: "m", name: "support" }).name).toBe("support");
+        expect(defineAgent({ model: "m" }).name).toBeUndefined();
     });
 
     it("rejects a missing model, bad maxTurns, and invalid tool names", () => {
@@ -53,6 +64,17 @@ describe(defineAgent, () => {
         // The string form goes through the same duration grammar, so it is bounded here too.
         expect(() => defineAgent({ approvalTimeout: "0 seconds", model: "m" })).toThrow(APPROVAL_TIMEOUT_PATTERN);
         expect(defineAgent({ approvalTimeout: "2 hours", model: "m" }).approvalTimeout).toBe("2 hours");
+    });
+
+    it("rejects an inbound shard hook that is not a function", () => {
+        expect.assertions(2);
+
+        const map = () => undefined;
+
+        expect(() => defineAgent({ model: "m", resolveEmailShard: "org-a" as never })).toThrow(EMAIL_SHARD_HOOK_PATTERN);
+        expect(() => defineAgent({ model: "m", onInbound: { channel: "slack", map, resolveShard: "org-a" as never, secret: "S" } })).toThrow(
+            CHANNEL_SHARD_HOOK_PATTERN,
+        );
     });
 
     it("derives the class (export key) and workflow names from the export name", () => {

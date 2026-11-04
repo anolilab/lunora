@@ -104,7 +104,7 @@ describe("scanWranglerVariablesForSecrets", () => {
         expect.assertions(2);
 
         // eslint-disable-next-line no-secrets/no-secrets -- a fake webhook-secret fixture, not a real credential
-        const findings = scanWranglerVariablesForSecrets({ WEBHOOK_SECRET: "whsec_9f8e7d6c5b4a3210ffee" }, "wrangler.jsonc");
+        const findings = scanWranglerVariablesForSecrets({ WEBHOOK_SECRET: "whsec_9f8e7d6c5b4a3210ffee" }, "wrangler.jsonc"); // secret-scanner:allow -- test fixture, not a real credential
 
         expect(findings).toHaveLength(1);
         expect(findings[0]?.kind).toBe("secret_named_var");

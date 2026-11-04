@@ -134,9 +134,23 @@ strongly consistent, with no routing overhead.
 ## Going global
 
 For cross-tenant data (identities, billing, account-wide audit logs) use
-`.global()`. The table lives in **Cloudflare D1** instead of a DO. Reads can
-hit a regional replica; writes go through the primary. Pass the `D1Session`
-bookmark via the `x-d1-bookmark` header for read-your-writes consistency.
+`.global()`. The table lives in **Cloudflare D1** instead of a DO. Writes go
+through the primary, and a read by default may be served from any regional
+replica. A request that carries the `x-d1-bookmark` header from an earlier
+response reads at least that far, which gives read-your-writes for a client's
+own sequence of requests.
+
+A read that must see a commit from another session, such as a policy check on
+a write path, asks for the primary:
+
+```ts
+const lock = await ctx.db.orgSettings.findFirst({ where: { orgId }, consistency: "primary" });
+```
+
+`consistency: "primary"` is accepted by `findMany` and `findFirst` on any table.
+On a shard-local table it changes nothing, since that table is already
+authoritative. It applies to the top-level rows of a `.global()` read; a
+`.global()` table loaded as a relation of a shard-local read is not covered yet.
 
 ```ts
 users: defineTable({ email: v.string(), name: v.string() }).global().index("by_email", ["email"], { unique: true });

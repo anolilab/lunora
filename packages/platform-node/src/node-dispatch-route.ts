@@ -29,7 +29,13 @@ import type { DirectShardDirectory } from "@lunora/platform";
 import { resolveShard, toErrorResponse } from "@lunora/runtime";
 
 import { readBodyTextCapped } from "../../../shared/read-body-text-capped";
-import { isReservedRelationFunctionPath, SCHEDULER_DISPATCH_PATH, verifySchedulerDispatch } from "../../../shared/scheduler-dispatch";
+import {
+    AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE,
+    isAgentRunOffDefaultShard,
+    isReservedRelationFunctionPath,
+    SCHEDULER_DISPATCH_PATH,
+    verifySchedulerDispatch,
+} from "../../../shared/scheduler-dispatch";
 import { buildSystemDispatchHeaders, readForwardedDispatchIdentity } from "../../../shared/system-dispatch-headers";
 
 /** Upper bound on a dispatch body, matching the runtime's default body budget. */
@@ -43,6 +49,8 @@ interface NodeDispatchInvocation {
     id: string | undefined;
     /** Identity the trusted caller forwarded, if any. */
     identity: { identity?: string; userId?: string } | undefined;
+    /** The job's due time in epoch-ms, when the sender stamped one. */
+    scheduledFor?: number;
     shardKey: string;
     traceparent: string | undefined;
 }
@@ -115,11 +123,16 @@ const handle = async (request: Request, options: NodeDispatchRouteOptions): Prom
 
     const shardKey = typeof candidate["shardKey"] === "string" && candidate["shardKey"].length > 0 ? candidate["shardKey"] : options.defaultShardKey;
 
+    if (isAgentRunOffDefaultShard(candidate["functionPath"], shardKey, options.defaultShardKey)) {
+        throw new LunoraError("BAD_REQUEST", AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE);
+    }
+
     return options.invoke({
         args: (candidate["args"] ?? {}) as Record<string, unknown>,
         functionPath: candidate["functionPath"],
         id: typeof candidate["id"] === "string" && candidate["id"].length > 0 ? candidate["id"] : undefined,
         identity: readForwardedDispatchIdentity(request),
+        scheduledFor: typeof candidate["scheduledFor"] === "number" ? candidate["scheduledFor"] : undefined,
         shardKey,
         traceparent: request.headers.get("traceparent") ?? undefined,
     });
@@ -145,7 +158,12 @@ const createShardInvoke =
 
         const request = new Request("https://shard.internal/rpc", {
             body: JSON.stringify({ args: call.args, functionPath: call.functionPath }),
-            headers: buildSystemDispatchHeaders({ forwardedIdentity: call.identity, mutationId: call.id, traceparent: call.traceparent }),
+            headers: buildSystemDispatchHeaders({
+                forwardedIdentity: call.identity,
+                mutationId: call.id,
+                scheduledFor: call.scheduledFor,
+                traceparent: call.traceparent,
+            }),
             method: "POST",
         });
 

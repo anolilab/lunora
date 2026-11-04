@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBrowser } from "../src/create-browser";
+import type { PlaywrightModuleLike } from "../src/types";
 import { fakeBinding, fakeLaunch } from "./_helpers/fake-launch";
 import { stubDohFetch } from "./_helpers/stub-doh";
 
@@ -23,7 +24,7 @@ describe("createBrowser", () => {
         expect(() => createBrowser({})).toThrow(/`binding` is required/);
     });
 
-    it("throws on first use when launch is not available", async () => {
+    it("throws on first use when playwright is not configured", async () => {
         expect.assertions(1);
 
         const browser = createBrowser({ binding: fakeBinding() });
@@ -31,12 +32,49 @@ describe("createBrowser", () => {
         await expect(browser.screenshot("https://example.com")).rejects.toThrow(/@cloudflare\/playwright/);
     });
 
+    it("loads playwright on the first browser call, once, not at construction", async () => {
+        expect.assertions(3);
+
+        const launch = fakeLaunch();
+        const playwright = vi.fn<() => Promise<PlaywrightModuleLike>>(async () => {
+            return { launch };
+        });
+        const browser = createBrowser({ binding: fakeBinding(), playwright });
+
+        expect(playwright).not.toHaveBeenCalled();
+
+        await Promise.all([browser.content("https://example.com/a"), browser.content("https://example.com/b")]);
+
+        expect(playwright).toHaveBeenCalledTimes(1);
+        expect(launch.browsers).toHaveLength(2);
+    });
+
+    it("rejects with the loader's own error and retries the load on the next call", async () => {
+        expect.assertions(3);
+
+        const launch = fakeLaunch();
+        const playwright = vi.fn<() => Promise<{ launch: typeof launch }>>().mockRejectedValueOnce(new Error("Cannot find module '@cloudflare/playwright'"));
+
+        playwright.mockResolvedValue({ launch });
+
+        const browser = createBrowser({ binding: fakeBinding(), playwright });
+
+        await expect(browser.content("https://example.com/")).rejects.toThrow("Cannot find module '@cloudflare/playwright'");
+        await expect(browser.content("https://example.com/")).resolves.toBeTypeOf("string");
+        expect(playwright).toHaveBeenCalledTimes(2);
+    });
+
     describe("screenshot", () => {
         it("navigates to the validated url and returns the bytes", async () => {
             expect.assertions(3);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             const bytes = await browser.screenshot("https://example.com/page");
 
@@ -49,7 +87,12 @@ describe("createBrowser", () => {
             expect.assertions(1);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await browser.screenshot("https://example.com", { fullPage: true, type: "jpeg" });
 
@@ -60,7 +103,12 @@ describe("createBrowser", () => {
             expect.assertions(1);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await browser.screenshot("https://example.com", { viewport: { height: 999_999, width: 999_999 } });
 
@@ -71,7 +119,12 @@ describe("createBrowser", () => {
             expect.assertions(2);
 
             const launch = fakeLaunch({ gotoThrows: true });
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await expect(browser.screenshot("https://example.com")).rejects.toThrow(/navigation failed/);
 
@@ -84,7 +137,12 @@ describe("createBrowser", () => {
             expect.assertions(1);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await browser.screenshot("https://example.com", { viewport: { height: Number.NaN, width: Number.POSITIVE_INFINITY } });
 
@@ -95,7 +153,12 @@ describe("createBrowser", () => {
             expect.assertions(1);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await browser.screenshot("https://example.com", { viewport: { height: 0, width: -50 } });
 
@@ -106,7 +169,12 @@ describe("createBrowser", () => {
             expect.assertions(1);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await browser.content("https://example.com", { timeoutMs: 999_999, waitUntil: "domcontentloaded" });
 
@@ -117,7 +185,12 @@ describe("createBrowser", () => {
             expect.assertions(1);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await browser.content("https://example.com", { timeoutMs: Number.NaN });
 
@@ -128,7 +201,13 @@ describe("createBrowser", () => {
             expect.assertions(1);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch, timeoutMs: 5000 });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+                timeoutMs: 5000,
+            });
 
             await browser.content("https://example.com");
 
@@ -174,7 +253,12 @@ describe("createBrowser", () => {
             expect.assertions(2);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await expect(browser.screenshot(url)).rejects.toThrow(/@lunora\/browser/);
             expect(launch.browsers).toHaveLength(0);
@@ -184,7 +268,12 @@ describe("createBrowser", () => {
             expect.assertions(1);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await browser.content("http://example.com");
             await browser.content("https://example.com");
@@ -196,7 +285,13 @@ describe("createBrowser", () => {
             expect.assertions(2);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ allowPrivateTargets: true, binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                allowPrivateTargets: true,
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await browser.content("http://127.0.0.1:8787/health");
 
@@ -208,7 +303,13 @@ describe("createBrowser", () => {
             expect.assertions(2);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ allowPrivateTargets: true, binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                allowPrivateTargets: true,
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await expect(browser.screenshot("file:///etc/passwd")).rejects.toThrow(/@lunora\/browser/);
             expect(launch.browsers).toHaveLength(0);
@@ -220,7 +321,13 @@ describe("createBrowser", () => {
             expect.assertions(2);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ allowedHosts: ["example.com"], binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                allowedHosts: ["example.com"],
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await expect(browser.content("https://evil.example.net")).rejects.toThrow(/not in the configured allowedHosts allowlist/);
             expect(launch.browsers).toHaveLength(0);
@@ -230,7 +337,13 @@ describe("createBrowser", () => {
             expect.assertions(1);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ allowedHosts: ["Example.com"], binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                allowedHosts: ["Example.com"],
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await browser.content("https://example.com./page");
 
@@ -245,7 +358,13 @@ describe("createBrowser", () => {
             // `browser_user_url_without_allowlist` suppressed on the key being
             // PRESENT. The config read as hardened and was not.
             const launch = fakeLaunch();
-            const browser = createBrowser({ allowedHosts: [], binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                allowedHosts: [],
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await expect(browser.content("https://example.com/page")).rejects.toThrow(/allowedHosts is configured but EMPTY/);
             expect(launch.browsers).toHaveLength(0);
@@ -259,7 +378,14 @@ describe("createBrowser", () => {
             // off) plus the flag (private-target guard off, redirect interception
             // never registered) — now refuses outright.
             const launch = fakeLaunch();
-            const browser = createBrowser({ allowPrivateTargets: true, allowedHosts: [], binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                allowPrivateTargets: true,
+                allowedHosts: [],
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await expect(browser.content("https://169.254.169.254/latest/meta-data/")).rejects.toThrow(/allowedHosts is configured but EMPTY/);
             expect(launch.browsers).toHaveLength(0);
@@ -277,7 +403,12 @@ describe("createBrowser", () => {
 
             stubDohFetch({ 1: [{ data: "169.254.169.254", type: 1 }] });
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await expect(browser.content("https://rebind.example.com")).rejects.toThrow(/resolves to a private\/internal address/);
             expect(launch.browsers).toHaveLength(0);
@@ -288,7 +419,13 @@ describe("createBrowser", () => {
 
             const fetchMock = stubDohFetch({ 1: [{ data: "169.254.169.254", type: 1 }] });
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch, resolveDns: false });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+                resolveDns: false,
+            });
 
             await browser.content("https://rebind.example.com");
 
@@ -301,7 +438,13 @@ describe("createBrowser", () => {
 
             const fetchMock = stubDohFetch({ 1: [{ data: "169.254.169.254", type: 1 }] });
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch, resolveDns: true });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+                resolveDns: true,
+            });
 
             await expect(browser.content("https://rebind.example.com")).rejects.toThrow(/resolves to a private\/internal address/);
             expect(launch.browsers).toHaveLength(0);
@@ -313,7 +456,13 @@ describe("createBrowser", () => {
 
             const fetchMock = stubDohFetch({ 1: [{ data: "93.184.216.34", type: 1 }], 28: [{ data: "2606:2800:220:1:248:1893:25c8:1946", type: 28 }] });
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch, resolveDns: true });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+                resolveDns: true,
+            });
 
             await browser.content("https://example.com");
 
@@ -326,7 +475,13 @@ describe("createBrowser", () => {
 
             stubDohFetch({ 1: [], 28: [{ data: "fd00::1", type: 28 }] });
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch, resolveDns: true });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+                resolveDns: true,
+            });
 
             await expect(browser.content("https://rebind.example.com")).rejects.toThrow(/DNS-rebinding guard/);
         });
@@ -341,7 +496,13 @@ describe("createBrowser", () => {
             vi.stubGlobal("fetch", fetchMock);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch, resolveDns: true });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+                resolveDns: true,
+            });
 
             // The name's nameserver can stall or break the check on purpose; that must not wave the request through.
             await expect(browser.content("https://example.com")).rejects.toMatchObject({
@@ -366,7 +527,13 @@ describe("createBrowser", () => {
             vi.stubGlobal("fetch", fetchMock);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch, resolveDns: true });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+                resolveDns: true,
+            });
 
             await expect(browser.content("https://example.com")).rejects.toMatchObject({ code: "FORBIDDEN" });
             expect(launch.browsers).toHaveLength(0);
@@ -377,7 +544,13 @@ describe("createBrowser", () => {
 
             const fetchMock = stubDohFetch({});
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch, resolveDns: true });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+                resolveDns: true,
+            });
 
             await browser.content("https://93.184.216.34");
 
@@ -399,7 +572,12 @@ describe("createBrowser", () => {
             expect.assertions(2);
 
             const launch = fakeLaunch({ network: redirectTo("http://10.0.0.5/admin") });
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await expect(browser.content("https://public.example.com")).rejects.toMatchObject({ code: "FORBIDDEN" });
             expect(launch.requested).toStrictEqual(["https://public.example.com/"]);
@@ -409,7 +587,12 @@ describe("createBrowser", () => {
             expect.assertions(2);
 
             const launch = fakeLaunch({ network: redirectTo("http://169.254.169.254/latest/meta-data/") });
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await expect(browser.content("https://public.example.com")).rejects.toThrow(/private\/internal address/u);
             expect(launch.requested).not.toContain("http://169.254.169.254/latest/meta-data/");
@@ -419,7 +602,12 @@ describe("createBrowser", () => {
             expect.assertions(2);
 
             const launch = fakeLaunch({ network: redirectTo("https://cdn.example.net/final") });
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await expect(browser.content("https://public.example.com")).resolves.toContain("hi");
             expect(launch.browsers[0]!.pages[0]!.gotoCalls).toStrictEqual(["https://public.example.com/", "https://cdn.example.net/final"]);
@@ -429,7 +617,12 @@ describe("createBrowser", () => {
             expect.assertions(1);
 
             const launch = fakeLaunch({ network: redirectTo("/next") });
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await browser.content("https://public.example.com");
 
@@ -447,7 +640,12 @@ describe("createBrowser", () => {
                     return { headers: { location: `https://loop.example.com/${String(hop)}` }, status: 302 };
                 },
             });
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await expect(browser.content("https://loop.example.com")).rejects.toMatchObject({ code: "BROWSER_TOO_MANY_REDIRECTS", status: 502 });
         });
@@ -459,7 +657,13 @@ describe("createBrowser", () => {
             // session makes, hops included, so the navigation is continued in the
             // browser (keeping a Tunnel-reachable internal host reachable).
             const launch = fakeLaunch();
-            const browser = createBrowser({ allowedHosts: ["public.example.com"], binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                allowedHosts: ["public.example.com"],
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await browser.content("https://public.example.com");
 
@@ -474,7 +678,12 @@ describe("createBrowser", () => {
             expect.assertions(2);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             const bytes = await browser.pdf("https://example.com");
 
@@ -486,7 +695,12 @@ describe("createBrowser", () => {
             expect.assertions(1);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await expect(browser.content("https://example.com")).resolves.toBe("<html><body>hi</body></html>");
         });
@@ -495,7 +709,12 @@ describe("createBrowser", () => {
             expect.assertions(1);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             const result = await browser.scrape("https://example.com", () => 42 as never);
 
@@ -508,7 +727,12 @@ describe("createBrowser", () => {
             expect.assertions(3);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await browser.launch(async (raw) => {
                 const context = await raw.newContext();
@@ -526,7 +750,12 @@ describe("createBrowser", () => {
             expect.assertions(2);
 
             const launch = fakeLaunch();
-            const browser = createBrowser({ binding: fakeBinding(), launch });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch };
+                },
+            });
 
             await expect(
                 browser.launch(async () => {
@@ -543,7 +772,12 @@ describe("createBrowser", () => {
         it("does not replace the result", async () => {
             expect.assertions(1);
 
-            const browser = createBrowser({ binding: fakeBinding(), launch: launchWithBrokenClose() });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch: launchWithBrokenClose() };
+                },
+            });
 
             await expect(browser.content("https://example.com")).resolves.toContain("hi");
         });
@@ -551,7 +785,12 @@ describe("createBrowser", () => {
         it("does not mask the caller's own error", async () => {
             expect.assertions(1);
 
-            const browser = createBrowser({ binding: fakeBinding(), launch: launchWithBrokenClose() });
+            const browser = createBrowser({
+                binding: fakeBinding(),
+                playwright: () => {
+                    return { launch: launchWithBrokenClose() };
+                },
+            });
 
             await expect(
                 browser.launch(async () => {

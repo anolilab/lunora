@@ -47,6 +47,23 @@ describe(functionTool, () => {
         expect(output).toStrictEqual({ id: "o_42", status: "shipped" });
     });
 
+    it("runs an app function on the run's shard, but the agent's own agents:* function on the default shard", async () => {
+        expect.assertions(1);
+
+        const seen: unknown[] = [];
+        const run: AgentToolContext["run"] = async (_reference, _args, options) => {
+            seen.push(options);
+
+            return undefined;
+        };
+        const context = toolContext(run, { shardKey: "tenant-a" });
+
+        await functionTool("orders:byId", { description: "Look up an order by id.", inputSchema }).execute({ id: "o_42" }, context);
+        await functionTool("agents:agentState", { description: "Read the thread state.", inputSchema }).execute({ id: "o_42" }, context);
+
+        expect(seen).toStrictEqual([{ shardKey: "tenant-a" }, undefined]);
+    });
+
     it("forwards the call's idempotencyKey to the dispatched function, pinned after the model input", async () => {
         const seen: (Record<string, unknown> | undefined)[] = [];
 

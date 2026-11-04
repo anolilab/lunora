@@ -45,6 +45,8 @@ const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> = {
     DELIVERY_RECEIPT_FENCED:
         "The operation committed, but its stored result belongs to an older authority epoch. Do not automatically retry with a new transport ID. Recover through the application's durable operation key under current authorization.",
     CONFLICT: CONFLICT_HINT,
+    GLOBAL_TRANSACTION_UNSUPPORTED:
+        "A `.global()` write commits its row and companion rows in one transaction. Pass a postgres.js client that has `begin()`, or a mysql2 pool (`createPool`) rather than a single connection.",
     NOT_UNIQUE: [
         "`.unique()` matched more than one document — it expects the query to identify at most one row.",
         "",
@@ -62,6 +64,8 @@ const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> = {
         "Narrow the read with an index (`.withIndex(...)`) instead of scanning the table, or split the write across several mutations — for a large backfill use `defineMigration` + `lunora migrate up`, which batches and checkpoints for you.",
         "",
         "The ceilings are deliberately conservative — they exist to stop one request taking down the whole shard. A deployment that genuinely needs bigger transactions can raise them by overriding the `transactionLimits()` seam on its generated shard class.",
+        "",
+        "A transaction that reaches 80% of a ceiling without crossing it logs one `warn` line (event `lunora.transaction.near_limit`) naming the limit, so a function that only gets close on development data shows up before production data pushes it over. A single read or write that jumps past the ceiling from below 80% fails without that warning.",
     ],
     MIGRATION_DRIFT: [
         "An applied SQL migration is never re-run, so the runner stopped before applying anything.",
@@ -135,6 +139,8 @@ const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> = {
         "The imported row carries an `_id` that is already held by a DIFFERENT table in this shard. Ids are per-table, so inserting it would leave two tables claiming one id and make a later lookup resolve to whichever one it reached first.",
         "",
         "This is reported per row rather than aborting the import: the remaining rows still apply. Re-mint the id on the source side, or import that table into a shard that does not already hold it.",
+        "",
+        "Only shard tables raise it. A `.global()` table names its table on every by-id call, so the same id in two global tables is two separate rows and the import accepts it.",
     ],
     STORAGE_CHECKSUM_MISMATCH: [
         "The upload body did not match the declared `expectedSize` or `expectedSha256`, so nothing was written — this check fails closed.",

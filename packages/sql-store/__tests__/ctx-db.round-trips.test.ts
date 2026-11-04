@@ -249,7 +249,8 @@ describe("createSqlCtxDb — companion rebuilds", () => {
                     return await harness.exec.all(query, parameters);
                 },
             };
-            const abandoned = createSqlCtxDb({ clock: () => 1, dialect, exec: stuck, provisionScope, schema: companionSchema });
+            // No statement deadline: a cancelled request's timers never fire either, so its run stays pending.
+            const abandoned = createSqlCtxDb({ clock: () => 1, dialect, exec: stuck, provisionScope, queryTimeoutMs: 0, schema: companionSchema });
 
             abandoned.count("notes", { org: "a" }).catch(() => undefined);
 
@@ -290,7 +291,8 @@ describe("createSqlCtxDb — companion rebuilds", () => {
                     return await recorded.all(query, parameters);
                 },
             };
-            const stalled = createSqlCtxDb({ clock: () => 1, dialect, exec: slow, provisionScope, schema: companionSchema });
+            // No statement deadline, so the source page stays parked past the rebuild wait.
+            const stalled = createSqlCtxDb({ clock: () => 1, dialect, exec: slow, provisionScope, queryTimeoutMs: 0, schema: companionSchema });
             const first = stalled.count("notes", { org: "a" });
 
             const next = createSqlCtxDb({ clock: () => 2, dialect, exec: harness.exec, provisionScope, schema: companionSchema });
@@ -452,10 +454,21 @@ describe("createSqlCtxDb — companion rebuilds", () => {
 
             const stalled = gate();
             const replacement = gate();
-            const first = createSqlCtxDb({ clock: () => 1, dialect, exec: stalled.exec, provisionScope, schema: companionSchema }).count("notes", {
-                org: "a",
-            });
-            const counted = createSqlCtxDb({ clock: () => 2, dialect, exec: replacement.exec, provisionScope, schema: companionSchema }).count("notes", {
+            // No statement deadlines, so both gated source pages stay parked past the rebuild wait.
+            const first = createSqlCtxDb({ clock: () => 1, dialect, exec: stalled.exec, provisionScope, queryTimeoutMs: 0, schema: companionSchema }).count(
+                "notes",
+                {
+                    org: "a",
+                },
+            );
+            const counted = createSqlCtxDb({
+                clock: () => 2,
+                dialect,
+                exec: replacement.exec,
+                provisionScope,
+                queryTimeoutMs: 0,
+                schema: companionSchema,
+            }).count("notes", {
                 org: "a",
             });
 
@@ -612,7 +625,7 @@ describe("createSqlCtxDb — by-id writes pinned to a table", () => {
         harness.close();
     });
 
-    /** The id probe `tableNameFromId` fans out across tables. */
+    /** A bare existence probe: the id-only resolution this writer no longer does. */
     const isProbe = (statement: string): boolean => statement.startsWith("SELECT 1 FROM");
 
     it("reads the row once, with no id probe ahead of it", async () => {
@@ -648,6 +661,33 @@ describe("createSqlCtxDb — by-id writes pinned to a table", () => {
         await expect(writer.get("tags", tagId)).resolves.toMatchObject({ label: "x" });
     });
 
+    it("refuses a by-id call that names no table instead of probing for the id", async () => {
+        expect.assertions(8);
+
+        const { exec, statements } = recording(harness.exec);
+        const writer = createSqlCtxDb({ clock: () => 1, dialect, exec, schema });
+        const id = await writer.insert("notes", { body: "a" });
+        const before = statements.length;
+        // A JS caller (or a stale cast) can still omit the table the types require.
+        const loose = writer as unknown as Record<string, (...arguments_: unknown[]) => Promise<unknown>>;
+        const unpinned = [
+            () => loose["patch"]?.(undefined, id, { body: "b" }),
+            () => loose["replace"]?.(undefined, id, { body: "b" }),
+            () => loose["delete"]?.(undefined, id),
+            () => loose["restore"]?.(undefined, id),
+            () => loose["patchIf"]?.(undefined, id, { patch: { body: "b" }, where: {} }),
+            () => loose["get"]?.(undefined, id),
+        ];
+
+        for (const call of unpinned) {
+            // eslint-disable-next-line no-await-in-loop -- each rejection is asserted in turn
+            await expect(call()).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        }
+
+        expect(statements.slice(before).filter((statement) => isProbe(statement))).toStrictEqual([]);
+        await expect(writer.get("notes", id)).resolves.toMatchObject({ body: "a" });
+    });
+
     it("refuses a pinned table that does not live in this store", async () => {
         expect.assertions(1);
 
@@ -655,6 +695,18 @@ describe("createSqlCtxDb — by-id writes pinned to a table", () => {
         const id = await writer.insert("notes", { body: "a" });
 
         await expect(writer.patch("constructor", id, { body: "b" })).rejects.toThrow(`"constructor" is not a table in this schema`);
+    });
+
+    it("does not read an omitted table as a table named undefined", async () => {
+        expect.assertions(2);
+
+        const named: SchemaLike = { tables: { undefined: { indexes: [], shape: { body: col("string") }, shardMode: { kind: "global" } } } } as never;
+        const writer = createSqlCtxDb({ clock: () => 1, dialect, exec: harness.exec, schema: named });
+        const id = await writer.insert("undefined", { body: "a" });
+        const loose = writer as unknown as Record<string, (...arguments_: unknown[]) => Promise<unknown>>;
+
+        await expect(loose["patch"]?.(undefined, id, { body: "b" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        await expect(writer.get("undefined", id)).resolves.toMatchObject({ body: "a" });
     });
 });
 
@@ -872,5 +924,52 @@ describe("createSqlCtxDb — the changed-tables poll", () => {
             // eslint-disable-next-line no-await-in-loop -- one poll per cursor, compared in turn
             await expect(writer.cdcChangedTables?.(since)).resolves.toMatchObject({ cursor, tables: expected.map((row) => row["table"]) });
         }
+    });
+});
+
+describe("createSqlCtxDb — statements stay under workerd's compound-SELECT limit", () => {
+    let harness: ReturnType<typeof createSqliteBatchHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteBatchHarness();
+
+        // workerd and D1 allow five terms per compound SELECT; `node:sqlite` exposes the limit from Node 24.
+        const { limits } = harness.database as unknown as { limits?: { compoundSelect: number } };
+
+        if (limits !== undefined) {
+            limits.compoundSelect = 5;
+        }
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("rebuilds aggregate and rank companions holding more than five rows", async () => {
+        expect.assertions(2);
+
+        const schema = {
+            tables: {
+                notes: {
+                    aggregateIndexes: [{ by: ["org"], name: "byOrg", on: "notes", op: "count" }],
+                    indexes: [],
+                    rankIndexes: [{ name: "byPriority", on: "notes", sortBy: [{ direction: "desc", field: "priority" }] }],
+                    shape: { org: col("string"), priority: col("number") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as unknown as SchemaLike;
+        const seeder = createSqlCtxDb({ clock: () => 1, dialect, exec: harness.exec, schema });
+
+        for (const priority of [1, 2, 3, 4, 5, 6, 7]) {
+            // eslint-disable-next-line no-await-in-loop -- deterministic seeding
+            await seeder.insert("notes", { org: `org-${String(priority)}`, priority });
+        }
+
+        // A fresh writer rebuilds both companions from the table: seven groups and seven rank entries.
+        const rebuilt = createSqlCtxDb({ clock: () => 1, dialect, exec: harness.exec, schema });
+
+        await expect(rebuilt.count("notes", { org: "org-7" })).resolves.toBe(1);
+        await expect(rebuilt.rankPage("notes", "byPriority", { take: 10 }).then((page) => page.page.length)).resolves.toBe(7);
     });
 });

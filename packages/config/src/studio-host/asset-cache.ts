@@ -11,6 +11,7 @@
  * host to apply: a host applying it would keep its own copy of the header
  * block, which is the drift this module exists to prevent.
  */
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 
@@ -58,37 +59,58 @@ const applyStudioAssetCache = (request: IncomingMessage, response: ServerRespons
 
 type AssetEncoding = "br" | "gzip";
 
-/** A zero quality value (`q=0`, `q=0.0`, …) — the client refuses that coding. */
-const ZERO_QUALITY = /^q=0(?:\.0*)?$/;
+/** What a client's `Accept-Encoding` allows: the codings we can produce, best first, and whether the raw body is acceptable. */
+interface EncodingChoice {
+    /** Supported codings the client accepts, highest quality first; brotli before gzip on a tie. */
+    readonly encodings: ReadonlyArray<AssetEncoding>;
+    /** False when the client refuses `identity` (explicitly, or through `*;q=0` with no `identity` entry). */
+    readonly identityAllowed: boolean;
+}
+
+/** The weight of a coding's `q` parameter; a coding without one has full weight, a malformed one is read the same way. */
+const qualityOf = (parameters: ReadonlyArray<string>): number => {
+    const parameter = parameters.find((candidate) => candidate.startsWith("q="));
+    const value = parameter?.slice(2).trim() ?? "";
+    // `Number("")` is 0, which would refuse the coding, so an empty weight is malformed like any other.
+    const quality = value === "" ? Number.NaN : Number(value);
+
+    return Number.isNaN(quality) || quality < 0 || quality > 1 ? 1 : quality;
+};
 
 /**
- * The encoding to answer with: brotli when the client accepts it (smaller),
- * else gzip, else none. A coding listed with `q=0` is refused, per RFC 9110.
+ * Read `Accept-Encoding` per RFC 9110: each coding's `q` weight, with `*` covering the codings not named. A coding with
+ * `q=0` is refused. The encodings come back ordered by weight, so `br;q=0.1, gzip;q=1` answers gzip.
  */
-const pickEncoding = (acceptEncoding: string | undefined): AssetEncoding | undefined => {
+const chooseEncoding = (acceptEncoding: string | undefined): EncodingChoice => {
     if (acceptEncoding === undefined) {
-        return undefined;
+        return { encodings: [], identityAllowed: true };
     }
 
-    const accepted = new Set<string>();
+    const weights = new Map<string, number>();
 
     for (const part of acceptEncoding.split(",")) {
         const [coding = "", ...parameters] = part.split(";").map((token) => token.trim().toLowerCase());
 
-        if (!parameters.some((parameter) => ZERO_QUALITY.test(parameter))) {
-            accepted.add(coding);
-        }
+        weights.set(coding, qualityOf(parameters));
     }
 
-    if (accepted.has("br")) {
-        return "br";
-    }
+    const weightOf = (coding: string): number => weights.get(coding) ?? weights.get("*") ?? 0;
+    const supported: ReadonlyArray<AssetEncoding> = ["br", "gzip"];
 
-    return accepted.has("gzip") ? "gzip" : undefined;
+    // An unnamed identity ranks lowest, so a coding the client accepts at any weight beats it on a tie; a named or
+    // wildcard identity ranks the raw body against the codings, which then answer only when they weigh more.
+    const identityQuality = weights.get("identity") ?? weights.get("*") ?? 0;
+
+    return {
+        // Array.prototype.sort is stable, so the listed order (brotli first) breaks a tie.
+        encodings: supported.filter((coding) => weightOf(coding) > Math.max(0, identityQuality)).toSorted((left, right) => weightOf(right) - weightOf(left)),
+        identityAllowed: (weights.get("identity") ?? weights.get("*") ?? 1) > 0,
+    };
 };
 
 /**
- * Compressed bodies of the current studio build, keyed `${encoding}:${fileName}`.
+ * Compressed bodies of the current studio build, keyed `${encoding}:${fileName}:${content hash}`. The hash keeps two studio
+ * installs that share a stamp (the CLI and the middleware can resolve different ones) from serving each other's bytes.
  * The bundle is ~1 MiB of JS + CSS that every studio load re-sends, so each file
  * is compressed once per encoding, not per request. Dropped wholesale when the
  * rebuild stamp moves, so a mid-session `@lunora/studio` rebuild never serves
@@ -121,7 +143,7 @@ const compressedBody = (body: Buffer, encoding: AssetEncoding, fileName: string,
         compressedStamp = stamp;
     }
 
-    const key = `${encoding}:${fileName}`;
+    const key = `${encoding}:${fileName}:${createHash("sha256").update(body).digest("hex")}`;
     let cached = compressedBodies.get(key);
 
     if (cached === undefined) {
@@ -154,12 +176,23 @@ const sendStudioAsset = (
 ): void => {
     response.setHeader("Vary", "Accept-Encoding");
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `headers` is typed required but partial/mocked requests omit it
+    const { encodings, identityAllowed } = chooseEncoding(rawHeader(request.headers?.["accept-encoding"]));
+    const encoding = identityAllowed && body.length < MIN_COMPRESS_BYTES ? undefined : encodings[0];
+
+    // The client refused the raw body and every coding we can produce.
+    if (encoding === undefined && !identityAllowed) {
+        response.statusCode = 406;
+        response.end();
+
+        return;
+    }
+
+    // A `304` answers only a request that would otherwise get a `200` (RFC 9110 §15.4.5), so the refusal above comes first.
     if (applyStudioAssetCache(request, response, fileName, stamp)) {
         return;
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `headers` is typed required but partial/mocked requests omit it
-    const encoding = body.length < MIN_COMPRESS_BYTES ? undefined : pickEncoding(rawHeader(request.headers?.["accept-encoding"]));
     const payload = encoding === undefined ? body : compressedBody(body, encoding, fileName, stamp);
 
     response.statusCode = 200;

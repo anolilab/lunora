@@ -120,6 +120,15 @@ const MIGRATION_STATUS_INPUT_SCHEMA: ToolInputSchema = {
     type: "object",
 };
 
+const SCHEDULE_OUTBOX_INPUT_SCHEMA: ToolInputSchema = {
+    properties: {
+        cursor: { description: "`nextCursor` from a previous call, to read the page after it.", type: "string" },
+        limit: LIMIT_PROPERTY,
+        shardKey: SHARD_KEY_PROPERTY,
+    },
+    type: "object",
+};
+
 /**
  * `outputSchema`s are shallow on purpose: they tell a client what the top-level
  * envelope is (and let it validate `structuredContent`), without pinning row
@@ -180,9 +189,22 @@ const MIGRATION_STATUS_OUTPUT_SCHEMA: ToolInputSchema = {
     type: "object",
 };
 
+const SCHEDULE_OUTBOX_OUTPUT_SCHEMA: ToolInputSchema = {
+    properties: {
+        entries: {
+            description:
+                "Deferred schedules the scheduler has not accepted, oldest first, live and parked alike: { id, target, attempts, parked, forever, nextAttemptAt, createdAt, when }.",
+            type: "array",
+        },
+        nextCursor: { description: "Pass back as `cursor` to read the next page. Absent on the last page.", type: "string" },
+    },
+    required: ["entries"],
+    type: "object",
+};
+
 /**
  * The observability tools. Descriptions say WHEN to call the tool, not just
- * what it returns — an agent picking between five similar reads needs the
+ * what it returns — an agent picking between several similar reads needs the
  * trigger, and it pays for these strings on every turn.
  */
 const OBSERVABILITY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
@@ -222,6 +244,14 @@ const OBSERVABILITY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
         inputSchema: MIGRATION_STATUS_INPUT_SCHEMA,
         name: "lunora_get_migration_status",
         outputSchema: withErrorShape(MIGRATION_STATUS_OUTPUT_SCHEMA),
+    },
+    {
+        annotations: { ...READ_ONLY_ANNOTATIONS, title: "Read the schedule outbox" },
+        description:
+            "List deferred `ctx.scheduler` jobs whose mutation committed but that the scheduler has not accepted yet (retrying or parked), to find out why a scheduled job never ran.",
+        inputSchema: SCHEDULE_OUTBOX_INPUT_SCHEMA,
+        name: "lunora_get_schedule_outbox",
+        outputSchema: withErrorShape(SCHEDULE_OUTBOX_OUTPUT_SCHEMA),
     },
 ];
 
@@ -323,6 +353,13 @@ const callObservabilityTool = async (client: LunoraClient, name: string, input: 
                 total: entries.length,
                 trackedStatements: typeof trackedStatements === "number" ? trackedStatements : entries.length,
             });
+        }
+        case "lunora_get_schedule_outbox": {
+            // An absent cursor or `nextCursor` stays `undefined`, which the JSON hop drops.
+            const result = await adminRead(client, ADMIN_FUNCTIONS.getScheduleOutbox, { cursor: readText(input.cursor), limit }, shardKey);
+            const { nextCursor } = (result ?? {}) as { nextCursor?: string };
+
+            return okStructured({ entries: rowsOf(result, "entries"), nextCursor });
         }
         default: {
             throw new LunoraError("INTERNAL", `unknown observability tool: ${name}`);

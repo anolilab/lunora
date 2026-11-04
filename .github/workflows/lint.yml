@@ -33,18 +33,18 @@
             "yaml_lintable": "${{ steps.changes.outputs.yaml_lintable }}"
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             # checkout-with-retry absorbs the transient mid-checkout GITHUB_TOKEN 401,
             # so this call needs no retry handling of its own.
             - "name": "Check for file changes"
               "id": "changes"
-              "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
+              "uses": "dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d" # v4.0.3
               "with":
                   "token": "${{ github.token }}"
                   "filters": ".github/file-filters.yml"
@@ -60,17 +60,17 @@
         "timeout-minutes": 30
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "lint"
@@ -111,17 +111,17 @@
         "timeout-minutes": 30
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "lint"
@@ -154,17 +154,17 @@
         "timeout-minutes": 15
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "lint"
@@ -194,15 +194,15 @@
         "timeout-minutes": 30
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "lint"
@@ -232,15 +232,15 @@
         "timeout-minutes": 30
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "lint"
@@ -258,8 +258,40 @@
             - "name": "Verify no development-build artifacts"
               "run": "pnpm run dist:check"
 
-    "prettier":
-        "name": "Lint (prettier)"
+    "oxfmt":
+        "name": "Lint (oxfmt)"
+        "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 15
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "lint"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Lint (oxfmt)"
+              "run": "pnpm run lint:oxfmt"
+
+    # Advisory: oxlint reports tens of thousands of problems today, so this job never
+    # gates the PR and stays out of `Check Lint Run`. Remove `continue-on-error` and add
+    # "oxlint" to that job's `needs` to make it a gate.
+    "oxlint":
+        "name": "Lint (oxlint)"
         "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
@@ -271,10 +303,10 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "lint"
@@ -284,8 +316,9 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            - "name": "Lint (prettier)"
-              "run": "pnpm run lint:prettier"
+            - "name": "Lint (oxlint)"
+              "continue-on-error": true
+              "run": "pnpm run lint:oxlint"
 
     "package-json-sort":
         "name": "Lint (package.json sort)"
@@ -295,15 +328,15 @@
         "timeout-minutes": 15
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "lint"
@@ -325,15 +358,15 @@
         "timeout-minutes": 15
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "lint"
@@ -364,15 +397,15 @@
         "timeout-minutes": 20
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "lint"
@@ -406,15 +439,15 @@
         "timeout-minutes": 10
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "lint"
@@ -438,15 +471,15 @@
         "timeout-minutes": 10
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "lint"
@@ -473,15 +506,15 @@
         "timeout-minutes": 10
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "lint"
@@ -502,12 +535,12 @@
         "timeout-minutes": 15
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Lint YAML files"
               "uses": "ibiqlik/action-yamllint@2576378a8e339169678f9939646ee3ee325e845c" # v3.1.1
@@ -524,15 +557,15 @@
         "timeout-minutes": 15
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "jactionlint"
-              "uses": "jdx/jactionlint@2462f925040c2aa1c88714dc85bc12d869cc4998" # v2.0.2
+              "uses": "jdx/jactionlint@baa8d685e2b27ff5821558c9eeabb2051c1da61b" # v2.4.0
 
     # Cheap repo-consistency guards nothing else covers, sharing one install. Their
     # own job rather than more postinstall gates: a failing postinstall turns every
@@ -545,15 +578,15 @@
         "timeout-minutes": 15
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "lint"
@@ -599,15 +632,15 @@
         "timeout-minutes": 30
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "lint"
@@ -638,7 +671,7 @@
                 "fallow",
                 "api-surface",
                 "dist-production",
-                "prettier",
+                "oxfmt",
                 "package-json-sort",
                 "secrets",
                 "registry-items",

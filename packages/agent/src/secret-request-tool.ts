@@ -1,6 +1,6 @@
-import { jsonSchema } from "@ai-sdk/provider-utils";
 import { LunoraError } from "@lunora/errors";
 
+import jsonSchema from "./json-schema";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import type { AgentToolContext, AgentToolDefinition } from "./types";
 
@@ -210,6 +210,15 @@ const redactCallbackError = (error: unknown, secret: string, seen: Set<unknown> 
     // The error is the callback's own object, so reading it can run its code: an accessor that throws
     // `new Error(secret)` would escape with the value. Any failure to inspect it withholds it instead.
     try {
+        // `name` is usually inherited, so the own-property walk below never sees it, yet telemetry reads it. It is read once
+        // and pinned as an own value: an accessor that answers differently on a later read could otherwise expose the value.
+        // It goes first, because the accessor may also change `message` or `stack`, which are scrubbed after it.
+        const { name } = error;
+
+        if (typeof name === "string") {
+            Object.defineProperty(error, "name", { configurable: true, value: redactText(name, secret), writable: true });
+        }
+
         // In place on purpose: a copy would lose the class and brand that classify the error.
         // eslint-disable-next-line no-param-reassign -- the error is rewritten in place, see above
         error.message = redactText(error.message, secret);

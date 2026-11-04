@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { LunoraError } from "@lunora/errors";
 import { MAX_SEARCH_SCAN } from "@lunora/search-core";
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
-import { CURSOR_PREFIX } from "@lunora/shard-engine";
+import { CURSOR_PREFIX, rankTableName } from "@lunora/shard-engine";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SqlCtxExec } from "../src/ctx-db";
@@ -810,8 +810,8 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
         }
     });
 
-    it("sends a patch's aggregate, rank and CDC companion writes as exactly one batch", async () => {
-        expect.assertions(5);
+    it("sends a patch's aggregate and rank companion writes as exactly one batch, after its CDC append", async () => {
+        expect.assertions(6);
 
         const harness = createSqliteBatchHarness();
 
@@ -823,9 +823,11 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
 
             await writer.patch("notes", id, { archived: true, priority: 2 });
 
-            expect(batch).toHaveBeenCalledTimes(1);
-            // Aggregate: -1 old group, +1 new group, two prunes; rank: DELETE + INSERT; CDC: one append.
-            expect(batch.mock.calls[0]?.[0]).toHaveLength(7);
+            // The CDC append goes ahead of the companions on its own, so a timeout or failure in them cannot lose it.
+            expect(batch).toHaveBeenCalledTimes(2);
+            expect(batch.mock.calls[0]?.[0]).toHaveLength(1);
+            // Aggregate: -1 old group, +1 new group, two prunes; rank: DELETE + INSERT.
+            expect(batch.mock.calls[1]?.[0]).toHaveLength(6);
 
             const groups = await writer.groupBy("notes", { agg: { op: "count" }, by: ["archived"] });
 
@@ -844,7 +846,7 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
     });
 
     it("chunks the rank backfill instead of buffering the whole table into one batch", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const rowCount = BACKFILL_BATCH_SIZE * 2 + 7;
         const database = new DatabaseSync(":memory:");
@@ -904,7 +906,10 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
 
             expect(page.page).toHaveLength(3);
             // Every tuple still lands…
-            expect(batchSizes.reduce((total, size) => total + size, 0)).toBeGreaterThanOrEqual(rowCount);
+            expect(all(`SELECT COUNT(*) AS n FROM "${rankTableName("notes", "byPriority")}"`, [])[0]?.["n"]).toBe(rowCount);
+            // …several to a statement: 32 three-column rows fit under the 100-parameter cap beside the fence's two,
+            // so the 500/500/7 pages take 16 + 16 + 1 INSERTs rather than one per row.
+            expect(batchSizes.reduce((total, size) => total + size, 0)).toBe(33);
             // …but no single batch carries the whole table. An N-statement batch
             // (and the N drizzle `SQL` objects behind it) is what the docblock's
             // "an unbounded table never has to fit in a single SELECT" claim did

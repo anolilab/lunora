@@ -207,17 +207,11 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
     // FCM_* (#1039) — the same reason the payment adapters are keyed by subpath.
     "@lunora/notify:fcm": [
         {
-            description: "Firebase project id for FCM (HTTP v1) push. Found in the Firebase console project settings.",
-            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
-            key: "FCM_PROJECT_ID",
-            placeholderValue: "<your-firebase-project-id>",
-        },
-        {
             description:
-                "OAuth2 access token for FCM (HTTP v1). Convenient for dev but expires — in production supply a getAccessToken() in defineNotify instead. Obtain via the Google Cloud SDK / a service account.",
+                "Google service-account key file for FCM HTTP v1, base64-encoded on one line for .dev.vars (.dev.vars cannot hold its JSON quotes); in production use: wrangler secret put FCM_SERVICE_ACCOUNT < key.json. fcmFromEnv mints access tokens from it and reads the project id from it. Download it from the Firebase console (Project settings → Service accounts).",
             docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
-            key: "FCM_ACCESS_TOKEN",
-            placeholderValue: "<your-fcm-access-token>",
+            key: "FCM_SERVICE_ACCOUNT",
+            placeholderValue: "<base64-of-your-service-account-key-json>",
         },
     ],
     "@lunora/notify:webPush": [

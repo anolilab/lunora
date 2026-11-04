@@ -76,7 +76,7 @@ describe("lunora seed", () => {
     });
 
     it("generates deterministic NDJSON with valid foreign keys on --dry-run", async () => {
-        expect.assertions(6);
+        expect.assertions(7);
 
         writeSchema();
         const writeSpy = vi.spyOn(process.stdout, "write").mockReturnValue(true);
@@ -90,10 +90,12 @@ describe("lunora seed", () => {
         expect(a.data?.generated).toBe(8);
         // Same seed ⇒ byte-identical output.
         expect(a.ndjson).toBe(b.ndjson);
+        // The text is imported from a file, which must end with the export's end marker.
+        expect(a.ndjson.trimEnd().split("\n").at(-1)).toBe('{"end":true,"rows":8}');
 
         const rows = a.ndjson
             .split("\n")
-            .filter((line) => line.trim().length > 0)
+            .filter((line) => line.trim().length > 0 && !line.startsWith('{"end"'))
             .map((line) => JSON.parse(line) as { doc: Record<string, unknown>; table: string });
 
         const userIds = new Set(rows.filter((row) => row.table === "users").map((row) => row.doc._id as string));
@@ -116,7 +118,7 @@ describe("lunora seed", () => {
         const tables = new Set(
             result.ndjson
                 .split("\n")
-                .filter((line) => line.trim().length > 0)
+                .filter((line) => line.trim().length > 0 && !line.startsWith('{"end"'))
                 .map((line) => (JSON.parse(line) as { table: string }).table),
         );
 
@@ -146,7 +148,7 @@ export default defineSchema({
         const result = await runSeedCommand({ count: 4, cwd: workDir, dryRun: true, logger: silentLogger(), table: "authorBooks" });
         const rows = result.ndjson
             .split("\n")
-            .filter((line) => line.trim().length > 0)
+            .filter((line) => line.trim().length > 0 && !line.startsWith('{"end"'))
             .map((line) => JSON.parse(line) as { doc: Record<string, unknown>; table: string });
         const links = rows.filter((row) => row.table === "authorBooks");
         const sorted = (values: string[]): string[] => values.toSorted((left, right) => left.localeCompare(right));
@@ -187,7 +189,7 @@ export default defineSchema({
 
             calls.push({ body, url });
 
-            const rows = body.split("\n").filter((line) => line.trim().length > 0);
+            const rows = body.split("\n").filter((line) => line.trim().length > 0 && !line.startsWith('{"end"'));
             const inserted: Record<string, number> = {};
 
             for (const line of rows) {

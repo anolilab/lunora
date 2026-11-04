@@ -1,6 +1,6 @@
 {
     "name": "@lunora/mail",
-    "version": "1.0.0-alpha.129",
+    "version": "1.0.0-alpha.138",
     "description": "Email for Lunora: Resend adapter, TSX templates, and queue-backed sends",
     "keywords": [
         "cloudflare",
@@ -59,9 +59,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",

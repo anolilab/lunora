@@ -21,6 +21,7 @@ export { describeErrorLevelFindings, errorAdvisoryNames, errorPlatformDiagnostic
 // The capability table's usage-probe facets, read by `@lunora/config` (see below).
 export type { CapabilityKey, CapabilityProbe } from "./capabilities";
 export { CAPABILITY_PROBES } from "./capabilities";
+export { COMPANION_BINDING, COMPANION_SERVICE_NAME } from "./companion";
 export { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
 export { AGENTS_FILENAME, discoverAgents } from "./discover/agents";
 // The canonical `lunora/` source walk — exported so a consumer deciding what
@@ -60,7 +61,13 @@ export { default as discoverRlsMetadata } from "./discover/rls-procedures/metada
 export type { SandboxUsage } from "./discover/sandbox";
 export { discoverSandboxUsage } from "./discover/sandbox";
 export { default as discoverSchema } from "./discover/schema";
-export { readServiceBindings, resolveServiceBindings } from "./discover/service-bindings";
+export {
+    companionServiceBinding,
+    readBoundServiceBindings,
+    readDevServiceBindings,
+    readServiceBindings,
+    resolveServiceBindings,
+} from "./discover/service-bindings";
 export { discoverShapes, SHAPES_FILENAME } from "./discover/shapes";
 export { default as discoverStorageRulesMetadata } from "./discover/storage-rules";
 export { discoverWorkflows, WORKFLOWS_FILENAME } from "./discover/workflows";
@@ -130,12 +137,12 @@ export { buildOpenRpcDocument, emitOpenRpc, emitOpenRpcModule, OPENRPC_VERSION }
 export type { PlatformDiagnostic } from "./platform-target";
 export { DEFAULT_TARGET, platformMatrixIds, readProjectTarget, resolveCodegenTarget } from "./platform-target";
 export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral } from "./project-config-file";
-export { findProjectConfigFile, loadProjectConfig, PROJECT_CONFIG_FILENAMES, readProjectConfigLiterals } from "./project-config-file";
+export { findProjectConfigFile, loadProjectConfig, PROJECT_CONFIG_FILENAMES, readProjectConfigLiterals, readProjectLazyFunctions } from "./project-config-file";
 export { findCodegenConfigFile, projectConfigCandidatePaths } from "./project-config-path";
 export type { CodegenOptions, CodegenResult } from "./run-codegen";
 export { createCodegenProject, findTsconfig, refreshCodegenProject, runCodegen, SCHEMA_SNAPSHOT_FILENAME, tsconfigFingerprint } from "./run-codegen";
-export type { SchemaDriftDecision } from "./schema-drift";
-export { buildSchemaSnapshot, evaluateSchemaDrift, parseSchemaSnapshot, SchemaSnapshotParseError } from "./schema-drift";
+export type { IndexReference, SchemaDriftDecision } from "./schema-drift";
+export { buildSchemaSnapshot, evaluateSchemaDrift, indexReferencesOf, parseSchemaSnapshot, SchemaSnapshotParseError } from "./schema-drift";
 export { default as fingerprintSchemaSources } from "./schema-fingerprint";
 export { schemaFromIr } from "./schema-from-ir";
 export { LUNORA_ERROR_CODES, validatorIrToJsonSchema } from "./schema-ir";

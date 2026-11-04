@@ -79,14 +79,14 @@ describe("lazy function registry", () => {
                 lazyFunctions: true,
             });
             const checkedType = 'satisfies RegisteredLunoraFunction & Pick<FunctionManifestEntry, "argumentDescriptors" | "channel" | "expose">';
-            const invalidPlaceholder = source.replace(/(handler: unloadedFunctionHandler, \.\.\..*?)"kind":"query"/u, '$1"kind":"invalid"');
+            const invalidPlaceholder = source.replace(/(handler: unloadedFunctionHandler, .*?)"kind":"query"/u, '$1"kind":"invalid"');
             const oldCastControl = invalidPlaceholder.replaceAll(checkedType, "as unknown as RegisteredLunoraFunction");
 
             expect(typecheckGeneratedFunctions(projectRoot, source)).toEqual([]);
             expect(invalidPlaceholder).not.toBe(source);
             expect(typecheckGeneratedFunctions(projectRoot, invalidPlaceholder)).toEqual([
                 expect.stringContaining("Type '\"invalid\"' is not assignable"),
-                expect.stringContaining("does not satisfy the expected type"),
+                expect.stringContaining("Type '\"invalid\"' is not assignable"),
             ]);
             expect(typecheckGeneratedFunctions(projectRoot, oldCastControl)).toEqual([]);
 
@@ -121,6 +121,82 @@ describe("lazy function registry", () => {
         expect(emitted).not.toContain("installCompiledValidatorMap");
         expect(module).toContain('import * as lunora_posts_0 from "../../posts.js";');
         expect(module).toContain("installCompiledValidatorMap(lunora_posts_0.premium.args");
+    });
+
+    it("types a lazy manifest's cache policy as the runtime's required RestCachePolicy", () => {
+        expect.assertions(2);
+
+        const projectRoot = mkdtempSync(join(tmpdir(), "lunora-lazy-registry-cache-"));
+
+        try {
+            makeFunctionTypecheckProject(projectRoot);
+            const source = emitFunctions({
+                functions: [makeFunction("premium", { expose: { cache: { maxAge: 60, scope: "private" }, rest: true } })],
+                lazyFunctions: true,
+            });
+            // The runtime's `FunctionRegistryEntry.expose` requires `maxAge` and `scope`; the lazy manifest must too.
+            const runtimePolicyCheck = [
+                'const runtimePolicy: { maxAge: number; scope: "private" | "public" } | undefined =',
+                // eslint-disable-next-line no-secrets/no-secrets -- emitted TypeScript fixture, not a credential
+                "    Object.values(LUNORA_FUNCTION_MANIFEST)[0]?.expose?.cache;",
+                "export { runtimePolicy };",
+            ].join("\n");
+
+            expect(typecheckGeneratedFunctions(projectRoot, source + runtimePolicyCheck)).toEqual([]);
+            expect(typecheckGeneratedFunctions(projectRoot, source.replace("maxAge: number;", "maxAge?: number;") + runtimePolicyCheck)).toEqual([
+                expect.stringContaining("Type 'number | undefined' is not assignable to type 'number'"),
+            ]);
+        } finally {
+            rmSync(projectRoot, { force: true, recursive: true });
+        }
+    });
+
+    it("typechecks a lazy manifest entry whose argument is marked sensitive", () => {
+        expect.assertions(2);
+
+        const projectRoot = mkdtempSync(join(tmpdir(), "lunora-lazy-registry-sensitive-"));
+
+        try {
+            makeFunctionTypecheckProject(projectRoot);
+            const source = emitFunctions({
+                functions: [
+                    makeFunction("answer", {
+                        args: {
+                            note: { inner: { kind: "string", sensitive: true }, kind: "optional" },
+                            secret: { kind: "string", sensitive: true },
+                        },
+                    }),
+                ],
+                lazyFunctions: true,
+            });
+
+            expect(source).toContain('"sensitive":true');
+            expect(typecheckGeneratedFunctions(projectRoot, source)).toEqual([]);
+        } finally {
+            rmSync(projectRoot, { force: true, recursive: true });
+        }
+    });
+
+    it("rejects a lazy stub member that the registry type does not declare", () => {
+        expect.assertions(2);
+
+        const projectRoot = mkdtempSync(join(tmpdir(), "lunora-lazy-registry-excess-"));
+
+        try {
+            makeFunctionTypecheckProject(projectRoot);
+            const source = emitFunctions({ functions: [makeFunction("premium")], lazyFunctions: true });
+            // Anchored to the stub line: the manifest entry earlier in the file also has `"kind":"query"`. Inside the serialized
+            // fields, because a property written straight into the literal is excess-checked even under a spread.
+            const withUndeclared = source.replace(/(handler: unloadedFunctionHandler, [^\n]*?"kind":"query")/u, '$1,"undeclaredField":1');
+
+            expect(withUndeclared).not.toBe(source);
+            expect(typecheckGeneratedFunctions(projectRoot, withUndeclared)).toEqual([
+                expect.stringContaining("'\"undeclaredField\"' does not exist in type 'RegisteredLunoraFunction & Pick"),
+                expect.stringContaining("'\"undeclaredField\"' does not exist in type 'RegisteredLunoraFunction'."),
+            ]);
+        } finally {
+            rmSync(projectRoot, { force: true, recursive: true });
+        }
     });
 
     it("deduplicates handlers from the same module and emits room routes without loading handlers", () => {
@@ -160,8 +236,8 @@ describe("lazy function registry", () => {
         // pin the registry itself: a failed load stays in the cache and every call rethrows it.
         const emitted = emitFunctions({ functions: [makeFunction("list")], lazyFunctions: true });
 
-        expect(emitted).not.toContain("loadedModules.delete(");
-        expect(emitted).toContain("loadedModules.set(manifest.moduleId, pending);");
+        expect(emitted).not.toContain("settledLoads.delete(");
+        expect(emitted).toContain("settledLoads.set(manifest.moduleId, started);");
     });
 
     it("emits the smoke loader only when there is a lazy entry for it to check", () => {

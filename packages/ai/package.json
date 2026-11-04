@@ -1,6 +1,6 @@
 {
     "name": "@lunora/ai",
-    "version": "1.0.0-alpha.156",
+    "version": "1.0.0-alpha.164",
     "description": "Workers AI helper for Lunora: provider-agnostic AI SDK access from functions, Workers AI by default",
     "keywords": [
         "ai",
@@ -61,9 +61,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "pnpm exec eslint . --max-warnings=0",
         "lint:eslint:fix": "pnpm exec eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "pnpm exec tsc --noEmit",
+        "lint:types": "pnpm exec tsrs --noEmit",
         "test": "pnpm exec vitest run",
         "test:coverage": "pnpm exec vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -76,7 +74,7 @@
         "@ai-sdk/openai": "catalog:ai",
         "@ai-sdk/provider-utils": "catalog:ai",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/wire": "1.0.0-alpha.5",
+        "@lunora/wire": "1.0.0-alpha.6",
         "ai": "catalog:ai",
         "workers-ai-provider": "catalog:ai"
     },

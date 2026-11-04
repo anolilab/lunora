@@ -55,6 +55,12 @@ export interface SpawnDescriptor {
     captureStderr?: boolean;
 
     /**
+     * Capture the child's stderr without teeing it to the parent. For a caller that reports its own outcome and must not
+     * print the tool's errors when the outcome is a skip.
+     */
+    captureStderrSilently?: boolean;
+
+    /**
      * Capture the child's stdout (in addition to streaming it to the parent), so
      * the caller can parse it — used by `deploy` to read the deployed URL from
      * `wrangler deploy` output. Each chunk is still teed to the parent's stdout
@@ -73,6 +79,7 @@ export interface SpawnDescriptor {
      * and `stdoutToStderr`.
      */
     captureStdoutSilently?: boolean;
+
     command: string;
     cwd?: string;
     env?: Readonly<Record<string, string>>;
@@ -91,6 +98,12 @@ export interface SpawnDescriptor {
      * — the single JSON document the command prints to stdout.
      */
     stdoutToStderr?: boolean;
+
+    /**
+     * Kill the child (SIGKILL) and count the run as failed after this many milliseconds. Without it a stalled
+     * child keeps the caller waiting with no way to stop it.
+     */
+    timeoutMs?: number;
 }
 
 export interface SpawnResult {
@@ -170,13 +183,26 @@ export const defaultSpawner: Spawner = (descriptor) =>
         } else if (descriptor.stdoutToStderr) {
             stdout = 2;
         }
+        const capturesStderr = descriptor.captureStderr === true || descriptor.captureStderrSilently === true;
         const exec = spawnShellCompat(descriptor.command, descriptor.args);
         const child = nodeSpawn(exec.command, exec.args, {
             cwd: descriptor.cwd ?? process.cwd(),
             env: descriptor.env ? { ...process.env, ...descriptor.env } : process.env,
             shell: exec.shell,
-            stdio: [hasInput ? "pipe" : "inherit", stdout, descriptor.captureStderr === true ? "pipe" : "inherit"],
+            // A timed child leads its own process group, so the timeout can kill the wrapper's children too (wrangler starts workerd).
+            detached: descriptor.timeoutMs !== undefined && process.platform !== "win32",
+            stdio: [hasInput ? "pipe" : "inherit", stdout, capturesStderr ? "pipe" : "inherit"],
         });
+        const killTimer =
+            descriptor.timeoutMs === undefined
+                ? undefined
+                : setTimeout(() => {
+                      if (process.platform === "win32" || child.pid === undefined) {
+                          child.kill("SIGKILL");
+                      } else {
+                          process.kill(-child.pid, "SIGKILL");
+                      }
+                  }, descriptor.timeoutMs);
 
         // Decoders, not `chunk.toString()`: a multi-byte character split across
         // two chunks would otherwise decode as two replacement characters.
@@ -185,11 +211,13 @@ export const defaultSpawner: Spawner = (descriptor) =>
         let captured = "";
         let capturedError = "";
 
-        if (descriptor.captureStderr === true && child.stderr) {
+        if (capturesStderr && child.stderr) {
             child.stderr.on("data", (chunk: Buffer) => {
                 capturedError += stderrDecoder.write(chunk);
-                // Tee to the parent so the user still sees the tool's own output.
-                process.stderr.write(chunk);
+                // Tee to the parent so the user still sees the tool's own output, unless the caller asked for silence.
+                if (descriptor.captureStderr === true) {
+                    process.stderr.write(chunk);
+                }
             });
         }
 
@@ -209,6 +237,7 @@ export const defaultSpawner: Spawner = (descriptor) =>
         let settled = false;
 
         child.on("error", (error) => {
+            clearTimeout(killTimer);
             settled = true;
 
             // The single chokepoint for "that program isn't installed": every
@@ -242,9 +271,10 @@ export const defaultSpawner: Spawner = (descriptor) =>
 
             settled = true;
             clearTimeout(stdioGrace);
+            clearTimeout(killTimer);
             resolve({
                 code: exitCode,
-                stderr: descriptor.captureStderr === true ? capturedError + stderrDecoder.end() : undefined,
+                stderr: capturesStderr ? capturedError + stderrDecoder.end() : undefined,
                 stdout: wantCapture || wantSilentCapture ? captured + stdoutDecoder.end() : undefined,
             });
         };

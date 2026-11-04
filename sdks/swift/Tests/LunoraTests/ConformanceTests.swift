@@ -983,7 +983,7 @@ final class ConformanceTests: XCTestCase {
 
     /// The bearer token never reaches a printed or dumped client.
     func caseAuthTokenRedactedWhenPrinted() {
-        let token = "lunora-secret-7f3a9c"
+        let token = "lunora-secret-7f3a9c"  // secret-scanner:allow -- test fixture
         let client = LunoraClient(url: "https://app.example", authToken: token)
         var dumped = ""
 

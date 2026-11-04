@@ -1,14 +1,14 @@
 import type { FunctionReference } from "@lunora/client";
 import { LunoraClient } from "@lunora/client";
 // eslint-disable-next-line sonarjs/deprecation -- the low-level `Server` is the sanctioned choice here, as in `./server`: plain JSON Schema tools with no per-tool zod.
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import pkg from "../package.json";
 import { coerceArgs } from "./function-args";
 import type { FunctionKind, FunctionRoute, FunctionTools } from "./function-tools";
 import { functionToolsFromOpenRpc, isWrite } from "./function-tools";
+import loadMcpSdk from "./sdk";
 import { errorFromThrown, errorResult, jsonResultReplacer, ok, okStructured } from "./tool-result";
 import type { ToolResult } from "./tool-types";
 import { readArgumentsBag } from "./tools";
@@ -215,9 +215,12 @@ const runStream = async (
     // where the documented PAYLOAD_TOO_LARGE belongs. A failed send cancels the stream.
     let sent: Promise<unknown> = Promise.resolve();
     let sendFailure: { error: unknown } | undefined;
+    // Set when a cap ends the call: the result is returned without waiting for slow sends, so the
+    // ones still queued must not go out for a request that has already been answered.
+    let answered = false;
     const queueProgress = (chunkIndex: number, chunkJson: string): void => {
         sent = sent
-            .then(() => (sendFailure === undefined ? progress?.(chunkIndex, chunkJson) : undefined))
+            .then(() => (sendFailure === undefined && !answered ? progress?.(chunkIndex, chunkJson) : undefined))
             .catch((error: unknown) => {
                 sendFailure = { error };
                 iterable.cancel();
@@ -228,6 +231,7 @@ const runStream = async (
         for await (const chunk of iterable) {
             // Refused on the chunk past the cap, so a stream of exactly the cap still completes.
             if (chunks.length === MAX_STREAM_CHUNKS) {
+                answered = true;
                 iterable.cancel();
 
                 return errorResult(
@@ -241,6 +245,7 @@ const runStream = async (
             collectedLength += chunkJson.length;
 
             if (collectedLength > MAX_STREAM_BYTES) {
+                answered = true;
                 iterable.cancel();
 
                 return errorResult(
@@ -422,19 +427,21 @@ const clientFor = (options: FunctionMcpServerOptions): { acquire: () => ClientLe
  * Build an MCP `Server` with one tool per function in `openRpcSpec`. Transport
  * agnostic: call `.connect(transport)` yourself.
  *
- * Throws at construction when the document is malformed or two functions share a
- * tool name, so a bad integration fails at startup rather than on the first call.
+ * Rejects when the document is malformed or two functions share a tool name, so a
+ * bad integration fails where the server is built rather than on the first call.
+ * Async because it loads the MCP SDK (see `./sdk`); the document is checked first,
+ * so a malformed one is reported without loading it.
  */
 // eslint-disable-next-line sonarjs/deprecation -- see the `Server` import above.
-const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
+const createFunctionMcpServer = async (options: FunctionMcpServerOptions): Promise<Server> => {
     const allowWrites = options.allowWrites ?? false;
     const resolveSpec = (): unknown => (typeof options.openRpcSpec === "function" ? (options.openRpcSpec as () => unknown)() : options.openRpcSpec);
     const buildTools = (spec: unknown): { spec: unknown; tools: FunctionTools } => {
         return { spec, tools: functionToolsFromOpenRpc(spec, { allowWrites }) };
     };
     let served = buildTools(resolveSpec());
+    const { CallToolRequestSchema, ListToolsRequestSchema, Server } = await loadMcpSdk();
     const { acquire, release } = clientFor(options);
-    // eslint-disable-next-line sonarjs/deprecation -- see the `Server` import above.
     const server = new Server(
         { name: options.name ?? SERVER_NAME, version: options.version ?? pkg.version },
         { capabilities: { tools: { listChanged: true } } },

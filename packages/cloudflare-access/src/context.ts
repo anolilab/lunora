@@ -92,13 +92,50 @@ const facadeFor = (identity: Record<string, unknown>, userId: string | undefined
 /**
  * Build the `ctx.access` facade from a (possibly absent) resolved identity
  * envelope. Returns the anonymous facade when no identity is present, so callers
- * never null-check. Shared by {@link accessContext} and the codegen-wired global
- * `ctx.access` (which calls this synchronously from the resolved identity locals
- * at ctx-build time, so a global `ctx.access` adds only this object construction
- * per request — no extra I/O or re-verification).
+ * never null-check. Shared by {@link accessContext} and, through
+ * {@link lazyAccessFacade}, the codegen-wired global `ctx.access` — no extra I/O
+ * or re-verification either way.
  */
 const accessFacade = (identity: Record<string, unknown> | null | undefined, userId: string | null | undefined): AccessFacade =>
     identity ? facadeFor(identity, userId ?? undefined) : ANONYMOUS_FACADE;
+
+/**
+ * The {@link accessFacade} over readers, resolved on the first field read and
+ * then memoized. The generated shard wires the global `ctx.access` through it: its
+ * readers mark the live query as reading its caller, so building the facade up
+ * front would mark every query of an app that enables `ctx.access`, and none
+ * could share a run across subscribers.
+ */
+const lazyAccessFacade = (readIdentity: () => Record<string, unknown> | null | undefined, readUserId: () => string | null | undefined): AccessFacade => {
+    let resolved: AccessFacade | undefined;
+    const resolve = (): AccessFacade => {
+        resolved ??= accessFacade(readIdentity(), readUserId());
+
+        return resolved;
+    };
+
+    return {
+        get authenticated() {
+            return resolve().authenticated;
+        },
+        get claims() {
+            return resolve().claims;
+        },
+        get commonName() {
+            return resolve().commonName;
+        },
+        get email() {
+            return resolve().email;
+        },
+        get groups() {
+            return resolve().groups;
+        },
+        hasGroup: (group) => resolve().hasGroup(group),
+        get userId() {
+            return resolve().userId;
+        },
+    };
+};
 
 /**
  * Middleware that attaches a typed `ctx.access` facade derived from the verified
@@ -135,5 +172,5 @@ const accessContext =
         return next({ ctx: { access } });
     };
 
-export { accessContext, accessFacade };
+export { accessContext, accessFacade, lazyAccessFacade };
 export type { AccessContextInput, AccessContextOutput, AccessFacade };

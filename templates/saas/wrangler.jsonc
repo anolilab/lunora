@@ -6,9 +6,15 @@
     "compatibility_flags": ["nodejs_compat"],
     "d1_databases": [{ "binding": "DB", "database_name": "{{name}}-db", "database_id": "<replace-with-d1-create-id>" }],
     "durable_objects": {
-        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "ADMIN_REVOCATIONS", "class_name": "AdminRevocationDO" },
+        ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["AdminRevocationDO"] },
+    ],
     // The public origin the payment provider redirects back to. Declared here
     // because `vars` is what types a key into `CloudflareBindings`, and EMPTY for
     // the same reason the `payment` registry item ships it empty: `vars` is

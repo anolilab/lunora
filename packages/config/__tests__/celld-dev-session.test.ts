@@ -117,6 +117,39 @@ describe("celld dev session", () => {
         await session.stop();
     });
 
+    it("registers the companion advisor Worker when studio.companion is on", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "lunora.config.ts"), `export default { studio: { companion: true } };\n`);
+        mkdirSync(join(root, "lunora", "_generated", "companion", "src"), { recursive: true });
+        writeFileSync(join(root, "lunora", "_generated", "companion", "wrangler.jsonc"), `{ "name": "app-advisor", "main": "src/worker.ts" }\n`);
+        writeFileSync(join(root, "lunora", "_generated", "companion", "src", "worker.ts"), "export default { fetch: () => new Response(null) };\n");
+
+        const started: Started[] = [];
+        const session = await startCelldDevSession({ probe: noProblems, log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld(started) });
+
+        // The app's wrangler config carries the `ADVISOR_COMPANION` binding, so dev has to run that Worker too.
+        expect(started.map(({ config }) => config)).toStrictEqual([".celld.service.app-advisor.wrangler.json", ".celld.wrangler.json"]);
+        expect(started[0]?.port).not.toBe(started[1]?.port);
+
+        await session.stop();
+    });
+
+    it("does not register the companion when studio.companion is off, even with a generated folder on disk", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(root, "lunora.config.ts"), `export default {};\n`);
+        mkdirSync(join(root, "lunora", "_generated", "companion", "src"), { recursive: true });
+        writeFileSync(join(root, "lunora", "_generated", "companion", "wrangler.jsonc"), `{ "name": "app-advisor", "main": "src/worker.ts" }\n`);
+
+        const started: Started[] = [];
+        const session = await startCelldDevSession({ probe: noProblems, log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld(started) });
+
+        expect(started.map(({ config }) => config)).toStrictEqual([".celld.wrangler.json"]);
+
+        await session.stop();
+    });
+
     it("reports an app that exits on its own, but not one it stops", async () => {
         expect.assertions(1);
 

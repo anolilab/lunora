@@ -305,7 +305,7 @@ export type { AdvisorOpenShardAccess } from "./open-shard-access";
 export type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
 export type { AdvisorPaymentWebhook } from "./payment-webhooks";
 export type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
-export type { AdvisorProcedureProtection } from "./procedure-protections";
+export type { AdvisorProcedureDocument, AdvisorProcedureProtection } from "./procedure-protections";
 export type { AdvisorQueryRead } from "./queries";
 export type { AdvisorQueue, AdvisorQueueTuning } from "./queues";
 export type { AdvisorR2sqlCall } from "./r2sql-calls";

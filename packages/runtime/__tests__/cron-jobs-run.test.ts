@@ -100,6 +100,27 @@ describe("createWorker — cron-jobs run endpoint", () => {
         expect(created).toStrictEqual([{ params: { region: "eu" } }]);
     });
 
+    it("keeps the shardKey in an agent workflow cron's args, since those args are the app's own", async () => {
+        expect.assertions(1);
+
+        const created: { params?: unknown }[] = [];
+        const env = {
+            AGENT_DIGEST: {
+                create: async (options?: { params?: unknown }) => {
+                    created.push(options ?? {});
+
+                    return { id: "wf-1" };
+                },
+            },
+        };
+        const cronJobs = { "0 6 * * *": [{ args: { input: "digest", shardKey: "org-a", threadKey: "t" }, name: "agent digest", workflow: "AGENT_DIGEST" }] };
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, agentWorkflows: ["AGENT_DIGEST"], cronJobs, shardDO: createShardSpy().namespace });
+
+        await worker.fetch(runRequest("agent digest"), env, fakeContext);
+
+        expect(created).toStrictEqual([{ params: { input: "digest", shardKey: "org-a", threadKey: "t" } }]);
+    });
+
     it("starts a fresh instance on every cron run — the cron path deliberately passes no instance id", async () => {
         expect.assertions(2);
 

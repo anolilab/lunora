@@ -38,9 +38,11 @@ export const fanCheckpoints = (state: SubscriptionState, rowsFollow = false): vo
  * so this has no effect on subscribers. A cross-tab follower passes the same position the
  * leader does, and it decides which parts apply.
  */
-export const commitDataFrame = (state: SubscriptionState, payload: unknown, position: { cursor?: number; epoch?: string }): void => {
+export const commitDataFrame = (state: SubscriptionState, payload: unknown, position: { claims?: string; cursor?: number; epoch?: string }): void => {
     /* eslint-disable no-param-reassign -- commit the shared subscription state in place */
     state.serverBase = payload;
+    state.serverBaseCommitted = true;
+    state.serverClaims = position.claims;
 
     if (position.cursor !== undefined) {
         state.serverCursor = position.cursor;
@@ -61,7 +63,7 @@ export const commitDataFrame = (state: SubscriptionState, payload: unknown, posi
 export const isStaleDataFrame = (state: SubscriptionState, position: { cursor?: number; epoch?: string }): boolean =>
     position.cursor !== undefined &&
     state.serverCursor !== undefined &&
-    state.serverBase !== undefined &&
+    (state.serverBase !== undefined || state.serverBaseCommitted === true) &&
     position.epoch !== undefined &&
     position.epoch === state.serverEpoch &&
     position.cursor < state.serverCursor;

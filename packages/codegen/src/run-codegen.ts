@@ -1,9 +1,11 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { performance } from "node:perf_hooks";
 
+import type { AdvisorProcedureDocument } from "@lunora/advisor";
 import { runAdvisor } from "@lunora/advisor";
 import { LunoraError } from "@lunora/errors";
+import type { AdvisorProcedure } from "@lunora/shard-engine";
 import type { Project } from "ts-morph";
 
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
@@ -13,13 +15,15 @@ import type { CallSites } from "./architecture";
 import { buildArchitecture, emitArchitectureModule } from "./architecture";
 import assertNoNamespaceCollisions from "./assert-namespace-collisions";
 import { createCodegenProject } from "./codegen-project";
+import { COMPANION_FILES } from "./companion";
 import { buildDeclarationSurface } from "./declaration-surface";
-import { withSourceListMemo } from "./discover/ast";
+import { listLunoraSourceFiles, withSourceListMemo } from "./discover/ast";
 import discoverCallEdges from "./discover/call-edges";
 import type { ErasedReturn } from "./discover/erased-returns";
 import { collectErasures, erasedReturnFindings } from "./discover/erased-returns";
 import { discoverFlagKeys } from "./discover/flag-keys";
 import discoverFunctions from "./discover/functions";
+import { warnUnwiredComponents } from "./discover/functions/internal/registered-type";
 import resolveStandardSchemaType from "./discover/functions/resolve-standard-schema-type";
 import discoverHttpRoutes from "./discover/http-routes";
 import discoverInserts from "./discover/inserts";
@@ -45,6 +49,7 @@ import discoverWorkflowCalls from "./discover/workflow-calls";
 import discoverWorkflowEvents from "./discover/workflow-events";
 import {
     buildStorageColumns,
+    emitAdminRevocations,
     emitAgents,
     emitApi,
     emitCollections,
@@ -67,17 +72,18 @@ import {
     LAZY_FUNCTION_DIRECTORY,
     queueAliasFindings,
 } from "./emit";
+import emitCompanion from "./emit/companion";
 import { emitServiceDeclarations } from "./emit/service-declarations";
 import { isSensitiveFunction } from "./emit/shared";
 import { emitApp, emitAuthModule } from "./emit-app";
 import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type { AgentIR, FunctionIR, HttpRouteIR, MaskMetadataIR, MigrationIR, MutatorIR, ShapeIR, WorkflowIR } from "./ir";
 import { setStandardTypeResolver } from "./parse-validator";
-import { platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
-import { readMergeDurableObjects } from "./project-config-file";
+import { gateAdminTokenRevocation, platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
+import { readMergeDurableObjects, readProjectLazyFunctions, readProjectStudioCompanion } from "./project-config-file";
 import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged } from "./run-codegen-files";
 import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
-import { buildSchemaSnapshot } from "./schema-drift";
+import { buildSchemaSnapshot, indexReferencesOf } from "./schema-drift";
 import { buildSpecArtifacts } from "./spec-artifacts";
 
 /**
@@ -304,6 +310,12 @@ const inferToFixpoint = (options: {
         value: { functions, httpRoutes, mutators },
     } = discover();
 
+    // Once, not per pass: the passes refine inferred types, and whether a component's functions are re-exported is syntax.
+    warnUnwiredComponents(
+        listLunoraSourceFiles(lunoraDirectory).map((filePath) => project.getSourceFileOrThrow(filePath)),
+        (source) => relative(lunoraDirectory, source.getFilePath()),
+    );
+
     // Two files whose sanitized namespaces collide (`a-b.ts` + `a_b.ts`) would
     // emit the same key twice into `_generated/api.ts` — a TS2300 inside
     // generated code, with no pointer back to the two files that caused it.
@@ -382,7 +394,15 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const startedAt = timingEnabled ? performance.now() : 0;
 
     const lunoraDirectory = join(options.projectRoot, options.lunoraDirectory ?? "lunora");
-    const lazyFunctions = options.lazyFunctions === true;
+    // Either opt-in enables the lazy registry, and `false` does not veto the
+    // project's: the config is what keeps every entry point that regenerates
+    // `_generated/` in agreement, so a caller that merely omits the flag must
+    // not rewrite it eager.
+    // Read whatever the caller passes, so an unreadable config value is said even when the caller already opts in.
+    const projectLazyFunctions = readProjectLazyFunctions(lunoraDirectory);
+    const lazyFunctions = options.lazyFunctions === true || projectLazyFunctions;
+    // Read from the config alone, so every entry point that regenerates `_generated/` agrees and none deletes the folder.
+    const studioCompanion = readProjectStudioCompanion(lunoraDirectory);
     const schemaPath = join(lunoraDirectory, "schema.ts");
 
     if (!existsSync(schemaPath)) {
@@ -532,6 +552,10 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
                   workflowCalls: discoverWorkflowCalls(project, lunoraDirectory),
               };
 
+    // The drift gate refuses to drop an index a query still names, so these are read on every run: they do not hang off the
+    // advisory opt-out. A run that already walked the queries reuses them.
+    const indexReferences = indexReferencesOf(callSites?.queries ?? discoverQueries(project, lunoraDirectory, functions));
+
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
     // fields, filter-without-index, …). Cheap, derived from the schema + the
     // discovered query reads, and run here so a problem surfaces at codegen time
@@ -673,10 +697,10 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // Structural schema snapshot for the pre-deploy drift gate. Built from the
     // discovered schema + the declared migration ids; the CLI gate diffs the
     // CURRENT snapshot against the committed baseline. Always computed (cheap,
-    // pure) and returned in `CodegenResult`; the baseline file is (re-)blessed
-    // only when it is absent (first capture) or `updateSchemaBaseline` is set —
-    // so a routine codegen run never silently moves the goalposts the gate
-    // measures against.
+    // pure) and returned in `CodegenResult`; codegen writes the baseline file only
+    // when it is absent (first capture). Advancing it is the deploy gate's job, on
+    // success — so a routine codegen run never silently moves the goalposts the
+    // gate measures against.
     const schemaSnapshot = buildSchemaSnapshot(
         schema,
         migrations.map((migration) => migration.id),
@@ -700,7 +724,6 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         // from the emitted list. That is the pre-existing cost of embedding
         // advisories at all, not something this filter can fix.)
         advisories: advisories.filter((advisory) => advisory.name !== "procedure_type_check_unavailable"),
-        advisorProcedures: advisorContext?.procedureProtections ?? [],
         agents,
         capabilities,
         containers,
@@ -708,6 +731,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         flagKeys,
         hasFlags,
         hasNotify,
+        hasIpReaders: functions.some((definition) => definition.readsIp === true) || shapes.some((shape) => shape.readsIp === true),
         hasRooms: roomsSupported && functions.some((definition) => definition.channel?.kind === "room"),
         hasSensitiveArgs: agents.length > 0 || functions.some((definition) => isSensitiveFunction(definition)),
         // The gate's verdict on the app-declared `requestSecretTool` import. `true` only
@@ -746,12 +770,14 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // `writeIfPresent` skips it.
     const collectionsContent = emitCollections(shapes, dependencies.has("@lunora/db"), useUmbrella);
     const containersContent = emitContainers(containers, schema.jurisdiction);
-    const workflowsContent = emitWorkflows(workflows);
-    const agentsContent = emitAgents(agents);
+    const workflowsContent = emitWorkflows(workflows, { lazy: lazyFunctions });
+    const agentsContent = emitAgents(agents, { lazy: lazyFunctions });
     const queuesContent = emitQueues(queues, options.wranglerQueueProducers);
     const liveContent = emitLive(liveStreams, useUmbrella);
     const cronsContent = emitCrons(crons);
     const schedulerContent = emitScheduler(studioFeatures.scheduler);
+    const adminRevocationGate = gateAdminTokenRevocation(resolveCodegenTarget(options.projectRoot, options.target));
+    const adminRevocationsContent = adminRevocationGate.supported ? emitAdminRevocations(useUmbrella) : "";
     const shardRegistryContent = emitShardRegistry(schema.tables, useUmbrella, schema.jurisdiction);
     const durableObjectsContent = readMergeDurableObjects(options.projectRoot) ? emitDurableObjects(useUmbrella) : "";
     const vectorsContent = emitVectors(schema.vectorIndexes);
@@ -765,6 +791,12 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // projects (and the golden fixtures) keep writing only `openapi.json`.
     const apiSpec = options.apiSpec ?? "openapi";
     const wantsOpenApi = apiSpec === "openapi" || apiSpec === "both";
+    const advisorProcedureData: ReadonlyArray<AdvisorProcedure> = advisorContext?.procedureProtections ?? [];
+    // A `lint: false` run has no evidence, so it writes a marker instead of `{ procedures: [] }`: the studio reads
+    // the marker as "analysis disabled" rather than scoring an empty roster as a deployment with nothing wrong.
+    const advisorProcedureDocument: AdvisorProcedureDocument =
+        advisorContext === undefined ? { analysis: "disabled", procedures: [] } : { procedures: [...advisorProcedureData] };
+    const advisorProceduresJson = `${JSON.stringify(advisorProcedureDocument, undefined, 2)}\n`;
     const wantsOpenRpc = apiSpec === "openrpc" || apiSpec === "both";
 
     // The fluent worker-composition builder. Emits one method per package-backed
@@ -774,6 +806,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // `@lunora/runtime`) so it can import the add-on packages the app installed.
     const authModuleContent = emitAuthModule(dependencies.has("@lunora/auth"));
     const appContent = emitApp({
+        agentWorkflows: agents.map((agent) => agent.className),
         // Usage-only, never a dependency signal: each long-tail method's
         // parameter type reads `ShardConfig[configKey]` (e.g. `.kv()` reads
         // `ShardConfig["kv"]`), and the shard emits that config field on the
@@ -818,6 +851,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         liveStreams: platformGate.signals.liveStreams === true,
         liveStreamsWithheld: platformGate.liveStreamsWithheld,
         liveStreamDeclarations: liveStreams,
+        hasAdminRevocations: adminRevocationGate.supported,
         hasScheduler: studioFeatures.scheduler,
         // The same schema signal `emitShard` gates the shard config's source-client
         // field and the ingest poll on, so the builder method and the config field
@@ -840,6 +874,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         jurisdiction: schema.jurisdiction,
         // `{ pinAuth: true }` — only then is DO-backed auth pinned too.
         jurisdictionPinsAuth: schema.jurisdictionPinsAuth === true,
+        lazyFunctions,
         // Drives the emitted `listSchemaTables` and `resolveTableSharding`.
         tables: schema.tables.map((table) => {
             return { name: table.name, shardMode: table.shardMode };
@@ -928,12 +963,20 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: liveContent, kind: "optional", name: "live.ts" },
               { content: schedulerContent, kind: "optional", name: "scheduler.ts" },
               { content: shardRegistryContent, kind: "optional", name: "shardRegistry.ts" },
+              { content: adminRevocationsContent, kind: "optional", name: "adminRevocations.ts" },
               { content: durableObjectsContent, kind: "optional", name: "durableObjects.ts" },
               { content: seedContent, kind: "optional", name: "seed.ts" },
               // The `@lunora/auth` exports `app.ts` loads with `import()` on the first event.
               { content: authModuleContent, kind: "optional", name: "authModule.ts" },
               { content: collectionsContent, kind: "optional", name: "collections.ts" },
               { files: serviceDeclarations, kind: "services" },
+              // Off removes the folder, so turning the flag off leaves no stale deployable Worker behind.
+              {
+                  files: emitCompanion(options.projectRoot, advisorProceduresJson, studioCompanion),
+                  kind: "directory",
+                  name: "companion",
+                  owned: COMPANION_FILES,
+              },
               // The `.json` is the portable artifact for external tooling; the `.ts` (same
               // document, inlined) is what the worker imports and passes to `createWorker({
               // openApiSpec })`. Both are gated on the same `apiSpec` choice so they regenerate
@@ -942,6 +985,12 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: wantsOpenApi ? openApiModuleContent : "", kind: "optional", name: "openapi.ts" },
               { content: wantsOpenRpc ? openRpcContent : "", kind: "optional", name: "openrpc.json" },
               { content: wantsOpenRpc ? openRpcModuleContent : "", kind: "optional", name: "openrpc.ts" },
+              // Studio-only data (the health map's denominator). The main app Worker never
+              // carries it: the dev hosts serve this file to the studio, and a hosted Studio
+              // gets it from the opt-in companion Worker (`studio.companion`). A `lint: false`
+              // run writes the marker here too, so the dev host never serves a roster from an
+              // earlier run next to this run's (empty) advisories.
+              { content: advisorProceduresJson, kind: "optional", name: "advisor-procedures.json" },
               // Same pairing as the specs: the `.json` for tooling, the `.ts` for `createWorker({ architecture })`,
               // both removed when the last module goes.
               {
@@ -956,10 +1005,9 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               },
           ]);
 
-    // Bless the schema baseline on first capture (so a project gets a committed snapshot the
-    // moment it runs codegen) or when explicitly asked to refresh it. The CLI gate reads the
-    // existing baseline BEFORE calling codegen, so re-blessing here never hides drift from that run.
-    if (!options.dryRun && (!schemaSnapshotExists || options.updateSchemaBaseline === true)) {
+    // Bless the schema baseline on first capture, so a project gets a committed snapshot the
+    // moment it runs codegen. The CLI gate reads the existing baseline BEFORE calling codegen.
+    if (!options.dryRun && !schemaSnapshotExists) {
         writeIfChanged(schemaSnapshotPath, serializeSchemaSnapshot(schemaSnapshot));
     }
 
@@ -986,6 +1034,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         // so the reconciler and the CLI's limit warning have to see one list.
         cronTriggers: [...new Set([...emitWranglerCronTriggers(crons), ...entryCronTriggers])],
         generated: {
+            advisorProceduresJson,
             agents: agentsContent,
             api: apiContent,
             app: appContent,
@@ -1013,10 +1062,13 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         },
         migrations,
         outputDirectory,
-        platformDiagnostics: platformGate.diagnostics,
+        platformDiagnostics:
+            adminRevocationGate.diagnostic === undefined ? platformGate.diagnostics : [...platformGate.diagnostics, adminRevocationGate.diagnostic],
         queues,
+        indexReferences,
         schemaSnapshot,
         schemaSnapshotPath,
+        schemaTables: schema.tables,
         workflows,
         writtenFiles,
     };

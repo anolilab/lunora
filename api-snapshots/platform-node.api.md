@@ -28,6 +28,7 @@ interface NodeDispatchInvocation {
         identity?: string;
         userId?: string;
     } | undefined;
+    scheduledFor?: number;
     shardKey: string;
     traceparent: string | undefined;
 }
@@ -218,6 +219,7 @@ interface NodeSchedulerHostOptions {
     onDispatch?: (functionPath: string, args: Record<string, unknown>, job: {
         attempts: number;
         id: string;
+        scheduledFor: number;
     }) => Promise<void> | void;
 }
 ```

@@ -132,7 +132,7 @@ describe("every tool a server exposes declares annotations (runtime)", () => {
         expect.hasAssertions();
 
         const tools = await listedTools(
-            createLocalMcpServer({ allowWrites: true, deployment: { token: "admin-token", url: "https://worker.example" }, docs: false }),
+            await createLocalMcpServer({ allowWrites: true, deployment: { token: "admin-token", url: "https://worker.example" }, docs: false }),
         );
 
         assertAnnotated(tools);
@@ -144,7 +144,7 @@ describe("every tool a server exposes declares annotations (runtime)", () => {
         expect.hasAssertions();
 
         const index = { getPage: async () => undefined, listPages: async () => [], search: async () => [] } as unknown as DocsIndex;
-        const tools = await listedTools(createDocsMcpServer({ index }));
+        const tools = await listedTools(await createDocsMcpServer({ index }));
 
         assertAnnotated(tools);
 

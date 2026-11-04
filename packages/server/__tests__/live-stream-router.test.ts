@@ -1,4 +1,5 @@
 import type { ExecutionContext } from "hono";
+import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 
 import type { HttpActionCtx as HttpActionContext, LiveStream, ShardFetch } from "../src/index";
@@ -176,5 +177,40 @@ describe("liveStreamRouter", () => {
         liveStreamRouter(mounts, app);
 
         expect(app.routes).toHaveLength(registered);
+    });
+
+    it("mounts a stream added on a later build of the same app", () => {
+        expect.assertions(1);
+
+        const app = httpRouter();
+
+        liveStreamRouter([{ id: "posts", load: () => Promise.resolve(stream) }], app);
+
+        const registered = app.routes.length;
+
+        liveStreamRouter(
+            [
+                { id: "posts", load: () => Promise.resolve(stream) },
+                { id: "feed", load: () => Promise.resolve(stream) },
+            ],
+            app,
+        );
+
+        expect(app.routes.length).toBeGreaterThan(registered);
+    });
+
+    it("keeps a plain Hono host out of the direct mount, so a stream handler still gets its context", async () => {
+        expect.assertions(2);
+
+        const calls: ShardCall[] = [];
+        const host = new Hono();
+
+        host.all("*", (c) => c.text("from the host"));
+
+        const router = liveStreamRouter([{ id: "posts", load: () => Promise.resolve(stream) }], host);
+        const response = await router.fetch(new Request("https://app.test/live/posts/connect"), makeEnv(calls), context);
+
+        expect(host.routes).toHaveLength(1);
+        await expect(response.text()).resolves.not.toBe("from the host");
     });
 });

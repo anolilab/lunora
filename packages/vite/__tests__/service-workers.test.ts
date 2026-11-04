@@ -54,6 +54,23 @@ describe(serviceWorkersPlugin, () => {
         expect(run({}, root, "build").auxiliaryWorkers).toBeUndefined();
     });
 
+    it("runs the studio companion on vite dev once codegen has written it, and waits for it before that", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "lunora.config.ts"), "export default { studio: { companion: true } };\n");
+        writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "shop" }\n`);
+
+        // The app's wrangler config binds ADVISOR_COMPANION, so a Worker that never runs would leave it pointing at nothing.
+        expect(run({}, root, "serve").auxiliaryWorkers).toBeUndefined();
+
+        const companion = join(root, "lunora", "_generated", "companion");
+
+        mkdirSync(companion, { recursive: true });
+        writeFileSync(join(companion, "wrangler.jsonc"), `{ "name": "shop-advisor" }\n`);
+
+        expect(run({}, root, "serve").auxiliaryWorkers).toStrictEqual([{ configPath: join(companion, "wrangler.jsonc") }]);
+    });
+
     it("adds a Worker bound under two keys once", () => {
         expect.assertions(1);
 

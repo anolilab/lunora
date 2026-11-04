@@ -893,6 +893,18 @@ describe("reconcileWranglerBindings", () => {
         expect(result.warnings.some((warning) => warning.includes(`already bound by \`${owner}\``))).toBe(true);
     });
 
+    it("does not write the AI binding when another section already holds its name", () => {
+        expect.assertions(3);
+
+        writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}    "vars": { "AI": "on" },\n}\n`, "utf8");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAi: true }));
+
+        expect(readConfig().ai).toBeUndefined();
+        expect(result.warnings.some((warning) => warning.startsWith("ai: not adding"))).toBe(true);
+        expect(result.warnings.some((warning) => warning.includes("already bound by `vars`"))).toBe(true);
+    });
+
     it("does not write AI_SEARCH when a Durable Object binding already holds the name", () => {
         expect.assertions(3);
 

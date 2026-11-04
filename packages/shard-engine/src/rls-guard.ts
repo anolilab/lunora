@@ -67,6 +67,9 @@ interface GuardableSchema {
  * `resolveTableName`). `undefined` ⇒ the id resolves to no table this writer can
  * see (absent row, or another backend) — nothing to leak, so the op passes
  * through to the raw call (which yields `null` / routes on).
+ *
+ * Cost: with no `expectedTable` the resolver has to search every table the writer can see, so an id that matches
+ * nothing pays for all of them. Pass the pinned table whenever the caller knows it.
  */
 type TableOfId = (id: string, expectedTable?: string) => Promise<string | undefined> | string | undefined;
 
@@ -90,7 +93,7 @@ interface GuardableWriter {
     aggregate: (tableName: string, options: unknown) => unknown;
     assertPatchAllowed?: (table: string, id: string) => unknown;
     count: (tableName: string, whereOrArgs?: unknown) => unknown;
-    delete: (table: string, id: string, options?: { hard?: boolean }) => unknown;
+    delete: (table: string, id: string, options?: { hard?: boolean; skipOnDelete?: boolean }) => unknown;
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => unknown;
     deleteMany: (table: string, ids: ReadonlyArray<string>, options?: { limit?: number }) => unknown;
     deleteWhere?: (tableName: string, where: Record<string, unknown>, options?: { limit?: number }) => unknown;
@@ -385,7 +388,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
 
     const guarded: Record<PropertyKey, unknown> = {
         ...(raw as Record<string, unknown>),
-        delete: async (table: string, id: string, options?: { hard?: boolean }) => {
+        delete: async (table: string, id: string, options?: { hard?: boolean; skipOnDelete?: boolean }) => {
             // The table is named by the caller, so it gates directly — no owner probe.
             guardTable(table);
 

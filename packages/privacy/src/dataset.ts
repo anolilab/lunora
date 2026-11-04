@@ -110,12 +110,12 @@ class PortTableMissingError extends LunoraError {
 }
 
 /**
- * Refuse a data port result that leaves out one of the dataset's tables. A missing key would read as zero rows,
+ * Refuse a data port result that leaves out one of the dataset's tables. A missing or null entry would read as zero rows,
  * so an export would omit the table and an erasure would report it clean without checking it. The check is on
  * own properties, so an inherited name such as `toString` does not count as an entry.
  */
 const requireTables = (result: Readonly<Record<string, unknown>>, dataset: Dataset, call: string): void => {
-    const missing = dataset.tableNames.find((table) => !Object.hasOwn(result, table) || result[table] === undefined);
+    const missing = dataset.tableNames.find((table) => !Object.hasOwn(result, table) || result[table] === undefined || result[table] === null);
 
     if (missing !== undefined) {
         throw new PortTableMissingError(call, dataset.id, missing);

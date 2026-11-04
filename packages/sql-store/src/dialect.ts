@@ -31,11 +31,12 @@ export interface SqlRunResult {
  * write and reports `rowsAffected` — the matched-rows count that drives the
  * MySQL optimistic-concurrency guard (which has no `RETURNING`).
  *
- * Note: companion writes (aggregate/rank/FTS/CDC) run after the row write, not
- * in its transaction, so they share D1's at-least-once caveat. Where the
- * executor provides `batch`, a write's aggregate/rank/CDC statements go out as
- * one ordered batch; without it they run as sequential statements, and a failure
- * partway through leaves the earlier ones applied.
+ * A row write and its aggregate/rank/CDC companion statements commit together
+ * when the executor provides `transaction`. Without it they run after the row
+ * write: as one ordered batch where the executor provides `batch` on the sqlite
+ * dialect, otherwise as sequential statements, and a failure partway through
+ * leaves the earlier ones applied. The FTS search companion always follows the
+ * row write on its own, guarded by the row's version.
  */
 export interface SqlExec {
     all: (sql: string, params: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
@@ -68,6 +69,20 @@ export interface SqlExec {
      */
     batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<void>;
     run: (sql: string, params: ReadonlyArray<unknown>) => Promise<SqlRunResult>;
+
+    /**
+     * Optional: run `work` against an exec pinned to ONE connection inside one
+     * transaction, committed when `work` resolves and rolled back when it
+     * throws. The store runs a row write, the reads its companions need and the
+     * companion writes through it, so the row and its counters never drift
+     * apart. Statements inside see each other's effects, and `RETURNING` /
+     * affected-rows report as they do outside.
+     *
+     * Never implement it by sending `BEGIN`/`COMMIT` through a pool: consecutive
+     * calls may land on different connections. D1 has no interactive
+     * transaction, so its execs leave this out.
+     */
+    transaction?: <T>(work: (tx: SqlExec) => Promise<T>) => Promise<T>;
 }
 
 /** Everything engine-specific the store core needs. One value per engine; `sqliteDialect` (in `@lunora/d1`) is the reference, Postgres/MySQL live in `@lunora/hyperdrive/global`. */

@@ -56,7 +56,7 @@ apps/docs/src/content/changelogs/
 marketing/videos/build/
 
 # Non-JS SDK build output. Git ignores these, but Prettier does not read
-# .gitignore, so a local `lint:prettier` otherwise reports dozens of warnings for
+# .gitignore, so a local `lint:oxfmt` otherwise reports dozens of warnings for
 # swiftpm and cargo intermediates that no CI checkout even contains.
 sdks/*/.build/
 sdks/**/target/
@@ -64,14 +64,18 @@ sdks/**/.dart_tool/
 
 # Schema baselines — written by `serializeSchemaSnapshot`, whose exact output is
 # the canonical form. Prettier reformats them to 4-space, so every
-# `lunora prepare --update-schema-baseline` produced a file that then failed
-# `lint:prettier` until someone re-ran `--write`. The serializer owns this
+# a deploy that advanced the baseline produced a file that then failed
+# `lint:oxfmt` until someone re-ran `--write`. The serializer owns this
 # format, not Prettier. (Safe: the ledger hash is taken from the re-serialized
 # object, never from the file's bytes, so on-disk spacing cannot shift a
 # schema version's identity.)
 **/.lunora-schema.json
 
 # Netlify's build output for the docs site. Gitignored, so it only exists in a
-# checkout where `apps/docs` has been built — and then `lint:prettier` fails on
+# checkout where `apps/docs` has been built — and then `lint:oxfmt` fails on
 # a bundle no one wrote and no one can usefully format.
 **/.netlify
+
+# vis release state — rewritten by the release job's serializer (2-space JSON) on
+# every run, so a reformat here is undone by the next release commit.
+.vis/release/

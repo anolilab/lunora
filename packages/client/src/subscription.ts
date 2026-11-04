@@ -153,6 +153,19 @@ export interface SubscriptionState {
     serverBase: unknown;
 
     /**
+     * Set when a full data frame was committed, so a result that is itself `undefined` still counts as a value this
+     * subscription holds. `serverBase` alone cannot say: `undefined` there also means nothing has arrived.
+     */
+    serverBaseCommitted?: boolean;
+
+    /**
+     * Fingerprint of the claims the value and cursor were read under, as the shard announced it; replayed
+     * as `sinceClaims` so the server resumes only when the socket's claims are still those. Absent when the
+     * shard announced none, which the server treats as a mismatch (a full snapshot).
+     */
+    serverClaims?: string;
+
+    /**
      * The `__cdc_log` high-watermark (`cursor`) the `lastValue` reflects,
      * captured from the last `data`/`delta`/`resume` frame. Persisted to the
      * durable read cache and replayed as `sinceSeq` on reconnect so the server

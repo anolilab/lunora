@@ -1,6 +1,6 @@
 {
     "name": "@lunora/agent",
-    "version": "1.0.0-alpha.265",
+    "version": "1.0.0-alpha.281",
     "description": "Durable AI agents for Lunora: defineAgent compiles a replay-safe tool-loop onto Cloudflare Workflows, with DO SQLite threads and live message subscriptions",
     "keywords": [
         "agent",
@@ -54,6 +54,10 @@
             "types": "./dist/component.d.ts",
             "import": "./dist/component.mjs"
         },
+        "./core": {
+            "types": "./dist/core.d.ts",
+            "import": "./dist/core.mjs"
+        },
         "./inbound": {
             "types": "./dist/inbound.d.ts",
             "import": "./dist/inbound.mjs"
@@ -88,21 +92,19 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "pnpm exec eslint . --max-warnings=0",
         "lint:eslint:fix": "pnpm exec eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "pnpm exec tsc --noEmit",
+        "lint:types": "pnpm exec tsrs --noEmit",
         "test": "pnpm exec vitest run",
         "test:coverage": "pnpm exec vitest run --coverage"
     },
     "dependencies": {
         "@ai-sdk/provider-utils": "catalog:ai",
-        "@lunora/ai": "1.0.0-alpha.156",
+        "@lunora/ai": "1.0.0-alpha.164",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/mail": "1.0.0-alpha.130",
-        "@lunora/platform": "1.0.0-alpha.76",
-        "@lunora/server": "1.0.0-alpha.255",
-        "@lunora/values": "1.0.0-alpha.86",
-        "@lunora/workflow": "1.0.0-alpha.101",
+        "@lunora/mail": "1.0.0-alpha.138",
+        "@lunora/platform": "1.0.0-alpha.80",
+        "@lunora/server": "^1.0.0-alpha.268",
+        "@lunora/values": "^1.0.0-alpha.95",
+        "@lunora/workflow": "^1.0.0-alpha.111",
         "@modelcontextprotocol/sdk": "catalog:mcp",
         "ai": "catalog:ai",
         "yaml": "catalog:content"
@@ -110,10 +112,10 @@
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@lunora/container": "1.0.0-alpha.100",
+        "@lunora/container": "1.0.0-alpha.108",
         "@lunora/dispatch": "workspace:*",
-        "@lunora/shard-engine": "1.0.0-alpha.174",
-        "@lunora/wire": "1.0.0-alpha.5",
+        "@lunora/shard-engine": "^1.0.0-alpha.187",
+        "@lunora/wire": "1.0.0-alpha.6",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

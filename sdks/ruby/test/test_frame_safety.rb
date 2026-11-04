@@ -248,7 +248,7 @@ class TestFrameSafety < Minitest::Test
 
   def test_the_auth_token_is_redacted_when_printed
     ConformanceManifest.covers("auth_token_redacted_when_printed")
-    secret = "lunora-secret-7f3a9c"
+    secret = "lunora-secret-7f3a9c" # secret-scanner:allow -- test fixture
     client = Lunora::Client.new("https://app.example", auth_token: secret)
 
     printed = capture_io do

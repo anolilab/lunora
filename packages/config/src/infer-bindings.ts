@@ -27,12 +27,13 @@ import type { CapabilityKey, ServiceBindingIR, SourceCapabilitySignals } from "@
 import {
     capabilitiesUsedBy,
     CAPABILITY_PROBES,
+    COMPANION_BINDING,
     createTargetScope,
     discoverNotifyChannels,
     foldCapabilitySignals,
     mayReadCapabilityContext,
     NOTIFY_FILENAME,
-    readServiceBindings,
+    readBoundServiceBindings,
     sourceCapabilitySignals,
 } from "@lunora/codegen";
 // `worker-entry.ts` lexes the entry's exports; the lexer's wasm must be initialised first.
@@ -441,7 +442,16 @@ interface InferOptions {
     scanDirs?: ReadonlyArray<string>;
     /** Lunora source directory holding `schema.ts`. Defaults to `lunora`. */
     schemaDir?: string;
+    /** Leave the `studio.companion` Worker out of the inferred services, for a run that does not deploy it. */
+    skipCompanion?: boolean;
 }
+
+/** The service bindings to reconcile; `skipCompanion` drops the companion for a run that does not deploy it. */
+const readInferredServiceBindings = (projectRoot: string, schemaDirectory: string, skipCompanion: boolean): ReturnType<typeof readBoundServiceBindings> => {
+    const bound = readBoundServiceBindings(projectRoot, schemaDirectory);
+
+    return skipCompanion ? { ...bound, services: bound.services.filter((service) => service.binding !== COMPANION_BINDING) } : bound;
+};
 
 /** The schema facts binding inference reads. */
 interface SchemaFacts {
@@ -630,7 +640,7 @@ const describeDeclaredExports = (
  */
 const describeCapabilitySignals = (capabilities: Capabilities, exported: ReadonlySet<string>, schema: SchemaFacts): string[] => {
     const rules: ReadonlyArray<[boolean, string]> = [
-        [capabilities.usesAi, `AI (${usageOf("ai")}, or env.AI is used)`],
+        [capabilities.usesAi, `AI (${usageOf("ai")}, env.AI is used, or an agent is declared)`],
         [
             capabilities.usesAuth && !exported.has("SessionDO"),
             "hint: @lunora/auth is imported; its tables are D1-backed by default. For DO-backed auth (what @better-auth/scim needs), pass `namespace` to .auth() and export the generated auth DO class",
@@ -781,7 +791,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const scanDirectories = options.scanDirs ?? DEFAULT_SCAN_DIRECTORIES;
 
     const scan = (): CapabilityScan => scanCapabilities(options.projectRoot, scanDirectories, schemaDirectory);
-    const { scannedFiles, ...capabilities } =
+    const { scannedFiles, ...scannedCapabilities } =
         options.cache === undefined ? scan() : options.cache.memo(`capabilities:${options.projectRoot}:${schemaDirectory}:${scanDirectories.join(",")}`, scan);
     const entry = resolveWorkerEntry(options.projectRoot);
     let durableObjects: DurableObjectSpec[];
@@ -804,12 +814,16 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     }
 
     const discoveredSchema = schemaFacts(options.projectRoot, schemaDirectory, options.cache);
-    const schema: SchemaFacts = { ...discoveredSchema, needsD1: capabilities.needsD1 || discoveredSchema.needsD1 };
+    const schema: SchemaFacts = { ...discoveredSchema, needsD1: scannedCapabilities.needsD1 || discoveredSchema.needsD1 };
     const containers = detectClassExports(entry, discoverContainerInfo(options.projectRoot, schemaDirectory, options.cache).containers, "containers");
     const workflows = detectClassExports(entry, discoverWorkflowInfo(options.projectRoot, schemaDirectory).workflows, "workflows");
     // Agents compile onto Cloudflare Workflows, so — like workflows — only an
     // exported agent WorkflowEntrypoint class is safe to reconcile into `exports`.
     const agents = detectClassExports(entry, discoverAgentInfo(options.projectRoot, schemaDirectory).agents, "agents");
+    // An agent calls Workers AI through `env.AI` (a `@cf/...` model, voice, memory
+    // extraction) without the app importing `@lunora/ai` or reading `ctx.ai`, so a
+    // declared agent needs the binding on its own.
+    const capabilities = { ...scannedCapabilities, usesAi: scannedCapabilities.usesAi || agents.length > 0 };
     // Queues need no worker-entry export (their `queue()` handler rides
     // `createWorker`), so the discovered list is reconcilable as-is.
     const queues = [...discoverQueueInfo(options.projectRoot, schemaDirectory).queues];
@@ -850,14 +864,21 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
 
     // Codegen throws, naming the entry, on a declaration it cannot wire; that
     // error surfaces there, so inference only reconciles what resolves.
-    const resolved = readServiceBindings(options.projectRoot);
+    const resolved = readInferredServiceBindings(options.projectRoot, schemaDirectory, options.skipCompanion === true);
     const services = resolved.error === undefined ? resolved.services : undefined;
 
     if (resolved.error !== undefined) {
         signals.push(`hint: lunora.config \`services\` not reconciled — ${resolved.error}`);
     }
 
-    signals.push(...resolved.services.map((service) => `${service.binding} → ${service.worker} (lunora.config services.${service.name})`));
+    signals.push(
+        ...resolved.services.map((service) =>
+            // The companion is Lunora's own Worker, enabled by `studio.companion`, not a `services` declaration.
+            service.binding === COMPANION_BINDING
+                ? `${service.binding} → ${service.worker} (studio.companion)`
+                : `${service.binding} → ${service.worker} (lunora.config services.${service.name})`,
+        ),
+    );
 
     return {
         // The scanned flags first: `needsD1` below replaces the raw `env.DB` flag

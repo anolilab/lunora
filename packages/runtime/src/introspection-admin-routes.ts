@@ -6,13 +6,14 @@
  * admin gate, option registry, and request helpers through injected deps, so the
  * module imports no runtime values from `create-worker` (only its types).
  */
-import { decodeWire } from "@lunora/wire";
+import { decodeWire, encodeWire } from "@lunora/wire";
 
 import { EMPTY_ARCHITECTURE } from "../../../shared/architecture-manifest";
 import type { CronJobDispatch, CronJobInfo, FunctionDescriptor, FunctionRegistryLike, GlobalFilterClause, GlobalIntrospector } from "./create-worker";
 import { describeArguments } from "./describe-args";
 import { LunoraError } from "./errors";
 import { assertMethod } from "./method-guard";
+import PROCEDURE_META from "./procedure-meta-key";
 
 const FUNCTIONS_PATH = "/_lunora/admin/functions";
 const CRON_JOBS_PATH = "/_lunora/admin/cron-jobs";
@@ -139,7 +140,21 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
                     return [];
                 }
 
-                return [{ args: [...(entry.argumentDescriptors ?? describeArguments(entry.args))], kind: entry.kind, path }];
+                const meta = entry[PROCEDURE_META];
+                let metaField: Pick<FunctionDescriptor, "meta" | "metaUnencodable" | "metaUnloaded"> = {};
+
+                if (meta === "unloaded") {
+                    metaField = { metaUnloaded: true };
+                } else if (meta !== undefined) {
+                    try {
+                        metaField = { meta: encodeWire(meta) };
+                    } catch {
+                        // `.meta()` accepts anything structured-cloneable; the wire codec does not (a RegExp, a cycle). One such function must not fail the whole listing.
+                        metaField = { metaUnencodable: true };
+                    }
+                }
+
+                return [{ args: [...(entry.argumentDescriptors ?? describeArguments(entry.args))], kind: entry.kind, ...metaField, path }];
             })
             .toSorted((a, b) => a.path.localeCompare(b.path));
 

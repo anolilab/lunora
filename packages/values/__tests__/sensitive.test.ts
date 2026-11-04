@@ -444,6 +444,14 @@ describe("v.sensitive — a literal's value is not published", () => {
         expect(argsToJsonSchema({ token }).properties).toStrictEqual({ token: { format: "password", type: "string", writeOnly: true } });
     });
 
+    it("publishes no literal value nested in a sensitive object, array or record", () => {
+        expect.assertions(3);
+
+        expect(JSON.stringify(toJsonSchema(v.sensitive(v.object({ pin: v.literal("1234") }))))).not.toContain("1234");
+        expect(JSON.stringify(toJsonSchema(v.sensitive(v.array(v.literal("1234")))))).not.toContain("1234");
+        expect(JSON.stringify(toJsonSchema(v.sensitive(v.record(v.string(), v.literal("1234")))))).not.toContain("1234");
+    });
+
     it("publishes no literal value under an optional sensitive literal argument", () => {
         expect.assertions(1);
 

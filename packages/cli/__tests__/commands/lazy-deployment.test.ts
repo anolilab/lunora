@@ -14,7 +14,7 @@ import { runPrepareCommand } from "../../src/commands/prepare/handler";
 import type { VerifyCommandData } from "../../src/commands/verify/handler";
 import { execute as verify } from "../../src/commands/verify/handler";
 import type { VerifyOptions } from "../../src/commands/verify/index";
-import runLazySmokeLoad from "../../src/util/lazy-smoke-load";
+import runSmokeLoad from "../../src/util/lazy-smoke-load";
 import { createRecordingSpawner } from "../../src/util/spawn";
 import { runExecute } from "../helpers/execute";
 
@@ -86,6 +86,19 @@ describe("lazy deployment", () => {
             expect(functions).toContain("messages:latest");
             expect(functions).not.toContain("messages:list");
         });
+
+        it("regenerates lazily from lunora.config with neither the flag nor the environment", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(projectRoot, "lunora.config.ts"), "export default { codegen: { lazyFunctions: true } };\n");
+            const { spawner } = createRecordingSpawner();
+            const result = await run({ cwd: projectRoot, dryRun: true, interactive: false, logger, spawner, strictAdvisories: false });
+            const generated = join(projectRoot, "lunora", "_generated");
+
+            expect(result.code).toBe(0);
+            expect(readFileSync(join(generated, "functions.ts"), "utf8")).toContain("export const LUNORA_FUNCTION_MANIFEST");
+            expect(existsSync(join(generated, "fn", "lunora_messages_0.ts"))).toBe(true);
+        });
     });
 
     describe("verify lazy metadata gate", () => {
@@ -115,6 +128,24 @@ describe("lazy deployment", () => {
             expect(result.document?.data?.errors.join("\n").includes("lazy function registry needs literal")).toBe(enabled);
             expect(existsSync(join(projectRoot, "lunora", "_generated"))).toBe(false);
         });
+
+        it("checks the lazy registry lunora.config opts into without a flag", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(projectRoot, "lunora.config.ts"), "export default { codegen: { lazyFunctions: true } };\n");
+            writeFileSync(
+                join(projectRoot, "lunora", "messages.ts"),
+                'import { query } from "@lunora/server";\nconst rest = true;\nconst base = query.expose({ rest });\nexport const list = base.query(() => []);\n',
+            );
+            const result = await runExecute<VerifyOptions, VerifyCommandData>(verify, {
+                commandName: "verify",
+                cwd: projectRoot,
+                options: { format: "json", strictAdvisories: false, typecheck: false },
+            });
+
+            expect(result.code).toBe(1);
+            expect(result.document?.data?.errors.join("\n")).toContain("lazy function registry needs literal");
+        });
     });
 
     describe("lazy smoke-load gate", () => {
@@ -127,54 +158,54 @@ describe("lazy deployment", () => {
         ])("runs the check=$called for lazyFunctions=$lazyFunctions smokeLoad=$smokeLoad", async ({ lazyFunctions, smokeLoad, called }) => {
             expect.assertions(2);
 
-            vi.mocked(runLazySmokeLoad).mockClear();
+            vi.mocked(runSmokeLoad).mockClear();
 
             const { spawner } = createRecordingSpawner();
             const result = await runBuildCommand({ cwd: projectRoot, lazyFunctions, logger, smokeLoad, spawner, strictAdvisories: false });
 
             expect(result.code).toBe(0);
-            expect(vi.mocked(runLazySmokeLoad)).toHaveBeenCalledTimes(called ? 1 : 0);
+            expect(vi.mocked(runSmokeLoad)).toHaveBeenCalledTimes(called ? 1 : 0);
         });
 
         it("hands an injected smoke launcher to the check", async () => {
             expect.assertions(1);
 
-            vi.mocked(runLazySmokeLoad).mockClear();
+            vi.mocked(runSmokeLoad).mockClear();
             const smokeLauncher = vi.fn<DevProcessSpawner>();
             const { spawner } = createRecordingSpawner();
 
             await runBuildCommand({ cwd: projectRoot, lazyFunctions: true, logger, smokeLauncher, spawner, strictAdvisories: false });
 
-            expect(vi.mocked(runLazySmokeLoad)).toHaveBeenCalledWith(expect.objectContaining({ launcher: smokeLauncher }));
+            expect(vi.mocked(runSmokeLoad)).toHaveBeenCalledWith(expect.objectContaining({ launcher: smokeLauncher }));
         });
 
         it("skips prepare's smoke check on --no-smoke-load, as build and deploy do", async () => {
             expect.assertions(2);
 
-            vi.mocked(runLazySmokeLoad).mockClear();
+            vi.mocked(runSmokeLoad).mockClear();
             const { spawner } = createRecordingSpawner();
             const result = await runPrepareCommand({ cwd: projectRoot, lazyFunctions: true, logger, smokeLoad: false, spawner, strictAdvisories: false });
 
-            expect(vi.mocked(runLazySmokeLoad)).not.toHaveBeenCalled();
+            expect(vi.mocked(runSmokeLoad)).not.toHaveBeenCalled();
             expect(result.code).toBe(0);
         });
 
         it("hands an injected smoke launcher to prepare's check", async () => {
             expect.assertions(1);
 
-            vi.mocked(runLazySmokeLoad).mockClear();
+            vi.mocked(runSmokeLoad).mockClear();
             const smokeLauncher = vi.fn<DevProcessSpawner>();
             const { spawner } = createRecordingSpawner();
 
             await runPrepareCommand({ cwd: projectRoot, lazyFunctions: true, logger, smokeLauncher, spawner, strictAdvisories: false });
 
-            expect(vi.mocked(runLazySmokeLoad)).toHaveBeenCalledWith(expect.objectContaining({ launcher: smokeLauncher }));
+            expect(vi.mocked(runSmokeLoad)).toHaveBeenCalledWith(expect.objectContaining({ launcher: smokeLauncher }));
         });
 
         it("refuses prepare, the CI gate, when a lazy module fails to load", async () => {
             expect.assertions(2);
 
-            vi.mocked(runLazySmokeLoad).mockResolvedValueOnce("1 of 3 lazy function(s) fail to load: posts:list: boom");
+            vi.mocked(runSmokeLoad).mockResolvedValueOnce("1 of 3 lazy function(s) fail to load: posts:list: boom");
 
             const { spawner } = createRecordingSpawner();
             const result = await runPrepareCommand({ cwd: projectRoot, lazyFunctions: true, logger, spawner, strictAdvisories: false });
@@ -186,7 +217,7 @@ describe("lazy deployment", () => {
         it("refuses to build, before wrangler runs, when a lazy module fails to load", async () => {
             expect.assertions(3);
 
-            vi.mocked(runLazySmokeLoad).mockResolvedValueOnce("1 of 3 lazy function(s) fail to load — posts:list: boom");
+            vi.mocked(runSmokeLoad).mockResolvedValueOnce("1 of 3 lazy function(s) fail to load — posts:list: boom");
 
             const { calls, spawner } = createRecordingSpawner();
             const result = await runBuildCommand({ cwd: projectRoot, lazyFunctions: true, logger, spawner, strictAdvisories: false });

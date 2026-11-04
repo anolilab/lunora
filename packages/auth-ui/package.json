@@ -37,9 +37,7 @@
     "scripts": {
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit && ngc -p tsconfig.ngcheck.json && tsc -p tsconfig.solid.json --noEmit && tsc -p tsconfig.solid-v2.json --noEmit && vue-tsc --noEmit -p tsconfig.vue.json && svelte-check --tsconfig ./tsconfig.svelte.json",
+        "lint:types": "tsrs --noEmit && ngc -p tsconfig.ngcheck.json && tsrs -p tsconfig.solid.json --noEmit && tsrs -p tsconfig.solid-v2.json --noEmit && vue-tsc --noEmit -p tsconfig.vue.json && svelte-check --tsconfig ./tsconfig.svelte.json",
         "sync:registry": "node ../../scripts/sync-auth-ui-registry.mjs",
         "sync:registry:check": "node ../../scripts/sync-auth-ui-registry.mjs --check",
         "test": "vitest run",

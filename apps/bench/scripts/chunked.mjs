@@ -32,7 +32,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { gzipSync } from "node:zlib";
 
-import { startupActiveMs, summarize } from "../../../scripts/worker-startup-measure.js";
+import { startupActiveMs, summarize } from "./worker-startup-measure.js";
 import { appDirectory, sizeFromArgs } from "./generate.mjs";
 import { benchDirectory, buildMode, quietEnv, sizeLabel, withSizedApp, wrangler } from "./sized-app.mjs";
 

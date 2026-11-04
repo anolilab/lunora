@@ -53,6 +53,8 @@ export interface ShapeSubscriptionState {
     onCheckpoint?: (watermark: SyncWatermark) => void;
     /** The shape's current rowset, keyed by `_id`. */
     rows: Map<string, Record<string, unknown>>;
+    /** Fingerprint of the claims `serverCursor` was read under; see `SubscriptionState.serverClaims`. */
+    serverClaims?: string;
     serverCursor?: number;
     serverEpoch?: string;
     shardKey: string | undefined;

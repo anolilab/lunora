@@ -48,7 +48,7 @@
 
 import { stableWireKey } from "@lunora/wire";
 
-import { depKey, SCAN_DEP } from "./dependency-tracker";
+import { depKey, isPrimaryReadDep, SCAN_DEP } from "./dependency-tracker";
 import { estimateBytes } from "./estimate-bytes";
 import type { IndexKeyEntry, KeyRange } from "./read-write-set";
 import { isPointRange, keysTouchRanges } from "./read-write-set";
@@ -218,6 +218,13 @@ class ReactiveCache {
         // let the next call miss.
         if (this.generation !== generationAtEntry) {
             return result;
+        }
+
+        // See PRIMARY_READ: such a query is re-run on every call, never memoized.
+        for (const dep of deps) {
+            if (isPrimaryReadDep(dep)) {
+                return result;
+            }
         }
 
         const bytes = estimateBytes(result);

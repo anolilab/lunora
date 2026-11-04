@@ -5,6 +5,7 @@ import { memoizeIdentity } from "lunorash/runtime";
 import { defineApp } from "../../lunora/_generated/app.js";
 
 interface Env {
+    ADMIN_REVOCATIONS: ShardNamespaceLike;
     SHARD: ShardNamespaceLike;
     /** Optional custom auth domain; it then issues the tokens instead of api.workos.com. */
     WORKOS_AUTH_DOMAIN?: string;
@@ -26,6 +27,7 @@ interface Env {
  */
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    .adminRevocations((env) => env.ADMIN_REVOCATIONS)
     .extend((env) => {
         return {
             resolveIdentity: memoizeIdentity(
@@ -39,6 +41,8 @@ const app = defineApp<Env>()
     .build();
 
 export const { ShardDO } = app;
+// Records revoked named admin tokens where a restore of the shard cannot rewind them.
+export { AdminRevocationDO } from "../../lunora/_generated/adminRevocations.js";
 
 // The composed app IS the module worker — see examples/chess for why it is exported wholesale.
 export default app;

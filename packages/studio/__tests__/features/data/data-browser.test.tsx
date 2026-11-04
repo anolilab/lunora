@@ -1395,7 +1395,9 @@ describe("dataBrowser — editable", () => {
             mock.emit(ADMIN_FUNCTIONS.readTablePage, { columns: ["__id__", "text"], rows: [{ __id__: "m9", text: "LIVE ROW" }], total: 1 });
         });
 
-        expect(screen.getByTestId("db-page").textContent).toContain("LIVE ROW");
+        // The push lands in the query cache; observers are notified on react-query's
+        // scheduler, so the re-render follows the act() rather than happening inside it.
+        await expect(within(screen.getByTestId("db-page")).findByText("LIVE ROW")).resolves.toBeDefined();
     });
 
     it("keeps the live subscription bound to the loaded page, ignoring shard-input keystrokes", async () => {
@@ -1447,8 +1449,10 @@ describe("dataBrowser — editable", () => {
             ]);
         });
 
-        expect(screen.getByTestId("db-table-invoices")).toBeDefined();
-        expect(screen.getByTestId("db-table-invoices").textContent).toContain("invoices");
+        const invoices = await screen.findByTestId("db-table-invoices");
+
+        expect(invoices).toBeDefined();
+        expect(invoices.textContent).toContain("invoices");
     });
 
     /**
@@ -3639,7 +3643,7 @@ describe("dataBrowser — AI filter reply after a table switch", () => {
                 if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
                     return new Promise((resolve) => {
                         finishAi = (clauses) => {
-                            resolve({ result: { clauses, degraded: false } });
+                            resolve({ clauses, degraded: false });
                         };
                     });
                 }
@@ -3704,7 +3708,7 @@ describe("dataBrowser — nested paths on suggested and linked filters", () => {
                 }
 
                 if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
-                    return { result: { clauses: [{ column: "text", operator: "has", path: ["a.b", "tags"], value: "x" }], degraded: false } };
+                    return { clauses: [{ column: "text", operator: "has", path: ["a.b", "tags"], value: "x" }], degraded: false };
                 }
 
                 return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
@@ -3734,7 +3738,7 @@ describe("dataBrowser — nested paths on suggested and linked filters", () => {
                 }
 
                 if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
-                    return { result: { clauses: [{ column: "text", operator: "eq", path: ["a"], value: null }], degraded: false } };
+                    return { clauses: [{ column: "text", operator: "eq", path: ["a"], value: null }], degraded: false };
                 }
 
                 return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
@@ -3766,7 +3770,7 @@ describe("dataBrowser — nested paths on suggested and linked filters", () => {
                 }
 
                 if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
-                    return { result: { clauses: [{ column: "text", operator, value }], degraded: false } };
+                    return { clauses: [{ column: "text", operator, value }], degraded: false };
                 }
 
                 return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
@@ -3795,7 +3799,7 @@ describe("dataBrowser — nested paths on suggested and linked filters", () => {
                 }
 
                 if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
-                    return { result: { clauses: [{ column: "text", operator: "eq", path: ["a"], value: "10" }], degraded: false } };
+                    return { clauses: [{ column: "text", operator: "eq", path: ["a"], value: "10" }], degraded: false };
                 }
 
                 return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
@@ -3825,15 +3829,13 @@ describe("dataBrowser — nested paths on suggested and linked filters", () => {
 
                 if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
                     return {
-                        result: {
-                            clauses: [
-                                { column: "text", operator: "has", value: "10" },
-                                { column: "text", operator: "has", value: "true" },
-                                { column: "text", operator: "gt", value: "18" },
-                                { column: "text", operator: "has", value: 10 },
-                            ],
-                            degraded: false,
-                        },
+                        clauses: [
+                            { column: "text", operator: "has", value: "10" },
+                            { column: "text", operator: "has", value: "true" },
+                            { column: "text", operator: "gt", value: "18" },
+                            { column: "text", operator: "has", value: 10 },
+                        ],
+                        degraded: false,
                     };
                 }
 

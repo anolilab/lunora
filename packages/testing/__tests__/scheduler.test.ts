@@ -1,4 +1,4 @@
-import { MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS } from "@lunora/scheduler";
+import { MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS, TERMINAL_RETENTION_MS } from "@lunora/scheduler";
 import { defineSchema, defineTable, initLunora, v } from "@lunora/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -339,8 +339,8 @@ describe("fake scheduler", () => {
         expect(result.cancelled).toBe(false);
     });
 
-    it("get returns the job when pending and null after it executes", async () => {
-        expect.assertions(2);
+    it("get reports the job pending, then succeeded after it executes", async () => {
+        expect.assertions(3);
 
         const t = start();
 
@@ -348,13 +348,44 @@ describe("fake scheduler", () => {
 
         const job = await t.mutation(getJob, { id: jobId });
 
-        expect(job).toMatchObject({ functionPath: "log:appendLog", id: jobId });
+        expect(job).toMatchObject({ functionPath: "log:appendLog", id: jobId, state: "pending" });
 
         await t.scheduler.advance(1000);
 
         const afterExec = await t.mutation(getJob, { id: jobId });
 
-        expect(afterExec).toBeNull();
+        expect(afterExec).toMatchObject({ id: jobId, state: "succeeded" });
+        expect(typeof afterExec?.completedAt).toBe("number");
+    });
+
+    it("get forgets a finished job after the seven-day retention window, as the scheduler does", async () => {
+        expect.assertions(2);
+
+        const t = start();
+        const jobId = await t.mutation(scheduleAppend, { delayMs: 500, message: "aging" });
+
+        // Finishes at the end of this advance.
+        await t.scheduler.advance(1000);
+        await t.scheduler.advance(TERMINAL_RETENTION_MS - 1);
+
+        await expect(t.mutation(getJob, { id: jobId })).resolves.toMatchObject({ state: "succeeded" });
+
+        await t.scheduler.advance(1);
+
+        await expect(t.mutation(getJob, { id: jobId })).resolves.toBeNull();
+    });
+
+    it("get reports a cancelled job as canceled and an unknown id as null", async () => {
+        expect.assertions(2);
+
+        const t = start();
+
+        const jobId = await t.mutation(scheduleAppend, { delayMs: 1000, message: "cancelled" });
+
+        await t.mutation(cancelJob, { id: jobId });
+
+        await expect(t.mutation(getJob, { id: jobId })).resolves.toMatchObject({ state: "canceled" });
+        await expect(t.mutation(getJob, { id: "no-such-job" })).resolves.toBeNull();
     });
 
     it("runAt schedules a job at an absolute timestamp", async () => {
@@ -624,11 +655,11 @@ describe("fake scheduler", () => {
             // 7 fixed assertions + one per non-final retry (MAX_RETRY_ATTEMPTS - 1).
             // A change to the retry budget breaks this count loudly rather than
             // quietly asserting fewer things.
-            expect.assertions(11);
+            expect.assertions(12);
 
             const t = start();
 
-            await t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:appendOrThrow", { fail: true, message: "always" }));
+            const jobId = await t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:appendOrThrow", { fail: true, message: "always" }));
 
             // Attempt 1 (the original dispatch): fails. attempts=1 is within the
             // retry budget, so it is silently retried rather than surfaced.
@@ -654,6 +685,10 @@ describe("fake scheduler", () => {
 
             expect(t.scheduler.failures()).toHaveLength(1);
             expect(t.scheduler.list()).toHaveLength(0);
+            await expect(t.run(async (ctx) => ctx.scheduler.get(jobId))).resolves.toMatchObject({
+                error: `dead-lettered after ${String(MAX_RETRY_ATTEMPTS + 1)} attempts`,
+                state: "failed",
+            });
         });
 
         it("pins the virtual clock a terminal failure costs: the whole backoff schedule, not one tick", async () => {

@@ -49,11 +49,11 @@ const moduleSpecifiers = (sourceFile: ts.SourceFile): ts.StringLiteral[] => {
     return found;
 };
 
-/** A file's change stamp: modification time and size. */
+/** A file's change stamp: modification time, size and change time. The change time moves on a same-length edit whose mtime was restored. */
 const stampOf = (path: string): string => {
-    const { mtimeMs, size } = statSync(path);
+    const { ctimeMs, mtimeMs, size } = statSync(path);
 
-    return `${String(mtimeMs)}:${String(size)}`;
+    return `${String(mtimeMs)}:${String(ctimeMs)}:${String(size)}`;
 };
 
 /**

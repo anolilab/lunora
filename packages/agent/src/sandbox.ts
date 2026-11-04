@@ -1,6 +1,6 @@
-import { jsonSchema } from "@ai-sdk/provider-utils";
 import { LunoraError } from "@lunora/errors";
 
+import jsonSchema from "./json-schema";
 import { SANDBOX_INVOKE_PATH, toFunctionReference } from "./paths";
 import { SANDBOX_BROWSER_DISPATCH_TIMEOUT_MS, SANDBOX_CONTAINER_DISPATCH_TIMEOUT_MS } from "./sandbox-budgets";
 import type { AgentToolContext, AgentToolDefinition } from "./types";
@@ -293,8 +293,8 @@ const CONTAINER_TOOL_SCHEMA = jsonSchema<ContainerToolInput>({
  * action — which runs on an action ctx carrying `ctx.browser`. Importing the tool
  * makes codegen register the dispatcher and provision the `BROWSER` binding; like
  * any `ctx.browser` user, the app still supplies a `config.browser` thunk
- * (`createBrowser({ binding: env.BROWSER, launch })` with the optional
- * `@cloudflare/playwright` `launch` peer) to `createShardDO()` — codegen never
+ * (`createBrowser({ binding: env.BROWSER, playwright: () => import("@cloudflare/playwright") })`,
+ * loading the optional peer on first use) to `createShardDO()` — codegen never
  * injects that peer, so the browser op throws a directed error until it is wired.
  *
  * `content`/`scrape` return text. `screenshot`/`pdf` write the render to
@@ -354,7 +354,8 @@ const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<Brow
             const modelInput = Object.fromEntries(Object.entries(input).filter(([key]) => !PINNED_RENDER_KEYS.has(key)));
 
             return (await context.run(SANDBOX_REF, { ...modelInput, ...destination, kind: "browser" }, { timeoutMs: SANDBOX_BROWSER_DISPATCH_TIMEOUT_MS })) as
-                BrowserRenderResult | string;
+                | BrowserRenderResult
+                | string;
         },
         inputSchema: BROWSER_TOOL_SCHEMA,
         isLunoraAgentTool: true,

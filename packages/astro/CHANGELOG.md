@@ -1,3 +1,130 @@
+## @lunora/astro [1.0.0-alpha.311](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.310...@lunora/astro@1.0.0-alpha.311) (2026-11-04)
+
+- Release 1.0.0-alpha.311. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
+
+## @lunora/astro [1.0.0-alpha.310](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.309...@lunora/astro@1.0.0-alpha.310) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.285
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.275
+
+## @lunora/astro [1.0.0-alpha.309](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.308...@lunora/astro@1.0.0-alpha.309) (2026-11-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.284
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.274
+
+## @lunora/astro [1.0.0-alpha.308](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.307...@lunora/astro@1.0.0-alpha.308) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.283
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.273
+
+## @lunora/astro [1.0.0-alpha.307](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.306...@lunora/astro@1.0.0-alpha.307) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.282
+
+## @lunora/astro [1.0.0-alpha.306](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.305...@lunora/astro@1.0.0-alpha.306) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.281
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.271
+
+## @lunora/astro [1.0.0-alpha.305](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.304...@lunora/astro@1.0.0-alpha.305) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.280
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.270
+
+## @lunora/astro [1.0.0-alpha.304](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.303...@lunora/astro@1.0.0-alpha.304) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.279
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.269
+
+## @lunora/astro [1.0.0-alpha.303](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.302...@lunora/astro@1.0.0-alpha.303) (2026-11-01)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.278
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.268
+
+## @lunora/astro [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.301...@lunora/astro@1.0.0-alpha.302) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.277
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.267
+
+## @lunora/astro [1.0.0-alpha.301](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.300...@lunora/astro@1.0.0-alpha.301) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.276
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.266
+
+## @lunora/astro [1.0.0-alpha.300](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.299...@lunora/astro@1.0.0-alpha.300) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.275
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.265
+
+## @lunora/astro [1.0.0-alpha.299](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.298...@lunora/astro@1.0.0-alpha.299) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.274
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.264
+
+## @lunora/astro [1.0.0-alpha.298](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.297...@lunora/astro@1.0.0-alpha.298) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.273
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.263
+
+## @lunora/astro [1.0.0-alpha.297](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.296...@lunora/astro@1.0.0-alpha.297) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.272
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.262
+
+## @lunora/astro [1.0.0-alpha.296](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.295...@lunora/astro@1.0.0-alpha.296) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.269
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.259
+
 ## @lunora/astro [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.294...@lunora/astro@1.0.0-alpha.295) (2026-10-30)
 
 

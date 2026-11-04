@@ -63,9 +63,7 @@ const bindingEntries = (value: unknown): unknown[] | undefined =>
  * layout (dev values at the top, real ones in the env block). Shares
  * `mergeWranglerEnvironment` with the validator so both agree with wrangler.
  */
-const readWranglerShape = (cwd: string, environment?: string): WranglerD1Shape | undefined => {
-    const wranglerPath = findWranglerFile(cwd);
-
+const readWranglerShape = (cwd: string, environment?: string, wranglerPath: string | undefined = findWranglerFile(cwd)): WranglerD1Shape | undefined => {
     if (!wranglerPath) {
         return undefined;
     }
@@ -228,18 +226,17 @@ const isBlockingPlaceholder = (databaseId: string | undefined, target: string): 
  * `reconcileWranglerBindings`. Returns `undefined` when no placeholder is found (or when
  * wrangler.jsonc is absent/unparseable — the validator will report the real problem in that case).
  */
-const findD1PlaceholderEntry = (cwd: string, target: string, environment?: string): WranglerD1Entry | undefined =>
-    (readWranglerShape(cwd, environment)?.d1_databases ?? []).find((entry) => isBlockingPlaceholder(entry.database_id, target));
+const findD1PlaceholderEntry = (cwd: string, target: string, environment?: string, configPath?: string): WranglerD1Entry | undefined =>
+    (readWranglerShape(cwd, environment, configPath)?.d1_databases ?? []).find((entry) => isBlockingPlaceholder(entry.database_id, target));
 
 /**
  * Validate the migration options that would otherwise fail only after the live
  * worker has already been replaced by `wrangler deploy`.
  */
 const validateMigrateDeployPreflight = (options: DeployCommandOptions): string | undefined => {
-    // A dry run / preview never publishes a live version, so post-deploy
-    // migrations don't run — don't demand `--migrate-url`/`--migrate-yes` for a
-    // `--dry-run --migrate` or `--preview --migrate` combo.
-    if (!options.migrate || options.dryRun || options.preview) {
+    // A dry run never publishes a live version, so post-deploy migrations don't
+    // run — don't demand `--migrate-url`/`--migrate-yes` for `--dry-run --migrate`.
+    if (!options.migrate || options.dryRun) {
         return undefined;
     }
 
@@ -288,18 +285,29 @@ const validateMigrateDeployPreflight = (options: DeployCommandOptions): string |
  * — those cases fall through to the validator). Extracted from `runDeployCommand`
  * to keep its cognitive complexity within the 15-node budget.
  */
-const checkD1Placeholder = (cwd: string, logger: Logger, command: PreDeployCommand, target: string, environment?: string): string | undefined => {
-    const placeholder = findD1PlaceholderEntry(cwd, target, environment);
+const checkD1Placeholder = (
+    cwd: string,
+    logger: Logger,
+    command: PreDeployCommand,
+    target: string,
+    environment?: string,
+    configPath?: string,
+): string | undefined => {
+    const placeholder = findD1PlaceholderEntry(cwd, target, environment, configPath);
 
     if (placeholder === undefined) {
         return undefined;
     }
 
     const blocked = `${command} blocked: the "${placeholder.binding ?? "<unnamed>"}" D1 binding has a placeholder database_id ("${placeholder.database_id ?? ""}")`;
+    const remedy =
+        configPath === undefined
+            ? "Run `lunora doctor --fix` to create the database and write its id into wrangler.jsonc, or run `wrangler d1 create <name>` and paste the id in yourself."
+            : `Run \`wrangler d1 create <name>\` and put the returned database_id in ${configPath}.`;
     const message =
         target === "celld"
             ? `${blocked}, which celld would use as the database's identity. Set database_id to the database celld should use, then ${command} again.`
-            : `${blocked}. Run \`lunora doctor --fix\` to create the database and write its id into wrangler.jsonc, or run \`wrangler d1 create <name>\` and paste the id in yourself.`;
+            : `${blocked}. ${remedy}`;
 
     logger.error(message);
 
@@ -876,4 +884,4 @@ const runPreDeployChecks = (
 };
 
 export type { PreDeployCommand };
-export { resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight };
+export { checkD1Placeholder, resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight };

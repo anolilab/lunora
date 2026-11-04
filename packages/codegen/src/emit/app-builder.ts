@@ -47,7 +47,7 @@ interface GlobalDeclaration<Env> {
 interface HyperdriveGlobalDeclaration<Env> {
     /** The Hyperdrive engine — selects the Postgres or MySQL dialect. */
     engine: HyperdriveEngine;
-    /** Build the \`SqlExec\` from \`env\` — e.g. \`buildPgExec(fromPostgresJs(postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 })))\`. Called per request, by the shard and by the stateless worker's admin plane, so return an exec on a connection opened for that call: never cache a driver or socket at module scope, since Workers refuse I/O across requests. */
+    /** Build the \`SqlExec\` from \`env\` — e.g. \`buildPgExec(fromPostgresJs(async () => (await import("postgres")).default(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 })))\`. Called per request, by the shard and by the stateless worker's admin plane, so return an exec on a connection opened for that call: never cache a driver or socket at module scope, since Workers refuse I/O across requests. */
     exec: (env: Env) => SqlExec;
     /** The worker origin used to fan reverse cross-backend relations across shards. Without it, such a relation throws a clear error. */
     origin?: Selector<Env, string>;
@@ -76,6 +76,7 @@ interface AuthDeclaration<Env> {
 /** Builder instance fields (private state recorded by the fluent methods). */
 const buildFieldLines = (options: ResolvedAppOptions): string[] => [
     ...(options.hasAccess ? [`    private accessSelector?: Selector<Env, CreateAccessResolverOptions | undefined>;`] : []),
+    ...(options.hasAdminRevocations === false ? [] : [`    private adminRevocationsSelector?: Selector<Env, ShardNamespaceLike>;`]),
     `    private adminToken?: Selector<Env, string>;`,
     ...(options.hasAuth ? [`    private authDeclaration?: AuthDeclaration<Env>;`] : []),
     `    private cdcEnabled = false;`,
@@ -277,6 +278,16 @@ const buildMethodBlocks = (options: ResolvedAppOptions): string[] => [
 
         return this;
     }`,
+    ...(options.hasAdminRevocations === false
+        ? []
+        : [
+              `    /** The \`AdminRevocationDO\` namespace (typically \`env.ADMIN_REVOCATIONS\`). Records revoked named admin tokens where a point-in-time restore of the default shard cannot rewind them. Without it no named admin token can be created and any that exist are refused. */
+    public adminRevocations(selector: Selector<Env, ShardNamespaceLike>): this {
+        this.adminRevocationsSelector = selector;
+
+        return this;
+    }`,
+          ]),
     ...(hasShardedTables(options)
         ? [
               `    /** The \`ShardRegistryDO\` namespace (typically \`env.SHARD_REGISTRY\`). Each shard registers itself for the \`.shardBy()\` tables it writes, and cross-shard export, CDC sync and migrations fan out to the shards it lists. Without it they refuse a \`.shardBy()\` table. */
@@ -357,7 +368,7 @@ const buildShardFactoryBody = (options: ResolvedAppOptions): string => {
             ? [
                   `            ...(this.globalDeclaration
                 ? {
-                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null }) => {
+                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null | undefined }) => {
                           const env = rawEnv as Env;
                           const database = this.globalDeclaration?.d1(env);
 
@@ -368,16 +379,30 @@ const buildShardFactoryBody = (options: ResolvedAppOptions): string => {
                           const origin = this.globalDeclaration?.origin?.(env);
                           const crossShard = origin
                               ? createCrossShardRelationCapabilities({
-                                    ...(request?.identity === undefined ? {} : { identity: request.identity }),
+                                    get identity() {
+                                        return request?.identity;
+                                    },
                                     origin,
-                                    ...(request?.userId == null ? {} : { userId: request.userId }),
+                                    get userId() {
+                                        return request?.userId ?? undefined;
+                                    },
                                 })
                               : undefined;
 
                           return createD1CtxDb({
                               ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),${schedulerEntryFor("D1CtxDbOptions")}
                               ...(request?.cdcRetentionMs === undefined ? {} : { cdcRetentionMs: request.cdcRetentionMs }),
-                              auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
+                              // Getters, like the cross-shard identity above: reading the
+                              // request's caller marks the live query as caller-dependent, so
+                              // it may happen only when a \`.serverDefault\` column is stamped.
+                              auth: {
+                                  get identity() {
+                                      return request?.identity ?? null;
+                                  },
+                                  get userId() {
+                                      return request?.userId ?? null;
+                                  },
+                              },
                               // Forwarded from the shard's own \`cdc\` config, so ONE
                               // switch governs both changelogs. Built without it, the
                               // global \`__cdc_log\` is never written and the shape
@@ -399,7 +424,7 @@ const buildShardFactoryBody = (options: ResolvedAppOptions): string => {
             ? [
                   `            ...(this.hyperdriveGlobalDeclaration
                 ? {
-                      hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; userId?: string | null }) => {
+                      hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; userId?: string | null | undefined }) => {
                           const env = rawEnv as Env;
                           const declaration = this.hyperdriveGlobalDeclaration;
                           const exec = declaration?.exec(env) as SqlExec | undefined;
@@ -411,16 +436,30 @@ const buildShardFactoryBody = (options: ResolvedAppOptions): string => {
                           const origin = declaration.origin?.(env);
                           const crossShard = origin
                               ? createCrossShardRelationCapabilities({
-                                    ...(request?.identity === undefined ? {} : { identity: request.identity }),
+                                    get identity() {
+                                        return request?.identity;
+                                    },
                                     origin,
-                                    ...(request?.userId == null ? {} : { userId: request.userId }),
+                                    get userId() {
+                                        return request?.userId ?? undefined;
+                                    },
                                 })
                               : undefined;
 
                           return createHyperdriveGlobalCtxDb({
                               ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),${schedulerEntryFor("SqlCtxDbOptions")}
                               ...(request?.cdcRetentionMs === undefined ? {} : { cdcRetentionMs: request.cdcRetentionMs }),
-                              auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
+                              // Getters, like the cross-shard identity above: reading the
+                              // request's caller marks the live query as caller-dependent, so
+                              // it may happen only when a \`.serverDefault\` column is stamped.
+                              auth: {
+                                  get identity() {
+                                      return request?.identity ?? null;
+                                  },
+                                  get userId() {
+                                      return request?.userId ?? null;
+                                  },
+                              },
                               // See the D1 twin: one \`cdc\` switch, both changelogs.
                               cdc: request?.cdc ?? false,
                               engine: declaration.engine as HyperdriveEngine,

@@ -62,6 +62,31 @@ ${fields.map(([name, , load]) => `            ${name}: ${load},`).join("\n")}
 `;
 };
 
+/**
+ * How a cron, queue or email entry obtains its worker. Those events are often the host's own and
+ * must not die because Lunora's auth failed to initialise: when auth is not ready the event gets a
+ * worker built just for it and the cached one stays unset, so the next request retries auth rather
+ * than inherit a worker built without it.
+ */
+const eventWorkerWiring = (
+    hasAuth: boolean,
+    deferredArgument: string,
+): { ensureAuthCall: string; ensureRawAuthCall: string; eventWorker: string; eventWorkerLine: string } => {
+    const build = `buildWorker(rawEnv as Env${deferredArgument})`;
+
+    const ensureAuthCall = hasAuth ? `\n                await ensureAuth(env);` : "";
+    const ensureRawAuthCall = hasAuth ? `\n                await ensureAuth(rawEnv as Env);` : "";
+
+    return hasAuth
+        ? {
+              ensureAuthCall,
+              ensureRawAuthCall,
+              eventWorker: "target",
+              eventWorkerLine: `\n                const target = (await authReady(rawEnv as Env)) ? (worker ??= ${build}) : ${build};`,
+          }
+        : { ensureAuthCall, ensureRawAuthCall, eventWorker: "worker", eventWorkerLine: `\n                worker ??= ${build};` };
+};
+
 /** The fragments that thread {@link buildDeferredModules}' load through the entries and `buildWorkerOptions`; all empty when nothing is deferred. */
 const deferredWiring = (
     options: ResolvedAppOptions,
@@ -91,6 +116,51 @@ const emitAuthModule = (hasAuth: boolean): string =>
     hasAuth
         ? `${GENERATED_HEADER}export { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter, resolveSessionIdentity } from "@lunora/auth/worker";\n`
         : "";
+
+/**
+ * Auto-wire the worker's `email()` handler for `defineAgent({ onEmail })` agents: received mail
+ * starts a durable run via `dispatchAgentEmail` (`@lunora/agent/inbound`). Emitted as the DEFAULT
+ * `composed.email`, ahead of the manual `.onEmail(...)` override, so a hand-registered handler
+ * still wins. Empty when no `onEmail` agent is declared — email-free (and agent-free) output stays
+ * byte-identical. With the lazy registry the agent definitions (and the `@lunora/agent` barrel
+ * they import) load on the first message rather than at isolate startup.
+ */
+const buildEmailAgentsBlock = (options: ResolvedAppOptions): string => {
+    const emailAgents = options.emailAgents ?? [];
+
+    if (emailAgents.length === 0) {
+        return "";
+    }
+
+    const targets = (indent: string): string =>
+        emailAgents.map((agent) => `${indent}{ agent: lunoraAgentDefinitions.${agent.exportName}, className: ${JSON.stringify(agent.className)} },`).join("\n");
+
+    if (options.lazyFunctions !== true) {
+        return `        composed.email = dispatchAgentEmail([
+${targets("            ")}
+        ]);
+
+`;
+    }
+
+    // Concurrent first messages may both load; `??=` keeps one dispatcher, and the module cache
+    // makes the second load free.
+    return `        let agentEmail: ReturnType<typeof dispatchAgentEmail> | undefined;
+
+        composed.email = async (message, rawEnv, context) => {
+            if (agentEmail === undefined) {
+                const [{ dispatchAgentEmail: dispatch }, lunoraAgentDefinitions] = await Promise.all([import("@lunora/agent/inbound"), import("../agents.js")]);
+
+                agentEmail ??= dispatch([
+${targets("                    ")}
+                ]);
+            }
+
+            return agentEmail(message, rawEnv, context);
+        };
+
+`;
+};
 
 /** The `export type { ... }` list — only the declaration types that were emitted. */
 const buildExportedTypes = (options: ResolvedAppOptions): string =>
@@ -163,7 +233,7 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
 
     // The auth lazy-init dance is woven through `build()` and `buildWorkerOptions`.
     const authState = hasAuth
-        ? `        let auth: LunoraAuth | null = null;\n        let authInit: Promise<void> | null = null;\n        // One memo per env for THIS assembled worker: a framework-hosted worker rebuilds its options per\n        // request and must reuse it, but a second \`assemble()\` has its own auth closure and must not share.\n        const identityMemos: IdentityMemoStore = new WeakMap();\n`
+        ? `        let auth: LunoraAuth | null = null;\n        let authInit: Promise<void> | null = null;\n        // One memo per env for THIS assembled worker: every worker it builds reuses it, but a second\n        // \`assemble()\` has its own auth closure and must not share.\n        const identityMemos: IdentityMemoStore = new WeakMap();\n`
         : "";
     const ensureAuthBlock = hasAuth
         ? `
@@ -219,10 +289,26 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
                 authInit = null;
                 throw error;
             }));
+
+        // For host-owned events (cron, queue, mail), which must not go down with auth. The failure is
+        // logged each time: auth retries on the next event, and an isolate that only ever sees these
+        // would otherwise repeat it with nothing saying why the admin and auth surfaces are missing.
+        const authReady = (env: Env): Promise<boolean> =>
+            ensureAuth(env).then(
+                () => true,
+                (error: unknown) => {
+                    console.error("[lunora] auth failed to initialise; this event runs without auth:", error);
+
+                    return false;
+                },
+            );
 `
         : "";
     const { asyncIfDeferred, deferredArgument, deferredParameter, loadDeferredLine } = deferredWiring(options);
-    const ensureAuthCall = hasAuth ? `\n                await ensureAuth(env);` : "";
+    // Every entry point that can build the worker awaits auth first: the worker is built once per
+    // isolate and reads \`getAuth()\` while building (\`authAdmin\`), so a cron or queue batch that
+    // built it first would leave auth unset for every later request.
+    const { ensureAuthCall, ensureRawAuthCall, eventWorker, eventWorkerLine } = eventWorkerWiring(hasAuth, deferredArgument);
     const getAuthArgument = `${hasAuth ? `() => auth, identityMemos` : `() => null`}${deferredArgument}`;
     const getAuthParameter = `${hasAuth ? `getAuth: () => LunoraAuth | null, identityMemos: IdentityMemoStore` : `_getAuth: () => null`}${deferredParameter}`;
     const buildWorkerParameters = `env: Env${deferredParameter}`;
@@ -237,21 +323,7 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
         : `        const buildWorker = (${buildWorkerParameters}): LunoraWorker => createWorker(this.buildWorkerOptions(env, ${getAuthArgument}));`;
     const assembleParameter = options.hasFramework ? `host?: FrameworkHostHandler` : ``;
 
-    // Auto-wire the worker's `email()` handler for `defineAgent({ onEmail })`
-    // agents: received mail starts a durable run via `dispatchAgentEmail`
-    // (`@lunora/agent/inbound`). Emitted as the DEFAULT `composed.email`, ahead of
-    // the manual `.onEmail(...)` override below, so a hand-registered handler still
-    // wins. Empty when no `onEmail` agent is declared — email-free (and agent-free)
-    // output stays byte-identical.
-    const emailAgents = options.emailAgents ?? [];
-    const emailAgentsBlock =
-        emailAgents.length > 0
-            ? `        composed.email = dispatchAgentEmail([
-${emailAgents.map((agent) => `            { agent: lunoraAgentDefinitions.${agent.exportName}, className: ${JSON.stringify(agent.className)} },`).join("\n")}
-        ]);
-
-`
-            : "";
+    const emailAgentsBlock = buildEmailAgentsBlock(options);
 
     // Public terminals: always `build()`; `.buildFrameworkWorker(host)` only when
     // a worker-composition framework adapter is a dependency.
@@ -328,12 +400,11 @@ ${buildWorkerLine}
 
                 return worker.fetch(request, rawEnv, context);
             },
-            scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {${loadDeferredLine}
-                worker ??= buildWorker(rawEnv as Env${deferredArgument});
+            scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {${loadDeferredLine}${eventWorkerLine}
 
-                return worker.scheduled(controller, rawEnv, context);
+                return ${eventWorker}.scheduled(controller, rawEnv, context);
             },
-            serverQuery: ${asyncIfDeferred}(request, rawEnv, reference, args, options) => {${loadDeferredLine}
+            serverQuery: ${asyncIfDeferred}(request, rawEnv, reference, args, options) => {${loadDeferredLine}${ensureRawAuthCall}
                 worker ??= buildWorker(rawEnv as Env${deferredArgument});
 
                 return worker.serverQuery(request, rawEnv, reference, args, options);
@@ -346,10 +417,9 @@ ${buildWorkerLine}
                 // acked and destroyed.
                 options.hasQueue || options.hasFramework
                     ? `
-            queue: async (batch: unknown, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {${loadDeferredLine}
-                worker ??= buildWorker(rawEnv as Env${deferredArgument});
+            queue: async (batch: unknown, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {${loadDeferredLine}${eventWorkerLine}
 
-                return worker.queue?.(batch, rawEnv, context);
+                return ${eventWorker}.queue?.(batch, rawEnv, context);
             },`
                     : ""
             }
@@ -368,10 +438,9 @@ ${
         // of its own the host's is the only one there is — forward to it rather than
         // dropping the entry.
         if (!composed.email && host && typeof host === "object" && typeof host.email === "function") {
-            composed.email = ${asyncIfDeferred}(message, rawEnv, context) => {${loadDeferredLine}
-                worker ??= buildWorker(rawEnv as Env${deferredArgument});
+            composed.email = ${asyncIfDeferred}(message, rawEnv, context) => {${loadDeferredLine}${eventWorkerLine}
 
-                return worker.email?.(message, rawEnv, context) ?? Promise.resolve();
+                return ${eventWorker}.email?.(message, rawEnv, context) ?? Promise.resolve();
             };
         }
 `
@@ -413,14 +482,16 @@ interface LunoraConfig<Env extends object = object> {
     advisor?: { accept?: ReadonlyArray<{ exportName: string; file: string; reason: string; rule: string }>; minSeverity?: "error" | "info" | "warn" };
     /** Receives this project's \`defineApp()\` builder and returns it — where a Vite-first app makes the builder calls its generated entry cannot derive. */
     app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
-    /** Codegen's source walk. \`exclude\` adds globs (relative to \`lunora/\`, e.g. \`"seed/**"\`) to skip on top of the built-in test-file patterns. A literal array of strings, for the same reason as \`target\`. */
-    codegen?: { exclude?: string[] };
+    /** Codegen settings. \`exclude\` adds globs (relative to \`lunora/\`, e.g. \`"seed/**"\`) to skip on top of the built-in test-file patterns. \`lazyFunctions: true\` emits the per-module lazy function registry for every command and bundler plugin that generates or checks \`_generated/\`. Literals, for the same reason as \`target\`. */
+    codegen?: { exclude?: string[]; lazyFunctions?: boolean };
     /** Host the shard, scheduler and shard registry in ONE Durable Object class (\`merge: true\`, plan 462) — before the first deploy only. A literal, for the same reason as \`target\`. */
     durableObjects?: { merge?: boolean };
     /** Opt into remote-binding dev without \`--remote\` or \`LUNORA_REMOTE\` on every run. A literal, for the same reason as \`target\`. */
     remote?: boolean;
     /** Sibling Workers the app calls through service bindings — key → its folder and, for RPC, the exported \`WorkerEntrypoint\` class (\`rpc: false\` binds that class but calls it with plain \`fetch\`, without importing the service's sources). Becomes \`ctx.services.<key>\` in actions, a wrangler \`services[]\` entry, one \`lunora dev\` session and a services-first \`lunora deploy\`. Literals, for the same reason as \`target\`. */
     services?: Record<string, { dir: string; entrypoint?: string; rpc?: false }>;
+    /** Studio settings. \`companion: true\` emits the companion Worker that serves the advisor procedure list to a hosted Studio, bound to the app as \`ADVISOR_COMPANION\`. A literal, for the same reason as \`target\`. */
+    studio?: { companion?: boolean };
     /** Deploy target id — \`lunora deploy\`/\`verify\` read it when no \`--target\` is passed. Must be a literal: \`runCodegen\` resolves it synchronously by PARSING this file, so a computed value is not seen — \`lunora verify\` reports \`platform_unreadable_target\` rather than defaulting in silence. */
     target?: string;
 }

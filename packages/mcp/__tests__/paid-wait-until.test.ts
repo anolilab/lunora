@@ -29,7 +29,11 @@ vi.mock(import("@lunora/x402/charge"), () => {
     };
 });
 
-const charge = { network: "base", recipient: { evm: "0x1111111111111111111111111111111111111111" } } as const;
+const charge = {
+    facilitator: { url: "https://facilitator.example/x402" },
+    network: "base",
+    recipient: { evm: "0x1111111111111111111111111111111111111111" },
+} as const;
 const NO_INPUT = { properties: {}, type: "object" } as const;
 
 const mcpRequest = (body: unknown): Request =>

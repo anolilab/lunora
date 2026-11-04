@@ -1,6 +1,6 @@
 {
     "name": "@lunora/astro",
-    "version": "1.0.0-alpha.295",
+    "version": "1.0.0-alpha.311",
     "description": "Astro integration for Lunora — single-worker composition plus reactive-loader server helpers",
     "keywords": [
         "astro",
@@ -54,9 +54,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -64,8 +62,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.268",
-        "@lunora/runtime": "1.0.0-alpha.258"
+        "@lunora/client": "^1.0.0-alpha.286",
+        "@lunora/runtime": "^1.0.0-alpha.276"
     },
     "devDependencies": {
         "@types/node": "catalog:types",

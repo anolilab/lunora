@@ -5,6 +5,7 @@
  * the registry — behind both front doors.
  */
 import type { SelectOption } from "@lunora/config";
+// eslint-disable-next-line e18e/ban-dependencies -- semver's minVersion/validRange are the range semantics the add-feature resolver is written against; swapping the package is a migration, not a lint fix.
 import { minVersion, validRange } from "semver";
 
 /**

@@ -268,6 +268,8 @@ export const ERROR_CATALOG = {
      * `internal: true` individually, with the reason noted alongside.
      */
     ADMIN_FORBIDDEN: { status: 403, title: "Admin access forbidden" },
+    ADMIN_ROOT_REQUIRED: { status: 403, title: "Root admin token required" },
+    ADMIN_TOKEN_EXISTS: { status: 409, title: "Admin token name already in use" },
     ADMIN_TOKEN_NOT_CONFIGURED: { status: 400, title: "Admin token not configured" },
 
     /**
@@ -317,7 +319,9 @@ export const ERROR_CATALOG = {
         title: "Backup too large to assemble in a Worker",
     },
     CRON_JOBS_NOT_CONFIGURED: { status: 400, title: "Cron jobs not configured" },
+    CRON_JOB_IN_FLIGHT: { status: 409, title: "Cron job is already running" },
     CRON_JOB_NOT_FOUND: { status: 404, title: "Cron job not found" },
+    DEPLOYMENT_PAUSED: { status: 503, title: "Deployment is paused" },
     EXPORT_SHARD_FAILED: {
         status: 502,
         title: "Export failed on one or more shards",
@@ -331,6 +335,8 @@ export const ERROR_CATALOG = {
     },
     KV_NOT_CONFIGURED: { status: 400, title: "KV introspector not configured" },
     MIGRATION_ID_REQUIRED: { status: 400, title: "Migration id required" },
+    PAUSE_INSTANCES_FAILED: { status: 502, title: "Pause did not reach every scheduler instance" },
+    PAUSE_NOT_CONFIGURED: { status: 400, title: "Deployment pause not configured" },
     PITR_UNAVAILABLE: { status: 409, title: "Point-in-time recovery unavailable" },
     SCHEDULER_NOT_CONFIGURED: { status: 400, title: "Scheduler not configured" },
     STORAGE_CHECKSUM_MISMATCH: {
@@ -441,13 +447,26 @@ export const ERROR_CATALOG = {
     WORKFLOW_EVENT_NOT_LITERAL: { status: 500, title: "Workflow event type is not a string literal" },
     MIGRATION_ID_NOT_STATIC: { status: 500, title: "Migration id is not statically analyzable" },
     NAMESPACE_COLLISION: { status: 500, title: "Function namespace collision" },
+    PUBLISHED_FUNCTION_UNSUPPORTED: { status: 500, title: "Published function cannot be registered from its declaration" },
+    PUBLISHED_FUNCTION_VISIBILITY_UNKNOWN: { status: 500, title: "Published function does not declare its visibility" },
+
+    /**
+     * `procedureMeta(fn)` on a lazily registered stub whose `.meta()` codegen
+     * could not copy. Tooling-side — never crosses the RPC wire — and not
+     * `internal`: the message is fixed text that says how to fix it.
+     */
+    PROCEDURE_META_UNLOADED: { status: 500, title: "Procedure meta is not loaded" },
 
     /**
      * `@lunora/runtime`'s dispatch/security-boundary codes — RPC/HTTP entry, not
      * admin-gated. Fixed, non-sensitive messages throughout, so none are `internal`.
      */
+    /** The studio assistant's stream transport failed. Fixed, safe message — the turn's internals are never echoed to a browser. */
+    AI_CHAT_FAILED: { status: 500, title: "Assistant turn failed" },
     BAD_ROW: { status: 400, title: "Malformed import row" },
     BAD_SUBSCRIPTION_ARGS: { status: 400, title: "Invalid subscription arguments" },
+    /** A subscribe named a table instead of a function on a socket that carries claims; the raw-delta path is not claim-scoped, so it is refused. */
+    SUBSCRIPTION_FUNCTION_REQUIRED: { status: 400, title: "Subscription needs a function path" },
     BATCH_LIMIT_EXCEEDED: { status: 400, title: "Batch limit exceeded" },
     /** An `onDelete` cascade / `set null` would touch more holder rows than one delete may (`CASCADE_MAX_ROWS` in `@lunora/shard-engine`). */
     CASCADE_LIMIT: { status: 400, title: "Cascade limit exceeded" },
@@ -490,6 +509,8 @@ export const ERROR_CATALOG = {
     STALE_CREDENTIAL: { status: 409, title: "Stale credential" },
     /** A socket re-auth resolved to different claims than the socket was opened with; the client must reconnect to change identity. */
     IDENTITY_CHANGED: { status: 409, title: "Socket identity changed" },
+    /** A socket re-auth arrived after the socket's revalidation window had passed; the socket is closed and the client must reconnect. */
+    IDENTITY_STALE: { status: 409, title: "Socket identity stale" },
     FORBIDDEN_FANOUT: { status: 403, title: "Fan-out forbidden" },
     GLOBAL_SEARCH_SCORES_UNSUPPORTED: { status: 400, title: "collectWithScores() is unsupported on a global table" },
     FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },
@@ -590,6 +611,7 @@ export const ERROR_CATALOG = {
     /** A resume below the compacted prefix: the keys survive but their post-images do not, so only a payload consumer (streaming export, replay-PITR, a read replica) is refused. */
     CDC_PAYLOAD_COMPACTED: { status: 409, title: "CDC payloads compacted" },
     EXPIRED: { status: 404, title: "Session expired" },
+    GLOBAL_TRANSACTION_UNSUPPORTED: { status: 500, title: "Global transaction unsupported by driver" },
     LIVE_CONNECTION_LIMIT: { status: 503, title: "Live connection limit reached" },
     LIVE_CONNECTION_NOT_FOUND: { status: 404, title: "Live connection not found" },
     LIVE_STREAMS_UNSUPPORTED: { status: 501, title: "Live streams are not served by this worker" },

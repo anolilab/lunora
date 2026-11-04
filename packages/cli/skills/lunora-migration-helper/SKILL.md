@@ -52,13 +52,27 @@ diffs the schema against the committed `lunora/.lunora-schema.json`.
   type, optional → required, new required field on an existing table, a new
   unique index or `.unique()` column (existing duplicates would make the shard
   fail to open).
-- **Breaking, not fixable by a migration:** changing a table's shard mode
-  (root ↔ `.shardBy()` ↔ `.global()`, or the `.global()` backend) moves rows to
-  other storage; use export → import. A dropped index or relation needs call
-  sites changed, then `--update-schema-baseline`.
+- **Moves data, blocks until a migration accompanies it:** changing a table's
+  shard mode (root ↔ `.shardBy()` ↔ `.global()`, or the `.global()` backend), turning
+  on `.memory()`, or changing the jurisdiction. Move the rows with export → import,
+  then declare a migration whose literal `covers` names the change
+  (`covers: { table: "users", shardMode: "shardBy:tenantId" }`, `{ table, memory: true }`
+  or `{ jurisdiction: "eu" }`). An unrelated migration clears nothing. Where a table is
+  involved its `up` must rewrite rows (give each what its new home needs, e.g. its
+  shard key); one that returns the document unchanged covers nothing.
+- **Also blocks until a migration names it:** a TTL added, moved to another column or
+  shortened (`covers: { table, ttl: { field, after } }`), because the next sweep deletes
+  every row already past the cutoff; the blocked message counts those rows when
+  `lunora deploy` can read the worker. Refresh the column on the rows that must survive
+  in `up`.
+- **Never blocks, may warn:** a dropped table (its rows stay in place, unreachable),
+  a dropped relation, a TTL lengthened or removed (every row stays), `.commitOrdered()`
+  turned off, and a dropped index. A dropped index is refused only while a function
+  still names it through `.withIndex("name")`; point the query elsewhere first.
 
-A migration covers a change only if it is new since the baseline and its
-`table` is a string literal naming the affected table. The baseline advances
+A migration covers a change only if it is new since the baseline, its `table`
+is a string literal naming the affected table, and its `up` does more than return
+the document (the `migrate create` placeholder covers nothing). The baseline advances
 only after a successful deploy.
 
 ## Online data migrations
@@ -124,7 +138,7 @@ To change rows in a second table, write a second migration over that table.
 If the field is the table's `.shardBy()` key, a migration can't help: a row with
 no shard key belongs to no shard (so the runner never sees it), and setting the
 key would mean moving the row to another Durable Object. Re-key with
-`lunora export` → rewrite the NDJSON → `lunora import`. Ids are preserved, so
+`lunora export` → rewrite the NDJSON → `lunora import`. A rewrite that adds, drops or splits rows must also update the last line, the end marker `{"end":true,"rows":N}`, to the new row count, or the import refuses the file. Ids are preserved, so
 foreign keys survive. The same route applies to any shard-mode change.
 
 ### Run it
@@ -211,9 +225,9 @@ reshaping still follows widen → migrate → narrow.
 3. **Not dual-writing during the window.** Rows inserted mid-migration keep the
    old shape. Write the new shape from the widen step on.
 4. **A non-literal `table`.** `table: TABLE_NAME` covers nothing in the gate.
-5. **Bypassing the gate.** `--allow-schema-drift` / `--update-schema-baseline`
-   ship the shape without touching data; use them only when existing rows are
-   already compatible.
+5. **Bypassing the gate.** `--allow-schema-drift` ships the shape for one run
+   without checking anything. `lunora deploy` reads the stored rows of the affected tables and
+   lets a change through only when every row already fits.
 
 ## Checklist
 

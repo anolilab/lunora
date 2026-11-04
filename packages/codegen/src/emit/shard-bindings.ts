@@ -141,7 +141,7 @@ const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFr
         build: `
             const flags: import("${flagsSpecifier}").LunoraFlags = createFlags(flagsConfig, env, {
                 provider: () => config.flags?.(env),
-                targetingKey: () => flagsConfig.identify?.({ identity: identity ?? null, userId: userId ?? null }),
+                targetingKey: () => flagsConfig.identify?.({ identity: readIdentity() ?? null, userId: readUserId() ?? null }),
             });
 `,
         configField: `\n    flags?: (env: Record<string, unknown>) => import("${flagsSpecifier}").Provider;`,
@@ -243,24 +243,27 @@ const emitFlagsOverrides = (
 const LUNORA_FLAG_KEYS = ${renderJsonData(flagKeys, `ReadonlyArray<{ key: string; type: "boolean" | "number" | "object" | "string" }>`)};
 `;
 
+    // eslint-disable-next-line no-secrets/no-secrets -- emitted source text, not a credential
+    const mapFlagKeys = "LUNORA_FLAG_KEYS.map(async";
     const evaluateOverride = `
         protected override async evaluateFlags(context?: Record<string, unknown>): Promise<FlagsResult> {${clientBuild("undefined")}
             const evalContext = context as import("${flagsSpecifier}").EvaluationContext | undefined;
-            const evaluations: FlagsResult["flags"] = [];
+            // Concurrent, not sequential: against a remote provider every read is a round
+            // trip, and the request-scoped bind in createFlags is shared by all of them.
+            const evaluations: FlagsResult["flags"] = await Promise.all(
+                ${mapFlagKeys} (entry) => {
+                    const details =
+                        entry.type === "boolean"
+                            ? await flags.details.boolean(entry.key, false, evalContext)
+                            : entry.type === "number"
+                              ? await flags.details.number(entry.key, 0, evalContext)
+                              : entry.type === "string"
+                                ? await flags.details.string(entry.key, "", evalContext)
+                                : await flags.details.object(entry.key, {}, evalContext);
 
-            for (const entry of LUNORA_FLAG_KEYS) {
-                // eslint-disable-next-line no-await-in-loop -- flags evaluate sequentially; each shares the single memoized provider client
-                const details =
-                    entry.type === "boolean"
-                        ? await flags.details.boolean(entry.key, false, evalContext)
-                        : entry.type === "number"
-                          ? await flags.details.number(entry.key, 0, evalContext)
-                          : entry.type === "string"
-                            ? await flags.details.string(entry.key, "", evalContext)
-                            : await flags.details.object(entry.key, {}, evalContext);
-
-                evaluations.push({ errorCode: details.errorCode, key: entry.key, reason: details.reason, type: entry.type, value: details.value, variant: details.variant });
-            }
+                    return { errorCode: details.errorCode, key: entry.key, reason: details.reason, type: entry.type, value: details.value, variant: details.variant };
+                }),
+            );
 
             return { configured: true, flags: evaluations };
         }
@@ -346,21 +349,20 @@ const emitAiFragments = (): CapabilityShardFragments => {
 
 /**
  * `ctx.access` (verified Cloudflare Access identity). Bespoke because the facade
- * is built **synchronously** from the resolved `identity`/`userId` locals already
- * in scope at the ctx-build site (the same source `ctx.auth` uses), via the
- * package's pure `accessFacade(identity, userId)` factory — so a global
- * `ctx.access` adds only one object construction per request: no I/O, and no
- * JWT re-verification (that happened once at the edge in `resolveIdentity`).
- * `accessFacade` returns the anonymous facade when no identity is present, so
- * there is no config thunk and no stub fallback.
+ * reads the caller through `buildCtx`'s `readIdentity()` / `readUserId()`
+ * (the same source `ctx.auth` uses) via the package's `lazyAccessFacade`: no
+ * I/O and no JWT re-verification (that happened once at the edge in
+ * `resolveIdentity`). The readers mark the path through `noteIdentityRead`, so
+ * the facade must stay lazy: built eagerly it would mark every ctx, and no live
+ * query of an app using `ctx.access` could share a run across subscribers.
  */
 const emitAccessFragments = (): CapabilityShardFragments => {
     return {
         build: `
-            const access = accessFacade(identity, userId);
+            const access = lazyAccessFacade(readIdentity, readUserId);
 `,
         configField: "",
-        importLines: [`import { accessFacade } from "@lunora/cloudflare-access/context";`],
+        importLines: [`import { lazyAccessFacade } from "@lunora/cloudflare-access/context";`],
         stub: "",
     };
 };

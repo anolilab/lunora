@@ -74,6 +74,8 @@ typings/
 # templates from there for `vis generate`.
 .vis/*
 !.vis/templates/
+# vis release change files are committed by the release job; its state and lock stay local (below).
+!.vis/release/
 # Committed git hooks live at .vis/hooks/<stage> (moved from .vis-hooks).
 # The generated dispatcher under .vis/hooks/_/ stays out of version control.
 !.vis/hooks/
@@ -153,3 +155,7 @@ __pycache__/
 # into. They live beside the fixtures (not in os.tmpdir()) so codegen resolves
 # types through the workspace tsconfig + node_modules the way a real app does.
 packages/codegen/__tests__/fixtures/.workdir-*/
+
+# vis release subsystem
+.vis/release/.state.json
+.vis/release/.lock

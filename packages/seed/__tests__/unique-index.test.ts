@@ -355,6 +355,22 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(() => seedPlan(schema, { counts: { slots: 5 } })).toThrow(/by_kind_flag/u);
     });
 
+    it("never seeds NULL into a nullable unique enum whose refinement rejects it", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            slots: defineTable({
+                kind: v
+                    .union(v.literal("x"), v.literal("y"))
+                    .nullable()
+                    .check((kind) => kind !== null),
+            }).index("by_kind", ["kind"], { unique: true }),
+        });
+
+        // Two accepted values, so a third row has no value the refinement accepts and must be refused, not given NULL.
+        expect(() => seedPlan(schema, { counts: { slots: 3 } })).toThrow(/cannot seed 3 rows into "slots"/u);
+    });
+
     it("never leaves an overridden unique array row without a value", () => {
         expect.hasAssertions();
 
@@ -626,5 +642,17 @@ describe("seedPlan — multi-column unique indexes", () => {
 
         expect(ratios[1]).toBeCloseTo(0.500_001, 12);
         expect(ratios[2]).toBeCloseTo(0.500_002, 12);
+    });
+
+    it("deals NULL as one more value of a nullable unique enum and boolean column", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            tags: defineTable({ flag: v.boolean().nullable().unique(), kind: v.union(v.literal("a"), v.literal("b")).nullable().unique() }),
+        });
+        const rows = rowsOf(seedPlan(schema, { counts: { tags: 3 } }), "tags");
+
+        expect(new Set(rows.map((row) => row.flag)).size).toBe(3);
+        expect(new Set(rows.map((row) => row.kind)).size).toBe(3);
     });
 });

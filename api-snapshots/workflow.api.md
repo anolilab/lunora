@@ -361,6 +361,15 @@ type WorkflowHandler<Params = Record<string, unknown>, Output = unknown> = (cont
 type WorkflowInstanceAction = "pause" | "restart" | "resume" | "terminate";
 ```
 
+### `WorkflowInstanceCreated` (interface)
+
+```ts
+interface WorkflowInstanceCreated {
+    id: string;
+    status: WorkflowInstanceStatus;
+}
+```
+
 ### `WorkflowInstanceDetail` (interface)
 
 ```ts
@@ -638,6 +647,11 @@ interface Workflows {
 
 ```ts
 interface WorkflowsRestClient {
+    createInstance: (args: {
+        instanceId?: string;
+        params?: unknown;
+        workflowName: string;
+    }) => Promise<WorkflowInstanceCreated>;
     getInstance: (args: {
         instanceId: string;
         workflowName: string;
@@ -648,6 +662,15 @@ interface WorkflowsRestClient {
         status?: WorkflowInstanceStatus;
         workflowName: string;
     }) => Promise<WorkflowInstancePage>;
+    sendEvent: (args: {
+        eventType: string;
+        instanceId: string;
+        payload?: unknown;
+        workflowName: string;
+    }) => Promise<{
+        instanceId: string;
+        timestamp?: string;
+    }>;
     setInstanceStatus: (args: {
         action: WorkflowInstanceAction;
         instanceId: string;
@@ -807,7 +830,7 @@ const workflowDefaultName: (exportName: string) => string;
 ```ts
 class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends WorkflowEntrypoint<Record<string, unknown>, Params> {
     #private;
-    constructor(context: ConstructorParameters<typeof WorkflowEntrypoint>[0], env: Record<string, unknown>, definition: WorkflowDefinition<Params, Output>, exportName?: string);
+    constructor(context: ConstructorParameters<typeof WorkflowEntrypoint>[0], env: Record<string, unknown>, definition: WorkflowDefinition<Params, Output> | (() => Promise<WorkflowDefinition<Params, Output>>), exportName?: string);
     override run(event: Readonly<WorkflowEvent<Params>>, step: WorkflowStep): Promise<Output>;
 }
 ```

@@ -527,7 +527,7 @@ const indexState = async (exec: SqlCtxExec, dialect: SqlDialect, table: string, 
             const rows = await queryAll(
                 exec,
                 dialect,
-                sql`SELECT 1 AS ${sql.identifier("present")} FROM sqlite_master WHERE type = 'index' AND name = ${name}`,
+                sql`SELECT 1 AS ${sql.identifier("present")} FROM sqlite_master WHERE type = 'index' AND name = ${name} AND tbl_name = ${table}`,
             );
 
             return rows.length > 0 ? "valid" : "absent";
@@ -549,12 +549,21 @@ interface SqlCtxExec {
     // `queryBatch` falls back to the sequential `run()` loop every companion
     // write used before this existed.
     batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<void>;
+    // Optional. An exec over a replicated store (D1 sessions) exposes a sibling
+    // that reads the primary, for a read that must see every committed write
+    // (a policy check on a write path). Absent, every read already hits the
+    // authoritative store, so a primary read is the same read.
+    primary?: SqlCtxExec;
     // `void` for D1/node:sqlite (the result is ignored on those paths); a
     // `SqlRunResult` ({ rowsAffected }) for engines whose OCC needs the affected
     // count (MySQL, which has no `RETURNING`). The union lets a PlanetScale
     // `SqlExec` satisfy this without forcing the D1 execs to report a count.
     // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- `void` is intentional: accepts a void-returning exec (one that reports no affected-rows count)
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<SqlRunResult | void>;
+    // Optional, mirroring `SqlExec.transaction` (see dialect.ts): run `work`
+    // against an exec pinned to one connection inside one transaction,
+    // committed when `work` resolves and rolled back when it throws.
+    transaction?: <T>(work: (tx: SqlCtxExec) => Promise<T>) => Promise<T>;
 }
 
 /**

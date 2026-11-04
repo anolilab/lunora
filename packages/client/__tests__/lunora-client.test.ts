@@ -163,6 +163,9 @@ const jsonResponse = (body: unknown, init: ResponseInit = {}): Response =>
         ...init,
     });
 
+/** Far more timers than leadership needs to open a socket; reaching it means the socket never opens, not that more time would help. */
+const MAX_LEADERSHIP_TIMER_TURNS = 100;
+
 describe("lunoraClient", () => {
     beforeEach(() => {
         sockets.length = 0;
@@ -1662,9 +1665,13 @@ describe("lunoraClient", () => {
 
                 client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
                 // Advance to the next scheduled timer until leadership opens the socket.
-                while (sockets.length === 0) {
+                for (let turns = 0; sockets.length === 0 && turns < MAX_LEADERSHIP_TIMER_TURNS; turns += 1) {
                     // eslint-disable-next-line no-await-in-loop -- each timer must settle before the socket check
                     await vi.advanceTimersToNextTimerAsync();
+                }
+
+                if (sockets.length === 0) {
+                    throw new Error("leadership never opened a socket");
                 }
 
                 const socket = latestSocket();
@@ -2509,7 +2516,8 @@ describe("lunoraClient", () => {
                     {
                         optimisticUpdate: (store, args) => {
                             const current = store.getQuery(fnRef("messages:list"), { channelId: (args as { channelId: string }).channelId }) as
-                                undefined | unknown[];
+                                | undefined
+                                | unknown[];
 
                             store.setQuery(fnRef("messages:list"), { channelId: (args as { channelId: string }).channelId }, [...(current ?? []), draft]);
                         },
@@ -6293,9 +6301,13 @@ describe("lunoraClient", () => {
                 client.subscribe(fnRef("q:list"), {}, () => undefined);
 
                 // Advance to the next scheduled timer until leadership opens the socket.
-                while (sockets.length === 0) {
+                for (let turns = 0; sockets.length === 0 && turns < MAX_LEADERSHIP_TIMER_TURNS; turns += 1) {
                     // eslint-disable-next-line no-await-in-loop -- each timer must settle before the socket check
                     await vi.advanceTimersToNextTimerAsync();
+                }
+
+                if (sockets.length === 0) {
+                    throw new Error("leadership never opened a socket");
                 }
 
                 expect(sockets).toHaveLength(1);

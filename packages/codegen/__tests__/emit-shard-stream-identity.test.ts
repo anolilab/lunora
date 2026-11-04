@@ -37,7 +37,7 @@ const emit = (): string => {
 
 describe("emitted executeStream identity", () => {
     it("takes the socket identity and hands it to buildCtx", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const shard = emit();
 
@@ -46,11 +46,12 @@ describe("emitted executeStream identity", () => {
         // base — naming the type is what makes `tsc` catch the drift.
         expect(shard).toContain("protected override executeStream(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity)");
         // Never a bare `buildCtx({ functionPath })` — that is the per-request fallback.
-        expect(shard).toContain("this.buildCtx({ functionPath, identity })");
+        expect(shard).toContain("this.buildCtx({ functionPath, headroom, identity })");
+        expect(shard).toContain("this.windowStreamReads(headroom, ");
     });
 
     it("builds ctx.ip from the threaded value, not the shared per-request field", () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const shard = emit();
         // The ctx object literal itself — sliced, because `getCurrentIp()` DOES
@@ -61,9 +62,9 @@ describe("emitted executeStream identity", () => {
         // A subscription refresh runs inside the writing dispatch's flush, before
         // its `endDispatch`, so reading it here would hand every subscriber the
         // mutating caller's IP. The ctx takes the already-resolved value — the
-        // getter (which marks the reactive-cache read scope) returns that local
-        // and nothing else.
-        expect(literal).toContain("\n                    return ip;\n                },\n");
+        // getter returns it through the marking reader and nothing else.
+        expect(literal).toContain("\n                    return readIp();\n                },\n");
+        expect(shard).toContain("options.scope?.markIpRead();\n\n                return caller.ip;");
         expect(literal.slice(0, literal.indexOf("\n            };"))).not.toContain("getCurrentIp");
         // One expression on one discriminant, resolving all three members
         // together — parallel per-field ternaries are how `ip` was forgotten.

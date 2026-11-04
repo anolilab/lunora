@@ -317,6 +317,14 @@ export type OrderByInput = Record<string, SortDirection | { nulls: NullPlacement
 
 export interface QueryArgs {
     baseWhere?: WhereInput;
+
+    /**
+     * Read the authoritative copy, not a replica. A `.global()` table on D1 otherwise reads
+     * from whichever replica the session can reach, so a row committed a moment ago may be
+     * missing; a policy check on a write path needs this to see the lock it must refuse on.
+     * Shard-local tables are already authoritative, so there it changes nothing.
+     */
+    consistency?: "primary";
     cursor?: null | string;
 
     includeDeleted?: boolean;
@@ -818,7 +826,13 @@ export interface DatabaseWriterLike {
         | undefined
     >;
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
-    delete: (table: string, id: string, options?: { hard?: boolean }) => Promise<void>;
+
+    /**
+     * `skipOnDelete` removes the row without running the schema's `onDelete` actions (cascade, set null,
+     * restrict). Delete triggers still fire, as insert triggers do on an import. Only a data restore uses
+     * it: its file already says what every table holds, and a cascade would reach tables the file does not name.
+     */
+    delete: (table: string, id: string, options?: { hard?: boolean; skipOnDelete?: boolean }) => Promise<void>;
 
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
 

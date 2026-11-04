@@ -84,7 +84,8 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
         const hydratedValue = client.peekHydratedQueryByKey(function_.__lunoraRef, argsKey, shardKey);
 
         cachedData = (hydratedValue === undefined ? client.peekActiveQuerySnapshot(function_.__lunoraRef, argsRecord, shardKey).value : hydratedValue) as
-            ReturnOf<F> | undefined;
+            | ReturnOf<F>
+            | undefined;
     }
 
     // The client is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Swapping the provider's `client` does not remount this subtree; `LunoraProvider` clears the `["lunora", …]` entries on a swap instead.

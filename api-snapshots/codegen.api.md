@@ -60,6 +60,18 @@ interface AuthApiCallIR {
 const CAPABILITY_PROBES: Readonly<Record<CapabilityKey, CapabilityProbe>>;
 ```
 
+### `COMPANION_BINDING` (const)
+
+```ts
+const COMPANION_BINDING = "ADVISOR_COMPANION";
+```
+
+### `COMPANION_SERVICE_NAME` (const)
+
+```ts
+const COMPANION_SERVICE_NAME = "advisorCompanion";
+```
+
 ### `CONTAINERS_FILENAME` (const)
 
 ```ts
@@ -104,7 +116,6 @@ interface CodegenOptions {
     project?: Project;
     projectRoot: string;
     target?: string;
-    updateSchemaBaseline?: boolean;
     wranglerQueueProducers: ReadonlyArray<WranglerQueueProducerIR>;
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
 }
@@ -121,6 +132,7 @@ interface CodegenResult {
     containers: ReadonlyArray<ContainerIR>;
     cronTriggers: ReadonlyArray<string>;
     generated: {
+        advisorProceduresJson: string;
         agents: string;
         api: string;
         app: string;
@@ -146,12 +158,14 @@ interface CodegenResult {
         vectors: string;
         workflows: string;
     };
+    indexReferences: ReadonlyArray<IndexReference>;
     migrations: ReadonlyArray<MigrationIR>;
     outputDirectory: string;
     platformDiagnostics: ReadonlyArray<PlatformDiagnostic>;
     queues: ReadonlyArray<QueueIR>;
     schemaSnapshot: SchemaSnapshot;
     schemaSnapshotPath: string;
+    schemaTables: ReadonlyArray<TableIR>;
     workflows: ReadonlyArray<WorkflowIR>;
     writtenFiles: ReadonlyArray<string>;
 }
@@ -242,7 +256,21 @@ interface DriftChange {
     scope: DriftScope;
     severity: "breaking" | "safe";
     summary: string;
+    field?: string;
     table?: string;
+    warning?: true;
+    identityRewrites?: true;
+    expiry?: {
+        after?: number;
+        field: string;
+        previous?: {
+            after?: number;
+            field: string;
+        };
+    };
+    coverage?: DriftCoverage;
+    index?: string;
+    uniqueOn?: ReadonlyArray<string>;
     type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedCommitOrdering" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedMemoryMode" | "changedShardMode" | "changedTtlPolicy" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
 }
 ```
@@ -272,12 +300,14 @@ interface DurableObjectScheduledContainerIR extends ContainerIRBase {
 
 ```ts
 interface EmitAppOptions {
+    agentWorkflows?: ReadonlyArray<string>;
     capabilities: ReadonlySet<CapabilityKey>;
     emailAgents?: ReadonlyArray<{
         className: string;
         exportName: string;
     }>;
     hasAccess: boolean;
+    hasAdminRevocations?: boolean;
     hasAuth: boolean;
     hasDeliveryAuthorization?: boolean;
     hasFramework: boolean;
@@ -294,6 +324,7 @@ interface EmitAppOptions {
     identity?: IdentityIR;
     jurisdiction?: JurisdictionIR;
     jurisdictionPinsAuth?: boolean;
+    lazyFunctions?: boolean;
     liveStreamDeclarations?: ReadonlyArray<LiveStreamIR>;
     liveStreams?: boolean;
     liveStreamsWithheld?: boolean;
@@ -368,13 +399,16 @@ interface FunctionIR {
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
     lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
+    meta?: Record<string, unknown> | "unloaded";
     output?: ValidatorIR;
+    readsIp?: true;
     returnType: string;
     socket?: {
         auth: boolean;
         origin?: string;
         path: string;
     };
+    typeDerivedArgs?: true;
     visibility?: "internal" | "public";
     x402?: {
         price?: number | string;
@@ -412,6 +446,18 @@ interface IndexIR {
     fields: ReadonlyArray<string>;
     name: string;
     unique?: boolean;
+}
+```
+
+### `IndexReference` (interface)
+
+```ts
+interface IndexReference {
+    file: string;
+    function: string;
+    index: string | undefined;
+    line: number;
+    table: string;
 }
 ```
 
@@ -574,9 +620,20 @@ interface MaskProcedureIR {
 
 ```ts
 interface MigrationIR {
+    covers?: {
+        jurisdiction?: string;
+        memory?: true;
+        shardMode?: string;
+        table?: string;
+        ttl?: {
+            after?: number;
+            field: string;
+        };
+    };
     exportName: string;
     filePath: string;
     id: string;
+    identity?: true;
     table: string;
 }
 ```
@@ -675,6 +732,8 @@ interface ProjectConfigLiterals {
     };
     codegen?: {
         exclude?: string[];
+        lazyFunctions?: boolean;
+        lazyFunctionsUnreadable?: true;
         unreadable?: boolean;
     };
     durableObjects?: {
@@ -684,6 +743,10 @@ interface ProjectConfigLiterals {
     remote?: boolean;
     services?: {
         declared?: Record<string, ServiceLiteral>;
+        unreadable?: boolean;
+    };
+    studio?: {
+        companion?: boolean;
         unreadable?: boolean;
     };
     target?: string;
@@ -873,6 +936,7 @@ interface SchemaDriftDecision {
     changes: ReadonlyArray<DriftChange>;
     newMigrationIds: ReadonlyArray<string>;
     reason: string;
+    uncovered: ReadonlyArray<DriftChange>;
 }
 ```
 
@@ -964,6 +1028,7 @@ interface ShapeIR {
     args: Record<string, ValidatorIR>;
     exportName: string;
     filePath: string;
+    readsIp?: true;
     table?: string;
 }
 ```
@@ -1040,6 +1105,7 @@ interface TableSnapshot {
     fields: Record<string, FieldSnapshot>;
     indexes: Record<string, IndexSnapshot>;
     memory?: boolean;
+    refinementsRecorded?: true;
     relations: Record<string, RelationSnapshot>;
     shardMode: string;
     ttl?: TtlSnapshot;
@@ -1050,8 +1116,7 @@ interface TableSnapshot {
 
 ```ts
 interface TargetScope {
-    readonly origins: Map<Project, Project>;
-    readonly projects: Map<Project, Project>;
+    readonly [targetScopeBrand]: true;
 }
 ```
 
@@ -1089,6 +1154,7 @@ interface ValidatorIR {
     tableName?: string;
     tsType?: string;
     unmodelledRefinement?: boolean;
+    unresolvedShape?: boolean;
     valueType?: ValidatorIR;
 }
 ```
@@ -1176,6 +1242,12 @@ const buildSchemaSnapshot: (schema: SchemaIR, migrationIds: ReadonlyArray<string
 
 ```ts
 const capabilitiesUsedBy: (signals: Pick<SourceCapabilitySignals, "contextReads" | "valueImports">) => ReadonlySet<CapabilityKey>;
+```
+
+### `companionServiceBinding` (const)
+
+```ts
+const companionServiceBinding: (projectRoot: string, lunoraDirectory?: string) => ServiceBindingIR | undefined;
 ```
 
 ### `createCodegenProject` (const)
@@ -1372,7 +1444,9 @@ const discoverWorkflows: (project: Project, lunoraDirectory: string) => Workflow
 ### `emitAgents` (const)
 
 ```ts
-const emitAgents: (agents: ReadonlyArray<AgentIR>) => string;
+const emitAgents: (agents: ReadonlyArray<AgentIR>, options?: {
+    lazy?: boolean;
+}) => string;
 ```
 
 ### `emitApi` (const)
@@ -1474,7 +1548,7 @@ const emitServer: ({ agents, capabilities, containers, env, hasVectors, hasFlags
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, hasSecretValues, hasSensitiveArgs, hasSockets, lazyFunctions, hasVectors, liveStreamDeclarations, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflowEvents, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, hasSecretValues, hasSensitiveArgs, hasSockets, lazyFunctions, hasVectors, liveStreamDeclarations, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, hasIpReaders, services, topics, useUmbrella, workflowEvents, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -1486,7 +1560,9 @@ const emitVectors: (vectorIndexes: ReadonlyArray<VectorIndexIR>) => string;
 ### `emitWorkflows` (const)
 
 ```ts
-const emitWorkflows: (workflows: ReadonlyArray<WorkflowIR>) => string;
+const emitWorkflows: (workflows: ReadonlyArray<WorkflowIR>, options?: {
+    lazy?: boolean;
+}) => string;
 ```
 
 ### `emitWranglerCronTriggers` (const)
@@ -1515,7 +1591,8 @@ const evaluateSchemaDrift: (options: {
     baseline: SchemaSnapshot | undefined;
     command?: string;
     current: SchemaSnapshot;
-    migrations: ReadonlyArray<Pick<MigrationIR, "id" | "table">>;
+    indexReferences?: ReadonlyArray<IndexReference>;
+    migrations: ReadonlyArray<Pick<MigrationIR, "covers" | "id" | "identity" | "table">>;
 }) => SchemaDriftDecision;
 ```
 
@@ -1562,6 +1639,12 @@ const formatAdvisories: (findings: ReadonlyArray<Finding>) => string;
 ### `generateSdk` (const)
 
 Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
+
+### `indexReferencesOf` (const)
+
+```ts
+const indexReferencesOf: (queries: ReadonlyArray<QueryReadIR>) => IndexReference[];
+```
 
 ### `isD1GlobalTable` (const)
 
@@ -1629,6 +1712,24 @@ const platformMatrixIds: () => ReadonlyArray<string>;
 const projectConfigCandidatePaths: (lunoraDirectory: string) => string[];
 ```
 
+### `readBoundServiceBindings` (const)
+
+```ts
+const readBoundServiceBindings: (projectRoot: string, lunoraDirectory?: string) => {
+    error?: string;
+    services: ServiceBindingIR[];
+};
+```
+
+### `readDevServiceBindings` (const)
+
+```ts
+const readDevServiceBindings: (projectRoot: string, lunoraDirectory?: string) => {
+    error?: string;
+    services: ServiceBindingIR[];
+};
+```
+
 ### `readPackageDependencies` (const)
 
 ```ts
@@ -1639,6 +1740,12 @@ const readPackageDependencies: (projectRoot: string) => Set<string> | undefined;
 
 ```ts
 const readProjectConfigLiterals: (projectRoot: string) => ProjectConfigLiterals;
+```
+
+### `readProjectLazyFunctions` (const)
+
+```ts
+const readProjectLazyFunctions: (lunoraDirectory: string) => boolean;
 ```
 
 ### `readProjectTarget` (const)
@@ -2174,7 +2281,7 @@ const CAPABILITY_ROWS: readonly [
     {
         readonly appMethod: {
             readonly configKey: "browser";
-            readonly doc: "Build the `ctx.browser` helper, e.g. `(env) => createBrowser({ binding: env.BROWSER, launch })`. REQUIRED: unlike the binding-backed capabilities, `ctx.browser` is not auto-constructed — without this thunk every method throws, because the generated worker deliberately stays free of the optional `@cloudflare/playwright` peer.";
+            readonly doc: "Build the `ctx.browser` helper, e.g. `(env) => createBrowser({ binding: env.BROWSER, playwright: () => import('@cloudflare/playwright') })`. REQUIRED: unlike the binding-backed capabilities, `ctx.browser` is not auto-constructed — without this thunk every method throws, because the generated worker deliberately stays free of the optional `@cloudflare/playwright` peer. Load it through `playwright` rather than a static import, so it stays out of the Worker's startup graph.";
             readonly method: "browser";
         };
         readonly contextProperty: "browser";
@@ -2184,7 +2291,7 @@ const CAPABILITY_ROWS: readonly [
         readonly serverCtxField: "\n    /** Browser Rendering (screenshots/PDF/scrape). Non-deterministic — available only in actions. */\n    readonly browser: import(\"@lunora/browser\").Browser;";
         readonly shardBinding: {
             readonly clientType: "Browser";
-            readonly missingMessage: "ctx.browser: provide a `browser` config thunk, e.g. `browser: (env) => createBrowser({ binding: env.BROWSER, launch })` with `import { launch } from '@cloudflare/playwright'`. Session reuse (connect/sessions) additionally needs those two exports passed the same way.";
+            readonly missingMessage: "ctx.browser: provide a `browser` config thunk, e.g. `browser: (env) => createBrowser({ binding: env.BROWSER, playwright: () => import('@cloudflare/playwright') })`.";
             readonly stubMethods: readonly [
                 "cancelCrawl",
                 "connect",
@@ -2225,7 +2332,7 @@ const CAPABILITY_ROWS: readonly [
         readonly shardBinding: {
             readonly clientType: "SqlClient";
             readonly instrument: "instrumentSql";
-            readonly missingMessage: "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))`.";
+            readonly missingMessage: "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(async () => (await import('postgres')).default(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))`.";
             readonly stubMethods: readonly [
                 "query"
             ];
@@ -2521,6 +2628,21 @@ interface CountReadIR {
 }
 ```
 
+### `DriftCoverage` (interface)
+
+```ts
+interface DriftCoverage {
+    jurisdiction?: string;
+    memory?: true;
+    shardMode?: string;
+    table?: string;
+    ttl?: {
+        after?: number;
+        field: string;
+    };
+}
+```
+
 ### `EmitApiOptions` (interface)
 
 ```ts
@@ -2576,7 +2698,6 @@ interface EmitServerOptions {
 ```ts
 interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
-    advisorProcedures?: ReadonlyArray<AdvisorProcedureProtection>;
     agents?: ReadonlyArray<AgentIR>;
     capabilities?: ReadonlySet<CapabilityKey>;
     containers?: ReadonlyArray<ContainerIR>;
@@ -2586,6 +2707,7 @@ interface EmitShardOptions {
         type: "boolean" | "number" | "object" | "string";
     }>;
     hasFlags?: boolean;
+    hasIpReaders?: boolean;
     hasNotify?: boolean;
     hasRooms?: boolean;
     hasSecretValues?: boolean;

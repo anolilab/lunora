@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { decodeDocument, decodeWire, encodeWire, needsWireEncoding, parseWire, stableStringify, stableWireKey, WIRE_TAG } from "../src";
 
@@ -227,5 +227,304 @@ describe(parseWire, () => {
         expect.assertions(1);
 
         expect(() => parseWire(JSON.stringify({ deep: nest(80), tag: WIRE_TAG }))).toThrow(RangeError);
+    });
+});
+
+describe("one prototype read per node", () => {
+    // A Proxy whose getPrototypeOf trap counts its calls and answers from a script.
+    const scripted = (target: object, answers: ReadonlyArray<object | null>, extra: ProxyHandler<object> = {}) => {
+        const reads = { count: 0 };
+        const proxy = new Proxy(target, {
+            ...extra,
+            getPrototypeOf() {
+                const answer = answers[Math.min(reads.count, answers.length - 1)] ?? null;
+
+                reads.count += 1;
+
+                return answer;
+            },
+        });
+
+        return { proxy, reads };
+    };
+
+    it("reads the prototype of a date-like proxy once in each entry point", () => {
+        expect.assertions(3);
+
+        for (const run of [(value: unknown) => encodeWire(value), (value: unknown) => needsWireEncoding(value), (value: unknown) => stableStringify(value)]) {
+            const { proxy, reads } = scripted(new Date(0), [Date.prototype, Object.prototype]);
+
+            try {
+                run(proxy);
+            } catch {
+                // rejected loudly or classified; only the read count matters here
+            }
+
+            // needsWireEncoding may answer from `toJSON` before reading at all; never twice.
+            expect(reads.count).toBeLessThanOrEqual(1);
+        }
+    });
+
+    it("rejects a proxy that impersonates a built-in through its traps", () => {
+        expect.assertions(4);
+
+        const fakeDate = new Proxy(new Date(5), {
+            get: (target, key) => (key === "getTime" ? () => 5 : (Reflect.get(target, key) as unknown)),
+            getPrototypeOf: () => Date.prototype,
+        });
+        const fakeMap = new Proxy(new Map([[1, 2]]), {
+            get: (target, key) => (key === "entries" ? () => [[1, 2]][Symbol.iterator]() : (Reflect.get(target, key) as unknown)),
+            getPrototypeOf: () => Map.prototype,
+        });
+        const fakeSet = new Proxy(new Set([1]), {
+            getPrototypeOf: () => Set.prototype,
+            get: (target, key) => (key === Symbol.iterator ? () => [1][Symbol.iterator]() : (Reflect.get(target, key) as unknown)),
+        });
+        const fakeBytes = new Proxy(new Uint8Array([1]), { getPrototypeOf: () => Uint8Array.prototype });
+
+        for (const fake of [fakeDate, fakeMap, fakeSet, fakeBytes]) {
+            expect(() => encodeWire(fake)).toThrow(TypeError);
+        }
+    });
+
+    it("still round-trips real built-ins", () => {
+        const value = {
+            big: 2n ** 70n,
+            buffer: new Uint8Array([1, 2, 3]).buffer,
+            date: new Date(1_700_000_000_000),
+            map: new Map([["a", 1n]]),
+            set: new Set([1, 2]),
+            view: new Float32Array([1.5]),
+        };
+
+        expect(parseWire(JSON.stringify(encodeWire(value)))).toStrictEqual(value);
+    });
+});
+
+describe("url classification under a script polyfill", () => {
+    it("keeps Maps and Errors intact when the global URL's href just stringifies its receiver", async () => {
+        expect.assertions(3);
+
+        const NativeUrl = URL;
+        const expectedMap = encodeWire(new Map([["a", 1]]));
+        const expectedError = encodeWire(new Error("boom"));
+        // Shaped like React Native's URL: a script class (no internal slot) whose `href` is `this.toString()`, so
+        // calling the getter on any object succeeds. Delegating to a real URL keeps the module loader working.
+        const url = new WeakMap<object, URL>();
+        const PolyfillUrl = function PolyfillUrl(this: object, ...arguments_: ConstructorParameters<typeof URL>): void {
+            url.set(this, new NativeUrl(...arguments_));
+        } as unknown as typeof URL;
+
+        Object.defineProperties(PolyfillUrl.prototype, {
+            href: {
+                get(this: object): string {
+                    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- the polyfill behaviour under test: stringify any receiver
+                    return String(this);
+                },
+            },
+            toString: {
+                value(this: object): string {
+                    return url.get(this)?.toString() ?? Object.prototype.toString.call(this);
+                },
+            },
+        });
+
+        for (const key of ["hash", "host", "hostname", "origin", "pathname", "port", "protocol", "search", "searchParams"]) {
+            Object.defineProperty(PolyfillUrl.prototype, key, {
+                get(this: object): unknown {
+                    return Reflect.get(url.get(this) ?? {}, key);
+                },
+            });
+        }
+
+        vi.stubGlobal("URL", PolyfillUrl);
+        vi.resetModules();
+
+        try {
+            const fresh = await import("../src");
+
+            expect(fresh.encodeWire(new Map([["a", 1]]))).toStrictEqual(expectedMap);
+            expect(fresh.encodeWire(new Error("boom"))).toStrictEqual(expectedError);
+            expect(fresh.encodeWire(new PolyfillUrl("https://a.test/x"))).toStrictEqual(["$lunora.wire$", "url", "https://a.test/x"]);
+        } finally {
+            vi.unstubAllGlobals();
+            vi.resetModules();
+        }
+    });
+});
+
+describe("error classification without a slot check", () => {
+    it("keeps a real Map a Map when only Error ancestry is there to test", async () => {
+        expect.assertions(1);
+
+        // Without `Error.isError` the Error test falls back to ancestry, which a prototype swap satisfies. It must
+        // run after the slot brands, so a real Map whose prototype claims Error is still encoded as a Map.
+        const expected = encodeWire(new Map([["a", 1]]));
+        const errorStatics = Error as unknown as Record<string, unknown>;
+        const nativeIsError = Object.getOwnPropertyDescriptor(Error, "isError");
+
+        Reflect.deleteProperty(errorStatics, "isError");
+        vi.resetModules();
+
+        try {
+            const fresh = await import("../src");
+            const disguised = new Map([["a", 1]]);
+
+            Object.setPrototypeOf(disguised, Error.prototype);
+
+            expect(fresh.encodeWire(disguised)).toStrictEqual(expected);
+        } finally {
+            if (nativeIsError !== undefined) {
+                Object.defineProperty(Error, "isError", nativeIsError);
+            }
+
+            vi.resetModules();
+        }
+    });
+});
+
+describe("built-in contents read natively", () => {
+    it("encodes a collection's real contents when a subclass hides them from its iterators", () => {
+        expect.assertions(3);
+
+        // A Map or Set passes classification by its internal slot, so its contents must come from that slot too, not
+        // from `entries()` / the iterator a subclass (or another realm's subclass) can override to omit values.
+        const hidingMap = new Map([["a", 1]]);
+        const hidingSet = new Set([1, 2]);
+        const lyingDate = new Date(5);
+
+        Object.defineProperties(hidingMap, {
+            [Symbol.iterator]: { value: () => new Map<string, number>().entries() },
+            entries: { value: () => new Map<string, number>().entries() },
+        });
+        Object.defineProperty(hidingSet, Symbol.iterator, { value: () => new Set<number>().values() });
+        Object.defineProperty(lyingDate, "getTime", { value: () => 0 });
+
+        expect(encodeWire(hidingMap)).toStrictEqual(encodeWire(new Map([["a", 1]])));
+        expect(encodeWire(hidingSet)).toStrictEqual(encodeWire(new Set([1, 2])));
+        expect(encodeWire(lyingDate)).toStrictEqual(encodeWire(new Date(5)));
+    });
+});
+
+describe("brands under a polluted root prototype", () => {
+    it("ignores an href accessor added to Object.prototype", async () => {
+        expect.assertions(1);
+
+        const expected = encodeWire(new Map([["a", 1]]));
+
+        // A polluted root must not become the deepest `href` and brand every object as a URL.
+        // eslint-disable-next-line no-extend-native -- the pollution under test; removed again in `finally`
+        Object.defineProperty(Object.prototype, "href", { configurable: true, get: () => "https://polluted.test/" });
+        vi.resetModules();
+
+        try {
+            const fresh = await import("../src");
+
+            expect(fresh.encodeWire(new Map([["a", 1]]))).toStrictEqual(expected);
+        } finally {
+            Reflect.deleteProperty(Object.prototype, "href");
+            vi.resetModules();
+        }
+    });
+});
+
+describe("date and error classification", () => {
+    it("brands dates with the base getTime when a subclass overrides it without a receiver check", async () => {
+        expect.assertions(2);
+
+        const NativeDate = Date;
+        const expectedMap = encodeWire(new Map([["a", 1]]));
+        const expectedDate = encodeWire(new NativeDate(5));
+        // A subclass whose `getTime` answers for any receiver: right for a real Date, a made-up number otherwise.
+        const nativeGetTime = Reflect.get(NativeDate.prototype, "getTime");
+
+        const LooseDate = function LooseDate(...arguments_: ConstructorParameters<typeof Date>): Date {
+            return Reflect.construct(NativeDate, arguments_, LooseDate) as Date;
+        };
+
+        LooseDate.prototype = Object.create(NativeDate.prototype, {
+            getTime: {
+                value(this: unknown): number {
+                    try {
+                        return Reflect.apply(nativeGetTime, this, []);
+                    } catch {
+                        return 0;
+                    }
+                },
+            },
+        }) as Date;
+        Object.setPrototypeOf(LooseDate, NativeDate);
+        vi.stubGlobal("Date", LooseDate);
+        vi.resetModules();
+
+        try {
+            const fresh = await import("../src");
+
+            expect(fresh.encodeWire(new Map([["a", 1]]))).toStrictEqual(expectedMap);
+            expect(fresh.encodeWire(new NativeDate(5))).toStrictEqual(expectedDate);
+        } finally {
+            vi.unstubAllGlobals();
+            vi.resetModules();
+        }
+    });
+});
+
+describe("url classification", () => {
+    it("encodes a url when the global URL is a subclass that inherits href", async () => {
+        expect.assertions(1);
+
+        const NativeUrl = URL;
+        const expected = encodeWire(new NativeUrl("https://a.test/path"));
+
+        class SubUrl extends NativeUrl {}
+
+        vi.stubGlobal("URL", SubUrl);
+        vi.resetModules();
+
+        try {
+            const fresh = await import("../src");
+
+            expect(fresh.encodeWire(new SubUrl("https://a.test/path"))).toStrictEqual(expected);
+        } finally {
+            vi.unstubAllGlobals();
+            vi.resetModules();
+        }
+    });
+
+    it("brands urls with the base getter when a subclass overrides href without a receiver check", async () => {
+        expect.assertions(1);
+
+        const NativeUrl = URL;
+        const expected = encodeWire(new Map([["a", 1]]));
+
+        // A subclass whose `href` answers for any receiver: right for a real URL, a made-up string otherwise.
+        const LooseUrl = function LooseUrl(...arguments_: ConstructorParameters<typeof URL>) {
+            return Reflect.construct(NativeUrl, arguments_, LooseUrl) as URL;
+        } as unknown as typeof URL;
+
+        LooseUrl.prototype = Object.create(NativeUrl.prototype, {
+            href: {
+                get(this: unknown): string {
+                    try {
+                        return Reflect.get(NativeUrl.prototype, "href", this);
+                    } catch {
+                        return "https://loose.test/";
+                    }
+                },
+            },
+        }) as URL;
+        Object.setPrototypeOf(LooseUrl, NativeUrl);
+
+        vi.stubGlobal("URL", LooseUrl);
+        vi.resetModules();
+
+        try {
+            const fresh = await import("../src");
+
+            expect(fresh.encodeWire(new Map([["a", 1]]))).toStrictEqual(expected);
+        } finally {
+            vi.unstubAllGlobals();
+            vi.resetModules();
+        }
     });
 });

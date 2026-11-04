@@ -301,6 +301,14 @@ const ERROR_CATALOG: {
         readonly status: 403;
         readonly title: "Admin access forbidden";
     };
+    readonly ADMIN_ROOT_REQUIRED: {
+        readonly status: 403;
+        readonly title: "Root admin token required";
+    };
+    readonly ADMIN_TOKEN_EXISTS: {
+        readonly status: 409;
+        readonly title: "Admin token name already in use";
+    };
     readonly ADMIN_TOKEN_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Admin token not configured";
@@ -349,9 +357,17 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Cron jobs not configured";
     };
+    readonly CRON_JOB_IN_FLIGHT: {
+        readonly status: 409;
+        readonly title: "Cron job is already running";
+    };
     readonly CRON_JOB_NOT_FOUND: {
         readonly status: 404;
         readonly title: "Cron job not found";
+    };
+    readonly DEPLOYMENT_PAUSED: {
+        readonly status: 503;
+        readonly title: "Deployment is paused";
     };
     readonly EXPORT_SHARD_FAILED: {
         readonly status: 502;
@@ -380,6 +396,14 @@ const ERROR_CATALOG: {
     readonly MIGRATION_ID_REQUIRED: {
         readonly status: 400;
         readonly title: "Migration id required";
+    };
+    readonly PAUSE_INSTANCES_FAILED: {
+        readonly status: 502;
+        readonly title: "Pause did not reach every scheduler instance";
+    };
+    readonly PAUSE_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Deployment pause not configured";
     };
     readonly PITR_UNAVAILABLE: {
         readonly status: 409;
@@ -591,6 +615,22 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Function namespace collision";
     };
+    readonly PUBLISHED_FUNCTION_UNSUPPORTED: {
+        readonly status: 500;
+        readonly title: "Published function cannot be registered from its declaration";
+    };
+    readonly PUBLISHED_FUNCTION_VISIBILITY_UNKNOWN: {
+        readonly status: 500;
+        readonly title: "Published function does not declare its visibility";
+    };
+    readonly PROCEDURE_META_UNLOADED: {
+        readonly status: 500;
+        readonly title: "Procedure meta is not loaded";
+    };
+    readonly AI_CHAT_FAILED: {
+        readonly status: 500;
+        readonly title: "Assistant turn failed";
+    };
     readonly BAD_ROW: {
         readonly status: 400;
         readonly title: "Malformed import row";
@@ -598,6 +638,10 @@ const ERROR_CATALOG: {
     readonly BAD_SUBSCRIPTION_ARGS: {
         readonly status: 400;
         readonly title: "Invalid subscription arguments";
+    };
+    readonly SUBSCRIPTION_FUNCTION_REQUIRED: {
+        readonly status: 400;
+        readonly title: "Subscription needs a function path";
     };
     readonly BATCH_LIMIT_EXCEEDED: {
         readonly status: 400;
@@ -626,6 +670,10 @@ const ERROR_CATALOG: {
     readonly IDENTITY_CHANGED: {
         readonly status: 409;
         readonly title: "Socket identity changed";
+    };
+    readonly IDENTITY_STALE: {
+        readonly status: 409;
+        readonly title: "Socket identity stale";
     };
     readonly FORBIDDEN_FANOUT: {
         readonly status: 403;
@@ -726,6 +774,10 @@ const ERROR_CATALOG: {
     readonly EXPIRED: {
         readonly status: 404;
         readonly title: "Session expired";
+    };
+    readonly GLOBAL_TRANSACTION_UNSUPPORTED: {
+        readonly status: 500;
+        readonly title: "Global transaction unsupported by driver";
     };
     readonly LIVE_CONNECTION_LIMIT: {
         readonly status: 503;

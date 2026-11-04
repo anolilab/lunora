@@ -80,6 +80,10 @@ describe("registration-type parity (anti-drift lock for the dropped-registration
         // make this test vacuously pass.
         expect(declared).toStrictEqual([
             "RegisteredAction",
+            "RegisteredInternalAction",
+            "RegisteredInternalMutation",
+            "RegisteredInternalQuery",
+            "RegisteredInternalStream",
             "RegisteredLifecycleHook",
             "RegisteredMigration",
             "RegisteredMutation",

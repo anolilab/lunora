@@ -397,6 +397,7 @@ const DEV_WORKER_ENV_VAR = "WORKER_ENV";
 
 ```ts
 const DURABLE_OBJECT_BINDINGS: {
+    readonly AdminRevocationDO: "ADMIN_REVOCATIONS";
     readonly LunoraDO: "SHARD";
     readonly SchedulerDO: "SCHEDULER";
     readonly SessionDO: "SESSION";
@@ -425,7 +426,9 @@ interface DeployRequest {
     entry?: string;
     environment?: string;
     outDir?: string;
+    outFile?: string;
     preview?: boolean;
+    secretsFile?: string;
     temporary?: boolean;
 }
 ```
@@ -691,6 +694,7 @@ interface FrameworkDetection {
 
 ```ts
 const GENERATED_CLASS_MODULES: readonly [
+    "adminRevocations",
     "agents",
     "containers",
     "scheduler",
@@ -747,6 +751,7 @@ interface InferOptions {
     projectRoot: string;
     scanDirs?: ReadonlyArray<string>;
     schemaDir?: string;
+    skipCompanion?: boolean;
 }
 ```
 
@@ -2199,6 +2204,17 @@ interface LocalHyperdrive {
 }
 ```
 
+### `Manifest` (interface)
+
+```ts
+interface Manifest {
+    lunora: Record<string, unknown> | undefined;
+    lunoraIsForeign: boolean;
+    path: string;
+    text: string;
+}
+```
+
 ### `ManifestConfigShape` (interface)
 
 ```ts
@@ -2991,6 +3007,12 @@ const mergeWranglerEnvironment: (wrangler: WranglerConfig, environment: string |
 const planRemoteBindings: (parsed: RemoteWranglerShape) => RemoteBindingPlan[];
 ```
 
+### `readManifest` (const)
+
+```ts
+const readManifest: (projectRoot: string) => Manifest | undefined;
+```
+
 ### `readWranglerJsonc` (const)
 
 ```ts
@@ -3028,6 +3050,12 @@ const reconcileWranglerCrons: (projectRoot: string, cronTriggers: ReadonlyArray<
 
 ```ts
 const reconcileWranglerExtras: (projectRoot: string, cronTriggers: ReadonlyArray<string>, logger: ReconcileLogger) => void;
+```
+
+### `recordManifestKey` (const)
+
+```ts
+const recordManifestKey: (manifest: Manifest, key: string, value: unknown) => void;
 ```
 
 ### `resolveObservabilitySampling` (const)
@@ -3106,6 +3134,12 @@ const wranglerToAlchemy: (config: WranglerConfigShape) => AlchemyTranslation;
 ```
 
 ## `@lunora/config/studio-host`
+
+### `ADVISOR_PROCEDURES_ENDPOINT` (const)
+
+```ts
+const ADVISOR_PROCEDURES_ENDPOINT = "/__lunora/advisor-procedures";
+```
 
 ### `ALLOW_FORWARDED_ENV` (const)
 
@@ -3285,6 +3319,7 @@ interface StudioAssets {
 ```ts
 interface StudioHtmlConfig {
     readonly adminToken?: string;
+    readonly advisorProcedures?: boolean;
     readonly basePath: string;
     readonly dataEditable?: boolean;
     readonly rulesInstalled?: boolean;
@@ -3350,6 +3385,12 @@ const createStudioMiddleware: (options: StudioMiddlewareOptions) => ((request: I
 
 ```ts
 const devVariablesStamp: (root: string) => string;
+```
+
+### `handleAdvisorProceduresRequest` (const)
+
+```ts
+const handleAdvisorProceduresRequest: (request: LocalEndpointRequest) => Promise<LocalEndpointResponse>;
 ```
 
 ### `handlePolicyScaffoldRequest` (const)

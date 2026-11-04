@@ -1,6 +1,6 @@
-import type { AdvisorProcedureProtection, Finding } from "@lunora/advisor";
+import type { Finding } from "@lunora/advisor";
 import { LunoraError } from "@lunora/errors";
-import type { AdvisorProcedure, AdvisoryFinding, MaskPoliciesResult, RlsPoliciesResult, StorageRulesResult, StudioFeaturesResult } from "@lunora/shard-engine";
+import type { AdvisoryFinding, MaskPoliciesResult, RlsPoliciesResult, StorageRulesResult, StudioFeaturesResult } from "@lunora/shard-engine";
 
 import type { SchemaSnapshot } from "../../../../shared/schema-snapshot";
 import { hashSchemaSnapshot, serializeSchemaSnapshot } from "../../../../shared/schema-snapshot";
@@ -61,20 +61,20 @@ import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, IMPORT_PATH_RE, ren
 
 interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
-    /** Every declared procedure — the health map's denominator, served via `getAdvisorProcedures`. */
-    advisorProcedures?: ReadonlyArray<AdvisorProcedureProtection>;
     /** Agents declared via `defineAgent` exports in `lunora/agents.ts` — wires the typed `ctx.agents` producers. */
     agents?: ReadonlyArray<AgentIR>;
     /** The package-backed capabilities the app uses (post platform gate) — each row of the `CAPABILITIES` table it names is wired per its `shardBinding` / `tier`. */
     capabilities?: ReadonlySet<CapabilityKey>;
-
     containers?: ReadonlyArray<ContainerIR>;
+
     /** The single `defineEnv(...)` contract declared in `lunora/env.ts` — applies the accessor to the worker `env` to populate `ctx.env`. */
     env?: EnvIR;
     /** Statically-discovered `ctx.flags.<type>("key")` reads — the studio Flags page + reactive evaluation iterate these. */
     flagKeys?: ReadonlyArray<{ key: string; type: "boolean" | "number" | "object" | "string" }>;
     /** The project declares `lunora/flags.ts` — wires `ctx.flags` (OpenFeature) onto every ctx. */
     hasFlags?: boolean;
+    /** Whether some query may read `ctx.ip` (see `LUNORA_IP_READER_PATHS`), so the shard seeds its address-keyed set from it. */
+    hasIpReaders?: boolean;
     /** The project declares `lunora/notify.ts` — wires `ctx.notify` + its `ctx.push` alias (`@lunora/notify`) onto every ctx. */
     hasNotify?: boolean;
     /** The project declares at least one `defineRoom` — wires the `LUNORA_ROOMS` topic→path resolution in the `roomHandlerPath` override. */
@@ -153,7 +153,6 @@ interface EmitShardOptions {
 /* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each declaration-driven fragment behind its own flag/length check to assemble dense generated TS; the branching is the per-feature emission contract, not refactorable logic */
 const emitShard = ({
     advisories = [],
-    advisorProcedures = [],
     agents = [],
     capabilities = new Set(),
     containers = [],
@@ -178,6 +177,7 @@ const emitShard = ({
     shapes = [],
     storageRules,
     studioFeatures,
+    hasIpReaders = false,
     services = [],
     topics = [],
     useUmbrella = false,
@@ -236,7 +236,9 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         build: agentsBuild,
         contextField: agentsContextField,
         importLines: agentImportLines,
+        schedulerSource: agentsSchedulerSource,
         specs: agentSpecs,
+        stampsOutbox: agentsStampOutbox,
     } = emitAgentFragments(agents, hasSecretValues && agents.length > 0);
     const {
         build: paymentsBuild,
@@ -251,12 +253,6 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // `@lunora/do` hand-mirrors `Finding` to avoid depending on `@lunora/advisor`.
     const advisoryData: ReadonlyArray<AdvisoryFinding> = advisories;
     const { advisoryRules, advisoryRows } = splitAdvisoryRules(advisoryData);
-    // Typed as the DO's shape on purpose: the generated file declares
-    // `LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[]`, so without this assignment
-    // a field added to the advisor's type and forgotten in `@lunora/do` compiles
-    // here and breaks in the *user's* tsc. Mirrors the `AdvisoryFinding` guard above.
-    const advisorProcedureData: ReadonlyArray<AdvisorProcedure> = advisorProcedures;
-
     // Same drift guard for the RLS inspector's metadata: codegen's `RlsMetadataIR`
     // must stay assignable to the DO's `RlsPoliciesResult` (the generated
     // `LUNORA_RLS_METADATA` is typed against it and fed straight to the
@@ -374,10 +370,6 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         doTypeImports.push("WhereInput");
     }
 
-    if (hasSensitiveShapes) {
-        doTypeImports.push("SensitiveScope");
-    }
-
     // Reverse cross-backend relation override + its `@lunora/do` import fragment
     // (both empty unless the project has `.global()` tables). See `emitRelationFanout`.
     const relationFanout = emitRelationFanout(hasGlobalTables);
@@ -487,7 +479,7 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
         ...liveStreamImports,
         // Local-first sync registries are pulled in alongside the function table
         // only when the project declares them, so the import list stays minimal.
-        `import { ${["LUNORA_FUNCTIONS", "LUNORA_LIFECYCLE_HOOKS", "LUNORA_MIGRATIONS", ...(lazyFunctions ? ["getLoadedFunction", "loadFunction"] : []), ...(hasMutators ? ["LUNORA_MUTATOR_PATHS"] : []), ...(hasRooms ? ["LUNORA_ROOMS"] : []), ...(hasSockets ? ["LUNORA_SOCKETS"] : []), ...(hasShapes ? ["LUNORA_SHAPES"] : [])].join(", ")} } from "./functions.js";`,
+        `import { ${["LUNORA_FUNCTIONS", "LUNORA_LIFECYCLE_HOOKS", "LUNORA_MIGRATIONS", ...(lazyFunctions ? ["getLoadedFunction", "loadFunction"] : []), ...(hasMutators ? ["LUNORA_MUTATOR_PATHS"] : []), ...(hasIpReaders ? ["LUNORA_IP_READER_PATHS"] : []), ...(hasRooms ? ["LUNORA_ROOMS"] : []), ...(hasSockets ? ["LUNORA_SOCKETS"] : []), ...(hasShapes ? ["LUNORA_SHAPES"] : [])].join(", ")} } from "./functions.js";`,
     );
 
     const vectorsConfigField = hasVectorIndexes ? `\n    vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;` : "";
@@ -503,14 +495,14 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     // field under `noImplicitAny`. The Hyperdrive thunk below stays narrow on
     // purpose — it is handed the same object and simply never reads the extras.
     const d1ConfigField = hasD1Global
-        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;`
+        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;`
         : "";
 
     // Hyperdrive-backed `.global()` tables receive their writer via an optional
     // `hyperdriveGlobal` thunk (mirrors `d1`); the host builds it with the global
     // writer factory from `@lunora/hyperdrive/global` over a Hyperdrive driver.
     const hyperdriveGlobalConfigField = hasHyperdriveGlobal
-        ? `\n    hyperdriveGlobal?: (env: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;`
+        ? `\n    hyperdriveGlobal?: (env: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; userId?: string | undefined }) => DatabaseWriterLike | undefined;`
         : "";
 
     // External-source ingest (plan 077): the host supplies one resolver that turns a
@@ -559,8 +551,17 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     const globalDatabaseField = hasGlobalTables ? "\n                globalDb," : "";
     // Resolved request auth handed to `.serverDefault(fn)` column factories so
     // server-trusted columns (owner/tenant ids) stamp from the verified caller,
-    // never the client. `userId`/`identity` are resolved above in `buildCtx`.
-    const authField = "\n                auth: { identity: identity ?? null, userId: userId ?? null },";
+    // never the client. Getters, so only a write that actually stamps such a
+    // column counts as reading the caller (see `readIdentity` in `buildCtx`).
+    const authField = `
+                auth: {
+                    get identity() {
+                        return readIdentity() ?? null;
+                    },
+                    get userId() {
+                        return readUserId() ?? null;
+                    },
+                },`;
     // `ctxDbTuning()` FIRST, so every per-request option below still wins. It
     // carries the reactive cache (row + index-range invalidation — without it a
     // write only invalidates table-wide) and the two relation knobs
@@ -585,7 +586,7 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
                 // reach it; \`onConnect\`/\`onDisconnect\` carry a verified identity and
                 // stay guarded like any request.
                 enforceRls: options.trusted !== true,
-                headroom: options.headroom ?? this.transactionHeadroom(),
+                headroom: options.headroom ?? this.transactionHeadroom(options.functionPath),
                 // A live predicate, not a flag: the transaction opens AFTER this ctx
                 // is built (a mutation dispatch wraps the handler), so only a call-time
                 // read reports the truth. \`_commitSeq\` reuses one sequence across
@@ -640,7 +641,9 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     // Pass the per-request identity into the \`d1\` factory so a cross-backend
     // reader it builds (reverse relations) can forward \`x-lunora-userid\` /
     // \`x-lunora-identity\` on the fan-out — each shard then applies its own
-    // identity-scoped read. \`userId\`/\`identity\` are in scope from \`buildCtx\`.
+    // identity-scoped read. Both are getters over \`buildCtx\`'s readers, so only a
+    // handler whose global access actually reaches the caller marks its path; the
+    // factory must keep them lazy too, or every live query of the app stays keyed.
     // Resolve `globalDb` from the active backend's thunk. A schema uses exactly
     // one global backend (mixed is rejected above), so this is a single writer —
     // D1 by default, or Hyperdrive when `.global({ backend: "hyperdrive" })`.
@@ -669,9 +672,13 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
             const globalRequest = {
                 ...this.globalCdcOptions(config.cdc ?? false),
                 ...(bookmark === undefined ? {} : { bookmark }),
-                ...(identity === undefined ? {} : { identity }),
+                get identity(): Record<string, unknown> | undefined {
+                    return readIdentity();
+                },
                 onBookmark: (bookmarkValue: string | undefined) => { if (options.bookmarks !== undefined) { options.bookmarks.value = bookmarkValue; } },
-                ...(userId === undefined ? {} : { userId }),
+                get userId(): string | undefined {
+                    return readUserId();
+                },
             };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
         : "";
 
@@ -801,6 +808,14 @@ ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema a
     // in the inner tracker and the outer entry would be stored with zero deps —
     // permanently stale. `handleRpc` forwards the scope it is handed instead.
     /* eslint-disable no-secrets/no-secrets -- false positive: emitted generated-code text referencing the function registry, not a credential */
+    // The statically-found address readers are address-keyed from the first run, before any dispatch has taught the
+    // base class; the runtime-learned set stays as the backstop for what the analysis cannot see.
+    const ipReaderBootstrap = hasIpReaders
+        ? `            for (const path of LUNORA_IP_READER_PATHS) {
+                this.ipKeyedFunctionPaths.add(path);
+            }
+`
+        : "";
     const constructorOverride = `
         public constructor(state: ShardDOState, env: unknown) {
             super(state, env, {
@@ -818,7 +833,7 @@ ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema a
                 // exists — a trigger that fails first still flushes and fuses.
                 ...(config.observability === undefined ? {} : { telemetrySink: () => config.observability?.((env ?? {}) as Record<string, unknown>) }),
             });
-${sourceBootstrap}${ttlBootstrap}        }
+${ipReaderBootstrap}${sourceBootstrap}${ttlBootstrap}        }
 
         protected override isCacheableQuery(functionPath: string): boolean {
             // NOT \`kind === "query"\` alone. A cache hit answers without running
@@ -858,23 +873,24 @@ ${sourceBootstrap}${ttlBootstrap}        }
                 return;
             }
 
-            return loadFunction(functionPath).then(() => undefined);
+            return this.holdShardWhileLoading(() => loadFunction(functionPath));
         }
 `
         : "";
     const renderedPrepareFunctionOverride = prepareFunctionOverride === "" ? "\n\n" : `${prepareFunctionOverride}\n`;
     // Only emitted when some function declares a `v.sensitive` argument, so projects
     // without one keep their output byte-identical. The base class masks nothing.
-    /* eslint-disable no-secrets/no-secrets -- emitted generated-code text referencing the function and shape registries, not credentials */
     // A shape resolves its marked names through its own `__shape__:` path, so the shape registry is read only when one exists.
-    const shapeNamesLookup = hasSensitiveShapes
-        ? `\n            const shape = functionPath.startsWith("__shape__:") ? LUNORA_SHAPES[functionPath.slice("__shape__:".length)] : undefined;`
-        : "";
+    // eslint-disable-next-line no-secrets/no-secrets -- emitted shape-registry lookup, not a credential
+    const shapeLookup = `const shape = functionPath.startsWith("__shape__:") ? LUNORA_SHAPES[functionPath.slice("__shape__:".length)] : undefined;`;
+    const shapeNamesLookup = hasSensitiveShapes ? `\n            ${shapeLookup}` : "";
     const shapeArgsFallback = hasSensitiveShapes ? "shape?.args ?? " : "";
+    // eslint-disable-next-line no-secrets/no-secrets -- emitted function-registry lookup, not a credential
+    const registeredLookup = "const registered = LUNORA_FUNCTIONS[functionPath];";
     const sensitiveArgsOverride = sensitiveArgs
         ? `
         protected override sensitiveArgNames(functionPath: string): ReadonlySet<string> {
-            const registered = LUNORA_FUNCTIONS[functionPath];${shapeNamesLookup}
+            ${registeredLookup}${shapeNamesLookup}
             const fromValidators = sensitiveArgumentNames(registered?.args ?? ${shapeArgsFallback}{});
 
             if (registered?.sensitiveArgs === undefined) {
@@ -886,13 +902,12 @@ ${sourceBootstrap}${ttlBootstrap}        }
 
 `
         : "";
-    /* eslint-enable no-secrets/no-secrets */
     const dispatchRun = dispatchRunSource(lazyFunctions);
     const prepareFunctionCall = lazyFunctions
         ? '            const preparation = this.prepareFunction(functionPath, "subscription");\n            if (preparation !== undefined) await preparation;\n'
         : "";
     const subscriptionMethods = SUBSCRIPTION_METHODS.replace("__PREPARE_FUNCTION__", prepareFunctionCall);
-    const shardDispatchMethods = dispatchMethods(hasRooms, lazyFunctions);
+    const shardDispatchMethods = dispatchMethods(hasRooms, lazyFunctions, agentsStampOutbox);
 
     const facadeBlock = hasTables
         ? `\n            const facade = db as unknown as Record<string, FacadeEntry>;
@@ -1017,9 +1032,6 @@ const LUNORA_ADVISORIES = ((): (() => AdvisoryFinding[]) => {
     return () => (cached ??= LUNORA_ADVISORY_ROWS().map((row) => ({ ...LUNORA_ADVISORY_RULES()[row.name], ...row }) as AdvisoryFinding));
 })();
 
-/** Every declared procedure (discovered by @lunora/codegen) served via \`__lunora_admin__:getAdvisorProcedures\` — the health map's denominator. */
-const LUNORA_ADVISOR_PROCEDURES = ${renderLazyJsonData(advisorProcedureData, "AdvisorProcedure[]")};
-
 /** Read-only RLS metadata (policies + roles discovered from \`.use(rls(...))\` chains) served via \`__lunora_admin__:rlsPolicies\` for the studio's RLS inspector. */
 const LUNORA_RLS_METADATA = ${renderLazyJsonData(rlsData, "RlsPoliciesResult")};
 ${shapeReadPolicyAssertion}
@@ -1112,7 +1124,7 @@ ${lazyFunctions ? '            const requestScope = this.captureRequestScope();\
             this.ensureServable();
 
             const footprint = createReadFootprint();
-            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, replayKey: false, trusted: true });
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath), onRead: footprint.onRead, onReadRange: footprint.onReadRange, replayKey: false, trusted: true });
             const outcome = (await this.runMutationTransaction(ctx, async () =>
                 registered.handler(ctx, { previousDigest } as unknown as Record<string, unknown>),
             )) as {
@@ -1175,10 +1187,6 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             return LUNORA_ADVISORIES();
         }
 
-        protected override advisorProcedures(): AdvisorProcedure[] {
-            return LUNORA_ADVISOR_PROCEDURES();
-        }
-
 ${ADMIN_WRITE_METHODS}
 
         /**
@@ -1236,7 +1244,7 @@ ${
 `
         : ""
 }${vectorSyncMethod}
-${renderBuildContext({ hasSensitiveArgs: sensitiveArgs, lazyFunctions, actionOnlyFields, agentsBuild, agentsContextField, containersBuild, containersContextField, databaseOptions, everyContextBuild, everyContextField, facadeBlock, globalDatabaseLine, notifyBuild, ormContextField, paymentsBuild, paymentsContextField, queuesBuild, queuesContextField, topicsBuild, topicsContextField, vectorsBuild, vectorsContextField, workflowsBuild, workflowsContextField, actionOnlyBuild })}
+${renderBuildContext({ hasSensitiveArgs: sensitiveArgs, lazyFunctions, actionOnlyFields, agentsBuild, agentsContextField, agentsSchedulerSource, containersBuild, containersContextField, databaseOptions, everyContextBuild, everyContextField, facadeBlock, globalDatabaseLine, notifyBuild, ormContextField, paymentsBuild, paymentsContextField, queuesBuild, queuesContextField, topicsBuild, topicsContextField, vectorsBuild, vectorsContextField, workflowsBuild, workflowsContextField, actionOnlyBuild })}
     };
 `;
 };

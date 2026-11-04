@@ -27,7 +27,7 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
-import { eagerGraph, eagerPackages, registrySplit, startupActiveMs, summarize } from "../../../scripts/worker-startup-measure.js";
+import { eagerGraph, eagerPackages, registrySplit, startupActiveMs, summarize } from "./worker-startup-measure.js";
 import { appDirectory, sizeFromArgs } from "./generate.mjs";
 import { benchDirectory, buildMode, parseModes, quietEnv, sizeLabel, withSizedApp, wrangler } from "./sized-app.mjs";
 

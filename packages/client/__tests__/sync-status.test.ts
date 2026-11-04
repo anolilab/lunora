@@ -115,6 +115,7 @@ describe("sync status", () => {
             dropCacheSeed: () => undefined,
             emitConnectionStatus,
             identityFingerprint: () => null,
+            ownClaims: () => null,
             settleAwaitedAnswer: () => undefined,
             subscription: () => state,
         } as unknown as TabLeadershipHost;

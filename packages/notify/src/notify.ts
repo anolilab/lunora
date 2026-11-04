@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import type { Notification, Provider, Receipt } from "@visulima/notification";
 
+import { assertPushPayloadFits } from "./payload-size";
 import type { ResolvedProviders } from "./providers";
 import { buildEngine, checkPushTtl, checkPushUrgency } from "./providers";
 import { memorySubscriptionStore } from "./subscriptions/memory-store";
@@ -72,6 +73,13 @@ const mapWithConcurrency = async <T, R>(items: ReadonlyArray<T>, limit: number, 
     await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
 
     return results;
+};
+
+/** Every push-level check a send runs before anything is resolved, stored or contacted. */
+const checkPushPayload = (payload: PushContent): void => {
+    checkPushTtl(payload.ttl);
+    checkPushUrgency(payload.urgency);
+    assertPushPayloadFits(payload);
 };
 
 /** Resolve the (possibly env-thunked) channel configs into a ready-to-wire set. */
@@ -492,8 +500,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
      * audience cap, so its zero-floor is zero deliveries, not an unbounded page.
      */
     const broadcastPage = async (payload: PushContent, filter?: SubscriptionFilter): Promise<BroadcastPageResult> => {
-        checkPushTtl(payload.ttl);
-        checkPushUrgency(payload.urgency);
+        checkPushPayload(payload);
 
         // A non-positive `limit` means "deliver to nobody" at this (audience-cap)
         // layer — NOT "no cap", which is the store layer's convention for the same
@@ -604,8 +611,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             return subscriptionStore.put(normalizeRegisterInput(input, undefined, { allowedPushOrigins: definition.allowedPushOrigins }));
         },
         send: async (target: StoredSubscription | string, payload: PushContent): Promise<Receipt> => {
-            checkPushTtl(payload.ttl);
-            checkPushUrgency(payload.urgency);
+            checkPushPayload(payload);
 
             const { error, receipt } = await deliver(await resolveSubscription(target), payload, { countInline: true, deferStatus: false });
 

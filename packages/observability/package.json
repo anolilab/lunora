@@ -1,6 +1,6 @@
 {
     "name": "@lunora/observability",
-    "version": "1.0.0-alpha.188",
+    "version": "1.0.0-alpha.201",
     "description": "Host-neutral telemetry storage and read models for Lunora, backing the Studio's Logs, Traces, Metrics and Issues views",
     "keywords": [
         "lunora",
@@ -50,9 +50,7 @@
         "fallow:health": "fallow health --score",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit && tsc --noEmit -p __tests__/workerd",
+        "lint:types": "tsrs --noEmit && tsrs --noEmit -p __tests__/workerd",
         "test": "vitest run",
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "test:coverage": "vitest run --coverage"
@@ -60,8 +58,8 @@
     "dependencies": {
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/fingerprint": "1.0.0-alpha.10",
-        "@lunora/shard-engine": "1.0.0-alpha.174",
-        "@lunora/wire": "1.0.0-alpha.5",
+        "@lunora/shard-engine": "^1.0.0-alpha.187",
+        "@lunora/wire": "1.0.0-alpha.6",
         "@visulima/redact": "catalog:redact"
     },
     "devDependencies": {

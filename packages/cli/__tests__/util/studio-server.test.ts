@@ -540,7 +540,7 @@ describe("startStudioServer", () => {
                             "Connection: Upgrade",
                             "Upgrade: websocket",
                             // eslint-disable-next-line no-secrets/no-secrets -- the RFC 6455 example handshake key, not a real secret
-                            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+                            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==", // secret-scanner:allow -- RFC 6455 example key, not a credential
                             "Sec-WebSocket-Version: 13",
                             "X-Forwarded-For: 203.0.113.7",
                             "",
@@ -706,6 +706,33 @@ export default defineSchema({
             }
         },
     );
+
+    it("serves the advisor list from the project's schema directory", async () => {
+        expect.assertions(2);
+
+        const projectRoot = mkdtempSync(join(tmpdir(), "lunora-studio-schemadir-"));
+
+        writeFileSync(
+            join(projectRoot, "vite.config.ts"),
+            `import { lunora } from "@lunora/vite";\n\nexport default { plugins: [lunora({ schemaDir: "backend" })] };\n`,
+            "utf8",
+        );
+        mkdirSync(join(projectRoot, "backend", "_generated"), { recursive: true });
+        writeFileSync(join(projectRoot, "backend", "_generated", "advisor-procedures.json"), `{ "procedures": [] }\n`, "utf8");
+
+        const port = await getFreePort();
+        const studio = await startStudioServer({ cwd: projectRoot, port, workerOrigin: "http://localhost:8787" });
+
+        try {
+            const response = await requestStudio(port, "/__lunora/advisor-procedures", `127.0.0.1:${String(port)}`);
+
+            expect(response.statusCode).toBe(200);
+            expect(JSON.parse(response.body)).toStrictEqual({ procedures: [] });
+        } finally {
+            await studio.close();
+            rmSync(projectRoot, { force: true, recursive: true });
+        }
+    });
 });
 
 describe("proxyHttp timeout", () => {

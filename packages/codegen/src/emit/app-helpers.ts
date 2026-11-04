@@ -6,6 +6,13 @@ import { isShardByTable } from "../ir";
 /** Which capability methods the generated `defineApp` builder exposes — one flag per package-backed feature the app actually uses. */
 interface EmitAppOptions {
     /**
+     * Every agent's generated workflow class name → wire `options.agentWorkflows`, so a
+     * scheduled agent job takes its run shard from the scheduler record instead of its
+     * args. Empty/absent ⇒ no wiring, byte-identical output for agent-free projects.
+     */
+    agentWorkflows?: ReadonlyArray<string>;
+
+    /**
      * The package-backed capabilities the app uses (post platform gate). Every
      * used row of the `CAPABILITIES` table with an `appMethod` gets its fluent
      * `defineApp` method (`.ai()`, `.kv()`, `.payment()`, …), which sets the
@@ -25,6 +32,9 @@ interface EmitAppOptions {
     emailAgents?: ReadonlyArray<{ className: string; exportName: string }>;
     /** App depends on `@lunora/cloudflare-access` → emit `.access()` (wire the Cloudflare Access `resolveIdentity`, composed ahead of `@lunora/auth` when both are present). */
     hasAccess: boolean;
+    /** The target backs named admin tokens' revocation store → emit `.adminRevocations()`. Absent counts as true. */
+    hasAdminRevocations?: boolean;
+
     /** App depends on `@lunora/auth` → emit `.auth()` + the lazy build/migrate dance. */
     hasAuth: boolean;
 
@@ -39,6 +49,7 @@ interface EmitAppOptions {
     hasFramework: boolean;
     /** Schema declares **D1-backed** `.global()` tables → emit `.global()` (D1 ctx-db + studio introspector + cross-shard relations). */
     hasGlobal: boolean;
+
     /** Schema declares **Hyperdrive-backed** `.global({ backend: "hyperdrive" })` tables → emit `.hyperdriveGlobal()` (reactive Postgres/MySQL ctx-db over Hyperdrive). */
     hasHyperdriveGlobal: boolean;
 
@@ -55,6 +66,7 @@ interface EmitAppOptions {
     hasKvIntrospector: boolean;
     /** App declares `lunora/notify.ts` (`@lunora/notify`) → wire `options.notifySubscriptionStore` so the studio Notifications page can read registered devices. */
     hasNotify: boolean;
+
     /** App declares push queues (`defineQueue`) → wire `LUNORA_QUEUE_REGISTRY` into the worker's `queue()` consumer entry. */
     hasQueue: boolean;
 
@@ -100,6 +112,14 @@ interface EmitAppOptions {
      * auth object (codegen refuses a project it can see doing that).
      */
     jurisdictionPinsAuth?: boolean;
+
+    /**
+     * The lazy function registry is selected (`--lazy-functions`). The modules the
+     * worker reaches only from an event entry — the push-queue registry and the
+     * `onEmail` agent definitions — then load with `import()` on that event instead
+     * of at isolate startup. Absent or `false` keeps the eager output unchanged.
+     */
+    lazyFunctions?: boolean;
 
     /**
      * Every `defineLiveStream` the app declares, read from its literals. With `liveStreams` set, the worker mounts
@@ -361,22 +381,14 @@ const buildGlobalHelpers = (hasGlobal: boolean): string =>
  * deployed; the dashboard's own metric is per-database and can't name the query.
  * The emit is best-effort — instrumentation must never fail a served query.
  */
-const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
+const buildSessionExec = (database: D1DatabaseLike, constraint: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
     // Real D1 always exposes \`withSession\`; guarded the same way as \`batch\`
     // below so a hand-rolled test double that omits it keeps working via
-    // \`prepare()\` straight on the raw binding — today's behaviour. With no
-    // inbound bookmark, \`"first-unconstrained"\` is the documented no-op
-    // equivalent (lowest latency, may read any replica) — see \`D1Client.withSession\`.
-    const session = typeof database.withSession === "function" ? database.withSession(bookmark ?? "first-unconstrained") : undefined;
+    // \`prepare()\` straight on the raw binding — today's behaviour. \`constraint\`
+    // is the Sessions API constraint the session opens with (see \`buildExec\`).
+    const session = typeof database.withSession === "function" ? database.withSession(constraint) : undefined;
     const target = session ?? database;
     const batchFn = target.batch;
-    const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
-        try {
-            emitD1QueryCost(sql, meta);
-        } catch {
-            // Best-effort: never let cost accounting fail the query it measures.
-        }
-    };
 
     return retryingExec({
         all: async (sql, parameters) => {
@@ -448,6 +460,56 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
     });
 };
 
+const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
+    try {
+        emitD1QueryCost(sql, meta);
+    } catch {
+        // Best-effort: never let cost accounting fail the query it measures.
+    }
+};
+
+/**
+ * The primary exec, for a read that must see every committed write (a policy check on a write
+ * path). Every statement opens its own \`"first-primary"\` session, and so does every retry:
+ * that constraint covers only a session's first read, so one session shared by two reads, or by
+ * a retry, can serve the later read from a replica that has not caught up. It reports no
+ * bookmark: the sink keeps the last value it is given, and a later replica read reports an older
+ * one, which would move the client's bookmark backwards.
+ */
+const buildPrimaryExec = (database: D1DatabaseLike): D1Exec => {
+    const statement = (sql: string, parameters: ReadonlyArray<unknown>) =>
+        (typeof database.withSession === "function" ? database.withSession("first-primary") : database).prepare(sql).bind(...parameters);
+
+    return retryingExec({
+        all: async (sql, parameters) => {
+            const result = await statement(sql, parameters).all<Record<string, unknown>>();
+
+            meter(sql, result.meta);
+
+            return result.results;
+        },
+        run: async (sql, parameters) => {
+            const result = await statement(sql, parameters).run();
+
+            meter(sql, result.meta);
+        },
+    });
+};
+
+/**
+ * The replica exec reads at the caller's bookmark, or \`"first-unconstrained"\` (lowest latency,
+ * any replica) without one. \`primary\` is the per-statement primary exec (see \`buildPrimaryExec\`).
+ */
+const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
+    const replica = buildSessionExec(database, bookmark ?? "first-unconstrained", onBookmark);
+
+    if (typeof database.withSession !== "function") {
+        return replica;
+    }
+
+    return { ...replica, primary: buildPrimaryExec(database) };
+};
+
 /** Introspect \`.global()\` (D1-backed) tables for the studio's global data browser. */
 const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector => {
     const exec = buildExec(database);
@@ -473,11 +535,12 @@ const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector =
  * \`startLine\` plus positional counting would mis-attribute every row after
  * the first gap. \`importGlobalRows\` prefers \`row.line\` when present and
  * falls back to the position-derived count otherwise. A dry run is passed through and writes nothing;
- * \`onConflict: "replace"\` overwrites a row whose \`_id\` already exists instead of reporting a conflict.
+ * \`onConflict: "replace"\` overwrites a row whose \`_id\` already exists instead of reporting a conflict, and a row's
+ * \`op: "delete"\` removes the stored row it names.
  */
 const buildGlobalImporter =
     (database: D1DatabaseLike, cdc: boolean) =>
-    (request: { dryRun?: boolean; onConflict?: "replace" | "skip"; rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => {
+    (request: { dryRun?: boolean; onConflict?: "replace" | "skip"; rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; op?: "delete"; table: string }>; startLine?: number }) => {
         const exec = buildExec(database);
         // Same reason the PITR applier carries it: a bulk import that skips the
         // changelog restores rows no downstream consumer is ever told about.
@@ -487,7 +550,7 @@ const buildGlobalImporter =
             dryRun: request.dryRun === true,
             exec,
             onConflict: request.onConflict ?? "skip",
-            rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, table: row.table })),
+            rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, ...(row.op === undefined ? {} : { op: row.op }), table: row.table })),
             ...(request.startLine === undefined ? {} : { startLine: request.startLine }),
         });
     };

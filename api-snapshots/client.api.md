@@ -18,6 +18,10 @@ interface ActionCallOptions {
 }
 ```
 
+### `AdminTokenSummary` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `ArgsOf` (type)
 
 ```ts
@@ -126,6 +130,7 @@ const CONFLICT_ERROR_CODE = "CONFLICT";
 
 ```ts
 interface CachedQuery {
+    claims?: string;
     credential?: string;
     identity: string | null;
     serverCursor?: number;
@@ -203,6 +208,7 @@ interface ClientShapeSubscribeMessage {
         name: string;
     };
     sinceCheckpoint?: number;
+    sinceClaims?: string;
     sinceEpoch?: string;
     type: "shape_subscribe";
 }
@@ -236,14 +242,72 @@ interface ConnectLiveStreamOptions {
 type ConnectionStatus = "connected" | "connecting" | "idle" | "offline" | "polling";
 ```
 
+### `CreatedAdminToken` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `CronJobInfo` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `CronRunInFlight` (interface)
+
+```ts
+interface CronRunInFlight {
+    name: string;
+    renewedAt?: number;
+    runId: string;
+    skipped: number;
+    startedAt: number;
+}
+```
+
+### `CronRunRecord` (interface)
+
+```ts
+interface CronRunRecord {
+    durationMs: number;
+    endedAt: number;
+    error?: string;
+    name: string;
+    reason?: "in-flight" | "paused";
+    runId: string;
+    skipped: number;
+    startedAt: number;
+    status: CronRunStatus;
+}
+```
+
+### `CronRunStatus` (type)
+
+```ts
+type CronRunStatus = "failed" | "skipped" | "succeeded";
+```
+
+### `CronRunsResult` (interface)
+
+```ts
+interface CronRunsResult {
+    inFlight: CronRunInFlight[];
+    runs: CronRunRecord[];
+}
+```
 
 ### `DEFAULT_MAX_BUFFER` (const)
 
 ```ts
 const DEFAULT_MAX_BUFFER = 1024;
+```
+
+### `DeploymentPauseStatus` (interface)
+
+```ts
+interface DeploymentPauseStatus {
+    paused: boolean;
+    pausedAt?: number;
+    reason?: string;
+    supported: boolean;
+}
 ```
 
 ### `FunctionArgumentDescriptor` (interface)
@@ -265,6 +329,9 @@ interface FunctionArgumentDescriptor {
 interface FunctionDescriptor {
     args?: FunctionArgumentDescriptor[];
     kind: "action" | "mutation" | "query";
+    meta?: unknown;
+    metaUnencodable?: true;
+    metaUnloaded?: true;
     path: string;
 }
 ```
@@ -632,6 +699,11 @@ class LunoraClient {
         maxBuffer?: number;
         signal?: AbortSignal;
     }): StreamIterable<HttpStreamChunkOf<Ref>>;
+    streamRpc(function_: FunctionReference, args?: Record<string, unknown>, options?: {
+        onFrame?: (frame: unknown) => void;
+        shardKey?: string;
+        signal?: AbortSignal;
+    }): Promise<unknown>;
     close(): void;
 }
 ```
@@ -1061,6 +1133,8 @@ interface ScheduleRecord {
     args: Record<string, unknown>;
     attempts?: number;
     enqueuedAt: number;
+    error?: string;
+    firstDueAt?: number;
     functionPath?: string;
     id: string;
     instanceName?: string;
@@ -1078,8 +1152,33 @@ interface ScheduleRecord {
 interface ScheduleRetryPolicy {
     backoff?: "exponential" | "linear";
     baseMs?: number;
+    forever?: boolean;
     maxAttempts?: number;
     maxMs?: number;
+}
+```
+
+### `ScheduledHistoryPage` (interface)
+
+```ts
+interface ScheduledHistoryPage {
+    cursor?: string;
+    records: ScheduledJobView[];
+}
+```
+
+### `ScheduledJobState` (type)
+
+```ts
+type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+```
+
+### `ScheduledJobView` (interface)
+
+```ts
+interface ScheduledJobView extends ScheduleRecord {
+    completedAt?: number;
+    state: ScheduledJobState;
 }
 ```
 
@@ -1284,6 +1383,8 @@ interface SubscriptionState {
         payload: unknown;
     };
     serverBase: unknown;
+    serverBaseCommitted?: boolean;
+    serverClaims?: string;
     serverCursor?: number;
     serverEpoch?: string;
     readonly shardKey?: string;
@@ -1325,9 +1426,9 @@ class TabCoordinator {
     get leaderTabId(): string | undefined;
     get id(): string;
     get isRunning(): boolean;
-    broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null): void;
-    broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null): void;
-    broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null): void;
+    broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string): void;
+    broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null, claims?: string): void;
+    broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null, claims?: string): void;
     broadcastConnectionStatus(status: ConnectionStatus, identity?: string | null): void;
 }
 ```
@@ -1373,6 +1474,15 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ```ts
 type WorkflowInstanceAction = "pause" | "restart" | "resume" | "terminate";
+```
+
+### `WorkflowInstanceCreated` (interface)
+
+```ts
+interface WorkflowInstanceCreated {
+    id: string;
+    status: WorkflowInstanceStatus;
+}
 ```
 
 ### `WorkflowInstanceDetail` (interface)
@@ -1672,8 +1782,15 @@ const subscribeLiveTopic: (options: SubscribeLiveTopicOptions) => (() => void);
 ```ts
 class LunoraAdminClient extends LunoraClient {
     shardTraffic(table: string): Promise<ShardTrafficResult>;
+    getDeploymentPause(): Promise<DeploymentPauseStatus>;
+    setDeploymentPause(paused: boolean, reason?: string): Promise<DeploymentPauseStatus>;
     listScheduledJobs(): Promise<ScheduleRecord[]>;
     schedulerStatus(): Promise<SchedulerStatus>;
+    getScheduledJob(id: string): Promise<ScheduledJobView | null>;
+    listScheduledHistory(options?: {
+        cursor?: string;
+    }): Promise<ScheduledHistoryPage>;
+    listCronRuns(): Promise<CronRunsResult>;
     cancelScheduledJob(id: string): Promise<{
         cancelled: boolean;
     }>;
@@ -1694,6 +1811,20 @@ class LunoraAdminClient extends LunoraClient {
         id: string;
         name: string;
     }): Promise<WorkflowInstanceDetail>;
+    createWorkflowInstance(options: {
+        id?: string;
+        name: string;
+        params?: unknown;
+    }): Promise<WorkflowInstanceCreated>;
+    sendWorkflowEvent(options: {
+        id: string;
+        name: string;
+        payload?: unknown;
+        type: string;
+    }): Promise<{
+        instanceId: string;
+        timestamp?: string;
+    }>;
     setWorkflowInstanceStatus(options: {
         action: WorkflowInstanceAction;
         id: string;
@@ -1756,6 +1887,12 @@ class LunoraAdminClient extends LunoraClient {
         topK?: number;
     }): Promise<VectorQueryMatch[]>;
     queryLogArchive(query?: PipelineLogQuery): Promise<PipelineLogPage>;
+    listAdminTokens(): Promise<AdminTokenSummary[]>;
+    createAdminToken(options: {
+        expiresAt?: number;
+        name: string;
+    }): Promise<CreatedAdminToken>;
+    revokeAdminToken(name: string): Promise<void>;
     listKvNamespaces(): Promise<KvNamespaceSummary[]>;
     listKvKeys(options: {
         cursor?: string;
@@ -2610,6 +2747,7 @@ interface ClientSubscribeMessage {
     query: {
         args?: Record<string, unknown>;
         functionPath?: string;
+        sinceClaims?: string;
         sinceEpoch?: string;
         sinceSeq?: number;
         table?: string;
@@ -2773,7 +2911,9 @@ interface ServerErrorMessage {
 
 ```ts
 interface ServerIdentityMessage {
+    claims?: string;
     connectionId?: string;
+    revalidateMs?: number;
     subject: null | string;
     type: "identity";
     whisperAck?: boolean;
@@ -2852,9 +2992,9 @@ interface TabCoordinatorOptions {
     onConnectionStatus?: (status: ConnectionStatus, identity?: string | null) => void;
     onLeaderClaimAnswered?: () => void;
     onStopBeingLeader?: () => void;
-    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void;
-    onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null) => void;
-    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void;
+    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void;
+    onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null, claims?: string) => void;
+    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null, claims?: string) => void;
 }
 ```
 

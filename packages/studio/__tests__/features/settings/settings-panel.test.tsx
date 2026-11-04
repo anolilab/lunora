@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { SettingsPanel } from "../../../src/features/settings/settings-panel";
-import type { SettingsResult } from "../../../src/lib/admin";
+import type { AiOptInLevel, SettingsResult } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import { resetShortcuts } from "../../../src/lib/shortcuts";
 import type { MockClientHooks } from "../../mock-client";
@@ -25,11 +25,15 @@ const renderPanel = (mock: MockClientHooks): ReactElement => (
     </LunoraProvider>
 );
 
-const clientWith = (settings: SettingsResult): MockClientHooks =>
+const clientWith = (settings: SettingsResult, level: AiOptInLevel = "schema"): MockClientHooks =>
     createMockClient({
         query: (reference): unknown => {
             if (reference === ADMIN_FUNCTIONS.getSettings) {
                 return settings;
+            }
+
+            if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                return { available: level !== "disabled", level };
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -140,5 +144,51 @@ describe("settingsPanel", () => {
         await screen.findByTestId("set-empty");
 
         expect(screen.getByTestId("set-empty")).toBeDefined();
+    });
+
+    it("shows where the deployment sits on the AI data-sharing ladder", async () => {
+        expect.assertions(4);
+
+        render(renderPanel(clientWith(SETTINGS, "schema_and_log")));
+
+        // The level is a wrangler var with no readout anywhere else — an operator
+        // whose assistant refused to read a table had nothing to look at.
+        await waitFor(() => {
+            expect(screen.getByTestId("set-ai-level").textContent).toBe("schema_and_log");
+        });
+
+        // Granted up to and including the current rung, withheld above it. The rung
+        // marking is what makes the ladder legible rather than a list of four words.
+        expect(screen.getByTestId("set-ai-tier-schema").dataset["granted"]).toBe("true");
+        expect(screen.getByTestId("set-ai-tier-schema_and_log_and_data").dataset["granted"]).toBe("false");
+
+        // And it names the var to change, which is the only actionable thing here.
+        expect(screen.getByTestId("set-ai-howto").textContent).toContain("LUNORA_AI_OPT_IN");
+    });
+
+    it("still reports the level when the assistant is off, since that is when it is asked", async () => {
+        expect.assertions(2);
+
+        // `disabled` HIDES every assistant surface, so a readout living beside the
+        // assistant would be unreachable to exactly the operator wondering why it
+        // vanished. That is why this card is in Settings.
+        render(renderPanel(clientWith(SETTINGS, "disabled")));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("set-ai-level").textContent).toBe("disabled");
+        });
+
+        expect(screen.getByTestId("set-ai-tier-schema").dataset["granted"]).toBe("false");
+    });
+
+    it("offers no way to raise the level, which would make the ladder a preference", async () => {
+        expect.assertions(1);
+
+        render(renderPanel(clientWith(SETTINGS, "schema")));
+
+        const card = await screen.findByTestId("set-ai-sharing");
+
+        // eslint-disable-next-line testing-library/no-node-access -- asserting the ABSENCE of any control, which no role query can express as a whole-subtree claim
+        expect(card.querySelectorAll('button, input, select, [role="button"]')).toHaveLength(0);
     });
 });

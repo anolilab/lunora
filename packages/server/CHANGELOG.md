@@ -1,3 +1,1842 @@
+## @lunora/server [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.267...@lunora/server@1.0.0-alpha.268) (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+
+## @lunora/server 1.0.0-alpha.268 (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+
+## @lunora/server [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.266...@lunora/server@1.0.0-alpha.267) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.186
+* **@lunora/observability:** upgraded to 1.0.0-alpha.200
+
+## @lunora/server [1.0.0-alpha.266](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.265...@lunora/server@1.0.0-alpha.266) (2026-11-03)
+
+### Bug Fixes
+
+* **sql-store:** let global reads ask for the primary ([#1449](https://github.com/anolilab/lunora/issues/1449)) ([490a8fa](https://github.com/anolilab/lunora/commit/490a8fa203fe2f170e62d71239ca5d54b0b28051))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.168
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.185
+* **@lunora/observability:** upgraded to 1.0.0-alpha.199
+* **@lunora/storage:** upgraded to 1.0.0-alpha.171
+
+## @lunora/server [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.264...@lunora/server@1.0.0-alpha.265) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.85
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.167
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.184
+* **@lunora/values:** upgraded to 1.0.0-alpha.94
+* **@lunora/observability:** upgraded to 1.0.0-alpha.198
+* **@lunora/storage:** upgraded to 1.0.0-alpha.170
+
+## @lunora/server [1.0.0-alpha.264](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.263...@lunora/server@1.0.0-alpha.264) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.166
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.183
+* **@lunora/values:** upgraded to 1.0.0-alpha.93
+* **@lunora/observability:** upgraded to 1.0.0-alpha.197
+* **@lunora/storage:** upgraded to 1.0.0-alpha.169
+
+## @lunora/server [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.262...@lunora/server@1.0.0-alpha.263) (2026-11-02)
+
+### Features
+
+* **scheduler:** add retry.forever and an outbox admin surface ([#1378](https://github.com/anolilab/lunora/issues/1378)) ([b83a9ea](https://github.com/anolilab/lunora/commit/b83a9eacccb29b90981f4b55c30066ef4636e2a2))
+* **shard-engine,do:** read-byte cap, near-limit and unawaited-work warnings, scheduler lag ([#1398](https://github.com/anolilab/lunora/issues/1398)) ([19a42b8](https://github.com/anolilab/lunora/commit/19a42b8c9adf9ecf99b85eab27ceb954a2310687))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.165
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.182
+* **@lunora/values:** upgraded to 1.0.0-alpha.92
+* **@lunora/observability:** upgraded to 1.0.0-alpha.196
+* **@lunora/storage:** upgraded to 1.0.0-alpha.168
+
+## @lunora/server [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.261...@lunora/server@1.0.0-alpha.262) (2026-11-02)
+
+### ⚠ BREAKING CHANGES
+
+* `rls()` and `mask()` return `PolicyMiddleware` instead of
+`Middleware<Context, Context>`.
+* `RegisteredQuery`/`RegisteredMutation`/`RegisteredAction`
+now mean public functions; `internal*` builders return the new
+`RegisteredInternal*` types.
+* a function re-exported from a published package and typed
+as a bare `RegisteredFunction` now fails codegen, since its visibility is
+unknown.
+* `PresenceComponent.extension` is required.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix: keep published functions paid, sensitive and policy-checked
+
+- Load every module re-exporting a function from a published package
+  eagerly under lazy functions. A declaration-file type cannot say whether
+  the function is paid, what its `.meta()` is, or which args are
+  `v.sensitive`, so an unloaded stub let a paid call dispatch free and
+  reported no meta.
+- Mark those functions' client references sensitive, since `v.sensitive`
+  leaves no trace in the type and guessing otherwise could persist a secret
+  in the offline queue.
+- Keep the policy's required context in `PolicyMiddleware`, so attaching
+  `rls()` / `mask()` to a procedure context lacking a field the policies
+  read is a type error again. `RlsContextIn` is exported so such a policy
+  context can be written.
+- Match a package factory by symbol, not by name.
+- Treat a `__proto__` key as non-literal; it sets a prototype instead.
+- Encode each function's meta separately in the admin listing and flag an
+  unencodable one (`metaUnencodable`) instead of failing the whole response.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): gate factory calls and tighten published-function discovery
+
+- Call a package factory during extension resolution only when its declared
+  return type carries a schema extension (`extension` with `tables`), so a
+  side-effecting package export the source happens to call is never run.
+- Map `Id<"table">` arguments of published functions to the `id` kind, so
+  OpenAPI and the SDKs keep their string schema.
+- Count `const { functions } = x` and `x["functions"]` as reading a
+  component's functions, and warn about an unwired component once per
+  codegen run instead of once per inference pass.
+- Declare `sensitiveArgs` on the generated registry type whenever the shard
+  masks sensitive arguments, including for type-derived functions, so the
+  generated shard typechecks.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): resolve default and namespace factories, freeze stub meta
+
+- Resolve `.extend(component.extension)` when the factory behind the
+  component is a default import (`import defineX from "pkg"`) or is called
+  through a namespace import (`pkg.defineX(...)`), not only a named import.
+- Emit a lazy stub's `.meta()` deep-frozen, matching the builder's copy on
+  the loaded function, so a reader cannot mutate it before the module loads.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): keep package tables' ttl, geo indexes and global backend
+
+A schema extension read from an installed package lost three table
+declarations without a warning: its `.ttl(...)` policy (no expiry sweep was
+generated), its geo indexes (absent from metadata and types), and a
+Hyperdrive global backend (wired as D1). The runtime builder exposes all
+three in the IR's own shape, so they are now carried over; a global table
+without a backend normalises to D1, as on the AST path.
+
+Lazy-stub `.meta()` also keeps `Infinity`, `NaN` and `-0`, which
+`JSON.stringify` rewrote, and an overflowing numeric literal (`1e999`) now
+reads as `Infinity` rather than `NaN`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix: discover published streams, keep memory tables, align test harness
+
+- Discover a `.stream()` function re-exported from a published package,
+  with its chunk type from the handler's `AsyncIterable<R>`.
+  `RegisteredStream` gains the same visibility type parameter as the other
+  registration types, so an internal stream is typed as one.
+- Stop marking an argument-free published function sensitive: with nothing
+  to leak it may queue offline. Discovery now refuses a published function
+  whose args type does not list its keys (`any`, an index signature), so an
+  empty args map is proven empty.
+- Carry a package table's `.memory()` flag through runtime introspection,
+  so its rows are still cleared on wake.
+- Type the test harness's top-level `query`/`mutation`/`action`/`subscribe`
+  as public-only again: they reject internal functions at runtime, as
+  production does, and now reject them at compile time too.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): carry every package table flag the IR models
+
+Runtime introspection of a package schema extension still dropped table
+declarations that have an IR field:
+
+- `.softDelete()`: the TTL sweep could not skip tombstones, so expired
+  deleted rows kept the alarm rescheduling.
+- `.public()`: under `.rls("required")` the table would be refused at
+  runtime.
+- `.commitOrdered()` and a declared aggregate index.
+
+They are now mapped like the AST path maps them. An external source has no
+introspectable IR, so it joins the dropped-feature warning instead of
+vanishing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix: route published lifecycle hooks and keep package source tables
+
+- `onConnect`, `onDisconnect` and `onShardInit` now return their moment in
+  the type (`RegisteredLifecycleHook & { readonly lifecycle: "connect" }`),
+  so a hook a published component ships through them can be routed. A hook
+  whose declared type hides its moment fails codegen with advice that fits
+  a hook, instead of the visibility message meant for procedures.
+- Carry a package table's `.source(...)` definition through runtime
+  introspection (binding, columns, mode, query and the reconcile, soft
+  delete and tenant markers the lints read), so the shard still polls and
+  bootstraps it. It previously only warned.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): type published byte arguments as bytes, not objects
+
+A published function's `v.bytes()` argument parses to `ArrayBuffer`, a lib
+interface the type mapper read as an object of its methods, so the client
+api, OpenAPI, MCP schemas and SDKs described a plain JSON object the runtime
+validator rejects. `ArrayBuffer` now maps to the `bytes` kind, and any other
+object type with methods (`Date`) is carried as its TS text instead of a
+bogus object shape.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(codegen): convert package tables' relations, rank and vector indexes
+
+A schema extension read from an installed package had its tables'
+`.relations(...)`, `.rankIndex(...)` and inline `.vectorize(...)` replaced
+with empty lists, with a warning, so the generated data model lacked the
+relation helpers and index names. The runtime builder exposes all three in
+the IR's own shapes, so they are converted like every other table
+declaration; relation targets and the vector index owner stay bare and are
+retargeted by the same namespacing the AST path uses. The dropped-feature
+warning is gone, since nothing it covered is dropped any more.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): unwrap a published handler's direct Promise result
+
+The published-function result type unwrapped `Promise<T>` only as a member
+of a `Promise<T> | T` union, so a handler declared to return `Promise<T>`
+directly gave its client reference a `Promise<T>` result, though dispatch
+awaits the handler and returns `T`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix: keep dropped lifecycle hooks reported, refuse published rooms clearly
+
+- `RegisteredLifecycleHook` is generic over its moment
+  (`RegisteredLifecycleHook<"connect">`), and `onConnect`, `onDisconnect`
+  and `onShardInit` return it. The previous anonymous intersection carried no
+  type name, so the dropped-registration check no longer reported a hook
+  exported through a factory, and it silently never fired. Hooks are also
+  typed internal, as the runtime stamps them.
+- A room re-exported from a published package now fails codegen with advice
+  that fits a room (its name is not in the declared type, so it cannot be
+  routed), instead of the procedure visibility message.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* refactor(codegen): read the published room channel property once
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix: require the internal marker wherever a type claims internal
+
+Dispatch refuses a client call by the value's own `visibility` marker, but
+for a published package codegen can only read the declared type. A type
+like `RegisteredStream<A, R, "internal">` has an optional `visibility`, so a
+value could omit the marker: codegen kept the function out of the client
+api while dispatch still served it.
+
+- `RegisteredInternalQuery`/`Mutation`/`Action` and the new
+  `RegisteredInternalStream` require `visibility: "internal"`; internal
+  builders return them.
+- Codegen accepts a published internal function only when its type makes
+  the marker required, and names the `RegisteredInternal*` types otherwise.
+- `.extend(x.extension as T)` (or `satisfies`, parentheses) is unwrapped
+  before resolution, so a cast no longer drops the extension.
+* a published component that declares an internal function as
+`RegisteredQuery<A, R, "internal">` (optional `visibility`) now fails
+codegen; declare it with `RegisteredInternalQuery` and friends.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): keep package columns' sensitive marker and bigint literals
+
+- Runtime introspection of a package schema extension dropped a column's
+  `v.sensitive` marker, so a `v.sensitive(v.literal(secret))` column wrote
+  the secret into every generated schema, which redact only on that flag.
+  The marker is now carried, at every depth.
+- A published argument typed by a bigint literal (`v.literal(5n)`) now
+  keeps its exact-value constraint instead of falling back to an opaque
+  type.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): keep published literal values out of generated schemas
+
+A published function's argument is rebuilt from its declared type, which
+cannot show `v.sensitive`. A literal there could be the very secret the
+marker guards, and it reached generated OpenAPI/OpenRPC schemas as a
+`const`. Type-derived literals are now marked sensitive, so the schemas keep
+their type and drop the value; the client types still narrow to it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): await every member of a published handler's result type
+
+A handler declared `Promise<A> | B` gave its client reference `A` alone:
+the result reader took the promise's type argument and dropped the other
+members, though dispatch awaits whatever the handler returns. Each member is
+now awaited and rendered through the shared return-type checks, joined
+into one union.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix: record package columns' bounds without a false deploy block
+
+Codegen read a package extension's tables at runtime and dropped every
+`.min()`/`.max()`, so a bound added to or removed from a package column was
+invisible to the deploy gate.
+
+- Runtime introspection now marks such a column refined (and carries a
+  string's `maxLength`), the way the AST path does.
+- A package table's snapshot carries `refinementsRecorded`. A baseline
+  without it never recorded those bounds, so the gate skips the refinement
+  comparison for that table once instead of reporting every bound the
+  column always had as newly gained; after one re-blessed baseline the check
+  is live. An app's own tables are unaffected.
+- `migrate generate` no longer reports a bound-only change as a column type
+  change to fix with manual SQL: a `.min()` changes no column, and the
+  deploy gate already reports what it means for stored values.
+
+The payment-demo and privacy snapshots gain the bounds and the marker; the
+gate reports no change between their previous and new snapshots.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(errors): register the published-function and procedure-meta codes
+
+`PUBLISHED_FUNCTION_UNSUPPORTED`, `PUBLISHED_FUNCTION_VISIBILITY_UNKNOWN` and
+`PROCEDURE_META_UNLOADED` were minted without a catalog entry, which the
+repo-wide catalog registration test rejects. They are now catalogued (the two
+codegen codes with the other build-time diagnostics, mapped to exit code 2
+like them), and the generated error reference is regenerated.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): resolve documented component options, keep published kinds
+
+- Fold numeric arithmetic over literal operands (`60 * 60 * 1000`) when
+  evaluating a package factory's options, so the documented
+  `defineActionCache({ ttlMs: 60 * 60 * 1000 })` and
+  `defineDocumentHistory({ retentionMs: … })` wiring resolves its tables
+  instead of dropping them. The skipped-extension hint names every
+  standalone extension, not only presence's.
+- A published function's `v.timestamp()`/`v.date()` argument maps to the
+  timestamp kind, `v.object({})` to an empty object, and `v.geoPoint()` to
+  geoPoint, read from the validator's own interface or the named value type
+  where the parsed value type alone (`number`, `{}`, a plain object) loses
+  them.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* close silent gaps in presence, policy typing and meta ([#1439](https://github.com/anolilab/lunora/issues/1439)) ([053213d](https://github.com/anolilab/lunora/commit/053213d99a83e0e1b88b9a155184993b35473fa4))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.164
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.181
+* **@lunora/values:** upgraded to 1.0.0-alpha.91
+* **@lunora/observability:** upgraded to 1.0.0-alpha.195
+* **@lunora/storage:** upgraded to 1.0.0-alpha.167
+
+## @lunora/server [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.260...@lunora/server@1.0.0-alpha.261) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.163
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.180
+* **@lunora/values:** upgraded to 1.0.0-alpha.90
+* **@lunora/observability:** upgraded to 1.0.0-alpha.194
+* **@lunora/storage:** upgraded to 1.0.0-alpha.166
+
+## @lunora/server [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.259...@lunora/server@1.0.0-alpha.260) (2026-10-31)
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** `lunora deploy --preview` is refused on every target.
+`DeployRequest.preview` (@lunora/config) and `DeployedIdentity.preview` (the
+`--format json` deployment block) are removed, and the scaffolded CI job is
+renamed from `preview` to `check`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* feat(cli): add import/restore modes with a plan and safe replace
+
+`lunora import` and `backup restore` could only append (or, with `--replace`,
+overwrite matching `_id`s), so restoring into a populated deployment silently
+mixed old and new rows. `--mode` now chooses:
+
+- append: insert, an existing `_id` is a conflict (import default)
+- upsert: overwrite an existing `_id` (the old `--replace`)
+- replace: upsert, then delete the stored rows of the file's tables the
+  file lacks; tables the file does not name are never touched
+- require-empty: refuse unless those tables are empty (restore default)
+
+Every mode but append first reads the target's rows for the file's tables
+through the admin export route and prints a per-table plan (add / overwrite /
+delete). `--dry-run` stops there. Overwriting or deleting asks on a TTY and
+needs `--yes` otherwise.
+
+replace never clears first: it writes every file row, and deletes only after
+that write came back clean, via new `op: "delete"` import rows that route to
+the shard their doc names. A failed run leaves old rows plus what was
+written, never fewer, and re-running converges. Deletes are hard and an
+already-gone `_id` is a no-op. The shard plane (@lunora/shard-engine) and the
+global plane (@lunora/sql-store, so D1 and Hyperdrive) both apply delete rows;
+the runtime refuses global deletes unless `importGlobalsSupportsDelete` is
+set, which the emitted worker options now do. The import route is
+host-neutral, so Cloudflare, Node and celld behave the same.
+* **cli:** `lunora import --replace` and `lunora backup restore
+--replace` are removed; use `--mode upsert`. `backup restore` now defaults to
+`--mode require-empty`. `ImportShardResult`, the sql-store `ImportResult`
+and the admin import response gain a `deleted` count.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* feat(cli): let the drift gate check stored rows before blocking
+
+The deploy gate judged schema files only: it blocked a tightening the data
+already satisfied, `--update-schema-baseline` accepted one the data broke, and
+the identity `up` that `lunora migrate create` scaffolds cleared the gate the
+moment it existed.
+
+`lunora deploy` now reads the stored rows of each table a blocking change
+touches, through the runtime's admin export (every shard and the global
+plane; the same route on Cloudflare and celld), and runs the new validators
+from the codegen IR on the changed fields. Every row fits: the change passes
+and the baseline advances on success. A row does not fit: the gate stays
+blocked and names up to ten rows by table, _id, field and reason, never a
+stored value, shard key or record key. The target is the env-guarded `--migrate-url` or the
+project link plus LUNORA_ADMIN_TOKEN; without one the block stands.
+
+A check that cannot be completed never passes: unique columns and indexes,
+TTLs, field constraints, refinements other than a literal `.max(n)`,
+unresolved validators, a repointed `v.id()`/`v.storage()`, and a missing
+target or failed read all keep the gate's answer.
+`--update-schema-baseline` now runs the same check for every
+change rows can settle and refuses otherwise; changes rows cannot settle (an
+index, a call site) it still accepts. With `--allow-schema-drift` as well,
+the run ships but the baseline advances only if the rows confirm it.
+Codegen marks a migration whose `up`
+returns its document unchanged as `identity`, and such a migration covers
+nothing. `DriftChange` gains the `field` it concerns, `SchemaDriftDecision`
+the `uncovered` changes, and `CodegenResult` the parsed `schemaTables`.
+* **cli:** `lunora prepare --update-schema-baseline` refuses a change only
+stored rows can confirm (it reads no deployment) and points at `lunora deploy`.
+`lunora deploy --update-schema-baseline` refuses while a stored row does not
+fit or the rows cannot be read. An identity `defineMigration` no longer covers
+a breaking change. `runSchemaDriftGate` is async. `@lunora/wire` moves to the
+CLI's runtime dependencies.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* chore(api): record import modes and the row-checked drift gate
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): take drift-gate row evidence only from the deploy target
+
+The stored-row check read whatever `--migrate-url` or the link named, so a
+local dev worker, or another environment's worker whose rows happened to
+fit, could clear a tightening that then shipped to a production whose rows
+do not. The URL now has to be the deployment this run ships to: a local or
+private address is refused, a URL other than the one linked for this `--env`
+is refused, and a `*.workers.dev` URL must carry the Worker name Wrangler
+deploys for the `--env`. A refused URL keeps the gate blocked and the
+message names it and why.
+
+The scaffolded production CI job now runs `lunora deploy --migrate-url` with
+LUNORA_DEPLOY_URL and LUNORA_ADMIN_TOKEN from the provider's secrets, so the
+row check can run there, and drops the preceding `lunora prepare`, which
+blocked before the deploy could check (deploy runs the same gates).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(cli): share the overwrite predicate and drop row-check casts
+
+Move `overwrites` into import-plan so reportPlan and planDestroysRows use it
+instead of spelling the same mode check twice more. isRowCheckable is now a
+type guard, so planCheck no longer casts table/field, and the unused
+StoredRowFailure type export is gone.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(cli): drop --preview from the deploy synopsis and skill
+
+The deploy synopsis and the deploy skill still listed `--preview`, which the CLI now refuses, and
+the environments page promised per-pull-request isolation the scaffolded pipeline does not do.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): tie the row-check target to its path, env and routes
+
+The drift gate's row source was compared with the link by origin only, ignored a link recorded for
+another env, and took any custom domain on trust. Two paths on one host can be two Workers, so the
+path now counts; a URL linked to another env is refused; and a custom domain must match a
+`route`/`routes` pattern the deploying env declares in the Wrangler config, and is refused when it
+matches another env's route. A project with no routes at all still has nothing to compare with.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): check record keys in the stored-row check
+
+The row check validated a changed `v.record()` field's values but never its keys, so tightening the
+key validator passed rows whose keys the new schema rejects. Keys are now checked against `keyType`
+and reported as `[*]`, never by name.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): keep stored text out of export read errors
+
+The export reader's errors quoted the HTTP error body, a slice of a non-row line and, through
+`JSON.parse`, a fragment of a malformed line. The drift gate prints those messages, so stored values
+could reach CI logs. They now name only the status, line number and line length.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(runtime): honour delete import rows only under ?deletes=true
+
+The admin import endpoint treated any line carrying `op: "delete"` as a hard delete, and the CLI
+forwards file lines unchanged, so a change-feed dump imported under the default append mode could
+remove stored rows with no plan and no prompt. A delete row now counts only on a request that sets
+`?deletes=true`, which only the `--mode replace` prune sends; anywhere else it is a BAD_ROW.
+* **cli:** an admin import that sends `op: "delete"` rows must add `?deletes=true`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(shard-engine): prune import deletes without onDelete actions
+
+An import's delete row went through the full ORM delete, so `--mode replace` with a partial file
+cascaded or nulled holder rows in tables the file never names, and a global row with shardBy holders
+failed outright. The writer's delete takes `skipOnDelete`, which both import planes now pass: the
+row goes, triggers still fire, and no other row changes. The docs say a holder outside the file
+keeps its reference.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* chore(api): record the import delete option
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): hold the replace prune behind --verify and fresh file rows
+
+The prune ran before `--verify`'s parity and storage checks, so a run those checks fail could still
+delete the planned rows. They now run first and block the prune. The write pass also indexes the
+rows it sends, and the prune skips any planned deletion the file now carries, so a file that changed
+between the passes never loses its newer row.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(shard-engine): refuse unknown import ops and failed delete probes
+
+The direct shard import RPC dropped an `op` other than "delete", so a misspelt delete was inserted
+as a document; it is now kept and refused as a BAD_ROW. A delete row whose ownership probe threw
+counted as already absent, so a replace prune could report a clean run over a row it never removed;
+the probe failure is now the row's error.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): check geoPoint ranges and refuse unknown kinds in the row check
+
+A stored geoPoint passed with any finite lat and lng, though `v.geoPoint()` limits them to ±90 and
+±180. A validator kind the checker has no rule for now makes the check inconclusive at planning,
+instead of failing every row it reads.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): resolve the row-check URL like the deploy and refuse mapped IPv6
+
+The row check read `--migrate-url` raw, so an empty value was refused as a URL and the link for the
+`--env` never stood in for a missing one. It now resolves the URL the way the deploy's migrate step
+does. An IPv4-mapped IPv6 host (`[::ffff:127.0.0.1]`) is checked as the IPv4 address it carries, so
+a loopback or private address in that form is refused.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(codegen): see an identity migration through wrapping parentheses
+
+`up: ((doc) => doc)` was not recognised as an identity, so the scaffold-style empty migration could
+still cover its table in the drift gate. The initializer is unwrapped before the check.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(cli): say a replace prune still fires delete triggers
+
+The prune skips `onDelete` actions, not triggers, and import inserts fire theirs too. The docs and
+the writer option's comment claimed no other row could change; they now say a trigger still runs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(cli): tell restores to stop writes to the target
+
+`require-empty` and `replace` act on a read of the target taken before the write, so a row
+written in between can slip past either. The docs now say to stop writes while a restore runs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* perf(cli): skip the upsert plan read under --yes
+
+An upsert read every stored row of the file's tables only to count `_id` matches for its prompt, so
+`--mode upsert --yes` (and `migrate … --replace`) paid a full export, which can exceed the export
+route's per-shard memory on a large table. With `--yes` and no `--dry-run` it now plans nothing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): pass --format to the import a backup restore runs
+
+`backup restore` called the import without its output format, so the import's json guard never
+fired: a `--format json` restore on a TTY that needed confirmation drew the prompt on the stdout the
+json summary owns. It now refuses there and asks for `--yes`, like `lunora import`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): accept an unlisted custom domain only when no env has routes
+
+An env without routes of its own accepted any custom domain as the row-check target even when other
+envs declared routes. Only a project that declares no routes anywhere now takes a custom domain
+as given, as the docs say.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): dry-run a replace's deletes before writing anything
+
+The worker probe only checked that deletes are reported, not that every planned delete is taken. A
+worker whose `.global()` importer cannot delete passed it, the shard deletes landed and the prune
+stopped at the first global batch on every re-run. The planned deletes now go through a dry run
+first, and a refusal stops the import before any row is written.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(codegen): mark a v.object whose shape could not be read
+
+An unresolved v.object(expr) (built at runtime, a cyclic or unreadable
+spread, or no argument) parsed to an empty shape, which the stored-row
+check treated as a real empty object. An old `{}` value then passed the
+drift gate although the runtime shape requires properties.
+
+Add `unresolvedShape` to the validator IR and make the row check report
+such a field as inconclusive instead of validating it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): reject an export that ends inside a row
+
+The export reader delivered whatever text remained at end of stream as a
+final row. The runtime newline-terminates every row, so a parseable
+remainder is a response cut off mid-row, yet the row check or import
+plan treated the export as complete. Throw instead.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(shard-engine): require the deletes opt-in on the shard import RPC
+
+The `?deletes=true` opt-in was enforced only by the runtime NDJSON
+parser. A direct `__lunora_admin__:importShard` call (the batch path
+Studio uses) hard-deleted any row tagged `op: "delete"` without it.
+
+Carry a `deletes` flag from the import request through the fan-out to
+the shard, and refuse delete rows as BAD_ROW, checked or not, unless it
+is set.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(cli): stop saying deploy --preview runs the drift gate
+
+The deploy skill still described `lunora deploy --preview` as running
+the schema-drift gate, but the flag is refused. A non-live version can
+only come from `wrangler versions upload`, which skips the gate.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(api): record the string-typed import row op
+
+ImportRow.op widened to string so a misspelt op is refused rather than
+read as an insert; the snapshot still pinned the literal "delete".
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): never trust a workers.dev row-check target on its name
+
+A *.workers.dev host passed the row-check target test when its first label
+matched the Worker name, but the account subdomain after it cannot be read
+from the config, so a same-named Worker in another account passed and was
+sent the admin bearer. Such a target is now accepted only when the project
+link for the deploy's env names it; otherwise the check is inconclusive
+and the message says how to link or confirm the drift.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(cli)!: end every export with a row-count marker
+
+A response or file cut on a row boundary is still valid NDJSON that reads
+as a smaller export, so a short export passed as complete to the drift
+gate, the import plan and a restore.
+
+Every export now ends with `{"end":true,"rows":N}`. The runtime export and
+the scheduled backup write it; `lunora export`, the row reads, `lunora
+import` of an NDJSON file and Studio's shard import refuse a stream with no
+marker, a count that differs from the rows read, or anything after it,
+before any row is written. The runtime import endpoint applies the same
+check when a body carries a marker. `lunora seed` and Studio's export write
+it too.
+* **cli:** NDJSON files without the end marker (older exports and
+backups, hand-written files) no longer import until a marker line is added.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(cli): say a replace import needs writes stopped, and why
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(sql-store): prune global rows on a replace import
+
+prepareRow called deleteOneRow with a writer, dialect and args it does not
+have, and returned its promise as a prepared row. Every delete row for a
+.global() table on D1 or Hyperdrive threw a ReferenceError, so a replace
+restore could not prune them.
+
+Prepare a delete as its own entry and apply it in the import loop, where
+the writer is in scope, so it is counted as deleted and a dry run writes
+nothing.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): count a repeated _id in the import plan as an overwrite
+
+The plan counted every source row but deduplicated source ids, so each
+repeat of an _id raised the add count and lowered the overwrite count,
+although the importer inserts the first copy and overwrites it with the
+next. Track repeats per table and count them as overwrites.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): let rows confirm a bigint literal field
+
+A v.literal(1n) source text stayed the string "1n", which never equals a
+stored bigint, so every row of a changed bigint literal field was listed
+as a failure and the gate stayed blocked. Read it as a bigint.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(cli): say what the scaffolded CI gate can and cannot read
+
+.lunora/ is not committed, so CI has no project link and a *.workers.dev
+target is not read there. Say so in the scaffolded pipelines and the
+docs, add the end-marker rewrite step to the migration skill, and cover
+that a compatible change passes a dry-run with no URL or token.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* test(runtime): expect the export end marker in the workerd backup test
+
+The scheduled backup now ends its NDJSON with the end marker readers use to tell a complete export
+from a truncated one, so the R2 object holds the two rows and then {"end":true,"rows":2}. Assert
+the marker instead of a two-line file.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): keep GitLab production secrets out of merge-request pipelines
+
+The scaffold asked for masked variables only, so a merge-request pipeline,
+which runs the project's own code, could read the admin token. Ask for
+Masked and Protected variables scoped to the production environment, have
+the deploy job declare environment: production, and pin that the check job
+references none of them.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(cli): say how to make a pre-marker export importable
+
+A file without an end marker is refused with a message saying it predates
+the marker (or was cut short) and how to append one after checking it is
+complete; the backups page and the alpha migration guide say the same.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(studio): offer the import modes, plan and prune in the import panel
+
+Studio only sent onConflict, so replace and require-empty and the prune of
+rows the file lacks were CLI-only. Add the same four modes for the shard,
+a plan that writes nothing, and the replace prune through the shard RPC:
+the deletes are checked first, sent with deletes: true, and run only after
+every file row is written.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(studio): record the import modes in the api snapshot
+
+The import result gains an optional `deleted` count and the import panel its mode, plan and
+delete messages.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): make replace refuse what it cannot do safely
+
+The delete check ignored shards it could not reach, so a replace wrote the file
+and pruned only the reachable shards. Rows with no _id were written under new
+ids on every run while the prune deleted the previous run's copies, so replace
+now refuses them. The overwrite confirmation counted a file repeating its own
+_id as an overwrite of stored rows, a dry run kept every planned delete in
+memory, and the plan took a bare JSON.parse of its own line.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): carry the restore plan in backup restore's json result
+
+backup restore --dry-run --format json computed the per-table plan in the import
+leg and then dropped it. Put it in the result document.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): read NULL in a removed global column as unset
+
+A .global() column that was never set is stored and exported as SQL NULL, so
+dropping it listed every row as still holding it and kept the deploy blocked.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): tie the row-check target to its route path and the current config
+
+Routes on one host that differ only by path (example.com/prod/* and
+example.com/staging/*) were one route, so another env's URL passed. A project
+link also vouched for its URL without being held against the Worker name and
+routes Wrangler deploys now. Compare the path, and check a linked URL against
+the current config.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(runtime): count the end marker against the scheduled backup cap
+
+A snapshot whose rows ended within a marker's length of the cap was stored over
+it. Check the size again after the marker, before anything is written.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(studio): report a failed prune as one, and keep the plan and labels honest
+
+A delete failing after every file row was sent showed the file-row resume text,
+which points at a line already sent. Say the file is written and the prune
+failed. Drop a shown plan when the file, shard or mode changes, word the upsert
+option for what it does, and stop the upsert confirmation mentioning deletes.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(cli): say a worker must be redeployed before the CLI that needs its marker
+
+A worker from before the end marker does not write it, so the new CLI refuses its
+export until it is redeployed; the deploy skill also overstated that every
+non-live version skipped the drift gate.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(studio): assert the upsert option exists, format the import, refresh ai knowledge
+
+The upsert wording test compared an element to `true`, so it could never pass; it now checks the
+element it found. `admin-export-import.ts` gets its Prettier formatting, and the generated
+`shared/ai-knowledge-data.ts` is rebuilt from the current docs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): compare hosts in one spelling and hold a linked domain to its routes
+
+A hostname with a trailing dot (app.acme.workers.dev., localhost.) is the same host
+in DNS but missed every suffix and equality test, so an unlinked workers.dev
+target or a local address passed as a custom domain. Canonicalise the host once
+before any comparison. A linked custom domain is now also checked against the
+routes the current env deploys, so a link kept after a route moved cannot vouch
+for the old URL.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): treat a v.literal it cannot evaluate as uncheckable
+
+A literal whose source is a constant, an expression, a template with a
+substitution or a numeric form like 1_000 was compared as raw text, failing
+every row or passing a row that spelt the source. Resolve plain literals and
+report the rest as inconclusive.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): validate the plan's parsed line without casts, pin the mixed-decision block
+
+Read the wire row through a plain-object guard instead of a cast, and pin that
+conforming rows never clear a decision that also holds a change rows cannot
+decide unless --update-schema-baseline is passed.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* test(d1): assert the delete test removes the row, add workerd coverage for replace pruning
+
+The dry-run delete test now checks the real run removes the row. A workerd test
+drives a replace restore on real D1: overwrite, then a checked, counted and
+repeatable prune.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(cli)!: remove --update-schema-baseline, settle its two cases in the gate
+
+The flag accepted a new baseline on the operator's word, including changes no
+stored row could confirm. The two cases it existed for are now handled by the
+gate itself:
+
+- A dropped index (unique or not), or an index reshaped without becoming
+  unique, is safe: it cannot invalidate a stored row. The baseline advances
+  with the deploy.
+- A new unique index, an index that becomes unique, or a field that becomes
+  unique is verified against the table's stored rows. The deploy is refused,
+  naming the repeating rows by _id and never printing a value, while any
+  value repeats or the rows cannot be read. NULLs never repeat and a
+  .shardBy() table is compared per shard.
+
+--allow-schema-drift remains the one-run override: it checks nothing and
+leaves the baseline unchanged. `lunora prepare` reads no deployment, so for
+a change only stored rows can confirm it refuses and points at `lunora
+deploy`. An unreadable baseline now says to fix or delete it. The codegen
+`updateSchemaBaseline` option and the dead gate paths are gone.
+* **cli:** `lunora deploy` and `lunora prepare` no longer accept
+--update-schema-baseline (it is an unknown-option error), and
+CodegenOptions.updateSchemaBaseline is removed. DriftChange gains an
+optional `uniqueOn`; a removed index is now a safe change.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(cli)!: classify schema drift by what it can do to stored data
+
+Nothing the gate cannot verify is left needing a baseline reset. Changes that
+cannot make a stored row invalid no longer block, and warn instead:
+
+- a dropped table (its rows are left in place), a dropped relation, a TTL
+  added, moved or shortened (with the count of rows the next sweep deletes
+  when the deployed worker can be read) and .commitOrdered() turned off;
+- a dropped index, which is refused only while a function still names it
+  through withIndex (codegen now returns every withIndex read), with the
+  function named.
+
+A shard-mode flip, a table turned .memory() and a jurisdiction change still
+block, because they move or empty data, and now clear once a new migration
+accompanies them; the message shows an export/import example. A migration
+whose up is a named identity function is treated as the no-op it is, and one
+that cannot be resolved as a real transform.
+* **cli:** DriftChange gains warning, expiry and index; CodegenResult
+gains indexReferences; the removed table, relation, TTL and commit-ordering
+changes are safe instead of breaking.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): key unique constraints as SQLite does, and accept an absent v.any()
+
+A unique key now treats true and 1 as one value, as SQLite's index does, and is
+a JSON typed tuple so no value can imitate a separator. A required v.any()
+field no longer fails every row that lacks it, as the runtime accepts it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): pick the most specific route when tying a target to its env
+
+Cover all of fe80::/10, not inherit the top level's routes into an env that
+declares an empty list, tell the top level from env.production, choose the
+most specific route a URL matches instead of any other env's, and compare
+paths before another env's link refuses a URL.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): confirm an overwrite only when a stored row is matched
+
+Count the stored rows an _id of the file matches separately from repeats within
+the file, and ask for confirmation on that count.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(sql-store): report a delete whose companion write failed as landed
+
+A hard delete removes the row before its companion and after-delete trigger
+writes run. A failure there is now marked post-commit, so the import says the
+row was deleted instead of reporting a plain failure.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(studio): reject keyless rows in replace, drop stale plans, split the card
+
+Replace refuses rows with no _id, a plan that settles after the mode, shard,
+file or CSV table changed is not shown, and the import half of the panel is its
+own component with the failure reporting in a helper.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(server)!: clear data-moving drift only for a migration that names it
+
+A shard-mode flip, a table turned .memory() and a jurisdiction change moved
+or emptied data, and any new migration on the table (or, for a jurisdiction
+change, any migration at all) cleared them. An unrelated migration no longer
+does.
+
+defineMigration takes a typed `covers` declaration, read statically by
+codegen: `{ table, shardMode }`, `{ table, memory: true }` or
+`{ jurisdiction }`. The gate clears such a change only when some new
+migration's `covers` matches it exactly (the mode a table moves to, or the
+jurisdiction the schema moves to, `none` when removed). Where a table is
+involved the migration must also iterate it with an `up` that rewrites rows;
+a jurisdiction change has no table, so `covers` alone is the acknowledgement.
+A missing, different or unreadable `covers` keeps the block, and the message
+names what to declare, with an example.
+* **cli:** a shard-mode flip, .memory() and a jurisdiction change are no
+longer cleared by a migration that does not declare `covers`. DriftChange
+gains `coverage`; MigrationIR gains `covers`; MigrationDefinition gains
+`covers`.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): refuse 0/8, 100.64/10 and 198.18/15, and keep a wildcard route off its apex
+
+A mapped 0.0.0.0, a carrier-grade NAT address or the benchmarking range passed the
+target check and so received the admin bearer. They are private now. A route for
+*.x.com matched x.com itself, but Cloudflare matches subdomains only, so the apex
+could be classed as this env's route.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(server)!: block a new or shorter TTL until a migration declares it
+
+A new, moved or shorter TTL deletes the rows already past the cutoff on the next
+sweep, which a warning let through. It now blocks like a shard-mode flip: a new
+migration clears it by declaring covers: { table, ttl: { field, after } } and
+rewriting rows on that table. The blocked message counts the stored rows the sweep
+would delete when lunora deploy can read the worker, and says so when it cannot.
+A longer or removed TTL keeps every row and only warns.
+
+Turning .commitOrdered() on is backfilled by a migration that returns each row
+unchanged, because rewriting stamps the sequence, so the identity placeholder is no
+longer called a no-op for it.
+* **cli:** a TTL added, moved or shortened blocks until a migration declares
+it in covers. MigrationCovers gains ttl; DriftCoverage gains ttl; DriftChange gains
+identityRewrites.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(lunora): update the api snapshot for MigrationCovers
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **cli:** row-checked drift gate, import modes, refuse shared-state previews ([#1399](https://github.com/anolilab/lunora/issues/1399)) ([958c9c7](https://github.com/anolilab/lunora/commit/958c9c7735d1cb79e42c78ca4c21a40cfface288))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.179
+* **@lunora/observability:** upgraded to 1.0.0-alpha.193
+
+## @lunora/server [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.258...@lunora/server@1.0.0-alpha.259) (2026-10-31)
+
+### ⚠ BREAKING CHANGES
+
+* **scheduler,runtime:** Scheduler.get (and @lunora/server's ctx.scheduler.get)
+returns a ScheduledJobView with a required state and answers for finished
+jobs instead of null. The Node scheduler host keeps succeeded and canceled
+rows instead of deleting them.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* feat(scheduler): record cron runs and skip overlapping ticks
+
+Cron fires recorded nothing, and a run that outlasted its interval ran
+concurrently with the next tick.
+
+Each cronJobs() job now runs under a per-job lease held in the SchedulerDO
+(POST /cron/begin, /cron/end): Cloudflare delivers cron triggers to any
+isolate, so module state cannot see a run elsewhere, and the DO's input
+gate makes the check-and-set atomic. A tick that finds the lease held is
+skipped and recorded; the holding run counts it. A lease older than the
+fifteen-minute scheduled() wall clock is treated as lost and recorded as a
+failed run. Every fire is kept (start, end, duration, status, error,
+skipped count), the newest 50 per job. Studio's "Run now" answers
+409 CRON_JOB_IN_FLIGHT while a run is going.
+
+The worker fails open: with no schedulerDO, or one that cannot be reached,
+the run goes ahead unguarded and a warning is logged, rather than a
+scheduler outage stopping every cron.
+
+Surfaces: GET /cron/runs on the DO, /_lunora/admin/scheduled/cron-runs,
+the admin client's listCronRuns, and Studio's Cron triggers view (last run
+per job, recent-run history). Cloudflare and celld capability notes state
+the lease; Node rates cronTriggers unsupported, so there is no runtime
+path to guard there.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* feat(runtime): pause and resume a deployment
+
+There was no way to stop functions, scheduled jobs, crons and queue
+consumers during an incident short of a redeploy.
+
+The pause flag is durable in the SchedulerDO (meta:paused, GET/POST
+/pause). While it is set the alarm holds every job in place (header,
+index and attempts untouched) and deletes its clock rather than spin on
+past-due rows; resume re-derives the clock and the held jobs run.
+/cron/begin skips and records the tick (reason "paused").
+
+The worker reads the flag per isolate with a 5 s cache (fail open) and:
+answers app function calls (rpc, batch, ws, REST, socket and voice routes)
+with 503 DEPLOYMENT_PAUSED and Retry-After; lets admin-bearer calls,
+the admin plane, health, auth and the scheduler's dispatch callback
+through so the operator can inspect and resume; hands queue batches back
+with a 300 s retry (each spends a delivery attempt, stated in the docs);
+answers Studio's Run now with 503.
+
+Entry points: GET/POST /_lunora/admin/pause (PAUSE_NOT_CONFIGURED without
+a schedulerDO, and GET reports supported: false), the admin client's
+getDeploymentPause / setDeploymentPause, `lunora pause [status]
+[--reason]` and `lunora resume`, and Studio's banner on every page while
+paused (with Resume) plus a toggle on the Schedule tab. New error codes
+DEPLOYMENT_PAUSED, PAUSE_NOT_CONFIGURED, CRON_JOB_IN_FLIGHT.
+
+Platform: new advisory deploymentPause capability, emulated on Cloudflare
+and celld (SchedulerDO-held), unsupported on Node (no SchedulerDO).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* chore(api): record job lifecycle, cron runs and deployment pause
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* test(scheduler): expect the cancel outcome row after a mid-dispatch cancel
+
+The job now keeps a done: record when cancelled; the test still fails if the
+failed attempt re-arms the job.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(runtime): tidy pause and cron-run edits
+
+Scope the cron loop's no-await-in-loop disables to their lines, move the queue
+pause check above the comment it had split from its code, drop a redundant
+completedAt guard in the Studio job history (formatTimestamp already falls
+back), and undo stray blank-line churn in PlatformCapabilities.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(playground): read job-status from the scheduler's lifecycle state
+
+get() now keeps succeeded, failed and canceled jobs for the retention window, so a non-null
+record no longer means the job is still pending. Branch on state instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(runtime): let adminGate operators through a deployment pause
+
+The pause refused a function call before any adminGate grant was recorded, so an Access-only
+operator (no bearer) was locked out of RPC while paused. Read the flag first and evaluate the
+gate only when paused, so ordinary traffic still never pays for it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(runtime): hold raw crons and tenant queue batches while paused
+
+The pause only gated cronJobs() and the native queue() entry. A raw crons handler still ran on
+every tick, and a Workers-for-Platforms tenant's forwarded batches (POST /_lunora/queue) were
+consumed. Skip the raw handler and answer a forwarded batch with every id in retry. The built-in
+backup keeps running: it executes no app code.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): stop a running drain from dispatching after a pause
+
+alarm() read the pause flag once, so records queued behind in-flight dispatches still started
+after a pause landed. Re-check the flag before each claim and leave the due-time index in place,
+and keep rescheduleAlarm() from arming a past alarm while paused.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): keep a job that ran from reading as canceled
+
+A cancel landing mid-dispatch wrote canceled even when the kick then went through, and a cancel
+on a header left behind by a failed post-dispatch cleanup overwrote the succeeded row. Rewrite
+the outcome to succeeded when the raced kick succeeds (only while the row is still this record's
+and the id is not reused), and treat a header beside an outcome row as residue to clean up.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): clear a stale failed outcome when a dead job is retried
+
+A dead-letter purge writes its failed outcome before dropping the dead row. If that drop failed
+and the job was then retried, /get read the leftover failed row ahead of the new pending header.
+/dead/retry now deletes the outcome row first.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): keep real cron runs in history through skipped ticks
+
+Cron history was keyed by start time, so a run that held its lease through 50 skipped ticks
+was trimmed the moment it was recorded, and a long pause evicted every earlier run. Key rows by
+end time and fold consecutive same-reason skips into one row whose skipped count is the streak.
+/cron/runs also reconciles a lapsed lease into a failed run instead of showing it in flight
+until another tick arrives.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): let the outcome sweep keep up with load and cancels
+
+One 64-row batch per alarm that found due jobs could fall behind a 100-job drain, and a
+cancel-only workload never swept at all. Sweep up to four batches, on every alarm and after
+each cancel and dead-letter purge.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(client): page scheduled-job history by cursor
+
+listScheduledHistory dropped the scheduler's continuation cursor, so outcomes past the first 100
+within the retention window were unreachable. It now takes { cursor } and returns
+{ records, cursor? }, and Studio's History view loads older pages on demand.
+* **scheduler,runtime:** LunoraAdminClient.listScheduledHistory returns a ScheduledHistoryPage instead
+of an array.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(studio): keep the pause banner through a failed status poll
+
+Every rejected pause read fell back to not-paused, so one network blip or 5xx during a pause
+hid the banner until the next good poll. Only an older worker's 404 means unsupported now;
+other errors rethrow and the query keeps its last state.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* chore(api): record the paged scheduled-history client surface
+
+listScheduledHistory now takes a cursor and returns ScheduledHistoryPage.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(cli): note what else a pause holds and lets through
+
+Raw crons handlers and forwarded tenant queue batches are now held; the scheduled backup and
+adminGate-authorized operators are not.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* test(scheduler): await the dispatch-entered milestone, not a timer turn
+
+The cron-overlap and lifecycle tests waited a zero-delay timer before asserting on an in-flight
+dispatch. They now await a promise the blocking double resolves when that dispatch begins. Also
+separate a run's end from the last skipped tick in the cron-history test, whose shared end
+time made the row order depend on the random run id.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): keep the pause flag until resume has re-armed the clock
+
+Resume deleted the flag before re-arming the alarm, so a failed arm returned an error with
+the deployment unpaused and held jobs left without a clock. Arm first, then clear the flag.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* perf(runtime): share one in-flight pause read per isolate
+
+Calls that found the pause cache stale each started their own SchedulerDO read. Concurrent
+callers now await the read already in flight.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(studio): drop the finally from the history pager
+
+React Compiler cannot memoize a component holding a try/finally, so the Load more handler
+catches inline instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(platform-node): record a job cancelled mid-dispatch as succeeded when it ran
+
+Match SchedulerDO: a cancel landing while the handler runs keeps the claim, so a successful
+attempt still settles the row as succeeded. Retry re-arm and dead-letter parking now require a
+pending row, so a failed attempt leaves the job canceled rather than parking or re-arming it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(platform): say a parked job reads failed until requeued or purged
+
+Both hosts keep a dead-lettered job until an operator requeues or purges it, so the get()
+contract no longer implies it ages out. Scheduler get() fixtures now carry a lifecycle state.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): refuse stray arguments to pause and resume
+
+lunora resume ignored its positional arguments and lunora pause checked only the first, so a
+typo could still flip a deployment. Both now exit with a usage error.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): never lose a cron run or a skip decision to a write error
+
+/cron/end released the lease before recording the run, so a failed write lost the run with
+nothing left to reconcile. Record first, then release. A failed skip-history write in
+/cron/begin no longer errors the request, which the worker read as an outage and ran the job
+unguarded.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(runtime): keep the operator's pause reason out of the public 503
+
+The DEPLOYMENT_PAUSED body echoed the free-text --reason to every caller, which leaks internal
+incident notes. Callers now get a fixed message; the reason stays on the admin pause route.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): list dead-lettered jobs in history when they are parked
+
+A parked job had no completion time and no dt: entry, so it was missing from /history and
+Studio until purged, and get() gave no failure time. Parking now records completedAt and
+indexes it; a purge keeps that time, and a requeue drops it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(studio): clear the history pager's loading flag on both paths
+
+The reset sat after the await, which reads as success-only. The try and the catch now each
+clear it, still without a finally.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): record a lapsed cron lease before releasing it
+
+/cron/runs deleted an expired lease before writing its failed-run row, so a failed write lost
+the run. Record first, as /cron/end does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* style(studio): mark the deliberate react-doctor findings in the scheduler views
+
+The table scaffolding repeats by design and the pager's loading flag is cleared on both paths;
+line-scoped disables with reasons stop the PR scan from re-posting them.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): reject cron names the overlap lease cannot hold
+
+cronJobs() accepted names of any length while /cron/begin refuses names over 256 characters,
+which the worker reads as an outage and runs the job unguarded. Reject them at definition.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): report a cancel as done once the job is removed
+
+A failed outcome write after the rows were removed errored the request, so a retry answered
+cancelled: false for a job that was gone. The outcome row is now best-effort.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(runtime): note what a pause leaves serving and what a skip means
+
+Custom routes handlers are not gated by a pause, like httpRouter. CronRunStatus skipped also
+covers a paused deployment.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): keep cron history whole across partial write failures
+
+A lease left by a failed release after /cron/end was later recorded again as a lost run, and
+folding a skip deleted the old row before writing its replacement. Skip a lost run already on
+record, and write the folded row before dropping the old one. Also fix a misplaced doc comment.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* perf(platform-node): index scheduler rows by state and completion
+
+Finished rows now stay for seven days, and the sweep after each delivery plus the pending scans
+read the whole table. A (state, completed_at) index keeps them bounded.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(studio): keep the job history contiguous after Load more
+
+Polling refreshed only the first page, so new outcomes pushed rows into the gap before the
+loaded older pages, where they were never shown. Polling stops once older pages are loaded.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(errors): regenerate error reference after rebase
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(runtime): keep a fresh pause toggle over an older read
+
+A read of the pause flag that started before an admin POST could resolve
+after it and overwrite the cache the POST had just filled, so the isolate
+that set the flag kept serving (or refusing) calls for another cache window.
+Writes now bump a generation; a read only fills the cache when no write
+began or finished since it started.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(scheduler): drop the history entry of a requeued dead job
+
+Requeueing a dead-lettered job removed its dead row but left the dt: index
+entry parkDead wrote, which took a /history page slot until the retention
+sweep reclaimed it. The entry is now deleted with the dead row.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(testing): report the dead-letter reason on a failed fake job
+
+The fake scheduler exposed the handler's thrown message as a failed job's
+error, while SchedulerDO records why the job was dead-lettered. Tests reading
+get(id).error now see the same value production callers do.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(testing): match the stored dead-letter error text
+
+SchedulerDO stores the reason as "dead-lettered after N attempts"; the fake
+reported only "after N attempts".
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* style(studio): sort the cron panel imports after the rebase
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(queue): hold paused messages with a fresh retry budget
+
+A paused deployment handed each queue batch back with a delayed retry, which
+spends one delivery attempt per hold. A pause longer than max_retries times
+the delay dead-lettered work that never ran.
+
+The runtime now tells the consumer to hold instead (holdSeconds on the
+trigger, forwarded by the generated queue entry). The consumer re-enqueues
+each message as a fresh, authenticated copy that keeps the original id and
+body, and acks the original only once the copy was sent. A message that cannot
+be copied falls back to the delayed retry and logs why. A job that genuinely
+throws after the pause lifts still fails on its normal budget.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(scheduler): restore the outcome of a job whose history write failed
+
+When a dispatched job's terminal row could not be written, its pending rows
+were still cleared, so neither get() nor /history had any record that it ran.
+
+The failed write now leaves a repair marker holding the row and marks the
+instance dirty, so its successor runs the orphan walk. The walk writes the row
+back with its original completion time and drops the marker and any header
+the job left behind, so the job is neither lost from history nor run again.
+Scheduling a caller-chosen id again clears a stale marker.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(scheduler): renew a running cron job's lease
+
+A cron lease was declared lost fifteen minutes after it began, on the premise
+that every holder is a scheduled() invocation torn down at that age. A manual
+run from a fetch handler, or a host that does not enforce the bound, can run
+longer: the next tick then started a second copy beside it, and the first
+run's real outcome was dropped.
+
+The worker now renews the lease every five minutes while the run is alive
+(POST /cron/renew), and the lease lapses fifteen minutes after its last sign
+of life instead of after its start. A renewal only extends a lease the caller
+still owns and that has not lapsed, so a stale worker cannot revive a lease
+another run took over. A renewal that fails is logged and the run goes on.
+* **scheduler,runtime:** CronRunInFlight gains an optional renewedAt field, in
+@lunora/scheduler and in its mirror in @lunora/client; the scheduler gains the
+internal /cron/renew route.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(api): snapshot the queue hold field on TriggerTrace
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(studio): show a failed cron history read and the pause banner in a bare studio
+
+A failed cron history request was mapped to an empty result, so an auth, server
+or network error read as no runs and replaced the last runs shown. Only a
+worker without a scheduler now maps to empty; any other failure is shown and
+the last runs are kept.
+
+The pause banner was gated on the app chrome's token, so a studio composed
+around an injected client never showed it. It now shows when there is no chrome
+or the chrome holds a token.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(runtime): stop waiting on a pause read that never settles
+
+The flag read is shared by every caller in an isolate but belongs to the
+request that started it. If that request is cancelled the read may never
+settle and every caller hangs. Callers now stop waiting after three seconds,
+fail open on the last state the isolate trusted, and the next caller reads
+afresh.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(platform-node): reclaim expired cancelled jobs on cancel
+
+Finished rows were swept only on a completion or a restart, so a host that
+only cancels kept expired cancelled rows indefinitely.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(scheduler): commit paired history writes together and skip stale entries
+
+Four pairs of writes were awaited one after the other, so a failure between
+them left a half state: a reused id lost its old outcome without the new job
+persisting, a requeued job kept a dead row that /get answered failed for, a
+corrected outcome lost its history entry, and a folded skip streak counted
+twice toward the history limit and evicted a real run. Each pair is now issued
+in one synchronous run, which Durable Object storage commits as one.
+
+/history also counted stale index entries toward its page, so a page of them
+answered no records with a cursor. It now reads on until a record shows or the
+index ends, within a bound.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(cli): correct how a pause holds queue messages
+
+Held messages are re-sent as delayed copies with their attempt budgets intact;
+only a message that cannot be copied falls back to a delayed retry.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(api): snapshot the queue hold option on DispatchOptions
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(scheduler): pause and resume reach every named scheduler instance
+
+A pause held jobs only on the scheduler instance the admin route addresses, so
+jobs on a tenant scheduler or a workpool with its own instanceName kept running
+while Studio and the CLI reported the deployment as paused.
+
+A named instance now registers durably with the main one (its SchedulerDO
+storage) the first time it is addressed, and is brought to the current pause
+state by the registration itself, so one created during a pause starts paused.
+The admin route applies each pause or resume to the main instance first and
+then to every registered instance. An instance that cannot be reached is
+reported (PAUSE_INSTANCES_FAILED, naming it) and repeating the command
+converges. The registry lives in the same storage as the flag, so it needs no
+new host contract; the capability notes say so for both hosts.
+
+A custom schedulerInstanceName must also be passed to createScheduler and
+createWorkpool as the new optional primaryInstanceName.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(api): regenerate the studio snapshot for the pause banner text
+
+Generated by api:update from the built package; the banner string changed with
+the fan-out wording.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(runtime): keep a ticket to its upgrade and a newer pause read
+
+A Studio socket ticket lifted the pause on any request that carried it in the
+query. It is now accepted only on a WebSocket upgrade.
+
+A flag read abandoned at its deadline could still answer later and overwrite the
+newer read that replaced it. Abandoning a read now invalidates it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(scheduler): batch cron history deletes, move a streak atomically, guard repair
+
+A cron history far past its limit passed more than 128 keys to one delete, which
+the host rejects and which failed /cron/begin. Stale rows are now deleted in
+batches of 128.
+
+A folded skip streak is written and its old key deleted in one synchronous run,
+which storage commits together, so a failed delete cannot leave two copies.
+
+Restoring a lost outcome now leaves a header that belongs to a later job of the
+same id alone and drops only the stale marker.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(platform,testing): report when a parked job failed and age out fake outcomes
+
+The reference host's get() omitted completedAt for a dead-lettered job, which the
+contract requires for every terminal state; the suite now asserts it.
+
+The fake scheduler kept finished outcomes for the harness lifetime; get() now
+forgets them after the seven-day retention window the scheduler applies.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **scheduler,runtime:** job outcomes, cron run history, deployment pause ([#1397](https://github.com/anolilab/lunora/issues/1397)) ([4d648d3](https://github.com/anolilab/lunora/commit/4d648d35b7aa5861415d59930c4223e2645223c8))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.162
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.178
+* **@lunora/values:** upgraded to 1.0.0-alpha.89
+* **@lunora/observability:** upgraded to 1.0.0-alpha.192
+* **@lunora/storage:** upgraded to 1.0.0-alpha.165
+
+## @lunora/server [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.257...@lunora/server@1.0.0-alpha.258) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.79
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.161
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.177
+* **@lunora/values:** upgraded to 1.0.0-alpha.88
+* **@lunora/observability:** upgraded to 1.0.0-alpha.191
+* **@lunora/storage:** upgraded to 1.0.0-alpha.164
+
+## @lunora/server [1.0.0-alpha.257](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.256...@lunora/server@1.0.0-alpha.257) (2026-10-30)
+
+### ⚠ BREAKING CHANGES
+
+* **studio:** the aiChat admin RPC no longer serves a loadKnowledge
+tool; callers pass documentation excerpts in `knowledge`.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* security(runtime): turn the assistant off for a level that is not a level
+
+LUNORA_AI_OPT_IN values that are not on the ladder, such as off, false or Disabled, fell back to
+the default level. An operator who wrote one to switch the assistant off kept sending schema names
+to the inference provider from the chat and every one-shot op, with nothing to say so. A set value
+that is not a level now disables the assistant; an unset or empty var still takes the default, and
+the Studio's readout shows disabled so the mistake is visible.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): keep a failed chat turn's error in its own chat
+
+The chat status is held per hook, so a failure in one conversation showed in the next one the
+operator opened before they had asked it anything. Record which session sent the turn and show
+the reason only there; a reason that latches (ai-disabled, no-ai-binding) is about the deployment
+and still shows everywhere.
+
+Also sort the docs digest's source files in code-unit order instead of localeCompare, whose
+collation follows the host locale and could reorder the committed digest between machines.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* test(studio): match the excerpt's page by its whole parenthesised url
+
+The assertions checked that an excerpt contained the docs URL as a substring, which reads like
+URL sanitising to static analysis. An excerpt names its page as `Title (url): ...`, so match the
+whole parenthesised URL instead; it states exactly which page is meant.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(client): stop a cancelled stream call between buffered frames
+
+streamRpc handed the SSE pump a fresh AbortController unrelated to the caller's signal and never
+checked that signal while dispatching frames. One read can carry a narration frame and the
+terminal frame together, so a cancel that landed between them still delivered the next frame and
+resolved the call with the answer. Tie the pump to the caller's signal, deliver nothing once it is
+aborted, and reject with the signal's reason.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* security(runtime): refuse reserved shard keys on the chat RPC
+
+The chat op is served ahead of the worker's shard gate and forwarded every tool read to any
+non-empty shard key the caller named. The gate refuses keys carrying ::relay:: or ::replica::
+for everyone, admins included, because only the runtime mints those names and a Durable Object
+reads its own name to learn its role. Apply the same rule on the chat path.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* perf(runtime): read only the transcript turns the cap can keep
+
+budgetTranscript parsed every entry of the caller-sent transcript before keeping the newest twelve,
+so one oversized admin request made the worker validate entries it could never use. Walk
+newest-first and stop once the cap is full; invalid entries are still skipped, so the same turns
+are kept and the truncated flag is unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(runtime): sign assistant approval tickets with a deployment secret
+
+Approval tickets were signed with a random key each isolate made for itself, so an operator's
+approval that reached a different isolate could not be verified and the card came back instead
+of the read running. A deployment can now set LUNORA_AI_APPROVAL_SECRET (32+ characters); the
+worker reads it off its env, never the request, and tickets then verify on any isolate. Without
+it, or with a shorter value, the per-isolate key stays, which still fails safe.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): keep the selected shard when asking the assistant
+
+An advisor finding or error callout shown for a non-root shard opened a chat with no shard, so
+the assistant's tool reads hit the root shard instead of the one that produced it. AdvisorView
+and ErrorAlert take the shard and pass it in the seed; every panel with a shard selector
+supplies its own.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(runtime): cancel an in-flight shard read when a chat turn is aborted
+
+generateChat checked the abort signal before a tool call but never handed it to the runner, so
+a cancelled turn kept a shard read running and the worker waited on it. The signal now flows
+runTool -> chatToolRunner -> forwardRpcToShard -> the shard request, and the turn stops once
+the read is cancelled. Other forwardRpcToShard callers are unaffected (the parameter is
+optional).
+
+Also rewrites the ai-chat module header to state what the module owns and who consumes it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+* **server:** presence_present gains a required tenantId column, the
+byRoomSession / byRoom / byRoomLastSeen indexes are replaced by
+byTenantRoomSession and byTenantRoomLastSeen, and sweep takes
+{ roomId, tenantId }. The schema-drift gate reports the added required field
+and removed indexes. Rows written before the upgrade carry no tenantId, so no
+tenant sees or reaps them; they are ephemeral, clear them with a data
+migration. Apps whose identity has an orgId claim now get per-organization
+rooms; better-auth apps must forward activeOrganizationId as orgId from
+resolveIdentity to get that isolation.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(scheduling): pass the presence sweep its room and tenant
+
+The cron example called `internal.presence.sweep` with no args, which
+already failed on the required `roomId` and now also needs `tenantId`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* style(server): rewrap the presence doc comments
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(server): name the tenant-prefixed presence index
+
+The maxSessions and listPresent comments still described the removed
+(roomId, lastSeen) index; the reads go through byTenantRoomLastSeen.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **studio:** a conversational assistant, served off the DO admin dispatch ([#429](https://github.com/anolilab/lunora/issues/429)) ([ccba48d](https://github.com/anolilab/lunora/commit/ccba48d4f14748105e33ab33f39383cd84880604))
+
+### Bug Fixes
+
+* **server:** scope definePresence rooms to the caller's tenant ([#1421](https://github.com/anolilab/lunora/issues/1421)) ([43fecb1](https://github.com/anolilab/lunora/commit/43fecb1cbc099f0cc771a7446a9a9a68c3979e81))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.78
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.160
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.176
+* **@lunora/values:** upgraded to 1.0.0-alpha.87
+* **@lunora/wire:** upgraded to 1.0.0-alpha.6
+* **@lunora/observability:** upgraded to 1.0.0-alpha.190
+* **@lunora/storage:** upgraded to 1.0.0-alpha.163
+
+## @lunora/server [1.0.0-alpha.256](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.255...@lunora/server@1.0.0-alpha.256) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** require the errors release that defines the duplicate-rows code ([#1429](https://github.com/anolilab/lunora/issues/1429)) ([fe5d405](https://github.com/anolilab/lunora/commit/fe5d40505851942c8734f094ec904b075b96f6d8))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.175
+* **@lunora/observability:** upgraded to 1.0.0-alpha.189
+
 ## @lunora/server [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.254...@lunora/server@1.0.0-alpha.255) (2026-10-30)
 
 ### Performance Improvements

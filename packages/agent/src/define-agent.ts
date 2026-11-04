@@ -1,8 +1,8 @@
 import { LunoraError } from "@lunora/errors";
 
-import { approvalTimeoutMs } from "./agent-loop";
 import { collectAgenticMemoryTools } from "./agentic-memory";
 import { agentAsTool } from "./as-tool";
+import { approvalTimeoutMs } from "./component-shared";
 import { isInjectedMemorySource } from "./memory";
 import isPositiveInteger from "./positive-integer";
 import { RESERVED_SKILL_NAME, SKILL_NAME_PATTERN } from "./skill";
@@ -17,6 +17,17 @@ import type {
     AnyAgentTool,
     SkillDefinition,
 } from "./types";
+
+/**
+ * `compileAgentWorkflow` hands the name to `defineWorkflow`, which rejects an empty one. The pre-deploy
+ * smoke load imports a deferred (lazy) agent module but never compiles its workflow, so the check runs
+ * at definition time, where that import reaches it.
+ */
+const assertValidName = (name: unknown): void => {
+    if (name !== undefined && (typeof name !== "string" || name.length === 0)) {
+        throw new LunoraError("INTERNAL", "@lunora/agent: defineAgent `name` must be a non-empty string when provided");
+    }
+};
 
 /** Tool names surface as model function names — keep them identifier-shaped. */
 const TOOL_NAME_PATTERN = /^[a-zA-Z][\w-]*$/u;
@@ -182,6 +193,21 @@ const assertMemorySourcesConfigured = (config: AgentConfig, skills: ReadonlyArra
 };
 
 /**
+ * A non-function shard hook would be skipped at delivery and the run would land on the
+ * default shard, which is exactly the tenant mix-up the hook exists to prevent.
+ */
+const assertInboundShardHooks = (config: AgentConfig): void => {
+    for (const [label, hook] of [
+        ["resolveEmailShard", config.resolveEmailShard],
+        ["onInbound.resolveShard", config.onInbound?.resolveShard],
+    ] as const) {
+        if (hook !== undefined && typeof hook !== "function") {
+            throw new LunoraError("INTERNAL", `@lunora/agent: \`${label}\` must be a function`);
+        }
+    }
+};
+
+/**
  * Reject an `approvalTimeout` that resolves to no wait at all.
  *
  * `approvalTimeoutMs` clamps the UPPER bound and nothing guarded the lower one,
@@ -248,6 +274,8 @@ const defineAgent = (config: AgentConfig): AgentDefinition => {
         );
     }
 
+    assertValidName(config.name);
+
     if (config.maxTurns !== undefined && !isPositiveInteger(config.maxTurns)) {
         throw new LunoraError("INTERNAL", "@lunora/agent: `maxTurns` must be a positive integer");
     }
@@ -259,6 +287,7 @@ const defineAgent = (config: AgentConfig): AgentDefinition => {
     }
 
     assertPositiveApprovalTimeout(config.approvalTimeout);
+    assertInboundShardHooks(config);
 
     const skills = config.skills ?? [];
 

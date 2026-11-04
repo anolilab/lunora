@@ -21,7 +21,7 @@
  * PREREQUISITE: a PRODUCTION build of `@lunora/studio` and its dependencies
  * (`pnpm exec vis run build:prod --query "project=studio"`). A development build
  * of `@lunora/react` makes `build-standalone.mjs` fall back to React's development
- * build — roughly double the entry — which the `jsxDEV` check below refuses to
+ * build — roughly double the entry — which the development-build check below refuses to
  * measure.
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -75,12 +75,17 @@ for (const file of closure) {
     gzipBytes += gzipSync(bytes).length;
 }
 
-// Same marker `build-standalone.mjs` keys its NODE_ENV choice on: present, it
-// shipped React's development build, and the number would be meaningless.
-const devBuild = readdirSync(standaloneDir).some((file) => file.endsWith(".js") && readFileSync(join(standaloneDir, file), "utf8").includes("jsxDEV"));
+// `build-standalone.mjs` keys its NODE_ENV choice on React's dev JSX runtime being in the
+// module graph. Here only the output is left, and the `jsxDEV` identifier alone proves
+// nothing: `hast-util-to-jsx-runtime` (markdown rendering) names it in a guard that a
+// production bundle never takes. What a development React build does ship is its
+// readable hook-misuse message; production React replaces every message with an error code.
+const devBuild = readdirSync(standaloneDir).some(
+    (file) => file.endsWith(".js") && readFileSync(join(standaloneDir, file), "utf8").includes("Invalid hook call."),
+);
 
 if (devBuild) {
-    fail("check-studio-size: the standalone bundle contains `jsxDEV` — it was built against a development dist. Rebuild with `build:prod`.");
+    fail("check-studio-size: the standalone bundle contains React's development build — it was built against a development dist. Rebuild with `build:prod`.");
 }
 
 const baseline = JSON.parse(readFileSync(fixturePath, "utf8"));

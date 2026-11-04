@@ -124,8 +124,8 @@ const connected = async (server: Server): Promise<Client> => {
 
 const CALLER_TOKEN = "caller-token";
 
-const serverFor = (token?: string): Server =>
-    createFunctionMcpServer({ fetch: vi.fn<typeof fetch>(), openRpcSpec: SPEC, url: "https://app.example", ...(token === undefined ? {} : { token }) });
+const serverFor = async (token?: string): Promise<Server> =>
+    await createFunctionMcpServer({ fetch: vi.fn<typeof fetch>(), openRpcSpec: SPEC, url: "https://app.example", ...(token === undefined ? {} : { token }) });
 
 /** The text block of a tool result, parsed. A stream returns its chunks here, not as structured content. */
 const chunksOf = (content: unknown): unknown => JSON.parse((content as { text: string }[])[0]!.text) as unknown;
@@ -146,7 +146,7 @@ describe("a stream tool over a real SDK client", () => {
 
         vi.stubGlobal("WebSocket", StreamSocket);
 
-        const client = await connected(serverFor());
+        const client = await connected(await serverFor());
         const { tools } = await client.listTools();
         const tail = tools.find((tool) => tool.name === "feed_tail");
 
@@ -166,7 +166,7 @@ describe("a stream tool over a real SDK client", () => {
             { id, type: "complete" },
         ];
 
-        const client = await connected(serverFor(CALLER_TOKEN));
+        const client = await connected(await serverFor(CALLER_TOKEN));
 
         await client.callTool({ arguments: { args: { room: "r1" } }, name: "feed_tail" });
 
@@ -187,7 +187,7 @@ describe("a stream tool over a real SDK client", () => {
             { id, type: "complete" },
         ];
 
-        const client = await connected(serverFor());
+        const client = await connected(await serverFor());
         const onprogress = vi.fn<(progress: unknown) => void>();
         const result = await client.callTool({ arguments: { args: { room: "r1" } }, name: "feed_tail" }, undefined, { onprogress });
 
@@ -221,7 +221,7 @@ describe("a stream tool over a real SDK client", () => {
             { id, type: "complete" },
         ];
 
-        const client = await connected(serverFor());
+        const client = await connected(await serverFor());
         const result = await client.callTool({ arguments: { args: { room: "r1" } }, name: "feed_tail" }, undefined, { onprogress: () => undefined });
 
         expect(result.isError ?? false).toBe(false);
@@ -241,7 +241,7 @@ describe("a stream tool over a real SDK client", () => {
             { id, type: "complete" },
         ];
 
-        const client = await connected(serverFor());
+        const client = await connected(await serverFor());
         const result = await client.callTool({ arguments: { args: { room: "r1" } }, name: "feed_tail" }, undefined, { onprogress: () => undefined });
 
         expect(result.isError ?? false).toBe(false);
@@ -263,7 +263,7 @@ describe("a stream tool over a real SDK client", () => {
             { id, type: "complete" },
         ];
 
-        const client = await connected(serverFor());
+        const client = await connected(await serverFor());
         const result = await client.callTool({ arguments: { args: { room: "r1" } }, name: "feed_tail" }, undefined, { onprogress: () => undefined });
 
         expect(result.structuredContent).toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
@@ -282,7 +282,7 @@ describe("a stream tool over a real SDK client", () => {
             { id, type: "complete" },
         ];
 
-        const server = createFunctionMcpServer({
+        const server = await createFunctionMcpServer({
             fetch: vi.fn<typeof fetch>(),
             openRpcSpec: SPEC,
             url: "https://app.example",
@@ -307,7 +307,7 @@ describe("a stream tool over a real SDK client", () => {
             { error: { code: "FORBIDDEN", message: "no access to this room" }, id, type: "error" },
         ];
 
-        const client = await connected(serverFor());
+        const client = await connected(await serverFor());
         const onprogress = vi.fn<(progress: unknown) => void>();
         const result = await client.callTool({ arguments: { args: { room: "r1" } }, name: "feed_tail" }, undefined, { onprogress });
 
@@ -328,7 +328,7 @@ describe("a stream tool over a real SDK client", () => {
             { data: CHUNKS[0], id, type: "chunk" },
         ];
 
-        const client = await connected(serverFor());
+        const client = await connected(await serverFor());
         const controller = new AbortController();
         const firstProgress = new Promise<void>((resolve) => {
             client
@@ -372,7 +372,7 @@ describe("a stream tool when the deployment URL moves while it is open", () => {
         ];
 
         const httpFetch = vi.fn<typeof fetch>(async () => Response.json({ result: [] }, { headers: { "content-type": "application/json" } }));
-        const client = await connected(createFunctionMcpServer({ fetch: httpFetch, openRpcSpec: SPEC, token: "test-caller", url: () => url }));
+        const client = await connected(await createFunctionMcpServer({ fetch: httpFetch, openRpcSpec: SPEC, token: "test-caller", url: () => url }));
         const pending = client.callTool({ arguments: { args: { room: "r1" } }, name: "feed_tail" });
 
         await StreamSocket.whenSent("stream");
@@ -423,7 +423,7 @@ describe("a stream tool through the stateless HTTP transport", () => {
             headers: { accept: "application/json, text/event-stream", "content-type": "application/json" },
             method: "POST",
         });
-        const response = await serveStateless(serverFor(), request);
+        const response = await serveStateless(await serverFor(), request);
         const body = (await response.json()) as { id: number; method?: string; result: { content: { text: string }[] } };
         const progress = send.mock.calls.filter(([message]) => (message as { method?: string }).method === "notifications/progress");
 

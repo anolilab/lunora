@@ -1,6 +1,6 @@
 {
     "name": "@lunora/mcp",
-    "version": "1.0.0-alpha.277",
+    "version": "1.0.0-alpha.291",
     "description": "Model Context Protocol server exposing a Lunora deployment to AI agents",
     "keywords": [
         "ai-agents",
@@ -65,9 +65,7 @@
         "build:prod": "packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -76,15 +74,15 @@
     },
     "dependencies": {
         "@cfworker/json-schema": "catalog:mcp",
-        "@lunora/client": "1.0.0-alpha.268",
+        "@lunora/client": "^1.0.0-alpha.286",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/shard-engine": "1.0.0-alpha.174",
-        "@lunora/wire": "1.0.0-alpha.5",
+        "@lunora/shard-engine": "^1.0.0-alpha.187",
+        "@lunora/wire": "1.0.0-alpha.6",
         "@modelcontextprotocol/sdk": "catalog:mcp"
     },
     "devDependencies": {
-        "@lunora/auth": "1.0.0-alpha.247",
-        "@lunora/x402": "1.0.0-alpha.108",
+        "@lunora/auth": "^1.0.0-alpha.257",
+        "@lunora/x402": "1.0.0-alpha.117",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

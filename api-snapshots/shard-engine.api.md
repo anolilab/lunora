@@ -16,7 +16,9 @@ const ADMIN_FUNCTIONS: {
     readonly applyCdc: "__lunora_admin__:applyCdc";
     readonly aiAvailable: "__lunora_admin__:aiAvailable";
     readonly aiChartConfig: "__lunora_admin__:aiChartConfig";
+    readonly aiCronExpression: "__lunora_admin__:aiCronExpression";
     readonly aiGenerateSql: "__lunora_admin__:aiGenerateSql";
+    readonly aiNameQuery: "__lunora_admin__:aiNameQuery";
     readonly aiTableFilter: "__lunora_admin__:aiTableFilter";
     readonly assignIssue: "__lunora_admin__:assignIssue";
     readonly backfillSearch: "__lunora_admin__:backfillSearch";
@@ -26,16 +28,17 @@ const ADMIN_FUNCTIONS: {
     readonly clearCapturedMail: "__lunora_admin__:clearCapturedMail";
     readonly clearQueueMessages: "__lunora_admin__:clearQueueMessages";
     readonly clearTable: "__lunora_admin__:clearTable";
+    readonly createAdminToken: "__lunora_admin__:createAdminToken";
     readonly createWorkflowInstance: "__lunora_admin__:createWorkflowInstance";
     readonly deleteRows: "__lunora_admin__:deleteRows";
     readonly describeTable: "__lunora_admin__:describeTable";
     readonly describeTables: "__lunora_admin__:describeTables";
+    readonly dropOutboxEntry: "__lunora_admin__:dropOutboxEntry";
     readonly explainIssue: "__lunora_admin__:explainIssue";
     readonly exportShard: "__lunora_admin__:exportShard";
     readonly facetColumn: "__lunora_admin__:facetColumn";
     readonly findRelated: "__lunora_admin__:findRelated";
     readonly getAdvisories: "__lunora_admin__:getAdvisories";
-    readonly getAdvisorProcedures: "__lunora_admin__:getAdvisorProcedures";
     readonly getAuditLog: "__lunora_admin__:getAuditLog";
     readonly getAuthMetrics: "__lunora_admin__:getAuthMetrics";
     readonly getCapturedMail: "__lunora_admin__:getCapturedMail";
@@ -44,6 +47,7 @@ const ADMIN_FUNCTIONS: {
     readonly getIssues: "__lunora_admin__:getIssues";
     readonly getMetricHistory: "__lunora_admin__:getMetricHistory";
     readonly getMetricSeries: "__lunora_admin__:getMetricSeries";
+    readonly getScheduleOutbox: "__lunora_admin__:getScheduleOutbox";
     readonly listSubscriptions: "__lunora_admin__:listSubscriptions";
     readonly listTableIndexes: "__lunora_admin__:listTableIndexes";
     readonly listTablesIndexes: "__lunora_admin__:listTablesIndexes";
@@ -59,6 +63,7 @@ const ADMIN_FUNCTIONS: {
     readonly getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus";
     readonly ignoreIssue: "__lunora_admin__:ignoreIssue";
     readonly importShard: "__lunora_admin__:importShard";
+    readonly listAdminTokens: "__lunora_admin__:listAdminTokens";
     readonly listFlags: "__lunora_admin__:listFlags";
     readonly listReactors: "__lunora_admin__:listReactors";
     readonly listQueues: "__lunora_admin__:listQueues";
@@ -79,7 +84,9 @@ const ADMIN_FUNCTIONS: {
     readonly recordQueueMessage: "__lunora_admin__:recordQueueMessage";
     readonly releaseShardRegistration: "__lunora_admin__:releaseShardRegistration";
     readonly replayQueueMessage: "__lunora_admin__:replayQueueMessage";
+    readonly retryOutboxEntry: "__lunora_admin__:retryOutboxEntry";
     readonly resolveIssue: "__lunora_admin__:resolveIssue";
+    readonly revokeAdminToken: "__lunora_admin__:revokeAdminToken";
     readonly rlsPolicies: "__lunora_admin__:rlsPolicies";
     readonly schemaHistory: "__lunora_admin__:schemaHistory";
     readonly schemaVersion: "__lunora_admin__:schemaVersion";
@@ -94,6 +101,7 @@ const ADMIN_FUNCTIONS: {
     readonly storageReferences: "__lunora_admin__:storageReferences";
     readonly storageRules: "__lunora_admin__:storageRules";
     readonly studioFeatures: "__lunora_admin__:studioFeatures";
+    readonly verifyAdminToken: "__lunora_admin__:verifyAdminToken";
     readonly writeRow: "__lunora_admin__:writeRow";
 };
 ```
@@ -102,6 +110,12 @@ const ADMIN_FUNCTIONS: {
 
 ```ts
 const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
+```
+
+### `ADMIN_TOKEN_TABLE` (const)
+
+```ts
+const ADMIN_TOKEN_TABLE = "__lunora_admin_tokens__";
 ```
 
 ### `AGGREGATE_SQL_FUNCTION` (const)
@@ -134,6 +148,17 @@ const AGG_VALUE: Name;
 const AUDIT_LOG_TABLE = "__lunora_audit__";
 ```
 
+### `AdminTokenSummary` (interface)
+
+```ts
+interface AdminTokenSummary {
+    createdAt: number;
+    expiresAt?: number;
+    lastUsedAt?: number;
+    name: string;
+}
+```
+
 ### `AdvisorProcedure` (interface)
 
 ```ts
@@ -161,14 +186,6 @@ interface AdvisorProcedure {
     usesRls: boolean;
     visibility: "internal" | "public";
     writesUserTable?: boolean;
-}
-```
-
-### `AdvisorProceduresResult` (interface)
-
-```ts
-interface AdvisorProceduresResult {
-    procedures: AdvisorProcedure[];
 }
 ```
 
@@ -660,6 +677,7 @@ interface DatabaseWriterLike {
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
     delete: (table: string, id: string, options?: {
         hard?: boolean;
+        skipOnDelete?: boolean;
     }) => Promise<void>;
     deleteAll?: (tableName: string, options?: {
         chunkSize?: number;
@@ -1239,13 +1257,22 @@ interface ImportError {
 }
 ```
 
+### `ImportRow` (interface)
+
+```ts
+interface ImportRow extends ExportRow {
+    op?: string;
+}
+```
+
 ### `ImportShardAdminArgs` (interface)
 
 ```ts
 interface ImportShardAdminArgs {
+    deletes: boolean;
     dryRun: boolean;
     onConflict: ImportConflictMode;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 ```
@@ -1254,9 +1281,10 @@ interface ImportShardAdminArgs {
 
 ```ts
 interface ImportShardArgs {
+    deletes?: boolean;
     dryRun?: boolean;
     onConflict?: ImportConflictMode;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 ```
@@ -1266,6 +1294,7 @@ interface ImportShardArgs {
 ```ts
 interface ImportShardResult {
     conflicts: number;
+    deleted: number;
     errors: ImportError[];
     inserted: Record<string, number>;
     replaced: number;
@@ -1359,6 +1388,7 @@ interface LifecycleEvent {
 ```ts
 interface LiveSocketControlCall {
     action: unknown;
+    adminReauth?: true;
     callerId: string;
     connectionId: string;
     identity?: Record<string, unknown>;
@@ -1702,6 +1732,7 @@ const QUEUE_TABLE = "__lunora_queue_messages";
 ```ts
 interface QueryArgs {
     baseWhere?: WhereInput;
+    consistency?: "primary";
     cursor?: null | string;
     includeDeleted?: boolean;
     limit?: number;
@@ -2294,6 +2325,7 @@ interface RelayHost {
     deliverLiveLocal: (topic: string, key: string, frame: string) => number;
     deliverWhisperLocal: (topic: string, frame: string, exclude: undefined | ShardSocketLike) => number;
     doName: () => string | undefined;
+    dropIfLapsed: (ws: ShardSocketLike) => boolean;
     env: () => unknown;
     getWebSockets: () => ShardSocketLike[];
     liveControl: (control: LiveSocketControlCall) => Promise<Response>;
@@ -2352,7 +2384,7 @@ interface RelayPokeDelivery {
 
 ```ts
 interface RelayRoomEvent {
-    attachment: Pick<SocketAttachment, "connectionId" | "context" | "identity" | "ip" | "userId">;
+    attachment: Pick<SocketAttachment, "connectionId" | "context" | "expiresAt" | "identity" | "ip" | "revalidateAt" | "userId">;
     connectionId: string;
     data?: unknown;
     kind: "join" | "leave" | "message";
@@ -2665,8 +2697,24 @@ interface SchedulableWorkflowReferenceLike {
 interface ScheduleOutbox {
     admit: (target: string) => number | undefined;
     forget: (id: string) => void;
-    record: (id: string, envelope: ScheduleOutboxEnvelope) => void;
+    handOff?: (id: string, run: () => Promise<unknown>, token?: string) => Promise<void>;
+    record: (id: string, envelope: ScheduleOutboxEnvelope) => string | undefined;
     wake: () => void;
+}
+```
+
+### `ScheduleOutboxEntry` (interface)
+
+```ts
+interface ScheduleOutboxEntry {
+    attempts: number;
+    createdAt: number;
+    forever: boolean;
+    id: string;
+    nextAttemptAt: number;
+    parked: boolean;
+    target: string | undefined;
+    when: number | undefined;
 }
 ```
 
@@ -2698,12 +2746,15 @@ interface ScheduleOutboxRow {
 interface ScheduledFunctionDoc {
     args: Record<string, unknown>;
     attempts?: number;
+    completedAt?: number;
     enqueuedAt: number;
+    error?: string;
     functionPath?: string;
     id: string;
     pool?: string;
     scheduledFor: number;
     shardKey?: string;
+    state?: "canceled" | "failed" | "pending" | "running" | "succeeded";
     workflow?: string;
 }
 ```
@@ -2980,6 +3031,7 @@ interface SocketAttachment {
     pageDeltas?: boolean;
     pendingSince?: number;
     refreshBatch?: boolean;
+    revalidateAt?: number;
     shapes?: Record<string, ShapeSubscriptionQuery>;
     socketFunction?: string;
     socketPath?: string;
@@ -3170,6 +3222,7 @@ interface SubscriptionEnvelope {
     };
     sinceCheckpoint?: number;
     sinceChunk?: number;
+    sinceClaims?: string;
     sinceEpoch?: string;
     token?: string;
     topic?: string;
@@ -3203,6 +3256,7 @@ interface SubscriptionInfo {
 interface SubscriptionQuery {
     args?: Record<string, unknown>;
     functionPath?: string;
+    sinceClaims?: string;
     sinceEpoch?: string;
     sinceSeq?: number;
     table?: string;
@@ -3418,7 +3472,9 @@ interface ThroughRelationWriteInfo extends RelationWriteBase {
 
 ```ts
 interface TransactionHeadroom {
+    readBytes: number;
     readRows: number;
+    remainingReadBytes: number;
     remainingReadRows: number;
     remainingWrittenBytes: number;
     remainingWrittenRows: number;
@@ -3431,10 +3487,29 @@ interface TransactionHeadroom {
 
 ```ts
 class TransactionHeadroomTracker {
-    constructor(limits?: Partial<TransactionLimits>);
+    constructor(limits?: Partial<TransactionLimits>, onNearLimit?: (warning: TransactionLimitWarning) => void);
     recordRead(count: number): void;
+    recordReadBytes(bytes: number): void;
+    recordDocumentRead(key: string, bytes: number): void;
+    beginReadWindow(): void;
     recordWrite(row: unknown): void;
     headroom(): TransactionHeadroom;
+}
+```
+
+### `TransactionLimitKind` (type)
+
+```ts
+type TransactionLimitKind = "readBytes" | "readRows" | "writtenBytes" | "writtenRows";
+```
+
+### `TransactionLimitWarning` (interface)
+
+```ts
+interface TransactionLimitWarning {
+    kind: TransactionLimitKind;
+    limit: number;
+    used: number;
 }
 ```
 
@@ -3442,6 +3517,7 @@ class TransactionHeadroomTracker {
 
 ```ts
 interface TransactionLimits {
+    maxReadBytes: number;
     maxReadRows: number;
     maxWrittenBytes: number;
     maxWrittenRows: number;
@@ -3658,6 +3734,12 @@ interface WriteEvent {
 
 ```ts
 type WriteHook = (event: WriteEvent) => Promise<void> | void;
+```
+
+### `adminTokenExists` (const)
+
+```ts
+const adminTokenExists: (sql: SqlExec, name: string) => boolean;
 ```
 
 ### `advanceClientWatermark` (const)
@@ -4027,6 +4109,17 @@ const countLegacyRows: (sql: SqlExec, table: string, fields: ReadonlyArray<strin
 const coveringGeohashes: (center: GeoPoint, radiusMeters: number) => string[];
 ```
 
+### `createAdminTokenRecord` (const)
+
+```ts
+const createAdminTokenRecord: (sql: SqlExec, record: {
+    createdAt: number;
+    digest: string;
+    expiresAt?: number;
+    name: string;
+}) => boolean;
+```
+
 ### `createCompanionSync` (const)
 
 ```ts
@@ -4216,6 +4309,12 @@ const diffGlobalMembership: (rows: ReadonlyArray<ShapeRow>, previous: ReadonlyMa
 const distinctValues: (rows: Record<string, unknown>[], field: string) => unknown[];
 ```
 
+### `dropScheduleOutbox` (const)
+
+```ts
+const dropScheduleOutbox: (sql: SqlExec, id: string) => boolean;
+```
+
 ### `encodeAggregateKey` (const)
 
 ```ts
@@ -4399,6 +4498,12 @@ const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, re
 const handleReplicaControl: (host: ReplicaOwnerHost, request: Request) => Promise<Response>;
 ```
 
+### `hasScheduleOutboxEntry` (const)
+
+```ts
+const hasScheduleOutboxEntry: (sql: SqlExec, id: string) => boolean;
+```
+
 ### `hasTrigger` (const)
 
 ```ts
@@ -4435,7 +4540,7 @@ const isDevEnvironment: (rawEnv: unknown) => boolean;
 ### `isFtsAvailable` (const)
 
 ```ts
-const isFtsAvailable: (sql: SqlExec) => boolean;
+const isFtsAvailable: (wrapper: SqlExec) => boolean;
 ```
 
 ### `isInternalTableName` (const)
@@ -4523,6 +4628,12 @@ const liftSourceId: (row: Record<string, unknown>, options?: {
 
 ```ts
 const lintReadonlySql: (sql: SqlExec, query: string) => SqlLintResult;
+```
+
+### `listAdminTokens` (const)
+
+```ts
+const listAdminTokens: (sql: SqlExec) => AdminTokenSummary[];
 ```
 
 ### `listReactorStates` (const)
@@ -4750,7 +4861,7 @@ const param: (value: unknown) => SQL;
 ### `parkScheduleOutbox` (const)
 
 ```ts
-const parkScheduleOutbox: (sql: SqlExec, id: string, attempts: number) => void;
+const parkScheduleOutbox: (sql: SqlExec, id: string, attempts: number, now: number) => void;
 ```
 
 ### `parseExportShardArgs` (const)
@@ -4967,6 +5078,12 @@ const readDeployInfo: (rawEnv: unknown) => DeployInfo;
 const readDueScheduleOutbox: (sql: SqlExec, nowMs: number, limit: number) => ScheduleOutboxRow[];
 ```
 
+### `readDueScheduleOutboxEntry` (const)
+
+```ts
+const readDueScheduleOutboxEntry: (sql: SqlExec, id: string, nowMs: number) => ScheduleOutboxRow | undefined;
+```
+
 ### `readExternalSourceBaseline` (const)
 
 ```ts
@@ -5015,6 +5132,25 @@ const readQueueMessages: (sql: SqlExec, options?: ReadQueueMessagesOptions) => {
 
 ```ts
 const readReactorState: (sql: SqlExec, path: string) => ReactorState | undefined;
+```
+
+### `readScheduleOutbox` (const)
+
+```ts
+const readScheduleOutbox: (sql: SqlExec, limit: number, cursor?: string) => {
+    entries: ScheduleOutboxEntry[];
+    nextCursor: string | undefined;
+};
+```
+
+### `readScheduleOutboxState` (const)
+
+```ts
+const readScheduleOutboxState: (sql: SqlExec, id: string) => {
+    createdAt: number;
+    parked: boolean;
+    version: string;
+} | undefined;
 ```
 
 ### `readSchemaHistory` (const)
@@ -5147,6 +5283,12 @@ const reprojectionMigrationId: (table: string) => string;
 const reprojectionTables: (schema: SchemaLike) => string[];
 ```
 
+### `requeueScheduleOutbox` (const)
+
+```ts
+const requeueScheduleOutbox: (sql: SqlExec, id: string, now: number) => boolean;
+```
+
 ### `resolvePatch` (const)
 
 ```ts
@@ -5178,6 +5320,12 @@ const resolveRelationPredicates: (where: WhereInput | undefined, options: Resolv
 
 ```ts
 const resolveWith: (options: ResolveWithOptions) => Promise<void>;
+```
+
+### `revokeAdminTokenRecord` (const)
+
+```ts
+const revokeAdminTokenRecord: (sql: SqlExec, name: string, createdAt: number) => boolean;
 ```
 
 ### `rowToDocument` (const)
@@ -5495,6 +5643,15 @@ const uniqueIndexFields: (indexes: ReadonlyArray<{
 
 ```ts
 const validateImportRow: (schema: SchemaLike, table: string, record: Record<string, unknown>) => string | undefined;
+```
+
+### `verifyAdminTokenDigest` (const)
+
+```ts
+const verifyAdminTokenDigest: (sql: SqlExec, name: string, digest: string, now: number) => undefined | {
+    createdAt: number;
+    expiresAt?: number;
+};
 ```
 
 ### `verifySiblingBody` (const)

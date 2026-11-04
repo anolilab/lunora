@@ -1,3 +1,60 @@
+## @lunora/container [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.107...@lunora/container@1.0.0-alpha.108) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.85
+
+## @lunora/container [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.106...@lunora/container@1.0.0-alpha.107) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+
+## @lunora/container [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.105...@lunora/container@1.0.0-alpha.106) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+
+## @lunora/container [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.104...@lunora/container@1.0.0-alpha.105) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+
+## @lunora/container [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.103...@lunora/container@1.0.0-alpha.104) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+
+## @lunora/container [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.102...@lunora/container@1.0.0-alpha.103) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+
+## @lunora/container [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.101...@lunora/container@1.0.0-alpha.102) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.79
+
+## @lunora/container [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.100...@lunora/container@1.0.0-alpha.101) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.78
+* **@lunora/wire:** upgraded to 1.0.0-alpha.6
+
 ## @lunora/container [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.99...@lunora/container@1.0.0-alpha.100) (2026-10-30)
 
 

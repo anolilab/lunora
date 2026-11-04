@@ -1,6 +1,6 @@
 {
     "name": "@lunora/privacy",
-    "version": "1.0.0-alpha.46",
+    "version": "1.0.0-alpha.57",
     "description": "Reusable data-subject rights for Lunora apps: export, erasure and retention holds (GDPR Art. 15, 17, 20).",
     "keywords": [
         "data-subject-rights",
@@ -60,17 +60,15 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check .",
-        "lint:prettier:fix": "prettier --write .",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
         "@cantoo/pdf-lib": "catalog:privacy",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/server": "1.0.0-alpha.255",
-        "@lunora/wire": "1.0.0-alpha.5",
+        "@lunora/server": "^1.0.0-alpha.268",
+        "@lunora/wire": "1.0.0-alpha.6",
         "fflate": "catalog:privacy"
     },
     "devDependencies": {

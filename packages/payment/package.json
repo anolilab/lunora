@@ -1,6 +1,6 @@
 {
     "name": "@lunora/payment",
-    "version": "1.0.0-alpha.257",
+    "version": "1.0.0-alpha.269",
     "description": "Provider-agnostic payments for Lunora: Stripe-first adapter, webhook sync, and subscription/payment state machine",
     "keywords": [
         "billing",
@@ -75,9 +75,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -86,14 +84,14 @@
     },
     "dependencies": {
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/server": "1.0.0-alpha.255",
-        "@lunora/values": "1.0.0-alpha.86",
+        "@lunora/server": "^1.0.0-alpha.268",
+        "@lunora/values": "^1.0.0-alpha.95",
         "dinero.js": "catalog:payment"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@lunora/shard-engine": "1.0.0-alpha.174",
+        "@lunora/shard-engine": "^1.0.0-alpha.188",
         "@polar-sh/sdk": "catalog:payment",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

@@ -80,8 +80,8 @@ import { LunoraError } from "@lunora/errors";
 import { isAgentToolName } from "./agent-tools";
 import type { McpFetchHandler } from "./serve-stateless";
 import { readScreenedBody, serveStateless } from "./serve-stateless";
-import type { LunoraMcpServerOptions } from "./server";
-import { createLunoraMcpServer, resolveClient } from "./server";
+import type { LunoraMcpServerOptions } from "./server-options";
+import { resolveClient } from "./server-options";
 import callToolName from "./tool-call";
 import { SCOPED_GATES, scopeForTool, WRITE_TOOL_NAMES } from "./tools";
 
@@ -324,6 +324,9 @@ const createAuthedMcpFetchHandler = (options: AuthedMcpFetchHandlerOptions): Mcp
 
         // Resolved after the step-up screen so a misconfigured `server` still fails where it did.
         const resolved = withTokenScopes(typeof options.server === "function" ? { ...base, client: clientFor(base) } : base, scopes);
+
+        // `import()`ed here, not at module scope: see `createMcpFetchHandler`.
+        const { createLunoraMcpServer } = await import("./server");
 
         return await serveStateless(createLunoraMcpServer(resolved), request, { maxRequestBytes, parsedBody });
     });

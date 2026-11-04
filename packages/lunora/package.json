@@ -1,6 +1,6 @@
 {
     "name": "lunorash",
-    "version": "1.0.0-alpha.454",
+    "version": "1.0.0-alpha.478",
     "description": "The Lunora umbrella package: one install for the server authoring API, worker runtime, Durable Objects, and the lunora CLI",
     "keywords": [
         "backend",
@@ -156,9 +156,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -166,17 +164,17 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/cli": "1.0.0-alpha.456",
-        "@lunora/client": "1.0.0-alpha.268",
-        "@lunora/do": "1.0.0-alpha.266",
-        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/flags": "1.0.0-alpha.94",
-        "@lunora/observability": "1.0.0-alpha.188",
-        "@lunora/platform": "1.0.0-alpha.76",
-        "@lunora/ratelimit": "1.0.0-alpha.185",
-        "@lunora/runtime": "1.0.0-alpha.258",
-        "@lunora/server": "1.0.0-alpha.255",
-        "@lunora/values": "1.0.0-alpha.86"
+        "@lunora/cli": "^1.0.0-alpha.480",
+        "@lunora/client": "^1.0.0-alpha.286",
+        "@lunora/do": "^1.0.0-alpha.281",
+        "@lunora/errors": ">=1.0.0-alpha.77 <2.0.0-0",
+        "@lunora/flags": "1.0.0-alpha.104",
+        "@lunora/observability": "^1.0.0-alpha.201",
+        "@lunora/platform": "1.0.0-alpha.80",
+        "@lunora/ratelimit": "1.0.0-alpha.196",
+        "@lunora/runtime": "^1.0.0-alpha.276",
+        "@lunora/server": "^1.0.0-alpha.268",
+        "@lunora/values": "^1.0.0-alpha.95"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",

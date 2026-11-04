@@ -41,11 +41,18 @@ const buildCommand: Command = {
         OUTPUT_FORMAT_OPTION,
         // Both halves declared explicitly, like `typecheck` on `verify`: the handler reads `!== false`.
         {
-            description: "Evaluate every lazy function module in workerd before shipping (default; nothing to check for an eager registry)",
+            description: "Evaluate the modules the Worker loads on demand (lazy functions, auth, API specs) in workerd before shipping (default)",
             name: "smoke-load",
             type: Boolean,
         },
-        { description: "Skip evaluating lazy function modules before shipping", name: "no-smoke-load", type: Boolean },
+        { description: "Skip evaluating on-demand modules before shipping", name: "no-smoke-load", type: Boolean },
+        // Declared as both halves, like `smoke-load`: the handler reads `!== false`.
+        {
+            description: "Profile the built Worker's startup CPU and warn when it nears Cloudflare's 1 s limit (default)",
+            name: "startup-check",
+            type: Boolean,
+        },
+        { description: "Skip profiling the built Worker's startup CPU", name: "no-startup-check", type: Boolean },
         // Declared as `framework-build` + `no-framework-build`, like `smoke-load`: the handler reads `!== false`.
         {
             description: "Run the project's vite/rsbuild client build before bundling the Worker (default when wrangler reads its output)",
@@ -97,6 +104,7 @@ export type BuildOptions = CreateOptions<{
     "out-dir": string | undefined;
     root: string | undefined;
     "smoke-load": boolean | undefined;
+    "startup-check": boolean | undefined;
     // Declared as `strict-advisories` + `no-strict-advisories`; cerebro exposes
     // both under this one positive camelCase key, `undefined` until a side is
     // picked (which is what lets the CI-vs-local default apply).

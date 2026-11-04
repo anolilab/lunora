@@ -17,7 +17,6 @@
  * binding the user's `exec` reads is not knowable here, so every config the
  * deploy creates or reuses is set that way.
  */
-import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
@@ -25,6 +24,7 @@ import { discoverSchemaInfo, resolveSchemaDirectory } from "@lunora/config";
 import { applyModify, findWranglerFile, HYPERDRIVE_PLACEHOLDER_ID, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import { cloudflareRestRequest } from "../../../../../shared/cloudflare-rest";
+import boundedName from "../../util/bounded-name";
 import type { CloudflareEnvironment } from "../../util/cloudflare-credentials";
 import { resolveCloudflareCredentials } from "../../util/cloudflare-credentials";
 import type { Logger } from "../../util/logger";
@@ -61,13 +61,13 @@ interface ProvisionHyperdriveOptions {
     logger: Logger;
     /** The `--env` being deployed. */
     wranglerEnvironment?: string;
+    /** The config to provision, when it is not the `wrangler.jsonc` found in `cwd` (a service's own). */
+    wranglerPath?: string;
 }
 
 type Request = (path: string, init?: RequestInit) => ReturnType<typeof cloudflareRestRequest>;
 
-const NON_NAME_CHARACTER = /[^a-z0-9-]/gu;
 const NON_VARIABLE_CHARACTER = /[^A-Za-z0-9]/gu;
-const TRAILING_DASH = /-$/u;
 
 /** The environment variable a binding's connection string is read from. */
 const connectionStringVariable = (binding: string): string => `LUNORA_${binding.replaceAll(NON_VARIABLE_CHARACTER, "_").toUpperCase()}_URL`;
@@ -90,31 +90,8 @@ const sharedVariable = (bindings: ReadonlyArray<string>): { bindings: string[]; 
     return undefined;
 };
 
-/** Characters of the hash that closes a shortened name, with its dash. */
-const HASH_SUFFIX = 7;
-
-/**
- * The config name for a binding: the deployed Worker's name and the binding, in Cloudflare's alphabet.
- * Past the 32-character limit the front is cut and a short hash of the whole identity closes it, so two
- * long names that share a prefix still get names of their own.
- */
-const configName = (workerName: string, binding: string): string => {
-    const raw = `${workerName}-${binding}`.toLowerCase();
-    const identity = raw.replaceAll(NON_NAME_CHARACTER, "-");
-
-    // A name that needed no change keeps its readable form. One that was cleaned (`billing_api` and `billing-api`
-    // would both read `billing-api`) or is too long is closed with a short hash of the original, which keeps them apart.
-    if (identity === raw && identity.length <= NAME_LIMIT) {
-        return identity;
-    }
-
-    const hash = createHash("sha256")
-        .update(raw)
-        .digest("hex")
-        .slice(0, HASH_SUFFIX - 1);
-
-    return `${identity.slice(0, NAME_LIMIT - HASH_SUFFIX).replace(TRAILING_DASH, "")}-${hash}`;
-};
+/** The config name for a binding: the deployed Worker's name and the binding, within the 32-character limit. */
+const configName = (workerName: string, binding: string): string => boundedName(`${workerName}-${binding}`, NAME_LIMIT);
 
 /** Cloudflare's name for the engine a URL scheme speaks: `postgresql` is `postgres`, and MariaDB is reached as `mysql`. */
 const engineOf = (scheme: string): string => {
@@ -440,8 +417,8 @@ const deployedName = (parsed: HyperdriveWrangler, wranglerEnvironment: string | 
     return typeof own === "string" && own !== "" ? own : `${base}-${wranglerEnvironment}`;
 };
 
-const scanPlaceholders = (cwd: string, wranglerEnvironment: string | undefined): PlaceholderScan | undefined => {
-    const wranglerPath = findWranglerFile(cwd);
+const scanPlaceholders = (cwd: string, wranglerEnvironment: string | undefined, configPath?: string): PlaceholderScan | undefined => {
+    const wranglerPath = configPath ?? findWranglerFile(cwd);
     const parsed = wranglerPath === undefined ? undefined : readWranglerJsonc<HyperdriveWrangler>(wranglerPath).parsed;
 
     if (wranglerPath === undefined || parsed === undefined) {
@@ -541,10 +518,10 @@ const warnIfCaching = async (request: Request, binding: string, id: string, logg
  * them; it never changes the config, since the user chose that id.
  */
 const warnCachingOn = async (
-    options: Pick<ProvisionHyperdriveOptions, "cwd" | "fetch" | "logger" | "wranglerEnvironment">,
+    options: Pick<ProvisionHyperdriveOptions, "cwd" | "fetch" | "logger" | "wranglerEnvironment" | "wranglerPath">,
     environment: CloudflareEnvironment,
 ): Promise<void> => {
-    const wranglerPath = findWranglerFile(options.cwd);
+    const wranglerPath = options.wranglerPath ?? findWranglerFile(options.cwd);
     const parsed = wranglerPath === undefined ? undefined : readWranglerJsonc<HyperdriveWrangler>(wranglerPath).parsed;
     const scope = options.wranglerEnvironment === undefined ? parsed : parsed?.env?.[options.wranglerEnvironment];
     const { accountId, token } = resolveCloudflareCredentials(environment, scope?.account_id ?? parsed?.account_id);
@@ -584,7 +561,7 @@ const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise
         await warnCachingOn(options, environment);
     }
 
-    const scan = scanPlaceholders(options.cwd, options.wranglerEnvironment);
+    const scan = scanPlaceholders(options.cwd, options.wranglerEnvironment, options.wranglerPath);
 
     if (scan === undefined) {
         return undefined;
@@ -698,6 +675,7 @@ const provisionDeployHyperdrive = async (
     command: PreDeployCommand,
     target: string,
     phase: "check" | "create" = "create",
+    wranglerPath?: string,
 ): Promise<string | undefined> => {
     if (target !== "cloudflare") {
         return undefined;
@@ -731,8 +709,13 @@ const provisionDeployHyperdrive = async (
         environment,
         logger: options.logger,
         wranglerEnvironment: options.env,
+        wranglerPath,
     });
 };
 
+/** Whether the config at `configPath` still has a placeholder Hyperdrive id for the environment `environment` names. */
+const hasHyperdrivePlaceholder = (cwd: string, environment: string | undefined, configPath: string): boolean =>
+    scanPlaceholders(cwd, environment, configPath) !== undefined;
+
 export type { ProvisionHyperdriveOptions };
-export { connectionStringVariable, generatedConfigPath, provisionDeployHyperdrive, provisionHyperdrive };
+export { connectionStringVariable, generatedConfigPath, hasHyperdrivePlaceholder, provisionDeployHyperdrive, provisionHyperdrive };

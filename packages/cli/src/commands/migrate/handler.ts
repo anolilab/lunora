@@ -44,6 +44,7 @@ import { diffSnapshots, renderMigrationFile } from "../../util/migration-diff";
 import schemaIrToSnapshot from "../../util/schema-snapshot";
 import { runExportCommand } from "../data-transfer/export";
 import { runImportCommand } from "../data-transfer/import";
+import type { ImportMode } from "../data-transfer/import-plan";
 import type { FetchLike } from "../run/handler";
 import { readAndLogBody } from "../run/handler";
 
@@ -763,6 +764,9 @@ const shortfallWarning = (replace: boolean, counts: { exported: number; inserted
           // target's values. Said outright, because on a rollback those are exactly the rows edited since cutover.
           `Imported ${String(counts.inserted)} of ${String(counts.exported)} exported row(s). The rest already exist in the ${target} target and were left unchanged (reported as conflicts above), so this copied rows missing from ${target}, not later edits to rows it already holds. Re-run with --replace to overwrite them with the ${source} values, or keep the dump with --out and reconcile by hand.`;
 
+/** `--replace` overwrites rows the target already holds; the copy never deletes one, so it is never `replace` mode. */
+const copyMode = (replace: boolean | undefined): ImportMode => (replace === true ? "upsert" : "append");
+
 /**
  * `lunora migrate d1-to-hyperdrive` — copy `.global()` table data from a
  * D1-backed deployment into a Hyperdrive-backed one; `hyperdrive-to-d1` is the
@@ -852,8 +856,8 @@ const runMigrateBackendCommand = async (options: MigrateBackendOptions): Promise
             fetchImpl: options.fetchImpl,
             file: dumpPath,
             logger,
+            mode: copyMode(options.replace),
             prod: options.prod,
-            replace: options.replace,
             token: options.toToken,
             url: toUrl,
             yes: options.yes,

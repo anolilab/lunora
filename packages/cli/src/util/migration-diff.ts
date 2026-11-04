@@ -180,14 +180,16 @@ const renderDropIndex = (tableName: string, indexName: string): string => `DROP 
 /**
  * The column's shape with `optional` stripped — that flag is the same fact as
  * {@link ColumnSnapshot.nullable}, which is reported on its own line, so leaving
- * it in would make one nullability edit print twice. `undefined` for a snapshot
+ * it in would make one nullability edit print twice. `refined` is stripped too: a
+ * `.min()`/`.max()` changes no column, so "write SQL manually" has nothing to
+ * write — the deploy gate reports what it means for stored values. `undefined` for a snapshot
  * written before the shape was recorded.
  */
 const shapeForm = (column: ColumnSnapshot): string | undefined =>
     // `optional: undefined` drops that key from the JSON without moving any
     // other — `JSON.stringify` omits undefined values and a re-assignment keeps
     // the original key position, so the form stays order-stable.
-    column.field === undefined ? undefined : JSON.stringify({ ...column.field, optional: undefined });
+    column.field === undefined ? undefined : JSON.stringify({ ...column.field, optional: undefined, refined: undefined });
 
 /** Where the D1 table-rebuild recipe for dropping a `NOT NULL` lives. */
 const RELAX_NOT_NULL_DOCS = "https://lunora.sh/docs/concepts/migrations#relaxing-not-null-on-a-d1-table";

@@ -196,8 +196,8 @@ while it exists (see FINDINGS.md).
 
 Build the changed package with `build:prod` and run the startup bench at
 `--preset customer`. Compare the eager graph first, since it is deterministic,
-and the Active time second. `scripts/worker-startup-measure.js` is the shared
-measurement code, the same one the CI gate (`check-worker-startup.js`) uses;
+and the Active time second. `scripts/worker-startup-measure.js` holds the
+measurement code (build, eager graph, `wrangler check startup`);
 `scripts/sized-app.mjs` holds the generate/build/restore steps the three benches
 share.
 

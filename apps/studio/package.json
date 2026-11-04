@@ -10,7 +10,7 @@
         "dev": "vite",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "preview": "vite preview",
         "fallow:audit": "fallow audit",
         "fallow:dead-code": "fallow dead-code",

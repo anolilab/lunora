@@ -5,7 +5,8 @@ import { SECRET_VALUE_MAX_TTL_MS } from "@lunora/platform";
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
-import { APPROVAL_TIMEOUT_MAX_MS, definedColumns, SECRET_WAIT_GRACE_MS } from "./component-shared";
+import appCallOptions from "./app-call-options";
+import { approvalTimeoutMs, definedColumns, SECRET_WAIT_GRACE_MS } from "./component-shared";
 import { resolveAgentModel, usageOfFailedTurn } from "./generate";
 import { readHistoryWindow } from "./history-window";
 import { firstEpisodicSource, firstGraphSource, memoryStepName, resolveInjectedSources } from "./memory";
@@ -117,6 +118,8 @@ const normalizeDepth = (depth: number | undefined): number => (isPositiveInteger
 /** Everything one turn (and its tool calls) needs, prepared once per run. */
 interface TurnContext {
     agent: AgentDefinition;
+    /** The agent's export name; keys its approval grants so a same-named tool of another agent on the thread is not covered. */
+    agentName: string;
     /** Dispatch ref of `agents:agentApprovalGranted` — whether a tool is granted for the thread (read inside the gate's step). */
     approvalGrantedRef: ReturnType<typeof toFunctionReference>;
     /** History-compaction seam, when the runtime provided one (else `undefined`). */
@@ -151,6 +154,8 @@ interface TurnContext {
     setState: (state: Record<string, unknown>) => Promise<void>;
     /** Dispatch ref of `agents:agentSettleSecretRequest` — reads a paused secret request's status once its wait ends. */
     settleSecretRef: ReturnType<typeof toFunctionReference>;
+    /** The shard the run was started on (`params.shardKey`), handed to every tool context. */
+    shardKey: string | undefined;
     step: AgentStepLike;
     /** The streaming LLM-turn seam, when available (else `undefined`). */
     streamGenerate: AgentStreamGenerate | undefined;
@@ -310,72 +315,16 @@ const WORKFLOW_TIMEOUT_ERROR_NAME = "WorkflowTimeoutError";
 const isWaitTimeoutError = (error: unknown): boolean => error instanceof Error && error.name === WORKFLOW_TIMEOUT_ERROR_NAME;
 
 /**
- * How long a HITL approval wait hibernates before it gives up (overridable per
- * agent via `approvalTimeout`). A slow approver is the NORMAL case — overnight
- * or over a weekend — so the default is generous; but with no bound at all a
- * never-answered approval hibernates the instance forever, and once the
- * thread's staleness horizon passes, its pending approval can never be
- * resolved again. The reclaim horizon is derived from
- * `APPROVAL_TIMEOUT_MAX_MS`, so the wait always fires first by construction.
- */
-const DEFAULT_APPROVAL_TIMEOUT_MS = 3 * 24 * 60 * 60 * 1000;
-
-/** Milliseconds per unit of the host's duration grammar (`"3 days"`); month/year are nominal. */
-const DURATION_UNIT_MS: Record<string, number> = {
-    day: 86_400_000,
-    hour: 3_600_000,
-    minute: 60_000,
-    month: 30 * 86_400_000,
-    second: 1000,
-    week: 7 * 86_400_000,
-    year: 365 * 86_400_000,
-};
-
-/** The host's `"<n> <unit>[s]"` duration grammar (hoisted, avoids recompilation). */
-const DURATION_PATTERN = /^(\d+(?:\.\d+)?) (day|hour|minute|month|second|week|year)s?$/u;
-
-/**
- * Resolve the agent's configured approval timeout to a bounded number of
- * milliseconds.
- *
- * Returns ms (which `waitForEvent` accepts natively) rather than passing the
- * configured value through, because the bound is the point: a value above
- * {@link APPROVAL_TIMEOUT_MAX_MS} would let the thread be reclaimed out from
- * under a still-pending approval. An unparseable string cannot reach here from
- * TypeScript (the property's type is the host's closed grammar) but can from
- * plain JS — it falls back to the default rather than handing the host a
- * duration it will reject mid-run.
- */
-const approvalTimeoutMs = (configured: number | string | undefined): number => {
-    if (configured === undefined) {
-        return DEFAULT_APPROVAL_TIMEOUT_MS;
-    }
-
-    if (typeof configured === "number") {
-        return Math.min(configured, APPROVAL_TIMEOUT_MAX_MS);
-    }
-
-    const match = DURATION_PATTERN.exec(configured);
-
-    if (match === null) {
-        return DEFAULT_APPROVAL_TIMEOUT_MS;
-    }
-
-    return Math.min(Number(match[1]) * (DURATION_UNIT_MS[match[2] as string] as number), APPROVAL_TIMEOUT_MAX_MS);
-};
-
-/**
  * Pause the run on a human-in-the-loop tool approval: persist an
  * `"awaiting_approval"` marker (filtered out of the model prompt, but observable
  * by a client), move the thread to `"awaiting_input"`, then hibernate on the
  * deterministically named durable event `approval:<toolCallId>`. A workflow
  * replay memoizes the resolved wait, so the run resumes with the recorded
  * decision without pausing (or re-persisting) again. Named ONLY from the
- * replay-stable `call.id`. The wait carries a timeout (default
- * {@link DEFAULT_APPROVAL_TIMEOUT_MS}, configurable via the agent's
- * `approvalTimeout` and bounded by {@link approvalTimeoutMs}) so a
- * never-answered approval ends as a rejection instead of hibernating the run
- * forever.
+ * replay-stable `call.id`. The wait carries a timeout (default 3 days,
+ * configurable via the agent's `approvalTimeout` and bounded by
+ * {@link approvalTimeoutMs}) so a never-answered approval ends as a rejection
+ * instead of hibernating the run forever.
  *
  * The wait's match `type` is scoped to THIS call (`agent-approval:<call.id>`,
  * the same format `component.ts`'s `agentResolveApproval` sends) — native CF
@@ -395,6 +344,7 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
             expiresAt: Date.now() + timeoutMs,
             messageKey: `${instanceId}:approval:${call.id}`,
             role: "tool",
+            approvalAgent: turnContext.agentName,
             status: "awaiting_approval",
             toolCallId: call.id,
             toolName: call.name,
@@ -630,8 +580,25 @@ const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCal
 };
 
 const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: number): Promise<void> => {
-    const { agent, approvalGrantedRef, depth, env, exports, getState, instanceId, onTokenDelta, owner, persist, run, setState, step, threadKey, tools } =
-        turnContext;
+    const {
+        agent,
+        agentName,
+        approvalGrantedRef,
+        depth,
+        env,
+        exports,
+        getState,
+        instanceId,
+        onTokenDelta,
+        owner,
+        persist,
+        run,
+        setState,
+        shardKey,
+        step,
+        threadKey,
+        tools,
+    } = turnContext;
     const stepName = `tool:${call.name}:${call.id}`;
     const tool: AnyAgentTool | undefined = tools[call.name];
     const messageKey = `${instanceId}:tool:${call.id}`;
@@ -693,6 +660,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: 
         reportProgress,
         run,
         setState,
+        shardKey,
         step,
         threadKey,
         toolCallId: call.id,
@@ -700,7 +668,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: 
     // The gate's view: everything `toolContext` has EXCEPT `setState` — a gate
     // that mutates state is a side effect inside a decision predicate, which is
     // exactly the misuse durability here is fixing, not relocating.
-    const gateContext: AgentApprovalContext = { depth, env, getState, idempotencyKey: stepName, instanceId, run, threadKey, toolCallId: call.id };
+    const gateContext: AgentApprovalContext = { depth, env, getState, idempotencyKey: stepName, instanceId, run, shardKey, threadKey, toolCallId: call.id };
     // Distinct from `stepName` (`tool:${call.name}:${call.id}`) so
     // `@lunora/workflow`'s BY-NAME step memoization can never confuse the gate's
     // durable result with the tool's own (see the advisor's duplicate-step-name
@@ -714,7 +682,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: 
     // turn can recover instead of stalling.
     let status: "approved" | undefined;
     let approvalScope: "thread" | undefined;
-    const isGranted = async (): Promise<boolean> => (await run(approvalGrantedRef, { key: threadKey, toolName: call.name })) === true;
+    const isGranted = async (): Promise<boolean> => (await run(approvalGrantedRef, { agent: agentName, key: threadKey, toolName: call.name })) === true;
 
     if (await resolveNeedsApproval(tool, call.input, step, gateStepName, gateContext, isGranted)) {
         const { decision, note, scope } = await awaitApproval(turnContext, call);
@@ -1138,7 +1106,13 @@ const graphTraverseBounds = (graph: AgentMemoryOptions["graph"]): Record<string,
     definedColumns({ depth: graph?.depth, fanOut: graph?.fanOut, maxNodes: graph?.maxNodes, maxSeeds: graph?.maxSeeds }) as Record<string, number>;
 
 /** Dispatch a `"semantic"` source's RAG action as a `memory:retrieve[:<key>]` step and read its context. */
-const dispatchSemanticMemory = async (source: AgentMemorySource, input: string, step: AgentStepLike, run: AgentRunFunction): Promise<string | undefined> => {
+const dispatchSemanticMemory = async (
+    source: AgentMemorySource,
+    input: string,
+    shardKey: string | undefined,
+    step: AgentStepLike,
+    run: AgentRunFunction,
+): Promise<string | undefined> => {
     // A semantic source without a `source` is rejected at `defineAgent`; guard
     // defensively for a hand-built definition that bypassed it.
     if (source.source === undefined) {
@@ -1148,7 +1122,8 @@ const dispatchSemanticMemory = async (source: AgentMemorySource, input: string, 
     const memorySource = toFunctionReference(source.source);
     const { topK } = source;
     const stepName = memoryStepName("memory:retrieve", source.key);
-    const retrieved = await step.do(stepName, async () => run(memorySource, { query: input, ...(topK === undefined ? {} : { topK }) }));
+    const args = { query: input, ...(topK === undefined ? {} : { topK }) };
+    const retrieved = await step.do(stepName, async () => run(memorySource, args, appCallOptions(shardKey)));
 
     return readRetrievedContext(retrieved);
 };
@@ -1218,9 +1193,14 @@ const dispatchInjectedSource = async (
         input: string;
         owner: string | undefined;
         run: AgentRunFunction;
+        shardKey: string | undefined;
         step: AgentStepLike;
     },
 ): Promise<string | undefined> => {
+    // Only a semantic source follows the run's shard: its `source` is an app function over
+    // the app's (possibly `.shardBy`) tables. Episodic and graph memory read the agent's own
+    // unsharded tables, which their run-end upserts write on the default shard, so a recall
+    // anywhere else would find nothing.
     if (source.kind === "episodic") {
         return dispatchEpisodicMemory(source, deps.owner, deps.episodeRecall, deps.step, deps.run);
     }
@@ -1229,7 +1209,7 @@ const dispatchInjectedSource = async (
         return dispatchGraphMemory(source, deps.input, deps.owner, deps.graphTraverse, deps.step, deps.run);
     }
 
-    return dispatchSemanticMemory(source, deps.input, deps.step, deps.run);
+    return dispatchSemanticMemory(source, deps.input, deps.shardKey, deps.step, deps.run);
 };
 
 /**
@@ -1248,6 +1228,7 @@ const retrieveMemoryContext = async (
     agent: AgentDefinition,
     input: string,
     owner: string | undefined,
+    shardKey: string | undefined,
     paths: AgentFunctionPaths,
     step: AgentStepLike,
     run: AgentRunFunction,
@@ -1268,7 +1249,7 @@ const retrieveMemoryContext = async (
 
     for (const source of sources) {
         // eslint-disable-next-line no-await-in-loop -- sequential durable steps in a stable order ARE the replay-safe execution model
-        const context = await dispatchInjectedSource(source, { episodeRecall, graphTraverse, input, owner, run, step });
+        const context = await dispatchInjectedSource(source, { episodeRecall, graphTraverse, input, owner, run, shardKey, step });
 
         if (context !== undefined) {
             contexts.push(context);
@@ -1760,7 +1741,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 
     // Memory step: dispatch the configured retrieval action once per run and
     // inject the assembled context into every turn's prompt.
-    const memoryContext = await retrieveMemoryContext(agent, params.input, params.owner, paths, step, run);
+    const memoryContext = await retrieveMemoryContext(agent, params.input, params.owner, params.shardKey, paths, step, run);
 
     // Resolve the system prompt once per run. A dynamic `instructions` thunk is
     // pure (env + run params in, string out), so calling it at the top level is
@@ -1770,6 +1751,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 
     const turnContext: TurnContext = {
         agent,
+        agentName: exportName,
         approvalGrantedRef,
         openSecretRef,
         settleSecretRef,
@@ -1791,6 +1773,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         persist,
         run,
         setState,
+        shardKey: params.shardKey,
         step,
         streamGenerate,
         threadKey: params.threadKey,
@@ -1903,4 +1886,4 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 };
 
 export type { AgentLoopOptions };
-export { addUsage, approvalTimeoutMs, compactHistory, runAgentLoop, splitForCompaction };
+export { addUsage, compactHistory, runAgentLoop, splitForCompaction };

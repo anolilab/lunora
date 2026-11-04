@@ -57,9 +57,15 @@ export default defineConfig({
         // App codegen (docs: fumadocs-mdx; playground: lunora codegen) emits the
         // generated dirs the apps' source imports. `lunora codegen` loads
         // @lunora/codegen + the @lunora deps, so build the upstream packages first.
+        // The outputs are what a cache hit restores. Without them a hit skips the
+        // command and leaves the gitignored generated dir missing, so the app's
+        // lint and tests run against imports that do not exist.
         codegen: {
             cache: true,
             dependsOn: ["^build"],
+            // Declared so a cache HIT restores the generated dirs too. Without it a hit replays the log and
+            // leaves the checkout without them: the playground's tests import its gitignored `_generated`.
+            outputs: ["{projectRoot}/lunora/_generated", "{projectRoot}/.source"],
         },
         // fallow (codebase-intelligence CLI) is pure static analysis over each
         // project's source — no dist needed, so no ^build dependency. health and
@@ -95,14 +101,6 @@ export default defineConfig({
         "lint:package-json": {
             cache: true,
             dependsOn: ["default"],
-        },
-        "lint:prettier": {
-            cache: true,
-            dependsOn: ["default", "^public"],
-        },
-        "lint:prettier:fix": {
-            cache: true,
-            dependsOn: ["default", "^public"],
         },
         "lint:types": {
             cache: true,
@@ -145,12 +143,59 @@ export default defineConfig({
     taskRunner: {
         parallel: 5,
     },
+    // Released by `vis release ci release` in .github/workflows/semantic-release.yml.
+    release: {
+        acknowledgeUnstable: true,
+        // `vis release generate` merge-bases against this on a PR branch.
+        baseBranch: "alpha",
+        // vis's default formatter. Its flat entry list is not grouped by commit type, so apps/docs
+        // cannot read section kinds from it; see .agents/docs/workflow.md.
+        // `repo` is pinned: otherwise vis looks it up with `gh repo view`, and a failed lookup drops
+        // every compare link from the headings without any error.
+        changelog: ["default", { heading: "## {name} [{version}]({compareUrl}) ({date})", repo: "anolilab/lunora" }],
+        channels: {
+            alpha: { mode: "auto-publish", prerelease: "alpha", tag: "alpha" },
+            beta: { mode: "auto-publish", prerelease: "beta", tag: "beta" },
+            main: { mode: "auto-publish", tag: "latest" },
+            next: { mode: "auto-publish", prerelease: "next", tag: "next" },
+        },
+        // Continues each package's existing `{name}@{version}` tag stream.
+        currentVersionResolver: "git-tag",
+        defaultManaged: true,
+        formatChangedFiles: true,
+        // vis would release every other type as a patch; breaking commits bypass this pattern.
+        ignoreCommitPattern: ["^(build|chore|ci|deps|docs|refactor|style|test|translation)(\\([^)]*\\))?:"],
+        // Keeps promotion-safe sibling ranges (`>=1.0.0-alpha.76 <2.0.0-0`) that still admit
+        // the new version; the default rewrite drops the ceiling.
+        internalDependencyRanges: "preserve-satisfying",
+        gitUser: { email: "github-actions[bot]@users.noreply.github.com", name: "github-actions-shell" },
+        publish: {
+            catalogResolution: "auto",
+            cleanPackageJson: true,
+            packManager: "auto",
+            protocolResolution: "pack",
+            publishArgs: ["--provenance"],
+            publishStrategy: "native",
+        },
+        // Rebase-and-retry the release commit when the branch moved mid-run.
+        pushRetries: 5,
+        // vis's stock walk skips prerelease channels, and every release here is one.
+        successWalk: { skipPrerelease: false },
+        // Tags go on the planned commit, which is already on the branch, so a lost or
+        // rebased release commit never strands a tag (#1054).
+        tagTarget: "source",
+        // A satisfied sibling peer range does not release its consumer; asserted by
+        // scripts/check-sibling-peer-ranges.js.
+        updateInternalDependencies: "out-of-range",
+    },
     staged: {
         // Reject a raw NUL byte (which turns a source file binary, hiding it from
-        // diff/blame/review), then Prettier-format every staged file, repo-wide.
-        // `--ignore-unknown`: Prettier has no TOML parser here, so a staged
-        // `.toml` would otherwise fail the hook instead of just the NUL check.
-        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,toml,json,json5,jsonc}": ["node scripts/no-nul-bytes.mjs", "pnpm exec prettier --write --ignore-unknown"],
+        // diff/blame/review), then format the staged code and data files with oxfmt.
+        // oxfmt skips TOML and Markdown by config, so those stay out of its glob. A staged
+        // lockfile is ignored by .prettierignore, which leaves oxfmt nothing to format; that
+        // must not fail the commit.
+        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,toml,json,json5,jsonc}": ["node scripts/no-nul-bytes.mjs"],
+        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,json,json5,jsonc,svelte}": ["pnpm exec oxfmt --no-error-on-unmatched-pattern"],
         // ESLint lives only in packages/* (each owns an eslint.config.js).
         // @anolilab/eslint-config picks plugins from the cwd's package.json, so
         // staged package files must be linted from INSIDE their package.
@@ -160,8 +205,6 @@ export default defineConfig({
         // plugin set and break rules + disable directives.
         "packages/**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx}": [{ command: "pnpm exec eslint --fix", perPackage: true }],
         "**/*.{md,mdx}": ["pnpm exec prettier --write"],
-        // Svelte needs prettier-plugin-svelte (wired in prettier.config.js).
-        "**/*.svelte": ["pnpm exec prettier --write"],
     },
     secrets: {
         config: {

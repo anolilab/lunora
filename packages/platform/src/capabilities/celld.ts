@@ -80,7 +80,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         cronTriggers: {
             level: "native",
-            note: "`triggers.crons` is a supported Wrangler key and celld schedules durably fleet-wide: one handler per occurrence across the whole fleet, one at a time per script, a failure retried with doubling backoff (giving up after six, or on `noRetry()`) without ever delaying the next occurrence, and one catch-up run of the most recent missed occurrence after downtime. Two parser gaps: celld rejects a descending range (`SAT-SUN`, `NOV-FEB`) and `*` inside a list (`1,*`)",
+            note: "`triggers.crons` is a supported Wrangler key and celld schedules durably fleet-wide: one handler per occurrence across the whole fleet, one at a time per script, a failure retried with doubling backoff (giving up after six, or on `noRetry()`) without ever delaying the next occurrence, and one catch-up run of the most recent missed occurrence after downtime. Two parser gaps: celld rejects a descending range (`SAT-SUN`, `NOV-FEB`) and `*` inside a list (`1,*`). The runtime's SchedulerDO-held per-job lease and run history apply unchanged (the lease is redundant with celld's one-at-a-time-per-script delivery, and harmless)",
         },
         crossShardFanout: {
             level: "emulated",
@@ -180,9 +180,13 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "celld does not terminate TLS or front a CDN: request.url's hostname comes from the Host header unless a trusted proxy is declared (`--trust-forwarded-headers`, which then reads X-Forwarded-Host / -Proto). Pin the host at the ingress proxy, or configure a base (publicBaseUrl) rather than trusting the request",
         },
+        deploymentPause: {
+            level: "emulated",
+            note: "The same SchedulerDO-held flag as on Cloudflare, on cell storage and alarms: jobs are held by the alarm, the worker's router, cron and queue checks are unchanged. A queue message held while paused is re-sent as a delayed copy with a fresh attempt budget, and the registry of named scheduler instances a pause fans out to lives in the same SchedulerDO storage, so no extra host contract is needed",
+        },
         scheduler: {
             level: "emulated",
-            note: "SchedulerDO's `runAfter`/`runAt` half runs on cell alarms, and declarative crons reach `scheduled()` through celld's fleet-wide Cron Triggers. As on Cloudflare there is no runtime cron registration, and celld's cron parser rejects descending ranges and `*` inside a list",
+            note: "SchedulerDO's `runAfter`/`runAt` half runs on cell alarms and supports `retry.forever`, and declarative crons reach `scheduled()` through celld's fleet-wide Cron Triggers. As on Cloudflare there is no runtime cron registration, and celld's cron parser rejects descending ranges and `*` inside a list",
         },
         secrets: {
             level: "unsupported",
@@ -215,6 +219,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         shardAlarms: {
             level: "native",
             note: "`storage.setAlarm`/`getAlarm`/`deleteAlarm` and the `alarm()` handler, durable across a cell moving between nodes",
+        },
+        adminTokenRevocation: {
+            level: "unsupported",
+            note: "Not yet provisioned or exercised on celld: nothing here binds the AdminRevocationDO namespace (createWorker adminRevocations), so no named admin token can be created and any that exist are refused (ADMIN_TOKEN_NOT_CONFIGURED); the root LUNORA_ADMIN_TOKEN is the only admin credential. celld has no bookmark API, so a restore cannot revive a revoked token",
         },
         shardedState: {
             level: "native",

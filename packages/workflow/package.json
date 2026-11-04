@@ -1,6 +1,6 @@
 {
     "name": "@lunora/workflow",
-    "version": "1.0.0-alpha.101",
+    "version": "1.0.0-alpha.111",
     "description": "Durable workflows for Lunora: defineWorkflow over Cloudflare Workflows, generated WorkflowEntrypoint classes, and the ctx.workflows surface",
     "keywords": [
         "cloudflare",
@@ -52,9 +52,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -63,14 +61,14 @@
     },
     "dependencies": {
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/values": "1.0.0-alpha.86",
-        "@lunora/wire": "1.0.0-alpha.5"
+        "@lunora/values": "^1.0.0-alpha.95",
+        "@lunora/wire": "1.0.0-alpha.6"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@lunora/dispatch": "workspace:*",
-        "@lunora/server": "1.0.0-alpha.255",
+        "@lunora/server": "^1.0.0-alpha.268",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

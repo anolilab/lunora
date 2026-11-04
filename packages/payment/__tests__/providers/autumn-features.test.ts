@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { AutumnFeaturesClientLike } from "../../src/providers/autumn-features";
 import { createAutumnFeatures } from "../../src/providers/autumn-features";
@@ -78,7 +78,7 @@ describe("autumn native features", () => {
         expect.assertions(5);
 
         const calls: RecordedCall[] = [];
-        const features = createAutumnFeatures({ client: makeClient(calls) });
+        const features = createAutumnFeatures({ client: () => makeClient(calls) });
 
         const created = await features.entities.create("user_1", { featureId: "seats", id: "ent_1", name: "Workspace A" });
 
@@ -103,7 +103,7 @@ describe("autumn native features", () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
-        const features = createAutumnFeatures({ client: makeClient(calls) });
+        const features = createAutumnFeatures({ client: () => makeClient(calls) });
 
         const minted = await features.referrals.createCode("user_1", "launch-program");
 
@@ -119,7 +119,7 @@ describe("autumn native features", () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
-        const features = createAutumnFeatures({ client: makeClient(calls) });
+        const features = createAutumnFeatures({ client: () => makeClient(calls) });
 
         const listed = await features.events.list("user_1", { featureId: "api_calls" });
 
@@ -134,7 +134,7 @@ describe("autumn native features", () => {
     it("lists the plan catalog", async () => {
         expect.assertions(2);
 
-        const features = createAutumnFeatures({ client: makeClient() });
+        const features = createAutumnFeatures({ client: () => makeClient() });
 
         const plans = await features.plans.list();
 
@@ -146,7 +146,7 @@ describe("autumn native features", () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
-        const features = createAutumnFeatures({ client: makeClient(calls) });
+        const features = createAutumnFeatures({ client: () => makeClient(calls) });
 
         const result = await features.checkout("user_1", {
             entityId: "ent_1",
@@ -167,5 +167,22 @@ describe("autumn native features", () => {
             planId: "pro",
             successUrl: "https://x/ok",
         });
+    });
+
+    it("loads the client on the first call, once, and retries a load that failed", async () => {
+        expect.assertions(4);
+
+        const load = vi.fn<() => Promise<AutumnFeaturesClientLike>>().mockRejectedValueOnce(new Error("sdk failed to load")).mockResolvedValue(makeClient());
+        const features = createAutumnFeatures({ client: load });
+
+        // Built at module scope in an app, so building it must not load the SDK.
+        expect(load).not.toHaveBeenCalled();
+
+        await expect(features.plans.list()).rejects.toThrow("sdk failed to load");
+        await expect(features.plans.list()).resolves.toHaveLength(2);
+
+        await features.plans.list();
+
+        expect(load).toHaveBeenCalledTimes(2);
     });
 });

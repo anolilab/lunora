@@ -3,9 +3,13 @@ import { createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
+import { withRunShard } from "../../../shared/run-shard";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import type { AgentBindingSpec, AgentHandle, AgentRunFunction, AgentRunInput, AgentWorkflowBindingLike } from "./types";
+
+/** Tries to record a cancelled run's status before giving up on the bookkeeping. */
+const CANCEL_PATCH_ATTEMPTS = 3;
 
 /**
  * Build the `ctx.agents` producer surface from the codegen-emitted spec list
@@ -19,14 +23,18 @@ import type { AgentBindingSpec, AgentHandle, AgentRunFunction, AgentRunInput, Ag
  * and the env-backed `createDispatchRunner` (the same runner the workflow body
  * uses — it POSTs to `/_lunora/scheduler/dispatch`) is built on demand; tests
  * inject a `dispatch` double.
+ *
+ * `shardKey` is the shard of the ctx this producer rides (the generated shard passes
+ * its own). Every run started here carries it, so the run's tools reach the same
+ * tenant's `.shardBy(...)` data the starting mutation could; absent for the default shard.
  * @experimental
  */
 const createAgentContext = (
     env: Record<string, unknown>,
     specs: ReadonlyArray<AgentBindingSpec>,
-    context: { dispatch?: AgentRunFunction; exports?: unknown } = {},
+    context: { dispatch?: AgentRunFunction; exports?: unknown; shardKey?: string } = {},
 ): Record<string, AgentHandle> => {
-    const { dispatch, exports } = context;
+    const { dispatch, exports, shardKey } = context;
     const agents: Record<string, AgentHandle> = {};
     const patchThread = toFunctionReference(DEFAULT_AGENT_FUNCTION_PATHS.patchThread);
     const resolveDispatch = (): AgentRunFunction => dispatch ?? createDispatchRunner({ env, label: "@lunora/agent" });
@@ -56,14 +64,20 @@ const createAgentContext = (
                 await instance.terminate();
 
                 // `terminate` is the irreversible act — the run is already gone.
-                // The status patch is best-effort bookkeeping: if it fails, cancel()
-                // must NOT throw (a retry would re-terminate an already-dead
-                // instance), so swallow it. The stale "running" status is reconciled
-                // out-of-band rather than leaving the thread wedged.
-                try {
-                    await resolveDispatch()(patchThread, { instanceId: id, status: "cancelled" });
-                } catch {
-                    // Non-fatal — the run is terminated; thread status is reconciled separately.
+                // The status patch is bookkeeping, but a thread left `awaiting_input`
+                // keeps listing the dead run's approval in the inbox until its deadline,
+                // so a transient failure is retried. cancel() must still NOT throw once
+                // the attempts run out (a retry of cancel() would re-terminate an
+                // already-dead instance), so the last failure is swallowed.
+                for (let attempt = 0; attempt < CANCEL_PATCH_ATTEMPTS; attempt += 1) {
+                    try {
+                        // eslint-disable-next-line no-await-in-loop -- attempts are sequential; a retry follows a failure
+                        await resolveDispatch()(patchThread, { instanceId: id, status: "cancelled" });
+
+                        break;
+                    } catch {
+                        // Non-fatal — the run is terminated; thread status is reconciled separately.
+                    }
                 }
             },
             // Carried from the codegen spec (`defineAgent({ publicRun: true })`).
@@ -79,7 +93,10 @@ const createAgentContext = (
                     throw new LunoraError("BAD_REQUEST", `@lunora/agent: run input ${BRANCH_MARKER_REJECTION}`);
                 }
 
-                const instance = await resolve().create({ ...(options?.id === undefined ? {} : { id: options.id }), params: input });
+                // The starting shard replaces a caller-supplied one: an app mutation forwarding
+                // its args may hand a client's input through, and that client was authorized
+                // for this shard, not the one it names.
+                const instance = await resolve().create({ ...(options?.id === undefined ? {} : { id: options.id }), params: withRunShard(input, shardKey) });
 
                 return { id: instance.id };
             },

@@ -121,14 +121,19 @@ emits a `sql` config thunk instead. Wire it on the app builder:
 ```ts title="src/server/index.ts"
 import type { HyperdriveLike } from "@lunora/hyperdrive";
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
-import postgres from "postgres";
 
 import { defineApp } from "../../lunora/_generated/app";
 
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
     // Called once per shard construction, not per request.
-    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 })))
+    .hyperdrive((env) =>
+        fromPostgresJs(async () => {
+            const { default: postgres } = await import("postgres");
+
+            return postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 });
+        }),
+    )
     .build();
 
 export const ShardDO = app.ShardDO;
@@ -138,9 +143,20 @@ Hand-composing the worker instead? The same thunk is `createShardDO({ sql })`:
 
 ```ts
 export const ShardDO = createShardDO({
-    sql: (env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 })),
+    sql: (env) =>
+        fromPostgresJs(async () => {
+            const { default: postgres } = await import("postgres");
+
+            return postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 });
+        }),
 });
 ```
+
+The adapter takes a **loader**, not a driver: it runs on the first query and
+its client is reused, so the driver stays out of the Worker's startup graph. A
+static `import postgres from "postgres"` in the entry is evaluated at startup and
+defeats this. A failed load rejects that query; the next one retries. For `pg`,
+the loader may `await client.connect()` before returning the client.
 
 Without the thunk `ctx.sql` is a stub whose every method throws a message
 pointing back at this wiring.
@@ -339,7 +355,13 @@ records `no sourceClient resolved for binding "…"` and the table stays empty.
 // worker.ts
 export default defineApp<Env>()
     .shard((env) => env.SHARD)
-    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString, { fetch_types: false, max: 5 })))
+    .sourceClient((env, binding) =>
+        fromPostgresJs(async () => {
+            const { default: postgres } = await import("postgres");
+
+            return postgres((env[binding] as { connectionString: string }).connectionString, { fetch_types: false, max: 5 });
+        }),
+    )
     .build();
 ```
 
@@ -428,27 +450,42 @@ the driver on the DO instance and rebuild it lazily after hibernation.
 ```ts tab="Postgres"
 import { fromPostgresJs } from "@lunora/hyperdrive";
 import { createPostgresGlobalCtxDb } from "@lunora/hyperdrive/global";
-import postgres from "postgres";
 
-const sql = postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 });
+// The loader runs on the first statement, so postgres.js is not evaluated at Worker startup.
+const globalDb = createPostgresGlobalCtxDb(
+    fromPostgresJs(async () => {
+        const { default: postgres } = await import("postgres");
 
-const globalDb = createPostgresGlobalCtxDb(fromPostgresJs(sql), { schema });
+        return postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 });
+    }),
+    { schema },
+);
 ```
 
 ```ts tab="MySQL"
 import { createMysqlGlobalCtxDb } from "@lunora/hyperdrive/global";
-import mysql from "mysql2/promise";
 
 // CLIENT_FOUND_ROWS is REQUIRED — the affected-rows OCC guard must see matched
 // (not changed) rows, or an idempotent patch reports 0 and raises a false conflict.
 // `disableEval` is required for mysql2 on Workers.
 // The server's sql_mode must not include NO_BACKSLASH_ESCAPES (see "Drivers & placeholders").
-const pool = mysql.createPool({ uri: env.HYPERDRIVE.connectionString, disableEval: true, flags: ["FOUND_ROWS"] });
+// The loader runs on the first statement, so mysql2 is not evaluated at Worker startup.
+const globalDb = createMysqlGlobalCtxDb(
+    async () => {
+        const { createPool } = await import("mysql2/promise");
 
-const globalDb = createMysqlGlobalCtxDb(pool, { schema });
+        return createPool({ uri: env.HYPERDRIVE.connectionString, disableEval: true, flags: ["FOUND_ROWS"] });
+    },
+    { schema },
+);
 ```
 
 </Tabs>
+
+A `.global()` write commits its row and companion rows in one transaction, so the
+driver must be able to open one: a postgres.js client with `begin()`, or a mysql2
+**pool** (`createPool`, not a single `createConnection`). Anything else is refused
+with `GLOBAL_TRANSACTION_UNSUPPORTED` instead of committing statement by statement.
 
 ### Turn Hyperdrive's query cache off
 
@@ -536,7 +573,7 @@ the engine rather than by Lunora's scorer.
 The convenience constructors cover the common path. For custom wiring, the
 lower-level pieces are also exported:
 
-- `buildPgExec(client)` / `buildMysqlExec(connection)` turn a driver into the
+- `buildPgExec(client)` / `buildMysqlExec(load)` turn a driver into the
   store's `SqlExec`.
 - `postgresDialect` / `mysqlDialect` are the engine dialects.
 - `createHyperdriveGlobalCtxDb({ engine, exec, ...storeOptions })` is the
@@ -558,7 +595,6 @@ binding went:
 ```ts title="src/server/index.ts"
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import { createPgVectorIndex } from "@lunora/hyperdrive/global";
-import postgres from "postgres";
 
 // Built once, not per request: `vectors` is called on every dispatch, and a fresh
 // index object means a fresh provisioning memo — five extra round trips each time.
@@ -567,7 +603,11 @@ let index: ReturnType<typeof createPgVectorIndex> | undefined;
 createShardDO({
     vectors: (env) => {
         index ??= createPgVectorIndex({
-            client: fromPostgresJs(postgres(createHyperdrive((env as Env).HYPERDRIVE).connectionString, { fetch_types: false, max: 5 })),
+            client: fromPostgresJs(async () => {
+                const { default: postgres } = await import("postgres");
+
+                return postgres(createHyperdrive((env as Env).HYPERDRIVE).connectionString, { fetch_types: false, max: 5 });
+            }),
             dimensions: 768,
             metric: "cosine",
             name: "posts_search",
@@ -649,9 +689,9 @@ than -500.
 | Export                                                                                                                                     | Purpose                                                                           |
 | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
 | `createHyperdrive(binding)`                                                                                                                | Lift `connectionString` + discrete parts off the binding                          |
-| `fromPostgresJs(client)`                                                                                                                   | Wrap a postgres.js client as a `SqlClient`                                        |
-| `fromNodePg(client)`                                                                                                                       | Wrap a `pg` Client/Pool as a `SqlClient`                                          |
-| `fromMysql2(connection)`                                                                                                                   | Wrap a `mysql2/promise` connection/pool as a `SqlClient`                          |
+| `fromPostgresJs(load)`                                                                                                                     | Wrap a postgres.js client, built by `load` on first query, as a `SqlClient`       |
+| `fromNodePg(load)`                                                                                                                         | Wrap a `pg` Client/Pool, built by `load` on first query, as a `SqlClient`         |
+| `fromMysql2(load)`                                                                                                                         | Wrap a `mysql2/promise` connection/pool, built by `load`, as a `SqlClient`        |
 | `pullSourceRows(sql, { query, params, idColumn?, map? })`                                                                                  | Run a tenant query + project rows to Lunora docs (read side of the ingest bridge) |
 | `projectSourceRow(row, { idColumn?, map? })`                                                                                               | Project one external row → a document with `_id`                                  |
 | `SqlClient`, `HyperdriveLike`, `HyperdriveConnection`, `PostgresJsLike`, `NodePgLike`, `Mysql2Like`, `ProjectOptions`, `PullSourceOptions` | Type-only                                                                         |
@@ -661,9 +701,9 @@ From `@lunora/hyperdrive/global` (reactive `.global()` backend):
 | Export                                                      | Purpose                                                                                                                           |
 | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `createPostgresGlobalCtxDb(client, options)`                | Build a reactive Postgres `.global()` writer (`globalDb`)                                                                         |
-| `createMysqlGlobalCtxDb(connection, options)`               | Build a reactive MySQL `.global()` writer (needs `FOUND_ROWS`)                                                                    |
+| `createMysqlGlobalCtxDb(load, options)`                     | Build a reactive MySQL `.global()` writer (needs `FOUND_ROWS`)                                                                    |
 | `createHyperdriveGlobalCtxDb({ engine, exec, … })`          | General factory the two convenience constructors call                                                                             |
-| `buildPgExec(client)` / `buildMysqlExec(conn)`              | Wrap a driver as the store's `SqlExec`                                                                                            |
+| `buildPgExec(client)` / `buildMysqlExec(load)`              | Wrap a driver as the store's `SqlExec`                                                                                            |
 | `postgresDialect` / `mysqlDialect`                          | The engine dialects                                                                                                               |
 | `createPgVectorIndex({ client, name, dimensions })`         | A `pgvector`-backed index for `ctx.vectors` (no Vectorize binding); `name` is the SQL table identifier, not the `vectors` map key |
 | `exportHyperdriveGlobalRows` / `importHyperdriveGlobalRows` | The admin export/import of `.global()` rows (`lunora export`/`import`, `migrate d1-to-hyperdrive` and back); codegen wires them   |

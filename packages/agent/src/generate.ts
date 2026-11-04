@@ -1,9 +1,9 @@
-import { jsonSchema } from "@ai-sdk/provider-utils";
 import { usageStatus } from "@lunora/ai/create";
 import { LunoraError } from "@lunora/errors";
 import type { LanguageModel, LanguageModelUsage, ModelMessage, Tool } from "ai";
 
 import resolveAgentAi from "./agent-ai";
+import jsonSchema from "./json-schema";
 import { FAILED_TURN_USAGE, summarizeUsage } from "./telemetry/common";
 import type {
     AgentCompact,

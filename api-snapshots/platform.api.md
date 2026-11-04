@@ -282,6 +282,7 @@ const NOOP_EXECUTION_CONTEXT: ExecutionContextLike;
 ```ts
 interface PlatformCapabilities {
     features: {
+        adminTokenRevocation?: Capability;
         agents?: Capability;
         ai?: Capability;
         aiSearch?: Capability;
@@ -300,6 +301,7 @@ interface PlatformCapabilities {
         cronTriggers?: Capability;
         crossShardFanout?: Capability;
         deliveryAuthorization?: Capability;
+        deploymentPause?: Capability;
         durableStreams?: Capability;
         edgeRequestMetadata?: Capability;
         globalTables?: Capability;
@@ -580,6 +582,7 @@ interface ScheduleOptions {
     delayMs?: number;
     retry?: {
         backoffMultiplier?: number;
+        forever?: boolean;
         initialDelayMs?: number;
         maxAttempts?: number;
         maxDelayMs?: number;
@@ -595,6 +598,21 @@ interface ScheduledJob {
     id: string;
     scheduledFor: number;
 }
+```
+
+### `ScheduledJobRecord` (interface)
+
+```ts
+interface ScheduledJobRecord extends ScheduledJobStatus {
+    completedAt?: number;
+    state: ScheduledJobState;
+}
+```
+
+### `ScheduledJobState` (type)
+
+```ts
+type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
 ```
 
 ### `ScheduledJobStatus` (interface)
@@ -616,6 +634,7 @@ interface SchedulerHost {
         list: () => Promise<ScheduledJobStatus[]>;
         requeue: (id: string) => Promise<boolean>;
     };
+    get?: (id: string) => Promise<ScheduledJobRecord | null>;
     list?: () => Promise<ScheduledJobStatus[]>;
     schedule: (functionPath: string, args: Record<string, unknown>, options?: ScheduleOptions) => Promise<ScheduledJob>;
 }

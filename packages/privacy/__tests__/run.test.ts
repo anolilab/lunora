@@ -1145,6 +1145,53 @@ describe("runErasure", () => {
     });
 });
 
+describe("a failed erasure workflow", () => {
+    it("reads the stored request inside a step, so a transient read failure is retried rather than escaping", async () => {
+        expect.assertions(1);
+
+        const { port } = memoryData({ goals: 0, jobs: 0, tasks: 0 });
+        const partial: DataPort = {
+            ...port,
+            remaining: async () => {
+                return { goals: 0 };
+            },
+        };
+        const store = memoryRequests();
+        const { runErasureWorkflow } = setup({ data: partial, datasets: [tasks, quiesced], erasure: NO_GRACE, store });
+        const { step } = durableStep();
+        let inStep = false;
+        const readsOutsideSteps: string[] = [];
+        const read = store.get.bind(store);
+
+        store.get = async (id) => {
+            // The workflow handler reads the request once before any step; only the failure path is under test.
+            if (!inStep && (new Error("trace").stack ?? "").includes("failErasure")) {
+                readsOutsideSteps.push(id);
+            }
+
+            return read(id);
+        };
+
+        const opened = await setup({ store, erasure: NO_GRACE }).privacy.requestErasure();
+
+        readsOutsideSteps.length = 0;
+        await runErasureWorkflow(opened.id, {
+            do: async (name, run) => {
+                inStep = true;
+
+                try {
+                    return await step.do(name, run);
+                } finally {
+                    inStep = false;
+                }
+            },
+            sleepUntil: step.sleepUntil,
+        });
+
+        expect(readsOutsideSteps).toStrictEqual([]);
+    });
+});
+
 describe("a data port that leaves out a table", () => {
     it("fails the export rather than writing an archive without that table", async () => {
         const { port } = memoryData({});

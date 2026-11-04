@@ -1,3 +1,59 @@
+## @lunora/notify [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.109...@lunora/notify@1.0.0-alpha.110) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.85
+
+## @lunora/notify [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.108...@lunora/notify@1.0.0-alpha.109) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+
+## @lunora/notify [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.107...@lunora/notify@1.0.0-alpha.108) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+
+## @lunora/notify [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.106...@lunora/notify@1.0.0-alpha.107) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+
+## @lunora/notify [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.105...@lunora/notify@1.0.0-alpha.106) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+
+## @lunora/notify [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.104...@lunora/notify@1.0.0-alpha.105) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+
+## @lunora/notify [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.103...@lunora/notify@1.0.0-alpha.104) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.79
+
+## @lunora/notify [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.102...@lunora/notify@1.0.0-alpha.103) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.78
+
 ## @lunora/notify [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.100...@lunora/notify@1.0.0-alpha.101) (2026-10-28)
 
 ### Performance Improvements

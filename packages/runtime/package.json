@@ -1,6 +1,6 @@
 {
     "name": "@lunora/runtime",
-    "version": "1.0.0-alpha.258",
+    "version": "1.0.0-alpha.277",
     "description": "Lunora Worker runtime: the RPC router, shard resolver, and query coordinator",
     "keywords": [
         "cloudflare",
@@ -50,9 +50,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",
@@ -61,19 +59,19 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/bindings": "1.0.0-alpha.142",
+        "@lunora/bindings": "1.0.0-alpha.151",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/observability": "1.0.0-alpha.188",
-        "@lunora/platform": "1.0.0-alpha.76",
-        "@lunora/wire": "1.0.0-alpha.5"
+        "@lunora/observability": "^1.0.0-alpha.201",
+        "@lunora/platform": "1.0.0-alpha.80",
+        "@lunora/wire": "1.0.0-alpha.6"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.266",
-        "@lunora/shard-engine": "1.0.0-alpha.174",
-        "@lunora/workflow": "1.0.0-alpha.101",
+        "@lunora/do": "^1.0.0-alpha.282",
+        "@lunora/shard-engine": "^1.0.0-alpha.189",
+        "@lunora/workflow": "^1.0.0-alpha.111",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

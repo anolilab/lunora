@@ -85,6 +85,7 @@ export const myRequests = query.query(async ({ ctx }): Promise<RequestSummary[]>
  * subject, and once the export has expired.
  */
 export const downloadLink = mutation
+    .use(rateLimit(limiter, "write", byCaller))
     .input({ requestId: v.string().max(64) })
     .mutation(async ({ args: { requestId }, ctx }) => privacyFor(ctx, await identityOf(ctx)).downloadUrl({ requestId }));
 

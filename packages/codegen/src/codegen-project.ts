@@ -284,15 +284,15 @@ const importedModuleKeys = (project: Project, reached: ReadonlySet<string>): Set
     return keys;
 };
 
+/** Each file's import and reference list, per parse: an edit makes a new compiler node, which misses. */
+const PRE_PROCESSED = new WeakMap<ts.SourceFile, ts.PreProcessedFileInfo>();
+
 /**
  * The files of `project` reached from `roots` by imports and references, outside
  * `node_modules`, as POSIX paths. Edges come from the compiler's own resolution, read
  * from each file's text, rather than ts-morph's reference container: that container
  * holds stale entries after a refresh, and walking it made the next program build throw.
  */
-/** Each file's import and reference list, per parse: an edit makes a new compiler node, which misses. */
-const PRE_PROCESSED = new WeakMap<ts.SourceFile, ts.PreProcessedFileInfo>();
-
 const reachedFiles = (project: Project, roots: string[]): Set<string> => {
     const options = project.getCompilerOptions();
     const resolvedImports = new Map<string, string | undefined>();

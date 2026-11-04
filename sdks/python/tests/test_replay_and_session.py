@@ -266,7 +266,7 @@ class TestRpcManifestCases(unittest.TestCase):
 
     def test_auth_token_redacted_when_printed(self):
         covers("auth_token_redacted_when_printed")
-        token = "lunora-secret-7f3a9c"
+        token = "lunora-secret-7f3a9c"  # secret-scanner:allow -- test fixture
         client = LunoraClient("https://app.example", auth_token=token)
 
         for rendered in (repr(client), str(client), f"{client}", f"{client!r}", format(client)):

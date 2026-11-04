@@ -1,6 +1,6 @@
 {
     "name": "@lunora/cloudflare-access",
-    "version": "1.0.0-alpha.247",
+    "version": "1.0.0-alpha.257",
     "description": "Cloudflare Access (Zero Trust) identity for Lunora — verify the Cf-Access-Jwt-Assertion JWT against your team JWKS and feed the verified identity into ctx.auth / RLS via a resolveIdentity adapter",
     "keywords": [
         "access",
@@ -54,9 +54,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -69,7 +67,7 @@
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@lunora/server": "1.0.0-alpha.255",
+        "@lunora/server": "1.0.0-alpha.267",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

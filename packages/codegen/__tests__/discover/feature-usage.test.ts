@@ -495,6 +495,24 @@ describe("discover/feature-usage", () => {
             expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
         });
 
+        it("follows a helper that exports a local alias of the tool", () => {
+            expect.assertions(1);
+
+            const project = inMemory();
+
+            project.createSourceFile(
+                "/app/lunora/tools.ts",
+                `import { requestSecretTool } from "@lunora/agent";\nconst ask = requestSecretTool;\nexport { ask };`,
+            );
+
+            const agents = project.createSourceFile(
+                "/app/lunora/agents.ts",
+                `import { ask } from "./tools";\nexport const a = ask({ consumer: "a", description: "d" });`,
+            );
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
+        });
+
         it("follows a relative barrel that exists only in an in-memory project", () => {
             expect.assertions(1);
 
@@ -541,7 +559,7 @@ describe("discover/feature-usage", () => {
         });
 
         it("resolves a JS-only module the same from a barrel as from the importing file", () => {
-            expect.assertions(1);
+            expect.assertions(2);
 
             const project = inMemory();
             const fileSystem = project.getFileSystem();
@@ -552,7 +570,9 @@ describe("discover/feature-usage", () => {
             const direct = project.createSourceFile("/app/lunora/direct.ts", agentsSource("./tools.js"));
             const viaBarrel = project.createSourceFile("/app/lunora/via.ts", agentsSource("./barrel"));
 
-            expect(sourceCapabilitySignals(viaBarrel).requestSecretTool).toBe(sourceCapabilitySignals(direct).requestSecretTool);
+            // Equality alone passes when both scans miss the tool, so each is pinned to the expected result.
+            expect(sourceCapabilitySignals(direct).requestSecretTool).toBe(true);
+            expect(sourceCapabilitySignals(viaBarrel).requestSecretTool).toBe(true);
         });
 
         it("prefers the declaring project's copy of a helper that a barrel loaded from disk re-exports", () => {

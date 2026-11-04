@@ -85,8 +85,8 @@ interface ActionCacheDatabase {
 
 ```ts
 interface ActionCacheFunctions {
-    purgeExpired: RegisteredMutation<{
-        limit: ReturnType<typeof v.optional>;
+    purgeExpired: RegisteredInternalMutation<{
+        limit: ColumnValidator<number | undefined, number | undefined>;
     }, {
         deleted: number;
     }>;
@@ -418,6 +418,7 @@ interface DefinePolicyInput<Context = unknown> {
 interface DefinePresenceOptions {
     disconnectGraceMs?: number;
     maxSessions?: number;
+    tenant?: (identity: Record<string, unknown> | null) => string;
     ttlMs?: number;
 }
 ```
@@ -487,13 +488,13 @@ interface DocumentHistoryEntry {
 
 ```ts
 interface DocumentHistoryFunctions {
-    listForDocument: RegisteredQuery<{
-        before: ReturnType<typeof v.optional>;
-        documentId: ReturnType<typeof v.string>;
-        limit: ReturnType<typeof v.optional>;
+    listForDocument: RegisteredInternalQuery<{
+        before: ColumnValidator<number | undefined, number | undefined>;
+        documentId: StringColumnValidator;
+        limit: ColumnValidator<number | undefined, number | undefined>;
     }, DocumentHistoryEntry[]>;
-    vacuum: RegisteredMutation<{
-        limit: ReturnType<typeof v.optional>;
+    vacuum: RegisteredInternalMutation<{
+        limit: ColumnValidator<number | undefined, number | undefined>;
     }, {
         deleted: number;
     }>;
@@ -972,10 +973,10 @@ interface InternalActionBuilder<Context, Args extends ArgsValidator, Output = un
     ] ? <R>(handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
-    }) => Promise<R> | R) => RegisteredAction<Args, Awaited<R>> : (handler: (options: {
+    }) => Promise<R> | R) => RegisteredInternalAction<Args, Awaited<R>> : (handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
-    }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
+    }) => Output | Promise<Output>) => RegisteredInternalAction<Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => InternalActionBuilder<Context, A & Args, Output>;
     meta: (value: Record<string, unknown>) => InternalActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalActionBuilder<Context, Args, Infer<V>>;
@@ -998,10 +999,10 @@ interface InternalMutationBuilder<Context, Args extends ArgsValidator, Output = 
     ] ? <R>(handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
-    }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>> : (handler: (options: {
+    }) => Promise<R> | R) => RegisteredInternalMutation<Args, Awaited<R>> : (handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
-    }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
+    }) => Output | Promise<Output>) => RegisteredInternalMutation<Args, Output>;
     output: <V extends Validator>(validator: V) => InternalMutationBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalMutationBuilder<ContextOut, Args, Output>;
 }
@@ -1023,15 +1024,15 @@ interface InternalQueryBuilder<Context, Args extends ArgsValidator, Output = und
     ] ? <R>(handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
-    }) => Promise<R> | R) => RegisteredQuery<Args, Awaited<R>> : (handler: (options: {
+    }) => Promise<R> | R) => RegisteredInternalQuery<Args, Awaited<R>> : (handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
-    }) => Output | Promise<Output>) => RegisteredQuery<Args, Output>;
+    }) => Output | Promise<Output>) => RegisteredInternalQuery<Args, Output>;
     stream: <R>(handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
         signal: AbortSignal;
-    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredStream<Args, R>;
+    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredInternalStream<Args, R>;
     use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
 }
 ```
@@ -1440,6 +1441,21 @@ interface MiddlewareNext<ContextIn> {
 }
 ```
 
+### `MigrationCovers` (interface)
+
+```ts
+interface MigrationCovers {
+    readonly jurisdiction?: "eu" | "fedramp" | "none" | "us";
+    readonly memory?: true;
+    readonly shardMode?: "global" | "global:d1" | "global:hyperdrive" | "root" | `shardBy:${string}`;
+    readonly table?: string;
+    readonly ttl?: {
+        readonly after?: number;
+        readonly field: string;
+    };
+}
+```
+
 ### `MigrationCtx` (interface)
 
 ```ts
@@ -1453,6 +1469,7 @@ interface MigrationCtx {
 ```ts
 interface MigrationDefinition {
     readonly batchSize?: number;
+    readonly covers?: MigrationCovers;
     readonly down?: MigrationTransform;
     readonly id: string;
     readonly table: string;
@@ -1625,6 +1642,12 @@ const DEFAULT_TTL_MS = 3e4;
 const PRESENCE_TABLE: "presence_present";
 ```
 
+### `PROCEDURE_META` (const)
+
+```ts
+const PROCEDURE_META: unique symbol;
+```
+
 ### `PaginationOptions` (interface)
 
 ```ts
@@ -1717,6 +1740,17 @@ type PolicyDecision = WhereInput | boolean | undefined;
 type PolicyDecisionOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = WhereOf<DM, REL, T> | boolean | undefined;
 ```
 
+### `PolicyMiddleware` (type)
+
+```ts
+type PolicyMiddleware<Required = unknown> = <Context extends Required & {
+    db: object;
+}>(options: {
+    ctx: Context;
+    next: MiddlewareNext<Context>;
+}) => Promise<Context>;
+```
+
 ### `PolicyOperation` (type)
 
 ```ts
@@ -1737,6 +1771,9 @@ type PrefixedTables<X extends Record<string, TableDefinition>, Key extends strin
 type PresenceComponent = Component<{
     [PRESENCE_BARE_TABLE]: ReturnType<typeof defineTable>;
 }> & {
+    readonly extension: SchemaExtension<{
+        [PRESENCE_BARE_TABLE]: ReturnType<typeof defineTable>;
+    }, typeof PRESENCE_KEY>;
     functions: PresenceFunctions;
 };
 ```
@@ -1745,19 +1782,20 @@ type PresenceComponent = Component<{
 
 ```ts
 interface PresenceFunctions {
-    disconnect: RegisteredLifecycleHook;
+    disconnect: RegisteredLifecycleHook<"disconnect">;
     heartbeat: RegisteredMutation<{
-        data: ReturnType<typeof v.optional>;
-        roomId: ReturnType<typeof v.string>;
-        sessionId: ReturnType<typeof v.string>;
+        data: ColumnValidator<Record<string, unknown> | undefined, Record<string, unknown> | undefined>;
+        roomId: StringColumnValidator;
+        sessionId: StringColumnValidator;
     }, {
         lastSeen: number;
     }>;
     listPresent: RegisteredQuery<{
-        roomId: ReturnType<typeof v.string>;
+        roomId: StringColumnValidator;
     }, PresenceMember[]>;
-    sweep: RegisteredMutation<{
-        roomId: ReturnType<typeof v.string>;
+    sweep: RegisteredInternalMutation<{
+        roomId: StringColumnValidator;
+        tenantId: StringColumnValidator;
     }, {
         deleted: number;
     }>;
@@ -1920,13 +1958,13 @@ interface ReadOnlyStorage<Buckets extends string = string> {
 ### `RegisteredAction` (type)
 
 ```ts
-type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "action">;
+type RegisteredAction<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "action", Visibility>;
 ```
 
 ### `RegisteredFunction` (interface)
 
 ```ts
-interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
+interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind, Visibility extends FunctionVisibility = FunctionVisibility> {
     readonly args: A;
     readonly channel?: {
         readonly kind: "room";
@@ -1936,16 +1974,48 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
     readonly lifecycle?: LifecycleEventKind;
-    readonly visibility?: FunctionVisibility;
+    readonly visibility?: Visibility;
     readonly x402?: X402ProcedureConfig;
 }
+```
+
+### `RegisteredInternalAction` (type)
+
+```ts
+type RegisteredInternalAction<A extends ArgsValidator, R> = RegisteredAction<A, R, "internal"> & {
+    readonly visibility: "internal";
+};
+```
+
+### `RegisteredInternalMutation` (type)
+
+```ts
+type RegisteredInternalMutation<A extends ArgsValidator, R> = RegisteredMutation<A, R, "internal"> & {
+    readonly visibility: "internal";
+};
+```
+
+### `RegisteredInternalQuery` (type)
+
+```ts
+type RegisteredInternalQuery<A extends ArgsValidator, R> = RegisteredQuery<A, R, "internal"> & {
+    readonly visibility: "internal";
+};
+```
+
+### `RegisteredInternalStream` (type)
+
+```ts
+type RegisteredInternalStream<A extends ArgsValidator, R> = RegisteredStream<A, R, "internal"> & {
+    readonly visibility: "internal";
+};
 ```
 
 ### `RegisteredLifecycleHook` (type)
 
 ```ts
-type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "mutation"> & {
-    readonly lifecycle: LifecycleEventKind;
+type RegisteredLifecycleHook<Moment extends LifecycleEventKind = LifecycleEventKind> = RegisteredFunction<Record<string, never>, void, "mutation", "internal"> & {
+    readonly lifecycle: Moment;
 };
 ```
 
@@ -1960,7 +2030,7 @@ interface RegisteredMigration extends MigrationDefinition {
 ### `RegisteredMutation` (type)
 
 ```ts
-type RegisteredMutation<A extends ArgsValidator, R> = RegisteredFunction<A, R, "mutation">;
+type RegisteredMutation<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "mutation", Visibility>;
 ```
 
 ### `RegisteredMutator` (interface)
@@ -1976,7 +2046,7 @@ interface RegisteredMutator<Args extends ValidatorMap = ValidatorMap, ServerCont
 ### `RegisteredQuery` (type)
 
 ```ts
-type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
+type RegisteredQuery<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "query", Visibility>;
 ```
 
 ### `RegisteredReactor` (type)
@@ -2014,12 +2084,12 @@ interface RegisteredShape<Args extends ValidatorMap = ValidatorMap, Context = Qu
 ### `RegisteredStream` (interface)
 
 ```ts
-interface RegisteredStream<A extends ArgsValidator, R> {
+interface RegisteredStream<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> {
     readonly args: A;
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
-    readonly visibility?: FunctionVisibility;
+    readonly visibility?: Visibility;
 }
 ```
 
@@ -2148,8 +2218,18 @@ type RestCacheConfig = RestCachePolicy;
 interface RetryPolicy {
     backoff?: "exponential" | "linear";
     baseMs?: number;
+    forever?: boolean;
     maxAttempts?: number;
     maxMs?: number;
+}
+```
+
+### `RlsContextIn` (interface)
+
+```ts
+interface RlsContextIn {
+    auth?: AuthLike;
+    db: RlsDatabase;
 }
 ```
 
@@ -2223,18 +2303,29 @@ interface RunQueryOptions {
 }
 ```
 
+### `ScheduleRunOptions` (interface)
+
+```ts
+interface ScheduleRunOptions {
+    retry?: RetryPolicy;
+}
+```
+
 ### `ScheduledFunctionDoc` (interface)
 
 ```ts
 interface ScheduledFunctionDoc {
     args: Record<string, unknown>;
     attempts?: number;
+    completedAt?: number;
     enqueuedAt: number;
+    error?: string;
     functionPath?: string;
     id: string;
     pool?: string;
     scheduledFor: number;
     shardKey?: string;
+    state?: "canceled" | "failed" | "pending" | "running" | "succeeded";
     workflow?: string;
 }
 ```
@@ -2246,6 +2337,7 @@ interface ScheduledJob {
     args: Record<string, unknown>;
     attempts?: number;
     enqueuedAt: number;
+    error?: string;
     functionPath?: string;
     id: string;
     instanceName?: string;
@@ -2257,6 +2349,21 @@ interface ScheduledJob {
 }
 ```
 
+### `ScheduledJobState` (type)
+
+```ts
+type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+```
+
+### `ScheduledJobView` (interface)
+
+```ts
+interface ScheduledJobView extends ScheduledJob {
+    completedAt?: number;
+    state: ScheduledJobState;
+}
+```
+
 ### `Scheduler` (interface)
 
 ```ts
@@ -2264,10 +2371,10 @@ interface Scheduler {
     cancel: (id: string) => Promise<{
         cancelled: boolean;
     }>;
-    get: (id: string) => Promise<ScheduledJob | null>;
+    get: (id: string) => Promise<ScheduledJobView | null>;
     list: () => Promise<ScheduledJob[]>;
-    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>, options?: ScheduleRunOptions) => Promise<string>;
+    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>, options?: ScheduleRunOptions) => Promise<string>;
 }
 ```
 
@@ -3085,6 +3192,12 @@ interface TypedDefinePolicyInput<DM, REL extends Record<keyof DM, object>, T ext
 }
 ```
 
+### `UNLOADED_META` (const)
+
+```ts
+const UNLOADED_META: "unloaded";
+```
+
 ### `VERSION` (const)
 
 ```ts
@@ -3786,7 +3899,7 @@ const liveStreamRouter: (mounts: ReadonlyArray<LiveStreamMount>, fallback?: Live
 ### `mask` (const)
 
 ```ts
-const mask: <Context extends MaskContextIn = MaskContextIn>(policies: MaskPolicies<Context>, options?: MaskOptions<Context>) => Middleware<Context, Context>;
+const mask: <Context extends MaskContextIn = MaskContextIn>(policies: MaskPolicies<Context>, options?: MaskOptions<Context>) => PolicyMiddleware<Omit<Context, "db">>;
 ```
 
 ### `mergeSchemaExtension` (const)
@@ -3800,13 +3913,13 @@ const mergeSchemaExtension: <T extends Record<string, TableDefinition>, X extend
 ### `onConnect` (const)
 
 ```ts
-const onConnect: (handler: LifecycleHandler) => RegisteredLifecycleHook;
+const onConnect: (handler: LifecycleHandler) => RegisteredLifecycleHook<"connect">;
 ```
 
 ### `onDisconnect` (const)
 
 ```ts
-const onDisconnect: (handler: LifecycleHandler) => RegisteredLifecycleHook;
+const onDisconnect: (handler: LifecycleHandler) => RegisteredLifecycleHook<"disconnect">;
 ```
 
 ### `onQueryChange` (const)
@@ -3818,7 +3931,7 @@ const onQueryChange: <T>(select: ReactorSelect<T>, handler: ReactorHandler<T>) =
 ### `onShardInit` (const)
 
 ```ts
-const onShardInit: (handler: ShardInitHandler) => RegisteredLifecycleHook;
+const onShardInit: (handler: ShardInitHandler) => RegisteredLifecycleHook<"init">;
 ```
 
 ### `onWhisper` (const)
@@ -3841,6 +3954,12 @@ const presenceExtension: SchemaExtension<{
 }, typeof PRESENCE_KEY>;
 ```
 
+### `procedureMeta` (const)
+
+```ts
+const procedureMeta: (registered: unknown) => Readonly<Record<string, unknown>> | undefined;
+```
+
 ### `protectPublic` (const)
 
 ```ts
@@ -3856,7 +3975,7 @@ const redactSecrets: (message: string) => string;
 ### `rls` (const)
 
 ```ts
-const rls: <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray<Policy<Context>>, options?: RlsOptions) => Middleware<Context, Context>;
+const rls: <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray<Policy<Context>>, options?: RlsOptions) => PolicyMiddleware<Omit<Context, "db">>;
 ```
 
 ### `serveStorageObject` (const)
@@ -4055,6 +4174,7 @@ interface QueryArgs<TDocument> {
 
 ```ts
 interface QueryArgsOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> {
+    consistency?: "primary";
     cursor?: null | string;
     includeDeleted?: boolean;
     limit?: number;
@@ -5520,8 +5640,8 @@ interface InProcessRuntime {
         database: DatabaseWriter;
         rawDatabase: DatabaseWriter;
     };
-    resetHeadroom: () => void;
     runInTransaction: <R>(body: () => Promise<R> | R) => Promise<R>;
+    runWithBudget: <R>(body: () => R) => R;
 }
 ```
 
@@ -5530,6 +5650,7 @@ interface InProcessRuntime {
 ```ts
 interface InProcessRuntimeOptions {
     enforceRls?: boolean;
+    headroomScope?: HeadroomScope;
     scheduler?: unknown;
     sql: SqlExec;
 }
@@ -5860,6 +5981,22 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `RegisteredInternalAction` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RegisteredInternalMutation` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RegisteredInternalQuery` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RegisteredInternalStream` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `RegisteredLifecycleHook` (type)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
@@ -5920,11 +6057,23 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `ScheduleRunOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `ScheduledFunctionDoc` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `ScheduledJob` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `ScheduledJobView` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
@@ -6661,6 +6810,15 @@ interface GroupByArgs$1 {
 }
 ```
 
+### `HeadroomScope` (interface)
+
+```ts
+interface HeadroomScope {
+    getStore: () => TransactionHeadroomTracker | undefined;
+    run: <R>(store: TransactionHeadroomTracker, body: () => R) => R;
+}
+```
+
 ### `HrTime` (type)
 
 ```ts
@@ -7009,6 +7167,7 @@ interface QueryArgs {
 ```ts
 interface QueryArgs$1 {
     baseWhere?: WhereInput;
+    consistency?: "primary";
     cursor?: null | string;
     includeDeleted?: boolean;
     limit?: number;
@@ -7196,15 +7355,6 @@ interface RestCachePolicy {
 }
 ```
 
-### `RlsContextIn` (interface)
-
-```ts
-interface RlsContextIn {
-    auth?: AuthLike;
-    db: RlsDatabase;
-}
-```
-
 ### `RlsDatabase` (type)
 
 ```ts
@@ -7215,7 +7365,7 @@ type RlsDatabase = DatabaseWriterLike;
 
 ```ts
 interface RunAction {
-    <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredAction<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
     <Args, R>(reference: FunctionHandle<"action", Args, R>, args: Args): Promise<R>;
 }
 ```
@@ -7224,7 +7374,7 @@ interface RunAction {
 
 ```ts
 interface RunMutation {
-    <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
     <Args, R>(reference: FunctionHandle<"mutation", Args, R>, args: Args): Promise<R>;
 }
 ```
@@ -7233,7 +7383,7 @@ interface RunMutation {
 
 ```ts
 interface RunQuery {
-    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>, options?: RunQueryOptions): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R, FunctionVisibility>, args: InferArgs<A>, options?: RunQueryOptions): Promise<R>;
     <Args, R>(reference: FunctionHandle<"query", Args, R>, args: Args, options?: RunQueryOptions): Promise<R>;
 }
 ```
@@ -7312,12 +7462,13 @@ interface SchedulableWorkflowReference {
 interface ScheduleOutbox {
     admit: (target: string) => number | undefined;
     forget: (id: string) => void;
+    handOff?: (id: string, run: () => Promise<unknown>, token?: string) => Promise<void>;
     record: (id: string, envelope: {
         args: unknown;
         options: Record<string, unknown> | undefined;
         target: unknown;
         when: number;
-    }) => void;
+    }) => string | undefined;
     wake: () => void;
 }
 ```

@@ -82,16 +82,28 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 198 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 211 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
 
 `403` — Admin access forbidden
 
+### `ADMIN_ROOT_REQUIRED`
+
+`403` — Root admin token required
+
+### `ADMIN_TOKEN_EXISTS`
+
+`409` — Admin token name already in use
+
 ### `ADMIN_TOKEN_NOT_CONFIGURED`
 
 `400` — Admin token not configured
+
+### `AI_CHAT_FAILED`
+
+`500` — Assistant turn failed
 
 ### `AI_UNKNOWN_IMAGE_MODEL`
 
@@ -281,6 +293,10 @@ Re-read the row and retry the mutation with the fresh value. Lunora serializes a
 
 `400` — Cron jobs not configured
 
+### `CRON_JOB_IN_FLIGHT`
+
+`409` — Cron job is already running
+
 ### `CRON_JOB_NOT_FOUND`
 
 `404` — Cron job not found
@@ -324,6 +340,10 @@ The operation may have committed. Retry with the same transport key; a committed
 `409` — Committed receipt authorization changed
 
 The operation committed, but its stored result belongs to an older authority epoch. Do not automatically retry with a new transport ID. Recover through the application's durable operation key under current authorization.
+
+### `DEPLOYMENT_PAUSED`
+
+`503` — Deployment is paused
 
 ### `DISPATCH_IN_PROGRESS`
 
@@ -453,6 +473,12 @@ The message names each failed shard key and its error. Re-run the export once th
 
 `400` — Global table is not editable
 
+### `GLOBAL_TRANSACTION_UNSUPPORTED`
+
+`500` — Global transaction unsupported by driver
+
+A `.global()` write commits its row and companion rows in one transaction. Pass a postgres.js client that has `begin()`, or a mysql2 pool (`createPool`) rather than a single connection.
+
 ### `HTTP_STREAM_BAD_CHUNK`
 
 `502` — Malformed HTTP stream chunk
@@ -496,6 +522,10 @@ A write queued offline was replayed on a session that now belongs to someone els
 
 `@lunora/client` re-resolves the session on this refusal and settles the write itself. If every replay is refused while the same user stays signed in, your worker's `resolveIdentity` returns a different `userId` than better-auth's `user.id`, or the RPC request carries no session cookie.
 
+### `IDENTITY_STALE`
+
+`409` — Socket identity stale
+
 ### `ID_COLLISION`
 
 `409` — Document id already belongs to another table
@@ -503,6 +533,8 @@ A write queued offline was replayed on a session that now belongs to someone els
 The imported row carries an `_id` that is already held by a DIFFERENT table in this shard. Ids are per-table, so inserting it would leave two tables claiming one id and make a later lookup resolve to whichever one it reached first.
 
 This is reported per row rather than aborting the import: the remaining rows still apply. Re-mint the id on the source side, or import that table into a shard that does not already hold it.
+
+Only shard tables raise it. A `.global()` table names its table on every by-id call, so the same id in two global tables is two separate rows and the import accepts it.
 
 ### `INDEX_FIELD_NESTED_PATH`
 
@@ -644,6 +676,14 @@ A mutation sent with `onlineOnly: true` found its connection down or reconnectin
 
 `409` — Out-of-order mutation
 
+### `PAUSE_INSTANCES_FAILED`
+
+`502` — Pause did not reach every scheduler instance
+
+### `PAUSE_NOT_CONFIGURED`
+
+`400` — Deployment pause not configured
+
 ### `PAYLOAD_TOO_LARGE`
 
 `413` — Payload too large
@@ -664,9 +704,21 @@ A mutation sent with `onlineOnly: true` found its connection down or reconnectin
 
 `403` — Recent sign-in required
 
+### `PROCEDURE_META_UNLOADED`
+
+`500` — Procedure meta is not loaded
+
 ### `PROVIDER_ERROR`
 
 `502` — Payment provider error
+
+### `PUBLISHED_FUNCTION_UNSUPPORTED`
+
+`500` — Published function cannot be registered from its declaration
+
+### `PUBLISHED_FUNCTION_VISIBILITY_UNKNOWN`
+
+`500` — Published function does not declare its visibility
 
 ### `R2_SQL_ERROR`
 
@@ -872,6 +924,10 @@ Without it a bucket-backed `lunora backup restore --bucket` cannot read the snap
 
 `507` — Durable stream exceeded its chunk ceiling
 
+### `SUBSCRIPTION_FUNCTION_REQUIRED`
+
+`400` — Subscription needs a function path
+
 ### `SUBSCRIPTION_PERSIST_FAILED`
 
 `500` — Subscription persist failed
@@ -919,6 +975,8 @@ A single mutation may only read and write a bounded amount before it is stopped.
 Narrow the read with an index (`.withIndex(...)`) instead of scanning the table, or split the write across several mutations — for a large backfill use `defineMigration` + `lunora migrate up`, which batches and checkpoints for you.
 
 The ceilings are deliberately conservative — they exist to stop one request taking down the whole shard. A deployment that genuinely needs bigger transactions can raise them by overriding the `transactionLimits()` seam on its generated shard class.
+
+A transaction that reaches 80% of a ceiling without crossing it logs one `warn` line (event `lunora.transaction.near_limit`) naming the limit, so a function that only gets close on development data shows up before production data pushes it over. A single read or write that jumps past the ceiling from below 80% fails without that warning.
 
 ### `UNAUTHENTICATED`
 

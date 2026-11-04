@@ -204,6 +204,13 @@ return { "name": source["name"], ...(__has1 ? { "avatarKey": __val1 } : {}) };
 });
 
 /**
+ * Queries and shapes that may read `ctx.ip`, decided statically (failing closed). The generated ShardDO marks them
+ * address-keyed from its first run, so it never resumes one warm: its rows can depend on the address the cursor
+ * was read at, which a claims fingerprint leaves out.
+ */
+export const LUNORA_IP_READER_PATHS: ReadonlySet<string> = new Set(["presence:list"]);
+
+/**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
  * client's WebSocket connects (`connect`) or disconnects (`disconnect`), once
  * per Durable Object instance before any handler runs (`init`), after a

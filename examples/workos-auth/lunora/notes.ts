@@ -1,9 +1,8 @@
 import { LunoraError } from "lunorash/errors";
-import type { Middleware } from "lunorash/server";
 import { definePolicies, definePolicy, rls } from "lunorash/server";
 
 import type { Doc as Document_ } from "./_generated/dataModel.js";
-import type { Id, MutationCtx, QueryCtx } from "./_generated/server.js";
+import type { Id } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
 
 /**
@@ -36,13 +35,9 @@ const orgNotesPolicy = definePolicies([
     }),
 ]);
 
-// `rls()` types its context against the runtime writer shape, which the
-// generated reader/writer facades narrow; the object underneath is the same
-// adapter, so re-typing the middleware onto the generated ctx is sound (the
-// boundary cast apps/playground/lunora/notes.ts uses too).
-const ownRead = rls(ownNotes) as unknown as Middleware<QueryCtx, QueryCtx>;
-const ownWrite = rls(ownNotes) as unknown as Middleware<MutationCtx, MutationCtx>;
-const orgRead = rls(orgNotesPolicy) as unknown as Middleware<QueryCtx, QueryCtx>;
+const ownRead = rls(ownNotes);
+const ownWrite = rls(ownNotes);
+const orgRead = rls(orgNotesPolicy);
 
 const newestFirst = (rows: Document_<"notes">[]): Document_<"notes">[] => rows.toSorted((a, b) => b.createdAt - a.createdAt);
 

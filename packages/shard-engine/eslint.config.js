@@ -130,6 +130,7 @@ export default createConfig(
     // `node:sqlite`, its `workerd/` twin over a Durable Object's storage.
     {
         files: [
+            "**/__tests__/admin-tokens.test.ts",
             "**/__tests__/ctx-db.aggregates.test.ts",
             "**/__tests__/ctx-db.batch-writes.test.ts",
             "**/__tests__/ctx-db.geo.test.ts",
@@ -137,7 +138,10 @@ export default createConfig(
             "**/__tests__/ctx-db.order-plan.test.ts",
             "**/__tests__/ctx-db.rank.test.ts",
             "**/__tests__/ctx-db.soft-delete.companions.test.ts",
+            "**/__tests__/introspect-wire-search.test.ts",
+            "**/__tests__/workerd/admin-tokens.workerd.test.ts",
             "**/__tests__/workerd/ctx-db.*.workerd.test.ts",
+            "**/__tests__/workerd/introspect-wire-search.workerd.test.ts",
         ],
         rules: {
             "sonarjs/no-empty-test-file": "off",

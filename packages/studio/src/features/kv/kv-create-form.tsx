@@ -24,7 +24,9 @@ interface CreateState {
 }
 
 type CreateAction =
-    { error: string; type: "submitFailed" } | { field: "metadata" | "name" | "ttl" | "value"; type: "setField"; value: string } | { type: "submitStart" };
+    | { error: string; type: "submitFailed" }
+    | { field: "metadata" | "name" | "ttl" | "value"; type: "setField"; value: string }
+    | { type: "submitStart" };
 
 const INITIAL_CREATE_STATE: CreateState = { busy: false, error: null, metadata: "", name: "", ttl: "", value: "" };
 

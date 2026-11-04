@@ -1,6 +1,6 @@
 {
     "name": "@lunora/auth",
-    "version": "1.0.0-alpha.247",
+    "version": "1.0.0-alpha.257",
     "description": "Auth for Lunora — a thin better-auth wrapper: email/password, OAuth, plugins, D1-backed",
     "keywords": [
         "auth",
@@ -118,9 +118,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -135,8 +133,8 @@
         "@better-auth/passkey": "catalog:auth",
         "@better-auth/scim": "catalog:auth",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/values": "1.0.0-alpha.86",
-        "@lunora/wire": "1.0.0-alpha.5",
+        "@lunora/values": "^1.0.0-alpha.95",
+        "@lunora/wire": "1.0.0-alpha.6",
         "@visulima/disposable-email-domains": "catalog:email",
         "@visulima/email-verifier": "catalog:email",
         "@visulima/free-email-domains": "catalog:email",
@@ -147,9 +145,9 @@
         "@better-auth/sso": "catalog:auth",
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@lunora/config": "1.0.0-alpha.430",
-        "@lunora/runtime": "1.0.0-alpha.257",
-        "@lunora/server": "1.0.0-alpha.255",
+        "@lunora/config": "^1.0.0-alpha.453",
+        "@lunora/runtime": "^1.0.0-alpha.276",
+        "@lunora/server": "^1.0.0-alpha.268",
         "@types/better-sqlite3": "catalog:tooling",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
@@ -167,7 +165,7 @@
         "@better-auth/core": ">=1.7.3 <2.0.0-0",
         "@better-auth/sso": ">=1.7.3 <2.0.0-0",
         "@lunora/server": ">=1.0.0-alpha.24 <2.0.0-0",
-        "better-auth": ">=1.7.3 <2.0.0-0"
+        "better-auth": ">=1.7.16 <2.0.0-0"
     },
     "peerDependenciesMeta": {
         "@better-auth/sso": {

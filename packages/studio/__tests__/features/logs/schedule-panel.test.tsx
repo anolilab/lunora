@@ -40,4 +40,18 @@ describe("schedulePanel", () => {
 
         expect(table).toBeDefined();
     });
+
+    it("opens the Pools view on the host's shard", async () => {
+        expect.assertions(1);
+
+        render(withProvider(createMockClient(), <SchedulePanel initialShardKey="tenant-a" scheduledLoad={loadRecords} />));
+
+        await screen.findByTestId("sj-table");
+
+        fireEvent.click(screen.getByTestId("schedule-view-pools"));
+
+        const input = await screen.findByTestId("lag-shard-input");
+
+        expect((input as HTMLInputElement).value).toBe("tenant-a");
+    });
 });

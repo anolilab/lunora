@@ -23,7 +23,7 @@ import { isServerSurfaceModule } from "../module-specifiers";
 import { parseObjectShape } from "../parse-validator";
 import { findObjectProperty, isConstDeclaration, unwrapExpression } from "./ast";
 import { declarationOf, exportedNameOf, exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
-import unwrapHandlerReturn from "./functions/unwrap-handler-return";
+import { unwrapHandlerReturn } from "./functions/unwrap-handler-return";
 
 /** The only file custom mutators may be declared in — mirrors `lunora/queues.ts`. */
 const MUTATORS_FILENAME = "mutators.ts";

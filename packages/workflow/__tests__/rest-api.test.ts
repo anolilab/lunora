@@ -230,3 +230,74 @@ describe("createWorkflowsRestClient", () => {
         }
     });
 });
+
+describe("createInstance and sendEvent", () => {
+    it("pOSTs a new instance with its optional id and JSON-encoded params", async () => {
+        expect.assertions(4);
+
+        const { calls, fetch } = fakeFetch(200, { result: { id: "order-1", status: "queued" }, success: true });
+        const client = createWorkflowsRestClient({ accountId: "acc", apiToken: "tok", fetch });
+
+        const result = await client.createInstance({ instanceId: "order-1", params: { sku: "a" }, workflowName: "wf" });
+
+        expect(result).toStrictEqual({ id: "order-1", status: "queued" });
+        expect(calls[0]?.url).toBe("https://api.cloudflare.com/client/v4/accounts/acc/workflows/wf/instances");
+        expect(calls[0]?.init?.method).toBe("POST");
+        expect(calls[0]?.init?.body).toBe(JSON.stringify({ instance_id: "order-1", params: JSON.stringify({ sku: "a" }) }));
+    });
+
+    it("pOSTs an event to the instance's events path with the payload as the body", async () => {
+        expect.assertions(3);
+
+        const { calls, fetch } = fakeFetch(200, { result: { instanceId: "i1", timestamp: "2026-11-03T00:00:00Z" }, success: true });
+        const client = createWorkflowsRestClient({ accountId: "acc", apiToken: "tok", fetch });
+
+        const result = await client.sendEvent({ eventType: "approval", instanceId: "i1", payload: { approved: true }, workflowName: "wf" });
+
+        expect(result).toStrictEqual({ instanceId: "i1", timestamp: "2026-11-03T00:00:00Z" });
+        expect(calls[0]?.url).toBe("https://api.cloudflare.com/client/v4/accounts/acc/workflows/wf/instances/i1/events/approval");
+        expect(calls[0]?.init?.body).toBe(JSON.stringify({ approved: true }));
+    });
+
+    it("sends an explicit null payload as the JSON body null, not as an empty object", async () => {
+        expect.assertions(1);
+
+        const { calls, fetch } = fakeFetch(200, { result: { instanceId: "i1" }, success: true });
+        const client = createWorkflowsRestClient({ accountId: "acc", apiToken: "tok", fetch });
+
+        await client.sendEvent({ eventType: "approval", instanceId: "i1", payload: null, workflowName: "wf" });
+
+        expect(calls[0]?.init?.body).toBe("null");
+    });
+
+    it("refuses the framework's reserved lunora: event namespace without calling the API", async () => {
+        expect.assertions(2);
+
+        const { calls, fetch } = fakeFetch(200, { result: {}, success: true });
+        const client = createWorkflowsRestClient({ accountId: "acc", apiToken: "tok", fetch });
+
+        await expect(client.sendEvent({ eventType: "lunora:branch:child-1", instanceId: "i1", workflowName: "wf" })).rejects.toMatchObject({
+            status: 400,
+        });
+        expect(calls).toHaveLength(0);
+    });
+
+    it("refuses caller params that carry the reserved branch marker, without calling the API", async () => {
+        expect.assertions(2);
+
+        const { calls, fetch } = fakeFetch(200, { result: { id: "a" }, success: true });
+        const client = createWorkflowsRestClient({ accountId: "acc", apiToken: "tok", fetch });
+
+        await expect(client.createInstance({ params: { __lunoraBranch: "forged" }, workflowName: "wf" })).rejects.toMatchObject({ status: 400 });
+        expect(calls).toHaveLength(0);
+    });
+
+    it("throws instead of returning an empty id when create carries none and none was supplied", async () => {
+        expect.assertions(1);
+
+        const { fetch } = fakeFetch(200, { result: { status: "queued" }, success: true });
+        const client = createWorkflowsRestClient({ accountId: "acc", apiToken: "tok", fetch });
+
+        await expect(client.createInstance({ workflowName: "wf" })).rejects.toMatchObject({ status: 502 });
+    });
+});

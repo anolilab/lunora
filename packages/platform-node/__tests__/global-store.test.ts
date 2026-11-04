@@ -6,9 +6,10 @@ import { sqliteDialect } from "@lunora/d1";
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import type { SqlCtxExec } from "@lunora/sql-store";
 import { createSqlCtxDb } from "@lunora/sql-store";
+import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createNodeGlobalStore } from "../src/node-global-store";
+import { createNodeGlobalStore, createNodeSqlExec } from "../src/node-global-store";
 
 /**
  * End-to-end coverage for the `.global()` backend on the Node target.
@@ -176,6 +177,192 @@ describe("createNodeGlobalStore", () => {
             ).toBe(0);
         } finally {
             store.dispose();
+        }
+    });
+
+    it("commits a row and its counter together, and keeps other writers out of the open transaction", async () => {
+        expect.assertions(4);
+
+        const tallies = {
+            tables: {
+                tallies: {
+                    aggregateIndexes: [{ by: ["org"], name: "countByOrg", on: "tallies", op: "count" }],
+                    indexes: [],
+                    shape: { org: col("string") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never as SchemaLike;
+        const store = createNodeGlobalStore();
+
+        try {
+            await store.migrate(tallies);
+
+            let armed = false;
+            let release: () => void = () => undefined;
+            const held = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            let reachedCompanion: () => void = () => undefined;
+            const atCompanion = new Promise<void>((resolve) => {
+                reachedCompanion = resolve;
+            });
+            // Parks the companion write inside the transaction, then fails it.
+            const failing = (inner: SqlCtxExec): SqlCtxExec => {
+                return {
+                    ...inner,
+                    // The sqlite dialect sends a write's companion statements as one `batch`.
+                    batch: async (statements) => {
+                        if (armed && statements.some((statement) => statement.sql.includes("__agg_"))) {
+                            reachedCompanion();
+                            await held;
+
+                            throw new Error("injected companion failure");
+                        }
+
+                        await inner.batch?.(statements);
+                    },
+                    ...(inner.transaction === undefined
+                        ? {}
+                        : {
+                              transaction: async <T>(work: (tx: SqlCtxExec) => Promise<T>): Promise<T> =>
+                                  await (inner.transaction as NonNullable<SqlCtxExec["transaction"]>)(async (tx) => await work(failing(tx))),
+                          }),
+                };
+            };
+            let issued: () => void = () => undefined;
+            const bystanderIssued = new Promise<void>((resolve) => {
+                issued = resolve;
+            });
+            const writer = createSqlCtxDb({ clock: () => 1, dialect: sqliteDialect, exec: failing(store.exec), schema: tallies });
+            const bystander = createSqlCtxDb({
+                clock: () => 1,
+                dialect: sqliteDialect,
+                exec: {
+                    ...store.exec,
+                    all: async (statement, parameters) => {
+                        if (armed) {
+                            issued();
+                        }
+
+                        return await store.exec.all(statement, parameters);
+                    },
+                    run: async (statement, parameters) => {
+                        if (armed) {
+                            issued();
+                        }
+
+                        return await store.exec.run(statement, parameters);
+                    },
+                    transaction: async (work) => {
+                        if (armed) {
+                            issued();
+                        }
+
+                        return await (store.exec.transaction as NonNullable<SqlCtxExec["transaction"]>)(work);
+                    },
+                },
+                schema: tallies,
+            });
+
+            await writer.insert("tallies", { org: "a" });
+            // Provisioned and backfilled already, so its next insert goes straight to the row write.
+            await bystander.count("tallies", { org: "b" });
+            armed = true;
+
+            const failed = writer.insert("tallies", { org: "a" });
+
+            await atCompanion;
+
+            // Issued while the failing insert's transaction is open; it must not land in it and be rolled back with it.
+            const other = bystander.insert("tallies", { org: "b" });
+
+            await bystanderIssued;
+            release();
+
+            await expect(failed).rejects.toThrow("injected companion failure");
+
+            await other;
+
+            expect(store.database.prepare("SELECT org FROM tallies ORDER BY org").all()).toStrictEqual([{ org: "a" }, { org: "b" }]);
+            await expect(bystander.count("tallies", { org: "a" })).resolves.toBe(1);
+            await expect(bystander.count("tallies", { org: "b" })).resolves.toBe(1);
+        } finally {
+            store.dispose();
+        }
+    });
+});
+
+describe("createNodeSqlExec — one connection, several wrappers", () => {
+    it("keeps a second wrapper's write out of the first wrapper's open transaction", async () => {
+        expect.assertions(2);
+
+        const database = new Database(":memory:");
+
+        try {
+            database.exec("CREATE TABLE notes (body TEXT)");
+
+            const first = createNodeSqlExec(database);
+            const second = createNodeSqlExec(database);
+            let release: () => void = () => undefined;
+            const held = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            let entered: () => void = () => undefined;
+            const inside = new Promise<void>((resolve) => {
+                entered = resolve;
+            });
+            const rolledBack = (first.transaction as NonNullable<SqlCtxExec["transaction"]>)(async (tx) => {
+                await tx.run("INSERT INTO notes (body) VALUES (?)", ["rolled back"]);
+                entered();
+                await held;
+
+                throw new Error("abort");
+            });
+
+            await inside;
+
+            // Issued while the first wrapper's transaction is open: it must wait for it, not land inside it.
+            const survivor = second.run("INSERT INTO notes (body) VALUES (?)", ["kept"]);
+
+            release();
+
+            await expect(rolledBack).rejects.toThrow("abort");
+
+            await survivor;
+
+            expect(database.prepare("SELECT body FROM notes").all()).toStrictEqual([{ body: "kept" }]);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("leaves a transaction the caller opened on the connection alone when its own begin is refused", async () => {
+        expect.assertions(3);
+
+        const database = new Database(":memory:");
+
+        try {
+            database.exec("CREATE TABLE notes (body TEXT)");
+            database.exec("BEGIN");
+            database.prepare("INSERT INTO notes (body) VALUES (?)").run("caller's");
+
+            const exec = createNodeSqlExec(database);
+
+            // SQLite refuses a nested BEGIN; that refusal is not a transaction this wrapper owns.
+            await expect(
+                (exec.transaction as NonNullable<SqlCtxExec["transaction"]>)(async () => {
+                    await Promise.resolve();
+                }),
+            ).rejects.toThrow(/within a transaction/u);
+
+            expect(database.inTransaction).toBe(true);
+
+            database.exec("COMMIT");
+
+            expect(database.prepare("SELECT body FROM notes").all()).toStrictEqual([{ body: "caller's" }]);
+        } finally {
+            database.close();
         }
     });
 });

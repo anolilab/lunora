@@ -122,7 +122,7 @@ import {
     parseLiveTopic,
 } from "../../../shared/live-stream";
 import type { HttpActionCtx as HttpActionContext, LunoraRouteHandler } from "./http";
-import { httpAction, httpRouter } from "./http";
+import { httpAction, httpRouter, isHttpRouter } from "./http";
 
 /** One declared topic: the key that addresses it (string-valued fields, in order) and the payload it carries. */
 interface LiveTopicDeclaration {
@@ -430,7 +430,8 @@ interface LiveHostTriggers {
 
 /** The router a live-stream router hands every other request to: an app with a `fetch`, or a bare `fetch` handler. */
 type LiveRouterFallback =
-    (LiveHostTriggers & LiveRouterApp) | ((request: Request, env?: Record<string, unknown>, context?: ExecutionContext) => Promise<Response> | Response);
+    | (LiveHostTriggers & LiveRouterApp)
+    | ((request: Request, env?: Record<string, unknown>, context?: ExecutionContext) => Promise<Response> | Response);
 
 /**
  * A framework host's triggers, copied by name as the runtime reads them. Spreading the host instead would also copy
@@ -448,8 +449,8 @@ const hostTriggersOf = (host: LiveRouterFallback | undefined): LiveHostTriggers 
     };
 };
 
-/** Hono apps that already carry their stream routes. Registering them again would add duplicate routes on every build. */
-const mountedApps = new WeakSet<object>();
+/** The stream ids each Hono app already carries. Registering one again would add duplicate routes on every build. */
+const mountedStreams = new WeakMap<object, Set<string>>();
 
 /**
  * Register each stream's connect and control routes on `app`. A route loads its stream on the first request and then
@@ -486,19 +487,26 @@ const mountStreams = (app: Pick<ReturnType<typeof httpRouter>, "get" | "post">, 
  * Serve each declared stream's connect and control routes. Codegen emits this as the worker's `httpRouter`, or wraps
  * a framework host with it, so a stream needs no `app.get` / `app.post` of its own.
  *
- * A Hono `fallback` (the app's `httpRouter()`) gets the stream routes registered on it, so its middleware runs for
- * them, and it is returned as the router. Any other `fallback` is a framework host: the stream routes are matched
+ * A `fallback` built by `httpRouter()` gets the stream routes registered on it, so its middleware runs for
+ * them, and it is returned as the router. Any other `fallback`, a plain Hono app included, is a framework host: the stream routes are matched
  * first on a router of their own, and every other request goes to the host. With no `fallback`, the router is the
  * stream routes alone.
  *
  * Only the exact method and path of a stream's two routes are taken. Calling this again with the same Hono app adds
- * nothing, so the same app can be passed on every build.
+ * nothing for a stream it already carries, so the same app can be passed on every build.
  */
 const liveStreamRouter = (mounts: ReadonlyArray<LiveStreamMount>, fallback?: LiveRouterFallback): LiveRouterApp => {
-    if (fallback instanceof Hono) {
-        if (!mountedApps.has(fallback)) {
-            mountStreams(fallback, mounts);
-            mountedApps.add(fallback);
+    // Only an `httpRouter()` app lifts `__lunoraCtx` into `c.var.lunora`, which the stream handlers read. Any other
+    // Hono app is a framework host and goes through the stream router like a plain fetch handler.
+    if (fallback instanceof Hono && isHttpRouter(fallback)) {
+        const mounted = mountedStreams.get(fallback) ?? new Set<string>();
+        const fresh = mounts.filter((mount) => !mounted.has(mount.id));
+
+        mountStreams(fallback, fresh);
+        mountedStreams.set(fallback, mounted);
+
+        for (const mount of fresh) {
+            mounted.add(mount.id);
         }
 
         return fallback;

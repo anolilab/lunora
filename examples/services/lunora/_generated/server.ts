@@ -113,10 +113,10 @@ export interface OrmReader {
 
 /** Read-write ORM surface — `ctx.orm` on a `MutationCtx` / `ActionCtx`. Writes are addressed by id, like `ctx.db`. */
 export interface OrmWriter extends OrmReader {
-    delete: <T extends keyof DataModel>(table: T, id: IdOfTable<T>) => Promise<void>;
+    delete: <T extends keyof DataModel>(table: T, id: NoInfer<IdOfTable<T>>) => Promise<void>;
     insert: <T extends keyof DataModel>(table: T) => OrmInsertBuilder<T>;
-    replace: <T extends keyof DataModel>(table: T, id: IdOfTable<T>) => OrmReplaceBuilder<T>;
-    update: <T extends keyof DataModel>(table: T, id: IdOfTable<T>) => OrmUpdateBuilder<T>;
+    replace: <T extends keyof DataModel>(table: T, id: NoInfer<IdOfTable<T>>) => OrmReplaceBuilder<T>;
+    update: <T extends keyof DataModel>(table: T, id: NoInfer<IdOfTable<T>>) => OrmUpdateBuilder<T>;
 }
 
 /** Storage buckets this schema declares (`v.storage("name")`), narrowing `ctx.storage.bucket(name)`. */
@@ -179,7 +179,7 @@ type TypedTableQuery = (<T extends TableName>(
  * fixes `T`, so the id must be an `Id<T>` and the resolved document is typed
  * `Doc<T>` (or `null` when absent) with no `as Doc<...>` cast. Mirrors {@link TypedTableQuery}.
  */
-type TypedTableGet = <T extends TableName>(table: T, id: IdOfTable<T>) => Promise<Doc<T> | null>;
+type TypedTableGet = <T extends TableName>(table: T, id: NoInfer<IdOfTable<T>>) => Promise<Doc<T> | null>;
 
 /**
  * Resolves the `asId` table argument: a literal in {@link TableName} passes through, a

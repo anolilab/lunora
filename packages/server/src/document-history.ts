@@ -57,7 +57,7 @@
  * whatever authorization the surface needs.
  */
 
-import type { Id } from "@lunora/values";
+import type { ColumnValidator, Id, StringColumnValidator } from "@lunora/values";
 import { v } from "@lunora/values";
 import { encodeWire, parseWire } from "@lunora/wire";
 
@@ -65,7 +65,7 @@ import { initLunora } from "./builder/index";
 import type { Component, SchemaExtension } from "./plugin";
 import { defineComponent, defineSchemaExtension } from "./plugin";
 import { defineTable } from "./schema";
-import type { RegisteredMutation, RegisteredQuery, TriggerBuilder, TriggerCtx as TriggerContext, TriggerDefinition } from "./types";
+import type { RegisteredInternalMutation, RegisteredInternalQuery, TriggerBuilder, TriggerCtx as TriggerContext, TriggerDefinition } from "./types";
 
 /** Default retention: 90 days. `vacuum` deletes entries older than this. */
 const DEFAULT_RETENTION_MS: number = 90 * 24 * 60 * 60 * 1000;
@@ -203,8 +203,12 @@ interface DocumentHistoryFunctions {
      * the last version at or before it, which is what a point-in-time
      * reconstruction needs.
      */
-    listForDocument: RegisteredQuery<
-        { before: ReturnType<typeof v.optional>; documentId: ReturnType<typeof v.string>; limit: ReturnType<typeof v.optional> },
+    listForDocument: RegisteredInternalQuery<
+        {
+            before: ColumnValidator<number | undefined, number | undefined>;
+            documentId: StringColumnValidator;
+            limit: ColumnValidator<number | undefined, number | undefined>;
+        },
         DocumentHistoryEntry[]
     >;
 
@@ -215,7 +219,7 @@ interface DocumentHistoryFunctions {
      * Compare `deleted` against `limit` to decide whether to run again rather
      * than assuming one pass drained the backlog.
      */
-    vacuum: RegisteredMutation<{ limit: ReturnType<typeof v.optional> }, { deleted: number }>;
+    vacuum: RegisteredInternalMutation<{ limit: ColumnValidator<number | undefined, number | undefined> }, { deleted: number }>;
 }
 
 /** The component shape {@link defineDocumentHistory} returns. */

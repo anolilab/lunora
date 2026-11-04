@@ -30,18 +30,19 @@ interface FakeD1Database {
 interface FakeD1Exec {
     all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
     batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<void>;
+    primary?: FakeD1Exec;
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<unknown>;
 }
 
 type BuildExecFunction = (database: FakeD1Database, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void) => FakeD1Exec;
 
 /**
- * Extract the emitted `buildExec` helper verbatim from `emitApp()`'s real
- * output — the exact text every project's `_generated/app.ts` gets — so the
- * tests below run the actual generated function.
+ * Extract the emitted `buildExec` helper (and the `buildSessionExec` it calls) verbatim from
+ * `emitApp()`'s real output — the exact text every project's `_generated/app.ts` gets — so the
+ * tests below run the actual generated functions.
  */
 const extractBuildExec = (output: string): string => {
-    const start = output.indexOf("const buildExec = (database: D1DatabaseLike");
+    const start = output.indexOf("const buildSessionExec = (database: D1DatabaseLike");
     const end = output.indexOf("\n\n/** Introspect", start);
 
     if (start === -1 || end === -1) {
@@ -103,6 +104,44 @@ const fakeSession = (statement: unknown, bookmark = "bookmark-after-write") => {
 };
 
 describe("emitApp — buildExec real-output bookmark wiring (plan 336)", () => {
+    it("a primary read opens a first-primary session and reports no bookmark to the sink", async () => {
+        expect.assertions(3);
+
+        const buildExec = compileBuildExec(extractBuildExec(emitApp(baseOptions)));
+
+        const statement = fakeStatement([{ id: "s1" }]);
+        const replica = fakeSession(statement, "bookmark-replica");
+        const primary = fakeSession(statement, "bookmark-primary");
+        const withSession = vi.fn<(bookmark?: string) => unknown>((bookmark) => (bookmark === "first-primary" ? primary : replica));
+        const database: FakeD1Database = { prepare: vi.fn<(sql: string) => unknown>(), withSession } as FakeD1Database;
+        const onBookmark = vi.fn<(bookmark: string | undefined) => void>();
+
+        const exec = buildExec(database, "bookmark-inbound", onBookmark);
+
+        await exec.primary?.all("select id from settings", []);
+
+        expect(withSession).toHaveBeenCalledWith("first-primary");
+        expect(replica.prepare).not.toHaveBeenCalled();
+        expect(onBookmark).not.toHaveBeenCalled();
+    });
+
+    it("each primary statement opens its own first-primary session, since the constraint covers only a session's first read", async () => {
+        expect.assertions(2);
+
+        const buildExec = compileBuildExec(extractBuildExec(emitApp(baseOptions)));
+
+        const session = fakeSession(fakeStatement([{ id: "s1" }]));
+        const withSession = vi.fn<(bookmark?: string) => unknown>(() => session);
+        const exec = buildExec({ prepare: vi.fn<(sql: string) => unknown>(), withSession } as FakeD1Database);
+
+        await exec.primary?.all("select id from settings", []);
+        await exec.primary?.all("select id from settings", []);
+
+        // One replica session opens up front; each primary statement adds its own.
+        expect(withSession.mock.calls.filter(([bookmark]) => bookmark === "first-primary")).toHaveLength(2);
+        expect(withSession).toHaveBeenCalledTimes(3);
+    });
+
     it("a write pins the D1 Sessions API session to the inbound bookmark and reports the write's bookmark via onBookmark", async () => {
         expect.assertions(3);
 
@@ -174,7 +213,8 @@ describe("emitApp — buildExec real-output bookmark wiring (plan 336)", () => {
         // because each call re-opened its own (which would silently fall
         // back to "first-unconstrained" per statement and defeat read-your-
         // writes).
-        expect(withSession).toHaveBeenCalledTimes(1);
+        // The replica opens its one session; the primary session sits beside it and only primary reads use it.
+        expect(withSession.mock.calls.filter(([bookmark]) => bookmark !== "first-primary")).toHaveLength(1);
         expect(session.prepare).toHaveBeenCalledTimes(2);
     });
 

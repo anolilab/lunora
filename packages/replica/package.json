@@ -1,6 +1,6 @@
 {
     "name": "@lunora/replica",
-    "version": "1.0.0-alpha.231",
+    "version": "1.0.0-alpha.243",
     "description": "Local-first replica runtime + local SQLite mirror for Lunora",
     "keywords": [
         "cloudflare",
@@ -66,21 +66,19 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit && tsc -p __tests__/workerd/tsconfig.json --noEmit",
+        "lint:types": "tsrs --noEmit && tsrs -p __tests__/workerd/tsconfig.json --noEmit",
         "test": "vitest run",
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/wire": "1.0.0-alpha.5"
+        "@lunora/wire": "1.0.0-alpha.6"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/server": "1.0.0-alpha.255",
+        "@lunora/server": "1.0.0-alpha.267",
         "@testing-library/dom": "catalog:frontend",
         "@testing-library/react": "catalog:frontend",
         "@types/node": "catalog:types",

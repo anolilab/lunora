@@ -24,9 +24,12 @@ const CLOUDFLARE_TOOLCHAIN: DriverToolchain = {
     prebuildsContainerImages: true,
 
     deploy: (request) => {
-        // `versions upload` publishes a new Version with a preview URL instead
-        // of taking production traffic.
-        const args: string[] = request.preview === true ? ["versions", "upload"] : ["deploy"];
+        // A versioned upload is not built here yet: refuse it rather than hand back a production `wrangler deploy` for it.
+        if (request.preview === true) {
+            throw new Error("the Cloudflare driver cannot build a preview upload; deploy an isolated preview with `lunora preview deploy`");
+        }
+
+        const args: string[] = ["deploy"];
 
         // Framework composition deploys a wrapper entry that overrides the
         // adapter-owned `main` in wrangler.jsonc.
@@ -50,10 +53,20 @@ const CLOUDFLARE_TOOLCHAIN: DriverToolchain = {
             args.push("--dry-run");
         }
 
+        // The path goes on argv, never the values: the file holds them.
+        if (request.secretsFile !== undefined) {
+            args.push("--secrets-file", request.secretsFile);
+        }
+
         // `--metafile` rides with `--outdir`: the esbuild metafile is what makes
         // the emitted bundle inspectable for CI artifacting.
         if (request.outDir !== undefined) {
             args.push("--outdir", request.outDir, "--metafile");
+        }
+
+        // The multipart upload form, which `wrangler check startup --worker` profiles without rebuilding.
+        if (request.outFile !== undefined) {
+            args.push("--outfile", request.outFile);
         }
 
         return { args, tool: "wrangler" };

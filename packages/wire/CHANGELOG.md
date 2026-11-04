@@ -1,3 +1,9 @@
+## @lunora/wire [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/@lunora/wire@1.0.0-alpha.5...@lunora/wire@1.0.0-alpha.6) (2026-10-30)
+
+### Bug Fixes
+
+* **wire:** classify each value with one prototype read ([#1427](https://github.com/anolilab/lunora/issues/1427)) ([ab466ed](https://github.com/anolilab/lunora/commit/ab466ed7e62f5ff6e2d6aca7d27dbb9bdade3f08))
+
 ## @lunora/wire [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/@lunora/wire@1.0.0-alpha.4...@lunora/wire@1.0.0-alpha.5) (2026-10-30)
 
 ### Performance Improvements

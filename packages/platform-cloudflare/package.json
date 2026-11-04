@@ -1,6 +1,6 @@
 {
     "name": "@lunora/platform-cloudflare",
-    "version": "1.0.0-alpha.113",
+    "version": "1.0.0-alpha.123",
     "description": "Cloudflare implementation of the Lunora platform contracts: ShardHost, SocketHost, ShardDirectory, ShardKvStore over Durable Objects",
     "keywords": [
         "cloudflare",
@@ -47,9 +47,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -58,7 +56,7 @@
     },
     "dependencies": {
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/platform": "1.0.0-alpha.76"
+        "@lunora/platform": "1.0.0-alpha.80"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",

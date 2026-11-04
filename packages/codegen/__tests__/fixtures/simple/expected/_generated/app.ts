@@ -72,6 +72,7 @@ interface ComposedApp extends LunoraWorker {
  * first request so per-isolate singletons are built once.
  */
 class AppBuilder<Env extends object> {
+    private adminRevocationsSelector?: Selector<Env, ShardNamespaceLike>;
     private adminToken?: Selector<Env, string>;
     private cdcEnabled = false;
     private deliveryAuthorizationSelector?: ShardConfig["deliveryAuthorization"];
@@ -194,6 +195,13 @@ class AppBuilder<Env extends object> {
         return this;
     }
 
+    /** The `AdminRevocationDO` namespace (typically `env.ADMIN_REVOCATIONS`). Records revoked named admin tokens where a point-in-time restore of the default shard cannot rewind them. Without it no named admin token can be created and any that exist are refused. */
+    public adminRevocations(selector: Selector<Env, ShardNamespaceLike>): this {
+        this.adminRevocationsSelector = selector;
+
+        return this;
+    }
+
     /** The `ShardRegistryDO` namespace (typically `env.SHARD_REGISTRY`). Each shard registers itself for the `.shardBy()` tables it writes, and cross-shard export, CDC sync and migrations fan out to the shards it lists. Without it they refuse a `.shardBy()` table. */
     public shardRegistry(selector: Selector<Env, ShardNamespaceLike | ShardRegistryRpc>): this {
         this.shardRegistrySelector = selector;
@@ -224,7 +232,7 @@ class AppBuilder<Env extends object> {
             ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
             ...(this.globalDeclaration
                 ? {
-                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null }) => {
+                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null | undefined }) => {
                           const env = rawEnv as Env;
                           const database = this.globalDeclaration?.d1(env);
 
@@ -235,16 +243,30 @@ class AppBuilder<Env extends object> {
                           const origin = this.globalDeclaration?.origin?.(env);
                           const crossShard = origin
                               ? createCrossShardRelationCapabilities({
-                                    ...(request?.identity === undefined ? {} : { identity: request.identity }),
+                                    get identity() {
+                                        return request?.identity;
+                                    },
                                     origin,
-                                    ...(request?.userId == null ? {} : { userId: request.userId }),
+                                    get userId() {
+                                        return request?.userId ?? undefined;
+                                    },
                                 })
                               : undefined;
 
                           return createD1CtxDb({
                               ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
                               ...(request?.cdcRetentionMs === undefined ? {} : { cdcRetentionMs: request.cdcRetentionMs }),
-                              auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
+                              // Getters, like the cross-shard identity above: reading the
+                              // request's caller marks the live query as caller-dependent, so
+                              // it may happen only when a `.serverDefault` column is stamped.
+                              auth: {
+                                  get identity() {
+                                      return request?.identity ?? null;
+                                  },
+                                  get userId() {
+                                      return request?.userId ?? null;
+                                  },
+                              },
                               // Forwarded from the shard's own `cdc` config, so ONE
                               // switch governs both changelogs. Built without it, the
                               // global `__cdc_log` is never written and the shape
@@ -415,6 +437,8 @@ class AppBuilder<Env extends object> {
     /** Fan the recorded declarations into the worker-side `createWorker` options. */
     private buildWorkerOptions(env: Env, _getAuth: () => null, deferred: DeferredModules): WorkerOptions {
         const options: WorkerOptions = {
+            aiChatBinding: (env as Record<string, unknown>)["AI"] as WorkerOptions["aiChatBinding"],
+            aiOptInLevel: (env as Record<string, unknown>)["LUNORA_AI_OPT_IN"] as WorkerOptions["aiOptInLevel"],
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
             openApiSpec: deferred.openApiSpec,
@@ -446,6 +470,12 @@ class AppBuilder<Env extends object> {
             options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ env, namespace: shardRegistry }) });
         }
 
+        const adminRevocations = this.adminRevocationsSelector?.(env);
+
+        if (adminRevocations) {
+            options.adminRevocations = adminRevocations;
+        }
+
         if (this.globalDeclaration) {
             const database = this.globalDeclaration.d1(env);
 
@@ -455,10 +485,12 @@ class AppBuilder<Env extends object> {
                 // plane: the rows `resolveTableSharding` classifies as `.global()`
                 // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
-                // The importer above skips the write for a dry run, and
-                // overwrites an existing `_id` under `onConflict: "replace"`.
+                // The importer above skips the write for a dry run, overwrites an
+                // existing `_id` under `onConflict: "replace"`, and removes the row
+                // an `op: "delete"` row names.
                 options.importGlobalsSupportsDryRun = true;
                 options.importGlobalsSupportsReplace = true;
+                options.importGlobalsSupportsDelete = true;
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
                 // all, and every one of them fails SILENTLY when unset — export
@@ -487,6 +519,8 @@ class AppBuilder<Env extends object> {
         if (logArchive !== undefined) {
             options.logArchive = logArchive;
         }
+
+        options.agentWorkflows = [];
 
         for (const fn of this.extendFns) {
             Object.assign(options, fn(env, { ...options }));
@@ -519,22 +553,14 @@ class AppBuilder<Env extends object> {
  * deployed; the dashboard's own metric is per-database and can't name the query.
  * The emit is best-effort — instrumentation must never fail a served query.
  */
-const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
+const buildSessionExec = (database: D1DatabaseLike, constraint: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
     // Real D1 always exposes `withSession`; guarded the same way as `batch`
     // below so a hand-rolled test double that omits it keeps working via
-    // `prepare()` straight on the raw binding — today's behaviour. With no
-    // inbound bookmark, `"first-unconstrained"` is the documented no-op
-    // equivalent (lowest latency, may read any replica) — see `D1Client.withSession`.
-    const session = typeof database.withSession === "function" ? database.withSession(bookmark ?? "first-unconstrained") : undefined;
+    // `prepare()` straight on the raw binding — today's behaviour. `constraint`
+    // is the Sessions API constraint the session opens with (see `buildExec`).
+    const session = typeof database.withSession === "function" ? database.withSession(constraint) : undefined;
     const target = session ?? database;
     const batchFn = target.batch;
-    const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
-        try {
-            emitD1QueryCost(sql, meta);
-        } catch {
-            // Best-effort: never let cost accounting fail the query it measures.
-        }
-    };
 
     return retryingExec({
         all: async (sql, parameters) => {
@@ -606,6 +632,56 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
     });
 };
 
+const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
+    try {
+        emitD1QueryCost(sql, meta);
+    } catch {
+        // Best-effort: never let cost accounting fail the query it measures.
+    }
+};
+
+/**
+ * The primary exec, for a read that must see every committed write (a policy check on a write
+ * path). Every statement opens its own `"first-primary"` session, and so does every retry:
+ * that constraint covers only a session's first read, so one session shared by two reads, or by
+ * a retry, can serve the later read from a replica that has not caught up. It reports no
+ * bookmark: the sink keeps the last value it is given, and a later replica read reports an older
+ * one, which would move the client's bookmark backwards.
+ */
+const buildPrimaryExec = (database: D1DatabaseLike): D1Exec => {
+    const statement = (sql: string, parameters: ReadonlyArray<unknown>) =>
+        (typeof database.withSession === "function" ? database.withSession("first-primary") : database).prepare(sql).bind(...parameters);
+
+    return retryingExec({
+        all: async (sql, parameters) => {
+            const result = await statement(sql, parameters).all<Record<string, unknown>>();
+
+            meter(sql, result.meta);
+
+            return result.results;
+        },
+        run: async (sql, parameters) => {
+            const result = await statement(sql, parameters).run();
+
+            meter(sql, result.meta);
+        },
+    });
+};
+
+/**
+ * The replica exec reads at the caller's bookmark, or `"first-unconstrained"` (lowest latency,
+ * any replica) without one. `primary` is the per-statement primary exec (see `buildPrimaryExec`).
+ */
+const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
+    const replica = buildSessionExec(database, bookmark ?? "first-unconstrained", onBookmark);
+
+    if (typeof database.withSession !== "function") {
+        return replica;
+    }
+
+    return { ...replica, primary: buildPrimaryExec(database) };
+};
+
 /** Introspect `.global()` (D1-backed) tables for the studio's global data browser. */
 const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector => {
     const exec = buildExec(database);
@@ -631,11 +707,12 @@ const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector =
  * `startLine` plus positional counting would mis-attribute every row after
  * the first gap. `importGlobalRows` prefers `row.line` when present and
  * falls back to the position-derived count otherwise. A dry run is passed through and writes nothing;
- * `onConflict: "replace"` overwrites a row whose `_id` already exists instead of reporting a conflict.
+ * `onConflict: "replace"` overwrites a row whose `_id` already exists instead of reporting a conflict, and a row's
+ * `op: "delete"` removes the stored row it names.
  */
 const buildGlobalImporter =
     (database: D1DatabaseLike, cdc: boolean) =>
-    (request: { dryRun?: boolean; onConflict?: "replace" | "skip"; rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => {
+    (request: { dryRun?: boolean; onConflict?: "replace" | "skip"; rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; op?: "delete"; table: string }>; startLine?: number }) => {
         const exec = buildExec(database);
         // Same reason the PITR applier carries it: a bulk import that skips the
         // changelog restores rows no downstream consumer is ever told about.
@@ -645,7 +722,7 @@ const buildGlobalImporter =
             dryRun: request.dryRun === true,
             exec,
             onConflict: request.onConflict ?? "skip",
-            rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, table: row.table })),
+            rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, ...(row.op === undefined ? {} : { op: row.op }), table: row.table })),
             ...(request.startLine === undefined ? {} : { startLine: request.startLine }),
         });
     };
@@ -734,14 +811,16 @@ interface LunoraConfig<Env extends object = object> {
     advisor?: { accept?: ReadonlyArray<{ exportName: string; file: string; reason: string; rule: string }>; minSeverity?: "error" | "info" | "warn" };
     /** Receives this project's `defineApp()` builder and returns it — where a Vite-first app makes the builder calls its generated entry cannot derive. */
     app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
-    /** Codegen's source walk. `exclude` adds globs (relative to `lunora/`, e.g. `"seed/**"`) to skip on top of the built-in test-file patterns. A literal array of strings, for the same reason as `target`. */
-    codegen?: { exclude?: string[] };
+    /** Codegen settings. `exclude` adds globs (relative to `lunora/`, e.g. `"seed/**"`) to skip on top of the built-in test-file patterns. `lazyFunctions: true` emits the per-module lazy function registry for every command and bundler plugin that generates or checks `_generated/`. Literals, for the same reason as `target`. */
+    codegen?: { exclude?: string[]; lazyFunctions?: boolean };
     /** Host the shard, scheduler and shard registry in ONE Durable Object class (`merge: true`, plan 462) — before the first deploy only. A literal, for the same reason as `target`. */
     durableObjects?: { merge?: boolean };
     /** Opt into remote-binding dev without `--remote` or `LUNORA_REMOTE` on every run. A literal, for the same reason as `target`. */
     remote?: boolean;
     /** Sibling Workers the app calls through service bindings — key → its folder and, for RPC, the exported `WorkerEntrypoint` class (`rpc: false` binds that class but calls it with plain `fetch`, without importing the service's sources). Becomes `ctx.services.<key>` in actions, a wrangler `services[]` entry, one `lunora dev` session and a services-first `lunora deploy`. Literals, for the same reason as `target`. */
     services?: Record<string, { dir: string; entrypoint?: string; rpc?: false }>;
+    /** Studio settings. `companion: true` emits the companion Worker that serves the advisor procedure list to a hosted Studio, bound to the app as `ADVISOR_COMPANION`. A literal, for the same reason as `target`. */
+    studio?: { companion?: boolean };
     /** Deploy target id — `lunora deploy`/`verify` read it when no `--target` is passed. Must be a literal: `runCodegen` resolves it synchronously by PARSING this file, so a computed value is not seen — `lunora verify` reports `platform_unreadable_target` rather than defaulting in silence. */
     target?: string;
 }

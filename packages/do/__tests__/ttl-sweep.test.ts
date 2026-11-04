@@ -488,5 +488,35 @@ describe("ttl sweep", () => {
             expect(response.status).toBe(200);
             expect(body.result.entries).toContainEqual(expect.objectContaining({ functionPath: "ttl:sweep", level: "warn" }));
         });
+
+        it("does not tell a sweep that fills its batch that the transaction will fail", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter();
+
+            for (let index = 0; index < 10; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+                await writer.insert("sessions", { _id: `s${String(index)}`, expiresAt: NOW - 1000, token: `t${String(index)}` }, { allowExplicitId: true });
+            }
+
+            const shard = new MeteredTtlShard(
+                {
+                    acceptWebSocket() {},
+                    getWebSockets() {
+                        return [];
+                    },
+                    storage: { sql: harness.sql as unknown as ShardDOState["storage"]["sql"] },
+                },
+                { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN },
+            );
+
+            await shard.runPollTtlSweeps();
+
+            const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getLogs, {}, ADMIN_TOKEN));
+            const body = await response.json<{ result: { entries: { message: string }[] } }>();
+
+            expect(response.status).toBe(200);
+            expect(body.result.entries.filter((entry) => entry.message.startsWith("transaction reached"))).toStrictEqual([]);
+        });
     });
 });

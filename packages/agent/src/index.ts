@@ -14,6 +14,7 @@ export { functionTool } from "./function-tool";
 export { createAgentGenerate, createEpisodeExtract, createGraphExtract, createStreamGenerate, resolveAgentModel } from "./generate";
 export type { JsCodeToolInput, JsCodeToolOptions, JsCodeToolResult } from "./js-code-tool";
 export { jsCodeTool } from "./js-code-tool";
+export { default as jsonSchema } from "./json-schema";
 export type { McpCallResult, McpClientLike, McpContentPart, McpToolInfo, McpToolsOptions } from "./mcp";
 export { adaptMcpResult, mcpTools } from "./mcp";
 export { buildModelMessages } from "./model-messages";
@@ -30,6 +31,7 @@ export type {
     FsToolOptions,
 } from "./sandbox";
 export { browserTool, containerFsTool, containerTool, fsTool } from "./sandbox";
+export { default as withAgentScheduleShard } from "./schedule-shard";
 export type { SecretRequestInput } from "./secret-request-tool";
 export { requestSecretTool, SecretUnavailableError, withSecret } from "./secret-request-tool";
 export { defineSkill, isSkillDefinition } from "./skill";
@@ -37,16 +39,19 @@ export type {
     AgentApprovalContext,
     AgentAsToolOptions,
     AgentBindingSpec,
+    AgentChannelShardInput,
     AgentConfig,
     AgentDefinition,
     AgentEmailMapper,
     AgentEmailRun,
+    AgentEmailShardInput,
     AgentFunctionPaths,
     AgentFunctionReference,
     AgentGenerate,
     AgentGenerateOptions,
     AgentGenerateResult,
     AgentHandle,
+    AgentInboundShardResolver,
     AgentInstructionsContext,
     AgentLiveEvent,
     AgentMemoryOptions,

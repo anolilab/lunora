@@ -10,6 +10,7 @@ import {
     DEFAULT_BUNDLE_META_PATH,
     detectFramework,
     LAZY_FUNCTIONS_ENV,
+    readApiSpecMarker,
     resolveTargetOrThrow,
     STRICT_ADVISORIES_ENV,
 } from "@lunora/config";
@@ -201,10 +202,22 @@ const clientBuildRuns = (cwd: string, frameworkBuild: boolean | undefined, envir
 
 /**
  * Whether the client build for `cwd` is a bundler plugin build. Only then did the plugin run codegen and the post-codegen hook,
- * so the deploy's own run must not write the same outputs again.
+ * so the deploy's own run must not write the same outputs again. The plugin records the API spec it emitted, and deploy clears
+ * that record before each client build, so a record present afterwards means this build's codegen ran. The config's text is
+ * not searched: a plugin registered through an imported local module is still recognised. The composed entry always runs it.
  */
-const pluginBuildRuns = (cwd: string, frameworkBuild: boolean | undefined, environment?: string): boolean =>
-    clientBuildRuns(cwd, frameworkBuild, environment) && frameworkBuildFor(cwd, environment) !== "script";
+const pluginBuildRuns = (cwd: string, frameworkBuild: boolean | undefined, environment?: string): boolean => {
+    const tool = frameworkBuild === false ? undefined : frameworkBuildFor(cwd, environment);
+
+    if (tool === undefined || tool === "script") {
+        return false;
+    }
+
+    const wranglerPath = findWranglerFile(cwd);
+    const composed = wranglerPath !== undefined && readWranglerJsonc<WranglerShape>(wranglerPath).parsed?.main === COMPOSED_MAIN;
+
+    return composed || readApiSpecMarker(cwd) !== undefined;
+};
 
 /**
  * The reason the client build cannot run with these options, or `undefined` when it can. A refusal is a usage error, so

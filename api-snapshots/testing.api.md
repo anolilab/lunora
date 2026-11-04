@@ -182,7 +182,7 @@ interface FakeTopicControls {
 ### `FunctionRegistry` (type)
 
 ```ts
-type FunctionRegistry = Record<string, RegisteredAction<any, any> | RegisteredMutation<any, any> | RegisteredQuery<any, any>>;
+type FunctionRegistry = Record<string, RegisteredFunction<any, any, "action" | "mutation" | "query">>;
 ```
 
 ### `HarnessDispatch` (interface)
@@ -440,6 +440,14 @@ interface TestSubscription<R> extends AsyncIterable<R> {
 ### `WaitForMailOptions` (interface)
 
 Re-exported from `@lunora/mail` — signature tracked at its source.
+
+### `absentScorer` (const)
+
+```ts
+const absentScorer: (needle: string, options?: {
+    caseSensitive?: boolean;
+}) => Scorer;
+```
 
 ### `agentHarness` (const)
 

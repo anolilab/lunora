@@ -1,6 +1,7 @@
 import type { FcmConfig } from "@visulima/notification/providers/fcm";
 import type { WebPushConfig } from "@visulima/notification/providers/web-push";
 
+import { fcmServiceAccountTokenSource, parseServiceAccount } from "./fcm-service-account";
 import type { NotifyEnv } from "./types";
 
 /**
@@ -17,6 +18,7 @@ const WEB_PUSH_ENV_KEYS = {
 const FCM_ENV_KEYS = {
     accessToken: "FCM_ACCESS_TOKEN",
     projectId: "FCM_PROJECT_ID",
+    serviceAccount: "FCM_SERVICE_ACCOUNT",
 } as const;
 
 const readString = (env: NotifyEnv, key: string): string | undefined => {
@@ -47,24 +49,53 @@ const webPushFromEnv = (env: NotifyEnv, overrides?: Partial<WebPushConfig>): Web
 };
 
 /**
- * Resolve an {@link FcmConfig} from the Worker `env` (`FCM_PROJECT_ID` plus a
- * static `FCM_ACCESS_TOKEN`). Returns `undefined` when the project id is missing.
+ * Stands in for the project id of a key that cannot be parsed. `createFcmProvider` throws on a
+ * missing id, which would fail every channel of the engine; this one is never sent, because the
+ * provider asks for a token before it builds a request and the token source rejects with the
+ * parse error. FCM sends then report the bad key instead of a missing `fcm` channel.
+ */
+const MALFORMED_KEY_PROJECT_ID = "unresolved-malformed-service-account";
+
+/** The key file's own project id, or the placeholder above when the key cannot be parsed. */
+const projectIdOf = (rawServiceAccount: string): string | undefined => {
+    try {
+        return parseServiceAccount(rawServiceAccount).project_id;
+    } catch {
+        return MALFORMED_KEY_PROJECT_ID;
+    }
+};
+
+/**
+ * Resolve an {@link FcmConfig} from the Worker `env`.
  *
- * The static token is convenient for local dev but expires; in production prefer
- * passing your own `getAccessToken` (e.g. wrapping `google-auth-library`) via
- * `defineNotify({ fcm: (env) => ({ ...fcmFromEnv(env), getAccessToken }) })` —
- * that keeps the provider edge-safe (no Google SDK / `node:crypto` bundled).
+ * Production: `FCM_SERVICE_ACCOUNT` holds the Google service-account key file, as JSON or
+ * base64 of it. The access token is minted from it on demand and cached until shortly
+ * before it expires, so `defineNotify({ fcm: (env) => fcmFromEnv(env) })` is correct as written.
+ * `FCM_PROJECT_ID` overrides the project id in the key file.
+ *
+ * Dev: a static `FCM_ACCESS_TOKEN` is accepted when no service account is set. It
+ * expires within the hour, so it is only a stopgap for local work.
+ *
+ * Returns `undefined` when no project id can be resolved. A malformed key does not throw
+ * here: the token source rejects with the parse error instead, so only FCM sends fail, not
+ * the other channels that share this engine.
  */
 const fcmFromEnv = (env: NotifyEnv, overrides?: Partial<FcmConfig>): FcmConfig | undefined => {
-    const projectId = readString(env, FCM_ENV_KEYS.projectId); // secret-scanner:allow -- `projectId` is a config field name, not a credential
+    const envProjectId = readString(env, FCM_ENV_KEYS.projectId); // secret-scanner:allow -- `projectId` is a config field name, not a credential
+    const rawServiceAccount = readString(env, FCM_ENV_KEYS.serviceAccount);
+    // An empty override would reach `createFcmProvider`, which throws on it and fails every channel of the engine.
+    const overrideProjectId = overrides?.projectId === "" ? undefined : overrides?.projectId;
+    const projectId = overrideProjectId ?? envProjectId ?? (rawServiceAccount === undefined ? undefined : projectIdOf(rawServiceAccount));
 
     if (projectId === undefined) {
         return undefined;
     }
 
-    const accessToken = readString(env, FCM_ENV_KEYS.accessToken);
+    if (rawServiceAccount !== undefined) {
+        return { getAccessToken: fcmServiceAccountTokenSource(rawServiceAccount), ...overrides, projectId };
+    }
 
-    return { accessToken, projectId, ...overrides };
+    return { accessToken: readString(env, FCM_ENV_KEYS.accessToken), ...overrides, projectId };
 };
 
 export { FCM_ENV_KEYS, fcmFromEnv, WEB_PUSH_ENV_KEYS, webPushFromEnv };

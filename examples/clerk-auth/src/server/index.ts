@@ -5,6 +5,7 @@ import { memoizeIdentity } from "lunorash/runtime";
 import { defineApp } from "../../lunora/_generated/app.js";
 
 interface Env {
+    ADMIN_REVOCATIONS: ShardNamespaceLike;
     /** Comma-separated frontend origins, checked against the session token's `azp`. */
     CLERK_AUTHORIZED_PARTIES?: string;
     /** The publishable key: it encodes the Frontend API that issues (and signs) session tokens. */
@@ -26,6 +27,7 @@ interface Env {
  */
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    .adminRevocations((env) => env.ADMIN_REVOCATIONS)
     .extend((env) => {
         return {
             resolveIdentity: memoizeIdentity(
@@ -40,6 +42,8 @@ const app = defineApp<Env>()
     .build();
 
 export const { ShardDO } = app;
+// Records revoked named admin tokens where a restore of the shard cannot rewind them.
+export { AdminRevocationDO } from "../../lunora/_generated/adminRevocations.js";
 
 // The composed app IS the module worker — see examples/chess for why it is exported wholesale.
 export default app;

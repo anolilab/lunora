@@ -328,22 +328,28 @@ const whileProcessing = async <T>(
         return value === undefined ? { status: request.status } : { status: request.status, value };
     });
 
-/** Mark the run failed and keep why on the event. A request already terminal, or failed, is left as it is. */
+type FailPatch = Partial<Omit<RequestRecord, "id" | "status">>;
+
+/**
+ * Mark the run failed and keep why on the event. A request already terminal, or failed, is left as it is. A patch
+ * given as a function reads the stored request inside the step, so its read is covered by the step's retry policy.
+ */
 const failStep = async (
     scope: RunScope,
     steps: StepRunner,
     requestId: string,
     detail: string,
-    patch?: Partial<Omit<RequestRecord, "id" | "status">>,
+    patch?: FailPatch | ((request: RequestRecord) => FailPatch),
 ): Promise<RequestStatus> =>
     steps.do("fail", async () => {
-        const { status } = await requireRequest(scope.ports.store, requestId);
+        const request = await requireRequest(scope.ports.store, requestId);
+        const { status } = request;
 
         if (!canTransition(status, "failed")) {
             return status;
         }
 
-        await setStatus(scope.ports, requestId, { detail, from: status, patch, to: "failed" });
+        await setStatus(scope.ports, requestId, { detail, from: status, patch: typeof patch === "function" ? patch(request) : patch, to: "failed" });
 
         return "failed" as const;
     });
@@ -697,8 +703,9 @@ const failErasure = async (
 ): Promise<RequestStatus> => {
     // An earlier attempt that got past its tombstone may have deleted rows, and a later attempt that fails before its own tombstone
     // does not undo that. The request is failed first: an expiry that throws must not leave the erasure in processing.
-    const { nothingErased } = await requireRequest(scope.ports.store, requestId);
-    const status = await failStep(scope, steps, requestId, detail, { nothingErased: !tombstoned && nothingErased !== false });
+    const status = await failStep(scope, steps, requestId, detail, ({ nothingErased }) => {
+        return { nothingErased: !tombstoned && nothingErased !== false };
+    });
 
     if (rowsMayBeGone) {
         await steps.do("expire", async () => expireReadyExports(scope.ports, requestId));

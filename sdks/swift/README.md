@@ -43,7 +43,10 @@ let messages = try client.query("messages:list", args: ["channel": "general"])
 _ = try client.mutation("messages:send", args: ["channel": "general", "text": "hi"])
 
 // Live subscription: attach your socket, then feed it frames.
-client.attachSocket { frame in try? socket.send(Wire.stableStringify(frame)) }
+// The sender cannot throw, so a failed write closes the socket: that ends the run and starts the reconnect.
+client.attachSocket { frame in
+    do { try socket.send(Wire.stableStringify(frame)) } catch { socket.close() }
+}
 let unsubscribe = client.subscribe("messages:list", args: args, onData: render)
 ```
 

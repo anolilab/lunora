@@ -1,6 +1,6 @@
 {
     "name": "@lunora/values",
-    "version": "1.0.0-alpha.85",
+    "version": "1.0.0-alpha.95",
     "description": "Validators for Lunora: the v.* validator suite with end-to-end return-type inference",
     "keywords": [
         "cloudflare",
@@ -50,9 +50,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",

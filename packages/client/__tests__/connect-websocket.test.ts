@@ -199,6 +199,20 @@ describe("connectWebSocket", () => {
         client.close();
     });
 
+    it("tells onTokenExpired listeners when a route socket closes with 4001", () => {
+        expect.assertions(1);
+
+        const client = makeClient();
+        const expired = vi.fn<() => void>();
+
+        client.onTokenExpired(expired);
+        client.connectWebSocket("/chat", { onMessage: () => undefined });
+
+        lastSocket().fire("close", { code: 4001, reason: "token_expired" });
+
+        expect(expired).toHaveBeenCalledTimes(1);
+    });
+
     it("finishes closing every route socket when one throws on close", () => {
         expect.assertions(2);
 

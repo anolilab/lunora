@@ -26,7 +26,9 @@ import { isDuplicateInstanceError } from "@lunora/workflow";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { fnv1a64Hex } from "../../../shared/fnv1a";
 import { importHmacKey } from "../../../shared/hmac-key";
+import { withRunShard } from "../../../shared/run-shard";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
+import resolveInboundShard from "./inbound-shard";
 import type { AgentChannelRun, AgentDefinition, AgentInboundChannelKind, AgentWorkflowBindingLike, InboundChannelEvent } from "./types";
 
 /** Max age (seconds) of a signed request before it is rejected as a replay. */
@@ -258,6 +260,73 @@ const ack = (): Response => new Response(undefined, { status: 200 });
 const sha256Hex = async (value: string): Promise<string> =>
     [...new Uint8Array(await crypto.subtle.digest("SHA-256", utf8(value)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
+const parseJsonObject = (json: string): Record<string, unknown> | undefined => {
+    try {
+        const parsed: unknown = JSON.parse(json);
+
+        return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * The fields of a signature-verified body: a JSON document, the JSON in a form-encoded Slack interactive `payload=`, or the
+ * fields of a form-encoded Slack slash command (`team_id=T1&command=…&text=…`), which is neither JSON nor a `payload=` wrapper.
+ */
+const parseSignedBody = (body: string): Record<string, unknown> | undefined => {
+    if (body.startsWith("payload=")) {
+        // `payload=` is always present here; a value that is not JSON (`null` included) yields no object.
+        return parseJsonObject(String(new URLSearchParams(body).get("payload")));
+    }
+
+    return parseJsonObject(body) ?? Object.fromEntries(new URLSearchParams(body));
+};
+
+/**
+ * Whether a signed body is refused before the mapper: it must carry a JSON object. A `payload=` form wrapper is judged by its
+ * payload (GitHub's form delivery, Slack's interactive payloads). Slack's other form bodies, its slash commands, are legitimate.
+ */
+const isMalformedBody = (channel: string, body: string): boolean => {
+    if (body.startsWith("payload=")) {
+        return parseSignedBody(body) === undefined;
+    }
+
+    return channel !== "slack" && parseJsonObject(body) === undefined;
+};
+
+const idString = (value: unknown): string | undefined => {
+    if (typeof value === "string" && value !== "") {
+        return value;
+    }
+
+    return typeof value === "number" ? String(value) : undefined;
+};
+
+/**
+ * The tenant id the provider stamped on a signature-verified body: Slack `team_id`
+ * (`team.id` on interactive payloads), GitHub `installation.id`, Discord `guild_id`. Only
+ * this, not the event, reaches `resolveShard`: the rest of the body carries text a user
+ * of that workspace wrote, and a shard derived from it would be theirs to choose.
+ */
+const verifiedWorkspaceId = (channel: AgentInboundChannelKind, body: string): string | undefined => {
+    const parsed = parseSignedBody(body);
+
+    if (parsed === undefined) {
+        return undefined;
+    }
+
+    if (channel === "slack") {
+        return idString(parsed["team_id"]) ?? idString((parsed["team"] as { id?: unknown } | undefined)?.id);
+    }
+
+    if (channel === "github") {
+        return idString((parsed["installation"] as { id?: unknown } | undefined)?.id);
+    }
+
+    return idString(parsed["guild_id"]);
+};
+
 /**
  * A stable per-delivery id for idempotent dispatch, taken ONLY from signed
  * material: Slack's `event_id` / Discord's interaction `id` from the (already
@@ -296,7 +365,13 @@ const deliveryId = async (channel: AgentInboundChannelKind, body: string): Promi
  * failure (service error, quota, bad binding) is rethrown so the handler returns
  * non-2xx and the provider redelivers rather than the event being lost.
  */
-const startChannelRun = async (workflow: AgentWorkflowBindingLike, run: AgentChannelRun, channel: AgentInboundChannelKind, id: string): Promise<Response> => {
+const startChannelRun = async (
+    workflow: AgentWorkflowBindingLike,
+    run: AgentChannelRun,
+    delivery: { channel: AgentInboundChannelKind; id: string; shardKey: string | undefined },
+): Promise<Response> => {
+    const { channel, id, shardKey } = delivery;
+
     // `run` derives from an inbound channel webhook mapper — reject the reserved
     // workflow branch-marker key at this trust boundary before it ever reaches
     // `create()`. Thrown (not acked): a forged marker must not be reported as
@@ -312,7 +387,8 @@ const startChannelRun = async (workflow: AgentWorkflowBindingLike, run: AgentCha
     // signed material, not on the digest; against ACCIDENTAL collision between
     // honest ids, 64 bits is ample.
     try {
-        await workflow.create({ id: `${channel}-${fnv1a64Hex(id)}`, params: run });
+        // The shard is the app's `resolveShard` verdict; a mapped `shardKey` is dropped.
+        await workflow.create({ id: `${channel}-${fnv1a64Hex(id)}`, params: withRunShard(run, shardKey) });
     } catch (error) {
         if (isDuplicateInstanceError(error)) {
             return ack();
@@ -374,6 +450,13 @@ const dispatchAgentChannel =
                 return pong;
             }
 
+            // A signed body must carry a JSON object before the mapper sees it, or it is refused rather than routed to the default shard.
+            // A `payload=` form wrapper (GitHub's form delivery, Slack's interactive payloads) is judged by its payload. Slack's other form
+            // bodies, its slash commands, are legitimate fields.
+            if (isMalformedBody(channel, body)) {
+                return new Response("Malformed webhook body", { status: 400 });
+            }
+
             // eslint-disable-next-line no-await-in-loop -- see above
             const run = await config.map(event);
 
@@ -391,8 +474,17 @@ const dispatchAgentChannel =
                 );
             }
 
+            // A throwing hook answers non-2xx, so the provider redelivers instead of the
+            // event running on the default shard.
             // eslint-disable-next-line no-await-in-loop -- single dispatch then return; never iterates past the first claim
-            return await startChannelRun(workflow, run satisfies AgentChannelRun, channel, await deliveryId(channel, body));
+            const shardKey = await resolveInboundShard(
+                config.resolveShard,
+                { channel, workspaceId: verifiedWorkspaceId(channel, body) },
+                "onInbound.resolveShard",
+            );
+
+            // eslint-disable-next-line no-await-in-loop -- single dispatch then return; never iterates past the first claim
+            return await startChannelRun(workflow, run satisfies AgentChannelRun, { channel, id: await deliveryId(channel, body), shardKey });
         }
 
         // No target's secret verified ⇒ unauthenticated; a verified-but-declined event is a 204.

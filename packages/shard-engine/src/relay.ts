@@ -288,7 +288,7 @@ interface RelayShapePoke {
  * wire-encoded message, passed through untouched.
  */
 interface RelayRoomEvent {
-    attachment: Pick<SocketAttachment, "connectionId" | "context" | "identity" | "ip" | "userId">;
+    attachment: Pick<SocketAttachment, "connectionId" | "context" | "expiresAt" | "identity" | "ip" | "revalidateAt" | "userId">;
     connectionId: string;
     data?: unknown;
     kind: "join" | "leave" | "message";
@@ -309,6 +309,9 @@ interface RelayRoomVerdict {
  */
 interface LiveSocketControlCall {
     action: unknown;
+
+    /** Set by the worker on a `reauth` whose admin credential it verified; an admin socket is re-authenticated only by one. */
+    adminReauth?: true;
     callerId: string;
     connectionId: string;
     /** The caller's verified claims; carried only by a `reauth`, which compares them with the socket's. */
@@ -335,7 +338,15 @@ interface RelayLiveFrame {
 
 /** Internal owner↔relay control messages (plan 075). NOT the public client protocol — the app never sees these. */
 type OwnerRelayFrame =
-    RelayAttach | RelayDetach | RelayFrame | RelayLiveControl | RelayLiveFrame | RelayRoomEvent | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
+    | RelayAttach
+    | RelayDetach
+    | RelayFrame
+    | RelayLiveControl
+    | RelayLiveFrame
+    | RelayRoomEvent
+    | RelayShapePoke
+    | RelayShapeSubscribe
+    | RelayShapeUnsubscribe;
 
 export { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor, relayProxyKey, shapeRoutingKey };
 export type {

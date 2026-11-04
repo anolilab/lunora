@@ -88,6 +88,8 @@ const literalType = (value: unknown): string | undefined => {
     return typeof value === "string" || typeof value === "boolean" ? typeof value : undefined;
 };
 
+const isSchema = (value: unknown): value is JsonSchema => typeof value === "object" && value !== null && !Array.isArray(value);
+
 /**
  * A `v.sensitive` node as JSON Schema: write-only, so a response never carries
  * it. `format: "password"` marks a plain string as one; a string that already
@@ -95,13 +97,29 @@ const literalType = (value: unknown): string | undefined => {
  */
 const markSensitive = (schema: JsonSchema): JsonSchema => {
     // A literal's `const` is the secret itself, so a published schema keeps only the type
-    // it implies. A union's members are marked the same way.
-    const { const: literal, anyOf, ...rest } = schema;
+    // it implies. Everything nested under the node is part of the secret and is marked the same way.
+    const { const: literal, ...rest } = schema;
     const typed: JsonSchema = literal === undefined ? rest : { ...rest, type: rest["type"] ?? literalType(literal) };
-    const unionMembers = Array.isArray(anyOf) ? { anyOf: (anyOf as JsonSchema[]).map((member) => markSensitive(member)) } : {};
+    const markNested = (value: unknown): unknown => (isSchema(value) ? markSensitive(value) : value);
+    const nested: JsonSchema = {};
+
+    if (Array.isArray(typed["anyOf"])) {
+        nested["anyOf"] = (typed["anyOf"] as unknown[]).map((member) => markNested(member));
+    }
+
+    for (const key of ["additionalProperties", "items"]) {
+        if (typed[key] !== undefined) {
+            nested[key] = markNested(typed[key]);
+        }
+    }
+
+    if (isSchema(typed["properties"])) {
+        nested["properties"] = Object.fromEntries(Object.entries(typed["properties"]).map(([key, value]) => [key, markNested(value)]));
+    }
+
     const plainString = typed["type"] === "string" && typed["format"] === undefined;
 
-    return { ...typed, ...unionMembers, writeOnly: true, ...(plainString ? { format: "password" } : {}) };
+    return { ...typed, ...nested, writeOnly: true, ...(plainString ? { format: "password" } : {}) };
 };
 
 /**
