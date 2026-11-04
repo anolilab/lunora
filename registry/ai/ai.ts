@@ -82,10 +82,8 @@ type Sentiment = (typeof SENTIMENTS)[number];
 
 /** The model's one word, checked: a reply that is not one of the labels fails rather than reaching the caller as one. */
 const toSentiment = (reply: string): Sentiment => {
-    const word = reply
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z]+$/u, "");
+    // Quotes, a full stop or whitespace around the word still leave the label; a digit does not.
+    const word = reply.toLowerCase().replaceAll(/^[\s.!?,;:'"*]+|[\s.!?,;:'"*]+$/gu, "");
     const sentiment = SENTIMENTS.find((label) => label === word);
 
     if (sentiment === undefined) {
