@@ -1,4 +1,28 @@
+import { readFileSync } from "node:fs";
+import { join, relative, sep } from "node:path";
+
 import { defineConfig } from "@visulima/vis/config";
+
+/**
+ * `vis run build` over the workspace dependencies (`<name>^...`, not the package
+ * itself) of every package that owns a staged file. One call, so two builds never
+ * race over shared dependencies: packem cleans `dist/` when a build starts.
+ * `--if-present` because a package with no workspace dependencies (@lunora/errors)
+ * selects no projects, which vis otherwise treats as an error.
+ */
+const buildStagedDependencies = (files: string[]): string[] => {
+    const names = new Set<string>();
+
+    for (const file of files) {
+        const [top, directory] = relative(import.meta.dirname, file).split(sep);
+
+        if (top === "packages" && directory) {
+            names.add((JSON.parse(readFileSync(join(import.meta.dirname, top, directory, "package.json"), "utf8")) as { name: string }).name);
+        }
+    }
+
+    return names.size === 0 ? [] : [`pnpm exec vis run build --if-present ${[...names].map((name) => `-F "${name}^..."`).join(" ")}`];
+};
 
 export default defineConfig({
     // `alpha` is the development branch, not `main`. vis only derives the
@@ -203,7 +227,11 @@ export default defineConfig({
         // cwd = that package dir (replacing the old scripts/staged-eslint.mjs
         // wrapper). Running eslint from the repo root would load the wrong
         // plugin set and break rules + disable directives.
-        "packages/**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx}": [{ command: "pnpm exec eslint --fix", perPackage: true }],
+        // The type-aware rules read @lunora/* types from each dependency's dist/, so
+        // the staged packages' dependencies are built first, before eslint starts.
+        // Unbuilt, those types resolve to `any`, which gives false errors and lets
+        // `--fix` rewrite code against the wrong types (#1456).
+        "packages/**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx}": [buildStagedDependencies, { command: "pnpm exec eslint --fix", perPackage: true }],
         "**/*.{md,mdx}": ["pnpm exec prettier --write"],
     },
     secrets: {
