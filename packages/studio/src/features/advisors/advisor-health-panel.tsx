@@ -1,7 +1,7 @@
 import type { AdvisorMap, AdvisorProcedureProtection, Coverage, Grade, ProcedureScore } from "@lunora/advisor";
 import { scoreAdvisor } from "@lunora/advisor";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import ErrorAlert from "../../components/error-alert";
 import { Card, CardContent } from "../../components/ui/card";
@@ -107,6 +107,9 @@ const AdvisorHealthPanel = ({ advisorCompanion = false, localProcedures = false,
         setScored({ advisories: freshAdvisories, procedures: freshProcedures });
     }
 
+    // Scoring walks and sorts every procedure, so it runs once per scored pair, not on every render.
+    const map: AdvisorMap | null = useMemo(() => (scored === undefined ? null : scoreAdvisor(scored.procedures, scored.advisories)), [scored]);
+
     if (source.kind === "none") {
         return (
             <Card>
@@ -138,8 +141,6 @@ const AdvisorHealthPanel = ({ advisorCompanion = false, localProcedures = false,
             </Card>
         );
     }
-
-    const map: AdvisorMap | null = scored === undefined ? null : scoreAdvisor(scored.procedures, scored.advisories);
 
     // Either read failing is a "cannot score" state, not a healthy one — say so
     // rather than showing 100, or spinning forever waiting on a read that failed.
