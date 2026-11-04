@@ -287,15 +287,15 @@
             - "name": "Lint (oxfmt)"
               "run": "pnpm run lint:oxfmt"
 
-    # Advisory: oxlint reports tens of thousands of problems today, so this job never
-    # gates the PR and stays out of `Check Lint Run`. Remove `continue-on-error` and add
-    # "oxlint" to that job's `needs` to make it a gate.
+    # Repo-wide and type-aware: every package is built and every app's codegen runs first.
+    # Without them the imported types resolve to `any` and oxlint reports hundreds of
+    # false findings.
     "oxlint":
         "name": "Lint (oxlint)"
         "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
-        "timeout-minutes": 15
+        "timeout-minutes": 30
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -310,14 +310,21 @@
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "lint"
+                  "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
                   "npm-version": "11"
+                  "enable-vis-cache": "true"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
+            - "name": "Build packages"
+              "run": "pnpm run build:packages"
+
+            - "name": "Generate app code"
+              "run": "pnpm exec vis run codegen"
+
             - "name": "Lint (oxlint)"
-              "continue-on-error": true
               "run": "pnpm run lint:oxlint"
 
     "package-json-sort":
@@ -672,6 +679,7 @@
                 "api-surface",
                 "dist-production",
                 "oxfmt",
+                "oxlint",
                 "package-json-sort",
                 "secrets",
                 "registry-items",

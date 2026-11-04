@@ -125,8 +125,28 @@
     {
       "at": "2026-11-04T13:19:35.391Z",
       "key": "@lunora/vite@1.0.0-alpha.427"
+    },
+    {
+      "at": "2026-11-04T20:06:50.177Z",
+      "key": "@lunora/advisor@1.0.0-alpha.289"
+    },
+    {
+      "at": "2026-11-04T20:06:50.177Z",
+      "key": "@lunora/config@1.0.0-alpha.456"
+    },
+    {
+      "at": "2026-11-04T20:06:50.177Z",
+      "key": "@lunora/cli@1.0.0-alpha.483"
+    },
+    {
+      "at": "2026-11-04T20:06:50.177Z",
+      "key": "@lunora/notify@1.0.0-alpha.111"
+    },
+    {
+      "at": "2026-11-04T20:06:50.177Z",
+      "key": "@lunora/testing@1.0.0-alpha.334"
     }
   ],
-  "updatedAt": "2026-11-04T13:19:35.391Z",
+  "updatedAt": "2026-11-04T20:06:50.178Z",
   "version": 1
 }
