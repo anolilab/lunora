@@ -164,6 +164,17 @@ describe("advisorHealthPanel", () => {
         });
     });
 
+    it("fetches the list once when the advisories arrive after the first request", async () => {
+        expect.assertions(1);
+
+        const fetchMock = stubProceduresResponse(200, { procedures: [] });
+
+        render(renderPanel(true));
+        await screen.findByTestId("advisor-health-score");
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
     it("reports a failing list at once instead of retrying behind a loading state", async () => {
         expect.assertions(2);
 

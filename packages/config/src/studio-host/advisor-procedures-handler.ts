@@ -52,26 +52,39 @@ const handleAdvisorProceduresRequest = (request: LocalEndpointRequest): LocalEnd
 
     const path = join(request.projectRoot, request.schemaDirectory ?? "lunora", "_generated", ADVISOR_PROCEDURES_FILE);
 
+    // Read directly instead of probing with `existsSync` first: codegen can rewrite the file between the two calls.
+    let source: string;
+
     try {
-        const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-
-        if (typeof parsed !== "object" || parsed === null || !Array.isArray((parsed as { procedures?: unknown }).procedures)) {
-            return { body: { error: "advisor-procedures.json has no procedures array; re-run `lunora codegen`." }, status: 500 };
-        }
-
-        if (!(parsed as { procedures: unknown[] }).procedures.every((entry) => isProcedureEntry(entry))) {
-            return { body: { error: "advisor-procedures.json has a malformed procedure entry; re-run `lunora codegen`." }, status: 500 };
-        }
-
-        return { body: parsed, status: 200 };
+        source = readFileSync(path, "utf8");
     } catch (error) {
-        // Read directly instead of probing with `existsSync` first: codegen can rewrite the file between the two calls.
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
             return { body: { error: "advisor-procedures.json is not generated yet; run `lunora codegen`." }, status: 404 };
         }
 
+        // eslint-disable-next-line no-console -- the response body is the studio's, so the cause is logged here for the dev server operator
+        console.error(`@lunora/config: could not read ${path}`, error);
+
+        return { body: { error: "advisor-procedures.json could not be read; see the dev server log." }, status: 500 };
+    }
+
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(source);
+    } catch {
         return { body: { error: "advisor-procedures.json is not valid JSON; re-run `lunora codegen`." }, status: 500 };
     }
+
+    if (typeof parsed !== "object" || parsed === null || !Array.isArray((parsed as { procedures?: unknown }).procedures)) {
+        return { body: { error: "advisor-procedures.json has no procedures array; re-run `lunora codegen`." }, status: 500 };
+    }
+
+    if (!(parsed as { procedures: unknown[] }).procedures.every((entry) => isProcedureEntry(entry))) {
+        return { body: { error: "advisor-procedures.json has a malformed procedure entry; re-run `lunora codegen`." }, status: 500 };
+    }
+
+    return { body: parsed, status: 200 };
 };
 
 export { ADVISOR_PROCEDURES_ENDPOINT, handleAdvisorProceduresRequest };
