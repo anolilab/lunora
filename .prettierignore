@@ -75,3 +75,7 @@ sdks/**/.dart_tool/
 # checkout where `apps/docs` has been built — and then `lint:oxfmt` fails on
 # a bundle no one wrote and no one can usefully format.
 **/.netlify
+
+# vis release state — rewritten by the release job's serializer (2-space JSON) on
+# every run, so a reformat here is undone by the next release commit.
+.vis/release/
