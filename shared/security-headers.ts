@@ -12,6 +12,9 @@
  * neither package depends on the other.
  */
 
+import { isEnvDisabled } from "./env-flag";
+import { isPlainObject } from "./is-plain-object";
+
 /** `Cross-Origin-Opener-Policy` values. `false` omits the header. */
 type CrossOriginOpenerPolicy = "same-origin" | "same-origin-allow-popups" | "unsafe-none";
 
@@ -116,50 +119,156 @@ const frameAncestorsDirective = (frameOptions: string | undefined, frameAncestor
 /** An origin a `frame-ancestors` list may name: `scheme://host[:port]`, the host optionally `*.`-prefixed. No path, quote, space or separator. */
 const ORIGIN_SOURCE = /^[a-z][\d+.a-z-]*:\/\/(?:\*\.)?[\d.a-z-]+(?::\d{1,5})?$/iu;
 
-/** A header value must stay on one line: a CR/LF would inject headers (or `_headers` rules); other control characters are refused by `Headers`. */
-const isHeaderSafe = (value: string): boolean => [...value].every((character) => character >= " " && character !== "\u007F");
-
 /**
- * Problems with `input` that would otherwise surface late: a value that breaks a
- * header line, or options that contradict each other. Empty when valid. Callers
- * fail on these (codegen and the build before deploy, `createWorker` at construction)
- * rather than at request time.
+ * A header value must stay on one line: a CR/LF would inject headers (or `_headers` rules). TAB is legal inside a
+ * value (RFC 9110 §5.5); every other control character, and anything past Latin-1, makes `Headers.set` throw.
  */
-const validateSecurityHeaders = (input: boolean | SecurityHeadersOptions | undefined): string[] => {
-    if (input === undefined || typeof input === "boolean") {
-        return [];
+const isHeaderSafe = (value: string): boolean =>
+    [...value].every((character) => character === "\t" || (character >= " " && character !== "\u007F" && character <= "\u00FF"));
+
+const COOP_VALUES: ReadonlyArray<CrossOriginOpenerPolicy> = ["same-origin", "same-origin-allow-popups", "unsafe-none"];
+const FRAME_OPTIONS_VALUES: ReadonlyArray<string> = ["DENY", "SAMEORIGIN"];
+const HSTS_KEYS: ReadonlyArray<string> = ["includeSubDomains", "maxAge", "preload"];
+const STRING_KEYS = ["csp", "permissionsPolicy", "referrerPolicy"] as const;
+const OPTION_KEYS: ReadonlyArray<string> = [...STRING_KEYS, "crossOriginOpenerPolicy", "frameAncestors", "frameOptions", "hsts"];
+
+const quoted = (values: ReadonlyArray<string>): string => values.map((value) => JSON.stringify(value)).join(", ");
+
+const parseHsts = (value: unknown, problems: string[]): SecurityHeadersOptions["hsts"] => {
+    if (typeof value === "boolean") {
+        return value;
     }
 
-    const problems: string[] = [];
+    if (!isPlainObject(value)) {
+        problems.push("security.headers.hsts must be a boolean or an object { maxAge?, includeSubDomains?, preload? }");
 
-    for (const key of ["csp", "permissionsPolicy", "referrerPolicy", "crossOriginOpenerPolicy", "frameOptions"] as const) {
+        return undefined;
+    }
+
+    for (const key of Object.keys(value).filter((name) => !HSTS_KEYS.includes(name))) {
+        problems.push(`security.headers.hsts.${key} is not an option (expected ${quoted(HSTS_KEYS)})`);
+    }
+
+    const { includeSubDomains, maxAge, preload } = value;
+
+    if (maxAge !== undefined && !(typeof maxAge === "number" && Number.isSafeInteger(maxAge) && maxAge >= 0)) {
+        problems.push(`security.headers.hsts.maxAge must be a whole number of seconds (got ${JSON.stringify(maxAge)})`);
+    }
+
+    for (const [key, flag] of [
+        ["includeSubDomains", includeSubDomains],
+        ["preload", preload],
+    ] as const) {
+        if (flag !== undefined && typeof flag !== "boolean") {
+            problems.push(`security.headers.hsts.${key} must be a boolean`);
+        }
+    }
+
+    return {
+        ...(includeSubDomains === undefined ? {} : { includeSubDomains: includeSubDomains as boolean }),
+        ...(maxAge === undefined ? {} : { maxAge: maxAge as number }),
+        ...(preload === undefined ? {} : { preload: preload as boolean }),
+    };
+};
+
+/** `value` when it is `false` or one of `allowed`; otherwise a problem. */
+const parseChoice = <T extends string>(key: string, value: unknown, allowed: ReadonlyArray<T>, problems: string[]): T | false | undefined => {
+    if (value === undefined || value === false || allowed.includes(value as T)) {
+        return value as T | false | undefined;
+    }
+
+    problems.push(`security.headers.${key} must be one of ${quoted(allowed)} or false (got ${JSON.stringify(value)})`);
+
+    return undefined;
+};
+
+const parseFrameAncestors = (value: unknown, problems: string[]): string[] | undefined => {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    if (!Array.isArray(value)) {
+        problems.push('security.headers.frameAncestors must be an array of origins like ["https://partner.example"]');
+
+        return undefined;
+    }
+
+    for (const origin of value as unknown[]) {
+        if (typeof origin !== "string" || !ORIGIN_SOURCE.test(origin)) {
+            problems.push(`security.headers.frameAncestors entry ${JSON.stringify(origin)} is not an origin like "https://partner.example"`);
+        }
+    }
+
+    return [...(value as string[])];
+};
+
+type ParsedSecurityHeaders = { ok: false; problems: string[] } | { ok: true; value: boolean | SecurityHeadersOptions | undefined };
+
+/**
+ * `security.headers` from an untyped source (`lunora.config`, a JS caller of `createWorker`) as the options the
+ * resolver can trust, or every problem with it: an unknown key (a typo would otherwise do nothing, silently), a
+ * value of the wrong type or outside a header's vocabulary, a value that breaks a header line, or options that
+ * contradict each other. Codegen, the build and `createWorker` all parse through here, so they refuse the same
+ * values. The value is a fresh object holding only known keys, safe to copy into generated code.
+ */
+const parseSecurityHeaders = (input: unknown): ParsedSecurityHeaders => {
+    if (input === undefined || typeof input === "boolean") {
+        return { ok: true, value: input };
+    }
+
+    if (!isPlainObject(input)) {
+        return { ok: false, problems: [`security.headers must be a boolean or an object (got ${Array.isArray(input) ? "an array" : JSON.stringify(input)})`] };
+    }
+
+    const problems = Object.keys(input)
+        .filter((key) => !OPTION_KEYS.includes(key))
+        .map((key) => `security.headers.${key} is not an option (expected ${quoted(OPTION_KEYS)})`);
+    const options: SecurityHeadersOptions = {};
+
+    for (const key of STRING_KEYS) {
         const value = input[key];
 
-        if (typeof value === "string" && !isHeaderSafe(value)) {
+        if (value === undefined || value === false) {
+            options[key] = value;
+        } else if (typeof value !== "string") {
+            problems.push(`security.headers.${key} must be a string or false`);
+        } else if (isHeaderSafe(value)) {
+            options[key] = value;
+        } else {
             problems.push(`security.headers.${key} contains a line break or control character`);
         }
     }
 
-    if (input.frameAncestors !== undefined) {
-        for (const origin of input.frameAncestors) {
-            if (!ORIGIN_SOURCE.test(origin)) {
-                problems.push(`security.headers.frameAncestors entry ${JSON.stringify(origin)} is not an origin like "https://partner.example"`);
-            }
-        }
+    options.crossOriginOpenerPolicy = parseChoice("crossOriginOpenerPolicy", input["crossOriginOpenerPolicy"], COOP_VALUES, problems);
+    options.frameOptions = parseChoice("frameOptions", input["frameOptions"], FRAME_OPTIONS_VALUES as ReadonlyArray<"DENY" | "SAMEORIGIN">, problems);
+    options.frameAncestors = parseFrameAncestors(input["frameAncestors"], problems);
+    options.hsts = input["hsts"] === undefined ? undefined : parseHsts(input["hsts"], problems);
 
-        if (typeof input.csp === "string") {
-            problems.push("security.headers.frameAncestors cannot be combined with a csp string: put the frame-ancestors directive in the csp");
-        }
-
-        if (input.frameOptions === "DENY") {
-            problems.push('security.headers.frameAncestors cannot be combined with frameOptions: "DENY"');
-        }
+    if (options.frameAncestors !== undefined && typeof options.csp === "string") {
+        problems.push("security.headers.frameAncestors cannot be combined with a csp string: put the frame-ancestors directive in the csp");
     }
 
-    return problems;
+    if (options.frameAncestors !== undefined && options.frameOptions === "DENY") {
+        problems.push('security.headers.frameAncestors cannot be combined with frameOptions: "DENY"');
+    }
+
+    if (problems.length > 0) {
+        return { ok: false, problems };
+    }
+
+    // Absent keys stay absent, so the value reads (and is emitted) as written.
+    return { ok: true, value: Object.fromEntries(Object.entries(options).filter(([, value]) => value !== undefined)) as SecurityHeadersOptions };
 };
 
-/** Resolve the options into header values. Pure; call {@link validateSecurityHeaders} first. */
+/**
+ * The `security.headers` in effect: the configured value, else `false` when `LUNORA_SECURITY_HEADERS` is an off
+ * value, else `undefined` (the defaults). The Worker and the build's `_headers` writer both resolve it this way,
+ * so an unset variable means the same thing on both paths.
+ */
+const effectiveSecurityHeaders = <T>(configured: T | undefined, environmentFlag: unknown): T | false | undefined =>
+    configured ?? (isEnvDisabled(environmentFlag) ? false : undefined);
+
+/** Resolve the options into header values. Pure; parse untrusted input with {@link parseSecurityHeaders} first. */
 const resolveSecurityHeaders = (input: boolean | SecurityHeadersOptions | undefined): ResolvedSecurityHeaders => {
     if (input === false) {
         return DISABLED;
@@ -191,5 +300,5 @@ const resolveSecurityHeaders = (input: boolean | SecurityHeadersOptions | undefi
     };
 };
 
-export type { CrossOriginOpenerPolicy, ResolvedSecurityHeaders, SecurityHeadersOptions };
-export { resolveSecurityHeaders, validateSecurityHeaders };
+export type { CrossOriginOpenerPolicy, ParsedSecurityHeaders, ResolvedSecurityHeaders, SecurityHeadersOptions };
+export { effectiveSecurityHeaders, parseSecurityHeaders, resolveSecurityHeaders };

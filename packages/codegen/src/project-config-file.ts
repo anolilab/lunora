@@ -49,10 +49,11 @@ import type { ObjectLiteralElementLike, ObjectLiteralExpression, PropertyAssignm
 import { Node as TsNode, Project, VariableDeclarationKind } from "ts-morph";
 
 import type { SecurityHeadersOptions } from "../../../shared/security-headers";
-import { validateSecurityHeaders } from "../../../shared/security-headers";
+import { parseSecurityHeaders } from "../../../shared/security-headers";
 import type { AcceptedFinding } from "./advisor-accept";
 import { propertyKeyName } from "./discover/property-name";
 import { findCodegenConfigFile, findProjectConfigFile } from "./project-config-path";
+import { literalOf, NOT_LITERAL } from "./static-literal";
 
 /**
  * The literals {@link readProjectConfigLiterals} proves by parsing — narrowed,
@@ -88,12 +89,12 @@ interface ProjectConfigLiterals {
     remote?: boolean;
 
     /**
-     * `security.headers`: `false`, `true`, or the per-header options object, read
-     * as a plain JSON value. `unreadable` when `security` is declared but its
-     * `headers` is not built from literals; the caller then keeps the defaults
-     * and says so, since an unreadable value must never read as "headers off".
+     * `security.headers` as its literal value, not yet parsed (see
+     * {@link readProjectSecurityHeaders}). `unreadable` when `security` is declared
+     * but its `headers` is not built from literals; the caller then keeps the
+     * defaults and says so, since an unreadable value must never read as "headers off".
      */
-    security?: { headers?: boolean | Record<string, unknown>; unreadable?: true };
+    security?: { headers?: unknown; unreadable?: true };
 
     /**
      * `services`: binding key → `{ dir, entrypoint? }` (plan 457). `unreadable`
@@ -488,64 +489,9 @@ const readStudio = (declared: TsNode | undefined, sourceFile: SourceFile): Proje
         : { studio: { unreadable: true } };
 };
 
-/** A JSON value built only from literals: strings, numbers, booleans, arrays and plain objects of them. */
-type JsonLiteral = boolean | number | string | JsonLiteral[] | { [key: string]: JsonLiteral };
-
-/** `node` as a {@link JsonLiteral}, or `undefined` when any part of it is not a literal (an identifier, a call, a spread, a computed key). */
-// eslint-disable-next-line sonarjs/function-return-type -- a JSON value is by definition one of several shapes; the union is the type.
-const readJsonLiteral = (node: TsNode | undefined): JsonLiteral | undefined => {
-    const value = unwrapLiteral(node);
-
-    if (value === undefined) {
-        return undefined;
-    }
-
-    if (TsNode.isStringLiteral(value) || TsNode.isNoSubstitutionTemplateLiteral(value)) {
-        return value.getLiteralValue();
-    }
-
-    if (TsNode.isNumericLiteral(value)) {
-        return value.getLiteralValue();
-    }
-
-    if (TsNode.isTrueLiteral(value) || TsNode.isFalseLiteral(value)) {
-        return value.getLiteralValue();
-    }
-
-    if (TsNode.isArrayLiteralExpression(value)) {
-        const items = value.getElements().map((element) => readJsonLiteral(element));
-
-        return items.every((item) => item !== undefined) ? items : undefined;
-    }
-
-    if (!TsNode.isObjectLiteralExpression(value)) {
-        return undefined;
-    }
-
-    const object: Record<string, JsonLiteral> = {};
-
-    for (const property of value.getProperties()) {
-        if (!TsNode.isPropertyAssignment(property) || TsNode.isComputedPropertyName(property.getNameNode())) {
-            return undefined;
-        }
-
-        const member = readJsonLiteral(property.getInitializer());
-
-        if (member === undefined) {
-            return undefined;
-        }
-
-        object[propertyKeyName(property)] = member;
-    }
-
-    return object;
-};
-
 /**
- * `security.headers` from the `security` object literal. Read generically rather
- * than field by field, so an option the runtime gains later is carried through
- * instead of making the whole section unreadable; the runtime and the build
- * validate the values.
+ * `security.headers` from the `security` object literal, evaluated as a literal and handed on unjudged:
+ * {@link readProjectSecurityHeaders} parses it, the same way the runtime does.
  */
 const readSecurity = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
     const member = readPlainMember(declared, sourceFile, "headers");
@@ -554,13 +500,9 @@ const readSecurity = (declared: TsNode | undefined, sourceFile: SourceFile): Pro
         return { security: {} };
     }
 
-    const headers = "literal" in member ? readJsonLiteral(member.literal) : undefined;
+    const headers = "literal" in member ? literalOf(member.literal) : NOT_LITERAL;
 
-    if (typeof headers === "boolean" || (headers !== undefined && typeof headers === "object" && !Array.isArray(headers))) {
-        return { security: { headers } };
-    }
-
-    return { security: { unreadable: true } };
+    return headers === NOT_LITERAL ? { security: { unreadable: true } } : { security: { headers } };
 };
 
 /** The sections read by one function each: `durableObjects.merge`, `security.headers` and `studio.companion`. */
@@ -884,12 +826,13 @@ const securityWarnedFor = new Set<string>();
 const readProjectSecurityHeaders = (lunoraDirectory: string): boolean | SecurityHeadersOptions | undefined => {
     const configPath = findCodegenConfigFile(lunoraDirectory);
     const { security } = configPath === undefined ? {} : readConfigLiterals(configPath);
-    const headers = security?.headers as boolean | SecurityHeadersOptions | undefined;
-    const problems = security?.unreadable ? ["`security.headers` is not built from literals"] : validateSecurityHeaders(headers);
+    const parsed = security?.unreadable ? undefined : parseSecurityHeaders(security?.headers);
 
-    if (problems.length === 0) {
-        return headers;
+    if (parsed?.ok) {
+        return parsed.value;
     }
+
+    const problems = parsed === undefined ? ["`security.headers` is not built from literals"] : parsed.problems;
 
     const key = `${configPath ?? ""}:${problems.join(";")}`;
 

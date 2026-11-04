@@ -190,6 +190,32 @@ describe("decorateResponse", () => {
         expect(() => resolveSecurity({ headers: { frameAncestors: ["https://a.example"], frameOptions: "DENY" } })).toThrow('frameOptions: "DENY"');
     });
 
+    it("refuses at construction a typo'd option or a value outside its header's vocabulary", () => {
+        expect.hasAssertions();
+
+        // Each of these used to pass and then do nothing, or throw mid-request.
+        expect(() => resolveSecurity({ headers: { frameOption: "DENY" } as never })).toThrow("security.headers.frameOption is not an option");
+        expect(() => resolveSecurity({ headers: { hsts: { maxAge: "x" } } as never })).toThrow("hsts.maxAge must be a whole number");
+        expect(() => resolveSecurity({ headers: { hsts: { maxAge: 60, preloaded: true } } as never })).toThrow("hsts.preloaded is not an option");
+        expect(() => resolveSecurity({ headers: { frameOptions: "ALLOW" } as never })).toThrow("frameOptions must be one of");
+        expect(() => resolveSecurity({ headers: { crossOriginOpenerPolicy: "same-site" } as never })).toThrow("crossOriginOpenerPolicy must be one of");
+        expect(() => resolveSecurity({ headers: { frameAncestors: 5 } as never })).toThrow("frameAncestors must be an array");
+        // A string is one problem, not one per character.
+        expect(() => resolveSecurity({ headers: { frameAncestors: "https://a.example" } as never })).toThrow(
+            /^@lunora\/runtime: security\.headers\.frameAncestors must be an array of origins like \["https:\/\/partner\.example"\]$/u,
+        );
+    });
+
+    it("accepts a TAB inside a header value, which is legal there", () => {
+        expect.hasAssertions();
+
+        const tabbed = resolveSecurity({ headers: { csp: "default-src 'self';\tscript-src 'self'" } });
+
+        expect(decorateResponse(new Response("x"), httpsRequest(), tabbed).headers.get("content-security-policy")).toBe(
+            "default-src 'self';\tscript-src 'self'",
+        );
+    });
+
     it("omits HSTS over plain HTTP (so localhost dev is never pinned to HTTPS)", () => {
         expect.hasAssertions();
 

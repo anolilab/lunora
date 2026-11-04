@@ -43,18 +43,23 @@ describe("security.headers in lunora.config", () => {
         expect(readProjectConfigLiterals(projectRoot).security).toStrictEqual(expected);
     });
 
-    it("carries an option it does not know through, so a field the runtime gains later is not refused here", () => {
+    it("reads a `__proto__` key as unreadable rather than copying it into the generated worker", () => {
         expect.assertions(1);
 
-        writeConfig('{ security: { headers: { someFutureHeader: "x" } } }');
+        writeConfig('{ security: { headers: { __proto__: { csp: "x" } } } }');
 
-        expect(readProjectSecurityHeaders(join(projectRoot, "lunora"))).toStrictEqual({ someFutureHeader: "x" });
+        expect(readProjectConfigLiterals(projectRoot).security).toStrictEqual({ unreadable: true });
     });
 
     it.each([
         ["{ security: { headers: { csp: process.env.CSP } } }", "not built from literals"],
         ['{ security: { headers: { frameAncestors: ["https://a.example\'; script-src *"] } } }', "is not an origin"],
         [String.raw`{ security: { headers: { permissionsPolicy: "a=()\nX-Evil: 1" } } }`, "line break"],
+        ['{ security: { headers: { frameOption: "DENY" } } }', "security.headers.frameOption is not an option"],
+        ['{ security: { headers: { hsts: { maxAge: "x" } } } }', "hsts.maxAge must be a whole number"],
+        ['{ security: { headers: { frameOptions: "ALLOW" } } }', "frameOptions must be one of"],
+        ['{ security: { headers: { frameAncestors: "https://a.example" } } }', "frameAncestors must be an array"],
+        ["{ security: { headers: [] } }", "must be a boolean or an object"],
     ])("falls back to the defaults, saying why, for %s", (body, reason) => {
         expect.assertions(2);
 

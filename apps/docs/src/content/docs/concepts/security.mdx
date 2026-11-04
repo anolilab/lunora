@@ -92,9 +92,12 @@ policies, so it cannot be combined with `frameAncestors`; put the
 `frame-ancestors` directive in it instead.
 
 The values must be literals, because codegen and the build read the file without
-running it. A value codegen cannot read, or one that would break a header line (a
-line break, or a `frameAncestors` entry that is not an origin), is reported and
-the defaults apply.
+running it. Codegen, the build and `createWorker` check them the same way: an
+unknown key (a typo such as `frameOption`), a value of the wrong type or outside
+the header's values (`frameOptions: "ALLOW"`, `hsts: { maxAge: "1y" }`), a value
+that would break a header line, or a `frameAncestors` entry that is not an origin.
+In `lunora.config` such a value, or one codegen cannot read, is reported and the
+defaults apply; passed to `createWorker` in code, it throws when the Worker is built.
 
 **Precedence.** A `security.headers` passed in code (to `createWorker`, or through
 `.extend()`) wins over `lunora.config`, which wins over
@@ -123,6 +126,12 @@ that opened it. Lunora defaults to `same-origin-allow-popups`:
 `same-origin` would sever that link and break those SDKs. Lunora sends no
 `Cross-Origin-Embedder-Policy`, so `same-origin` would not buy cross-origin
 isolation either.
+
+:::note[Changed default]
+Up to `@lunora/runtime` 1.0.0-alpha.277 the default was `same-origin`. An app
+that relied on it, for example to keep a page it opens from reaching back through
+`window.opener`, sets `crossOriginOpenerPolicy: "same-origin"` in `lunora.config`.
+:::
 
 If the popup ends on a callback page **you** serve, which then calls
 `window.opener.postMessage(...)`, that page needs `unsafe-none`. When the popup

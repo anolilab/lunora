@@ -22,7 +22,7 @@
 
 import { isEnvDisabled, isEnvEnabled } from "../../../shared/env-flag";
 import type { ResolvedSecurityHeaders, SecurityHeadersOptions } from "../../../shared/security-headers";
-import { resolveSecurityHeaders, validateSecurityHeaders } from "../../../shared/security-headers";
+import { effectiveSecurityHeaders, parseSecurityHeaders, resolveSecurityHeaders } from "../../../shared/security-headers";
 import { LunoraError } from "./errors";
 
 /** CORS allowlist. Cross-origin is denied unless an origin matches. */
@@ -296,21 +296,20 @@ const parseEnvCors = (env: Record<string, unknown> | undefined): CorsOptions | u
  * worker. Setting a layer in code means leaving its env var unset.
  */
 const resolveSecurity = (security: SecurityOptions | undefined, env?: Record<string, unknown>): ResolvedSecurity => {
-    const headers = security?.headers ?? (isEnvDisabled(env?.["LUNORA_SECURITY_HEADERS"]) ? false : undefined);
+    const headers = parseSecurityHeaders(effectiveSecurityHeaders<unknown>(security?.headers, env?.["LUNORA_SECURITY_HEADERS"]));
     const csrf = security?.csrf ?? (isEnvDisabled(env?.["LUNORA_SECURITY_CSRF"]) ? false : undefined);
     const cors = security?.cors ?? parseEnvCors(env);
-    const problems = validateSecurityHeaders(headers);
 
     // Thrown at construction, like the wildcard-CORS check: a value with a line break would otherwise make `Headers.set`
-    // throw on every response.
-    if (problems.length > 0) {
-        throw new LunoraError(`@lunora/runtime: ${problems.join("; ")}`);
+    // throw on every response, and a typo'd key or value would do nothing without a word.
+    if (!headers.ok) {
+        throw new LunoraError(`@lunora/runtime: ${headers.problems.join("; ")}`);
     }
 
     return {
         cors: resolveCors(cors),
         csrf: resolveCsrf(csrf),
-        headers: resolveSecurityHeaders(headers),
+        headers: resolveSecurityHeaders(headers.value),
     };
 };
 
