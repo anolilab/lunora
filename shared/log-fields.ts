@@ -358,8 +358,9 @@ export const normalizeLogFields = (perCall: LogFields | undefined, bound?: LogFi
  * Render a fields bag as compact, space-joined `key=value` pairs for a terminal
  * or log-row display, or `""` when there are none / the value isn't a plain
  * object. A logged Error renders as its `Name: message` headline here; its stack
- * and `cause` chain are {@link formatLoggedError}'s, shown separately. Used by the dev-terminal formatter (`@lunora/config`) and the Studio
- * Logs panel (`@lunora/studio`).
+ * and `cause` chain are {@link formatLoggedError}'s, shown separately. Used by
+ * the dev-terminal formatter (`@lunora/config`) and the Studio Logs panel
+ * (`@lunora/studio`).
  */
 export const formatLogFields = (fields: unknown): string => {
     if (typeof fields !== "object" || fields === null || Array.isArray(fields)) {

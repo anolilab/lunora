@@ -16,9 +16,9 @@
  * to pass it through unchanged.
  *
  * The one import is the bundler-inlined, zero-dependency `shared/log-fields.ts`
- * field and logged-Error renderer (shared with the runtime sinks and the Studio panel so the
- * `key=value` rendering isn't hand-mirrored), which keeps this module's
- * dependency-free property intact.
+ * field and logged-Error renderer (shared with the runtime sinks and the Studio
+ * panel so the `key=value` rendering isn't hand-mirrored), which keeps this
+ * module's dependency-free property intact.
  */
 import { formatLogFields, formatLoggedError, loggedErrorFields } from "../../../shared/log-fields";
 
