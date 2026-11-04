@@ -27,7 +27,7 @@ import type { Duplex } from "node:stream";
 import { pipeline } from "node:stream";
 
 import type { CodegenOptions } from "@lunora/codegen";
-import { detectAgentRules, resolveLazyFunctions } from "@lunora/config";
+import { detectAgentRules, resolveLazyFunctions, resolveSchemaDirectory } from "@lunora/config";
 import type { LocalEndpointHandler } from "@lunora/config/studio-host";
 import {
     ADVISOR_PROCEDURES_ENDPOINT,
@@ -238,9 +238,13 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
             // `apiSpec` travels with the request for the same reason the Vite host
             // forwards it: codegen writes the spec its mode names and DELETES the
             // other, so an edit that regenerated with the default deleted the
-            // `openrpc.json` the host's own run had just written. (`schemaDirectory`
-            // is moot here — `lunora dev` hardcodes `"lunora"`.)
-            serveJsonHandler(request, response, handle, options.cwd, { apiSpec: options.apiSpec, lazyFunctions: resolveLazyFunctions(options.lazyFunctions) });
+            // `openrpc.json` the host's own run had just written. `schemaDirectory`
+            // is the folder `lunora dev`'s codegen writes `_generated/` into.
+            serveJsonHandler(request, response, handle, options.cwd, {
+                apiSpec: options.apiSpec,
+                lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
+                schemaDirectory: resolveSchemaDirectory(options.cwd),
+            });
 
             return;
         }

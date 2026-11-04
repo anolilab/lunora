@@ -395,7 +395,7 @@ const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions
         runCodegen({
             apiSpec: options.apiSpec,
             lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
-            lunoraDirectory: "lunora",
+            lunoraDirectory: resolveSchemaDirectory(cwd),
             projectRoot: cwd,
             target,
             ...wranglerCodegenInputs(cwd),
@@ -619,6 +619,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
                 lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
                 jsonLogs: options.jsonLogs,
                 logger,
+                lunoraDirectory: resolveSchemaDirectory(cwd),
                 projectRoot: cwd,
                 target,
             });
