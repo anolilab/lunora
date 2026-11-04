@@ -89,9 +89,11 @@ const sendPluginEmail = async (env: EmailOtpEnv, message: { subject: string; tex
         await binding.send(new EmailMessage(from, to, raw));
     };
 
-    // `createMailerFromEnv` uses `cloudflareSend` only when `SEND_EMAIL` is bound,
-    // falling back to `RESEND_API_KEY` otherwise.
-    await createMailerFromEnv(fullEnv, { cloudflareSend }).send(message);
+    // Only hand over `cloudflareSend` when the binding exists: `createMailerFromEnv`
+    // prefers it over `RESEND_API_KEY` whenever it is supplied, so passing it
+    // unconditionally would make a Resend-only deployment (no `SEND_EMAIL`
+    // binding) throw inside `cloudflareSend` instead of falling back to Resend.
+    await createMailerFromEnv(fullEnv, fullEnv["SEND_EMAIL"] === undefined ? {} : { cloudflareSend }).send(message);
 };
 
 /**
