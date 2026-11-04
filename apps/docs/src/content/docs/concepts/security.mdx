@@ -159,8 +159,8 @@ directory without running the Worker. That covers your JS and CSS chunks, the SP
 shell, and prerendered pages. The `fetch` above never sees those responses, so
 on its own it cannot add headers to them.
 
-Instead, `vite build` writes the same headers into the client build's `_headers`
-file, which Cloudflare applies to asset responses only. With the defaults:
+Instead, the production build writes the same headers into the assets'
+`_headers` file, which Cloudflare applies to asset responses only. With the defaults:
 
 ```text
 # BEGIN lunora-managed: rewritten on every build. Put your own rules outside this block.
@@ -203,10 +203,22 @@ header (for example `DENY` and `SAMEORIGIN`), and browsers reject that. So:
   ! X-Frame-Options
 ```
 
-The file is written when the build includes `@cloudflare/vite-plugin` (Lunora's
-own or one you add) and the target is Cloudflare. An rsbuild build, or a
-framework that writes its own output directory (Nuxt, Astro, Analog), gets no
-managed block. Add the headers to its `_headers` yourself.
+The block is written on a production build for the Cloudflare target, by
+whichever integration produced the output:
+
+| Build                                                      | Where                                              | Immutable caching                           |
+| ---------------------------------------------------------- | -------------------------------------------------- | ------------------------------------------- |
+| `@lunora/vite` with `@cloudflare/vite-plugin` in the build | the client environment's `outDir`                  | `build.assetsDir` (`assets/`)               |
+| `@lunora/rspack/rsbuild`                                   | each environment output that is `assets.directory` | `static/`, when `output.filenameHash` is on |
+| `@lunora/nuxt`                                             | Nitro's public output, after Nitro's own rules     | none: Nitro manages `_nuxt/` caching        |
+| `@lunora/astro`                                            | the client output (`astro:build:done`)             | `build.assets` (`_astro/`)                  |
+
+Apart from the Vite path, whose client `outDir` is by definition what
+`@cloudflare/vite-plugin` uploads, the block is only written when the output is
+the `assets.directory` your wrangler config deploys (or the `CLOUDFLARE_ENV`
+block's own); anywhere else `_headers` would be published as a file. The plain
+Rspack/webpack plugin (`lunoraRspack()`) and Analog write none: their output
+layout is the project's own. Add the headers to their `_headers` yourself.
 
 ### CORS: deny cross-origin by default
 

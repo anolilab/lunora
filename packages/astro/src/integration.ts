@@ -50,12 +50,62 @@ interface AstroIntegrationLike {
  */
 interface ConfigDoneContext {
     readonly config?: {
+        readonly build?: { readonly assets?: string };
+        readonly publicDir?: URL;
         readonly root?: URL;
     };
     readonly logger?: {
         readonly warn: (message: string) => void;
     };
 }
+
+/** Structural subset of the `astro:build:done` payload: `dir` is the client output, the directory Cloudflare serves as assets. */
+interface BuildDoneContext {
+    readonly dir?: URL;
+    readonly logger?: {
+        readonly info: (message: string) => void;
+        readonly warn: (message: string) => void;
+    };
+}
+
+/**
+ * Write the Lunora-managed `_headers` block into the client output after
+ * `astro build`, when that output is wrangler's `assets.directory`, so a static
+ * asset Cloudflare serves without running the Worker carries the security
+ * headers. Astro names every file under `build.assets` (`_astro/`) with a
+ * content hash, so that directory is offered for immutable caching.
+ * `@lunora/config` is imported here, at build time, so the integration stays cheap to load.
+ */
+const writeAstroAssetHeaders = async (context: BuildDoneContext, config: ConfigDoneContext["config"]): Promise<void> => {
+    const root = config?.root;
+
+    if (context.dir === undefined || root === undefined) {
+        return;
+    }
+
+    const projectRoot = fileURLToPath(root);
+    const { resolveProjectTarget } = await import("@lunora/config");
+    const { reportAssetHeaders, writeProjectAssetHeaders } = await import("@lunora/config/cloudflare");
+    const outcome = writeProjectAssetHeaders({
+        hashedDirectory: config?.build?.assets ?? "_astro",
+        outputDirectory: fileURLToPath(context.dir),
+        projectRoot,
+        publicDirectory: config?.publicDir === undefined ? undefined : fileURLToPath(config.publicDir),
+        requireAssetsDirectory: true,
+        schemaDir: "lunora",
+        target: resolveProjectTarget(projectRoot),
+    });
+
+    // Closures, not detached methods: Astro's logger reads `this`.
+    reportAssetHeaders(outcome, {
+        info: (message) => {
+            context.logger?.info(message);
+        },
+        warn: (message) => {
+            context.logger?.warn(message);
+        },
+    });
+};
 
 /** Copy/paste wiring snippet shown when `serverEntry` composes nothing. */
 const WITH_LUNORA_SNIPPET = [
@@ -144,6 +194,8 @@ interface LunoraIntegrationOptions {
  * - Documents the `serverEntry` (default `src/server.ts`) where the
  *   `withLunora(astroWorker, { shardDO: env.SHARD, … })` composition — or the
  *   generated builder's `.buildFrameworkWorker(host)` — lives.
+ * - Writes the security headers (and immutable caching for `_astro/`) into the
+ *   client output's `_headers` at `astro:build:done`, when wrangler deploys it.
  * - Checks, at `astro:config:done`, that `serverEntry` exists and contains an
  *   actual composition CALL (not merely an import of it) — and warns
  *   (does not fail the build) when it doesn't, so a missing wrapper is caught
@@ -160,13 +212,17 @@ interface LunoraIntegrationOptions {
  */
 const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike => {
     const serverEntry = (options.serverEntry ?? DEFAULT_SERVER_ENTRY).trim();
+    let resolvedConfig: ConfigDoneContext["config"];
 
     return {
         hooks: {
+            "astro:build:done": (context: BuildDoneContext = {}) => writeAstroAssetHeaders(context, resolvedConfig),
             "astro:config:done": (context: ConfigDoneContext = {}) => {
                 if (serverEntry.length === 0) {
                     throw new TypeError("@lunora/astro: `serverEntry` must be a non-empty path.");
                 }
+
+                resolvedConfig = context.config;
 
                 const root = context.config?.root;
 

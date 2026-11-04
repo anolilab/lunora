@@ -680,8 +680,9 @@ those paths, Lunora warns and names it. Routes your app serves from the Worker
 yours to add; Lunora cannot see them at config time.
 
 Because an asset hit never runs the Worker, it also skips the Worker's security
-headers. `vite build` writes them into the client build's `_headers` file
-instead, in a block it manages beside your own rules. See [Static
+headers. The production build writes them into the assets' `_headers` file
+instead (from the Vite, Rsbuild, Nuxt or Astro integration), in a block it
+manages beside your own rules. See [Static
 assets](/docs/concepts/security#static-assets) on the security page.
 
 The same block makes Vite's content-hashed output cacheable. Cloudflare's

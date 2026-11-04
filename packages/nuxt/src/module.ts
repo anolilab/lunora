@@ -97,6 +97,46 @@ interface NitroConfigLike {
     rollupConfig?: { plugins?: unknown[] };
 }
 
+/** Minimal shape of the Nitro instance the `nitro:init` hook hands over. */
+export interface NitroLike {
+    hooks: { hook: (name: "compiled", callback: () => Promise<void>) => void };
+    options: { dev: boolean; output: { publicDir: string } };
+}
+
+/**
+ * Write the Lunora-managed `_headers` block into Nitro's public output once a
+ * production build is compiled, so a static asset Cloudflare serves without
+ * running the Worker still carries the security headers. On `compiled`, after
+ * Nitro's own `cloudflare_module` preset has written its route-rule headers there,
+ * so both are kept. Written only when that directory is wrangler's
+ * `assets.directory`.
+ *
+ * No immutable caching rule: Nuxt's `_nuxt/builds/` holds unhashed app-manifest
+ * files (`latest.json`), and Nitro writes its own cache rules for that tree.
+ * `@lunora/config` is imported here, at build time, so the module stays cheap to load.
+ */
+export const writeNuxtAssetHeaders = async (
+    nitro: NitroLike,
+    rootDirectory: string,
+    logger: { info: (message: string) => void; warn: (message: string) => void },
+): Promise<void> => {
+    if (nitro.options.dev) {
+        return;
+    }
+
+    const { resolveProjectTarget } = await import("@lunora/config");
+    const { reportAssetHeaders, writeProjectAssetHeaders } = await import("@lunora/config/cloudflare");
+    const outcome = writeProjectAssetHeaders({
+        outputDirectory: nitro.options.output.publicDir,
+        projectRoot: rootDirectory,
+        requireAssetsDirectory: true,
+        schemaDir: "lunora",
+        target: resolveProjectTarget(rootDirectory),
+    });
+
+    reportAssetHeaders(outcome, logger);
+};
+
 /**
  * Rollup plugin (injected into the Nitro server build) that rewrites codegen's
  * NodeNext `.js`-extension imports to their real `.ts` source. `@lunora/codegen`
@@ -414,6 +454,10 @@ const lunoraNuxtModule: LunoraNuxtModule = defineNuxtModule<ModuleOptions>({
 
             // eslint-disable-next-line no-param-reassign -- the nitro:config hook exists to mutate the passed config
             nitroConfig.rollupConfig = { ...nitroConfig.rollupConfig, plugins };
+        });
+
+        (nuxt as unknown as { hook: (name: "nitro:init", callback: (nitro: NitroLike) => void) => void }).hook("nitro:init", (nitro) => {
+            nitro.hooks.hook("compiled", () => writeNuxtAssetHeaders(nitro, nuxt.options.rootDir, useLogger("@lunora/nuxt")));
         });
 
         // Mount Lunora realtime (RPC + WebSocket + admin) as a Nitro server route.

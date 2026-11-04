@@ -1,7 +1,10 @@
+import { existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { join, resolve } from "node:path";
 
 import type { CelldDevSession } from "@lunora/config";
 import { lunoraLine, startCelldDevSession, targetRunsOwnDevServer } from "@lunora/config";
+import { reportAssetHeaders, writeProjectAssetHeaders } from "@lunora/config/cloudflare";
 
 import { resolveOptions } from "./options";
 import { LunoraRspackPlugin } from "./plugin";
@@ -53,9 +56,24 @@ interface RsbuildApiLike {
     getRsbuildConfig: () => Readonly<RsbuildConfigLike>;
     modifyRsbuildConfig: (callback: (config: RsbuildConfigLike) => RsbuildConfigLike) => void;
     modifyRspackConfig: (callback: (config: RspackConfigLike) => RspackConfigLike) => void;
+    onAfterBuild: (callback: (params: { environments: Record<string, BuildEnvironmentLike>; isWatch: boolean }) => Promise<void> | void) => void;
     onAfterStartDevServer: (callback: (params: { port: number }) => Promise<void> | void) => void;
     onBeforeStartDevServer: (callback: (params: { server: DevServerLike }) => Promise<void> | void) => void;
     onCloseDevServer: (callback: () => Promise<void> | void) => void;
+}
+
+/** The slice of an Rsbuild environment's context, after a build, that the `_headers` step reads. */
+interface BuildEnvironmentLike {
+    config: {
+        output: {
+            distPath: Record<string, unknown>;
+            filename?: Record<string, unknown>;
+            filenameHash?: unknown;
+        };
+        server?: { publicDir?: unknown };
+    };
+    /** Absolute output directory (`output.distPath.root`). */
+    distPath: string;
 }
 
 /** The slice of Rsbuild's dev server this uses: its Connect middleware stack. */
@@ -158,6 +176,72 @@ const mountStudio = (api: RsbuildApiLike, options: ResolvedLunoraRspackOptions):
     });
 };
 
+/** Rsbuild's directory for its emitted JS, CSS and media, all named with a content hash by default. */
+const HASHED_DIRECTORY = "static";
+
+/** The public directories an environment copies into its output, as absolute paths. */
+const publicDirectories = (environment: BuildEnvironmentLike, root: string): string[] => {
+    const { publicDir } = environment.config.server ?? {};
+    const entries = publicDir === undefined || publicDir === false ? [] : [publicDir].flat();
+
+    return entries
+        .map((entry) => (typeof entry === "object" && entry !== null ? (entry as { name?: unknown }).name : undefined))
+        .filter((name): name is string => typeof name === "string")
+        .map((name) => resolve(root, name));
+};
+
+/**
+ * `static/` when every file Rsbuild writes there is content-hashed: `filenameHash`
+ * on, every `distPath` that is set inside `static/`, every custom `filename` with a
+ * `[contenthash]`, and no public folder that would copy unhashed files into it.
+ */
+const hashedDirectoryOf = (environment: BuildEnvironmentLike, root: string): string | undefined => {
+    const { distPath, filename = {}, filenameHash } = environment.config.output;
+    const placed = Object.entries(distPath)
+        .filter(([key, value]) => key !== "root" && key !== "html" && typeof value === "string")
+        .every(([, value]) => (value as string).startsWith(`${HASHED_DIRECTORY}/`));
+    const named = Object.values(filename).every((pattern) => typeof pattern === "string" && pattern.includes("[contenthash"));
+    const collides = publicDirectories(environment, root).some((directory) => existsSync(join(directory, HASHED_DIRECTORY)));
+
+    return filenameHash !== false && placed && named && !collides ? HASHED_DIRECTORY : undefined;
+};
+
+/**
+ * Write the managed `_headers` block into each environment's output that is
+ * wrangler's `assets.directory` — the SPA's `dist/`, or the client half of an
+ * SSR build — after a production build, once Rsbuild has copied `public/` in.
+ * An SSR environment's output never matches, so it never gets a `_headers` file.
+ */
+const writeAssetHeadersAfterBuild = (api: RsbuildApiLike, options: ResolvedLunoraRspackOptions): void => {
+    api.onAfterBuild(({ environments, isWatch }) => {
+        if (isWatch) {
+            return;
+        }
+
+        for (const environment of Object.values(environments)) {
+            const outcome = writeProjectAssetHeaders({
+                hashedDirectory: hashedDirectoryOf(environment, options.projectRoot),
+                outputDirectory: environment.distPath,
+                projectRoot: options.projectRoot,
+                requireAssetsDirectory: true,
+                schemaDir: options.schemaDir,
+                target: options.target,
+            });
+
+            reportAssetHeaders(outcome, {
+                 
+                info: (message) => {
+                    console.info(lunoraLine(message));
+                },
+                 
+                warn: (message) => {
+                    console.warn(lunoraLine(message));
+                },
+            });
+        }
+    });
+};
+
 /**
  * Lunora Rsbuild plugin — the one-command dev story.
  *
@@ -217,6 +301,8 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
                     server: { ...config.server, proxy: withLunoraProxy(config.server?.proxy, port) },
                 };
             });
+
+            writeAssetHeadersAfterBuild(api, resolved);
 
             if (options?.studio !== false) {
                 mountStudio(api, resolved);
@@ -287,5 +373,14 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
     };
 };
 
-export type { DevServerLike, LunoraRsbuildOptions, ProxyConfigLike, RsbuildApiLike, RsbuildConfigLike, RsbuildPluginLike, RspackConfigLike };
+export type {
+    BuildEnvironmentLike,
+    DevServerLike,
+    LunoraRsbuildOptions,
+    ProxyConfigLike,
+    RsbuildApiLike,
+    RsbuildConfigLike,
+    RsbuildPluginLike,
+    RspackConfigLike,
+};
 export { LUNORA_PATH, lunoraRsbuild, RSBUILD_PLUGIN_NAME, withLunoraProxy };

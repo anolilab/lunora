@@ -2361,6 +2361,32 @@ interface ObservabilitySignalSampling {
 }
 ```
 
+### `ProjectAssetHeadersInput` (interface)
+
+```ts
+interface ProjectAssetHeadersInput {
+    hashedDirectory?: string;
+    outputDirectory: string;
+    projectRoot: string;
+    publicDirectory?: string;
+    requireAssetsDirectory: boolean;
+    schemaDir: string;
+    target: string;
+}
+```
+
+### `ProjectAssetHeadersOutcome` (type)
+
+```ts
+type ProjectAssetHeadersOutcome = {
+    result: AssetHeadersResult;
+    written: true;
+} | {
+    reason: string;
+    written: false;
+};
+```
+
 ### `REMOTE_ELIGIBLE_KEYS` (const)
 
 ```ts
@@ -3079,6 +3105,15 @@ const reconcileWranglerExtras: (projectRoot: string, cronTriggers: ReadonlyArray
 const recordManifestKey: (manifest: Manifest, key: string, value: unknown) => void;
 ```
 
+### `reportAssetHeaders` (const)
+
+```ts
+const reportAssetHeaders: (outcome: ProjectAssetHeadersOutcome, logger: {
+    info: (message: string) => void;
+    warn: (message: string) => void;
+}) => void;
+```
+
 ### `resolveObservabilitySampling` (const)
 
 ```ts
@@ -3164,6 +3199,12 @@ const wranglerToAlchemy: (config: WranglerConfigShape) => AlchemyTranslation;
 
 ```ts
 const writeAssetHeaders: (directory: string, options: AssetHeadersOptions) => AssetHeadersResult;
+```
+
+### `writeProjectAssetHeaders` (const)
+
+```ts
+const writeProjectAssetHeaders: (input: ProjectAssetHeadersInput) => ProjectAssetHeadersOutcome;
 ```
 
 ## `@lunora/config/studio-host`

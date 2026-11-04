@@ -1,18 +1,10 @@
-import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import { lunoraLine } from "@lunora/config";
-import { findWranglerFile, readWranglerJsonc, resolveProjectSecurityHeaders, writeAssetHeaders } from "@lunora/config/cloudflare";
+import { reportAssetHeaders, writeProjectAssetHeaders } from "@lunora/config/cloudflare";
 import type { Plugin, ResolvedConfig } from "vite";
 
 import type { ResolvedLunoraPluginOptions } from "./types";
-
-/** The `CLOUDFLARE_ENV` the build targets; an empty value is no environment, as wrangler reads it. */
-const cloudflareEnvironment = (): string | undefined => {
-    const value = process.env["CLOUDFLARE_ENV"];
-
-    return value === undefined || value === "" ? undefined : value;
-};
 
 /** `@cloudflare/vite-plugin`'s name: with it in the build, the client environment's `outDir` is what Workers Static Assets uploads. */
 const CLOUDFLARE_PLUGIN_NAME = "vite-plugin-cloudflare";
@@ -33,45 +25,15 @@ const namesCarryHash = (build: ResolvedConfig["build"]): boolean => {
     );
 };
 
-const recordOf = (value: unknown): Record<string, unknown> | undefined =>
-    typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-
-/**
- * The `assets.not_found_handling` the build deploys with. `assets` is
- * inheritable, so an `env.<name>` block without its own falls back to the top level.
- */
-const notFoundHandling = (wrangler: unknown, environment: string | undefined): unknown => {
-    const top = recordOf(wrangler);
-    const scoped = environment === undefined ? undefined : recordOf(recordOf(recordOf(top?.["env"])?.[environment])?.["assets"]);
-
-    return (scoped ?? recordOf(top?.["assets"]))?.["not_found_handling"];
-};
-
-/**
- * The directory whose files can be cached for good: Vite's `build.assetsDir`,
- * where it writes the content-hashed chunks and assets. `undefined` when it
- * might hold an unhashed file (a custom output name without `[hash]`, or a
- * `publicDir` subfolder of the same name, which Vite copies in unhashed), and
- * when a miss there is answered from the assets: under a `not_found_handling`
- * fallback, a request for a chunk a later deploy removed gets `index.html` or
- * `404.html` through the same `_headers` rule, which would cache that page for a
- * year. Unset or `"none"`, a miss goes to the Worker, which `_headers` never touches.
- */
-const immutableDirectory = (config: ResolvedConfig, fallback: unknown): string | undefined => {
-    const { assetsDir } = config.build;
-
-    if (assetsDir === "" || (fallback !== undefined && fallback !== "none") || !namesCarryHash(config.build)) {
-        return undefined;
-    }
-
-    return config.publicDir !== "" && existsSync(join(config.publicDir, assetsDir)) ? undefined : assetsDir;
-};
-
 /**
  * Write the Lunora-managed block of `_headers` into the client build, so a
  * static asset hit (which Cloudflare serves without running the Worker) still
  * carries Lunora's default security headers, and its content-hashed files are
  * cached for good. See `@lunora/config`'s `asset-headers` for the block itself.
+ *
+ * The hashed directory is Vite's `build.assetsDir`, offered only while every
+ * output name the build is configured with carries `[hash]`; `@lunora/config`
+ * applies the rest of the decision (public folder, `not_found_handling`).
  *
  * Runs in `writeBundle`, after Vite has copied `publicDir` (and with it any
  * `_headers` the user wrote) into `outDir`, so the user's rules are merged
@@ -87,7 +49,7 @@ const assetHeadersPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
         apply: "build",
         applyToEnvironment: (environment) => environment.name === "client",
         configResolved(config) {
-            cloudflareBuild = options.target === "cloudflare" && config.plugins.some((plugin) => plugin.name === CLOUDFLARE_PLUGIN_NAME);
+            cloudflareBuild = config.plugins.some((plugin) => plugin.name === CLOUDFLARE_PLUGIN_NAME);
         },
         name: "lunora:asset-headers",
         writeBundle() {
@@ -96,21 +58,24 @@ const assetHeadersPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             }
 
             const { config } = this.environment;
-            const wranglerPath = findWranglerFile(options.projectRoot);
-            const wrangler = wranglerPath === undefined ? undefined : readWranglerJsonc(wranglerPath).parsed;
-            const environment = cloudflareEnvironment();
-            const result = writeAssetHeaders(resolve(config.root, config.build.outDir), {
-                immutableDirectory: immutableDirectory(config, notFoundHandling(wrangler, environment)),
-                headers: resolveProjectSecurityHeaders(resolve(options.projectRoot, options.schemaDir), wrangler, environment),
+            const outcome = writeProjectAssetHeaders({
+                hashedDirectory: namesCarryHash(config.build) ? config.build.assetsDir : undefined,
+                outputDirectory: resolve(config.root, config.build.outDir),
+                projectRoot: options.projectRoot,
+                publicDirectory: config.publicDir === "" ? undefined : config.publicDir,
+                requireAssetsDirectory: false,
+                schemaDir: options.schemaDir,
+                target: options.target,
             });
 
-            if (result.deferred.length > 0) {
-                config.logger.info(lunoraLine(`_headers: kept your own ${result.deferred.join(", ")} for static assets instead of Lunora's default`));
-            }
-
-            for (const warning of result.warnings) {
-                config.logger.warn(lunoraLine(warning));
-            }
+            reportAssetHeaders(outcome, {
+                info: (message) => {
+                    config.logger.info(lunoraLine(message));
+                },
+                warn: (message) => {
+                    config.logger.warn(lunoraLine(message));
+                },
+            });
         },
     };
 };

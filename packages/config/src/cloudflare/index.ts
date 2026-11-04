@@ -35,6 +35,8 @@ export { bindingsNeedingDatabase, startLocalHyperdrive } from "./local-hyperdriv
 export type { Manifest } from "./lunora-manifest";
 export { readManifest, recordManifestKey } from "./lunora-manifest";
 export { HYPERDRIVE_PLACEHOLDER_ID } from "./placeholder-ids";
+export type { ProjectAssetHeadersInput, ProjectAssetHeadersOutcome } from "./project-asset-headers";
+export { reportAssetHeaders, writeProjectAssetHeaders } from "./project-asset-headers";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
 export { collectExportGaps, reconcileWranglerBindings } from "./reconcile-bindings";
 export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";

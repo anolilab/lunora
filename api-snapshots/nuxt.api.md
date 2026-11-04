@@ -17,6 +17,22 @@ interface ModuleOptions {
 }
 ```
 
+### `NitroLike` (interface)
+
+```ts
+interface NitroLike {
+    hooks: {
+        hook: (name: "compiled", callback: () => Promise<void>) => void;
+    };
+    options: {
+        dev: boolean;
+        output: {
+            publicDir: string;
+        };
+    };
+}
+```
+
 ### `ResolvedNuxtPlugin` (interface)
 
 ```ts
@@ -42,6 +58,15 @@ const checkWorkerEntry: (rootDirectory: string, warn: (message: string) => void)
 
 ```ts
 const lunoraNuxtModule: LunoraNuxtModule;
+```
+
+### `writeNuxtAssetHeaders` (const)
+
+```ts
+const writeNuxtAssetHeaders: (nitro: NitroLike, rootDirectory: string, logger: {
+    info: (message: string) => void;
+    warn: (message: string) => void;
+}) => Promise<void>;
 ```
 
 ## `@lunora/nuxt/server`
