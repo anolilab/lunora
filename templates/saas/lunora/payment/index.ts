@@ -152,7 +152,16 @@ export const seatAllowance = internalAction.input({ referenceId: v.string() }).a
     const { entitlements, plans } = await currentPlans(ctx, referenceId);
 
     if (plans.length === 0) {
-        return FREE_PLAN?.seats ?? null;
+        // Without a free plan there is no allowance to fall back on. Refused rather than read as
+        // unmetered, so a catalog edit cannot quietly lift the cap: the membership check fails closed.
+        if (FREE_PLAN === undefined) {
+            throw new LunoraError(
+                "INTERNAL",
+                "seatAllowance: the plan catalog has no free plan (one without a priceId) for organisations without a subscription",
+            );
+        }
+
+        return FREE_PLAN.seats ?? null;
     }
 
     return plans.some((plan) => plan.seats === undefined) ? null : (entitlements.limit("seats") ?? null);
