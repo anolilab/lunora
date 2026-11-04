@@ -58,10 +58,10 @@ interface ForwardableEmailMessageLike {
     readonly raw: ReadableStream<Uint8Array>;
 
     /**
-     * Size of `raw` in bytes. Cloudflare always sets it; it is optional so a hand-built
-     * test double can omit it, which skips the handler's size guard.
+     * Size of `raw` in bytes. Cloudflare always sets it; a message without a finite
+     * size is refused by the handler's size guard rather than read unbounded.
      */
-    readonly rawSize?: number;
+    readonly rawSize: number;
     /** Reply to the sender with a new message. */
     reply: (message: { from: string; raw: string; to: string }) => Promise<unknown>;
 
@@ -130,7 +130,7 @@ interface InboundEmailHandlerOptions<TEnv = Record<string, unknown>> {
      * bigger is refused through `onError` before a byte of it is read. Default
      * 10 MiB. Parsing holds the raw bytes, the decoded parts and every attachment
      * at once, so a message near Email Routing's 25 MiB ceiling can outgrow the
-     * isolate's 128 MB.
+     * isolate's 128 MB. Must be a positive, finite number.
      */
     maxRawBytes?: number;
 
@@ -264,9 +264,17 @@ const rejectOnError = <TEnv = Record<string, unknown>>(error: unknown, context: 
 // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- mirrors InboundVerify's public return type, which admits `void` for a no-return hook
 const verifyPassed = (verified: boolean | void): boolean => verified === true || verified === undefined;
 
-/** Refuse a message too big to parse safely, before its stream is read. */
+/**
+ * Refuse a message too big to parse safely, before its stream is read. A size the
+ * handler cannot read is refused too: `message` is often cast from `unknown`, and
+ * the guard must not open because a field is missing.
+ */
 const assertWithinSizeLimit = (message: ForwardableEmailMessageLike, maxRawBytes: number): void => {
-    if (message.rawSize !== undefined && message.rawSize > maxRawBytes) {
+    if (typeof message.rawSize !== "number" || !Number.isFinite(message.rawSize)) {
+        throw new LunoraError("INTERNAL", "@lunora/mail/inbound: message has no rawSize, so its size cannot be checked against maxRawBytes");
+    }
+
+    if (message.rawSize > maxRawBytes) {
         throw new LunoraError(
             "INTERNAL",
             `@lunora/mail/inbound: message is ${String(message.rawSize)} bytes, over the ${String(maxRawBytes)}-byte limit (maxRawBytes)`,
@@ -277,6 +285,11 @@ const assertWithinSizeLimit = (message: ForwardableEmailMessageLike, maxRawBytes
 const createInboundEmailHandler = <TEnv = Record<string, unknown>>(options: InboundEmailHandlerOptions<TEnv>): InboundEmailHandler<TEnv> => {
     const onError = options.onError ?? rejectOnError;
     const maxRawBytes = options.maxRawBytes ?? DEFAULT_MAX_RAW_BYTES;
+
+    // NaN would open the size guard and zero or less would bounce every message.
+    if (!Number.isFinite(maxRawBytes) || maxRawBytes <= 0) {
+        throw new LunoraError("INTERNAL", "@lunora/mail/inbound: `maxRawBytes` must be a positive, finite number of bytes");
+    }
 
     return async (message, env, context_) => {
         const context: InboundDispatchContext<TEnv> = { ctx: context_, env, message };

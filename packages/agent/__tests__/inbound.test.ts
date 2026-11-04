@@ -50,11 +50,11 @@ const fakeBinding = (): {
 };
 
 /** A mock `ForwardableEmailMessage` whose `raw` is the RFC 822 string above; records `setReject`. */
-const fakeMessage = (raw = RAW_EMAIL): { message: { raw: string; setReject: (reason: string) => void }; rejects: string[] } => {
+const fakeMessage = (raw = RAW_EMAIL): { message: { raw: string; rawSize: number; setReject: (reason: string) => void }; rejects: string[] } => {
     const rejects: string[] = [];
 
     return {
-        message: { raw, setReject: (reason: string) => rejects.push(reason) },
+        message: { raw, rawSize: new TextEncoder().encode(raw).byteLength, setReject: (reason: string) => rejects.push(reason) },
         rejects,
     };
 };

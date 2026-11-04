@@ -253,7 +253,11 @@ jurisdiction-pinned shard with no option passed; see
 A message over `maxRawBytes` (default 10 MiB, checked against `message.rawSize`) is
 refused before it is read: parsing holds the raw bytes, the decoded parts and every
 attachment at once, and a message near Email Routing's 25 MiB ceiling can outgrow
-the isolate. It goes down the same path as a parse failure.
+the isolate. It goes down the same path as a parse failure, and so does a message
+without a numeric `rawSize`. **Upgrading:** this limit is new, so mail between 10
+and 25 MiB that used to reach `dispatch` now bounces; raise `maxRawBytes` (a
+positive number of bytes) if you accept large attachments and have measured the
+memory headroom.
 
 Failures split by whether a redelivery could ever succeed. A **size, parse or verify**
 failure is permanent — the same bytes fail the same way — so the handler calls

@@ -23,6 +23,7 @@ const fakeMessage = (overrides: Partial<ForwardableEmailMessageLike> = {}): Forw
         from: "alice@example.com",
         headers: new Headers(),
         raw: new ReadableStream<Uint8Array>(),
+        rawSize: 1024,
         reply: vi.fn<ForwardableEmailMessageLike["reply"]>(async () => undefined),
         setReject: vi.fn<ForwardableEmailMessageLike["setReject"]>(),
         to: "bob@example.test",
@@ -76,6 +77,31 @@ describe("createInboundEmailHandler", () => {
             expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("maxRawBytes") }), expect.anything());
             expect(message.setReject).not.toHaveBeenCalled();
         });
+
+        it("refuses a message whose size it cannot read rather than parsing it unbounded", async () => {
+            expect.assertions(2);
+
+            const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const parse = vi.fn<() => Promise<InboundEmail>>(async () => fixture);
+            // A host message reaching the handler through a cast, without the field.
+            const message = { ...fakeMessage(), rawSize: undefined } as unknown as ForwardableEmailMessageLike;
+
+            await createInboundEmailHandler({ dispatch: async () => undefined, parse })(message, {}, undefined);
+
+            consoleError.mockRestore();
+
+            expect(parse).not.toHaveBeenCalled();
+            expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
+        });
+
+        it.each([Number.NaN, 0, -1, Number.POSITIVE_INFINITY])(
+            "rejects a maxRawBytes of %s, which would open the guard or bounce every message",
+            (maxRawBytes) => {
+                expect.assertions(1);
+
+                expect(() => createInboundEmailHandler({ dispatch: async () => undefined, maxRawBytes, parse: async () => fixture })).toThrow(/maxRawBytes/u);
+            },
+        );
     });
 
     it("reads raw, parses, and dispatches the parsed message", async () => {
