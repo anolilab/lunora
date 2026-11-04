@@ -21,6 +21,7 @@ export { describeErrorLevelFindings, errorAdvisoryNames, errorPlatformDiagnostic
 // The capability table's usage-probe facets, read by `@lunora/config` (see below).
 export type { CapabilityKey, CapabilityProbe } from "./capabilities";
 export { CAPABILITY_PROBES } from "./capabilities";
+export { COMPANION_BINDING, COMPANION_SERVICE_NAME } from "./companion";
 export { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
 export { AGENTS_FILENAME, discoverAgents } from "./discover/agents";
 // The canonical `lunora/` source walk — exported so a consumer deciding what
@@ -60,7 +61,13 @@ export { default as discoverRlsMetadata } from "./discover/rls-procedures/metada
 export type { SandboxUsage } from "./discover/sandbox";
 export { discoverSandboxUsage } from "./discover/sandbox";
 export { default as discoverSchema } from "./discover/schema";
-export { readServiceBindings, resolveServiceBindings } from "./discover/service-bindings";
+export {
+    companionServiceBinding,
+    readBoundServiceBindings,
+    readDevServiceBindings,
+    readServiceBindings,
+    resolveServiceBindings,
+} from "./discover/service-bindings";
 export { discoverShapes, SHAPES_FILENAME } from "./discover/shapes";
 export { default as discoverStorageRulesMetadata } from "./discover/storage-rules";
 export { discoverWorkflows, WORKFLOWS_FILENAME } from "./discover/workflows";

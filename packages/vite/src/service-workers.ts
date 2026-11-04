@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 
-import { readServiceBindings } from "@lunora/codegen";
+import { readDevServiceBindings } from "@lunora/codegen";
+import { resolveSchemaDirectory } from "@lunora/config";
 import type { Plugin } from "vite";
 
 import type { CloudflarePluginOptions } from "./types";
@@ -28,7 +29,9 @@ const serviceWorkersPlugin = (options: CloudflarePluginOptions, projectRoot: str
                 return;
             }
 
-            const { services } = readServiceBindings(projectRoot);
+            // Bound, not just declared: the app's wrangler config carries the `ADVISOR_COMPANION` binding when `studio.companion` is on,
+            // so dev runs that Worker too once codegen has written it.
+            const { services } = readDevServiceBindings(projectRoot, resolveSchemaDirectory(projectRoot));
             const existing = Array.isArray(options.auxiliaryWorkers) ? (options.auxiliaryWorkers as { configPath?: string }[]) : [];
             const listed = new Set(existing.map((worker) => (worker.configPath === undefined ? "" : resolve(projectRoot, worker.configPath))));
             // Two keys may bind two entrypoints of one Worker: it runs once.

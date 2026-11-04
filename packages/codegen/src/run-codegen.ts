@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { performance } from "node:perf_hooks";
 
+import type { AdvisorProcedureDocument } from "@lunora/advisor";
 import { runAdvisor } from "@lunora/advisor";
 import { LunoraError } from "@lunora/errors";
 import type { AdvisorProcedure } from "@lunora/shard-engine";
@@ -14,6 +15,7 @@ import type { CallSites } from "./architecture";
 import { buildArchitecture, emitArchitectureModule } from "./architecture";
 import assertNoNamespaceCollisions from "./assert-namespace-collisions";
 import { createCodegenProject } from "./codegen-project";
+import { COMPANION_FILES } from "./companion";
 import { buildDeclarationSurface } from "./declaration-surface";
 import { listLunoraSourceFiles, withSourceListMemo } from "./discover/ast";
 import discoverCallEdges from "./discover/call-edges";
@@ -70,6 +72,7 @@ import {
     LAZY_FUNCTION_DIRECTORY,
     queueAliasFindings,
 } from "./emit";
+import emitCompanion from "./emit/companion";
 import { emitServiceDeclarations } from "./emit/service-declarations";
 import { isSensitiveFunction } from "./emit/shared";
 import { emitApp, emitAuthModule } from "./emit-app";
@@ -77,7 +80,7 @@ import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type { AgentIR, FunctionIR, HttpRouteIR, MaskMetadataIR, MigrationIR, MutatorIR, ShapeIR, WorkflowIR } from "./ir";
 import { setStandardTypeResolver } from "./parse-validator";
 import { gateAdminTokenRevocation, platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
-import { readMergeDurableObjects, readProjectLazyFunctions } from "./project-config-file";
+import { readMergeDurableObjects, readProjectLazyFunctions, readProjectStudioCompanion } from "./project-config-file";
 import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged } from "./run-codegen-files";
 import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
 import { buildSchemaSnapshot, indexReferencesOf } from "./schema-drift";
@@ -398,6 +401,8 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // Read whatever the caller passes, so an unreadable config value is said even when the caller already opts in.
     const projectLazyFunctions = readProjectLazyFunctions(lunoraDirectory);
     const lazyFunctions = options.lazyFunctions === true || projectLazyFunctions;
+    // Read from the config alone, so every entry point that regenerates `_generated/` agrees and none deletes the folder.
+    const studioCompanion = readProjectStudioCompanion(lunoraDirectory);
     const schemaPath = join(lunoraDirectory, "schema.ts");
 
     if (!existsSync(schemaPath)) {
@@ -787,10 +792,11 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const apiSpec = options.apiSpec ?? "openapi";
     const wantsOpenApi = apiSpec === "openapi" || apiSpec === "both";
     const advisorProcedureData: ReadonlyArray<AdvisorProcedure> = advisorContext?.procedureProtections ?? [];
-    const advisorProcedureDocument = `${JSON.stringify({ procedures: advisorProcedureData }, undefined, 2)}\n`;
-    // No advisor evidence (`lint: false`) means the list above is a placeholder, not a result. Writing it would
-    // replace a real list with an empty one and the health score would read ~100 with nothing checked.
-    const hasAdvisorProcedures = advisorContext !== undefined;
+    // A `lint: false` run has no evidence, so it writes a marker instead of `{ procedures: [] }`: the studio reads
+    // the marker as "analysis disabled" rather than scoring an empty roster as a deployment with nothing wrong.
+    const advisorProcedureDocument: AdvisorProcedureDocument =
+        advisorContext === undefined ? { analysis: "disabled", procedures: [] } : { procedures: [...advisorProcedureData] };
+    const advisorProceduresJson = `${JSON.stringify(advisorProcedureDocument, undefined, 2)}\n`;
     const wantsOpenRpc = apiSpec === "openrpc" || apiSpec === "both";
 
     // The fluent worker-composition builder. Emits one method per package-backed
@@ -964,6 +970,13 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: authModuleContent, kind: "optional", name: "authModule.ts" },
               { content: collectionsContent, kind: "optional", name: "collections.ts" },
               { files: serviceDeclarations, kind: "services" },
+              // Off removes the folder, so turning the flag off leaves no stale deployable Worker behind.
+              {
+                  files: emitCompanion(options.projectRoot, advisorProceduresJson, studioCompanion),
+                  kind: "directory",
+                  name: "companion",
+                  owned: COMPANION_FILES,
+              },
               // The `.json` is the portable artifact for external tooling; the `.ts` (same
               // document, inlined) is what the worker imports and passes to `createWorker({
               // openApiSpec })`. Both are gated on the same `apiSpec` choice so they regenerate
@@ -974,11 +987,10 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: wantsOpenRpc ? openRpcModuleContent : "", kind: "optional", name: "openrpc.ts" },
               // Studio-only data (the health map's denominator). The main app Worker never
               // carries it: the dev hosts serve this file to the studio, and a hosted Studio
-              // is to get it from an opt-in companion Worker (`studio.companion`, not yet in
-              // this branch). Shape-checked against `@lunora/shard-engine`'s `AdvisorProcedure`
-              // before it is written, so a field added to the advisor's type and forgotten
-              // there fails codegen. Skipped without advisor evidence, leaving any existing file.
-              ...(hasAdvisorProcedures ? [{ content: advisorProcedureDocument, kind: "optional" as const, name: "advisor-procedures.json" }] : []),
+              // gets it from the opt-in companion Worker (`studio.companion`). A `lint: false`
+              // run writes the marker here too, so the dev host never serves a roster from an
+              // earlier run next to this run's (empty) advisories.
+              { content: advisorProceduresJson, kind: "optional", name: "advisor-procedures.json" },
               // Same pairing as the specs: the `.json` for tooling, the `.ts` for `createWorker({ architecture })`,
               // both removed when the last module goes.
               {
@@ -1022,6 +1034,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         // so the reconciler and the CLI's limit warning have to see one list.
         cronTriggers: [...new Set([...emitWranglerCronTriggers(crons), ...entryCronTriggers])],
         generated: {
+            advisorProceduresJson,
             agents: agentsContent,
             api: apiContent,
             app: appContent,
@@ -1039,7 +1052,6 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
             openApi: openApiContent,
             openApiModule: openApiModuleContent,
             openRpc: openRpcContent,
-            advisorProceduresJson: advisorProcedureDocument,
             openRpcModule: openRpcModuleContent,
             queues: queuesContent,
             seed: seedContent,

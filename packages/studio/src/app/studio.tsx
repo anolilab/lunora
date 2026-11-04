@@ -162,6 +162,14 @@ const WorkflowsPanel = lazy(() => import("../features/workflows/workflows-panel"
 
 interface StudioProps {
     /**
+     * The worker this Studio talks to has the companion advisor Worker deployed
+     * (`studio.companion` in `lunora.config.ts`). Off by default: a hosted Studio
+     * with no companion would otherwise request a route that is expected to 404.
+     * A dev host does not need it, since it serves the list from its own origin.
+     */
+    readonly advisorCompanion?: boolean;
+
+    /**
      * The host serves `/__lunora/advisor-procedures`, which the Advisors Health tab
      * reads as its score denominator. Off by default. Set by the dev hosts only; kept
      * apart from {@link StudioProps.schemaEditable} because a host can serve the
@@ -1120,6 +1128,7 @@ const buildRouter = ({
     initialShardKey,
     openApiSpec,
     openRpcSpec,
+    advisorCompanion = false,
     runAsIdentity = false,
     schemaEditable = false,
     scheduledCancel,
@@ -1189,7 +1198,7 @@ const buildRouter = ({
             <SchedulePanel initialShardKey={initialShardKey} loadCronJobs={scheduledCron} scheduledCancel={scheduledCancel} scheduledLoad={scheduledLoad} />
         ),
         schema: <SchemaRoutePanel initialShardKey={initialShardKey} schemaEditable={schemaEditable} />,
-        advisorHealth: <AdvisorHealthPanel localProcedures={advisorProcedures} />,
+        advisorHealth: <AdvisorHealthPanel advisorCompanion={advisorCompanion} localProcedures={advisorProcedures} />,
         security: <SecurityAdvisorPanel />,
         settings: <SettingsPanel initialShardKey={initialShardKey} />,
         sql: <SqlEditorPanel initialShardKey={initialShardKey} />,
@@ -1256,6 +1265,7 @@ const StudioShell = ({
     openApiSpec,
     openRpcSpec,
     privacyRequests,
+    advisorCompanion,
     runAsIdentity,
     schemaEditable,
     scheduledCancel,
@@ -1275,6 +1285,7 @@ const StudioShell = ({
         initialShardKey,
         openApiSpec,
         openRpcSpec,
+        advisorCompanion,
         runAsIdentity,
         schemaEditable,
         scheduledCancel,

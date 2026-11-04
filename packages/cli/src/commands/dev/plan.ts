@@ -6,8 +6,16 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { readServiceBindings } from "@lunora/codegen";
-import { detectFramework, DEV_VARS_FILE, parseDevVariableEntries, resolveDeployDriver, resolveProjectTarget, targetRunsOwnDevServer } from "@lunora/config";
+import { readDevServiceBindings } from "@lunora/codegen";
+import {
+    detectFramework,
+    DEV_VARS_FILE,
+    parseDevVariableEntries,
+    resolveDeployDriver,
+    resolveProjectTarget,
+    resolveSchemaDirectory,
+    targetRunsOwnDevServer,
+} from "@lunora/config";
 import type { WithheldBinding } from "@lunora/config/cloudflare";
 import { findWranglerFile, materializeDevWranglerConfig, materializeServiceDevConfigs, readWranglerJsonc } from "@lunora/config/cloudflare";
 
@@ -84,7 +92,7 @@ const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: str
  * `materializeServiceDevConfigs`). `cleanup` unlinks those copies.
  */
 const planServiceConfigs = (options: DevCommandOptions, cwd: string): { args: string[]; cleanup: () => void; withheld: WithheldBinding[] } => {
-    const paths = [...new Set(readServiceBindings(cwd).services.map((service) => service.wranglerPath))];
+    const paths = [...new Set(readDevServiceBindings(cwd, resolveSchemaDirectory(cwd)).services.map((service) => service.wranglerPath))];
     const { cleanup, configPaths, withheld } = (options.materializeServiceConfigs ?? materializeServiceDevConfigs)(paths, { projectRoot: cwd });
 
     return { args: configPaths.flatMap((path) => ["--config", path]), cleanup, withheld };

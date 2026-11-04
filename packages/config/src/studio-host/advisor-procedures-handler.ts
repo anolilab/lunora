@@ -1,16 +1,17 @@
 /**
  * Serves the advisor procedure list to the studio's health map. The list is the
- * health map's denominator, and it is Studio-only data, so codegen writes it to
- * `_generated/advisor-procedures.json` instead of embedding it in the deployed
- * worker. The dev hosts mount this read-only handler on a loopback bind, so the
- * worker never carries the list.
+ * health map's denominator and Studio-only data, so codegen writes it to
+ * `_generated/advisor-procedures.json` instead of embedding it in the main app
+ * Worker. The dev hosts mount this read-only handler on a loopback bind; a hosted
+ * Studio reads the same document from the opt-in companion Worker
+ * (`studio.companion`), which the app's Worker forwards to after its admin check.
  *
  * Transport-agnostic like its siblings: it takes a {@link LocalEndpointRequest}
  * and returns a {@link LocalEndpointResponse}. A missing file is a 404 with a
  * reason, not an empty list, so the studio cannot show a score computed from a
  * denominator that was never generated.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 
 import join from "../path";
 import type { LocalEndpointRequest, LocalEndpointResponse } from "./serve-json-handler";
@@ -24,18 +25,24 @@ const ADVISOR_PROCEDURES_ENDPOINT = "/__lunora/advisor-procedures";
 /** Name of the generated file codegen writes into `<schemaDirectory>/_generated/`. */
 const ADVISOR_PROCEDURES_FILE = "advisor-procedures.json";
 
-/**
- * The fields `scoreAdvisor` dereferences on every row. Checked here so a corrupt
- * sidecar is a 500 with a reason rather than a `TypeError` in the health panel.
- */
+const PROCEDURE_KINDS: ReadonlySet<unknown> = new Set(["action", "mutation", "query"]);
+const PROCEDURE_VISIBILITIES: ReadonlySet<unknown> = new Set(["internal", "public"]);
+
+/** The fields `scoreAdvisor` reads unconditionally; the optional behavioural facts are left to it. */
 const isProcedureEntry = (entry: unknown): boolean => {
     if (typeof entry !== "object" || entry === null) {
         return false;
     }
 
-    const { exportName, file, kind, visibility } = entry as Record<string, unknown>;
+    const row = entry as Record<string, unknown>;
 
-    return typeof exportName === "string" && typeof file === "string" && typeof kind === "string" && typeof visibility === "string";
+    return (
+        typeof row["exportName"] === "string" &&
+        typeof row["file"] === "string" &&
+        PROCEDURE_KINDS.has(row["kind"]) &&
+        PROCEDURE_VISIBILITIES.has(row["visibility"]) &&
+        ["usesCaptcha", "usesEmailGate", "usesMask", "usesRateLimit", "usesRls"].every((field) => typeof row[field] === "boolean")
+    );
 };
 
 const handleAdvisorProceduresRequest = (request: LocalEndpointRequest): LocalEndpointResponse => {
@@ -45,20 +52,18 @@ const handleAdvisorProceduresRequest = (request: LocalEndpointRequest): LocalEnd
 
     const path = join(request.projectRoot, request.schemaDirectory ?? "lunora", "_generated", ADVISOR_PROCEDURES_FILE);
 
-    if (!existsSync(path)) {
-        return {
-            body: { error: "advisor-procedures.json is not generated yet; run `lunora codegen`." },
-            status: 404,
-        };
-    }
-
+    // Read directly instead of probing with `existsSync` first: codegen can rewrite the file between the two calls.
     let source: string;
 
     try {
         source = readFileSync(path, "utf8");
     } catch (error) {
-        // eslint-disable-next-line no-console -- dev-host diagnostic; the studio hosts have no shared logger at this seam.
-        console.error(`[lunora] could not read ${path}:`, error);
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            return { body: { error: "advisor-procedures.json is not generated yet; run `lunora codegen`." }, status: 404 };
+        }
+
+        // eslint-disable-next-line no-console -- the response body is the studio's, so the cause is logged here for the dev server operator
+        console.error(`@lunora/config: could not read ${path}`, error);
 
         return { body: { error: "advisor-procedures.json could not be read; see the dev server log." }, status: 500 };
     }

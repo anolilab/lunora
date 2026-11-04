@@ -2,18 +2,89 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
 import type { AdvisorProceduresResult } from "../../lib/admin";
-import { errorMessage } from "../../lib/internal";
+import { errorMessage, workerBaseUrl } from "../../lib/internal";
 
 /**
- * Dev-host route that serves `_generated/advisor-procedures.json` (see
+ * Host route that serves `_generated/advisor-procedures.json` (see
  * `@lunora/config/studio-host`). Kept out of the worker: the procedure list is
- * Studio-only data, so the health map reads it from the local host instead of
- * an admin RPC.
+ * Studio-only data, so the health map reads it from the host instead of an
+ * admin RPC.
  */
 const ADVISOR_PROCEDURES_ENDPOINT = "/__lunora/advisor-procedures";
 
-const fetchAdvisorProcedures = async (): Promise<AdvisorProceduresResult> => {
-    const response = await fetch(ADVISOR_PROCEDURES_ENDPOINT);
+/**
+ * How often an open panel re-reads the list. Codegen rewrites it while the studio
+ * runs — on every dev save, and once per deploy — and the query key cannot see
+ * that, so without a poll a panel opened before the rewrite keeps scoring the old
+ * roster until it remounts.
+ */
+const ADVISOR_PROCEDURES_REFRESH_MS = 60_000;
+
+/** A hosted Studio's worker: where to fetch from and the admin bearer to present, if the client holds one. */
+interface RemoteProceduresSource {
+    readonly baseUrl: string;
+    readonly token: string | undefined;
+}
+
+/**
+ * Where this host can read the health map's denominator. `"local"` is a dev host
+ * serving the generated file itself, `"remote"` a hosted Studio reaching the
+ * companion through its worker, and `"none"` neither — which the panel renders as
+ * a notice instead of scoring.
+ */
+type AdvisorProceduresSource = { readonly kind: "local" } | { readonly kind: "none" } | { readonly kind: "remote"; readonly remote: RemoteProceduresSource };
+
+/**
+ * Resolve the source from the two host flags. The local route wins: a dev host
+ * serves the file it generated. Otherwise a hosted Studio reads it from the worker
+ * it already talks to. A client without a bearer still asks: an operator signed
+ * in through Cloudflare Access or a cookie session passes the worker's admin gate
+ * on the cookie alone.
+ */
+const resolveAdvisorProceduresSource = (options: {
+    readonly advisorCompanion: boolean;
+    readonly localProcedures: boolean;
+    readonly token: null | string;
+    readonly workerUrl: string;
+}): AdvisorProceduresSource => {
+    if (options.localProcedures) {
+        return { kind: "local" };
+    }
+
+    if (options.advisorCompanion) {
+        const token = options.token === null || options.token === "" ? undefined : options.token;
+
+        return { kind: "remote", remote: { baseUrl: workerBaseUrl(options.workerUrl), token } };
+    }
+
+    return { kind: "none" };
+};
+
+/**
+ * The worker answered 404 for the remote route: it forwards to the companion
+ * worker, which is not deployed. Distinct from a dev host's 404, which means
+ * `lunora codegen` has not written the list yet.
+ */
+class CompanionNotDeployedError extends Error {
+    public constructor() {
+        super("companion not deployed");
+        this.name = "CompanionNotDeployedError";
+    }
+}
+
+const fetchAdvisorProcedures = async (remote: RemoteProceduresSource | undefined): Promise<AdvisorProceduresResult> => {
+    const response =
+        remote === undefined
+            ? await fetch(ADVISOR_PROCEDURES_ENDPOINT)
+            : await fetch(`${remote.baseUrl}${ADVISOR_PROCEDURES_ENDPOINT}`, {
+                  // Same as the client's admin requests: the bearer when it has one, and the session cookie either way.
+                  credentials: "include",
+                  headers: remote.token === undefined ? {} : { authorization: `Bearer ${remote.token}` },
+              });
+
+    if (remote !== undefined && response.status === 404) {
+        throw new CompanionNotDeployedError();
+    }
 
     if (response.ok && !(response.headers.get("content-type") ?? "").includes("application/json")) {
         // A host without the route falls through to the SPA shell: HTML with a 200, which would fail as a raw parse error.
@@ -27,7 +98,14 @@ const fetchAdvisorProcedures = async (): Promise<AdvisorProceduresResult> => {
         throw new Error(reason);
     }
 
-    return (await response.json()) as AdvisorProceduresResult;
+    const body: unknown = await response.json();
+
+    // Anything without a roster (the disabled marker carries an empty one) would leave the panel on "Loading…".
+    if (typeof body !== "object" || body === null || !Array.isArray((body as { procedures?: unknown }).procedures)) {
+        throw new Error("The advisor procedure route answered without a procedure list.");
+    }
+
+    return body as AdvisorProceduresResult;
 };
 
 interface AdvisorProceduresOptions {
@@ -40,13 +118,24 @@ interface AdvisorProceduresOptions {
      * with a denominator from before a codegen run.
      */
     readonly refreshKey: unknown;
+
+    /** Set on a hosted Studio: fetch from this worker with the bearer instead of the same origin. */
+    readonly remote?: RemoteProceduresSource;
 }
 
 /**
  * The health map's denominator. Returns `error` as a message string, matching
  * the admin query hooks the panel reads next to it.
  */
-const useAdvisorProcedures = ({ enabled, refreshKey }: AdvisorProceduresOptions): { data: AdvisorProceduresResult | undefined; error: string | undefined } => {
+const useAdvisorProcedures = ({
+    enabled,
+    refreshKey,
+    remote,
+}: AdvisorProceduresOptions): {
+    data: AdvisorProceduresResult | undefined;
+    error: string | undefined;
+    notDeployed: boolean;
+} => {
     // Bump a revision when the advisories change and key the query on it, so React
     // Query fetches once per change. The first value (advisories still loading →
     // loaded) is not a change: the mount fetch already covers it.
@@ -63,18 +152,22 @@ const useAdvisorProcedures = ({ enabled, refreshKey }: AdvisorProceduresOptions)
 
     const query = useQuery({
         enabled,
-        queryFn: fetchAdvisorProcedures,
-        queryKey: ["studio", "advisor-procedures", revision],
+        queryFn: () => fetchAdvisorProcedures(remote),
+        // The source is a query input: a new worker or token must not be served the previous one's list.
+        queryKey: ["studio", "advisor-procedures", remote, revision],
+        refetchInterval: ADVISOR_PROCEDURES_REFRESH_MS,
         // No retries: a 404/500 is a state the host reports, and retrying would keep the panel on "Loading" for seconds first.
         retry: false,
-        // Codegen can rewrite the sidecar without any advisory changing (a clean
-        // procedure added or removed), so poll while the panel is open as well.
-        refetchInterval: 60_000,
-        // The app's QueryClient defaults to an infinite staleTime; refetch on mount and focus instead.
+        // The studio's client defaults to `staleTime: Infinity`. Generated output changes without the key changing,
+        // so this query must refetch on mount and on window focus instead of serving the cache indefinitely.
         staleTime: 0,
     });
 
-    return { data: query.data, error: query.error ? errorMessage(query.error) : undefined };
+    return {
+        data: query.data,
+        error: query.error ? errorMessage(query.error) : undefined,
+        notDeployed: query.error instanceof CompanionNotDeployedError,
+    };
 };
 
-export default useAdvisorProcedures;
+export { resolveAdvisorProceduresSource, useAdvisorProcedures };

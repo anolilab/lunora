@@ -101,7 +101,7 @@ const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 ### `AdvisorHealthPanel` (const)
 
 ```ts
-const AdvisorHealthPanel: ({ localProcedures, testId }: AdvisorHealthPanelProps) => ReactElement;
+const AdvisorHealthPanel: ({ advisorCompanion, localProcedures, testId }: AdvisorHealthPanelProps) => ReactElement;
 ```
 
 ### `AggregateMetrics` (interface)
@@ -1118,6 +1118,7 @@ interface StudioI18nProviderProps {
 
 ```ts
 interface StudioProps {
+    readonly advisorCompanion?: boolean;
     readonly advisorProcedures?: boolean;
     readonly analyticsSqlQuery?: AnalyticsPanelProps["runQuery"];
     readonly basePath?: string;
@@ -1318,6 +1319,7 @@ public API and is gated as one. Listed once per package, sorted by name.
 
 ```ts
 interface AdvisorHealthPanelProps {
+    readonly advisorCompanion?: boolean;
     readonly localProcedures?: boolean;
     readonly testId?: string;
 }
@@ -2221,7 +2223,9 @@ const MESSAGE_IDS: readonly [
     "Field",
     "Row {n}",
     "Loading…",
-    "The health score needs `lunora dev`: this deployment does not serve the advisor procedure list.",
+    "The health score needs `lunora dev`, or a Studio build with VITE_LUNORA_ADVISOR_COMPANION set to true.",
+    "The health score needs the companion worker: it is not deployed for this Studio, so the advisor procedure list is unavailable.",
+    "The advisor analysis is disabled for this build: `lunora codegen` ran with `lint: false`, so there is no procedure list to score.",
     "No matching row.",
     "CSV",
     "SQL",

@@ -751,6 +751,7 @@ interface InferOptions {
     projectRoot: string;
     scanDirs?: ReadonlyArray<string>;
     schemaDir?: string;
+    skipCompanion?: boolean;
 }
 ```
 
