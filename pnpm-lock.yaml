@@ -4156,6 +4156,9 @@ importers:
       fallow:
         specifier: catalog:lint
         version: 3.34.0
+      fast-check:
+        specifier: catalog:test
+        version: 4.10.2
       react:
         specifier: 19.3.1
         version: 19.3.1

@@ -15,7 +15,13 @@ export interface QueueLike {
  * provider responses to the same field for us.
  */
 export interface MailTransport {
-    send: (payload: SendPayload) => Promise<{ id: string }>;
+    /**
+     * `options.idempotencyKey` is the send's stable dedupe key, when it has one. A
+     * transport whose provider dedupes on a key forwards it (the Resend transport
+     * sends it as the `Idempotency-Key` request header); others ignore it. It is
+     * never a message header.
+     */
+    send: (payload: SendPayload, options?: { idempotencyKey?: string }) => Promise<{ id: string }>;
 }
 
 export interface SendPayload {
@@ -38,16 +44,15 @@ export interface SendOptions {
     html?: string;
 
     /**
-     * Stable key for deduping a queued send across Cloudflare Queues' at-least-once
-     * redelivery. Only meaningful for `mailer.queue()` — `mailer.send()` ignores it.
-     * When omitted, `queue()` generates one at enqueue time so it survives redelivery
-     * (a key minted in the consumer would change on every retry, defeating the point).
-     * Not forwarded to the mail provider, and no transport can: Resend dedupes on an
-     * `Idempotency-Key` REQUEST header, and the provider client exposes no hook for
-     * one (its own `headers` field becomes message headers in the JSON body). So a
-     * consumer that wants to collapse redeliveries MUST dedupe against its own store
-     * using this key — see `consumeQueuedSend` for the shape, and for why that is a
-     * narrowed at-least-once rather than exactly-once.
+     * Stable key for deduping a send across retries and Cloudflare Queues'
+     * at-least-once redelivery: 1-256 visible ASCII characters. When omitted,
+     * `queue()` generates one at enqueue time so it survives redelivery (a key
+     * minted in the consumer would change on every retry, defeating the point).
+     * `consumeQueuedSend` dedupes on it when given a `sent` store, and the transport
+     * receives it: Resend dedupes on it as the `Idempotency-Key` request header, while
+     * the Cloudflare binding has no such hook and ignores it. See
+     * `consumeQueuedSend` for why that is a narrowed at-least-once rather than
+     * exactly-once.
      */
     idempotencyKey?: string;
     react?: ReactElement;

@@ -12,6 +12,9 @@ import type { LunoraMailOptions, Mailer, MailTransport, SendOptions, SendPayload
 
 const DEFAULT_SEND_TIMEOUT_MS = 60_000;
 
+/** What Resend accepts as an `Idempotency-Key`, and short enough for a Workers KV key. */
+const IDEMPOTENCY_KEY_PATTERN = /^[\u0021-\u007E]{1,256}$/u;
+
 /**
  * Settle with the transport's answer, or fail as outcome-unknown once the
  * deadline passes — a hung provider call must not hold a queue message until
@@ -126,6 +129,11 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
         // fields get. Validated here so both send() and queue() are covered.
         assertSafeHeaderValue("subject", options_.subject);
 
+        // Checked at enqueue too, so a key the provider would refuse never reaches the consumer.
+        if (options_.idempotencyKey !== undefined && !IDEMPOTENCY_KEY_PATTERN.test(options_.idempotencyKey)) {
+            throw new LunoraError("INTERNAL", "@lunora/mail: `idempotencyKey` must be 1-256 visible ASCII characters");
+        }
+
         if (options_.headers) {
             for (const [name, value] of Object.entries(options_.headers)) {
                 assertSafeHeaderValue(`header name "${name}"`, name);
@@ -168,7 +176,9 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
         const payload = await buildPayload(options_);
 
         try {
-            return await withSendDeadline(transport.send(payload), sendTimeoutMs);
+            const { idempotencyKey } = options_;
+
+            return await withSendDeadline(idempotencyKey === undefined ? transport.send(payload) : transport.send(payload, { idempotencyKey }), sendTimeoutMs);
         } catch (error) {
             // A custom transport that throws something unclassified is treated as
             // transient. The message is generic so a provider's raw text never

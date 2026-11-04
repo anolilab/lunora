@@ -21,6 +21,7 @@ interface ProviderEmail {
     from: ProviderAddress;
     headers?: Record<string, string>;
     html?: string;
+    idempotencyKey?: string;
     replyTo?: ProviderAddress;
     subject: string;
     text?: string;

@@ -1,9 +1,10 @@
 import { LunoraError } from "@lunora/errors";
 
+import { MailSendError } from "./send-error";
 import type { Mailer, SendOptions } from "./types";
 
 /** Serializable representation of a `SendOptions` payload — drops the `react` field. */
-export interface QueuedSend {
+interface QueuedSend {
     bcc?: string[];
     cc?: string[];
     from?: string;
@@ -12,8 +13,8 @@ export interface QueuedSend {
 
     /**
      * Stable dedup key, minted at enqueue time by `createMailer(...).queue()` — see
-     * `SendOptions.idempotencyKey`. Carried through untouched by `consumeQueuedSend`;
-     * a consumer wanting exactly-once delivery dedupes against its own store using it.
+     * `SendOptions.idempotencyKey`. `consumeQueuedSend` dedupes on it when given a
+     * `sent` store, and forwards it to the provider.
      */
     idempotencyKey?: string;
     replyTo?: string;
@@ -27,7 +28,7 @@ export interface QueuedSend {
  * non-cloneable `react` field. React elements are not structured-cloneable, so
  * the queue body must carry only the pre-rendered html/text and scalar fields.
  */
-export const toQueuedPayload = (options: SendOptions): QueuedSend => {
+const toQueuedPayload = (options: SendOptions): QueuedSend => {
     const queued = { ...options };
 
     delete queued.react;
@@ -36,67 +37,38 @@ export const toQueuedPayload = (options: SendOptions): QueuedSend => {
 };
 
 /**
- * Helper used by Queue consumers: rehydrate a `QueuedSend` payload and forward
- * to a configured `Mailer.send()`. Use this inside your Worker's `queue()`
- * handler.
- *
- * DEDUPE IS THE CONSUMER'S JOB, and this helper does not do it. The payload's
- * `idempotencyKey` was minted once at enqueue time so it survives redelivery, but
- * nothing downstream reads it: no transport forwards it to the provider (Resend
- * dedupes on an `Idempotency-Key` REQUEST header, which the provider client offers
- * no hook for — its `headers` field becomes message headers in the body). A
- * consumer that only acks is correct for the failure the ack covers and sends a
- * duplicate for the one it does not: the provider accepted the message and the
- * worker died before acking.
- *
- * The recipe below NARROWS that window; it does not close it, and nothing on
- * this path can. The mark is written after the provider accepted the message, so
- * a crash in between still redelivers and resends, and a KV read is eventually
- * consistent — a redelivery seconds later can miss a mark that was written.
- * Delivery is at-least-once end to end. An app that must not double-send needs a
- * strongly-consistent mark taken BEFORE the send (a Durable Object or D1 row
- * claimed by this key, released on failure), and even then the send-then-crash
- * window is only ever traded for a send-that-may-not-have-happened one.
- *
- * ```ts
- * export default {
- *   queue: async (batch, env) => {
- *     // createMailerFromEnv, so dev captures the message here instead of sending it.
- *     const mailer = createMailerFromEnv(env);
- *     for (const message of batch.messages) {
- *       const idempotencyKey = message.body?.idempotencyKey;
- *       // Malformed, and no retry fixes it; unguarded, this would throw and retry the whole batch. Logged without the
- *       // body, which can still carry recipients and content.
- *       if (typeof idempotencyKey !== "string") { console.error("malformed mail message: no idempotencyKey"); message.ack(); continue; }
- *       if (await env.SENT.get(idempotencyKey)) { message.ack(); continue; }
- *       try {
- *         await consumeQueuedSend(mailer, message.body);
- *       } catch (error) {
- *         // Timed out: the provider may have delivered it, so a retry could send a second copy.
- *         if (isOutcomeUnknownMailError(error)) {
- *           console.error("mail outcome unknown", error);
- *           message.ack();
- *           continue;
- *         }
- *
- *         // A refusal the provider will never accept: a retry only dead-letters it.
- *         if (!isRetryableMailError(error)) {
- *           console.error("mail refused", error);
- *           message.ack();
- *           continue;
- *         }
- *
- *         message.retry();
- *         continue;
- *       }
- *       await env.SENT.put(idempotencyKey, "1", { expirationTtl: 86_400 });
- *       message.ack();
- *     }
- *   },
- * };
- * ```
+ * Where {@link consumeQueuedSend} records the idempotency keys it has already
+ * sent, mapped to the provider's message id. Shaped after Workers KV's
+ * `get` / `put`, so a `KVNamespace` binding passes as-is; a Durable Object or
+ * D1-backed adapter works too.
  */
-export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promise<{ id: string }> => {
+interface SentMailStore {
+    get: (key: string) => Promise<string | null>;
+    put: (key: string, value: string, options: { expirationTtl: number }) => Promise<void>;
+}
+
+interface ConsumeQueuedSendOptions {
+    /**
+     * Collapse redeliveries: a message whose `idempotencyKey` is already in the
+     * store is acknowledged without a second send, and a sent message's key is
+     * recorded here. With a store, a body without an `idempotencyKey` is refused.
+     */
+    sent?: SentMailStore;
+
+    /**
+     * How long a sent key is remembered, in seconds (default 86 400). Workers KV
+     * rejects anything under 60. A redelivery later than this sends again.
+     */
+    sentTtlSeconds?: number;
+}
+
+const DEFAULT_SENT_TTL_SECONDS = 86_400;
+
+/**
+ * Validate an untrusted queue body into `SendOptions`. Every throw here is a
+ * malformed message, which no redelivery fixes, so none is retryable.
+ */
+const toSendOptions = (payload: unknown): SendOptions => {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
         throw new LunoraError("INTERNAL", "@lunora/mail: queue message body must be an object");
     }
@@ -184,5 +156,105 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
         to: candidate.to as string | string[],
     };
 
-    return mailer.send(options);
+    return options;
 };
+
+/**
+ * Helper used by Queue consumers: validate a `QueuedSend` body and send it
+ * through `mailer.send()`. Use it inside your Worker's `queue()` handler, and
+ * `ack()` each message it settles.
+ *
+ * Pass `sent` (a KV namespace, or anything shaped like one) to collapse
+ * Cloudflare Queues' at-least-once redelivery: a key already in the store
+ * returns its recorded id with `deduplicated: true` and sends nothing, and a
+ * successful send records its key. Only a success is recorded, so a retryable
+ * or outcome-unknown failure never blocks a later attempt. A store that cannot
+ * be read fails the send as retryable, since nothing has gone out; a store that
+ * cannot be written after the send is logged and the id still returned, because
+ * throwing then would redeliver a message the provider already accepted.
+ *
+ * This NARROWS the duplicate window; it does not close it, and nothing on this
+ * path can. The mark is written after the provider accepted the message, so a
+ * crash in between still redelivers and resends, and a KV read is eventually
+ * consistent — a redelivery seconds later can miss a mark that was written.
+ * Delivery is at-least-once end to end. An app that must not double-send needs a
+ * strongly-consistent mark taken BEFORE the send (a Durable Object or D1 row
+ * claimed by this key, released on failure), and even then the send-then-crash
+ * window is only ever traded for a send-that-may-not-have-happened one. With
+ * Resend the key also travels as the `Idempotency-Key` request header, so Resend
+ * itself drops a repeat inside its own 24-hour window.
+ *
+ * ```ts
+ * export default {
+ *   queue: async (batch, env) => {
+ *     // createMailerFromEnv, so dev captures the message here instead of sending it.
+ *     const mailer = createMailerFromEnv(env);
+ *     for (const message of batch.messages) {
+ *       try {
+ *         await consumeQueuedSend(mailer, message.body, { sent: env.SENT });
+ *       } catch (error) {
+ *         // Timed out: the provider may have delivered it, so a retry could send a second copy.
+ *         if (isOutcomeUnknownMailError(error)) {
+ *           console.error("mail outcome unknown", error);
+ *           message.ack();
+ *           continue;
+ *         }
+ *
+ *         // A refusal or a malformed body: a retry only dead-letters it.
+ *         if (!isRetryableMailError(error)) {
+ *           console.error("mail refused", error);
+ *           message.ack();
+ *           continue;
+ *         }
+ *
+ *         message.retry();
+ *         continue;
+ *       }
+ *       // Per message: without it a single throw retries the whole batch.
+ *       message.ack();
+ *     }
+ *   },
+ * };
+ * ```
+ */
+const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: ConsumeQueuedSendOptions = {}): Promise<{ deduplicated: boolean; id: string }> => {
+    const sendOptions = toSendOptions(payload);
+    const { sent } = options;
+
+    if (!sent) {
+        return { deduplicated: false, ...(await mailer.send(sendOptions)) };
+    }
+
+    const key = sendOptions.idempotencyKey;
+
+    if (key === undefined) {
+        throw new TypeError("@lunora/mail: queue message has no `idempotencyKey` to dedupe on");
+    }
+
+    let recorded: string | null;
+
+    try {
+        recorded = await sent.get(key);
+    } catch (error) {
+        // Nothing has been sent yet, so a redelivery is safe and an ack would drop the mail.
+        throw new MailSendError({ cause: error, message: "@lunora/mail: could not read the sent-mail store", retryable: true });
+    }
+
+    if (recorded !== null) {
+        return { deduplicated: true, id: recorded };
+    }
+
+    const { id } = await mailer.send(sendOptions);
+
+    try {
+        await sent.put(key, id, { expirationTtl: options.sentTtlSeconds ?? DEFAULT_SENT_TTL_SECONDS });
+    } catch (error) {
+        // eslint-disable-next-line no-console -- the send succeeded; failing it now would redeliver a message the provider accepted
+        console.error("@lunora/mail: sent, but could not record the idempotency key; a redelivery may send again —", error);
+    }
+
+    return { deduplicated: false, id };
+};
+
+export { consumeQueuedSend, toQueuedPayload };
+export type { ConsumeQueuedSendOptions, QueuedSend, SentMailStore };

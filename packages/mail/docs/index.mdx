@@ -131,29 +131,9 @@ export default {
         const mailer = createMailerFromEnv(env);
 
         for (const message of batch.messages) {
-            const idempotencyKey = message.body?.idempotencyKey;
-
-            // A body without its key is malformed, and no retry fixes that; reading it
-            // unguarded would throw out of the loop and retry the whole batch.
-            if (typeof idempotencyKey !== "string") {
-                // Not the body: a malformed message can still carry recipients and content.
-                console.error("malformed mail message: no idempotencyKey");
-                message.ack();
-                continue;
-            }
-
-            // The dedupe is YOURS to do. Nothing downstream does it for you: no
-            // transport forwards the key to the provider (Resend dedupes on an
-            // `Idempotency-Key` REQUEST header, which the provider client does not
-            // expose), so this store is the only thing standing between a
-            // redelivery and a second copy of the same email.
-            if (await env.SENT.get(idempotencyKey)) {
-                message.ack();
-                continue;
-            }
-
             try {
-                await consumeQueuedSend(mailer, message.body);
+                // `env.SENT` is a KV namespace: a redelivered key is acked without a second send.
+                await consumeQueuedSend(mailer, message.body, { sent: env.SENT });
             } catch (error) {
                 // Timed out: the provider may have delivered it, and a retry could send a
                 // second copy. Ack it and check the provider's logs.
@@ -163,7 +143,7 @@ export default {
                     continue;
                 }
 
-                // A refusal the provider will never accept: a retry only dead-letters it.
+                // A refusal or a malformed body: a retry only dead-letters it.
                 if (!isRetryableMailError(error)) {
                     console.error("mail refused", error);
                     message.ack();
@@ -173,27 +153,35 @@ export default {
                 message.retry();
                 continue;
             }
-            await env.SENT.put(idempotencyKey, "1", { expirationTtl: 86_400 });
             message.ack();
         }
     },
 };
 ```
 
-Each queued send carries a stable `idempotencyKey` — a caller-supplied one, or one
-generated at enqueue time. The `ack` narrows retries to the message that actually
-failed, and the key is what stops a redelivery from mailing a second copy: skip
-the store and the window where the provider accepted the send but the worker died
-before acking sends a duplicate every time.
+Each queued send carries a stable `idempotencyKey` — a caller-supplied one (1-256
+visible ASCII characters), or one generated at enqueue time. The `ack` narrows
+retries to the message that actually failed, and the key is what stops a
+redelivery from mailing a second copy. Pass `sent` — a KV namespace, or anything
+with KV's `get(key)` / `put(key, value, { expirationTtl })` — and
+`consumeQueuedSend` checks it before sending, records the key with the provider's
+message id after a successful send (for `sentTtlSeconds`, default one day), and
+returns `{ id, deduplicated: true }` for a key it has seen. Only a success is
+recorded, so a failed attempt never blocks the retry. A store it cannot read fails
+the send as retryable, because nothing has gone out; a store it cannot write after
+the send is logged and the send still counts as done. With a `sent` store a body
+without an `idempotencyKey` is refused as malformed. Resend also receives the key
+as its `Idempotency-Key` request header and drops a repeat within its own 24-hour
+window; the Cloudflare binding has no such hook.
 
-It narrows that window rather than closing it, and nothing on this path can close
-it. The mark is written after the provider accepted the message, so a crash in
-between still redelivers and resends, and KV is eventually consistent — a
-redelivery seconds later can miss a mark that was written. Delivery is
-at-least-once end to end. If a second copy is unacceptable, claim the key in a
-strongly-consistent store (a Durable Object, or a D1 row) _before_ the send and
-release it on failure; that trades a possible duplicate for a possible unsent
-message, which is the only other side of this coin.
+The store narrows the duplicate window rather than closing it, and nothing on
+this path can close it. The mark is written after the provider accepted the
+message, so a crash in between still redelivers and resends, and KV is eventually
+consistent — a redelivery seconds later can miss a mark that was written.
+Delivery is at-least-once end to end. If a second copy is unacceptable, claim the
+key in a strongly-consistent store (a Durable Object, or a D1 row) _before_ the
+send and release it on failure; that trades a possible duplicate for a possible
+unsent message, which is the only other side of this coin.
 
 ## Receiving email
 
@@ -325,22 +313,22 @@ rules; that lifecycle stays in Cloudflare.
 
 `@lunora/mail`:
 
-| Export                                | Purpose                                                                                                                                                                                                             |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createMailer(options)`               | Build a `Mailer`. Needs `from` plus one of `cloudflareSend` / `apiKey` / `transport` (or only a `queue`, for a producer-only mailer)                                                                                |
-| `createMailerFromEnv(env, options?)`  | Build a `Mailer` from a Worker `env`: captures in dev, else delivers via Cloudflare/Resend                                                                                                                          |
-| `createCloudflareTransport(options)`  | Cloudflare Email Workers transport (single-recipient; rejects `cc`/`bcc`)                                                                                                                                           |
-| `createResendTransport(apiKey, from)` | Resend transport                                                                                                                                                                                                    |
-| `createCaptureTransport(sink)`        | Dev capture transport: persists to a `MailboxSink` instead of delivering                                                                                                                                            |
-| `createCaptureSink(env, rootShard?)`  | `MailboxSink` that records into the studio's root-shard inbox                                                                                                                                                       |
-| `shouldCaptureMail(env)`              | Whether the current env should capture (`LUNORA_MAIL_CAPTURE`, else dev detection)                                                                                                                                  |
-| `renderEmail(element)`                | Render a React Email element to `{ html, text }`                                                                                                                                                                    |
-| `toQueuedPayload(options)`            | Narrow `SendOptions` to its serializable `QueuedSend` (drops `react`)                                                                                                                                               |
-| `consumeQueuedSend(mailer, body)`     | Validate a queued payload and `mailer.send(...)` it; returns `{ id }`                                                                                                                                               |
-| `isRetryableMailError(error)`         | Whether a failed send is worth a redelivery: `false` for a refusal carrying an explicit permanent HTTP status and for a timed-out send, `true` for everything else                                                  |
-| `isOutcomeUnknownMailError(error)`    | Whether a failed send timed out and may have been delivered; never retryable, so ack and report it                                                                                                                  |
-| `MailSendError`                       | The error a failed send throws; `retryable` / `outcomeUnknown` (also on `data`) carry the decision                                                                                                                  |
-| Type-only                             | `Mailer`, `MailTransport`, `SendOptions`, `SendPayload`, `QueueLike`, `LunoraMailOptions`, `QueuedSend`, `CapturedMail`, `MailboxSink`, `CloudflareSend`, `CloudflareTransportOptions`, `FromEnvOptions`, `MailEnv` |
+| Export                                      | Purpose                                                                                                                                                                                                                                                          |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createMailer(options)`                     | Build a `Mailer`. Needs `from` plus one of `cloudflareSend` / `apiKey` / `transport` (or only a `queue`, for a producer-only mailer)                                                                                                                             |
+| `createMailerFromEnv(env, options?)`        | Build a `Mailer` from a Worker `env`: captures in dev, else delivers via Cloudflare/Resend                                                                                                                                                                       |
+| `createCloudflareTransport(options)`        | Cloudflare Email Workers transport (single-recipient; rejects `cc`/`bcc`)                                                                                                                                                                                        |
+| `createResendTransport(apiKey, from)`       | Resend transport                                                                                                                                                                                                                                                 |
+| `createCaptureTransport(sink)`              | Dev capture transport: persists to a `MailboxSink` instead of delivering                                                                                                                                                                                         |
+| `createCaptureSink(env, rootShard?)`        | `MailboxSink` that records into the studio's root-shard inbox                                                                                                                                                                                                    |
+| `shouldCaptureMail(env)`                    | Whether the current env should capture (`LUNORA_MAIL_CAPTURE`, else dev detection)                                                                                                                                                                               |
+| `renderEmail(element)`                      | Render a React Email element to `{ html, text }`                                                                                                                                                                                                                 |
+| `toQueuedPayload(options)`                  | Narrow `SendOptions` to its serializable `QueuedSend` (drops `react`)                                                                                                                                                                                            |
+| `consumeQueuedSend(mailer, body, options?)` | Validate a queued payload and `mailer.send(...)` it, skipping a key already in `options.sent`; returns `{ id, deduplicated }`                                                                                                                                    |
+| `isRetryableMailError(error)`               | Whether a failed send is worth a redelivery: `false` for a refusal carrying an explicit permanent HTTP status and for a timed-out send, `true` for everything else                                                                                               |
+| `isOutcomeUnknownMailError(error)`          | Whether a failed send timed out and may have been delivered; never retryable, so ack and report it                                                                                                                                                               |
+| `MailSendError`                             | The error a failed send throws; `retryable` / `outcomeUnknown` (also on `data`) carry the decision                                                                                                                                                               |
+| Type-only                                   | `Mailer`, `MailTransport`, `SendOptions`, `SendPayload`, `QueueLike`, `LunoraMailOptions`, `QueuedSend`, `SentMailStore`, `ConsumeQueuedSendOptions`, `CapturedMail`, `MailboxSink`, `CloudflareSend`, `CloudflareTransportOptions`, `FromEnvOptions`, `MailEnv` |
 
 `@lunora/mail/inbound`: `createInboundEmailHandler(options)`,
 `dispatchToLunoraFunction(options)`, `parseInboundEmail(raw)`,

@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import createMailer from "../src/create-mailer";
+import type { SentMailStore } from "../src/queue";
 import { consumeQueuedSend } from "../src/queue";
+import { isRetryableMailError, MailSendError } from "../src/send-error";
 import type { Mailer, MailTransport, SendPayload } from "../src/types";
 
 const captureTransport = (): { sent: SendPayload[]; transport: MailTransport } => {
@@ -93,5 +95,128 @@ describe("queued send idempotency key", () => {
         await expect(consumeQueuedSend(noopMailer(), { idempotencyKey: 42, subject: "Hi", to: "a@x.test" })).rejects.toThrow(
             /`idempotencyKey` must be a string/,
         );
+    });
+});
+
+describe("consumeQueuedSend with a sent-mail store", () => {
+    const body = { idempotencyKey: "order-42", subject: "Hi", to: "a@x.test" };
+
+    /** A KV-shaped store over a Map, recording every `put`. */
+    const memoryStore = (initial: Record<string, string> = {}) => {
+        const entries = new Map(Object.entries(initial));
+        const puts: { key: string; ttl: number; value: string }[] = [];
+
+        return {
+            entries,
+            puts,
+            store: {
+                get: async (key: string) => entries.get(key) ?? null,
+                put: async (key: string, value: string, options: { expirationTtl: number }) => {
+                    puts.push({ key, ttl: options.expirationTtl, value });
+                    entries.set(key, value);
+                },
+            } satisfies SentMailStore,
+        };
+    };
+
+    it("sends once, records the key with the provider id, and acks a redelivery without a second send", async () => {
+        expect.assertions(4);
+
+        const mailer = noopMailer();
+        const { puts, store } = memoryStore();
+
+        const first = await consumeQueuedSend(mailer, body, { sent: store });
+        const redelivered = await consumeQueuedSend(mailer, body, { sent: store });
+
+        expect(first).toStrictEqual({ deduplicated: false, id: "queued-send" });
+        expect(redelivered).toStrictEqual({ deduplicated: true, id: "queued-send" });
+        expect(mailer.send).toHaveBeenCalledTimes(1);
+        expect(puts).toStrictEqual([{ key: "order-42", ttl: 86_400, value: "queued-send" }]);
+    });
+
+    it("remembers a key for the configured TTL", async () => {
+        expect.assertions(1);
+
+        const { puts, store } = memoryStore();
+
+        await consumeQueuedSend(noopMailer(), body, { sent: store, sentTtlSeconds: 3600 });
+
+        expect(puts[0]?.ttl).toBe(3600);
+    });
+
+    it("does not record a failed send, so the redelivery sends", async () => {
+        expect.assertions(3);
+
+        const { puts, store } = memoryStore();
+        const send = vi
+            .fn<Mailer["send"]>()
+            .mockRejectedValueOnce(new MailSendError({ retryable: true }))
+            .mockResolvedValueOnce({ id: "second-try" });
+        const mailer: Mailer = {
+            queue: async () => {
+                return { queued: true };
+            },
+            send,
+        };
+
+        await expect(consumeQueuedSend(mailer, body, { sent: store })).rejects.toBeInstanceOf(MailSendError);
+        await expect(consumeQueuedSend(mailer, body, { sent: store })).resolves.toStrictEqual({ deduplicated: false, id: "second-try" });
+        expect(puts).toHaveLength(1);
+    });
+
+    it("fails as retryable without sending when the store cannot be read: nothing has gone out yet", async () => {
+        expect.assertions(2);
+
+        const mailer = noopMailer();
+        const store: SentMailStore = {
+            get: async () => {
+                throw new Error("KV unavailable");
+            },
+            put: async () => undefined,
+        };
+
+        const error = await consumeQueuedSend(mailer, body, { sent: store }).catch((error_: unknown) => error_);
+
+        expect(isRetryableMailError(error)).toBe(true);
+        expect(mailer.send).not.toHaveBeenCalled();
+    });
+
+    it("returns the id when the store cannot be written after the send, rather than redelivering a sent message", async () => {
+        expect.assertions(2);
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const store: SentMailStore = {
+            get: async () => null,
+            put: async () => {
+                throw new Error("KV write failed");
+            },
+        };
+
+        const result = await consumeQueuedSend(noopMailer(), body, { sent: store });
+
+        expect(result).toStrictEqual({ deduplicated: false, id: "queued-send" });
+        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("could not record the idempotency key"), expect.any(Error));
+
+        consoleError.mockRestore();
+    });
+
+    it("refuses a body without an idempotency key, which it could not dedupe", async () => {
+        expect.assertions(3);
+
+        const mailer = noopMailer();
+        const { store } = memoryStore();
+
+        const error = await consumeQueuedSend(mailer, { subject: "Hi", to: "a@x.test" }, { sent: store }).catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(TypeError);
+        expect(isRetryableMailError(error)).toBe(false);
+        expect(mailer.send).not.toHaveBeenCalled();
+    });
+
+    it("accepts a Workers KV namespace as the store", () => {
+        // Checked by the type checker (lint:types), not at runtime.
+        expect.assertions(0);
+
+        expectTypeOf<KVNamespace>().toExtend<SentMailStore>();
     });
 });

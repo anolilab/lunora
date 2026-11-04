@@ -105,8 +105,9 @@ For the auth flows, `lunora add auth-emails` adds ready-made templates.
 throws `` `queue` binding is required for mailer.queue() ``, except under
 capture, where it sends straight to the capture inbox so dev flows keep working.
 A consumer builds its mailer with `createMailerFromEnv` too, drains the queue
-with `consumeQueuedSend(mailer, message.body)` and then calls `message.ack()`
-for each message. On a throw, branch on `isRetryableMailError(error)`: retry with
+with `consumeQueuedSend(mailer, message.body, { sent: env.SENT })` and then calls
+`message.ack()` for each message; `sent` (a KV namespace) makes a redelivered
+message ack without a second send. On a throw, branch on `isRetryableMailError(error)`: retry with
 `message.retry()` when it is true, and ack and log when it is false, since a refused
 address or malformed body never sends and a retry only dead-letters it. A send
 that timed out (`isOutcomeUnknownMailError(error)`) is not retryable either: the

@@ -94,7 +94,7 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
 
 `queueEmail` decouples the send from the request by pushing it onto a Cloudflare Queue. To enable it:
 
-1. Add a Queue producer + consumer binding to your `wrangler.jsonc`:
+1. Add a Queue producer + consumer binding, and a KV namespace the consumer records sent messages in, to your `wrangler.jsonc`:
 
     ```jsonc
     {
@@ -102,6 +102,7 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
             "producers": [{ "queue": "lunora-mail", "binding": "MAIL_QUEUE" }],
             "consumers": [{ "queue": "lunora-mail" }],
         },
+        "kv_namespaces": [{ "binding": "SENT", "id": "<your KV namespace id>" }],
     }
     ```
 
@@ -136,7 +137,8 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
 
             for (const message of batch.messages) {
                 try {
-                    await consumeQueuedSend(mailer, message.body);
+                    // A KV namespace bound as `SENT`: a redelivered message is acked without a second send.
+                    await consumeQueuedSend(mailer, message.body, { sent: env.SENT });
                 } catch (error) {
                     // Timed out: the provider may have delivered it, so a retry could send a
                     // second copy. Ack it and check the provider's logs.

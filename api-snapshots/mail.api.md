@@ -33,6 +33,15 @@ interface CloudflareTransportOptions {
 }
 ```
 
+### `ConsumeQueuedSendOptions` (interface)
+
+```ts
+interface ConsumeQueuedSendOptions {
+    sent?: SentMailStore;
+    sentTtlSeconds?: number;
+}
+```
+
 ### `FromEnvOptions` (interface)
 
 ```ts
@@ -97,7 +106,9 @@ interface MailSendErrorData {
 
 ```ts
 interface MailTransport {
-    send: (payload: SendPayload) => Promise<{
+    send: (payload: SendPayload, options?: {
+        idempotencyKey?: string;
+    }) => Promise<{
         id: string;
     }>;
 }
@@ -185,10 +196,22 @@ interface SendPayload {
 }
 ```
 
+### `SentMailStore` (interface)
+
+```ts
+interface SentMailStore {
+    get: (key: string) => Promise<string | null>;
+    put: (key: string, value: string, options: {
+        expirationTtl: number;
+    }) => Promise<void>;
+}
+```
+
 ### `consumeQueuedSend` (const)
 
 ```ts
-const consumeQueuedSend: (mailer: Mailer, payload: unknown) => Promise<{
+const consumeQueuedSend: (mailer: Mailer, payload: unknown, options?: ConsumeQueuedSendOptions) => Promise<{
+    deduplicated: boolean;
     id: string;
 }>;
 ```
