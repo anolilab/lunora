@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import type { RsbuildConfig, RsbuildPlugin } from "@rsbuild/core";
+import { createRsbuild } from "@rsbuild/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BuildEnvironmentLike, DevServerLike, RsbuildApiLike, RsbuildConfigLike, RspackConfigLike } from "../src/rsbuild";
@@ -431,14 +433,26 @@ describe(startWorker, () => {
             await afterBuild?.({ environments, isWatch });
         };
 
-        const environment = (distPath: string, output: Partial<BuildEnvironmentLike["config"]["output"]> = {}): BuildEnvironmentLike => {
-            return {
-                config: {
-                    output: { distPath: { css: "static/css", js: "static/js", root: distPath }, ...output },
-                    server: { publicDir: [{ name: "public" }] },
+        /** The environments a real `rsbuild build` hands `onAfterBuild`, with Rsbuild's own normalized defaults. */
+        const rsbuildEnvironments = async (root: string, rsbuildConfig: RsbuildConfig = {}): Promise<Record<string, BuildEnvironmentLike>> => {
+            let environments: Record<string, BuildEnvironmentLike> = {};
+
+            mkdirSync(join(root, "src"), { recursive: true });
+            writeFileSync(join(root, "src", "index.js"), "", "utf8");
+
+            const capture: RsbuildPlugin = {
+                name: "capture-environments",
+                setup: (api) => {
+                    api.onBeforeCreateCompiler(({ environments: created }) => {
+                        environments = created;
+                    });
                 },
-                distPath,
             };
+            const rsbuild = await createRsbuild({ cwd: root, rsbuildConfig: { mode: "production", ...rsbuildConfig, plugins: [capture] } });
+
+            await rsbuild.createCompiler();
+
+            return environments;
         };
 
         const withAssets = (root: string, assets: Record<string, unknown>): void => {
@@ -457,27 +471,49 @@ describe(startWorker, () => {
             mkdirSync(join(root, "dist", "server"), { recursive: true });
             withAssets(root, { directory: "./dist/client" });
 
-            await build(root, { node: environment(join(root, "dist", "server")), web: environment(client) });
+            await build(
+                root,
+                await rsbuildEnvironments(root, {
+                    environments: {
+                        node: { output: { distPath: { root: "dist/server" }, target: "node" } },
+                        web: { output: { distPath: { root: "dist/client" } } },
+                    },
+                }),
+            );
 
             expect(readFileSync(join(client, "_headers"), "utf8")).toContain("/static/*\n  Cache-Control: public, max-age=31536000, immutable");
             // The SSR half is not what Cloudflare serves, so a `_headers` there would be published as a file.
             expect(existsSync(join(root, "dist", "server", "_headers"))).toBe(false);
         });
 
-        it("writes no immutable rule for the SPA fallback, or when file names may lack a hash", async () => {
-            expect.assertions(2);
+        it("caches static/ for good with Rsbuild's defaults, which place the favicon at the output root", async () => {
+            expect.assertions(1);
 
             const root = fixture();
             const dist = join(root, "dist");
 
             mkdirSync(dist, { recursive: true });
-            withAssets(root, { directory: "./dist", not_found_handling: "single-page-application" });
-            await build(root, { web: environment(dist) });
-
-            expect(readFileSync(join(dist, "_headers"), "utf8")).not.toContain("Cache-Control");
-
             withAssets(root, { directory: "./dist" });
-            await build(root, { web: environment(dist, { filenameHash: false }) });
+            await build(root, await rsbuildEnvironments(root));
+
+            expect(readFileSync(join(dist, "_headers"), "utf8")).toContain("/static/*\n  Cache-Control: public, max-age=31536000, immutable");
+        });
+
+        it.each<[string, RsbuildConfig]>([
+            ["the SPA fallback is on", {}],
+            ["filenameHash is off", { output: { filenameHash: false } }],
+            ["filenameHash is { enable: false }", { output: { filenameHash: { enable: false } } }],
+            ["the build is not production, where JS and CSS go unhashed", { mode: "development" }],
+            ["a custom JS file name has no hash", { output: { filename: { js: "[name].js" } } }],
+        ])("writes no immutable rule when %s", async (reason, rsbuildConfig) => {
+            expect.assertions(1);
+
+            const root = fixture();
+            const dist = join(root, "dist");
+
+            mkdirSync(dist, { recursive: true });
+            withAssets(root, reason.startsWith("the SPA") ? { directory: "./dist", not_found_handling: "single-page-application" } : { directory: "./dist" });
+            await build(root, await rsbuildEnvironments(root, rsbuildConfig));
 
             expect(readFileSync(join(dist, "_headers"), "utf8")).not.toContain("Cache-Control");
         });
@@ -490,7 +526,7 @@ describe(startWorker, () => {
 
             mkdirSync(dist, { recursive: true });
             withAssets(root, { directory: "./dist" });
-            await build(root, { web: environment(dist) }, true);
+            await build(root, await rsbuildEnvironments(root), true);
 
             expect(existsSync(join(dist, "_headers"))).toBe(false);
         });

@@ -64,10 +64,13 @@ interface RsbuildApiLike {
 /** The slice of an Rsbuild environment's context, after a build, that the `_headers` step reads. */
 interface BuildEnvironmentLike {
     config: {
+        /** `production` for `rsbuild build` unless the config says otherwise. */
+        mode?: string;
         output: {
             distPath: Record<string, unknown>;
             filename?: Record<string, unknown>;
             filenameHash?: unknown;
+            target?: unknown;
         };
         server?: { publicDir?: unknown };
     };
@@ -189,20 +192,56 @@ const publicDirectories = (environment: BuildEnvironmentLike, root: string): str
         .map((name) => resolve(root, name));
 };
 
+/** `distPath` keys whose files Rsbuild names with a hash; `root`, `html` and `favicon` (default `./`) are copied or named as they are. */
+const HASHABLE_KINDS: ReadonlySet<string> = new Set(["assets", "css", "cssAsync", "font", "image", "js", "jsAsync", "media", "svg", "wasm"]);
+
+/** JS and CSS get a hash only in production (`getJsCssHash(isProd)` in Rsbuild); media, fonts and the rest whenever hashing is on. */
+const JS_CSS_KINDS: ReadonlySet<string> = new Set(["css", "cssAsync", "js", "jsAsync"]);
+
+/** `output.filenameHash` as Rsbuild normalizes it: `true`, `false`, `"always"`, a format string, or `{ enable, format }`. */
+const hashEnabled = (filenameHash: unknown): unknown => {
+    if (typeof filenameHash === "string") {
+        return filenameHash !== "";
+    }
+
+    return typeof filenameHash === "object" && filenameHash !== null ? ((filenameHash as { enable?: unknown }).enable ?? true) : (filenameHash ?? true);
+};
+
+const LEADING_DOT_SLASH = /^\.\//u;
+const ASYNC_SUFFIX = /Async$/u;
+const HASH_PLACEHOLDER = /\[(?:content|chunk|full)?hash/u;
+
+const isInsideHashedDirectory = (path: string): boolean => {
+    const normalized = path.replaceAll("\\", "/").replace(LEADING_DOT_SLASH, "");
+
+    return normalized === HASHED_DIRECTORY || normalized.startsWith(`${HASHED_DIRECTORY}/`);
+};
+
 /**
- * `static/` when every file Rsbuild writes there is content-hashed: `filenameHash`
- * on, every `distPath` that is set inside `static/`, every custom `filename` with a
- * `[contenthash]`, and no public folder that would copy unhashed files into it.
+ * `static/` when every file Rsbuild writes there is content-hashed, as Rsbuild's
+ * own `getFilename` decides it: every kind placed inside `static/` is one Rsbuild
+ * hashes, hashing is on for it (JS and CSS only in a production client build, or
+ * with `enable: "always"`), a custom `filename` for it carries a hash, and no
+ * public folder copies unhashed files into `static/`.
  */
 const hashedDirectoryOf = (environment: BuildEnvironmentLike, root: string): string | undefined => {
-    const { distPath, filename = {}, filenameHash } = environment.config.output;
-    const placed = Object.entries(distPath)
-        .filter(([key, value]) => key !== "root" && key !== "html" && typeof value === "string")
-        .every(([, value]) => (value as string).startsWith(`${HASHED_DIRECTORY}/`));
-    const named = Object.values(filename).every((pattern) => typeof pattern === "string" && pattern.includes("[contenthash"));
+    const { mode, output } = environment.config;
+    const { distPath, filename = {}, filenameHash, target } = output;
+    const enable = hashEnabled(filenameHash);
+    const jsCssHashed = enable === "always" || (enable === true && mode === "production" && target !== "node");
+    const placed = Object.entries(distPath).filter(([key, value]) => key !== "root" && typeof value === "string" && isInsideHashedDirectory(value));
+    const hashed = placed.every(([kind]) => {
+        const custom = filename[kind.replace(ASYNC_SUFFIX, "")];
+
+        if (custom !== undefined) {
+            return typeof custom === "string" && HASH_PLACEHOLDER.test(custom);
+        }
+
+        return HASHABLE_KINDS.has(kind) && (JS_CSS_KINDS.has(kind) ? jsCssHashed : enable !== false);
+    });
     const collides = publicDirectories(environment, root).some((directory) => existsSync(join(directory, HASHED_DIRECTORY)));
 
-    return filenameHash !== false && placed && named && !collides ? HASHED_DIRECTORY : undefined;
+    return hashed && !collides ? HASHED_DIRECTORY : undefined;
 };
 
 /**
