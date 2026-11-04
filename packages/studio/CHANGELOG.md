@@ -1,3 +1,7 @@
+## @lunora/studio [1.0.0-alpha.377](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.376...@lunora/studio@1.0.0-alpha.377) (2026-11-04)
+
+- perf(studio): serve advisor procedures from a generated sidecar (#1465)
+
 ## @lunora/studio [1.0.0-alpha.376](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.375...@lunora/studio@1.0.0-alpha.376) (2026-11-03)
 
 - fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
