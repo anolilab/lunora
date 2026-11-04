@@ -73,6 +73,27 @@ describe(mergeAssetHeaders, () => {
         expect(stacked.warnings.join(" ")).toContain('add "! Cross-Origin-Opener-Policy" above it');
     });
 
+    it("keeps the default for every other host when a host-qualified rule sets a managed header", () => {
+        expect.assertions(3);
+
+        const merged = mergeAssetHeaders("https://one.example/*\n  X-Frame-Options: DENY\n", { headers: true });
+
+        // `https://one.example/*` covers one host; the block's `/*` still serves every other.
+        expect(merged.deferred).toEqual([]);
+        expect(merged.text).toContain("  X-Frame-Options: SAMEORIGIN");
+        expect(merged.warnings.join(" ")).toContain('"https://one.example/*" sets X-Frame-Options on top of Lunora\'s default');
+    });
+
+    it("leaves a file whose managed block lost its END marker as it is, and says so", () => {
+        expect.assertions(2);
+
+        const broken = `${BEGIN}: rewritten on every build. Put your own rules outside this block.\n/*\n  X-Frame-Options: SAMEORIGIN\n/mine\n  X-Mine: 1\n`;
+        const merged = mergeAssetHeaders(broken, { headers: true });
+
+        expect(merged.text).toBe(broken);
+        expect(merged.warnings.join(" ")).toContain(`no "${END}" line`);
+    });
+
     it("writes the values security.headers resolves to, through the runtime's resolver", () => {
         expect.assertions(4);
 

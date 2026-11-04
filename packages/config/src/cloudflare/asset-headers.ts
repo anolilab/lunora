@@ -117,8 +117,13 @@ const dropBlankEdges = (lines: string[]): string[] => {
     return lines.slice(start, end);
 };
 
-/** The user's lines: the `_headers` file with the managed block cut out and blank edges trimmed. */
-const userLines = (text: string): string[] => {
+/**
+ * The user's lines: the `_headers` file with the managed block cut out and blank
+ * edges trimmed. `undefined` when the block has lost its END marker: where the
+ * managed rules stop and the user's begin can no longer be told, so neither may
+ * be rewritten.
+ */
+const userLines = (text: string): string[] | undefined => {
     const lines = toLines(text);
     const begin = lines.indexOf(BEGIN_MARKER);
 
@@ -128,7 +133,7 @@ const userLines = (text: string): string[] => {
 
     const end = lines.indexOf(END_MARKER, begin);
 
-    return dropBlankEdges([...lines.slice(0, begin), ...(end === -1 ? [] : lines.slice(end + 1))]);
+    return end === -1 ? undefined : dropBlankEdges([...lines.slice(0, begin), ...lines.slice(end + 1)]);
 };
 
 const isIndented = (line: string): boolean => line.startsWith(" ") || line.startsWith("\t");
@@ -146,34 +151,29 @@ const rulePath = (rule: string): string => {
     return slash === -1 ? "/" : rule.slice(slash);
 };
 
-/**
- * How the user's rules interact with the block's security headers.
- *
- * Cloudflare joins the values of one header that two matching rules set (two
- * header lines on the wire), so `X-Frame-Options: DENY` from the user plus the
- * block's `SAMEORIGIN` ships both, which browsers reject. A user rule for `/*`
- * means "this value everywhere", so the block leaves that header to it (`taken`),
- * as the runtime's `setIfAbsent` leaves a handler's own. A narrower rule must
- * detach the default first (`! Name`, then `Name: value`); one that sets a managed
- * header without detaching it is reported (`stacked`). Names are lower-cased.
- */
-const userHeaderUse = (lines: ReadonlyArray<string>): { stacked: { name: string; rule: string }[]; taken: Set<string> } => {
-    const taken = new Set<string>();
-    const stacked: { name: string; rule: string }[] = [];
-    let rule: string | undefined;
+/** A user rule: its path line, and each header it sets with whether the rule detached that header first (`! Name`). Names are lower-cased. */
+interface UserRule {
+    rule: string;
+    sets: { detached: boolean; name: string }[];
+}
+
+/** The user's lines parsed once into their rules; comments, blank lines and a header line before any rule are skipped. */
+const parseUserRules = (lines: ReadonlyArray<string>): UserRule[] => {
+    const rules: UserRule[] = [];
     let detached = new Set<string>();
 
     for (const line of lines) {
         if (isRuleLine(line)) {
-            rule = line.trim();
+            rules.push({ rule: line.trim(), sets: [] });
             detached = new Set();
 
             continue;
         }
 
+        const current = rules.at(-1);
         const entry = line.trim();
 
-        if (rule === undefined || !isIndented(line) || entry.startsWith("#")) {
+        if (current === undefined || !isIndented(line) || entry.startsWith("#")) {
             continue;
         }
 
@@ -185,16 +185,40 @@ const userHeaderUse = (lines: ReadonlyArray<string>): { stacked: { name: string;
 
         const colon = entry.indexOf(":");
 
-        if (colon <= 0) {
-            continue;
+        if (colon > 0) {
+            const name = entry.slice(0, colon).trim().toLowerCase();
+
+            current.sets.push({ detached: detached.has(name), name });
         }
+    }
 
-        const name = entry.slice(0, colon).trim().toLowerCase();
+    return rules;
+};
 
-        if (rulePath(rule) === "/*") {
-            taken.add(name);
-        } else if (!detached.has(name)) {
-            stacked.push({ name, rule });
+/**
+ * How the user's rules interact with the block's security headers.
+ *
+ * Cloudflare joins the values of one header that two matching rules set (two
+ * header lines on the wire), so `X-Frame-Options: DENY` from the user plus the
+ * block's `SAMEORIGIN` ships both, which browsers reject. A user rule for `/*`
+ * means "this value everywhere", so the block leaves that header to it (`taken`),
+ * as the runtime's `setIfAbsent` leaves a handler's own. Any narrower rule, a
+ * host-qualified `https://host/*` included (it covers one host, and the block
+ * still serves every other), must detach the default first (`! Name`, then
+ * `Name: value`); one that sets a managed header without detaching it is
+ * reported (`stacked`).
+ */
+const userHeaderUse = (rules: ReadonlyArray<UserRule>): { stacked: { name: string; rule: string }[]; taken: Set<string> } => {
+    const taken = new Set<string>();
+    const stacked: { name: string; rule: string }[] = [];
+
+    for (const { rule, sets } of rules) {
+        for (const { detached, name } of sets) {
+            if (rule === "/*") {
+                taken.add(name);
+            } else if (!detached) {
+                stacked.push({ name, rule });
+            }
         }
     }
 
@@ -230,19 +254,8 @@ const ruleReaches = (rule: string, directory: string): boolean => {
  * `/<directory>/`. Only then would Cloudflare comma-join it with the immutable
  * rule; a user policy for `/img/*` leaves the hashed directory alone.
  */
-const userCachesUnder = (lines: ReadonlyArray<string>, directory: string): boolean => {
-    let rule: string | undefined;
-
-    for (const line of lines) {
-        if (isRuleLine(line)) {
-            rule = line.trim();
-        } else if (rule !== undefined && isIndented(line) && line.trim().toLowerCase().startsWith("cache-control:") && ruleReaches(rule, directory)) {
-            return true;
-        }
-    }
-
-    return false;
-};
+const userCachesUnder = (rules: ReadonlyArray<UserRule>, directory: string): boolean =>
+    rules.some(({ rule, sets }) => sets.some(({ name }) => name === "cache-control") && ruleReaches(rule, directory));
 
 const renderBlock = (rules: ReadonlyArray<HeaderRule>): string[] => [
     BEGIN_MARKER,
@@ -296,10 +309,22 @@ const mergeAssetHeaders = (
     options: AssetHeadersOptions,
 ): { deferred: string[]; text: string | undefined; warnings: string[] } => {
     const user = userLines(existing ?? "");
+
+    if (user === undefined) {
+        return {
+            deferred: [],
+            text: existing,
+            warnings: [
+                `_headers has "${BEGIN_MARKER}" but no "${END_MARKER}" line, so Lunora cannot tell its rules from yours and left the file as it is; put the END line back after the managed rules, or delete the managed block`,
+            ],
+        };
+    }
+
+    const userRules = parseUserRules(user);
     const deferred: string[] = [];
     const warnings: string[] = [];
     const rules: HeaderRule[] = [];
-    const security = planSecurityRule(securityHeaderLines(options.headers), userHeaderUse(user));
+    const security = planSecurityRule(securityHeaderLines(options.headers), userHeaderUse(userRules));
 
     deferred.push(...security.deferred);
     warnings.push(...security.warnings);
@@ -315,14 +340,14 @@ const mergeAssetHeaders = (
         .join("/");
 
     if (immutable !== undefined && immutable !== "") {
-        if (userCachesUnder(user, immutable)) {
+        if (userCachesUnder(userRules, immutable)) {
             deferred.push("Cache-Control");
         } else {
             rules.push({ headers: [["Cache-Control", IMMUTABLE_CACHE_CONTROL]], path: `/${immutable}/*` });
         }
     }
 
-    if (user.filter((line) => isRuleLine(line)).length + rules.length > MAX_HEADERS_RULES) {
+    if (userRules.length + rules.length > MAX_HEADERS_RULES) {
         warnings.push(
             `_headers has more than ${String(MAX_HEADERS_RULES)} rules with Lunora's added; Cloudflare ignores every rule past the ${String(MAX_HEADERS_RULES)}th`,
         );
