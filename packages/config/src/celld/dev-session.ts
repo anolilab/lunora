@@ -16,7 +16,7 @@ import { createServer } from "node:net";
 import { dirname } from "node:path";
 
 import type { ServiceBindingIR } from "@lunora/codegen";
-import { readBoundServiceBindings } from "@lunora/codegen";
+import { readDevServiceBindings } from "@lunora/codegen";
 
 import type { DevProcess, DevProcessSpawner } from "../dev-process";
 import { acceptsConnection, startDevProcess } from "../dev-process";
@@ -157,7 +157,7 @@ const startCelldDevSession = async (options: CelldDevSessionOptions): Promise<Ce
     }
 
     // Bound, not just declared: the app's celld config carries the `ADVISOR_COMPANION` binding when `studio.companion` is on.
-    const bindings = readBoundServiceBindings(projectRoot, resolveSchemaDirectory(projectRoot));
+    const bindings = readDevServiceBindings(projectRoot, resolveSchemaDirectory(projectRoot));
 
     // Started without them, every `ctx.services` call would fail with no reason given.
     if (bindings.error !== undefined) {

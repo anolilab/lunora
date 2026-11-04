@@ -1,11 +1,17 @@
-import { cpSync, existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { companionServiceBinding, readBoundServiceBindings, readServiceBindings, resolveServiceBindings } from "../src/discover/service-bindings";
+import {
+    companionServiceBinding,
+    readBoundServiceBindings,
+    readDevServiceBindings,
+    readServiceBindings,
+    resolveServiceBindings,
+} from "../src/discover/service-bindings";
 import { runCodegen } from "../src/run-codegen";
 
 const fixtureLunora = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "simple", "lunora");
@@ -128,5 +134,30 @@ describe("companion service binding", () => {
         expect(binding?.wranglerPath).toBe(join(projectRoot, "backend", "_generated", "companion", "wrangler.jsonc"));
         expect(existsSync(binding?.wranglerPath ?? "missing")).toBe(true);
         expect(readBoundServiceBindings(projectRoot, "backend").services.at(-1)?.main).toBe(binding?.main);
+    });
+
+    it("refuses a declared service that deploys under the companion's Worker name", () => {
+        expect.assertions(2);
+
+        mkdirSync(join(projectRoot, "services", "reports"), { recursive: true });
+        writeFileSync(join(projectRoot, "services", "reports", "wrangler.jsonc"), `{ "name": "shop-advisor", "main": "src/index.ts" }\n`, "utf8");
+        writeConfig(`{ services: { reports: { dir: "./services/reports" } }, studio: { companion: true } }`);
+
+        const bound = readBoundServiceBindings(projectRoot);
+
+        expect(bound.error).toContain("services.reports");
+        expect(bound.services.map((service) => service.binding)).not.toContain("ADVISOR_COMPANION");
+    });
+
+    it("leaves the companion out of a dev session until codegen has written its config", () => {
+        expect.assertions(2);
+
+        writeConfig("{ studio: { companion: true } }");
+
+        expect(readDevServiceBindings(projectRoot).services).toStrictEqual([]);
+
+        runCodegen({ projectRoot, wranglerQueueProducers: [] });
+
+        expect(readDevServiceBindings(projectRoot).services.map((service) => service.binding)).toStrictEqual(["ADVISOR_COMPANION"]);
     });
 });

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -62,6 +62,22 @@ describe("reconcile the companion service binding", () => {
         reconcileWranglerBindings(root, inferred);
 
         expect(config()["services"]).toStrictEqual([{ binding: "LEGACY", service: "legacy-worker" }]);
+    });
+
+    it("keeps an app service declared as `advisorCompanion` when the run skips the companion", async () => {
+        expect.assertions(1);
+
+        mkdirSync(join(root, "services", "advisor"), { recursive: true });
+        writeFileSync(join(root, "services", "advisor", "wrangler.jsonc"), `{ "name": "advisor-svc", "main": "src/index.ts" }\n`, "utf8");
+        writeFileSync(
+            join(root, "lunora.config.ts"),
+            `export default { services: { advisorCompanion: { dir: "./services/advisor" } }, studio: { companion: true } };\n`,
+            "utf8",
+        );
+
+        const inferred = await inferLunoraBindings({ projectRoot: root, skipCompanion: true });
+
+        expect(inferred.services?.map((service) => service.binding)).toStrictEqual(["SERVICE_ADVISOR_COMPANION"]);
     });
 
     it("points the inferred companion at the project's own lunora directory", async () => {

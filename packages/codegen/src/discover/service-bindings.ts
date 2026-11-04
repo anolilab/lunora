@@ -188,11 +188,35 @@ const readBoundServiceBindings = (projectRoot: string, lunoraDirectory = "lunora
     try {
         const companion = companionServiceBinding(projectRoot, lunoraDirectory);
 
-        return { ...(error === undefined ? {} : { error }), services: companion === undefined ? services : [...services, companion] };
+        if (companion === undefined) {
+            return { ...(error === undefined ? {} : { error }), services };
+        }
+
+        // Deploying both under one name would let the companion replace the app's service.
+        const clash = services.find((service) => service.worker === companion.worker);
+
+        if (clash !== undefined) {
+            return {
+                error: `lunora.config services.${clash.name} deploys as "${clash.worker}", the name the studio.companion Worker is given; rename that Worker or turn studio.companion off`,
+                services,
+            };
+        }
+
+        return { ...(error === undefined ? {} : { error }), services: [...services, companion] };
     } catch (companionError: unknown) {
         // The companion's Worker name is derived from the app's wrangler config; an unreadable one is reported like a bad `services` entry.
         return { error: error ?? (companionError instanceof Error ? companionError.message : String(companionError)), services };
     }
 };
 
-export { companionServiceBinding, readBoundServiceBindings, readServiceBindings, resolveServiceBindings };
+/**
+ * `readBoundServiceBindings` for a dev session, which can start before codegen writes `_generated/companion/`: the companion is left
+ * out until its wrangler config exists, rather than failing the session on the missing file. The next start enrolls it.
+ */
+const readDevServiceBindings = (projectRoot: string, lunoraDirectory = "lunora"): { error?: string; services: ServiceBindingIR[] } => {
+    const bound = readBoundServiceBindings(projectRoot, lunoraDirectory);
+
+    return { ...bound, services: bound.services.filter((service) => service.binding !== COMPANION_BINDING || existsSync(service.wranglerPath)) };
+};
+
+export { companionServiceBinding, readBoundServiceBindings, readDevServiceBindings, readServiceBindings, resolveServiceBindings };
