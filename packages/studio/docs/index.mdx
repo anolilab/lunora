@@ -62,6 +62,13 @@ The `<Studio>` shell takes a few host-controlled switches worth knowing:
   identity, to test auth + RLS. Security-sensitive (it forges identity on an
   admin RPC). Only ever enable on a trusted loopback-dev gate, never in
   production.
+- `advisorProcedures`: the host serves `/__lunora/advisor-procedures`, the
+  procedure list the Advisors **Health score** is computed against. The dev
+  hosts (`lunora dev`, the Vite and Rspack plugins) set it. A standalone or
+  embedded studio leaves it off and shows a notice in place of the score: the
+  list is Studio-only data that codegen writes to
+  `_generated/advisor-procedures.json`, and the deployed worker does not carry
+  it. The other Advisors pages work everywhere.
 - `functions`: the descriptors that populate the function runner and API tab.
 - `initialShardKey`: the shard every shard-scoped panel targets on first load.
 
@@ -205,6 +212,10 @@ Operational streams and per-shard signal from a running deployment.
 The [advisors](/docs/concepts/advisors) surface: splinter-style lints over your
 schema, functions, and runtime signal.
 
+- **Health score**: _One score for the deployment, the coverage split, and every
+  procedure ranked worst-first._ Computed with [`scoreAdvisor()`](/docs/packages/advisor)
+  against the procedure list the dev host serves, so it is available under
+  `lunora dev` only (see `advisorProcedures` above).
 - **Security**: _Review admin gates, credentials, and log redaction_, the
   security-category findings.
 - **RLS Policies**: _Inspect row-level-security policies and roles, per table._
