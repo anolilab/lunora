@@ -670,6 +670,42 @@ describe("saas kit functions", () => {
     });
 });
 
+describe("saas template seat allowance", () => {
+    type SeatAllowance = Handler<{ referenceId: string }, number | null>;
+
+    /** `payment:seatAllowance` over the given subscriptions; the catalog is the template's own `PLANS`. */
+    const allowance = async (subscriptions: Row[]): Promise<number | null> => {
+        const { seatAllowance } = await load<{ seatAllowance: SeatAllowance }>("templates", "saas", "lunora", "payment", "index.ts");
+
+        return seatAllowance({ args: { referenceId: "org-1" }, ctx: { payments: { listSubscriptions: async () => subscriptions } } });
+    };
+
+    it("gives an organisation with no active subscription the free plan's seats", async () => {
+        expect.hasAssertions();
+
+        await expect(allowance([])).resolves.toBe(3);
+        await expect(allowance([{ priceId: "price_pro", state: "canceled" }])).resolves.toBe(3);
+    });
+
+    it("gives an active Pro subscription its ten seats", async () => {
+        expect.hasAssertions();
+
+        await expect(allowance([{ priceId: "price_pro", state: "active" }])).resolves.toBe(10);
+    });
+
+    it("leaves an organisation on an unmetered plan uncapped, whatever else it holds", async () => {
+        expect.hasAssertions();
+
+        await expect(allowance([{ priceId: "price_scale", state: "active" }])).resolves.toBeNull();
+        await expect(
+            allowance([
+                { priceId: "price_pro", state: "active" },
+                { priceId: "price_scale", state: "trialing" },
+            ]),
+        ).resolves.toBeNull();
+    });
+});
+
 describe("saas template checkout", () => {
     type Checkout = Handler<{ priceId: string }, { url: string }>;
 
