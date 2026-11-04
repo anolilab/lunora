@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 
 import { runAdvisor } from "@lunora/advisor";
 import { LunoraError } from "@lunora/errors";
+import type { AdvisorProcedure } from "@lunora/shard-engine";
 import type { Project } from "ts-morph";
 
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
@@ -721,7 +722,6 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         // from the emitted list. That is the pre-existing cost of embedding
         // advisories at all, not something this filter can fix.)
         advisories: advisories.filter((advisory) => advisory.name !== "procedure_type_check_unavailable"),
-        advisorProcedures: advisorContext?.procedureProtections ?? [],
         agents,
         capabilities,
         containers,
@@ -789,6 +789,8 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // projects (and the golden fixtures) keep writing only `openapi.json`.
     const apiSpec = options.apiSpec ?? "openapi";
     const wantsOpenApi = apiSpec === "openapi" || apiSpec === "both";
+    const advisorProcedureData: ReadonlyArray<AdvisorProcedure> = advisorContext?.procedureProtections ?? [];
+    const advisorProcedureDocument = `${JSON.stringify({ procedures: advisorProcedureData }, undefined, 2)}\n`;
     const wantsOpenRpc = apiSpec === "openrpc" || apiSpec === "both";
 
     // The fluent worker-composition builder. Emits one method per package-backed
@@ -972,6 +974,15 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: wantsOpenApi ? openApiModuleContent : "", kind: "optional", name: "openapi.ts" },
               { content: wantsOpenRpc ? openRpcContent : "", kind: "optional", name: "openrpc.json" },
               { content: wantsOpenRpc ? openRpcModuleContent : "", kind: "optional", name: "openrpc.ts" },
+              // Studio-only data (the health map's denominator). Served to the studio by the
+              // host, not by the worker, so it stays out of the deployed bundle. Shape-checked
+              // against `@lunora/shard-engine`'s `AdvisorProcedure` before it is written, so a
+              // field added to the advisor's type and forgotten there fails codegen.
+              {
+                  content: advisorProcedureDocument,
+                  kind: "optional",
+                  name: "advisor-procedures.json",
+              },
               // Same pairing as the specs: the `.json` for tooling, the `.ts` for `createWorker({ architecture })`,
               // both removed when the last module goes.
               {
@@ -1032,6 +1043,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
             openApi: openApiContent,
             openApiModule: openApiModuleContent,
             openRpc: openRpcContent,
+            advisorProceduresJson: advisorProcedureDocument,
             openRpcModule: openRpcModuleContent,
             queues: queuesContent,
             seed: seedContent,

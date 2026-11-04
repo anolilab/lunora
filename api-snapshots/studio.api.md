@@ -34,7 +34,6 @@ const ADMIN_FUNCTIONS: {
     readonly exportShard: "__lunora_admin__:exportShard";
     readonly facetColumn: "__lunora_admin__:facetColumn";
     readonly getAdvisories: "__lunora_admin__:getAdvisories";
-    readonly getAdvisorProcedures: "__lunora_admin__:getAdvisorProcedures";
     readonly getAuditLog: "__lunora_admin__:getAuditLog";
     readonly getAuthAuditLog: "__lunora_admin__:getAuthAuditLog";
     readonly getAuthMetrics: "__lunora_admin__:getAuthMetrics";
@@ -102,7 +101,7 @@ const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 ### `AdvisorHealthPanel` (const)
 
 ```ts
-const AdvisorHealthPanel: ({ testId }: AdvisorHealthPanelProps) => ReactElement;
+const AdvisorHealthPanel: ({ localProcedures, testId }: AdvisorHealthPanelProps) => ReactElement;
 ```
 
 ### `AggregateMetrics` (interface)
@@ -1119,6 +1118,7 @@ interface StudioI18nProviderProps {
 
 ```ts
 interface StudioProps {
+    readonly advisorCompanion?: boolean;
     readonly analyticsSqlQuery?: AnalyticsPanelProps["runQuery"];
     readonly basePath?: string;
     readonly chrome?: StudioChrome;
@@ -1318,6 +1318,7 @@ public API and is gated as one. Listed once per package, sorted by name.
 
 ```ts
 interface AdvisorHealthPanelProps {
+    readonly localProcedures?: boolean;
     readonly testId?: string;
 }
 ```
@@ -2220,6 +2221,7 @@ const MESSAGE_IDS: readonly [
     "Field",
     "Row {n}",
     "Loading…",
+    "The health score needs `lunora dev`: this deployment does not serve the advisor procedure list.",
     "No matching row.",
     "CSV",
     "SQL",

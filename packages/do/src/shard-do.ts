@@ -77,7 +77,6 @@ import {
 import type { SecretValueHost, ShardHost, SocketHost } from "@lunora/platform";
 import { createSecretValueHost, createShardHost, createSocketHost } from "@lunora/platform-cloudflare";
 import type {
-    AdvisorProcedure,
     AdvisoryFinding,
     CdcChange,
     CdcChangeKey,
@@ -5141,21 +5140,6 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated advisory list
     protected advisories(): AdvisoryFinding[] {
-        return [];
-    }
-
-    /**
-     * Every declared procedure, surfaced via
-     * `__lunora_admin__:getAdvisorProcedures`. Discovered by the codegen feeder
-     * and emitted into the generated subclass, which overrides this.
-     *
-     * Separate from {@link advisories} because it is the denominator, not the
-     * numerator: findings say what is wrong, this says how much exists to be
-     * right, and the studio's health score needs both. The base class can't see
-     * the user's functions, so it reports none.
-     */
-    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated procedure list
-    protected advisorProcedures(): AdvisorProcedure[] {
         return [];
     }
 
@@ -13572,11 +13556,6 @@ abstract class ShardDO {
             // runtime ones derived from observed signal (`unused_index`).
             // Deployment-wide, so it carries the wildcard like the other reads.
             return { advisories: [...this.advisories(), ...this.runtimeAdvisories()] };
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.getAdvisorProcedures) {
-            // The health map's denominator — deployment-wide, like the advisories above.
-            return { procedures: this.advisorProcedures() };
         }
 
         if (functionPath === ADMIN_FUNCTIONS.rlsPolicies) {

@@ -6,10 +6,13 @@ import ErrorAlert from "../../components/error-alert";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
-import type { AdvisoriesResult, AdvisorProceduresResult } from "../../lib/admin";
+import type { AdvisoriesResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
+import { workerBaseUrl } from "../../lib/internal";
 import { cn } from "../../lib/utils";
+import useAdvisorProcedures from "./use-advisor-procedures";
 
 /** Tailwind classes per verdict, so the matrix is scannable at a glance. */
 const COVERAGE_STYLE: Readonly<Record<Coverage, string>> = {
@@ -46,6 +49,18 @@ const rankRows = (procedures: ReadonlyArray<ProcedureScore>): ProcedureScore[] =
     });
 
 interface AdvisorHealthPanelProps {
+    /**
+     * Set when the worker this Studio talks to has the companion deployed. Without it
+     * a hosted Studio makes no request for the list and says why.
+     */
+    readonly advisorCompanion?: boolean;
+
+    /**
+     * `true` on a dev host, which serves the advisor procedure list from its own origin.
+     * Elsewhere the list is fetched from the client's worker when the client carries an
+     * admin token; without one the panel says so instead of scoring.
+     */
+    readonly localProcedures?: boolean;
     /** Scopes the `data-testid`s. */
     readonly testId?: string;
 }
@@ -63,10 +78,35 @@ interface AdvisorHealthPanelProps {
  * denominator; without the latter there is no way to tell one failing handler
  * out of two from one out of two hundred.
  */
-const AdvisorHealthPanel = ({ testId = "advisor-health" }: AdvisorHealthPanelProps): ReactElement => {
+const AdvisorHealthPanel = ({ advisorCompanion = false, localProcedures = false, testId = "advisor-health" }: AdvisorHealthPanelProps): ReactElement => {
     const t = useT();
+    const client = useStudioClient();
     const advisoriesQuery = useAdminQuery<AdvisoriesResult>(ADMIN_FUNCTIONS.getAdvisories, {}, { live: true });
-    const proceduresQuery = useAdminQuery<AdvisorProceduresResult>(ADMIN_FUNCTIONS.getAdvisorProcedures, {}, { live: true });
+    // A hosted Studio has no dev host to serve the list, but its client points at a worker
+    // that forwards the route to the companion. Same client and token every admin read uses.
+    const token = client.getAuthToken();
+    const remote = advisorCompanion && !localProcedures && token !== null && token !== "" ? { baseUrl: workerBaseUrl(client.url), token } : undefined;
+    const proceduresQuery = useAdvisorProcedures({ enabled: localProcedures || remote !== undefined, refreshKey: advisoriesQuery.data, remote });
+
+    if (!localProcedures && remote === undefined) {
+        return (
+            <Card>
+                <CardContent className="py-8 text-center text-muted-foreground" data-testid={`${testId}-local-only`}>
+                    {t("The health score needs `lunora dev`, or a Studio build with VITE_LUNORA_ADVISOR_COMPANION set to true.")}
+                </CardContent>
+            </Card>
+        );
+    }
+
+    if (proceduresQuery.notDeployed) {
+        return (
+            <Card>
+                <CardContent className="py-8 text-center text-muted-foreground" data-testid={`${testId}-companion-missing`}>
+                    {t("The health score needs the companion worker: it is not deployed for this Studio, so the advisor procedure list is unavailable.")}
+                </CardContent>
+            </Card>
+        );
+    }
 
     const advisories = advisoriesQuery.data?.advisories ?? null;
     const procedures = proceduresQuery.data?.procedures ?? null;
@@ -75,7 +115,7 @@ const AdvisorHealthPanel = ({ testId = "advisor-health" }: AdvisorHealthPanelPro
 
     // Either read failing is a "cannot score" state, not a healthy one — say so
     // rather than showing 100, or spinning forever waiting on a read that failed.
-    const error = proceduresQuery.error ?? advisoriesQuery.error;
+    const error = proceduresQuery.error ?? advisoriesQuery.error ?? null;
 
     if (error !== null) {
         return <ErrorAlert error={error} testId={`${testId}-error`} />;

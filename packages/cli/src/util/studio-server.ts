@@ -30,8 +30,10 @@ import type { CodegenOptions } from "@lunora/codegen";
 import { detectAgentRules, resolveLazyFunctions } from "@lunora/config";
 import type { LocalEndpointHandler } from "@lunora/config/studio-host";
 import {
+    ADVISOR_PROCEDURES_ENDPOINT,
     assetContentType,
     createStudioDocumentCache,
+    handleAdvisorProceduresRequest,
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
     handleSeedRequest,
@@ -365,6 +367,14 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         // gate. Generates rows in Node so faker never reaches the browser bundle.
         if (pathname === SEED_ENDPOINT) {
             serveLoopbackOnly(request, response, handleSeedRequest, "Lunora data seeding is only available on loopback hosts in dev.");
+
+            return;
+        }
+
+        // Read-only advisor procedure list for the studio's health map (Studio-only
+        // data kept out of the worker). Loopback-only like the other local endpoints.
+        if (pathname === ADVISOR_PROCEDURES_ENDPOINT) {
+            serveLoopbackOnly(request, response, handleAdvisorProceduresRequest, "Lunora advisor data is only available on loopback hosts in dev.");
 
             return;
         }

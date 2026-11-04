@@ -39,7 +39,6 @@ const ADMIN_FUNCTIONS: {
     readonly facetColumn: "__lunora_admin__:facetColumn";
     readonly findRelated: "__lunora_admin__:findRelated";
     readonly getAdvisories: "__lunora_admin__:getAdvisories";
-    readonly getAdvisorProcedures: "__lunora_admin__:getAdvisorProcedures";
     readonly getAuditLog: "__lunora_admin__:getAuditLog";
     readonly getAuthMetrics: "__lunora_admin__:getAuthMetrics";
     readonly getCapturedMail: "__lunora_admin__:getCapturedMail";
@@ -187,14 +186,6 @@ interface AdvisorProcedure {
     usesRls: boolean;
     visibility: "internal" | "public";
     writesUserTable?: boolean;
-}
-```
-
-### `AdvisorProceduresResult` (interface)
-
-```ts
-interface AdvisorProceduresResult {
-    procedures: AdvisorProcedure[];
 }
 ```
 

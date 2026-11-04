@@ -855,6 +855,8 @@ const MESSAGE_IDS = [
     "Field",
     "Row {n}",
     "Loading…",
+    "The health score needs `lunora dev`, or a Studio build with VITE_LUNORA_ADVISOR_COMPANION set to true.",
+    "The health score needs the companion worker: it is not deployed for this Studio, so the advisor procedure list is unavailable.",
     "No matching row.",
     "CSV",
     "SQL",

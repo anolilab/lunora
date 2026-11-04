@@ -155,6 +155,8 @@ export interface CodegenResult {
     cronTriggers: ReadonlyArray<string>;
 
     generated: {
+        /** Studio-only advisor procedure list (`_generated/advisor-procedures.json`). */
+        advisorProceduresJson: string;
         /** WorkflowEntrypoint classes for declared agents (`_generated/agents.ts`); `""` (and not written) when no agents are declared. */
         agents: string;
         api: string;
