@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { describeActivity, groupActivityByDay } from "../../src/core/activity";
-import { adminTotals, planOptions, selectOrganizations } from "../../src/core/admin-organizations";
+import { DEFAULT_ADMIN_VIEW, organizationFilterArgs, planOptions } from "../../src/core/admin-organizations";
 import { dayKey, initials, planLabel, relativeTime } from "../../src/core/format";
 import { deriveOverviewStats, isFirstRun } from "../../src/core/overview";
 import { projectCounts, selectProjects } from "../../src/core/projects";
-import type { ActivityRow, OrganizationRow, ProjectRow } from "../../src/core/types";
+import type { ActivityRow, ProjectRow } from "../../src/core/types";
 
 const NOW = Date.UTC(2026, 8, 11, 12, 0, 0);
 const HOUR = 3_600_000;
@@ -29,20 +29,6 @@ const activity = (overrides: Partial<ActivityRow> & { action: string; createdAt:
         actorId: "u1",
         organizationId: "org1",
         subjectType: "project",
-        ...overrides,
-    };
-};
-
-const organization = (overrides: Partial<OrganizationRow> & { name: string }): OrganizationRow => {
-    return {
-        _creationTime: NOW,
-        _id: `o-${overrides.name}`,
-        organizationId: `org-${overrides.name}`,
-        plan: "free",
-        seats: 1,
-        slug: overrides.name.toLowerCase(),
-        status: "active",
-        updatedAt: NOW,
         ...overrides,
     };
 };
@@ -177,34 +163,29 @@ describe("deriveOverviewStats", () => {
 });
 
 describe("admin organisations", () => {
-    const rows = [
-        organization({ name: "Acme", plan: "pro", seats: 12, updatedAt: NOW - DAY }),
-        organization({ name: "Globex", plan: "free", seats: 3, updatedAt: NOW }),
-        organization({ name: "Initech", plan: "pro", seats: 40, status: "past_due", updatedAt: NOW - 2 * DAY }),
-    ];
-
-    it("filters by plan, status and search together", () => {
-        expect(selectOrganizations(rows, { plan: "pro", search: "", sort: "seats", status: "active" }).map((o) => o.name)).toStrictEqual(["Acme"]);
+    it("sends only the filters the admin set, with a trimmed search", () => {
+        expect(organizationFilterArgs(DEFAULT_ADMIN_VIEW)).toStrictEqual({});
+        expect(organizationFilterArgs({ plan: "pro", search: "  acme ", sort: "seats", status: "past_due" })).toStrictEqual({
+            plan: "pro",
+            search: "acme",
+            status: "past_due",
+        });
+        expect(organizationFilterArgs({ ...DEFAULT_ADMIN_VIEW, search: "   " })).toStrictEqual({});
     });
 
-    it("sorts by seats descending", () => {
-        expect(selectOrganizations(rows, { plan: "all", search: "", sort: "seats", status: "all" }).map((o) => o.name)).toStrictEqual([
-            "Initech",
-            "Acme",
-            "Globex",
-        ]);
-    });
-
-    it("offers every present plan, labelled, with an all option first", () => {
-        expect(planOptions(rows)).toStrictEqual([
+    it("offers every catalog plan in catalog order, with an all option first", () => {
+        expect(
+            planOptions([
+                { id: "free", name: "Free" },
+                { id: "scale", name: "Scale" },
+                { id: "pro", name: "Pro" },
+            ]),
+        ).toStrictEqual([
             { label: "All plans", value: "all" },
             { label: "Free", value: "free" },
+            { label: "Scale", value: "scale" },
             { label: "Pro", value: "pro" },
         ]);
-    });
-
-    it("sums seats across tenants", () => {
-        expect(adminTotals(rows)).toStrictEqual({ organizations: 3, seats: 55 });
     });
 });
 

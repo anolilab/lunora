@@ -1,12 +1,13 @@
 import { fireEvent, render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 
-import { createFormController } from "../../src/core";
+import type { AdminView } from "../../src/core";
+import { createFormController, DEFAULT_ADMIN_VIEW } from "../../src/core";
 import ActivityFeed from "../../src/svelte/ActivityFeed.svelte";
 import AdminOrganizations from "../../src/svelte/AdminOrganizations.svelte";
 import OverviewStats from "../../src/svelte/OverviewStats.svelte";
 import ProjectsCard from "../../src/svelte/ProjectsCard.svelte";
-import { activity, CREATED_SENTENCE, HOUR, noop, NOW, organization, project } from "../cards.fixtures";
+import { activity, CREATED_SENTENCE, HOUR, noop, NOW, organization, PLANS, project } from "../cards.fixtures";
 import FormHarness from "./FormHarness.svelte";
 
 /**
@@ -122,14 +123,45 @@ describe("activityFeed", () => {
 });
 
 describe("adminOrganizations", () => {
-    it("totals seats across tenants and filters by plan", async () => {
-        render(AdminOrganizations, { now: NOW, rows: [organization("Acme", "pro", 12), organization("Globex", "free", 3)] });
+    const rows = [organization("Acme", "pro", 12), organization("Globex", "free", 3)];
 
-        expect(screen.getByText("2 organizations · 15 seats")).toBeInTheDocument();
+    it("heads the table with the server's totals, not a sum of the rows loaded", () => {
+        render(AdminOrganizations, { now: NOW, onViewChange: noop, plans: PLANS, rows, totals: { organizations: 240, seats: 1310 }, view: DEFAULT_ADMIN_VIEW });
+
+        expect(screen.getByText("240 organizations · 1310 seats")).toBeInTheDocument();
+        expect(screen.getByText("Acme")).toBeInTheDocument();
+        expect(screen.getByText("Globex")).toBeInTheDocument();
+    });
+
+    it("offers every catalog plan and hands a filter change to the route", async () => {
+        const onViewChange = vi.fn<(view: AdminView) => void>();
+
+        render(AdminOrganizations, { now: NOW, onViewChange, plans: PLANS, rows: [rows[0]!], totals: undefined, view: DEFAULT_ADMIN_VIEW });
+
+        expect(screen.getByRole("option", { name: "Free" })).toBeInTheDocument();
 
         await fireEvent.change(screen.getByLabelText("Filter by plan"), { target: { value: "free" } });
 
-        expect(screen.queryByText("Acme")).not.toBeInTheDocument();
-        expect(screen.getByText("Globex")).toBeInTheDocument();
+        expect(onViewChange).toHaveBeenCalledWith({ ...DEFAULT_ADMIN_VIEW, plan: "free" });
+    });
+
+    it("keeps the search box while a new filter's first page loads, and loads more on request", async () => {
+        const onLoadMore = vi.fn<() => void>();
+        const { rerender } = render(AdminOrganizations, {
+            now: NOW,
+            onViewChange: noop,
+            plans: PLANS,
+            rows: undefined,
+            totals: undefined,
+            view: { ...DEFAULT_ADMIN_VIEW, search: "ac" },
+        });
+
+        expect(screen.getByLabelText("Search organizations")).toHaveValue("ac");
+        expect(screen.queryByText("Load more")).not.toBeInTheDocument();
+
+        await rerender({ onLoadMore, rows, view: DEFAULT_ADMIN_VIEW });
+        await fireEvent.click(screen.getByText("Load more"));
+
+        expect(onLoadMore).toHaveBeenCalledTimes(1);
     });
 });
