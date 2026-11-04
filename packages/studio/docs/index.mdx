@@ -62,6 +62,19 @@ The `<Studio>` shell takes a few host-controlled switches worth knowing:
   identity, to test auth + RLS. Security-sensitive (it forges identity on an
   admin RPC). Only ever enable on a trusted loopback-dev gate, never in
   production.
+- `advisorProcedures`: the host serves `/__lunora/advisor-procedures`, the
+  procedure list the Advisors **Health score** is computed against. The dev
+  hosts (`lunora dev`, the Vite and Rspack plugins) set it. The list is
+  Studio-only data that codegen writes to `_generated/advisor-procedures.json`;
+  the app's Worker does not carry it.
+- `advisorCompanion`: a hosted or embedded studio reads the list from its
+  worker instead. Opt in with `studio: { companion: true }` in
+  `lunora.config.ts`: codegen emits a small companion Worker (no public route,
+  reachable only through a service binding) that `lunora deploy` ships with the
+  app, and the app's Worker forwards the route to it after the admin check.
+  Then set `advisorCompanion` (in `apps/studio`, build with
+  `VITE_LUNORA_ADVISOR_COMPANION=true`). Without either flag the Health score
+  shows a notice; the other Advisors pages work everywhere.
 - `functions`: the descriptors that populate the function runner and API tab.
 - `initialShardKey`: the shard every shard-scoped panel targets on first load.
 
@@ -205,6 +218,10 @@ Operational streams and per-shard signal from a running deployment.
 The [advisors](/docs/concepts/advisors) surface: splinter-style lints over your
 schema, functions, and runtime signal.
 
+- **Health score**: _One score for the deployment, the coverage split, and every
+  procedure ranked worst-first._ Computed with [`scoreAdvisor()`](/docs/packages/advisor)
+  against the procedure list from the dev host or, for a hosted studio, the
+  companion Worker (see `advisorProcedures` and `advisorCompanion` above).
 - **Security**: _Review admin gates, credentials, and log redaction_, the
   security-category findings.
 - **RLS Policies**: _Inspect row-level-security policies and roles, per table._

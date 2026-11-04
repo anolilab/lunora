@@ -92,6 +92,12 @@ interface ProjectConfigLiterals {
      * fail loudly, not vanish from `ctx.services`.
      */
     services?: { declared?: Record<string, ServiceLiteral>; unreadable?: boolean };
+
+    /**
+     * `studio.companion`: deploy the companion Worker that serves the advisor procedure list to a hosted Studio.
+     * `unreadable` when `studio` is declared but `companion` is not a boolean literal.
+     */
+    studio?: { companion?: boolean; unreadable?: boolean };
     target?: string;
 
     /**
@@ -457,12 +463,32 @@ const readDurableObjects = (declared: TsNode | undefined, sourceFile: SourceFile
         : { durableObjects: { unreadable: true } };
 };
 
+/** `studio.companion` from the `studio` object literal: a boolean literal, or `unreadable`. */
+const readStudio = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+    const member = readPlainMember(declared, sourceFile, "companion");
+
+    if ("absent" in member) {
+        return { studio: {} };
+    }
+
+    return "literal" in member && (TsNode.isTrueLiteral(member.literal) || TsNode.isFalseLiteral(member.literal))
+        ? { studio: { companion: member.literal.getLiteralValue() } }
+        : { studio: { unreadable: true } };
+};
+
+/** The sections that carry one boolean literal: `durableObjects.merge` and `studio.companion`. */
+const BOOLEAN_SECTION_READERS: ReadonlyMap<string, (declared: TsNode | undefined, sourceFile: SourceFile) => ProjectConfigLiterals> = new Map([
+    ["durableObjects", readDurableObjects],
+    ["studio", readStudio],
+]);
+
 /** What a getter or method under each key this reader cares about contributes: it declares a value the parser cannot see. */
 const UNREADABLE_ACCESSOR: ReadonlyMap<string, ProjectConfigLiterals> = new Map([
     ["advisor", { advisor: { unreadable: true } }],
     ["codegen", { codegen: { lazyFunctionsUnreadable: true, unreadable: true } }],
     ["durableObjects", { durableObjects: { unreadable: true } }],
     ["remote", { unreadable: true }],
+    ["studio", { studio: { unreadable: true } }],
     ["target", { unreadable: true }],
 ]);
 
@@ -586,8 +612,10 @@ const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile
         return readCodegen(codegenValueOf(property, sourceFile), sourceFile);
     }
 
-    if (key === "durableObjects") {
-        return readDurableObjects(propertyLiteral(property, sourceFile), sourceFile);
+    const sectionReader = BOOLEAN_SECTION_READERS.get(key);
+
+    if (sectionReader !== undefined) {
+        return sectionReader(propertyLiteral(property, sourceFile), sourceFile);
     }
 
     if (key !== "target" && key !== "remote") {
@@ -651,6 +679,7 @@ const readConfigLiterals = (configPath: string): ProjectConfigLiterals => {
             ...(declares("advisor") ? { advisor: { unreadable: true } } : {}),
             ...(declares("codegen") ? { codegen: { lazyFunctionsUnreadable: true, unreadable: true } } : {}),
             ...(declares("durableObjects") ? { durableObjects: { unreadable: true } } : {}),
+            ...(declares("studio") ? { studio: { unreadable: true } } : {}),
             ...(declares("services") ? { services: { unreadable: true } } : {}),
             unreadable: true,
         };
@@ -723,6 +752,26 @@ const readProjectLazyFunctions = (lunoraDirectory: string): boolean => {
     return codegen?.lazyFunctions === true;
 };
 
+const studioCompanionWarnedFor = new Set<string>();
+
+/**
+ * `lunora.config`'s `studio.companion`: opt in to the generated companion Worker. An unreadable value is said
+ * out loud and treated as off, since the flag deploys an extra Worker and is never switched on by a value the parser could not prove.
+ */
+const readProjectStudioCompanion = (lunoraDirectory: string): boolean => {
+    const configPath = findCodegenConfigFile(lunoraDirectory);
+    const { studio } = configPath === undefined ? {} : readConfigLiterals(configPath);
+
+    // Codegen and every binding read call this, so the warning is said once per config file rather than once per call.
+    if (studio?.unreadable && configPath !== undefined && !studioCompanionWarnedFor.has(configPath)) {
+        studioCompanionWarnedFor.add(configPath);
+        // eslint-disable-next-line no-console -- codegen has no diagnostic sink for config literals; matches `durableObjects.merge`'s warning.
+        console.warn("@lunora/codegen: `studio.companion` in lunora.config is not a boolean literal, so the companion Worker is not generated.");
+    }
+
+    return studio?.companion === true;
+};
+
 export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral };
 export { findProjectConfigFile, PROJECT_CONFIG_FILENAMES } from "./project-config-path";
-export { loadProjectConfig, readMergeDurableObjects, readProjectConfigLiterals, readProjectLazyFunctions };
+export { loadProjectConfig, readMergeDurableObjects, readProjectConfigLiterals, readProjectLazyFunctions, readProjectStudioCompanion };

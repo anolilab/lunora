@@ -16,10 +16,11 @@ import { createServer } from "node:net";
 import { dirname } from "node:path";
 
 import type { ServiceBindingIR } from "@lunora/codegen";
-import { readServiceBindings } from "@lunora/codegen";
+import { readDevServiceBindings } from "@lunora/codegen";
 
 import type { DevProcess, DevProcessSpawner } from "../dev-process";
 import { acceptsConnection, startDevProcess } from "../dev-process";
+import resolveSchemaDirectory from "../resolve-schema-directory";
 import { planCelldConfig, planCelldServiceConfig } from "./celld-config";
 import type { CelldToolchainProbe } from "./celld-toolchain";
 import { probeCelldToolchain } from "./celld-toolchain";
@@ -155,7 +156,8 @@ const startCelldDevSession = async (options: CelldDevSessionOptions): Promise<Ce
         throw new Error(`port ${String(port)} is already in use — stop whatever is serving there (another dev server?), or pick another worker port`);
     }
 
-    const bindings = readServiceBindings(projectRoot);
+    // Bound, not just declared: the app's celld config carries the `ADVISOR_COMPANION` binding when `studio.companion` is on.
+    const bindings = readDevServiceBindings(projectRoot, resolveSchemaDirectory(projectRoot));
 
     // Started without them, every `ctx.services` call would fail with no reason given.
     if (bindings.error !== undefined) {

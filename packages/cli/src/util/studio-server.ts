@@ -27,11 +27,13 @@ import type { Duplex } from "node:stream";
 import { pipeline } from "node:stream";
 
 import type { CodegenOptions } from "@lunora/codegen";
-import { detectAgentRules, resolveLazyFunctions } from "@lunora/config";
+import { detectAgentRules, resolveLazyFunctions, resolveSchemaDirectory } from "@lunora/config";
 import type { LocalEndpointHandler } from "@lunora/config/studio-host";
 import {
+    ADVISOR_PROCEDURES_ENDPOINT,
     assetContentType,
     createStudioDocumentCache,
+    handleAdvisorProceduresRequest,
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
     handleSeedRequest,
@@ -199,6 +201,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
                 // it for a loopback bind: a non-loopback (LAN/0.0.0.0) bind would otherwise
                 // hand the token to any network client that GETs `/`.
                 adminToken: isLoopback ? resolveAdminToken(options.cwd) : undefined,
+                advisorProcedures: isLoopback,
                 basePath: "/",
                 dataEditable: isLoopback,
                 rulesInstalled: detectAgentRules(options.cwd).installed,
@@ -230,14 +233,21 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     // loopback-only; off a loopback bind they answer 403 with a clear reason.
     // On a loopback bind the request is routed through the shared transport glue
     // (`@lunora/config/studio-host`), so the CLI and Vite hosts stay in lockstep.
+    // Parses `vite.config.*`, and the answer cannot change while the server runs.
+    const schemaDirectory = resolveSchemaDirectory(options.cwd);
+
     const serveLoopbackOnly = (request: IncomingMessage, response: ServerResponse, handle: LocalEndpointHandler, deniedMessage: string): void => {
         if (isLoopback) {
             // `apiSpec` travels with the request for the same reason the Vite host
             // forwards it: codegen writes the spec its mode names and DELETES the
             // other, so an edit that regenerated with the default deleted the
-            // `openrpc.json` the host's own run had just written. (`schemaDirectory`
-            // is moot here — `lunora dev` hardcodes `"lunora"`.)
-            serveJsonHandler(request, response, handle, options.cwd, { apiSpec: options.apiSpec, lazyFunctions: resolveLazyFunctions(options.lazyFunctions) });
+            // `openrpc.json` the host's own run had just written. `schemaDirectory`
+            // is the folder `lunora dev`'s codegen writes `_generated/` into.
+            serveJsonHandler(request, response, handle, options.cwd, {
+                apiSpec: options.apiSpec,
+                lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
+                schemaDirectory,
+            });
 
             return;
         }
@@ -365,6 +375,14 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         // gate. Generates rows in Node so faker never reaches the browser bundle.
         if (pathname === SEED_ENDPOINT) {
             serveLoopbackOnly(request, response, handleSeedRequest, "Lunora data seeding is only available on loopback hosts in dev.");
+
+            return;
+        }
+
+        // Read-only advisor procedure list for the studio's health map (Studio-only
+        // data kept out of the worker). Loopback-only like the other local endpoints.
+        if (pathname === ADVISOR_PROCEDURES_ENDPOINT) {
+            serveLoopbackOnly(request, response, handleAdvisorProceduresRequest, "Lunora advisor data is only available on loopback hosts in dev.");
 
             return;
         }

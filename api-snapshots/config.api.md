@@ -751,6 +751,7 @@ interface InferOptions {
     projectRoot: string;
     scanDirs?: ReadonlyArray<string>;
     schemaDir?: string;
+    skipCompanion?: boolean;
 }
 ```
 
@@ -3134,6 +3135,12 @@ const wranglerToAlchemy: (config: WranglerConfigShape) => AlchemyTranslation;
 
 ## `@lunora/config/studio-host`
 
+### `ADVISOR_PROCEDURES_ENDPOINT` (const)
+
+```ts
+const ADVISOR_PROCEDURES_ENDPOINT = "/__lunora/advisor-procedures";
+```
+
 ### `ALLOW_FORWARDED_ENV` (const)
 
 ```ts
@@ -3312,6 +3319,7 @@ interface StudioAssets {
 ```ts
 interface StudioHtmlConfig {
     readonly adminToken?: string;
+    readonly advisorProcedures?: boolean;
     readonly basePath: string;
     readonly dataEditable?: boolean;
     readonly rulesInstalled?: boolean;
@@ -3377,6 +3385,12 @@ const createStudioMiddleware: (options: StudioMiddlewareOptions) => ((request: I
 
 ```ts
 const devVariablesStamp: (root: string) => string;
+```
+
+### `handleAdvisorProceduresRequest` (const)
+
+```ts
+const handleAdvisorProceduresRequest: (request: LocalEndpointRequest) => Promise<LocalEndpointResponse>;
 ```
 
 ### `handlePolicyScaffoldRequest` (const)

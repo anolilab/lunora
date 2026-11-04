@@ -60,6 +60,18 @@ interface AuthApiCallIR {
 const CAPABILITY_PROBES: Readonly<Record<CapabilityKey, CapabilityProbe>>;
 ```
 
+### `COMPANION_BINDING` (const)
+
+```ts
+const COMPANION_BINDING = "ADVISOR_COMPANION";
+```
+
+### `COMPANION_SERVICE_NAME` (const)
+
+```ts
+const COMPANION_SERVICE_NAME = "advisorCompanion";
+```
+
 ### `CONTAINERS_FILENAME` (const)
 
 ```ts
@@ -120,6 +132,7 @@ interface CodegenResult {
     containers: ReadonlyArray<ContainerIR>;
     cronTriggers: ReadonlyArray<string>;
     generated: {
+        advisorProceduresJson: string;
         agents: string;
         api: string;
         app: string;
@@ -732,6 +745,10 @@ interface ProjectConfigLiterals {
         declared?: Record<string, ServiceLiteral>;
         unreadable?: boolean;
     };
+    studio?: {
+        companion?: boolean;
+        unreadable?: boolean;
+    };
     target?: string;
     unreadable?: boolean;
 }
@@ -1227,6 +1244,12 @@ const buildSchemaSnapshot: (schema: SchemaIR, migrationIds: ReadonlyArray<string
 const capabilitiesUsedBy: (signals: Pick<SourceCapabilitySignals, "contextReads" | "valueImports">) => ReadonlySet<CapabilityKey>;
 ```
 
+### `companionServiceBinding` (const)
+
+```ts
+const companionServiceBinding: (projectRoot: string, lunoraDirectory?: string) => ServiceBindingIR | undefined;
+```
+
 ### `createCodegenProject` (const)
 
 ```ts
@@ -1525,7 +1548,7 @@ const emitServer: ({ agents, capabilities, containers, env, hasVectors, hasFlags
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, hasSecretValues, hasSensitiveArgs, hasSockets, lazyFunctions, hasVectors, liveStreamDeclarations, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, hasIpReaders, services, topics, useUmbrella, workflowEvents, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, hasSecretValues, hasSensitiveArgs, hasSockets, lazyFunctions, hasVectors, liveStreamDeclarations, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, hasIpReaders, services, topics, useUmbrella, workflowEvents, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -1687,6 +1710,24 @@ const platformMatrixIds: () => ReadonlyArray<string>;
 
 ```ts
 const projectConfigCandidatePaths: (lunoraDirectory: string) => string[];
+```
+
+### `readBoundServiceBindings` (const)
+
+```ts
+const readBoundServiceBindings: (projectRoot: string, lunoraDirectory?: string) => {
+    error?: string;
+    services: ServiceBindingIR[];
+};
+```
+
+### `readDevServiceBindings` (const)
+
+```ts
+const readDevServiceBindings: (projectRoot: string, lunoraDirectory?: string) => {
+    error?: string;
+    services: ServiceBindingIR[];
+};
 ```
 
 ### `readPackageDependencies` (const)
@@ -2657,7 +2698,6 @@ interface EmitServerOptions {
 ```ts
 interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
-    advisorProcedures?: ReadonlyArray<AdvisorProcedureProtection>;
     agents?: ReadonlyArray<AgentIR>;
     capabilities?: ReadonlySet<CapabilityKey>;
     containers?: ReadonlyArray<ContainerIR>;

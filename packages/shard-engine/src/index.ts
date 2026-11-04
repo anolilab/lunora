@@ -199,7 +199,6 @@ export { default as GlobalPollTick } from "./global-poll-tick";
 export type {
     AdvisoriesResult,
     AdvisorProcedure,
-    AdvisorProceduresResult,
     AdvisoryFinding,
     AuditLogResult,
     ColumnMeta,

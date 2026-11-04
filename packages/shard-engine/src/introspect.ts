@@ -85,7 +85,6 @@ const ADMIN_FUNCTIONS = {
     facetColumn: "__lunora_admin__:facetColumn",
     findRelated: "__lunora_admin__:findRelated",
     getAdvisories: "__lunora_admin__:getAdvisories",
-    getAdvisorProcedures: "__lunora_admin__:getAdvisorProcedures",
     getAuditLog: "__lunora_admin__:getAuditLog",
     getAuthMetrics: "__lunora_admin__:getAuthMetrics",
     getCapturedMail: "__lunora_admin__:getCapturedMail",
@@ -386,7 +385,7 @@ interface AdvisoriesResult {
 }
 
 /**
- * One declared procedure, surfaced by `__lunora_admin__:getAdvisorProcedures`.
+ * One declared procedure, written to `_generated/advisor-procedures.json` for the studio's health map.
  *
  * Structurally mirrors `@lunora/advisor`'s `AdvisorProcedureProtection`, for the
  * same reason `AdvisoryFinding` mirrors `Finding`: the DO serves it without
@@ -421,11 +420,6 @@ interface AdvisorProcedure {
     usesRls: boolean;
     visibility: "internal" | "public";
     writesUserTable?: boolean;
-}
-
-/** Payload of a `__lunora_admin__:getAdvisorProcedures` call: every declared procedure. */
-interface AdvisorProceduresResult {
-    procedures: AdvisorProcedure[];
 }
 
 /**
@@ -2601,7 +2595,6 @@ export {
 export type {
     AdvisoriesResult,
     AdvisorProcedure,
-    AdvisorProceduresResult,
     AdvisoryFinding,
     AuditLogResult,
     ColumnMeta,

@@ -27,12 +27,13 @@ import type { CapabilityKey, ServiceBindingIR, SourceCapabilitySignals } from "@
 import {
     capabilitiesUsedBy,
     CAPABILITY_PROBES,
+    COMPANION_BINDING,
     createTargetScope,
     discoverNotifyChannels,
     foldCapabilitySignals,
     mayReadCapabilityContext,
     NOTIFY_FILENAME,
-    readServiceBindings,
+    readBoundServiceBindings,
     sourceCapabilitySignals,
 } from "@lunora/codegen";
 // `worker-entry.ts` lexes the entry's exports; the lexer's wasm must be initialised first.
@@ -441,7 +442,16 @@ interface InferOptions {
     scanDirs?: ReadonlyArray<string>;
     /** Lunora source directory holding `schema.ts`. Defaults to `lunora`. */
     schemaDir?: string;
+    /** Leave the `studio.companion` Worker out of the inferred services, for a run that does not deploy it. */
+    skipCompanion?: boolean;
 }
+
+/** The service bindings to reconcile; `skipCompanion` drops the companion for a run that does not deploy it. */
+const readInferredServiceBindings = (projectRoot: string, schemaDirectory: string, skipCompanion: boolean): ReturnType<typeof readBoundServiceBindings> => {
+    const bound = readBoundServiceBindings(projectRoot, schemaDirectory);
+
+    return skipCompanion ? { ...bound, services: bound.services.filter((service) => service.binding !== COMPANION_BINDING) } : bound;
+};
 
 /** The schema facts binding inference reads. */
 interface SchemaFacts {
@@ -854,14 +864,21 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
 
     // Codegen throws, naming the entry, on a declaration it cannot wire; that
     // error surfaces there, so inference only reconciles what resolves.
-    const resolved = readServiceBindings(options.projectRoot);
+    const resolved = readInferredServiceBindings(options.projectRoot, schemaDirectory, options.skipCompanion === true);
     const services = resolved.error === undefined ? resolved.services : undefined;
 
     if (resolved.error !== undefined) {
         signals.push(`hint: lunora.config \`services\` not reconciled — ${resolved.error}`);
     }
 
-    signals.push(...resolved.services.map((service) => `${service.binding} → ${service.worker} (lunora.config services.${service.name})`));
+    signals.push(
+        ...resolved.services.map((service) =>
+            // The companion is Lunora's own Worker, enabled by `studio.companion`, not a `services` declaration.
+            service.binding === COMPANION_BINDING
+                ? `${service.binding} → ${service.worker} (studio.companion)`
+                : `${service.binding} → ${service.worker} (lunora.config services.${service.name})`,
+        ),
+    );
 
     return {
         // The scanned flags first: `needsD1` below replaces the raw `env.DB` flag

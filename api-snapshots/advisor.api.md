@@ -590,6 +590,15 @@ interface AdvisorPrivilegedDispatch {
 }
 ```
 
+### `AdvisorProcedureDocument` (interface)
+
+```ts
+interface AdvisorProcedureDocument {
+    analysis?: "disabled";
+    procedures: AdvisorProcedureProtection[];
+}
+```
+
 ### `AdvisorProcedureProtection` (interface)
 
 ```ts

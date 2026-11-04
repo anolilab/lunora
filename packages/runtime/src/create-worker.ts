@@ -2065,11 +2065,25 @@ const MIGRATE_PATH = "/_lunora/migrate";
  */
 const STATUS_PATH = "/_lunora/status";
 
-/** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
+/**
+ * Hosted Studio's advisor-procedure list. The generated companion Worker (`@lunora/codegen` `emit/companion.ts`) serves the same
+ * path, so the main Worker forwards it unchanged; a codegen test pins the two strings together.
+ */
+const ADVISOR_PROCEDURES_PATH = "/__lunora/advisor-procedures";
+
+interface ServiceBindingLike {
+    fetch: (request: Request) => Promise<Response>;
+}
+
+const isServiceBinding = (value: unknown): value is ServiceBindingLike =>
+    typeof value === "object" && value !== null && "fetch" in value && typeof value.fetch === "function";
+
 /** The reserved prefix every worker- and shard-served admin op shares. */
 const ADMIN_FUNCTION_PREFIX = "__lunora_admin__";
 
-const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
+// The advisor route is outside both prefixes but is admin-only, so it takes the same async gate: without it a named admin token or
+// Cloudflare Access caller is refused here while every other admin call works.
+const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH || pathname === ADVISOR_PROCEDURES_PATH;
 
 /**
  * Refuse a `__lunora_relation__:*` dispatch that is NOT a fan-out.
@@ -3041,6 +3055,13 @@ const assertNoReservedRoutes = (routes: Readonly<Record<string, unknown>> | unde
         // `"METHOD /path"` keys carry the pathname after the first space; a bare
         // key IS the pathname.
         const pathname = key.slice(key.indexOf(" ") + 1);
+
+        if (pathname === ADVISOR_PROCEDURES_PATH) {
+            throw new LunoraError(`route "${key}" is the framework's advisor endpoint, which carries its own admin gate — pick a different path.`, {
+                code: "MISCONFIGURED",
+                status: 500,
+            });
+        }
 
         if (pathname.startsWith(RESERVED_PATH_PREFIX)) {
             throw new LunoraError(
@@ -6461,6 +6482,29 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             }
 
             return Response.json({ ok: true }, { headers: { "cache-control": "no-store" } });
+        },
+        // Forwarded to the companion Worker over its service binding, which holds the embedded procedure list. Method and admin
+        // auth come first so an unauthenticated caller cannot tell from the answer whether a companion is bound; an absent binding
+        // is then a 404 and the hosted Studio shows its notice. The companion gets a bare GET: it checks nothing, so the caller's
+        // credentials have no reason to reach a second Worker's logs.
+        [ADVISOR_PROCEDURES_PATH]: async (request, env) => {
+            assertMethod(request, "GET", "Advisor procedures");
+
+            assertAdminAuthorized(request);
+
+            const companion: unknown = typeof env === "object" && env !== null ? Reflect.get(env, "ADVISOR_COMPANION") : undefined;
+
+            if (!isServiceBinding(companion)) {
+                return Response.json({ error: "not found" }, { headers: { "cache-control": "no-store" }, status: 404 });
+            }
+
+            // Rebuilt rather than mutated: a service-binding response can have immutable headers.
+            const forwarded = await companion.fetch(new Request(new URL(ADVISOR_PROCEDURES_PATH, request.url), { method: "GET" }));
+            const headers = new Headers(forwarded.headers);
+
+            headers.set("cache-control", "no-store");
+
+            return new Response(forwarded.body, { headers, status: forwarded.status, statusText: forwarded.statusText });
         },
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [SOCKET_REAUTH_PATH]: (request, env, url, context) => handleSocketReauth(request, env, context, url),

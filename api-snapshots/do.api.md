@@ -510,7 +510,6 @@ abstract class ShardDO {
     protected tableColumns(_table: string): ColumnMeta[];
     protected storageColumns(): Record<string, string[]>;
     protected advisories(): AdvisoryFinding[];
-    protected advisorProcedures(): AdvisorProcedure[];
     protected rlsMetadata(): RlsPoliciesResult;
     protected maskMetadata(): MaskPoliciesResult;
     protected storageRulesMetadata(): StorageRulesResult;

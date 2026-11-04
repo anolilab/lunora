@@ -15,7 +15,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { AdvisorProcedureProtection, Finding } from "@lunora/advisor";
+import type { Finding } from "@lunora/advisor";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
@@ -24,7 +24,6 @@ import type { TableIR } from "../src/ir";
 import { emitOpenApiModule } from "../src/openapi";
 import { emitOpenRpcModule } from "../src/openrpc";
 import emittedAdvisories from "./emitted-advisories";
-import emittedJsonData from "./emitted-json-data";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -110,30 +109,6 @@ const findings = (count: number): Finding[] =>
         };
     });
 
-/** Procedures whose boolean facts vary, so their element types are mutually incompatible. */
-const procedures = (count: number): AdvisorProcedureProtection[] =>
-    Array.from({ length: count }, (_, index) => {
-        // eslint-disable-next-line no-bitwise -- spreads the index over independent boolean facts
-        const bit = (n: number): boolean => (index & (1 << n)) !== 0;
-
-        return {
-            callsMail: bit(0),
-            emitsEvent: bit(1),
-            exportName: `fn${String(index)}`,
-            fanOut: bit(2),
-            file: `file${String(index % 97)}`,
-            handlesErrors: bit(3),
-            kind: (["action", "mutation", "query"] as const)[index % 3]!,
-            reachesOutbound: bit(4),
-            usesCaptcha: bit(5),
-            usesEmailGate: false,
-            usesMask: bit(6),
-            usesRateLimit: false,
-            usesRls: bit(7),
-            visibility: index % 4 === 0 ? "internal" : "public",
-        };
-    });
-
 const tables = (count: number): TableIR[] =>
     Array.from({ length: count }, (_, index): TableIR => {
         return {
@@ -154,26 +129,32 @@ const tables = (count: number): TableIR[] =>
     });
 
 describe("generated data tables typecheck at project scale (#823)", () => {
-    it(`compiles ${String(SCALE)} advisories and advisor procedures without TS2590`, () => {
+    it(`compiles ${String(SCALE)} advisories without TS2590`, () => {
         expect.assertions(3);
 
-        const shard = emitShard({ advisories: findings(SCALE), advisorProcedures: procedures(SCALE), schema: { tables: [], vectorIndexes: [] } });
+        const shard = emitShard({ advisories: findings(SCALE), schema: { tables: [], vectorIndexes: [] } });
 
-        expect(
-            typecheck(pickDeclarations(shard, ["LUNORA_ADVISORY_RULES", "LUNORA_ADVISORY_ROWS", "LUNORA_ADVISORIES", "LUNORA_ADVISOR_PROCEDURES"])),
-        ).toStrictEqual([]);
+        expect(typecheck(pickDeclarations(shard, ["LUNORA_ADVISORY_RULES", "LUNORA_ADVISORY_ROWS", "LUNORA_ADVISORIES"]))).toStrictEqual([]);
     }, 120_000);
 
     it("round-trips the data exactly through the emitted string literal", () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
         // Quotes, backslashes, U+2028 and `</script>` all survive the double encoding.
         const advisories = findings(RULES);
-        const advisorProcedures = procedures(16);
-        const shard = emitShard({ advisories, advisorProcedures, schema: { tables: [], vectorIndexes: [] } });
+        const shard = emitShard({ advisories, schema: { tables: [], vectorIndexes: [] } });
 
         expect(emittedAdvisories(shard)).toStrictEqual(advisories);
-        expect(emittedJsonData(shard, "LUNORA_ADVISOR_PROCEDURES")).toStrictEqual(advisorProcedures);
+    });
+
+    it("keeps the advisor procedure list out of the worker", () => {
+        expect.assertions(1);
+
+        // The health map's denominator is Studio-only: codegen writes it to a sidecar file,
+        // so no literal for it may reach the generated Worker module.
+        const shard = emitShard({ advisories: findings(RULES), schema: { tables: [], vectorIndexes: [] } });
+
+        expect(shard).not.toContain("LUNORA_ADVISOR_PROCEDURES");
     });
 
     it("emits each rule's text once, not once per finding", () => {

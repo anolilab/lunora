@@ -149,6 +149,11 @@ export interface CodegenResult {
     cronTriggers: ReadonlyArray<string>;
 
     generated: {
+        /**
+         * Studio-only advisor procedure document, written to `_generated/advisor-procedures.json`. A `lint: false`
+         * run carries the `analysis: "disabled"` marker instead of an empty roster.
+         */
+        advisorProceduresJson: string;
         /** WorkflowEntrypoint classes for declared agents (`_generated/agents.ts`); `""` (and not written) when no agents are declared. */
         agents: string;
         api: string;
