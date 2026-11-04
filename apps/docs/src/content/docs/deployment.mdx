@@ -660,24 +660,37 @@ framework-adapter-specific, so you declare it.
 Once the block exists, Lunora adds one key to it. Cloudflare answers from the
 assets directory before the Worker whenever a file matches, and with
 `not_found_handling: "single-page-application"` it answers every unmatched
-browser navigation with `index.html`. Either way a request for Lunora's own
-endpoints could get a static file instead. So when `run_worker_first` is absent,
-the dev server and `lunora deploy` write it with Lunora's reserved paths (for the
-top-level block and for each `env.<name>.assets` block):
+browser navigation with `index.html`. Either way a request meant for the Worker
+could get a static file instead. So the dev server and `lunora deploy` write
+`run_worker_first` (for the top-level block and for each `env.<name>.assets`
+block) with every path the Worker serves that they can see:
+
+- Lunora's reserved paths, `/_lunora/*` and `/__lunora/*`;
+- each [`httpRoute`](/docs/concepts/http-endpoints) path under `lunora/`;
+- `/api/auth/*`, `@lunora/auth`'s default base path, when the app imports it.
 
 ```jsonc
 {
     "assets": {
         "directory": "./dist/client",
-        "run_worker_first": ["/_lunora/*", "/__lunora/*"],
+        "run_worker_first": ["/_lunora/*", "/__lunora/*", "/api/auth", "/api/auth/*", "/api/todos/*"],
     },
 }
 ```
 
-A `run_worker_first` you wrote yourself is never changed. If it leaves out one of
-those paths, Lunora warns and names it. Routes your app serves from the Worker
-(an auth `basePath` such as `/api/auth/*`, or your own `httpRoute` paths) are
-yours to add; Lunora cannot see them at config time.
+A rule cannot hold a route parameter, so each route is widened to its static
+prefix: `/api/todos/:id` becomes `/api/todos/*`, and `/files/*` becomes `/files`
+plus `/files/*`. A route whose first segment is a parameter (`/:tenant/api`)
+cannot be narrowed and is reported instead. Rules another rule covers are
+dropped, and the list stays within Cloudflare's limits (100 rules of at most 100
+characters); anything over is reported.
+
+Lunora records the list it wrote under `lunora.runWorkerFirst` in
+`package.json`, and rewrites it when your routes change. A `run_worker_first`
+you wrote, or edited after Lunora wrote it, is never changed. If it leaves out
+one of the paths above, Lunora warns and names it. Two kinds of route are
+invisible at config time, so add them yourself: a custom auth `basePath`, and
+routes you add to a Hono `httpRouter()` directly rather than with `httpRoute`.
 
 Because an asset hit never runs the Worker, it also skips the Worker's security
 headers. The production build writes them into the assets' `_headers` file

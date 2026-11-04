@@ -39,6 +39,12 @@ const AGENT_RULES_HINT = "Lunora AI rules not installed — run `lunora rules in
 const AGENT_RULES_HINT_ENV = "LUNORA_RULES_HINT_SHOWN";
 ```
 
+### `AUTH_ROUTE_BASE_PATH` (const)
+
+```ts
+const AUTH_ROUTE_BASE_PATH = "/api/auth";
+```
+
 ### `AddIndexEdit` (interface)
 
 ```ts
@@ -810,6 +816,7 @@ interface InferredBindings {
     usesWorkerLoader: boolean;
     usesX402: boolean;
     usesX402Charge: boolean;
+    workerRoutes: string[];
     workflows: InferredWorkflow[];
 }
 ```

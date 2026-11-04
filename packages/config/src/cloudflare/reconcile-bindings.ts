@@ -29,7 +29,8 @@ import type { DurableObjectSpec, GeneratedClassModule } from "../worker-entry";
 import type { Manifest } from "./lunora-manifest";
 import { readManifest } from "./lunora-manifest";
 import { D1_PLACEHOLDER_ID, HYPERDRIVE_PLACEHOLDER_ID } from "./placeholder-ids";
-import { reconcileAssetRouting } from "./reconcile-assets";
+import type { OwnedRunWorkerFirst } from "./reconcile-assets";
+import { readOwnedRunWorkerFirst, reconcileAssetRouting, recordOwnedRunWorkerFirst } from "./reconcile-assets";
 import type { OwnedTuning } from "./reconcile-queues";
 import { readOwnedTuning, reconcileEnvQueues, reconcileQueues, recordOwnedTuning } from "./reconcile-queues";
 import type { OwnedServices } from "./reconcile-services";
@@ -1011,6 +1012,7 @@ const reconcileWranglerBindings = (
     const ownedScopes: Record<string, OwnedTuning> = {};
     const ownedServicesRecord = readOwnedServices(manifest);
     let ownedServices: OwnedServices | undefined;
+    let ownedRunWorkerFirst: OwnedRunWorkerFirst | undefined;
 
     // The reconcile pipeline: each enabled step rewrites `text` but reads the
     // original `parsed`. This is only safe because the steps touch disjoint
@@ -1072,7 +1074,16 @@ const reconcileWranglerBindings = (
         // Cloudflare-only; an omitted target is the default, Cloudflare.
         { enabled: target === undefined || target === "cloudflare", run: (text) => reconcileUploadSourceMaps(text, parsed) },
         // Cloudflare-only: `run_worker_first` is a Workers Static Assets key no other host reads.
-        { enabled: target === undefined || target === "cloudflare", run: (text) => reconcileAssetRouting(text, parsed) },
+        {
+            enabled: target === undefined || target === "cloudflare",
+            run: (text) => {
+                const step = reconcileAssetRouting(text, parsed, inferred.workerRoutes, readOwnedRunWorkerFirst(manifest));
+
+                ownedRunWorkerFirst = step.owned;
+
+                return step;
+            },
+        },
         { enabled: exportedContainers.length > 0, run: (text) => reconcileContainers(text, parsed, exportedContainers) },
         {
             enabled: exportedWorkflows.length > 0 || exportedAgents.length > 0,
@@ -1144,6 +1155,7 @@ const reconcileWranglerBindings = (
         }
 
         const servicesOwned = ownedServices;
+        const runWorkerFirstOwned = ownedRunWorkerFirst;
         const records = [
             ...(Object.keys(ownedScopes).length > 0
                 ? [
@@ -1157,6 +1169,18 @@ const reconcileWranglerBindings = (
                       },
                   ]
                 : []),
+            ...(runWorkerFirstOwned === undefined
+                ? []
+                : [
+                      {
+                          consequence: "the next route change leaves run_worker_first as it is",
+                          key: "runWorkerFirst",
+                          label: "run_worker_first rules",
+                          write: (current: Manifest) => {
+                              recordOwnedRunWorkerFirst(current, runWorkerFirstOwned);
+                          },
+                      },
+                  ]),
             ...(servicesOwned === undefined
                 ? []
                 : [

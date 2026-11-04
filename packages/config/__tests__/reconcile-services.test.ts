@@ -52,6 +52,7 @@ const inferred = (services: ServiceBindingIR[] | undefined): InferredBindings =>
         usesWorkerLoader: false,
         usesX402Charge: false,
         usesX402: false,
+        workerRoutes: [],
         workflows: [],
     };
 };

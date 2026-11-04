@@ -113,6 +113,28 @@ describe("inferLunoraBindings", () => {
         expect(result.signals.some((signal) => signal.includes("pass `namespace` to .auth()"))).toBe(true);
     });
 
+    it("lists the paths the Worker serves: each httpRoute path, and auth's default base path", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("lunora/schema.ts", SCHEMA_NO_GLOBAL);
+        write(
+            "lunora/http.ts",
+            'import { httpRoute } from "@lunora/server";\nexport const getTodo = httpRoute.get("/api/todos/:id").handler(async () => new Response("x"));\n',
+        );
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const routesOnly = await inferLunoraBindings({ projectRoot: root });
+
+        expect(routesOnly.workerRoutes).toStrictEqual(["/api/todos/:id"]);
+
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nimport { createAuth } from "@lunora/auth";\nexport const auth = createAuth();`);
+
+        const withAuth = await inferLunoraBindings({ projectRoot: root });
+
+        expect(withAuth.workerRoutes).toStrictEqual(["/api/todos/:id", "/api/auth/*"]);
+    });
+
     it("infers D1 from a .global() table even with no env.DB access", async () => {
         expect.assertions(1);
 

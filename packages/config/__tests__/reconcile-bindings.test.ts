@@ -57,6 +57,7 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         usesWorkerLoader: false,
         usesX402Charge: false,
         usesX402: false,
+        workerRoutes: [],
         workflows: [],
         ...overrides,
     };
@@ -304,6 +305,39 @@ describe("reconcileWranglerBindings", () => {
             writeFileSync(join(root, "wrangler.jsonc"), withAssets("{}").replace('    // the client build\n    "assets": {},\n', ""), "utf8");
 
             expect(reconcileWranglerBindings(root, baseInferred()).added).not.toContain("assets.run_worker_first");
+        });
+
+        it("adds the app's routes, widened to static prefixes, and rewrites the list it owns when they change", () => {
+            expect.assertions(3);
+
+            writeFileSync(join(root, "package.json"), '{ "name": "app" }\n', "utf8");
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client" }'), "utf8");
+
+            reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/api/todos/:id", "/webhooks/stripe", "/api/auth/*"] }));
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/api/auth", "/api/auth/*", "/api/todos/*", "/webhooks/stripe"]);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe"] }));
+
+            expect(result.updated).toContain("assets.run_worker_first");
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/webhooks/stripe"]);
+        });
+
+        it("leaves a list the user edited after Lunora wrote it, and says which routes it misses", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(root, "package.json"), '{ "name": "app" }\n', "utf8");
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client" }'), "utf8");
+            reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe"] }));
+
+            const edited = readFileSync(join(root, "wrangler.jsonc"), "utf8").replace('"/webhooks/stripe"', '"/webhooks/*"');
+
+            writeFileSync(join(root, "wrangler.jsonc"), edited, "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe", "/hooks/github"] }));
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/webhooks/*"]);
+            expect(result.warnings.join(" ")).toContain("does not send /hooks/github to the Worker first");
         });
 
         it.each([["celld"], ["node"]])("leaves assets alone on the %s target", (target) => {

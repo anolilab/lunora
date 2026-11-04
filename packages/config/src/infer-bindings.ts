@@ -30,6 +30,7 @@ import {
     CAPABILITY_PROBES,
     COMPANION_BINDING,
     createTargetScope,
+    discoverHttpRoutes,
     discoverNotifyChannels,
     foldCapabilitySignals,
     mayReadCapabilityContext,
@@ -392,9 +393,31 @@ interface InferredBindings {
     usesX402: boolean;
     /** `@lunora/x402/charge` is imported — the charge rail settles USDC to a recipient address (a public `[vars]` entry, user-named; hint-only). */
     usesX402Charge: boolean;
+
+    /**
+     * Paths the Worker serves outside its reserved `/_lunora/*` plane, as written:
+     * each `httpRoute.<verb>(path)` route under `lunora/`, plus `@lunora/auth`'s
+     * default base path (`/api/auth/*`) when auth is imported. Reconcile widens them
+     * into `assets.run_worker_first` rules. A custom auth `basePath` and routes
+     * added to a Hono `httpRouter` directly are not visible here.
+     */
+    workerRoutes: string[];
     /** Workflows declared in `lunora/workflows.ts` (exported or not — see {@link InferredWorkflow.exported}). */
     workflows: InferredWorkflow[];
 }
+
+/**
+ * `@lunora/auth`'s default base path, which this package cannot import
+ * (`@lunora/auth` depends on it). A test in `@lunora/auth` pins the two together.
+ */
+const AUTH_ROUTE_BASE_PATH = "/api/auth";
+
+/** See {@link InferredBindings.workerRoutes}. A parse failure only narrows `run_worker_first`, so it is not a signal: codegen reports the same file. */
+const discoverWorkerRoutes = (projectRoot: string, schemaDirectory: string, usesAuth: boolean): string[] => {
+    const routes = discoverIr(projectRoot, schemaDirectory, undefined, discoverHttpRoutes).value ?? [];
+
+    return [...routes.map((route) => route.path), ...(usesAuth ? [`${AUTH_ROUTE_BASE_PATH}/*`] : [])];
+};
 
 /**
  * Which capabilities the scanned project uses. A plain value built once from the
@@ -892,6 +915,8 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         ),
     );
 
+    const workerRoutes = discoverWorkerRoutes(options.projectRoot, schemaDirectory, capabilities.usesAuth);
+
     return {
         // The scanned flags first: `needsD1` below replaces the raw `env.DB` flag
         // with the schema-augmented value computed above.
@@ -912,6 +937,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         ...notifyChannelFlags(notifyIr.error === undefined ? notifyIr.value : ALL_NOTIFY_CHANNELS),
         hostsEventLog: hostsLog,
         hostsShardRegistry: hostsRegistry,
+        workerRoutes,
         workflows,
     };
 };
@@ -932,4 +958,4 @@ const secretSourcesFromBindings = (bindings: InferredBindings): string[] =>
         .map(([, source]) => source);
 
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow };
-export { inferLunoraBindings, secretSourcesFromBindings };
+export { AUTH_ROUTE_BASE_PATH, inferLunoraBindings, secretSourcesFromBindings };
