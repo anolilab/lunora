@@ -48,8 +48,8 @@ const DEFAULTS = {
     visibilityTimeoutMs: 30_000,
 };
 
-/** Cloudflare caps a per-message delay at 12 hours. */
-const MAX_DELAY_SECONDS = 43_200;
+/** Cloudflare caps a per-message delay at 24 hours. */
+const MAX_DELAY_SECONDS = 86_400;
 
 /**
  * Cloudflare Queues caps one message at 128 KiB and one `sendBatch` at 256 KiB.

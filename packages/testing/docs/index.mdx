@@ -246,7 +246,7 @@ const t = lunoraTest(schema, {
 List the export names of your `lunora/queues.ts` queues in the `queues` option
 and mutations and actions get a recording `ctx.queues`. Sends go through
 `@lunora/queue`'s own validation, so a batch over 100 messages, a delay past
-12 hours, or a queue name you did not list rejects as it would in production.
+24 hours, or a queue name you did not list rejects as it would in production.
 Each body is recorded as the consumer decodes it: encoded with its content type
 (Cloudflare's default `json`, unless the send names one) and decoded back, so a
 `Date` arrives as its ISO string and a `BigInt` rejects. Encoded sizes are checked

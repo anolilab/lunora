@@ -382,9 +382,9 @@ describe("createNodeQueueHost", () => {
 
         await host.bindings.typed.send("far future", { delaySeconds: 999_999 });
 
-        // Clamped to 43200s, not held for 999999s.
-        await expect(host.poll(now + 43_199_000)).resolves.toBe(0);
-        await expect(host.poll(now + 43_200_000)).resolves.toBe(1);
+        // Clamped to 86400s, not held for 999999s.
+        await expect(host.poll(now + 86_399_000)).resolves.toBe(0);
+        await expect(host.poll(now + 86_400_000)).resolves.toBe(1);
 
         await expect(host.bindings.typed.send(42, { contentType: "text" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
         await expect(host.bindings.typed.send("not bytes", { contentType: "bytes" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });

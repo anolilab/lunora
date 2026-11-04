@@ -18,13 +18,13 @@ import type { LunoraQueuesOptions, MessageSendRequestLike, QueueBindingLike, Que
 const MAX_QUEUE_BATCH = 100;
 
 /**
- * Cloudflare Queues ceiling on a per-message (or per-batch) delivery delay: 12
+ * Cloudflare Queues ceiling on a per-message (or per-batch) delivery delay: 24
  * hours. Mirrored by `@lunora/platform-node`'s host, which clamps to the same
- * number — so without this check the same `delaySeconds: 64_800` fires 6 hours
+ * number — so without this check the same `delaySeconds: 90_000` fires an hour
  * early on Node and is rejected by the platform on Cloudflare, from inside the
  * mutation, with an error that names neither the limit nor the option.
  */
-const MAX_DELAY_SECONDS = 43_200;
+const MAX_DELAY_SECONDS = 86_400;
 
 /** Refuse a delay past the platform ceiling, naming the limit and the option. */
 const assertDelay = (delaySeconds: number | undefined, where: string): void => {
@@ -34,7 +34,7 @@ const assertDelay = (delaySeconds: number | undefined, where: string): void => {
         // a server fault.
         throw new LunoraError(
             "VALIDATION_ERROR",
-            `@lunora/queue: ${where} delaySeconds is ${String(delaySeconds)}, over the Cloudflare Queues ceiling of ${String(MAX_DELAY_SECONDS)} (12 hours) — use @lunora/scheduler for longer schedules`,
+            `@lunora/queue: ${where} delaySeconds is ${String(delaySeconds)}, over the Cloudflare Queues ceiling of ${String(MAX_DELAY_SECONDS)} (24 hours) — use @lunora/scheduler for longer schedules`,
         );
     }
 };
