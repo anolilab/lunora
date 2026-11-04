@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import createMailer from "../src/create-mailer";
+import { parseInboundEmail } from "../src/inbound/parse";
 
 /**
  * Drives the REAL `@visulima/email` Cloudflare provider — no module mock.
@@ -33,5 +34,24 @@ describe("cloudflare transport against the real provider", () => {
         await mailer.send({ subject: "Hi", text: "x", to: "user@x.test" });
 
         expect(cloudflareSend).toHaveBeenCalledTimes(1);
+    });
+
+    it("writes In-Reply-To and References into the sent message, so a reply threads with the message it answers", async () => {
+        expect.assertions(2);
+
+        const cloudflareSend = vi.fn<(from: string, to: string, raw: string) => Promise<void>>(async () => undefined);
+        const mailer = createMailer({ cloudflareSend, from: "noreply@x.test" });
+
+        await mailer.send({
+            headers: { "In-Reply-To": "<m-2@example.com>", References: "<m-1@example.com> <m-2@example.com>" },
+            subject: "Re: Hi",
+            text: "x",
+            to: "user@x.test",
+        });
+
+        const parsed = await parseInboundEmail(cloudflareSend.mock.calls[0]?.[2] ?? "");
+
+        expect(parsed.inReplyTo).toBe("<m-2@example.com>");
+        expect(parsed.references).toBe("<m-1@example.com> <m-2@example.com>");
     });
 });

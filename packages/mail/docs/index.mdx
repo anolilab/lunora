@@ -293,6 +293,23 @@ export const onEmail = internalMutation
     });
 ```
 
+To reply in the same thread, send with the threading headers built from the
+parsed message. Both transports pass custom headers through as message headers.
+The Cloudflare transport writes each header on one unfolded line, so keep
+`References` to the newest few ids: a long thread's full chain overruns RFC 5322's
+998-character line limit.
+
+```ts
+const ids = [...(email.references?.split(/\s+/u) ?? []), email.messageId].filter(Boolean);
+
+await mailer.send({
+    to: email.from,
+    subject: email.subject?.startsWith("Re:") ? email.subject : `Re: ${email.subject ?? ""}`,
+    text: "Thanks — we got it.",
+    headers: email.messageId ? { "In-Reply-To": email.messageId, References: ids.slice(-10).join(" ") } : undefined,
+});
+```
+
 ### wrangler config
 
 Inbound delivery is configured in Cloudflare, not by codegen. Add an [Email
