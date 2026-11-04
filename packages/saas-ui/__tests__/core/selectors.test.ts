@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { describeActivity, groupActivityByDay } from "../../src/core/activity";
-import { DEFAULT_ADMIN_VIEW, organizationFilterArgs, planOptions } from "../../src/core/admin-organizations";
+import { DEFAULT_ADMIN_VIEW, ORGANIZATION_SEARCH_MAX, planOptions, toOrganizationFilter } from "../../src/core/admin-organizations";
 import { dayKey, initials, planLabel, relativeTime } from "../../src/core/format";
 import { deriveOverviewStats, isFirstRun } from "../../src/core/overview";
 import { projectCounts, selectProjects } from "../../src/core/projects";
@@ -164,13 +164,13 @@ describe("deriveOverviewStats", () => {
 
 describe("admin organisations", () => {
     it("sends only the filters the admin set, with a trimmed search", () => {
-        expect(organizationFilterArgs(DEFAULT_ADMIN_VIEW)).toStrictEqual({});
-        expect(organizationFilterArgs({ plan: "pro", search: "  acme ", sort: "seats", status: "past_due" })).toStrictEqual({
-            plan: "pro",
-            search: "acme",
-            status: "past_due",
-        });
-        expect(organizationFilterArgs({ ...DEFAULT_ADMIN_VIEW, search: "   " })).toStrictEqual({});
+        expect(toOrganizationFilter(DEFAULT_ADMIN_VIEW)).toStrictEqual({});
+        expect(toOrganizationFilter({ plan: "pro", search: "  acme " })).toStrictEqual({ plan: "pro", search: "acme" });
+        expect(toOrganizationFilter({ ...DEFAULT_ADMIN_VIEW, search: "   " })).toStrictEqual({});
+    });
+
+    it("cuts a pasted search to the length the server takes, instead of sending one it refuses", () => {
+        expect(toOrganizationFilter({ ...DEFAULT_ADMIN_VIEW, search: "x".repeat(ORGANIZATION_SEARCH_MAX + 50) }).search).toHaveLength(ORGANIZATION_SEARCH_MAX);
     });
 
     it("offers every catalog plan in catalog order, with an all option first", () => {

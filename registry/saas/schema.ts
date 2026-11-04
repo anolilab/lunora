@@ -121,15 +121,17 @@ export const saas = definePlugin("saas", {
                 updatedAt: v.number(),
             })
                 .global()
-                // One index per sort the admin list offers (`saas.listOrganizations`),
-                // each in that sort's key order, so a page is an index range rather
-                // than a sort of every tenant. `byPlanName` also serves the plan filter.
-                .index("byName", ["name", "organizationId"])
+                // The admin list's order (`saas.listOrganizations`: newest first),
+                // with and without its plan filter, so a page is an index range
+                // rather than a sort of every tenant.
                 .index("byOrganization", ["organizationId"], { unique: true })
-                .index("byPlanName", ["plan", "name", "organizationId"])
-                .index("bySeats", ["seats", "organizationId"])
+                .index("byPlanUpdated", ["plan", "updatedAt", "organizationId"])
                 .index("bySlug", ["slug"], { unique: true })
-                .index("byUpdatedAt", ["updatedAt", "organizationId"]),
+                .index("byUpdatedAt", ["updatedAt", "organizationId"])
+                // The list header's totals (`saas.organizationTotals`): a count and a
+                // seat sum per status and plan, kept in step on every write.
+                .aggregateIndex("countByStatusPlan", { by: ["status", "plan"] })
+                .aggregateIndex("seatsByStatusPlan", { by: ["status", "plan"], field: "seats", op: "sum" }),
         },
     }),
 });

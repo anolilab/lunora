@@ -39,9 +39,8 @@
  *          "svix-timestamp", "webhook-id", "webhook-signature", "webhook-timestamp"];
  *
  *      app.post("/payment/webhook", httpAction(async (ctx, request) => {
- *          // Capped: the body is read before its signature can be checked.
+ *          // Capped (413 past 1 MiB): the body is read before its signature can be checked.
  *          const body = await readWebhookBody(request);
- *          if (body === undefined) return new Response("webhook body too large", { status: 413 });
  *          const headers = Object.fromEntries(SIGNATURE_HEADERS.flatMap((name) => {
  *              const value = request.headers.get(name);
  *              return value === null ? [] : [[name, value]];
@@ -62,7 +61,7 @@ import { resolveEntitlements } from "@lunora/payment";
 import type { PaginationResult } from "lunorash/server";
 import { internal } from "#lunora/_generated/internal.js";
 import { action, internalAction, internalMutation, query, v } from "#lunora/_generated/server.js";
-import type { CloudflareBindings, Id } from "#lunora/_generated/server.js";
+import type { CloudflareBindings, Doc, Id, QueryCtx } from "#lunora/_generated/server.js";
 
 import { API_CALLS, entitlementsFromPlans, PLANS } from "../plans.js";
 
@@ -116,22 +115,40 @@ const appOrigin = (): string => {
 /** The shard a call that names none runs on, and the one the provider webhook reaches. */
 const ROOT_SHARD = "__root__";
 
+/** The catalog as payment entitlements, and its free plan: the one without a price. */
+const CATALOG_ENTITLEMENTS = entitlementsFromPlans(PLANS);
+const FREE_PLAN = PLANS.find((plan) => plan.priceId === undefined);
+
+/**
+ * `referenceId`'s entitlements and the catalog plans they come from; no plan
+ * when no priced subscription is active, which is the free plan.
+ */
+const currentPlans = async (
+    ctx: { payments: { listSubscriptions: (referenceId: string) => Promise<Parameters<typeof resolveEntitlements>[1]> } },
+    referenceId: string,
+): Promise<{ entitlements: ReturnType<typeof resolveEntitlements>; plans: ReadonlyArray<(typeof PLANS)[number]> }> => {
+    const entitlements = resolveEntitlements(CATALOG_ENTITLEMENTS, await ctx.payments.listSubscriptions(referenceId));
+
+    return { entitlements, plans: PLANS.filter((plan) => entitlements.plans.includes(plan.id)) };
+};
+
 /**
  * The members `referenceId`'s plan allows, or `null` when it is unmetered — the
  * limit better-auth's `membershipLimit` enforces in `lunora/auth/index.ts`.
  *
  * Read from the organisation's active subscriptions, the same source the billing
- * entitlements resolve against, rather than `saas_organizations.plan`, which
- * nothing syncs from billing. With no active priced plan the organisation is on
- * the catalog's free plan. Several active plans take the most generous, and one
- * without a seat cap makes the whole allowance unmetered.
+ * entitlements resolve against. With no active priced plan the organisation is on
+ * the free plan. Several active plans take the most generous cap, and one without
+ * a cap makes the whole allowance unmetered.
  */
 export const seatAllowance = internalAction.input({ referenceId: v.string() }).action(async ({ args: { referenceId }, ctx }): Promise<number | null> => {
-    const { plans } = resolveEntitlements(entitlementsFromPlans(PLANS), await ctx.payments.listSubscriptions(referenceId));
-    const active = PLANS.filter((plan) => plans.includes(plan.id));
-    const granting = active.length > 0 ? active : PLANS.filter((plan) => plan.priceId === undefined);
+    const { entitlements, plans } = await currentPlans(ctx, referenceId);
 
-    return granting.some((plan) => plan.seats === undefined) ? null : Math.max(...granting.map((plan) => plan.seats ?? 0));
+    if (plans.length === 0) {
+        return FREE_PLAN?.seats ?? null;
+    }
+
+    return plans.some((plan) => plan.seats === undefined) ? null : (entitlements.limit("seats") ?? null);
 });
 
 /** The org roles allowed to start a subscription or open the billing portal — the same pair `lunora/saas` lets write projects. */
@@ -495,6 +512,31 @@ const requireBillingAdmin = async (ctx: { auth: { getIdentity: () => Promise<{ a
 /** The most rows one admin subscription page may ask for, whatever `numItems` says. */
 const ADMIN_SUBSCRIPTIONS_PAGE_MAX = 100;
 
+/** A subscription row for the admin, with the organisation it bills from the cross-tenant projection. */
+type BilledSubscriptionRow = SubscriptionRow & { organization?: Doc<"saas_organizations"> };
+
+/**
+ * Attach each row's organisation, so the admin table names every subscription it
+ * shows however many it has loaded. One read per page, over that page's ids; a
+ * deleted organisation is left off and the table shows its id.
+ */
+const withOrganizations = async (ctx: QueryCtx, rows: ReadonlyArray<SubscriptionRow>): Promise<BilledSubscriptionRow[]> => {
+    const ids = [...new Set(rows.map((row) => row.referenceId))];
+
+    if (ids.length === 0) {
+        return [];
+    }
+
+    const { page } = await ctx.db.saas_organizations.findMany({ where: { organizationId: { in: ids }, status: { ne: "deleted" } } });
+    const byId = new Map(page.map((organization) => [organization.organizationId, organization]));
+
+    return rows.map((row) => {
+        const organization = byId.get(row.referenceId);
+
+        return organization === undefined ? row : { ...row, organization };
+    });
+};
+
 const pageCursor = v.optional(v.union(v.string(), v.null()));
 
 /**
@@ -505,8 +547,8 @@ const pageCursor = v.optional(v.union(v.string(), v.null()));
  * `lunora/schema.ts`), so every subscription the webhooks have written is here.
  * It lives beside the payment functions rather than in `lunora/saas` because a
  * kit without billing is a supported shape, and there `payment_subscriptions`
- * does not exist. The admin screen joins the rows to organisation names itself,
- * from `saas.organizationsById`.
+ * does not exist. Each row carries its organisation from the `saas_organizations`
+ * projection (see {@link withOrganizations}), so the admin table can name it.
  *
  * Paged because this table only grows: one response holding every subscription
  * ever written would be re-sent to the admin on each webhook. `numItems` is
@@ -516,7 +558,7 @@ const pageCursor = v.optional(v.union(v.string(), v.null()));
  */
 export const adminSubscriptions = query
     .input({ paginationOpts: v.object({ cursor: pageCursor, endCursor: pageCursor, numItems: v.number() }) })
-    .query(async ({ args: { paginationOpts }, ctx }): Promise<PaginationResult<SubscriptionRow>> => {
+    .query(async ({ args: { paginationOpts }, ctx }): Promise<PaginationResult<BilledSubscriptionRow>> => {
         await requireBillingAdmin(ctx);
 
         const numItems = Math.min(Math.max(Math.floor(paginationOpts.numItems), 1), ADMIN_SUBSCRIPTIONS_PAGE_MAX);
@@ -525,7 +567,13 @@ export const adminSubscriptions = query
             .order("desc")
             .paginate({ ...paginationOpts, numItems });
 
-        return { ...result, page: result.page.map((document) => toSubscriptionRow(document)) };
+        return {
+            ...result,
+            page: await withOrganizations(
+                ctx,
+                result.page.map((document) => toSubscriptionRow(document)),
+            ),
+        };
     });
 
 /** The most past-due subscriptions the dunning read returns. */
@@ -538,7 +586,7 @@ const PAST_DUE_MAX = 100;
  * back to it; this reads them through the `by_state` index instead, a bounded
  * read however large the table is. `more` says the cap was hit.
  */
-export const adminPastDueSubscriptions = query.query(async ({ ctx }): Promise<{ more: boolean; rows: SubscriptionRow[] }> => {
+export const adminPastDueSubscriptions = query.query(async ({ ctx }): Promise<{ more: boolean; rows: BilledSubscriptionRow[] }> => {
     await requireBillingAdmin(ctx);
 
     const rows = await ctx.db
@@ -546,7 +594,13 @@ export const adminPastDueSubscriptions = query.query(async ({ ctx }): Promise<{ 
         .withIndex("by_state", (q) => q.eq("state", "past_due"))
         .take(PAST_DUE_MAX + 1);
 
-    return { more: rows.length > PAST_DUE_MAX, rows: rows.slice(0, PAST_DUE_MAX).map((document) => toSubscriptionRow(document)) };
+    return {
+        more: rows.length > PAST_DUE_MAX,
+        rows: await withOrganizations(
+            ctx,
+            rows.slice(0, PAST_DUE_MAX).map((document) => toSubscriptionRow(document)),
+        ),
+    };
 });
 
 /**
@@ -578,7 +632,16 @@ export const processWebhook = internalAction
             method: "POST",
         });
         const response = await ctx.payments.handleWebhook(request);
-        const result = (await response.json()) as { applied?: boolean };
+        const result = (await response.json()) as { applied?: boolean; referenceId?: string };
+
+        // A subscription change moves the organisation's plan, which the admin list
+        // shows and filters on. Re-derived from every active subscription rather than
+        // this event, so a cancellation lands back on the free plan.
+        if (result.referenceId !== undefined) {
+            const [plan] = (await currentPlans(ctx, result.referenceId)).plans.toSorted((a, b) => b.priceMinor - a.priceMinor);
+
+            await ctx.runMutation(internal.saas.syncOrganizationPlan, { organizationId: result.referenceId, plan: (plan ?? FREE_PLAN)?.id ?? "free" });
+        }
 
         return { applied: result.applied ?? false, status: response.status };
     });

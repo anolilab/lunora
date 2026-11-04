@@ -54,9 +54,9 @@ without a reload.
 
 `AdminOrganizations` and `AdminSubscriptions` take rows like everything else.
 `AdminOrganizations` is controlled: the `saas` item's `saas.listOrganizations`
-is paged and searches, filters and sorts on the server, so the route holds the
+is paged, newest first, and searches and filters on the server, so the route holds the
 `view` (start from `DEFAULT_ADMIN_VIEW`), turns it into the query's arguments
-with `organizationFilterArgs(view)` plus `sort: view.sort`, reads the list with
+with `toOrganizationFilter(view)`, reads the list with
 `usePaginatedQuery`, and passes the loaded rows as `rows`, `onLoadMore` while another page can be
 asked for, and `onViewChange` to take the admin's changes. Debounce the search
 before it reaches the query, or every keystroke restarts the list. The header's
@@ -87,8 +87,8 @@ whatever page they fall on, and the past-due count is the whole table's. The
 template reads them with `adminPastDueSubscriptions`, over the `by_state` index
 `@lunora/payment` declares on `payment_subscriptions`. The
 organisation names come from the `organizations` prop, so the query does not
-need to know the kit's tenancy table exists; the template fills it from
-`saas.organizationsById` over the loaded rows' `referenceId`s.
+need to know the kit's tenancy table exists; the template fills it from the
+`organization` each `adminSubscriptions` / `adminPastDueSubscriptions` row carries.
 
 Suspending asks first: the row opens an inline step with an optional reason,
 which better-auth stores and the status column shows. Suspending is a better-auth ban, which better-auth enforces: the user's sessions

@@ -44,7 +44,6 @@ const v = {
     array: (): ValidatorStub => validator(),
     boolean: (): ValidatorStub => validator(),
     id: (): ValidatorStub => validator(),
-    literal: (): ValidatorStub => validator(),
     null: (): ValidatorStub => validator(),
     number: (): ValidatorStub => validator(),
     object: (): ValidatorStub => validator(),

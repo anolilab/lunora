@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 
 import type { AdminView, OrganizationTotals } from "../core/admin-organizations";
-import { planOptions } from "../core/admin-organizations";
+import { ORGANIZATION_SEARCH_MAX, planOptions } from "../core/admin-organizations";
 import type { AdminSubscriptionRow, PastDueSubscriptions, SubscriptionsView } from "../core/admin-subscriptions";
 import {
     DEFAULT_SUBSCRIPTIONS_VIEW,
@@ -30,7 +30,7 @@ interface AdminOrganizationsProps {
     /**
      * The admin changed the search or a filter. The list is filtered on the server, so
      * the route owns the view and turns it into the query's arguments with
-     * `organizationFilterArgs` — debounce the search there, or every keystroke restarts
+     * `toOrganizationFilter` — debounce the search there, or every keystroke restarts
      * the list at its first page.
      */
     onViewChange: (view: AdminView) => void;
@@ -54,7 +54,7 @@ interface AdminOrganizationsProps {
  * impersonation, which puts the admin inside the tenant with the tenant's own
  * authorisation applied.
  *
- * Controlled: the rows arrive already searched, filtered and sorted. The
+ * Controlled: the rows arrive already searched and filtered. The
  * toolbar stays mounted while a new filter's first page loads, so the search
  * box keeps its focus.
  */
@@ -99,6 +99,7 @@ const AdminOrganizations = ({ now, onLoadMore, onViewChange, plans, rows, timeZo
                 <input
                     aria-label="Search organizations"
                     className="lu-saas-input"
+                    maxLength={ORGANIZATION_SEARCH_MAX}
                     onChange={(event) => {
                         onViewChange({ ...view, search: event.target.value });
                     }}
@@ -149,9 +150,9 @@ interface AdminSubscriptionsProps {
     onLoadMore?: () => void;
 
     /**
-     * The organisations these subscriptions bill, for names — the saas kit's
-     * `saas.organizationsById` over the loaded rows' `referenceId`s. Subscriptions
-     * render with ids until it arrives, and for a tenant it does not return.
+     * The organisations these subscriptions bill, for names — in the saas
+     * template, the `organization` each subscription row carries. A subscription
+     * whose organisation is missing renders with its id.
      */
     organizations: ReadonlyArray<OrganizationRow> | undefined;
 

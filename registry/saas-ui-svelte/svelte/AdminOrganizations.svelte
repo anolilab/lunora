@@ -1,6 +1,6 @@
 <script lang="ts">
     import type { AdminView, OrganizationRow, OrganizationTotals, Plan } from "../core";
-    import { planLabel, planOptions, relativeTime } from "../core";
+    import { ORGANIZATION_SEARCH_MAX, planLabel, planOptions, relativeTime } from "../core";
     import Card from "./Card.svelte";
     import Empty from "./Empty.svelte";
 
@@ -14,7 +14,7 @@
         /**
          * The admin changed the search or a filter. The list is filtered on the server, so
          * the route owns the view and turns it into the query's arguments with
-         * `organizationFilterArgs` — debounce the search there, or every keystroke restarts
+         * `toOrganizationFilter` — debounce the search there, or every keystroke restarts
          * the list at its first page.
          */
         onViewChange: (view: AdminView) => void;
@@ -39,6 +39,7 @@
         <input
             aria-label="Search organizations"
             class="lu-saas-input"
+            maxlength={ORGANIZATION_SEARCH_MAX}
             oninput={(event) => onViewChange({ ...view, search: event.currentTarget.value })}
             placeholder="Search"
             type="search"

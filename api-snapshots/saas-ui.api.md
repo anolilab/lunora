@@ -162,8 +162,6 @@ interface AdminUsersState {
 interface AdminView {
     plan: string;
     search: string;
-    sort: OrganizationSort;
-    status: string;
 }
 ```
 
@@ -268,13 +266,18 @@ interface ImpersonationSessionLike {
 const NAME_MAX_LENGTH: 120;
 ```
 
-### `OrganizationFilterArgs` (interface)
+### `ORGANIZATION_SEARCH_MAX` (const)
 
 ```ts
-interface OrganizationFilterArgs {
+const ORGANIZATION_SEARCH_MAX: 100;
+```
+
+### `OrganizationFilter` (interface)
+
+```ts
+interface OrganizationFilter {
     plan?: string;
     search?: string;
-    status?: string;
 }
 ```
 
@@ -292,12 +295,6 @@ interface OrganizationRow {
     status: string;
     updatedAt: number;
 }
-```
-
-### `OrganizationSort` (type)
-
-```ts
-type OrganizationSort = "name" | "plan" | "seats" | "updated";
 ```
 
 ### `OrganizationTotals` (interface)
@@ -642,12 +639,6 @@ const mapError: (error: unknown) => string;
 const notEntitledLabel: (feature: string) => string;
 ```
 
-### `organizationFilterArgs` (const)
-
-```ts
-const organizationFilterArgs: (view: AdminView) => OrganizationFilterArgs;
-```
-
 ### `planLabel` (const)
 
 ```ts
@@ -742,6 +733,12 @@ const subscriptionTotals: (subscriptions: ReadonlyArray<AdminSubscriptionRow>) =
 
 ```ts
 const subscriptionsSubtitle: (subscriptions: ReadonlyArray<AdminSubscriptionRow>, hasMore: boolean, pastDue?: PastDueSubscriptions) => string;
+```
+
+### `toOrganizationFilter` (const)
+
+```ts
+const toOrganizationFilter: (view: AdminView) => OrganizationFilter;
 ```
 
 ### `userActions` (const)

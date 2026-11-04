@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../lunora/_generated/api";
 import { PLANS } from "../../lunora/plans";
 import type { AdminView } from "../../lunora/saas-ui/core";
-import { DEFAULT_ADMIN_VIEW, organizationFilterArgs } from "../../lunora/saas-ui/core";
+import { DEFAULT_ADMIN_VIEW, toOrganizationFilter } from "../../lunora/saas-ui/core";
 import { AdminOrganizations, AdminSubscriptions, AdminUsers } from "../../lunora/saas-ui/react";
 import { authClient } from "../auth-client";
 
@@ -24,9 +24,6 @@ const ORGANIZATIONS_PAGE = 50;
 /** How long the search box waits for typing to stop before it restarts the organisation list. */
 const SEARCH_DEBOUNCE_MS = 250;
 
-/** `saas.organizationsById` resolves at most this many ids in one call. */
-const ORGANIZATION_NAMES_MAX = 500;
-
 /** `value`, once it has held still for `delayMs`. */
 const useDebounced = <T,>(value: T, delayMs: number): T => {
     const [settled, setSettled] = useState(value);
@@ -42,25 +39,6 @@ const useDebounced = <T,>(value: T, delayMs: number): T => {
     }, [value, delayMs]);
 
     return settled;
-};
-
-/**
- * The last value other than `undefined`. `useQuery` reads `undefined` while new
- * arguments load, and the subscription table's name lookup gets new arguments on
- * every page it loads — without this each "Load more" would blank every name back
- * to an id until the lookup landed.
- */
-const useLastDefined = <T,>(value: T | undefined): T | undefined => {
-    const [last, setLast] = useState(value);
-
-    if (value !== undefined && value !== last) {
-        // Set-state-during-render: React's way to derive state from a changing input.
-        setLast(value);
-
-        return value;
-    }
-
-    return last;
 };
 
 export const Route = createFileRoute("/admin")({
@@ -88,12 +66,8 @@ function AdminPage() {
     const [failure, setFailure] = useState<SubscriptionError>();
     const [view, setView] = useState<AdminView>(DEFAULT_ADMIN_VIEW);
     const search = useDebounced(view.search, SEARCH_DEBOUNCE_MS);
-    const filter = organizationFilterArgs({ ...view, search });
-    const organizations = usePaginatedQuery(
-        api.saas.listOrganizations,
-        { ...filter, sort: view.sort },
-        { initialNumItems: ORGANIZATIONS_PAGE, onError: setFailure },
-    );
+    const filter = toOrganizationFilter({ ...view, search });
+    const organizations = usePaginatedQuery(api.saas.listOrganizations, filter, { initialNumItems: ORGANIZATIONS_PAGE, onError: setFailure });
     const totals = useQuery(api.saas.organizationTotals, filter, { onError: setFailure });
     // No `shardKey`: the billing tables live on the root shard. Paged, because the
     // table holds every subscription any tenant has ever had.
@@ -101,13 +75,11 @@ function AdminPage() {
     // Every past-due subscription, listed first: a newest-first page would leave an
     // older tenant in dunning out of sight until someone paged back to it.
     const pastDue = useQuery(api.payment.adminPastDueSubscriptions, {}, { onError: setFailure });
-    // The organisation list is paged and filtered, so it cannot name every
-    // subscription's tenant; resolve the ones on screen by id instead. Sorted so the
-    // query's arguments, and with them its subscription, change only when the set does.
-    const billedIds = [...new Set([...(pastDue?.rows ?? []), ...subscriptions.results].map((row) => row.referenceId))]
-        .toSorted((a, b) => a.localeCompare(b))
-        .slice(0, ORGANIZATION_NAMES_MAX);
-    const billedOrganizations = useLastDefined(useQuery(api.saas.organizationsById, { organizationIds: billedIds }, { onError: setFailure }));
+    // Each subscription row carries its organisation (the list above is paged and
+    // filtered, so it cannot name them), read once per page on the server.
+    const billedOrganizations = [...(pastDue?.rows ?? []), ...subscriptions.results].flatMap((row) =>
+        row.organization === undefined ? [] : [row.organization],
+    );
     const { data: session } = authClient.useSession();
     // The clock the tables read, advanced each minute: a timed suspension that has
     // lapsed has to turn back into Active (with Suspend offered), and "4m ago" has

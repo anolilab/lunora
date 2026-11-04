@@ -3,7 +3,7 @@
  *
  * Reads the `.global()` `saas_organizations` projection, which is the only
  * cross-tenant read the shard model allows. The list is paged (the saas kit's
- * `saas.listOrganizations` is a cursor query) and the search, filters and sort
+ * `saas.listOrganizations` is a cursor query) and the search and plan filter
  * run on the server, so nothing here filters rows: this module turns the
  * admin's view into the query's arguments, and the header's totals come from
  * `saas.organizationTotals` over the same filter. Anything that would need a
@@ -12,15 +12,10 @@
  */
 import type { Plan } from "./billing";
 
-type OrganizationSort = "name" | "plan" | "seats" | "updated";
-
 interface AdminView {
     /** Exact plan id, or `"all"`. */
     plan: string;
     search: string;
-    sort: OrganizationSort;
-    /** Exact status, or `"all"`. */
-    status: string;
 }
 
 /** What `saas.organizationTotals` resolves to: the whole filtered set, not the pages loaded. */
@@ -29,23 +24,28 @@ interface OrganizationTotals {
     seats: number;
 }
 
-/** The filter `saas.listOrganizations` and `saas.organizationTotals` share. The list also takes `sort`. */
-interface OrganizationFilterArgs {
+/** The filter `saas.listOrganizations` and `saas.organizationTotals` share. */
+interface OrganizationFilter {
     plan?: string;
     search?: string;
-    status?: string;
 }
 
-const DEFAULT_ADMIN_VIEW: AdminView = { plan: "all", search: "", sort: "updated", status: "all" };
+/** The longest search the saas kit's list takes; the search box stops typing at it. */
+const ORGANIZATION_SEARCH_MAX = 100;
 
-/** The view's filter as query arguments: `"all"` and a blank search are simply absent. */
-const organizationFilterArgs = (view: AdminView): OrganizationFilterArgs => {
-    const search = view.search.trim();
+const DEFAULT_ADMIN_VIEW: AdminView = { plan: "all", search: "" };
+
+/**
+ * The view's filter as query arguments: `"all"` and a blank search are simply
+ * absent, and a pasted search is cut to the length the server accepts, which
+ * refuses a longer one outright.
+ */
+const toOrganizationFilter = (view: AdminView): OrganizationFilter => {
+    const search = view.search.trim().slice(0, ORGANIZATION_SEARCH_MAX);
 
     return {
         ...(view.plan === "all" ? {} : { plan: view.plan }),
         ...(search === "" ? {} : { search }),
-        ...(view.status === "all" ? {} : { status: view.status }),
     };
 };
 
@@ -61,5 +61,5 @@ const planOptions = (plans: ReadonlyArray<Pick<Plan, "id" | "name">>): ReadonlyA
     }),
 ];
 
-export type { AdminView, OrganizationFilterArgs, OrganizationSort, OrganizationTotals };
-export { DEFAULT_ADMIN_VIEW, organizationFilterArgs, planOptions };
+export type { AdminView, OrganizationFilter, OrganizationTotals };
+export { DEFAULT_ADMIN_VIEW, ORGANIZATION_SEARCH_MAX, planOptions, toOrganizationFilter };
