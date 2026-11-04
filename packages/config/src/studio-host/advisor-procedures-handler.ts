@@ -24,6 +24,20 @@ const ADVISOR_PROCEDURES_ENDPOINT = "/__lunora/advisor-procedures";
 /** Name of the generated file codegen writes into `<schemaDirectory>/_generated/`. */
 const ADVISOR_PROCEDURES_FILE = "advisor-procedures.json";
 
+/**
+ * The fields `scoreAdvisor` dereferences on every row. Checked here so a corrupt
+ * sidecar is a 500 with a reason rather than a `TypeError` in the health panel.
+ */
+const isProcedureEntry = (entry: unknown): boolean => {
+    if (typeof entry !== "object" || entry === null) {
+        return false;
+    }
+
+    const { exportName, file, kind, visibility } = entry as Record<string, unknown>;
+
+    return typeof exportName === "string" && typeof file === "string" && typeof kind === "string" && typeof visibility === "string";
+};
+
 const handleAdvisorProceduresRequest = (request: LocalEndpointRequest): LocalEndpointResponse => {
     if (request.method !== "GET") {
         return { body: { error: "GET only" }, status: 405 };
@@ -38,17 +52,36 @@ const handleAdvisorProceduresRequest = (request: LocalEndpointRequest): LocalEnd
         };
     }
 
+    let source: string;
+
     try {
-        const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+        source = readFileSync(path, "utf8");
+    } catch (error) {
+        // eslint-disable-next-line no-console -- dev-host diagnostic; the studio hosts have no shared logger at this seam.
+        console.error(`[lunora] could not read ${path}:`, error);
 
-        if (typeof parsed !== "object" || parsed === null || !Array.isArray((parsed as { procedures?: unknown }).procedures)) {
-            return { body: { error: "advisor-procedures.json has no procedures array; re-run `lunora codegen`." }, status: 500 };
-        }
+        return { body: { error: "advisor-procedures.json could not be read; see the dev server log." }, status: 500 };
+    }
 
-        return { body: parsed, status: 200 };
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(source);
     } catch {
         return { body: { error: "advisor-procedures.json is not valid JSON; re-run `lunora codegen`." }, status: 500 };
     }
+
+    const procedures = typeof parsed === "object" && parsed !== null ? (parsed as { procedures?: unknown }).procedures : undefined;
+
+    if (!Array.isArray(procedures)) {
+        return { body: { error: "advisor-procedures.json has no procedures array; re-run `lunora codegen`." }, status: 500 };
+    }
+
+    if (!procedures.every((entry) => isProcedureEntry(entry))) {
+        return { body: { error: "advisor-procedures.json has a malformed procedure entry; re-run `lunora codegen`." }, status: 500 };
+    }
+
+    return { body: parsed, status: 200 };
 };
 
 export { ADVISOR_PROCEDURES_ENDPOINT, handleAdvisorProceduresRequest };

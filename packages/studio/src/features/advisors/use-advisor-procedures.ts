@@ -1,5 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 
 import type { AdvisorProceduresResult } from "../../lib/admin";
 import { errorMessage } from "../../lib/internal";
@@ -42,17 +42,33 @@ interface AdvisorProceduresOptions {
  * the admin query hooks the panel reads next to it.
  */
 const useAdvisorProcedures = ({ enabled, refreshKey }: AdvisorProceduresOptions): { data: AdvisorProceduresResult | undefined; error: string | undefined } => {
-    const query = useQuery({ enabled, queryFn: fetchAdvisorProcedures, queryKey: ["studio", "advisor-procedures"] });
-    const { refetch } = query;
-    const previousKey = useRef(refreshKey);
+    // Bump a revision when the advisories change and key the query on it, so React
+    // Query fetches once per change instead of an effect calling `refetch()`. The
+    // first value (advisories still loading → loaded) is not a change: the mount
+    // fetch already covers it.
+    const [seenKey, setSeenKey] = useState(refreshKey);
+    const [revision, setRevision] = useState(0);
 
-    useEffect(() => {
-        if (enabled && previousKey.current !== refreshKey) {
-            previousKey.current = refreshKey;
-            // A failed refetch is already recorded on the query's `error`, so the rejection is not re-raised here.
-            refetch().catch(() => undefined);
+    if (seenKey !== refreshKey) {
+        setSeenKey(refreshKey);
+
+        if (seenKey !== undefined) {
+            setRevision((current) => current + 1);
         }
-    }, [enabled, refreshKey, refetch]);
+    }
+
+    const query = useQuery({
+        enabled,
+        // Hold the previous list while a new revision loads, so the score does not flash to a spinner.
+        placeholderData: keepPreviousData,
+        queryFn: fetchAdvisorProcedures,
+        queryKey: ["studio", "advisor-procedures", revision],
+        // Codegen can rewrite the sidecar without any advisory changing (a clean
+        // procedure added or removed), so poll while the panel is open as well.
+        refetchInterval: 60_000,
+        // The app's QueryClient defaults to an infinite staleTime; refetch on mount and focus instead.
+        staleTime: 0,
+    });
 
     return { data: query.data, error: query.error ? errorMessage(query.error) : undefined };
 };

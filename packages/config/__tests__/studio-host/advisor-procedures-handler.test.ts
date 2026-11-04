@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { handleAdvisorProceduresRequest } from "../../src/studio-host/advisor-procedures-handler";
 
@@ -59,6 +59,33 @@ describe("handleAdvisorProceduresRequest", () => {
         writeFileSync(join(generatedDirectory, "advisor-procedures.json"), "{ not json");
 
         expect(handleAdvisorProceduresRequest({ method: "GET", projectRoot }).status).toBe(500);
+    });
+
+    it("answers 500 when an entry is not a procedure object", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(generatedDirectory, "advisor-procedures.json"), JSON.stringify({ procedures: [null] }));
+
+        const response = handleAdvisorProceduresRequest({ method: "GET", projectRoot });
+
+        expect(response.status).toBe(500);
+        expect(response.body).toStrictEqual({ error: "advisor-procedures.json has a malformed procedure entry; re-run `lunora codegen`." });
+    });
+
+    it("reports a read failure as such and logs the cause", () => {
+        expect.assertions(3);
+
+        // A directory at the file's path exists but cannot be read as a file (EISDIR).
+        mkdirSync(join(generatedDirectory, "advisor-procedures.json"));
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const response = handleAdvisorProceduresRequest({ method: "GET", projectRoot });
+
+        expect(response.status).toBe(500);
+        expect(response.body).toStrictEqual({ error: "advisor-procedures.json could not be read; see the dev server log." });
+        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("advisor-procedures.json"), expect.any(Error));
+
+        consoleError.mockRestore();
     });
 
     it("refuses any method other than GET", () => {
