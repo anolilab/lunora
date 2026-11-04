@@ -9,6 +9,7 @@ import { money } from "../src/money";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
 import type { CheckoutRequest, PaymentSession, Subscription, WebhookAction } from "../src/types";
+import { MAX_WEBHOOK_BODY_BYTES } from "../src/webhook-body";
 
 const subscription = (referenceId: string, state: Subscription["state"]): Subscription => {
     return {
@@ -1167,6 +1168,20 @@ describe("createPayment", () => {
 
         expect(session?.state).toBe("captured");
         expect(session?.capturedAmount.minorUnits).toBe(1000n);
+    });
+
+    it("refuses an oversized webhook body with 413 before the adapter parses it", async () => {
+        expect.assertions(2);
+
+        const parseWebhook = vi.fn<PaymentAdapter["parseWebhook"]>();
+        const payment = createPayment({ adapter: fakeAdapter({ parseWebhook }), authorize: () => true, store: new MemoryPaymentStore() });
+
+        const response = await payment.handleWebhook(
+            new Request("https://app.test/payment/webhook", { body: "x".repeat(MAX_WEBHOOK_BODY_BYTES + 1), method: "POST" }),
+        );
+
+        expect(response.status).toBe(413);
+        expect(parseWebhook).not.toHaveBeenCalled();
     });
 
     it("returns non-2xx for an orphaned subscription.updated so the provider retries", async () => {

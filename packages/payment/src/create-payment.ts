@@ -35,6 +35,7 @@ import type {
     TrackInput,
     TrackResult,
 } from "./types";
+import { readWebhookBody } from "./webhook-body";
 
 /**
  * Strictly increasing event stamps for the usage ledger.
@@ -462,7 +463,11 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             let action;
 
             try {
-                const payload = await request.text();
+                const payload = await readWebhookBody(request);
+
+                if (payload === undefined) {
+                    return jsonResponse({ error: "webhook body too large" }, 413);
+                }
 
                 action = await adapter.parseWebhook({ headers: request.headers, payload });
             } catch (error) {

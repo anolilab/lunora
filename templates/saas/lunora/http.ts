@@ -1,4 +1,4 @@
-import { webhookResponse } from "@lunora/payment";
+import { readWebhookBody, webhookResponse } from "@lunora/payment";
 import { httpAction, httpRouter } from "lunorash/server";
 
 import { internal } from "./_generated/internal";
@@ -39,7 +39,14 @@ app.post(
             }
         }
 
-        const result = await ctx.runAction(internal.payment.processWebhook, { body: await request.text(), headers });
+        // Capped: the route is public and the body is read before its signature can be checked.
+        const body = await readWebhookBody(request);
+
+        if (body === undefined) {
+            return new Response("webhook body too large", { status: 413 });
+        }
+
+        const result = await ctx.runAction(internal.payment.processWebhook, { body, headers });
 
         return webhookResponse(result);
     }),

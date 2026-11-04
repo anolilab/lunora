@@ -31,14 +31,16 @@
  *      deliberate 500 becomes a 200, the provider never retries it, and the
  *      update is lost for good.
  *      ```ts
- *      import { webhookResponse } from "@lunora/payment";
+ *      import { readWebhookBody, webhookResponse } from "@lunora/payment";
  *
  *      // Every header an adapter verifies with; add yours if it signs with another.
  *      const SIGNATURE_HEADERS = ["creem-signature", "stripe-signature", "svix-id", "svix-signature",
  *          "svix-timestamp", "webhook-id", "webhook-signature", "webhook-timestamp"];
  *
  *      app.post("/payment/webhook", httpAction(async (ctx, request) => {
- *          const body = await request.text();
+ *          // Capped: the body is read before its signature can be checked.
+ *          const body = await readWebhookBody(request);
+ *          if (body === undefined) return new Response("webhook body too large", { status: 413 });
  *          const headers = Object.fromEntries(SIGNATURE_HEADERS.flatMap((name) => {
  *              const value = request.headers.get(name);
  *              return value === null ? [] : [[name, value]];
