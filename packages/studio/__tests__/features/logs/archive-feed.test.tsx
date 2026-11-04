@@ -76,6 +76,25 @@ describe("archiveFeed", () => {
         expect(text).toContain("first");
     });
 
+    it("shows a logged Error field as its headline, with its stack and cause behind an Error details disclosure", async () => {
+        expect.assertions(3);
+
+        const err = JSON.stringify({
+            cause: { message: "disk full", name: "Error", stack: "Error: disk full\n    at write (store.ts:9:3)" },
+            message: "save failed",
+            name: "Error",
+            stack: "Error: save failed\n    at save (orders.ts:4:11)",
+        });
+
+        render(renderFeed(createClient({ rows: [ROW({ fields: { err, orderId: "o-1" } })] })));
+
+        const detail = await screen.findByTestId("lg-archive-error");
+
+        expect(screen.getByTestId("lg-archive-table").textContent).toContain("err=Error: save failed orderId=o-1");
+        expect(detail.textContent).toContain("at save (orders.ts:4:11)");
+        expect(detail.textContent).toContain("caused by: Error: disk full");
+    });
+
     it("renders the empty state when the archive returns no rows", async () => {
         expect.assertions(1);
 

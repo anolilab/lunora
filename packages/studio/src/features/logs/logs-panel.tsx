@@ -109,7 +109,7 @@ const LogRow = ({ entry, index, measureRef, onOpenTrace, start }: LogRowProps): 
 
     return (
         <div
-            className="flex items-center border-b border-border px-3 py-1.5 font-mono text-xs hover:bg-muted/50"
+            className="flex flex-wrap items-center border-b border-border px-3 py-1.5 font-mono text-xs hover:bg-muted/50"
             data-index={index}
             data-testid="lg-row"
             ref={measureRef}

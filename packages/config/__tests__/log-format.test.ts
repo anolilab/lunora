@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { normalizeLogFields } from "../../../shared/log-fields";
 import { formatLunoraEvent } from "../src/log-format";
 
 /** Build a one-line JSON event string the runtime would emit to `console`. */
@@ -52,6 +53,54 @@ describe("formatLunoraEvent", () => {
                     }),
                 )?.text,
             ).toBe('orders:place  placed  attempt=2 nested={"sku":"x"} orderId=o-1');
+        });
+
+        it("shows a logged Error field as its headline, then its stack and cause chain on indented lines", () => {
+            expect.assertions(1);
+
+            const cause = new Error("disk full");
+
+            cause.stack = "Error: disk full\n    at write (store.ts:9:3)";
+
+            const error = new Error("save failed", { cause });
+
+            error.stack = "Error: save failed\n    at save (orders.ts:4:11)";
+
+            expect(
+                formatLunoraEvent(
+                    event({
+                        fields: normalizeLogFields({ err: error, orderId: "o-1" }),
+                        function: "orders:place",
+                        level: "error",
+                        message: "failed",
+                        type: "log",
+                    }),
+                )?.text,
+            ).toBe(
+                [
+                    "orders:place  failed  err=Error: save failed orderId=o-1",
+                    "  err: Error: save failed",
+                    "      at save (orders.ts:4:11)",
+                    "    caused by: Error: disk full",
+                    "        at write (store.ts:9:3)",
+                ].join("\n"),
+            );
+        });
+
+        it("keeps a field that only looks like an error, or no longer parses, on the one line", () => {
+            expect.assertions(1);
+
+            expect(
+                formatLunoraEvent(
+                    event({
+                        fields: { cut: '{"name":"Error","message":"x","stack":"Error: x…[truncated]', plain: '{"name":"n","message":"m"}' },
+                        function: "a:b",
+                        level: "error",
+                        message: "m",
+                        type: "log",
+                    }),
+                )?.text,
+            ).toBe('a:b  m  cut={"name":"Error","message":"x","stack":"Error: x…[truncated] plain={"name":"n","message":"m"}');
         });
 
         it("appends a short trace-id suffix when the line carries one", () => {

@@ -296,6 +296,40 @@ describe("logsPanel — errors view", () => {
         expect(rows[0]?.textContent).toContain("order placed");
     });
 
+    it("shows a logged Error field as its headline and opens its stack and cause chain on demand", async () => {
+        expect.assertions(5);
+
+        const err = JSON.stringify({
+            cause: { message: "disk full", name: "Error", stack: "Error: disk full\n    at write (store.ts:9:3)" },
+            message: "save failed",
+            name: "Error",
+            stack: "Error: save failed\n    at save (orders.ts:4:11)",
+        });
+        const withError: LogEntry[] = [
+            { fields: { err, orderId: "o-1" }, functionPath: "orders:place", level: "error", message: "charge failed", timestamp: 1_700_000_005_000 },
+        ];
+
+        render(renderPanel(createClient(withError)));
+
+        await screen.findByTestId("lg-table");
+        await switchToErrors();
+
+        const fields = await screen.findByTestId("lg-fields");
+
+        expect(fields.textContent).toBe("err=Error: save failed orderId=o-1");
+        expect(screen.queryByTestId("lg-error-detail")).toBeNull();
+
+        const toggle = screen.getByTestId("lg-error-toggle");
+
+        fireEvent.click(toggle);
+
+        const detail = await screen.findByTestId("lg-error-detail");
+
+        expect(toggle.getAttribute("aria-expanded")).toBe("true");
+        expect(detail.textContent).toContain("at save (orders.ts:4:11)");
+        expect(detail.textContent).toContain("caused by: Error: disk full");
+    });
+
     it("shows the empty state when there are no logs", async () => {
         expect.assertions(1);
 

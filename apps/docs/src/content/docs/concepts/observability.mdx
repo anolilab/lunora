@@ -383,11 +383,31 @@ terminal, Workers Logs, the Studio Logs panel, and any sink; the raw positional
 args of a console-style call reach only the in-process `onLog` sink you control.
 
 Log an `Error` either way, `ctx.log.error("charge failed", err)` or
-`ctx.log.error("charge failed", { err, orderId })`, and it renders as
-`TypeError: card declined` (not `{}`). The log event also gets an `error`
-holding the thrown error's `name`, unredacted `message`, and `stack`; `otlpSink`
-ships these as `exception.*` attributes, and an
+`ctx.log.error("charge failed", { err, orderId })`. The log event gets an `error`
+holding the first logged error's `name`, unredacted `message`, and `stack`;
+`otlpSink` ships these as `exception.*` attributes, and an
 [error tracker](/docs/concepts/error-tracking) reads them directly.
+
+In the console-style form the error renders into the message as
+`TypeError: card declined`. In a fields object it keeps more: the field value is
+the JSON of the error's `name`, `message`, `stack`, its `cause` chain and, for an
+`AggregateError`, up to ten `errors`, plus the error's own enumerable properties.
+An `Error` nested deeper in a field object is written the same way, not as `{}`.
+
+- The dev terminal prints the field as `err=TypeError: card declined` on the log
+  line, then the stack and each `caused by:` level on indented lines below it.
+- The Studio Logs panel shows the same one-line form, plus an **Error details**
+  toggle that opens the stack and cause chain.
+- A `cause` that loops back is cut, and errors more than four levels down keep
+  only their `name` and `message`. When the JSON would pass 3.5 KiB, the stacks
+  below the top error are dropped first, then every stack is cut to a few lines,
+  then dropped, to stay under redaction's 4 KiB limit per string. A field still
+  over the limit (a very long message, large own properties) is cut by
+  redaction and shows as raw text.
+- If the error's own properties hold a cycle, they are left out and the stack
+  and `cause` chain are kept.
+- The field is redacted like any other: a credential in the message also appears
+  in the stack, and both are masked.
 
 :::caution[Behavior change]
 A two-argument call whose second argument is a plain object, such as `ctx.log.info("saved", user)`, is now the **structured** form: the message is `"saved"` and `user` becomes `fields`, instead of being rendered into the message as `saved {…}`. Calls with a non-object second argument, or three or more arguments, are unchanged. If you relied on the object being folded into the message text, pass it as a third argument (`ctx.log.info("saved", "-", user)`) or pre-render it.

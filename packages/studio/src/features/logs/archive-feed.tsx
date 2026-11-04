@@ -5,7 +5,7 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import { LOG_ARCHIVE_NOT_CONFIGURED } from "../../../../../shared/log-archive";
 import type { ContextLogLevel } from "../../../../../shared/log-event";
 import { LOG_LEVEL_ORDER } from "../../../../../shared/log-event";
-import { formatLogFields } from "../../../../../shared/log-fields";
+import { formatLogFields, formatLoggedError, loggedErrorFields } from "../../../../../shared/log-fields";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -85,7 +85,9 @@ const archiveReducer = (state: ArchiveState, action: ArchiveAction): ArchiveStat
 
 /** One archive row: time · level · path · message (+ fields) · trace · shard · user. */
 const ArchiveRow = ({ row }: { readonly row: PipelineLogRow }): ReactElement => {
+    const t = useT();
     const fields = formatLogFields(row.fields);
+    const errors = loggedErrorFields(row.fields);
 
     return (
         <TableRow data-testid={`lg-archive-row-${String(row.ts)}`}>
@@ -102,6 +104,14 @@ const ArchiveRow = ({ row }: { readonly row: PipelineLogRow }): ReactElement => 
                     <div className="truncate font-mono text-[11px] text-muted-foreground" title={fields}>
                         {fields}
                     </div>
+                )}
+                {errors.length > 0 && (
+                    <details className="mt-1 text-[11px]" data-testid="lg-archive-error">
+                        <summary className="cursor-pointer text-destructive">{t("Error details")}</summary>
+                        <pre className="mt-1 overflow-x-auto whitespace-pre rounded-md bg-muted/50 p-2 font-mono leading-snug text-muted-foreground">
+                            {errors.map(([key, error]) => `${key}: ${formatLoggedError(error)}`).join("\n\n")}
+                        </pre>
+                    </details>
                 )}
             </TableCell>
             <TableCell className="font-mono text-[11px] text-muted-foreground">{row.traceId ?? "—"}</TableCell>
