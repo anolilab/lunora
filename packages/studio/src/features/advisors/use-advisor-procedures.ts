@@ -15,6 +15,11 @@ const ADVISOR_PROCEDURES_ENDPOINT = "/__lunora/advisor-procedures";
 const fetchAdvisorProcedures = async (): Promise<AdvisorProceduresResult> => {
     const response = await fetch(ADVISOR_PROCEDURES_ENDPOINT);
 
+    if (response.ok && !(response.headers.get("content-type") ?? "").includes("application/json")) {
+        // A host without the route falls through to the SPA shell: HTML with a 200, which would fail as a raw parse error.
+        throw new Error("The advisor procedure route is not available on this host.");
+    }
+
     if (!response.ok) {
         const body: unknown = await response.json().catch(() => undefined);
         const reason = typeof body === "object" && body && "error" in body ? String(body.error) : `HTTP ${String(response.status)}`;
@@ -62,6 +67,8 @@ const useAdvisorProcedures = ({ enabled, refreshKey }: AdvisorProceduresOptions)
         placeholderData: keepPreviousData,
         queryFn: fetchAdvisorProcedures,
         queryKey: ["studio", "advisor-procedures", revision],
+        // No retries: a 404/500 is a state the host reports, and retrying would keep the panel on "Loading" for seconds first.
+        retry: false,
         // Codegen can rewrite the sidecar without any advisory changing (a clean
         // procedure added or removed), so poll while the panel is open as well.
         refetchInterval: 60_000,

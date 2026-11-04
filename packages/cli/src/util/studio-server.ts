@@ -201,6 +201,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
                 // it for a loopback bind: a non-loopback (LAN/0.0.0.0) bind would otherwise
                 // hand the token to any network client that GETs `/`.
                 adminToken: isLoopback ? resolveAdminToken(options.cwd) : undefined,
+                advisorProcedures: isLoopback,
                 basePath: "/",
                 dataEditable: isLoopback,
                 rulesInstalled: detectAgentRules(options.cwd).installed,

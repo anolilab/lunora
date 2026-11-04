@@ -105,6 +105,7 @@ const createStudioMiddleware = (options: StudioMiddlewareOptions): ((request: In
     const currentDocument = createStudioDocumentCache(projectRoot, () =>
         renderStudioHtml({
             adminToken: resolveAdminToken(projectRoot),
+            advisorProcedures: true,
             basePath: STUDIO_PATH,
             // Loopback-only dev route (it 403s on a non-loopback bind), so the
             // developer owns the data — let them edit rows, run-as a user, and edit

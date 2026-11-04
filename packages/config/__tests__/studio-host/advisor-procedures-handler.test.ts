@@ -6,7 +6,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { handleAdvisorProceduresRequest } from "../../src/studio-host/advisor-procedures-handler";
 
-const PROCEDURES = { procedures: [{ exportName: "list", file: "todos", kind: "query", visibility: "public" }] };
+const PROCEDURES = {
+    procedures: [
+        {
+            exportName: "list",
+            file: "todos",
+            kind: "query",
+            usesCaptcha: false,
+            usesEmailGate: false,
+            usesMask: false,
+            usesRateLimit: false,
+            usesRls: true,
+            visibility: "public",
+        },
+    ],
+};
 
 describe("handleAdvisorProceduresRequest", () => {
     let projectRoot: string;
@@ -51,6 +65,17 @@ describe("handleAdvisorProceduresRequest", () => {
 
         expect(response.status).toBe(500);
         expect(response.body).toStrictEqual({ error: "advisor-procedures.json has no procedures array; re-run `lunora codegen`." });
+    });
+
+    it("answers 500 when a procedure entry is malformed rather than letting the client cast it", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(generatedDirectory, "advisor-procedures.json"), JSON.stringify({ procedures: [{ exportName: "list" }] }));
+
+        const response = handleAdvisorProceduresRequest({ method: "GET", projectRoot });
+
+        expect(response.status).toBe(500);
+        expect(response.body).toStrictEqual({ error: "advisor-procedures.json has a malformed procedure entry; re-run `lunora codegen`." });
     });
 
     it("answers 500 when the file is not JSON", () => {
