@@ -1586,10 +1586,11 @@ tool runs without approval unless you set `needsApproval`. See
 
 **Type:** `(options?: WebSearchToolOptions) => AgentToolDefinition<WebSearchToolInput, AiWebSearchItem[] | string>`
 
-A batteries-included tool over the Cloudflare Web Search API. It bills the
-`byokAlias` provider key when one is set, and otherwise uses the `default`
-alias. The `provider`, `gatewayId` and `description` options set the search
-backend and the tool's description.
+A batteries-included tool over the Cloudflare Web Search API. A search bills a
+provider key stored on the AI Gateway (the `byokAlias` key, else the `default`
+alias) when there is one, and AI Gateway credits otherwise. The `provider`
+option picks the search backend, `gatewayId` picks the gateway, and
+`description` overrides the tool's description.
 
 **Default:** `limit` is 5.
 
@@ -1879,7 +1880,7 @@ The `graph` and `episodic` objects bound their own tiers. See
 
 Thrown by `withSecret` when the value is no longer available: it expired, a
 previous call already used it, it was never supplied, or it was declared for
-another consumer or thread. Its `code` is `"SECRET_UNAVAILABLE"`. Catch it to
+another consumer or thread. Its `code` is `"SECRET_UNAVAILABLE"`.
 See [details](#human-supplied-secrets-requestsecrettool).
 
 ## See also

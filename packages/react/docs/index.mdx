@@ -668,9 +668,9 @@ Returns a mutation handle for a server mutation. `mutate` is awaitable, and `pen
 
 #### `MutationHook`
 
-**Type:** `{ data; error; isError; mutate; pending; reset; withOptimisticUpdate }`
+**Type:** `MutationHook<F extends FunctionReference> { data: ReturnOf<F> | undefined; error: Error | null; isError: boolean; mutate: (args: ArgsOf<F>, options?) => Promise<ReturnOf<F>>; pending: boolean; reset: () => void; withOptimisticUpdate: (update: OptimisticUpdate<ArgsOf<F>>) => MutationHook<F> }`
 
-The object `useMutation` returns. `withOptimisticUpdate(update)` returns the same handle with an optimistic update applied to every call by default.
+The object `useMutation` returns. `withOptimisticUpdate(update)` returns a handle whose `mutate` applies `update` as the optimistic update for every call, unless a call passes its own `optimisticUpdate`.
 
 #### `useMutator`
 
@@ -692,9 +692,9 @@ Returns a handle for a server action. `call` fails fast and is never queued or r
 
 #### `ActionHook`
 
-**Type:** `{ call: (args: ArgsOf<F>, options?: ActionCallOptions) => Promise<ReturnOf<F>>; data; error; pending: boolean; reset: () => void }`
+**Type:** `ActionHook<F extends FunctionReference> { call: (args: ArgsOf<F>, options?: ActionCallOptions) => Promise<ReturnOf<F>>; data: ReturnOf<F> | undefined; error: Error | undefined; pending: boolean; reset: () => void }`
 
-The object `useAction` returns. `data` and `error` track the latest invocation, not the last one to settle.
+The object `useAction` returns. `ActionCallOptions` comes from `@lunora/client`. `data` and `error` track the latest invocation, not the last one to settle.
 
 ### Live data
 
@@ -836,7 +836,7 @@ Lists the caller's pending human-in-the-loop approvals. Each entry carries what 
 
 **Type:** `(options: UseAgentToolEventsOptions) => UseAgentToolEventsResult`
 
-Returns one thread's tool timeline as `{ events }`, with durable `call`, `result` and `awaiting-approval` events followed by live `progress` events. See [details](#agent-tool-events--useagenttooleventsoptions).
+Returns one thread's tool timeline as `{ events }`, with durable `call`, `result`, `awaiting-approval` and `awaiting-secret` events followed by live `progress` events. See [details](#agent-tool-events--useagenttooleventsoptions).
 
 #### `useVoiceAgent`
 
@@ -860,7 +860,7 @@ These components come from `@lunora/react/payment`.
 
 **Type:** `(trigger: RedirectTrigger) => UseCheckoutResult`
 
-Runs a redirect trigger and returns `{ checkout, pending, error }`. The trigger resolves to a `RedirectTarget` whose `url` the hook opens.
+Runs a redirect trigger and returns `{ checkout, pending, error }`. The trigger resolves to a `RedirectTarget` whose `url` the hook redirects the browser to. It refuses a URL that is not http or https.
 
 #### `CheckoutButton`
 
@@ -952,10 +952,10 @@ Narrows an unknown error to one with the `TOO_MANY_REQUESTS` code.
 
 **Type:** `(error: unknown) => LunoraErrorCode | undefined`
 
-Returns the Lunora error code on an error, or `undefined` when it has none.
+Returns the Lunora error code on an error. It returns `undefined` for a non-error, a missing code, or a code outside the known `LunoraErrorCode` set.
 
 #### `getRetryAfterMs`
 
 **Type:** `(error: unknown) => number | undefined`
 
-Returns the retry delay in milliseconds from a rate-limited error, or `undefined` when the error has none.
+Returns the retry delay in milliseconds from `data.retryAfterMs` on a rate-limited error, or `undefined` when it is absent or not a finite number.

@@ -588,12 +588,13 @@ Details in [defineShape](#defineshapedefinition--partial-replication).
 
 #### `ShapeDefinition`
 
-**Type:** `{ table, args?, use?, where?, columns?, owner? }`
+**Type:** `{ table, args?, use?, where?, columns?, owner?: string | true }`
 
 The fields of a shape. `table` names the table, and `where` returns the predicate the
 shard applies with a trusted context. `use` lists the `rls(...)` guards that gate reads,
-and `columns` is an optional projection. `owner: true` owner-scopes the shape to the
-verified identity.
+and `columns` is an optional projection. `owner` owner-scopes the shape to the
+verified identity: `true` uses the column declared by the table's `.ownedBy(field)`, and a
+string names the owning column directly. A shape needs either `where` or `owner`.
 
 #### `defineMutator`
 
@@ -706,10 +707,11 @@ Worker or Durable Object. Details in [Subpaths](#subpaths).
 
 #### `definePlugin`
 
-**Type:** `DefinePluginFunction`
+**Type:** `(key: string, options: DefinePluginOptions<TExtension, TContextIn, TContextOut>) => Plugin<TExtension, TContextIn, TContextOut>`
 
-Packages a schema extension and middleware as a reusable plugin. Both fields are
-optional.
+Packages a schema extension and middleware as a reusable plugin under a unique `key`.
+Both option fields are optional. When `options.extension` is given, the returned plugin
+keeps that extension typed under the literal `key`.
 
 #### `DefinePluginOptions`
 
@@ -761,10 +763,11 @@ hatch, mounted with `app.all(path, httpAction(fn))`.
 
 #### `httpRoute`
 
-**Type:** `HttpRoute`
+**Type:** `interface HttpRoute { get; post; put; patch; delete; head; options }` where each is `(path: string) => HttpRouteBuilder`
 
-The builder for a typed route. Chain `.get(path)`, `.params(...)`, and `.handler(...)`,
-then register the result on a router.
+The entry point for a typed route, with one factory per HTTP verb. Start with
+`httpRoute.get(path)`, chain `.params(...)`, `.searchParams(...)`, `.body(...)`, and
+`.output(...)`, and finish with `.handler(...)`. The result is a route handler to register on a router.
 
 ### Live, presence and storage
 
@@ -794,9 +797,11 @@ after its TTL unless it is refreshed.
 
 **Type:** `{ ttlMs?, maxSessions?, disconnectGraceMs?, tenant? }`
 
-**Default:** `ttlMs` 30000 (30 seconds), `maxSessions` 1024
+**Default:** `ttlMs` 30000 (30 seconds), `maxSessions` 1024, `disconnectGraceMs` 0
 
-`tenant` maps the identity to the key the presence set is partitioned by.
+`tenant` maps the verified identity to the tenant whose rooms the caller can reach, and
+it defaults to the identity's `orgId` claim, or `""` when there is none.
+`disconnectGraceMs` defaults to 0, which drops a session the moment its socket closes.
 
 #### `defineStorageRule`
 

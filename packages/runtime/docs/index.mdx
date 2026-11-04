@@ -680,7 +680,8 @@ and in small deployments whose shard keys are known up front.
 
 Builds a registry that reads the shard list from a registry Durable Object or a
 service binding, and caches the result per table. The cache is invalidated when
-the coordinator releases shards.
+`register` or `unregister` is called on it, or when you call `invalidate`. Other worker
+isolates see the change once their cache expires.
 
 **Default:** `cacheTtlMs` is `30000`.
 
@@ -738,15 +739,18 @@ in `env`.
 
 **Type:** `interface SecurityOptions { cors?: CorsOptions | false; csrf?: boolean | CsrfOptions; headers?: boolean | SecurityHeadersOptions }`
 
-The `security` option of `createWorker`. Each layer can be turned off, set to
-`true` for defaults, or configured with its own options object.
+The `security` option of `createWorker`. `csrf` and `headers` can be turned off, set to
+`true` for defaults, or configured with their own options object. `cors` takes an
+options object, or `false`, and denies cross-origin requests when unset.
 
 #### `CorsOptions`
 
 **Type:** `interface CorsOptions { allowedOrigins: string[] | ((origin: string) => boolean); allowCredentials?: boolean; allowedHeaders?: string[]; allowedMethods?: string[]; maxAge?: number }`
 
 Controls which origins can call the worker from a browser. `allowedOrigins` is
-required. Wildcard origins cannot be combined with `allowCredentials`.
+required. A `"*"` entry in an `allowedOrigins` list cannot be combined with `allowCredentials`,
+and `resolveSecurity` throws if you try. A predicate is not checked for this, so it logs a
+warning and must match only trusted origins.
 
 #### `CsrfOptions`
 
@@ -754,7 +758,8 @@ required. Wildcard origins cannot be combined with `allowCredentials`.
 
 Configures the CSRF check on state-changing requests. Add origins to
 `trustedOrigins` for other frontends that call the worker. `allowLoopback`
-defaults to `true`, which accepts loopback origins.
+defaults to `true`, which accepts a loopback `Origin` only when the worker itself is serving on
+loopback, for local development.
 
 ### Identity
 
