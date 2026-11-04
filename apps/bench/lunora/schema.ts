@@ -21,6 +21,19 @@ import { saas } from "./saas/schema";
  * `shard.ts` import this module's default.
  */
 export default defineSchema({
+    /*
+     * One row per organisation with a checkout in flight — see `checkout` in
+     * `lunora/payment/index.ts`. Root-scoped like the payment tables it guards,
+     * and taken inside a mutation, because only a mutation serialises two
+     * concurrent purchases; the provider call itself cannot.
+     */
+    checkout_holds: defineTable({
+        expiresAt: v.number(),
+        priceId: v.string(),
+        referenceId: v.string(),
+        url: v.optional(v.string()),
+    }).index("byReference", ["referenceId"], { unique: true }),
+
     /** Per-tenant work items — the core CRUD surface the bench exercises. */
     tasks: defineTable({
         assigneeId: v.optional(v.string()),

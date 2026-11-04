@@ -50,6 +50,9 @@
  *     return {
  *         activeOrganizationId: member ? activeOrganizationId : undefined,
  *         appRole: (session.user as { role?: string | null }).role ?? undefined,
+ *         email: session.user.email || undefined,
+ *         // The claim `lunora/presence` scopes rooms by; without it every organization shares them.
+ *         orgId: member ? activeOrganizationId : undefined,
  *         orgRole: member?.role,
  *         userId: session.user.id,
  *     };
@@ -84,6 +87,14 @@ export const identity = defineIdentity(
         appRole: v.optional(v.string()),
 
         /**
+         * The caller's email — better-auth's `user.email`, verified before sign-in
+         * succeeds (`requireEmailVerification`). A payment checkout hands it to
+         * the provider when it creates the organisation's first customer, which
+         * some providers (Polar, Dodo) cannot do without one.
+         */
+        email: v.optional(v.string()),
+
+        /**
          * The caller's role in {@link activeOrganizationId} — `owner`,
          * `admin` or `member` under better-auth's defaults. Read by the
          * mutations that are owner/admin-only; never used to decide which
@@ -93,15 +104,6 @@ export const identity = defineIdentity(
 
         /** The better-auth user id. Required by the contract on every identity. */
         userId: v.string(),
-
-        /**
-         * The caller's email address, present only once better-auth marks it
-         * verified. Onboarding mails the welcome to it: functions run without
-         * the Worker's `env`, so they cannot look the user up in better-auth
-         * themselves, and an address from the request would make the mailer a
-         * relay.
-         */
-        verifiedEmail: v.optional(v.string()),
     },
     { onInvalid: "reject" },
 );

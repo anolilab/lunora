@@ -118,7 +118,7 @@ const paymentAdapter = (env: Env): PaymentAdapter => {
 
 /**
  * The resolved identity: the claims `lunora/identity.ts` declares, plus the
- * undeclared ones the runtime and `saas.me` read (`name`, `expiresAtMs`).
+ * undeclared ones the runtime, `saas.me` and `presence` read (`name`, `expiresAtMs`, `orgId`).
  */
 const resolveIdentity = async (env: Env, request: Request): Promise<{ [claim: string]: unknown; userId: string } | null> => {
     const auth = getAuth(env);
@@ -146,9 +146,10 @@ const resolveIdentity = async (env: Env, request: Request): Promise<{ [claim: st
      * and that must not become a tenant claim (it is what `authorizeShard`
      * admits the caller to).
      */
-    const { adapter } = await auth.$context;
     const member = activeOrganizationId
-        ? await adapter.findOne<{ role: string }>({
+        ? await (
+              await auth.$context
+          ).adapter.findOne<{ role: string }>({
               model: "member",
               where: [
                   { field: "organizationId", value: activeOrganizationId },
@@ -161,13 +162,16 @@ const resolveIdentity = async (env: Env, request: Request): Promise<{ [claim: st
     return {
         activeOrganizationId: member ? activeOrganizationId : undefined,
         appRole: role ?? undefined,
+        email: session.user.email || undefined,
         // The socket credential expiry: without it a signed-out user keeps an
         // already-open WebSocket streaming their tenant's rows.
         ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
         name: session.user.name || undefined,
+        // The same membership-checked tenant under the claim name `lunora/presence`
+        // scopes its rooms by; without it every organisation shares one room.
+        orgId: member ? activeOrganizationId : undefined,
         orgRole: member?.role,
         userId: session.user.id,
-        ...(session.user.emailVerified ? { verifiedEmail: session.user.email } : {}),
     };
 };
 

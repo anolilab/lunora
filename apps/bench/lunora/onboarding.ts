@@ -4,7 +4,7 @@
  * functions below.
  *
  * The welcome mail goes to the caller's own verified address, from the
- * `verifiedEmail` identity claim the Worker resolves from better-auth, never
+ * `email` identity claim the Worker resolves from better-auth, never
  * to an address from the request, which would turn this into a relay for mail
  * to anyone.
  */
@@ -21,10 +21,10 @@ import { orgBulkMutation, requireWriter } from "./lib/crpc.js";
 export const start = orgBulkMutation.mutation(async ({ ctx }) => {
     const { organizationId, userId } = await requireWriter(ctx);
     const identity = await ctx.auth.getIdentity();
-    const email = identity?.verifiedEmail;
+    const email = identity?.email;
 
     if (email === undefined) {
-        throw new LunoraError("UNPROCESSABLE", "onboarding: verify your email address first");
+        throw new LunoraError("UNPROCESSABLE", "onboarding: the session carries no email address");
     }
 
     const id = `onboarding-${organizationId}`;

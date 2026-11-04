@@ -163,6 +163,13 @@ const requireOrganization = async (ctx: MutationCtx | QueryCtx): Promise<{ organ
         throw new LunoraError("UNPROCESSABLE", "no active organization — create or switch to one first");
     }
 
+    // The caller picks the shard, and `authorizeShard` also admits the root shard
+    // that `me` and billing run on. Run anywhere but the tenant's own shard, a
+    // read sees none of its rows and a write lands where the dashboard never looks.
+    if (ctx.shardKey !== organizationId) {
+        throw new LunoraError("FORBIDDEN", "call this on the active organization's shard ({ shardKey: organizationId })");
+    }
+
     return { organizationId, orgRole, userId };
 };
 
@@ -205,14 +212,17 @@ const organizations = (ctx: MutationCtx | QueryCtx): OrganizationsReader =>
  * matching `ctx.db.insert("<table>", …)` inside a procedure — an insert hidden
  * behind a helper is reported as `table_without_insert`.
  */
-const activityRow = (entry: {
-    action: string;
-    actorId: string;
-    meta?: Record<string, unknown>;
-    organizationId: string;
-    subjectId?: string;
-    subjectType: string;
-}): Record<string, unknown> => ({ ...entry, createdAt: Date.now() });
+const activityRow = (
+    now: number,
+    entry: {
+        action: string;
+        actorId: string;
+        meta?: Record<string, unknown>;
+        organizationId: string;
+        subjectId?: string;
+        subjectType: string;
+    },
+): Record<string, unknown> => ({ ...entry, createdAt: now });
 
 /** Joins an archived project's slug to its id, freeing the slug. `~` never survives {@link toSlug}. */
 const ARCHIVED_SLUG_MARK = "~archived~";
@@ -358,7 +368,7 @@ export const createProject = mutation
 
         await ctx.db.insert(
             "saas_activity",
-            activityRow({
+            activityRow(ctx.now, {
                 action: "project.created",
                 actorId: userId,
                 meta: { name },
@@ -395,10 +405,10 @@ export const archiveProject = mutation
             return;
         }
 
-        await ctx.db.patch(SAAS_PROJECTS_TABLE, projectId, { archivedAt: Date.now() });
+        await ctx.db.patch(SAAS_PROJECTS_TABLE, projectId, { archivedAt: ctx.now });
         await ctx.db.insert(
             "saas_activity",
-            activityRow({
+            activityRow(ctx.now, {
                 action: "project.archived",
                 actorId: userId,
                 meta: { name: project.name },
@@ -468,7 +478,7 @@ export const syncOrganization = internalMutation
     })
     .mutation(async ({ args: { name, organizationId, plan, seats, slug, status }, ctx }): Promise<void> => {
         const existing = await organizations(ctx).findFirst({ where: { organizationId } });
-        const updatedAt = Date.now();
+        const updatedAt = ctx.now;
 
         if (existing?.["status"] === "deleted") {
             return;

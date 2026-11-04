@@ -257,5 +257,14 @@ export const authOptions = (env: AuthEnv): LunoraAuthOptions => {
             passkey(),
         ],
         secret: env.BETTER_AUTH_SECRET,
+        /*
+         * No cookie cache. The tenant claims `resolveIdentity` derives from the
+         * `member` row are not part of the session cookie, so a removed or demoted
+         * member keeps presenting the same credential. With the cache on, the
+         * generated worker memoises the resolved identity per credential for up
+         * to 60s, and the old organisation and role would keep passing
+         * `authorizeShard` for that long. Off, identity resolves on every request.
+         */
+        session: { cookieCache: { enabled: false } },
     };
 };

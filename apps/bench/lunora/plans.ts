@@ -18,6 +18,10 @@
 export const API_CALLS = "api_calls";
 
 interface CatalogPlan {
+    /** Marketing copy for the pricing table. One line. */
+    blurb: string;
+    /** ISO 4217, e.g. `"USD"`. */
+    currency: string;
     /**
      * `api_calls` allowance per billing period. `0` grants none. The free plan has
      * no price, so `entitlementsFromPlans` never reaches it: an organisation without
@@ -25,10 +29,6 @@ interface CatalogPlan {
      * instead of leaving the plan's allowance unstated.
      */
     apiCalls: number;
-    /** Marketing copy for the pricing table. One line. */
-    blurb: string;
-    /** ISO 4217, e.g. `"USD"`. */
-    currency: string;
     /** Named capabilities this plan unlocks. */
     features: ReadonlyArray<string>;
     /** Stable id — also what `saas_organizations.plan` stores (`free` for a new organisation). */
@@ -38,7 +38,6 @@ interface CatalogPlan {
     priceId?: string;
     /** Minor units (cents). `0` renders as "Free". */
     priceMinor: number;
-
     /**
      * Maximum members. `undefined` means unmetered. Shown on the billing page's seat
      * meter and handed to the payment entitlements; nothing here stops an invitation
@@ -82,23 +81,21 @@ export const PLANS: ReadonlyArray<CatalogPlan> = [
  */
 export const entitlementsFromPlans = (
     plans: ReadonlyArray<CatalogPlan>,
-): { plans: Record<string, { features: ReadonlyArray<string>; limits: Record<string, number>; priceIds: ReadonlyArray<string> }> } => {
-    return {
-        plans: Object.fromEntries(
-            plans.flatMap((plan) =>
-                plan.priceId === undefined
-                    ? []
-                    : [
-                          [
-                              plan.id,
-                              {
-                                  features: plan.features,
-                                  limits: { [API_CALLS]: plan.apiCalls, ...(plan.seats === undefined ? {} : { seats: plan.seats }) },
-                                  priceIds: [plan.priceId],
-                              },
-                          ],
+): { plans: Record<string, { features: ReadonlyArray<string>; limits: Record<string, number>; priceIds: ReadonlyArray<string> }> } => ({
+    plans: Object.fromEntries(
+        plans.flatMap((plan) =>
+            plan.priceId === undefined
+                ? []
+                : [
+                      [
+                          plan.id,
+                          {
+                              features: plan.features,
+                              limits: { [API_CALLS]: plan.apiCalls, ...(plan.seats === undefined ? {} : { seats: plan.seats }) },
+                              priceIds: [plan.priceId],
+                          },
                       ],
-            ),
+                  ],
         ),
-    };
-};
+    ),
+});

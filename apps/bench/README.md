@@ -40,8 +40,8 @@ every function module builds on it, so whatever it reaches stays on the startup
 path however the registry is loaded. That is the pattern the app behind #1166
 had. better-auth is on that path too, through `.auth()` in `lunora/server.ts`.
 Actions cannot reach better-auth themselves: functions run without the Worker's
-`env`, which is why onboarding takes the caller's address from the
-`verifiedEmail` identity claim.
+`env`, which is why onboarding takes the caller's address from the `email`
+identity claim.
 
 The following are left out on purpose:
 

@@ -181,6 +181,11 @@ selectors accept an async factory that the runtime awaits on first `ctx.<cap>`
 use. Plan 490 §8's "lighter shared builders" lever should cover the entry file
 too.
 
+**Status:** fixed on `alpha` by plan 490 phase 3: each integration takes a loader
+it awaits on first use (`playwright`, Stripe's `client`, `fromPostgresJs`, and
+the MCP server builders), and `lunora/server.ts` now uses them. The numbers in
+this file predate that change.
+
 ## 2. `@lunora/auth/plugins` pulls unused better-auth plugins into startup (medium)
 
 The app uses only `organization`, `admin`, `passkey`, `twoFactor` and
@@ -293,9 +298,10 @@ and any room created there is shared by everyone.
 **Suggested fix for the item:** take a room authorizer in the copied file
 (`authorizeRoom(ctx, roomId)`, defaulting to "the caller belongs to the room",
 or derive room ids from a server-side membership), and refuse when it fails.
-The bench copy requires the active organisation and a room id of `<org>` or
-`<org>:…` (`lunora/presence/index.ts`). It was verified locally: a foreign room
-returns `FORBIDDEN`.
+
+**Status:** fixed in #1419: the item files each room under the caller's tenant
+(the `orgId` claim), so the same `roomId` in two organisations is two rooms. The
+bench copy is now the template's, with no bench edit.
 
 ## 8. Workflow `ctx.run` returns `Promise<unknown>` (low)
 
@@ -454,7 +460,7 @@ it is:
 
 - `lunora/env.ts` declares only the integration keys.
 - `authAction` no longer builds `authApi`, which nothing read.
-- `resolveIdentity` adds a `verifiedEmail` claim, which `onboarding:start` passes
+- `onboarding:start` passes the `email` identity claim (verified before sign-in)
   to the workflow.
 
 The `@lunora/server` `env.ts` docblock says Workers receive their secrets "on
