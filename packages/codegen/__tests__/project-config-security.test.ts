@@ -43,6 +43,14 @@ describe("security.headers in lunora.config", () => {
         expect(readProjectConfigLiterals(projectRoot).security).toStrictEqual(expected);
     });
 
+    it("reads every section a getter declares as unreadable, services included", () => {
+        expect.assertions(1);
+
+        writeConfig("{ get services() { return {}; }, get security() { return {}; } }");
+
+        expect(readProjectConfigLiterals(projectRoot)).toStrictEqual({ security: { unreadable: true }, services: { unreadable: true } });
+    });
+
     it("reads a `__proto__` key as unreadable rather than copying it into the generated worker", () => {
         expect.assertions(1);
 
