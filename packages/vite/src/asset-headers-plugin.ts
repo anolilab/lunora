@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { lunoraLine } from "@lunora/config";
-import { findWranglerFile, readWranglerJsonc, securityHeadersDisabled, writeAssetHeaders } from "@lunora/config/cloudflare";
+import { findWranglerFile, readWranglerJsonc, resolveProjectSecurityHeaders, writeAssetHeaders } from "@lunora/config/cloudflare";
 import type { Plugin, ResolvedConfig } from "vite";
 
 import type { ResolvedLunoraPluginOptions } from "./types";
@@ -101,7 +101,7 @@ const assetHeadersPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             const environment = cloudflareEnvironment();
             const result = writeAssetHeaders(resolve(config.root, config.build.outDir), {
                 immutableDirectory: immutableDirectory(config, notFoundHandling(wrangler, environment)),
-                securityHeaders: !securityHeadersDisabled(wrangler, environment),
+                headers: resolveProjectSecurityHeaders(resolve(options.projectRoot, options.schemaDir), wrangler, environment),
             });
 
             if (result.deferred.length > 0) {

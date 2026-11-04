@@ -177,7 +177,7 @@ export { applyRestCache, requestCarriesCredentials, restCacheHeaders } from "./r
 export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, RestRegistryLike, RestRoute, RestRouteDeps } from "./rest-routes";
 export { argsFromQuery, buildRestRoutes, createRestRateLimit, restSurfaceFromRegistry } from "./rest-routes";
 export type { BackupRetentionPreview, PrunedBackups } from "./scheduled-backup";
-export type { CorsOptions, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions } from "./security-headers";
+export type { CorsOptions, CrossOriginOpenerPolicy, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions } from "./security-headers";
 export { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 export type {
     ShardCallArgs,

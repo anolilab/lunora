@@ -1,0 +1,86 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { emitApp } from "../src/emit-app";
+import { readProjectConfigLiterals, readProjectSecurityHeaders } from "../src/project-config-file";
+import baseOptions from "./emit-app-options";
+
+describe("security.headers in lunora.config", () => {
+    let projectRoot: string;
+
+    beforeEach(() => {
+        projectRoot = mkdtempSync(join(tmpdir(), "lunora-security-config-"));
+        mkdirSync(join(projectRoot, "lunora"));
+    });
+
+    afterEach(() => {
+        rmSync(projectRoot, { force: true, recursive: true });
+        vi.restoreAllMocks();
+    });
+
+    const writeConfig = (body: string): void => {
+        writeFileSync(join(projectRoot, "lunora.config.ts"), `export default ${body};\n`, "utf8");
+    };
+
+    it.each([
+        [
+            '{ security: { headers: { crossOriginOpenerPolicy: "same-origin", frameAncestors: ["https://a.example"], hsts: { maxAge: 60 } } } }',
+            { headers: { crossOriginOpenerPolicy: "same-origin", frameAncestors: ["https://a.example"], hsts: { maxAge: 60 } } },
+        ],
+        ["{ security: { headers: false } }", { headers: false }],
+        ["{ security: {} }", {}],
+        ["{ security: { headers: { csp: process.env.CSP } } }", { unreadable: true }],
+        ['{ security: { headers: { ...base, csp: "x" } } }', { unreadable: true }],
+        ["{ get security() { return {}; } }", { unreadable: true }],
+    ])("reads %s", (body, expected) => {
+        expect.assertions(1);
+
+        writeConfig(body);
+
+        expect(readProjectConfigLiterals(projectRoot).security).toStrictEqual(expected);
+    });
+
+    it("carries an option it does not know through, so a field the runtime gains later is not refused here", () => {
+        expect.assertions(1);
+
+        writeConfig('{ security: { headers: { someFutureHeader: "x" } } }');
+
+        expect(readProjectSecurityHeaders(join(projectRoot, "lunora"))).toStrictEqual({ someFutureHeader: "x" });
+    });
+
+    it.each([
+        ["{ security: { headers: { csp: process.env.CSP } } }", "not built from literals"],
+        ['{ security: { headers: { frameAncestors: ["https://a.example\'; script-src *"] } } }', "is not an origin"],
+        [String.raw`{ security: { headers: { permissionsPolicy: "a=()\nX-Evil: 1" } } }`, "line break"],
+    ])("falls back to the defaults, saying why, for %s", (body, reason) => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        writeConfig(body);
+
+        expect(readProjectSecurityHeaders(join(projectRoot, "lunora"))).toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(reason));
+    });
+});
+
+describe("emitApp — security.headers", () => {
+    it("emits undefined when the config sets none, leaving the runtime its defaults", () => {
+        expect.assertions(1);
+
+        expect(emitApp(baseOptions)).toContain('const LUNORA_SECURITY_HEADERS: SecurityOptions["headers"] = undefined;');
+    });
+
+    it("emits the config's value and applies it only when code set no security.headers", () => {
+        expect.assertions(3);
+
+        const output = emitApp({ ...baseOptions, securityHeaders: { crossOriginOpenerPolicy: "unsafe-none" } });
+
+        expect(output).toContain('const LUNORA_SECURITY_HEADERS: SecurityOptions["headers"] = {"crossOriginOpenerPolicy":"unsafe-none"};');
+        expect(output).toContain("if (LUNORA_SECURITY_HEADERS !== undefined && options.security?.headers === undefined) {");
+        expect(output).toContain("export { AppBuilder, defineApp, LUNORA_SECURITY_HEADERS };");
+    });
+});

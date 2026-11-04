@@ -150,9 +150,44 @@ describe("decorateResponse", () => {
         expect(out.headers.get("x-frame-options")).toBe("SAMEORIGIN");
         expect(out.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
         expect(out.headers.get("permissions-policy")).toContain("camera=()");
-        expect(out.headers.get("cross-origin-opener-policy")).toBe("same-origin");
+        // Not `same-origin`: a popup the page opens (OAuth, payment) keeps `window.opener`.
+        expect(out.headers.get("cross-origin-opener-policy")).toBe("same-origin-allow-popups");
         expect(out.headers.get("strict-transport-security")).toContain("max-age=31536000");
         expect(out.headers.get("content-security-policy")).toContain("default-src 'none'");
+    });
+
+    it("takes crossOriginOpenerPolicy, or omits the header for false", () => {
+        expect.hasAssertions();
+
+        const strict = resolveSecurity({ headers: { crossOriginOpenerPolicy: "same-origin" } });
+        const off = resolveSecurity({ headers: { crossOriginOpenerPolicy: false } });
+
+        expect(decorateResponse(new Response("x"), httpsRequest(), strict).headers.get("cross-origin-opener-policy")).toBe("same-origin");
+        expect(decorateResponse(new Response("x"), httpsRequest(), off).headers.get("cross-origin-opener-policy")).toBeNull();
+    });
+
+    it("lets listed origins frame HTML pages: frame-ancestors carries the list and X-Frame-Options goes", () => {
+        expect.hasAssertions();
+
+        const partner = resolveSecurity({ headers: { frameAncestors: ["https://partner.example", "https://*.shop.example"] } });
+        const html = decorateResponse(new Response("<html></html>", { headers: { "content-type": "text/html" } }), httpsRequest(), partner);
+        const json = decorateResponse(Response.json({}), httpsRequest(), partner);
+
+        expect(html.headers.get("content-security-policy")).toBe(
+            "base-uri 'none'; object-src 'none'; frame-ancestors 'self' https://partner.example https://*.shop.example",
+        );
+        expect(html.headers.get("x-frame-options")).toBeNull();
+        // An API response is never meant to be framed.
+        expect(json.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    });
+
+    it("refuses at construction a header value that would break the header line, or framing options that contradict", () => {
+        expect.hasAssertions();
+
+        expect(() => resolveSecurity({ headers: { permissionsPolicy: "camera=()\r\nX-Evil: 1" } })).toThrow("line break");
+        expect(() => resolveSecurity({ headers: { frameAncestors: ["https://a.example; script-src *"] } })).toThrow("is not an origin");
+        expect(() => resolveSecurity({ headers: { csp: "default-src 'self'", frameAncestors: ["https://a.example"] } })).toThrow("csp string");
+        expect(() => resolveSecurity({ headers: { frameAncestors: ["https://a.example"], frameOptions: "DENY" } })).toThrow('frameOptions: "DENY"');
     });
 
     it("omits HSTS over plain HTTP (so localhost dev is never pinned to HTTPS)", () => {

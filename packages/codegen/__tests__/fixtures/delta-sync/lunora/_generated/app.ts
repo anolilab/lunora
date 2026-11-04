@@ -3,7 +3,7 @@
 
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
 import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
-import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, ShardRegistryRpc, WorkerOptions } from "@lunora/runtime";
+import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, SecurityOptions, ShardingInfo, ShardNamespaceLike, ShardRegistryRpc, WorkerOptions } from "@lunora/runtime";
 import { createCrossShardRelationCapabilities, createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
 
 import schema from "../schema.js";
@@ -16,6 +16,13 @@ type Selector<Env, T> = (env: Env) => T | undefined;
 
 /** The generated `createShardDO` config — `.observability()`, `.maxRelationKeys()` and the long-tail `.ai()` / `.kv()` / … methods pass straight through to it. */
 type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
+
+/**
+ * `security.headers` from `lunora.config`: the baseline security headers the Worker sends, and the same
+ * values the build writes into the static assets' `_headers`. `undefined` when the config sets none. An app
+ * that calls `createWorker` itself passes it as `security: { headers: LUNORA_SECURITY_HEADERS }`.
+ */
+const LUNORA_SECURITY_HEADERS: SecurityOptions["headers"] = undefined;
 
 /** What the worker reads only once a request arrives: loaded then, not at isolate startup (Cloudflare caps startup at 1 s of CPU). */
 interface DeferredModules {
@@ -389,6 +396,12 @@ class AppBuilder<Env extends object> {
             Object.assign(options, fn(env, { ...options }));
         }
 
+        // `security.headers` from lunora.config, unless code set its own. After `.extend()`, whose shallow
+        // assign would otherwise drop it when an extension sets only `security.cors`.
+        if (LUNORA_SECURITY_HEADERS !== undefined && options.security?.headers === undefined) {
+            options.security = { ...options.security, headers: LUNORA_SECURITY_HEADERS };
+        }
+
         return options;
     }
 }
@@ -682,6 +695,8 @@ interface LunoraConfig<Env extends object = object> {
     remote?: boolean;
     /** Sibling Workers the app calls through service bindings — key → its folder and, for RPC, the exported `WorkerEntrypoint` class (`rpc: false` binds that class but calls it with plain `fetch`, without importing the service's sources). Becomes `ctx.services.<key>` in actions, a wrangler `services[]` entry, one `lunora dev` session and a services-first `lunora deploy`. Literals, for the same reason as `target`. */
     services?: Record<string, { dir: string; entrypoint?: string; rpc?: false }>;
+    /** Baseline security headers for the Worker AND the static assets' generated `_headers` (`crossOriginOpenerPolicy`, `frameAncestors`, `csp`, …; `false` omits a header, `headers: false` all of them). A `security.headers` set in code wins. Literals, for the same reason as `target`. */
+    security?: { headers?: SecurityOptions["headers"] };
     /** Studio settings. `companion: true` emits the companion Worker that serves the advisor procedure list to a hosted Studio, bound to the app as `ADVISOR_COMPANION`. A literal, for the same reason as `target`. */
     studio?: { companion?: boolean };
     /** Deploy target id — `lunora deploy`/`verify` read it when no `--target` is passed. Must be a literal: `runCodegen` resolves it synchronously by PARSING this file, so a computed value is not seen — `lunora verify` reports `platform_unreadable_target` rather than defaulting in silence. */
@@ -700,5 +715,5 @@ interface LunoraConfig<Env extends object = object> {
  */
 const defineApp = <Env extends object>(): AppBuilder<Env> => new AppBuilder<Env>();
 
-export { AppBuilder, defineApp };
+export { AppBuilder, defineApp, LUNORA_SECURITY_HEADERS };
 export type { ComposedApp, GlobalDeclaration, LunoraConfig, Selector };

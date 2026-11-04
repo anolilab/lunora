@@ -334,6 +334,7 @@ interface EmitAppOptions {
     liveStreamDeclarations?: ReadonlyArray<LiveStreamIR>;
     liveStreams?: boolean;
     liveStreamsWithheld?: boolean;
+    securityHeaders?: boolean | SecurityHeadersOptions;
     tables: ReadonlyArray<Pick<TableIR, "name" | "shardMode">>;
     useUmbrella: boolean;
     vectorIndexCount?: number;
@@ -593,6 +594,7 @@ interface LunoraProjectConfig {
     codegen?: unknown;
     durableObjects?: unknown;
     remote?: unknown;
+    security?: unknown;
     target?: unknown;
 }
 ```
@@ -753,6 +755,10 @@ interface ProjectConfigLiterals {
         unreadable?: boolean;
     };
     remote?: boolean;
+    security?: {
+        headers?: boolean | Record<string, unknown>;
+        unreadable?: true;
+    };
     services?: {
         declared?: Record<string, ServiceLiteral>;
         unreadable?: boolean;
@@ -1760,6 +1766,12 @@ const readProjectConfigLiterals: (projectRoot: string) => ProjectConfigLiterals;
 const readProjectLazyFunctions: (lunoraDirectory: string) => boolean;
 ```
 
+### `readProjectSecurityHeaders` (const)
+
+```ts
+const readProjectSecurityHeaders: (lunoraDirectory: string) => boolean | SecurityHeadersOptions | undefined;
+```
+
 ### `readProjectTarget` (const)
 
 ```ts
@@ -2640,6 +2652,12 @@ interface CountReadIR {
 }
 ```
 
+### `CrossOriginOpenerPolicy` (type)
+
+```ts
+type CrossOriginOpenerPolicy = "same-origin" | "same-origin-allow-popups" | "unsafe-none";
+```
+
 ### `DriftCoverage` (interface)
 
 ```ts
@@ -3229,6 +3247,24 @@ interface SecretLiteralIR {
     kind: string;
     line: number;
     preview: string;
+}
+```
+
+### `SecurityHeadersOptions` (interface)
+
+```ts
+interface SecurityHeadersOptions {
+    crossOriginOpenerPolicy?: CrossOriginOpenerPolicy | false;
+    csp?: string | false;
+    frameAncestors?: ReadonlyArray<string>;
+    frameOptions?: "DENY" | "SAMEORIGIN" | false;
+    hsts?: boolean | {
+        includeSubDomains?: boolean;
+        maxAge?: number;
+        preload?: boolean;
+    };
+    permissionsPolicy?: string | false;
+    referrerPolicy?: string | false;
 }
 ```
 

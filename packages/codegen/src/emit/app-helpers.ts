@@ -1,3 +1,4 @@
+import type { SecurityHeadersOptions } from "../../../../shared/security-headers";
 import type { AppMethodFacet, CapabilityKey } from "../capabilities";
 import { APP_METHOD_CAPABILITIES } from "../capabilities";
 import type { IdentityIR, JurisdictionIR, LiveStreamIR, TableIR } from "../ir";
@@ -101,6 +102,7 @@ interface EmitAppOptions {
 
     /** App declares Cloudflare Workflows (`defineWorkflow`) → wire `options.workflowsClient` so the studio's workflow-instance proxy can reach the CF REST API. */
     hasWorkflow: boolean;
+
     /** The single `defineIdentity(...)` contract in `lunora/identity.ts` (Plan 080) → import it as a VALUE and wire `options.identity`, so the runtime trust boundary validates every resolved identity before it becomes `ctx.auth`. `undefined` ⇒ no wiring, byte-identical output. */
     identity?: IdentityIR;
     /** Schema declares `.jurisdiction("…")` → pin every DO the worker reaches (shards, fan-out, scheduler, containers, voice sessions, DO-backed auth, `@lunora/mail` shard RPC) to the Cloudflare data-residency jurisdiction. */
@@ -140,6 +142,14 @@ interface EmitAppOptions {
      * no `ctx.live`. Absent or `false` leaves the emitted options unchanged.
      */
     liveStreamsWithheld?: boolean;
+
+    /**
+     * `lunora.config`'s `security.headers`, already validated. Emitted as
+     * `LUNORA_SECURITY_HEADERS` and applied by `buildWorkerOptions` when code
+     * set no `security.headers` of its own; `undefined` emits `undefined`, so the
+     * runtime keeps its defaults.
+     */
+    securityHeaders?: boolean | SecurityHeadersOptions;
 
     /**
      * Every table the schema declares, with its shard mode. Emitted as a literal

@@ -2090,8 +2090,8 @@ interface AssertWranglerOptions {
 
 ```ts
 interface AssetHeadersOptions {
+    headers: boolean | SecurityHeadersOptions;
     immutableDirectory?: string;
-    securityHeaders: boolean;
 }
 ```
 
@@ -3088,6 +3088,12 @@ const resolveObservabilitySampling: (block: WranglerObservability | undefined) =
 };
 ```
 
+### `resolveProjectSecurityHeaders` (const)
+
+```ts
+const resolveProjectSecurityHeaders: (lunoraDirectory: string, wrangler: unknown, environment?: string) => boolean | SecurityHeadersOptions;
+```
+
 ### `resolveRemoteEnabled` (const)
 
 ```ts
@@ -3098,12 +3104,6 @@ const resolveRemoteEnabled: (inputs: RemoteEnableInputs) => boolean;
 
 ```ts
 const scanWranglerVariablesForSecrets: (variables: Record<string, unknown> | undefined, file: string) => WranglerVariableIR[];
-```
-
-### `securityHeadersDisabled` (const)
-
-```ts
-const securityHeadersDisabled: (wrangler: unknown, environment?: string) => boolean;
 ```
 
 ### `startLocalHyperdrive` (const)
@@ -3578,6 +3578,12 @@ interface CelldCommandResult {
 type CelldCommandRunner = (command: string, args: ReadonlyArray<string>) => Promise<CelldCommandResult | undefined>;
 ```
 
+### `CrossOriginOpenerPolicy` (type)
+
+```ts
+type CrossOriginOpenerPolicy = "same-origin" | "same-origin-allow-popups" | "unsafe-none";
+```
+
 ### `DockerLogStream` (interface)
 
 ```ts
@@ -3656,6 +3662,24 @@ interface RemoteOnlyBindings {
     artifacts?: ReadonlyArray<{
         binding?: string;
     } | null | undefined> | null;
+}
+```
+
+### `SecurityHeadersOptions` (interface)
+
+```ts
+interface SecurityHeadersOptions {
+    crossOriginOpenerPolicy?: CrossOriginOpenerPolicy | false;
+    csp?: string | false;
+    frameAncestors?: ReadonlyArray<string>;
+    frameOptions?: "DENY" | "SAMEORIGIN" | false;
+    hsts?: boolean | {
+        includeSubDomains?: boolean;
+        maxAge?: number;
+        preload?: boolean;
+    };
+    permissionsPolicy?: string | false;
+    referrerPolicy?: string | false;
 }
 ```
 

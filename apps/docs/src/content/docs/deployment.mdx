@@ -67,7 +67,9 @@ deploy `target`, the `remote`-binding dev preference, the `app` hook a
 Vite-first project composes its worker with, and `advisor.minSeverity`, the
 lowest advisory level codegen reports and writes into `_generated/shard.ts`
 (`"info"`, `"warn"` or `"error"`; an ERROR is never dropped, so the codegen gate
-stays on). It replaces `lunora.json`: the two
+stays on), and `security.headers`, the baseline security headers for the Worker
+and the static assets ([Configuring the
+headers](/docs/concepts/security#configuring-the-headers)). It replaces `lunora.json`: the two
 were always the same question, split across a format boundary that existed only
 because the CLI could not read TypeScript. It can now (`jiti`), so there is one
 file and it is real code.

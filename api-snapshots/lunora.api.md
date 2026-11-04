@@ -4667,6 +4667,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `CrossOriginOpenerPolicy` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `CrossShardCounter` (type)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.

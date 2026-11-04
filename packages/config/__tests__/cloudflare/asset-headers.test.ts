@@ -1,10 +1,10 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { mergeAssetHeaders, securityHeadersDisabled, writeAssetHeaders } from "../../src/cloudflare/asset-headers";
+import { mergeAssetHeaders, resolveProjectSecurityHeaders, writeAssetHeaders } from "../../src/cloudflare/asset-headers";
 
 const BEGIN = "# BEGIN lunora-managed";
 const END = "# END lunora-managed";
@@ -13,7 +13,7 @@ describe(mergeAssetHeaders, () => {
     it("writes the Worker's default security headers for every path when there is no _headers yet", () => {
         expect.assertions(1);
 
-        expect(mergeAssetHeaders(undefined, { securityHeaders: true }).text).toBe(
+        expect(mergeAssetHeaders(undefined, { headers: true }).text).toBe(
             [
                 "# BEGIN lunora-managed: rewritten on every build. Put your own rules outside this block.",
                 "/*",
@@ -22,7 +22,7 @@ describe(mergeAssetHeaders, () => {
                 "  X-Frame-Options: SAMEORIGIN",
                 "  Referrer-Policy: strict-origin-when-cross-origin",
                 "  Permissions-Policy: accelerometer=(), autoplay=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
-                "  Cross-Origin-Opener-Policy: same-origin",
+                "  Cross-Origin-Opener-Policy: same-origin-allow-popups",
                 "  Content-Security-Policy: base-uri 'none'; object-src 'none'; frame-ancestors 'self'",
                 "# END lunora-managed",
                 "",
@@ -34,7 +34,7 @@ describe(mergeAssetHeaders, () => {
         expect.assertions(2);
 
         const user = "/blog/*\n  X-Robots-Tag: noindex\n";
-        const { text } = mergeAssetHeaders(user, { securityHeaders: true });
+        const { text } = mergeAssetHeaders(user, { headers: true });
 
         expect(text?.startsWith(BEGIN)).toBe(true);
         expect(text?.endsWith(`${END}\n\n${user}`)).toBe(true);
@@ -43,40 +43,62 @@ describe(mergeAssetHeaders, () => {
     it("replaces its own block in place instead of appending a second one", () => {
         expect.assertions(2);
 
-        const first = mergeAssetHeaders("/a\n  X-A: 1\n", { securityHeaders: true }).text;
-        const second = mergeAssetHeaders(first, { securityHeaders: true }).text;
+        const first = mergeAssetHeaders("/a\n  X-A: 1\n", { headers: true }).text;
+        const second = mergeAssetHeaders(first, { headers: true }).text;
 
         expect(second).toBe(first);
         expect(second?.split(BEGIN)).toHaveLength(2);
     });
 
-    it("leaves out any header the user's rules set, since Cloudflare would comma-join the two values", () => {
+    it("leaves a header to a user rule for /* that sets it, since Cloudflare would send both values", () => {
         expect.assertions(4);
 
-        const merged = mergeAssetHeaders("/*\n  x-frame-options: DENY\n  ! Permissions-Policy\n/docs/*\n  Content-Security-Policy: default-src 'self'\n", {
-            securityHeaders: true,
-        });
+        const merged = mergeAssetHeaders("/*\n  x-frame-options: DENY\n  ! Permissions-Policy\n", { headers: true });
 
-        expect(merged.deferred).toEqual(["X-Frame-Options", "Content-Security-Policy"]);
+        expect(merged.deferred).toEqual(["X-Frame-Options"]);
         expect(merged.text).not.toContain("X-Frame-Options: SAMEORIGIN");
-        expect(merged.text).not.toContain("frame-ancestors 'self'");
         // A detach line sets nothing, so the block still sends the default.
         expect(merged.text).toContain("  Permissions-Policy: accelerometer=()");
+        expect(merged.warnings).toEqual([]);
+    });
+
+    it("keeps the default for a narrower rule, which replaces it by detaching first, and warns when it does not", () => {
+        expect.assertions(3);
+
+        const replaced = mergeAssetHeaders("/cb/*\n  ! Cross-Origin-Opener-Policy\n  Cross-Origin-Opener-Policy: unsafe-none\n", { headers: true });
+        const stacked = mergeAssetHeaders("/cb/*\n  Cross-Origin-Opener-Policy: unsafe-none\n", { headers: true });
+
+        expect(replaced.text).toContain("  Cross-Origin-Opener-Policy: same-origin-allow-popups");
+        expect(replaced.warnings).toEqual([]);
+        expect(stacked.warnings.join(" ")).toContain('add "! Cross-Origin-Opener-Policy" above it');
+    });
+
+    it("writes the values security.headers resolves to, through the runtime's resolver", () => {
+        expect.assertions(4);
+
+        const { text } = mergeAssetHeaders(undefined, {
+            headers: { crossOriginOpenerPolicy: "same-origin", frameAncestors: ["https://partner.example"], hsts: false, referrerPolicy: false },
+        });
+
+        expect(text).toContain("  Cross-Origin-Opener-Policy: same-origin\n");
+        expect(text).toContain("  Content-Security-Policy: base-uri 'none'; object-src 'none'; frame-ancestors 'self' https://partner.example");
+        expect(text).not.toContain("X-Frame-Options");
+        expect(text).not.toMatch(/Strict-Transport-Security|Referrer-Policy/u);
     });
 
     it("drops the block, and the file it alone made up, when the security headers are off", () => {
         expect.assertions(2);
 
-        const generated = mergeAssetHeaders(undefined, { securityHeaders: true }).text;
+        const generated = mergeAssetHeaders(undefined, { headers: true }).text;
 
-        expect(mergeAssetHeaders(generated, { securityHeaders: false }).text).toBeUndefined();
-        expect(mergeAssetHeaders(`${generated ?? ""}\n/a\n  X-A: 1\n`, { securityHeaders: false }).text).toBe("/a\n  X-A: 1\n");
+        expect(mergeAssetHeaders(generated, { headers: false }).text).toBeUndefined();
+        expect(mergeAssetHeaders(`${generated ?? ""}\n/a\n  X-A: 1\n`, { headers: false }).text).toBe("/a\n  X-A: 1\n");
     });
 
     it("gives the hashed assets directory a year-long immutable Cache-Control", () => {
         expect.assertions(2);
 
-        expect(mergeAssetHeaders(undefined, { immutableDirectory: "assets", securityHeaders: false }).text).toBe(
+        expect(mergeAssetHeaders(undefined, { immutableDirectory: "assets", headers: false }).text).toBe(
             [
                 "# BEGIN lunora-managed: rewritten on every build. Put your own rules outside this block.",
                 "/assets/*",
@@ -85,7 +107,7 @@ describe(mergeAssetHeaders, () => {
                 "",
             ].join("\n"),
         );
-        expect(mergeAssetHeaders(undefined, { immutableDirectory: "./static/js/", securityHeaders: true }).text).toContain("/static/js/*\n  Cache-Control:");
+        expect(mergeAssetHeaders(undefined, { immutableDirectory: "./static/js/", headers: true }).text).toContain("/static/js/*\n  Cache-Control:");
     });
 
     it.each([["/*"], ["/assets/*"], ["/assets/app.js"], ["/:dir/*"], ["https://example.com/assets/*"]])(
@@ -93,7 +115,7 @@ describe(mergeAssetHeaders, () => {
         (rule) => {
             expect.assertions(2);
 
-            const merged = mergeAssetHeaders(`${rule}\n  Cache-Control: no-store\n`, { immutableDirectory: "assets", securityHeaders: true });
+            const merged = mergeAssetHeaders(`${rule}\n  Cache-Control: no-store\n`, { immutableDirectory: "assets", headers: true });
 
             expect(merged.deferred).toEqual(["Cache-Control"]);
             expect(merged.text).not.toContain("immutable");
@@ -103,7 +125,7 @@ describe(mergeAssetHeaders, () => {
     it.each([["/img/*"], ["/assets"], ["/static/assets/*"]])("keeps the immutable rule beside a user Cache-Control for %s, which never reaches it", (rule) => {
         expect.assertions(1);
 
-        expect(mergeAssetHeaders(`${rule}\n  Cache-Control: max-age=60\n`, { immutableDirectory: "assets", securityHeaders: true }).text).toContain(
+        expect(mergeAssetHeaders(`${rule}\n  Cache-Control: max-age=60\n`, { immutableDirectory: "assets", headers: true }).text).toContain(
             "/assets/*\n  Cache-Control: public, max-age=31536000, immutable",
         );
     });
@@ -113,7 +135,7 @@ describe(mergeAssetHeaders, () => {
 
         const user = Array.from({ length: 100 }, (_, index) => `/r${String(index)}\n  X-R: ${String(index)}`).join("\n");
 
-        expect(mergeAssetHeaders(user, { securityHeaders: true }).warnings.join(" ")).toContain("more than 100 rules");
+        expect(mergeAssetHeaders(user, { headers: true }).warnings.join(" ")).toContain("more than 100 rules");
     });
 });
 
@@ -133,7 +155,7 @@ describe(writeAssetHeaders, () => {
 
         writeFileSync(join(directory, "_headers"), "/img/*\n  Cache-Control: max-age=60\n", "utf8");
 
-        const result = writeAssetHeaders(directory, { securityHeaders: true });
+        const result = writeAssetHeaders(directory, { headers: true });
         const text = readFileSync(join(directory, "_headers"), "utf8");
 
         expect(result.path).toBe(join(directory, "_headers"));
@@ -143,27 +165,61 @@ describe(writeAssetHeaders, () => {
     it("removes a _headers that held only the block once there is nothing to write", () => {
         expect.assertions(2);
 
-        writeAssetHeaders(directory, { securityHeaders: true });
+        writeAssetHeaders(directory, { headers: true });
 
         expect(existsSync(join(directory, "_headers"))).toBe(true);
 
-        writeAssetHeaders(directory, { securityHeaders: false });
+        writeAssetHeaders(directory, { headers: false });
 
         expect(existsSync(join(directory, "_headers"))).toBe(false);
     });
 });
 
-describe(securityHeadersDisabled, () => {
-    it("reads LUNORA_SECURITY_HEADERS from the top-level vars, or the env block's own", () => {
-        expect.assertions(5);
+describe(resolveProjectSecurityHeaders, () => {
+    let projectRoot: string;
 
+    beforeEach(() => {
+        projectRoot = mkdtempSync(join(tmpdir(), "lunora-asset-security-"));
+        mkdirSync(join(projectRoot, "lunora"));
+    });
+
+    afterEach(() => {
+        rmSync(projectRoot, { force: true, recursive: true });
+    });
+
+    it("reads LUNORA_SECURITY_HEADERS from the top-level vars, or the env block's own, when lunora.config sets nothing", () => {
+        expect.assertions(4);
+
+        const lunora = join(projectRoot, "lunora");
         const wrangler = { env: { open: { vars: {} }, staging: { vars: { LUNORA_SECURITY_HEADERS: "false" } } }, vars: { LUNORA_SECURITY_HEADERS: "off" } };
 
-        expect(securityHeadersDisabled(wrangler)).toBe(true);
-        expect(securityHeadersDisabled(wrangler, "staging")).toBe(true);
+        expect(resolveProjectSecurityHeaders(lunora, wrangler)).toBe(false);
+        expect(resolveProjectSecurityHeaders(lunora, wrangler, "staging")).toBe(false);
         // `vars` is not inheritable: an env block without the key does not inherit the top-level off.
-        expect(securityHeadersDisabled(wrangler, "open")).toBe(false);
-        expect(securityHeadersDisabled({ vars: { LUNORA_SECURITY_HEADERS: "on" } })).toBe(false);
-        expect(securityHeadersDisabled(undefined)).toBe(false);
+        expect(resolveProjectSecurityHeaders(lunora, wrangler, "open")).toBe(true);
+        expect(resolveProjectSecurityHeaders(lunora, undefined)).toBe(true);
+    });
+
+    it("prefers lunora.config's security.headers over the env var, as the Worker does", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(projectRoot, "lunora.config.ts"), 'export default { security: { headers: { crossOriginOpenerPolicy: "unsafe-none" } } };\n', "utf8");
+
+        expect(resolveProjectSecurityHeaders(join(projectRoot, "lunora"), { vars: { LUNORA_SECURITY_HEADERS: "off" } })).toEqual({
+            crossOriginOpenerPolicy: "unsafe-none",
+        });
+    });
+
+    it("keeps the defaults for a security.headers that would break a header line", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(projectRoot, "lunora.config.ts"),
+            'export default { security: { headers: { frameAncestors: ["https://a.example; script-src *"] } } };\n',
+            "utf8",
+        );
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        expect(resolveProjectSecurityHeaders(join(projectRoot, "lunora"), undefined)).toBe(true);
     });
 });

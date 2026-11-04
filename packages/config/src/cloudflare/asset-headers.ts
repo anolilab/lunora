@@ -15,15 +15,11 @@
  */
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
+import { readProjectSecurityHeaders } from "@lunora/codegen";
+
 import { isEnvDisabled } from "../../../../shared/env-flag";
-import {
-    DEFAULT_CROSS_ORIGIN_OPENER_POLICY,
-    DEFAULT_FRAME_OPTIONS,
-    DEFAULT_HSTS,
-    DEFAULT_PERMISSIONS_POLICY,
-    DEFAULT_REFERRER_POLICY,
-    htmlCspFor,
-} from "../../../../shared/security-header-defaults";
+import type { SecurityHeadersOptions } from "../../../../shared/security-headers";
+import { resolveSecurityHeaders } from "../../../../shared/security-headers";
 import join from "../path";
 
 const HEADERS_FILE = "_headers";
@@ -34,8 +30,13 @@ const END_MARKER = "# END lunora-managed";
 /** Cloudflare applies at most this many `_headers` rules; the rest of the file is ignored. */
 const MAX_HEADERS_RULES = 100;
 
+/** Cloudflare's cap on one `_headers` line, indentation and header name included. */
+const MAX_HEADERS_LINE_LENGTH = 2000;
+
 /**
- * The Worker's default security headers, as one `_headers` rule for every path.
+ * The Worker's security headers for `headers`, as `_headers` lines for every
+ * path. Resolved by the same function the runtime uses, so a value set once in
+ * `lunora.config` reaches both.
  *
  * HSTS ships unconditionally, where the runtime gates it on HTTPS: browsers
  * ignore it on a plain-HTTP response (RFC 6797 §8.1), so a local `wrangler dev`
@@ -44,15 +45,25 @@ const MAX_HEADERS_RULES = 100;
  * strict policy would stop every static HTML page from loading its own scripts.
  * CORS is left to the Worker; static files are served same-origin.
  */
-const SECURITY_HEADERS: ReadonlyArray<readonly [string, string]> = [
-    ["Strict-Transport-Security", DEFAULT_HSTS],
-    ["X-Content-Type-Options", "nosniff"],
-    ["X-Frame-Options", DEFAULT_FRAME_OPTIONS],
-    ["Referrer-Policy", DEFAULT_REFERRER_POLICY],
-    ["Permissions-Policy", DEFAULT_PERMISSIONS_POLICY],
-    ["Cross-Origin-Opener-Policy", DEFAULT_CROSS_ORIGIN_OPENER_POLICY],
-    ["Content-Security-Policy", htmlCspFor(DEFAULT_FRAME_OPTIONS)],
-];
+const securityHeaderLines = (headers: boolean | SecurityHeadersOptions): (readonly [string, string])[] => {
+    const resolved = resolveSecurityHeaders(headers);
+
+    if (!resolved.enabled) {
+        return [];
+    }
+
+    const lines: (readonly [string, string | undefined])[] = [
+        ["Strict-Transport-Security", resolved.hsts],
+        ["X-Content-Type-Options", "nosniff"],
+        ["X-Frame-Options", resolved.frameOptions],
+        ["Referrer-Policy", resolved.referrerPolicy],
+        ["Permissions-Policy", resolved.permissionsPolicy],
+        ["Cross-Origin-Opener-Policy", resolved.coop],
+        ["Content-Security-Policy", resolved.csp?.htmlValue],
+    ];
+
+    return lines.filter((line): line is readonly [string, string] => line[1] !== undefined);
+};
 
 /**
  * For fingerprinted build output: a file whose name changes with its content can
@@ -64,6 +75,12 @@ const IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
 interface AssetHeadersOptions {
     /**
+     * The security headers to write for `/*`, in the runtime's `security.headers`
+     * shape: `true` for the defaults, `false` for none. See {@link resolveProjectSecurityHeaders}.
+     */
+    headers: boolean | SecurityHeadersOptions;
+
+    /**
      * The directory, relative to the assets root, that holds only content-hashed
      * files (Vite's `build.assetsDir`). Its files get {@link IMMUTABLE_CACHE_CONTROL}.
      * Omit it when that cannot be promised: one unhashed file there would be
@@ -73,8 +90,6 @@ interface AssetHeadersOptions {
      * fallback page with this policy, and keep it for a year.
      */
     immutableDirectory?: string;
-    /** Write the default security headers for `/*`. `false` when the deployment opted out (`LUNORA_SECURITY_HEADERS=off`). */
-    securityHeaders: boolean;
 }
 
 interface AssetHeadersResult {
@@ -123,29 +138,6 @@ const isIndented = (line: string): boolean => line.startsWith(" ") || line.start
 
 const isRuleLine = (line: string): boolean => line !== "" && !isIndented(line) && !line.startsWith("#");
 
-/**
- * Header names (lower-cased) the user's rules set. Cloudflare joins the values of
- * one header matched by two rules with a comma, so `X-Frame-Options: DENY` from
- * the user plus the block's `SAMEORIGIN` would ship `DENY, SAMEORIGIN`, which
- * browsers reject. The block defers to the user for every name they set, as the
- * runtime's `setIfAbsent` does. A `! Name` line detaches a header and sets
- * nothing, so it is not counted.
- */
-const userHeaderNames = (lines: ReadonlyArray<string>): Set<string> => {
-    const names = new Set<string>();
-
-    for (const line of lines) {
-        const entry = line.trim();
-        const colon = entry.indexOf(":");
-
-        if (isIndented(line) && colon > 0 && !entry.startsWith("!") && !entry.startsWith("#")) {
-            names.add(entry.slice(0, colon).trim().toLowerCase());
-        }
-    }
-
-    return names;
-};
-
 /** The path part of a `_headers` rule, which may be an absolute `https://host/path` URL. */
 const rulePath = (rule: string): string => {
     if (!rule.startsWith("https://")) {
@@ -155,6 +147,61 @@ const rulePath = (rule: string): string => {
     const slash = rule.indexOf("/", "https://".length);
 
     return slash === -1 ? "/" : rule.slice(slash);
+};
+
+/**
+ * How the user's rules interact with the block's security headers.
+ *
+ * Cloudflare joins the values of one header that two matching rules set (two
+ * header lines on the wire), so `X-Frame-Options: DENY` from the user plus the
+ * block's `SAMEORIGIN` ships both, which browsers reject. A user rule for `/*`
+ * means "this value everywhere", so the block leaves that header to it (`taken`),
+ * as the runtime's `setIfAbsent` leaves a handler's own. A narrower rule must
+ * detach the default first (`! Name`, then `Name: value`); one that sets a managed
+ * header without detaching it is reported (`stacked`). Names are lower-cased.
+ */
+const userHeaderUse = (lines: ReadonlyArray<string>): { stacked: { name: string; rule: string }[]; taken: Set<string> } => {
+    const taken = new Set<string>();
+    const stacked: { name: string; rule: string }[] = [];
+    let rule: string | undefined;
+    let detached = new Set<string>();
+
+    for (const line of lines) {
+        if (isRuleLine(line)) {
+            rule = line.trim();
+            detached = new Set();
+
+            continue;
+        }
+
+        const entry = line.trim();
+
+        if (rule === undefined || !isIndented(line) || entry.startsWith("#")) {
+            continue;
+        }
+
+        if (entry.startsWith("!")) {
+            detached.add(entry.slice(1).trim().toLowerCase());
+
+            continue;
+        }
+
+        const colon = entry.indexOf(":");
+
+        if (colon <= 0) {
+            continue;
+        }
+
+        const name = entry.slice(0, colon).trim().toLowerCase();
+
+        if (rulePath(rule) === "/*") {
+            taken.add(name);
+        } else if (!detached.has(name)) {
+            stacked.push({ name, rule });
+        }
+    }
+
+    return { stacked, taken };
 };
 
 /**
@@ -207,6 +254,42 @@ const renderBlock = (rules: ReadonlyArray<HeaderRule>): string[] => [
 ];
 
 /**
+ * The block's `/*` rule: the security headers minus those a user rule for `/*`
+ * sets, with a warning for each narrower user rule that stacks a value on a
+ * default instead of detaching it, or a line past Cloudflare's length cap.
+ */
+const planSecurityRule = (
+    security: ReadonlyArray<readonly [string, string]>,
+    use: ReturnType<typeof userHeaderUse>,
+): { deferred: string[]; rule: HeaderRule | undefined; warnings: string[] } => {
+    const deferred: string[] = [];
+    const warnings: string[] = [];
+    const headers: (readonly [string, string])[] = [];
+
+    for (const [name, value] of security) {
+        for (const stacked of use.stacked.filter((entry) => entry.name === name.toLowerCase())) {
+            warnings.push(
+                `_headers rule "${stacked.rule}" sets ${name} on top of Lunora's default, so both values are sent; add "! ${name}" above it in that rule to replace the default`,
+            );
+        }
+
+        if (use.taken.has(name.toLowerCase())) {
+            deferred.push(name);
+        } else {
+            headers.push([name, value]);
+
+            if (`  ${name}: ${value}`.length > MAX_HEADERS_LINE_LENGTH) {
+                warnings.push(
+                    `_headers line for ${name} is longer than Cloudflare's ${String(MAX_HEADERS_LINE_LENGTH)}-character limit; shorten the value in lunora.config`,
+                );
+            }
+        }
+    }
+
+    return { deferred, rule: headers.length === 0 ? undefined : { headers, path: "/*" }, warnings };
+};
+
+/**
  * Merge the managed block into `existing` (the current `_headers` text, or
  * `undefined` when there is none) and return the new text, or `undefined` when
  * the file should not exist. Pure.
@@ -216,25 +299,16 @@ const mergeAssetHeaders = (
     options: AssetHeadersOptions,
 ): { deferred: string[]; text: string | undefined; warnings: string[] } => {
     const user = userLines(existing ?? "");
-    const taken = userHeaderNames(user);
     const deferred: string[] = [];
     const warnings: string[] = [];
     const rules: HeaderRule[] = [];
+    const security = planSecurityRule(securityHeaderLines(options.headers), userHeaderUse(user));
 
-    if (options.securityHeaders) {
-        const headers = SECURITY_HEADERS.filter(([name]) => {
-            if (taken.has(name.toLowerCase())) {
-                deferred.push(name);
+    deferred.push(...security.deferred);
+    warnings.push(...security.warnings);
 
-                return false;
-            }
-
-            return true;
-        });
-
-        if (headers.length > 0) {
-            rules.push({ headers, path: "/*" });
-        }
+    if (security.rule !== undefined) {
+        rules.push(security.rule);
     }
 
     const immutable = options.immutableDirectory
@@ -295,16 +369,19 @@ const variablesOf = (scope: unknown): Record<string, unknown> | undefined => {
 };
 
 /**
- * Whether the deployment turned the security headers off through
- * `LUNORA_SECURITY_HEADERS` in wrangler's `vars`. `vars` is not inheritable, so
- * an `env.<name>` build reads that block's own. A `security.headers` passed to
- * `createWorker` in code cannot be seen at build time; see the docs' security page.
+ * The security headers a build writes for the static assets, in the precedence
+ * the Worker applies them: `lunora.config`'s `security.headers` (read and
+ * validated by `@lunora/codegen`, which also emits it into the Worker), then
+ * an off value for `LUNORA_SECURITY_HEADERS` in wrangler's `vars` (`vars` is not inheritable,
+ * so an `env.<name>` build reads that block's own), then the defaults. A
+ * `security.headers` passed to `createWorker` in code cannot be seen here; set it
+ * in `lunora.config` to cover both.
  */
-const securityHeadersDisabled = (wrangler: unknown, environment?: string): boolean => {
+const resolveProjectSecurityHeaders = (lunoraDirectory: string, wrangler: unknown, environment?: string): boolean | SecurityHeadersOptions => {
     const scope = environment === undefined ? wrangler : (wrangler as { env?: Record<string, unknown> } | undefined)?.env?.[environment];
 
-    return isEnvDisabled(variablesOf(scope)?.["LUNORA_SECURITY_HEADERS"]);
+    return readProjectSecurityHeaders(lunoraDirectory) ?? !isEnvDisabled(variablesOf(scope)?.["LUNORA_SECURITY_HEADERS"]);
 };
 
 export type { AssetHeadersOptions, AssetHeadersResult };
-export { mergeAssetHeaders, securityHeadersDisabled, writeAssetHeaders };
+export { mergeAssetHeaders, resolveProjectSecurityHeaders, writeAssetHeaders };

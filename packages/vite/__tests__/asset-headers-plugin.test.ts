@@ -9,7 +9,7 @@ import type { ResolvedLunoraPluginOptions } from "../src/types";
 
 let projectRoot: string;
 
-const options = (target = "cloudflare"): ResolvedLunoraPluginOptions => ({ projectRoot, target }) as ResolvedLunoraPluginOptions;
+const options = (target = "cloudflare"): ResolvedLunoraPluginOptions => ({ projectRoot, schemaDir: "lunora", target }) as ResolvedLunoraPluginOptions;
 
 /** Drive the plugin through the two hooks a client build calls, with the given plugin names in the resolved config. */
 const build = (
@@ -100,6 +100,23 @@ describe(assetHeadersPlugin, () => {
         expect(text).not.toContain("X-Frame-Options");
         // Caching is not a security layer, so the opt-out leaves it on.
         expect(text).toContain("/assets/*\n  Cache-Control: public, max-age=31536000, immutable");
+    });
+
+    it("writes the security.headers lunora.config sets, the value codegen also hands the Worker", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(projectRoot, "lunora.config.ts"),
+            'export default { security: { headers: { crossOriginOpenerPolicy: "same-origin", frameAncestors: ["https://partner.example"] } } };\n',
+            "utf8",
+        );
+
+        build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
+
+        const text = readFileSync(headersFile(), "utf8");
+
+        expect(text).toContain("  Cross-Origin-Opener-Policy: same-origin\n");
+        expect(text).toContain("frame-ancestors 'self' https://partner.example");
     });
 
     it("caches Vite's hashed assets directory for good", () => {

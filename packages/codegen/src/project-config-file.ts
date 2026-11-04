@@ -48,6 +48,8 @@ import { createJiti } from "jiti";
 import type { ObjectLiteralElementLike, ObjectLiteralExpression, PropertyAssignment, ShorthandPropertyAssignment, SourceFile } from "ts-morph";
 import { Node as TsNode, Project, VariableDeclarationKind } from "ts-morph";
 
+import type { SecurityHeadersOptions } from "../../../shared/security-headers";
+import { validateSecurityHeaders } from "../../../shared/security-headers";
 import type { AcceptedFinding } from "./advisor-accept";
 import { propertyKeyName } from "./discover/property-name";
 import { findCodegenConfigFile, findProjectConfigFile } from "./project-config-path";
@@ -84,6 +86,14 @@ interface ProjectConfigLiterals {
      */
     durableObjects?: { merge?: boolean; unreadable?: boolean };
     remote?: boolean;
+
+    /**
+     * `security.headers`: `false`, `true`, or the per-header options object, read
+     * as a plain JSON value. `unreadable` when `security` is declared but its
+     * `headers` is not built from literals; the caller then keeps the defaults
+     * and says so, since an unreadable value must never read as "headers off".
+     */
+    security?: { headers?: boolean | Record<string, unknown>; unreadable?: true };
 
     /**
      * `services`: binding key → `{ dir, entrypoint? }` (plan 457). `unreadable`
@@ -129,6 +139,8 @@ interface LunoraProjectConfig {
     durableObjects?: unknown;
     /** Remote-binding dev preference. */
     remote?: unknown;
+    /** Baseline security headers (`headers`), read through {@link readProjectConfigLiterals}. */
+    security?: unknown;
     /** Deploy target id. */
     target?: unknown;
 }
@@ -476,9 +488,85 @@ const readStudio = (declared: TsNode | undefined, sourceFile: SourceFile): Proje
         : { studio: { unreadable: true } };
 };
 
-/** The sections that carry one boolean literal: `durableObjects.merge` and `studio.companion`. */
+/** A JSON value built only from literals: strings, numbers, booleans, arrays and plain objects of them. */
+type JsonLiteral = boolean | number | string | JsonLiteral[] | { [key: string]: JsonLiteral };
+
+/** `node` as a {@link JsonLiteral}, or `undefined` when any part of it is not a literal (an identifier, a call, a spread, a computed key). */
+// eslint-disable-next-line sonarjs/function-return-type -- a JSON value is by definition one of several shapes; the union is the type.
+const readJsonLiteral = (node: TsNode | undefined): JsonLiteral | undefined => {
+    const value = unwrapLiteral(node);
+
+    if (value === undefined) {
+        return undefined;
+    }
+
+    if (TsNode.isStringLiteral(value) || TsNode.isNoSubstitutionTemplateLiteral(value)) {
+        return value.getLiteralValue();
+    }
+
+    if (TsNode.isNumericLiteral(value)) {
+        return value.getLiteralValue();
+    }
+
+    if (TsNode.isTrueLiteral(value) || TsNode.isFalseLiteral(value)) {
+        return value.getLiteralValue();
+    }
+
+    if (TsNode.isArrayLiteralExpression(value)) {
+        const items = value.getElements().map((element) => readJsonLiteral(element));
+
+        return items.every((item) => item !== undefined) ? items : undefined;
+    }
+
+    if (!TsNode.isObjectLiteralExpression(value)) {
+        return undefined;
+    }
+
+    const object: Record<string, JsonLiteral> = {};
+
+    for (const property of value.getProperties()) {
+        if (!TsNode.isPropertyAssignment(property) || TsNode.isComputedPropertyName(property.getNameNode())) {
+            return undefined;
+        }
+
+        const member = readJsonLiteral(property.getInitializer());
+
+        if (member === undefined) {
+            return undefined;
+        }
+
+        object[propertyKeyName(property)] = member;
+    }
+
+    return object;
+};
+
+/**
+ * `security.headers` from the `security` object literal. Read generically rather
+ * than field by field, so an option the runtime gains later is carried through
+ * instead of making the whole section unreadable; the runtime and the build
+ * validate the values.
+ */
+const readSecurity = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+    const member = readPlainMember(declared, sourceFile, "headers");
+
+    if ("absent" in member) {
+        return { security: {} };
+    }
+
+    const headers = "literal" in member ? readJsonLiteral(member.literal) : undefined;
+
+    if (typeof headers === "boolean" || (headers !== undefined && typeof headers === "object" && !Array.isArray(headers))) {
+        return { security: { headers } };
+    }
+
+    return { security: { unreadable: true } };
+};
+
+/** The sections read by one function each: `durableObjects.merge`, `security.headers` and `studio.companion`. */
 const BOOLEAN_SECTION_READERS: ReadonlyMap<string, (declared: TsNode | undefined, sourceFile: SourceFile) => ProjectConfigLiterals> = new Map([
     ["durableObjects", readDurableObjects],
+    ["security", readSecurity],
     ["studio", readStudio],
 ]);
 
@@ -488,8 +576,19 @@ const UNREADABLE_ACCESSOR: ReadonlyMap<string, ProjectConfigLiterals> = new Map(
     ["codegen", { codegen: { lazyFunctionsUnreadable: true, unreadable: true } }],
     ["durableObjects", { durableObjects: { unreadable: true } }],
     ["remote", { unreadable: true }],
+    ["security", { security: { unreadable: true } }],
     ["studio", { studio: { unreadable: true } }],
     ["target", { unreadable: true }],
+]);
+
+/** What each declared section contributes when a spread in the config object may shadow it: its own `unreadable`. */
+const SPREAD_UNREADABLE: ReadonlyMap<string, ProjectConfigLiterals> = new Map([
+    ["advisor", { advisor: { unreadable: true } }],
+    ["codegen", { codegen: { lazyFunctionsUnreadable: true, unreadable: true } }],
+    ["durableObjects", { durableObjects: { unreadable: true } }],
+    ["security", { security: { unreadable: true } }],
+    ["services", { services: { unreadable: true } }],
+    ["studio", { studio: { unreadable: true } }],
 ]);
 
 /** A member's initializer: `undefined` when absent, `"unreadable"` when present but not a plain `key: value` assignment. */
@@ -675,14 +774,15 @@ const readConfigLiterals = (configPath: string): ProjectConfigLiterals => {
         const declares = (key: string): boolean =>
             object.getProperties().some((property) => !TsNode.isSpreadAssignment(property) && propertyKeyName(property) === key);
 
-        return {
-            ...(declares("advisor") ? { advisor: { unreadable: true } } : {}),
-            ...(declares("codegen") ? { codegen: { lazyFunctionsUnreadable: true, unreadable: true } } : {}),
-            ...(declares("durableObjects") ? { durableObjects: { unreadable: true } } : {}),
-            ...(declares("studio") ? { studio: { unreadable: true } } : {}),
-            ...(declares("services") ? { services: { unreadable: true } } : {}),
-            unreadable: true,
-        };
+        let shadowed: ProjectConfigLiterals = { unreadable: true };
+
+        for (const [key, unreadable] of SPREAD_UNREADABLE) {
+            if (declares(key)) {
+                shadowed = { ...shadowed, ...unreadable };
+            }
+        }
+
+        return shadowed;
     }
 
     let literals: ProjectConfigLiterals = {};
@@ -772,6 +872,43 @@ const readProjectStudioCompanion = (lunoraDirectory: string): boolean => {
     return studio?.companion === true;
 };
 
+const securityWarnedFor = new Set<string>();
+
+/**
+ * `lunora.config`'s `security.headers`, or `undefined` when the config sets none
+ * or the value cannot be used. Unreadable or invalid is said out loud and falls
+ * back to the defaults: never to "headers off", and never to a value that would
+ * fail every request at runtime. The build's `_headers` writer resolves the same
+ * way, so the Worker and the static assets keep sending the same headers.
+ */
+const readProjectSecurityHeaders = (lunoraDirectory: string): boolean | SecurityHeadersOptions | undefined => {
+    const configPath = findCodegenConfigFile(lunoraDirectory);
+    const { security } = configPath === undefined ? {} : readConfigLiterals(configPath);
+    const headers = security?.headers as boolean | SecurityHeadersOptions | undefined;
+    const problems = security?.unreadable ? ["`security.headers` is not built from literals"] : validateSecurityHeaders(headers);
+
+    if (problems.length === 0) {
+        return headers;
+    }
+
+    const key = `${configPath ?? ""}:${problems.join(";")}`;
+
+    if (!securityWarnedFor.has(key)) {
+        securityWarnedFor.add(key);
+        // eslint-disable-next-line no-console -- codegen has no diagnostic sink for config literals; matches `durableObjects.merge`'s warning.
+        console.warn(`@lunora/codegen: lunora.config ${problems.join("; ")}, so the default security headers apply.`);
+    }
+
+    return undefined;
+};
+
 export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral };
 export { findProjectConfigFile, PROJECT_CONFIG_FILENAMES } from "./project-config-path";
-export { loadProjectConfig, readMergeDurableObjects, readProjectConfigLiterals, readProjectLazyFunctions, readProjectStudioCompanion };
+export {
+    loadProjectConfig,
+    readMergeDurableObjects,
+    readProjectConfigLiterals,
+    readProjectLazyFunctions,
+    readProjectSecurityHeaders,
+    readProjectStudioCompanion,
+};

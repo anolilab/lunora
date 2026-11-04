@@ -44,7 +44,7 @@ Added to every response when the inner handler didn't set them:
 | `X-Frame-Options`            | `SAMEORIGIN`                                                              |
 | `Referrer-Policy`            | `strict-origin-when-cross-origin`                                         |
 | `Permissions-Policy`         | a minimal deny list (camera, microphone, geolocation, payment, …)         |
-| `Cross-Origin-Opener-Policy` | `same-origin`                                                             |
+| `Cross-Origin-Opener-Policy` | `same-origin-allow-popups` ([why](#oauth-and-payment-popups))             |
 | `Content-Security-Policy`    | strict on **non-HTML** responses, a hardening-only policy on HTML (below) |
 
 Non-HTML (API/JSON) responses get the strict `default-src 'none';
@@ -52,21 +52,105 @@ frame-ancestors 'none'; base-uri 'none'; form-action 'none'`. HTML responses get
 the HTML policy, `base-uri 'none'; object-src 'none'; frame-ancestors 'self'`
 (`'none'` when `frameOptions` is `DENY`). It sets no `default-src` or
 `script-src`, so an SSR page is never broken by a policy it didn't opt into.
-Pass a `csp` string to apply your own policy to every response:
+
+### Configuring the headers
+
+Set them in `lunora.config.ts`. That one value reaches both places headers are
+sent: codegen hands it to the Worker, and the build writes the same values into
+the static assets' `_headers` (see [Static assets](#static-assets) below).
 
 ```ts
-createWorker({
+// lunora.config.ts
+import type { LunoraConfig } from "./lunora/_generated/app";
+
+export default {
     security: {
         headers: {
-            csp: "default-src 'self'; script-src 'self' 'unsafe-inline'",
+            // Let listed origins embed your pages in a frame (drops X-Frame-Options,
+            // which cannot express a list; frame-ancestors carries it instead).
+            frameAncestors: ["https://partner.example"],
+            crossOriginOpenerPolicy: "same-origin-allow-popups",
             hsts: { maxAge: 63072000, preload: true },
+            permissionsPolicy: false, // omit one header
         },
     },
-});
+} satisfies LunoraConfig;
 ```
 
-Set `headers: false` to disable the layer entirely, or any individual field to
-`false` to omit that header.
+| Option                    | Values                                                                            |
+| ------------------------- | --------------------------------------------------------------------------------- |
+| `crossOriginOpenerPolicy` | `"same-origin-allow-popups"` (default), `"same-origin"`, `"unsafe-none"`, `false` |
+| `frameAncestors`          | origins allowed to frame your HTML pages, e.g. `["https://a.example"]`            |
+| `frameOptions`            | `"SAMEORIGIN"` (default), `"DENY"`, `false`                                       |
+| `csp`                     | one policy string for every response, or `false`                                  |
+| `hsts`                    | `true`, `false`, or `{ maxAge, includeSubDomains, preload }`                      |
+| `permissionsPolicy`       | a policy string, or `false`                                                       |
+| `referrerPolicy`          | a policy string, or `false`                                                       |
+
+`headers: false` turns the whole layer off. A `csp` string replaces both default
+policies, so it cannot be combined with `frameAncestors`; put the
+`frame-ancestors` directive in it instead.
+
+The values must be literals, because codegen and the build read the file without
+running it. A value codegen cannot read, or one that would break a header line (a
+line break, or a `frameAncestors` entry that is not an origin), is reported and
+the defaults apply.
+
+**Precedence.** A `security.headers` passed in code (to `createWorker`, or through
+`.extend()`) wins over `lunora.config`, which wins over
+`LUNORA_SECURITY_HEADERS=off` in wrangler `vars`. The build can only see the last
+two, so code-level headers do not reach the static assets. Keep them in
+`lunora.config` unless you need to compute them.
+
+An app built with the generated `defineApp()` gets the config value with no
+wiring. An app that calls `createWorker` itself passes it on:
+
+```ts
+import { LUNORA_SECURITY_HEADERS } from "../lunora/_generated/app";
+
+createWorker({ /* … */ security: { headers: LUNORA_SECURITY_HEADERS } });
+```
+
+### OAuth and payment popups
+
+`Cross-Origin-Opener-Policy` decides whether a popup can talk back to the page
+that opened it. Lunora defaults to `same-origin-allow-popups`:
+
+- A cross-origin page that opens your app gets no handle on it.
+- A popup your page opens (an OAuth provider, a payment sheet) keeps
+  `window.opener`, so the provider's SDK can post its result back.
+
+`same-origin` would sever that link and break those SDKs. Lunora sends no
+`Cross-Origin-Embedder-Policy`, so `same-origin` would not buy cross-origin
+isolation either.
+
+If the popup ends on a callback page **you** serve, which then calls
+`window.opener.postMessage(...)`, that page needs `unsafe-none`. When the popup
+navigates from the provider to your callback, any other value on the callback
+response moves the popup into a new browsing context group, and `window.opener`
+becomes `null`. (Checked in Chromium for both `same-origin-allow-popups` and
+`same-origin`.) Set it on that one response, not globally:
+
+- **A Worker route:** set the header in the handler. Inner handlers win over the
+  defaults.
+
+    ```ts
+    return new Response(html, {
+        headers: { "content-type": "text/html", "cross-origin-opener-policy": "unsafe-none" },
+    });
+    ```
+
+- **A static page:** detach the default and set your own in `public/_headers`:
+
+    ```text
+    /auth/popup-callback
+      ! Cross-Origin-Opener-Policy
+      Cross-Origin-Opener-Policy: unsafe-none
+    ```
+
+A page that is itself opened by another site's popup flow, or that must keep
+working with a third-party opener, can set `crossOriginOpenerPolicy:
+"unsafe-none"` in `lunora.config`, at the cost of the protection above.
 
 ### Static assets
 
@@ -75,8 +159,8 @@ directory without running the Worker. That covers your JS and CSS chunks, the SP
 shell, and prerendered pages. The `fetch` above never sees those responses, so
 on its own it cannot add headers to them.
 
-Instead, `vite build` writes the same defaults into the client build's `_headers`
-file, which Cloudflare applies to asset responses only:
+Instead, `vite build` writes the same headers into the client build's `_headers`
+file, which Cloudflare applies to asset responses only. With the defaults:
 
 ```text
 # BEGIN lunora-managed: rewritten on every build. Put your own rules outside this block.
@@ -86,7 +170,7 @@ file, which Cloudflare applies to asset responses only:
   X-Frame-Options: SAMEORIGIN
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: accelerometer=(), autoplay=(), camera=(), …
-  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
   Content-Security-Policy: base-uri 'none'; object-src 'none'; frame-ancestors 'self'
 # END lunora-managed
 ```
@@ -99,19 +183,20 @@ A few things differ from the Worker's layer:
 - **HSTS is sent on every response.** Browsers ignore it over plain HTTP, so
   local development is not pinned to HTTPS.
 - **No CORS headers.** Static files are served to your own origin.
-- **Code options do not reach it.** The build cannot see the `security` you pass
-  to `createWorker`. Setting `LUNORA_SECURITY_HEADERS` to `off` in wrangler
-  `vars` (top level, or the `env.<name>` block you build for) drops these headers
-  from the block. To
-  change one header for assets, set it in your own `public/_headers`.
+- **Only `lunora.config` and wrangler `vars` reach it.** See the precedence
+  above.
 
 Your own rules in `public/_headers` are kept as written. The managed block goes
 at the top of the file, and Lunora rewrites only what sits between its two
-markers. When one of your rules sets a header the block would also set, the
-block leaves that header out, because Cloudflare comma-joins two values for the
-same header (for example `DENY, SAMEORIGIN`), and browsers reject the result. To
-remove a default from some paths only, detach it in one of your rules. A detach
-only removes a header an earlier rule added, which is why the block comes first:
+markers. Cloudflare sends both values when two matching rules set the same
+header (for example `DENY` and `SAMEORIGIN`), and browsers reject that. So:
+
+- A header one of your rules for `/*` sets is left out of the block. Your value
+  applies everywhere.
+- For narrower paths, detach the default first, then set yours, as in the
+  popup-callback example above. A detach only removes a header an earlier rule
+  added, which is why the block comes first. A narrower rule that sets a managed
+  header without detaching it is reported at build time.
 
 ```text
 /embed/*
