@@ -46,7 +46,9 @@ if (names.size === 0) {
 }
 
 const filters = [...names].flatMap((name) => ["-F", `${name}^...`]);
-const result = spawnSync("pnpm", ["exec", "vis", "run", "build", ...filters], { cwd: rootDir, stdio: "inherit" });
+// --if-present: a package with no workspace dependencies (@lunora/errors) selects no
+// projects, which vis otherwise treats as an error.
+const result = spawnSync("pnpm", ["exec", "vis", "run", "build", "--if-present", ...filters], { cwd: rootDir, stdio: "inherit" });
 
 if (result.status !== 0) {
     process.stderr.write(
