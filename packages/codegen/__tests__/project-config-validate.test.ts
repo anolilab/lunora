@@ -33,6 +33,16 @@ describe("lunora.config validation", () => {
     codegen: { exclude: ["seed/**"], lazyFunctions: true },
     durableObjects: { merge: false },
     remote: { kinds: ["d1"] },
+    security: {
+        headers: {
+            crossOriginOpenerPolicy: "same-origin-allow-popups",
+            csp: false,
+            frameAncestors: ["https://partner.example"],
+            hsts: { includeSubDomains: true, maxAge: 63072000, preload: false },
+            permissionsPolicy: "camera=()",
+            referrerPolicy: "no-referrer",
+        },
+    },
     services: { gateway: { dir: "./services/gateway", entrypoint: "Gateway", rpc: false } },
     studio: { companion: true },
     target: "cloudflare",
@@ -41,6 +51,8 @@ describe("lunora.config validation", () => {
         // Computed values are the readers' to report, not this check's.
         "export default { remote: process.env.REMOTE === '1', target: process.env.TARGET };\n",
         "export type Env = { DB: string };\nexport interface Extra { a: string }\n",
+        "export default { security: { headers: false } };\n",
+        "export default { security: { headers: { frameOptions: 'DENY', hsts: false } } };\n",
     ])("accepts a valid config (%#)", (source) => {
         expect.assertions(1);
 
@@ -55,7 +67,7 @@ describe("lunora.config validation", () => {
         writeConfig("export default { remot: true, target: 'cloudflare' };\n");
 
         expect(projectConfigProblems(configPath)).toStrictEqual([
-            "unknown key `remot`. Did you mean `remote`? Valid keys: advisor, app, codegen, durableObjects, remote, services, studio, target.",
+            "unknown key `remot`. Did you mean `remote`? Valid keys: advisor, app, codegen, durableObjects, remote, security, services, studio, target.",
         ]);
     });
 
@@ -76,6 +88,11 @@ describe("lunora.config validation", () => {
         ["durableObjects: { merge: 'yes' }", "`durableObjects.merge` must be a boolean, got a string ('yes')."],
         ["app: 'app'", "`app` must be a function, got a string ('app')."],
         ["studio: true", "`studio` must be an object, got a boolean (true)."],
+        ["security: { headers: 'strict' }", "`security.headers` must be a boolean or an object, got a string ('strict')."],
+        [
+            "security: { headers: { frameAncestors: 'https://a.example' } }",
+            "`security.headers.frameAncestors` must be an array, got a string ('https://a.example').",
+        ],
         ["services: { api: { dir: './api', rpc: true } }", "`services.api.rpc` must be `false`, got `true`; leave it out for an RPC binding."],
     ])("refuses %s", (member, problem) => {
         expect.assertions(1);
@@ -83,6 +100,16 @@ describe("lunora.config validation", () => {
         writeConfig(`export default { ${member} };\n`);
 
         expect(projectConfigProblems(configPath)).toStrictEqual([problem]);
+    });
+
+    it("names an unknown key inside security.headers", () => {
+        expect.assertions(1);
+
+        writeConfig("export default { security: { headers: { crossOriginOpenerPolicyy: 'same-origin' } } };\n");
+
+        expect(projectConfigProblems(configPath)).toStrictEqual([
+            "unknown key `security.headers.crossOriginOpenerPolicyy`. Did you mean `security.headers.crossOriginOpenerPolicy`? Valid keys of `security.headers`: crossOriginOpenerPolicy, csp, frameAncestors, frameOptions, hsts, permissionsPolicy, referrerPolicy.",
+        ]);
     });
 
     it("follows a const to the value it names", () => {
@@ -99,7 +126,7 @@ describe("lunora.config validation", () => {
         writeConfig("const base = {};\nexport default { ...base, traget: 'cloudflare' };\n");
 
         expect(projectConfigProblems(configPath)).toStrictEqual([
-            "unknown key `traget`. Did you mean `target`? Valid keys: advisor, app, codegen, durableObjects, remote, services, studio, target.",
+            "unknown key `traget`. Did you mean `target`? Valid keys: advisor, app, codegen, durableObjects, remote, security, services, studio, target.",
         ]);
     });
 

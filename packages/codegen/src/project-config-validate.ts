@@ -36,6 +36,8 @@ interface FieldShape {
 const BOOLEAN: FieldShape = { accepts: ["boolean"], expected: "a boolean" };
 const STRING: FieldShape = { accepts: ["string"], expected: "a string" };
 const STRING_ARRAY: FieldShape = { accepts: ["array"], expected: "an array" };
+const NUMBER: FieldShape = { accepts: ["number"], expected: "a number" };
+const STRING_OR_FALSE: FieldShape = { accepts: ["boolean", "string"], expected: "a string or `false`" };
 
 /** `rpc` means something only as `false`; `true` is the default it is never written as. */
 const RPC: FieldShape = { accepts: ["boolean"], expected: "`false`" };
@@ -52,6 +54,26 @@ const CONFIG_SHAPE: Readonly<Record<string, FieldShape>> = {
     durableObjects: section({ merge: BOOLEAN }),
     // The object form is a reserved opt-in, read as "on" (see `interpretRemote`).
     remote: { accepts: ["boolean", "object"], expected: "a boolean" },
+    // Header values are checked by `validateSecurityHeaders` when the build reads them; here only the key names and kinds.
+    security: section({
+        headers: {
+            accepts: ["boolean", "object"],
+            expected: "a boolean or an object",
+            keys: {
+                crossOriginOpenerPolicy: STRING_OR_FALSE,
+                csp: STRING_OR_FALSE,
+                frameAncestors: STRING_ARRAY,
+                frameOptions: STRING_OR_FALSE,
+                hsts: {
+                    accepts: ["boolean", "object"],
+                    expected: "a boolean or an object",
+                    keys: { includeSubDomains: BOOLEAN, maxAge: NUMBER, preload: BOOLEAN },
+                },
+                permissionsPolicy: STRING_OR_FALSE,
+                referrerPolicy: STRING_OR_FALSE,
+            },
+        },
+    }),
     services: { accepts: ["object"], entries: section({ dir: STRING, entrypoint: STRING, rpc: RPC }), expected: "an object" },
     studio: section({ companion: BOOLEAN }),
     target: STRING,
