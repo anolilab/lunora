@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
 import type { AdvisorProceduresResult } from "../../lib/admin";
@@ -63,8 +63,6 @@ const useAdvisorProcedures = ({ enabled, refreshKey }: AdvisorProceduresOptions)
 
     const query = useQuery({
         enabled,
-        // Hold the previous list while a new revision loads, so the score does not flash to a spinner.
-        placeholderData: keepPreviousData,
         queryFn: fetchAdvisorProcedures,
         queryKey: ["studio", "advisor-procedures", revision],
         // No retries: a 404/500 is a state the host reports, and retrying would keep the panel on "Loading" for seconds first.

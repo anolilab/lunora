@@ -53,7 +53,9 @@ describe("handleAdvisorProceduresRequest", () => {
         const response = handleAdvisorProceduresRequest({ method: "GET", projectRoot });
 
         expect(response.status).toBe(404);
-        expect(response.body).toStrictEqual({ error: "advisor-procedures.json is not generated yet; run `lunora codegen`." });
+        expect(response.body).toStrictEqual({
+            error: "advisor-procedures.json is not generated; run `lunora codegen` with the advisor enabled (`lint` not `false`).",
+        });
     });
 
     it("answers 500 when the file has no procedures array rather than an empty list", () => {

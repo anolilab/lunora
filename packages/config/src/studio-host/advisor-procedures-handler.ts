@@ -47,7 +47,7 @@ const handleAdvisorProceduresRequest = (request: LocalEndpointRequest): LocalEnd
 
     if (!existsSync(path)) {
         return {
-            body: { error: "advisor-procedures.json is not generated yet; run `lunora codegen`." },
+            body: { error: "advisor-procedures.json is not generated; run `lunora codegen` with the advisor enabled (`lint` not `false`)." },
             status: 404,
         };
     }
