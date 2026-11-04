@@ -174,8 +174,12 @@ retries to the message that actually failed, and the key is what stops a
 redelivery from mailing a second copy. Pass `sent` — a KV namespace, or anything
 with KV's `get(key)` / `put(key, value, { expirationTtl })` — and
 `consumeQueuedSend` checks it before sending, records the key with the provider's
-message id after a successful send (for `sentTtlSeconds`, default one day), and
-returns `{ id, deduplicated: true }` for a key it has seen. Only a success is
+message id after a successful send (for `sentTtlSeconds`, default one day; KV needs
+a whole number of at least 60, and anything else fails every message as retryable),
+and returns `{ id, deduplicated: true }` for a key it has seen. `env.SENT` exists
+only once a `kv_namespaces` entry binds it as `SENT` in `wrangler.jsonc`; an unbound
+one is `undefined`, which turns dedupe off, so `consumeQueuedSend` logs a warning
+when `sent` is passed as `undefined`. Only a success is
 recorded, so a failed attempt never blocks the retry. A store it cannot read fails
 the send as retryable, because nothing has gone out; a store it cannot write after
 the send is logged and the send still counts as done. With a `sent` store a body

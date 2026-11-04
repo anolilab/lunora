@@ -51,17 +51,23 @@ interface ConsumeQueuedSendOptions {
      * Collapse redeliveries: a message whose `idempotencyKey` is already in the
      * store is acknowledged without a second send, and a sent message's key is
      * recorded here. With a store, a body without an `idempotencyKey` is refused.
+     * Passing the key with an `undefined` value (an unbound `env.SENT`) logs a
+     * warning on every call, because dedupe is then off.
      */
     sent?: SentMailStore;
 
     /**
-     * How long a sent key is remembered, in seconds (default 86 400). Workers KV
-     * rejects anything under 60. A redelivery later than this sends again.
+     * How long a sent key is remembered, in whole seconds, at least 60 (default
+     * 86 400), the range Workers KV accepts. A redelivery later than this sends
+     * again. Anything else fails every message as a retryable `MailSendError`.
      */
     sentTtlSeconds?: number;
 }
 
 const DEFAULT_SENT_TTL_SECONDS = 86_400;
+
+/** Workers KV's floor for `expirationTtl`. */
+const MIN_SENT_TTL_SECONDS = 60;
 
 /** A queue body no redelivery can fix, refused before anything is read or sent. */
 const malformed = (message: string): MailSendError => new MailSendError({ message: `@lunora/mail: ${message}`, retryable: false });
@@ -221,10 +227,25 @@ const toSendOptions = (payload: unknown): SendOptions => {
  * ```
  */
 const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: ConsumeQueuedSendOptions = {}): Promise<{ deduplicated: boolean; id: string }> => {
+    const { sent, sentTtlSeconds = DEFAULT_SENT_TTL_SECONDS } = options;
+
+    // Every put would throw and be swallowed below, turning dedupe off without a word. It is the
+    // deploy's fault, not the message's, so it is retryable: an ack would drop every queued mail.
+    if (!Number.isSafeInteger(sentTtlSeconds) || sentTtlSeconds < MIN_SENT_TTL_SECONDS) {
+        throw new MailSendError({
+            message: `@lunora/mail: \`sentTtlSeconds\` must be a whole number of seconds, at least ${String(MIN_SENT_TTL_SECONDS)}`,
+            retryable: true,
+        });
+    }
+
     const sendOptions = toSendOptions(payload);
-    const { sent } = options;
 
     if (!sent) {
+        if ("sent" in options) {
+            // eslint-disable-next-line no-console -- an unbound KV namespace arrives as `undefined`; the caller meant to dedupe
+            console.warn("@lunora/mail: consumeQueuedSend got `sent: undefined` (is the KV namespace bound?), so redeliveries are not deduplicated");
+        }
+
         return { deduplicated: false, ...(await mailer.send(sendOptions)) };
     }
 
@@ -250,7 +271,7 @@ const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: Cons
     const { id } = await mailer.send(sendOptions);
 
     try {
-        await sent.put(key, id, { expirationTtl: options.sentTtlSeconds ?? DEFAULT_SENT_TTL_SECONDS });
+        await sent.put(key, id, { expirationTtl: sentTtlSeconds });
     } catch (error) {
         // eslint-disable-next-line no-console -- the send succeeded; failing it now would redeliver a message the provider accepted
         console.error("@lunora/mail: sent, but could not record the idempotency key; a redelivery may send again —", error);

@@ -144,6 +144,38 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         expect(puts[0]?.ttl).toBe(3600);
     });
 
+    it.each([30, 0, -1, 90.5, Number.NaN, Number.POSITIVE_INFINITY])(
+        "fails a sentTtlSeconds of %s as retryable before touching the store, since every record would fail",
+        async (sentTtlSeconds) => {
+            expect.assertions(4);
+
+            const mailer = noopMailer();
+            const { store } = memoryStore();
+            const get = vi.spyOn(store, "get");
+
+            const error = await consumeQueuedSend(mailer, body, { sent: store, sentTtlSeconds }).catch((error_: unknown) => error_);
+
+            expect(error).toBeInstanceOf(MailSendError);
+            expect(isRetryableMailError(error)).toBe(true);
+            expect(get).not.toHaveBeenCalled();
+            expect(mailer.send).not.toHaveBeenCalled();
+        },
+    );
+
+    it("warns when the store was passed but is undefined, as an unbound KV namespace is", async () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        await consumeQueuedSend(noopMailer(), body, { sent: undefined });
+        await consumeQueuedSend(noopMailer(), body);
+
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("not deduplicated"));
+
+        warn.mockRestore();
+    });
+
     it("does not record a failed send, so the redelivery sends", async () => {
         expect.assertions(3);
 
