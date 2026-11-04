@@ -201,9 +201,8 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
             // studio inbox. Production paths always pass a real `queue` binding
             // and never hit this branch, so real-queue behavior is unchanged.
             if (isCaptureTransport(transport)) {
-                const captured = await buildPayload(options_);
-
-                await transport.send(captured);
+                // Through `send()`, so the capture gets the same deadline and key as a real send.
+                await send(options_);
 
                 return { queued: true };
             }
