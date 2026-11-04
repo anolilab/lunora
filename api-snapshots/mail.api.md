@@ -41,6 +41,7 @@ interface FromEnvOptions {
     jurisdiction?: DurableObjectJurisdiction;
     queue?: QueueLike;
     rootShard?: string;
+    sendTimeoutMs?: number;
 }
 ```
 
@@ -52,6 +53,7 @@ interface LunoraMailOptions {
     cloudflareSend?: (from: string, to: string, raw: string) => Promise<void>;
     from: string;
     queue?: QueueLike;
+    sendTimeoutMs?: number;
     transport?: MailTransport;
 }
 ```
@@ -66,10 +68,17 @@ type MailEnv = Record<string, unknown>;
 
 ```ts
 class MailSendError extends LunoraError {
+    readonly outcomeUnknown: boolean;
     readonly retryable: boolean;
     constructor(options: {
         cause?: unknown;
         message?: string;
+        outcomeUnknown: true;
+        retryable: false;
+    } | {
+        cause?: unknown;
+        message?: string;
+        outcomeUnknown?: false;
         retryable: boolean;
     });
 }
@@ -79,6 +88,7 @@ class MailSendError extends LunoraError {
 
 ```ts
 interface MailSendErrorData {
+    outcomeUnknown: boolean;
     retryable: boolean;
 }
 ```
@@ -217,6 +227,12 @@ const createMailerFromEnv: (env: MailEnv, options?: FromEnvOptions) => Mailer;
 
 ```ts
 const createResendTransport: (apiKey: string, defaultFrom: string) => MailTransport;
+```
+
+### `isOutcomeUnknownMailError` (const)
+
+```ts
+const isOutcomeUnknownMailError: (error: unknown) => boolean;
 ```
 
 ### `isRetryableMailError` (const)

@@ -75,24 +75,49 @@ const httpStatusOf = (code: unknown): number | undefined => {
     return typeof code === "string" && THREE_DIGIT_STATUS.test(code) ? Number(code) : undefined;
 };
 
+/** The `code` `@visulima/email`'s HTTP client puts on a request it aborted at its own timeout. */
+const PROVIDER_TIMEOUT_CODE = "ETIMEDOUT";
+
+/** The provider errors in a failure's `cause` chain, outermost first — `@visulima/email` wraps a callback's failure as a `cause`. */
+const causeChain = (rawError: unknown): Error[] => {
+    const chain: Error[] = [];
+
+    for (let current: unknown = rawError; current instanceof Error && chain.length < 5; current = current.cause) {
+        chain.push(current);
+    }
+
+    return chain;
+};
+
+/**
+ * Whether the provider gave up waiting for its own request. The request may have
+ * reached the provider and been accepted, so the send's outcome is unknown, and
+ * `@visulima/email` deliberately does not retry it for the same reason.
+ */
+const isProviderTimeout = (rawError: unknown): boolean => causeChain(rawError).some((error) => "code" in error && error.code === PROVIDER_TIMEOUT_CODE);
+
 /**
  * Whether a provider's failed send is worth repeating. `@visulima/email` puts an
  * HTTP status on the error as a numeric `code`, so 408, 429 and 5xx are
  * transient and any other 1xx-5xx status is a refusal. A send is dropped only on
  * that explicit permanent status; anything the provider did not classify (a plain
  * `Error`, a network failure, a non-`Error` result) is retried, because a wrong
- * retry only dead-letters the message and a wrong drop loses it.
+ * retry only dead-letters the message and a wrong drop loses it. A provider
+ * timeout is the exception: it may have delivered, so it is never retried.
  */
 const isRetryableProviderError = (rawError: unknown): boolean => {
     if (!(rawError instanceof Error)) {
         return true;
     }
 
-    // `@visulima/email` wraps a callback's failure as a `cause`, so the status can sit one or more levels down.
+    if (isProviderTimeout(rawError)) {
+        return false;
+    }
+
     let status: number | undefined;
 
-    for (let current: unknown = rawError, depth = 0; current instanceof Error && depth < 5; current = current.cause, depth += 1) {
-        status = httpStatusOf("code" in current ? current.code : undefined);
+    for (const error of causeChain(rawError)) {
+        status = httpStatusOf("code" in error ? error.code : undefined);
 
         if (status !== undefined) {
             break;
@@ -147,6 +172,15 @@ const interpretSendResult = (result: ProviderSendResult): { id: string } => {
     if (!result.success || !result.data) {
         // eslint-disable-next-line no-console -- intentional server-side log of the redacted provider error before throwing a generic message
         console.error(`@lunora/mail: send failed: ${reasonOf(result.error)}`);
+
+        if (isProviderTimeout(result.error)) {
+            throw new MailSendError({
+                cause: result.error,
+                message: "@lunora/mail: the provider timed out, so the send may have been delivered",
+                outcomeUnknown: true,
+                retryable: false,
+            });
+        }
 
         throw new MailSendError({ cause: result.error, retryable: isRetryableProviderError(result.error) });
     }

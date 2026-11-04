@@ -114,12 +114,17 @@ outage, rate limit, network failure or any failure the provider did not classify
 is retried with `message.retry()` (until the dead-letter queue), while a send the
 provider refused with an explicit permanent HTTP status (for example a rejected
 address or message) or a malformed body is acked and logged, because a retry
-would fail the same way and only fill the dead-letter queue. Build the consumer's mailer with
+would fail the same way and only fill the dead-letter queue. A send that timed out
+is not retryable either: the provider may already have accepted it, so it fails
+with `isOutcomeUnknownMailError(error)` true and the consumer acks and reports it
+rather than mailing a possible second copy. `send()` gives the transport 60 seconds
+by default (`sendTimeoutMs` on `createMailer` / `createMailerFromEnv`), and Resend's
+own 30-second request timeout counts the same way. Build the consumer's mailer with
 `createMailerFromEnv` so that in dev the queued message is captured into the
 studio inbox at consume time instead of delivered:
 
 ```ts
-import { consumeQueuedSend, createMailerFromEnv, isRetryableMailError } from "@lunora/mail";
+import { consumeQueuedSend, createMailerFromEnv, isOutcomeUnknownMailError, isRetryableMailError } from "@lunora/mail";
 
 export default {
     queue: async (batch, env) => {
@@ -150,6 +155,14 @@ export default {
             try {
                 await consumeQueuedSend(mailer, message.body);
             } catch (error) {
+                // Timed out: the provider may have delivered it, and a retry could send a
+                // second copy. Ack it and check the provider's logs.
+                if (isOutcomeUnknownMailError(error)) {
+                    console.error("mail outcome unknown", error);
+                    message.ack();
+                    continue;
+                }
+
                 // A refusal the provider will never accept: a retry only dead-letters it.
                 if (!isRetryableMailError(error)) {
                     console.error("mail refused", error);
@@ -319,8 +332,9 @@ rules; that lifecycle stays in Cloudflare.
 | `renderEmail(element)`                | Render a React Email element to `{ html, text }`                                                                                                                                                                    |
 | `toQueuedPayload(options)`            | Narrow `SendOptions` to its serializable `QueuedSend` (drops `react`)                                                                                                                                               |
 | `consumeQueuedSend(mailer, body)`     | Validate a queued payload and `mailer.send(...)` it; returns `{ id }`                                                                                                                                               |
-| `isRetryableMailError(error)`         | Whether a failed send is worth a redelivery: `false` only for a refusal carrying an explicit permanent HTTP status, `true` for everything else                                                                      |
-| `MailSendError`                       | The error a failed send throws; `retryable` and `data.retryable` carry the decision                                                                                                                                 |
+| `isRetryableMailError(error)`         | Whether a failed send is worth a redelivery: `false` for a refusal carrying an explicit permanent HTTP status and for a timed-out send, `true` for everything else                                                  |
+| `isOutcomeUnknownMailError(error)`    | Whether a failed send timed out and may have been delivered; never retryable, so ack and report it                                                                                                                  |
+| `MailSendError`                       | The error a failed send throws; `retryable` / `outcomeUnknown` (also on `data`) carry the decision                                                                                                                  |
 | Type-only                             | `Mailer`, `MailTransport`, `SendOptions`, `SendPayload`, `QueueLike`, `LunoraMailOptions`, `QueuedSend`, `CapturedMail`, `MailboxSink`, `CloudflareSend`, `CloudflareTransportOptions`, `FromEnvOptions`, `MailEnv` |
 
 `@lunora/mail/inbound`: `createInboundEmailHandler(options)`,

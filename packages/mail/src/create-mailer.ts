@@ -10,6 +10,35 @@ import createResendTransport from "./resend-transport";
 import { MailSendError } from "./send-error";
 import type { LunoraMailOptions, Mailer, MailTransport, SendOptions, SendPayload } from "./types";
 
+const DEFAULT_SEND_TIMEOUT_MS = 60_000;
+
+/**
+ * Settle with the transport's answer, or fail as outcome-unknown once the
+ * deadline passes — a hung provider call must not hold a queue message until
+ * the consumer's wall-clock limit, which redelivers a send that may have gone out.
+ */
+const withSendDeadline = async <T>(work: Promise<T>, timeoutMs: number): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const deadline = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+            reject(
+                new MailSendError({
+                    message: `@lunora/mail: send timed out after ${String(timeoutMs)}ms, so it may have been delivered`,
+                    outcomeUnknown: true,
+                    retryable: false,
+                }),
+            );
+        }, timeoutMs);
+    });
+
+    try {
+        return await Promise.race([work, deadline]);
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
 /**
  * Pick the default transport when no explicit `transport` is supplied. The
  * preference order encodes "Cloudflare Email Workers is the default provider":
@@ -73,6 +102,12 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
         throw new LunoraError("INTERNAL", "@lunora/mail: `from` is required");
     }
 
+    const sendTimeoutMs = options.sendTimeoutMs ?? DEFAULT_SEND_TIMEOUT_MS;
+
+    if (!Number.isFinite(sendTimeoutMs) || sendTimeoutMs <= 0) {
+        throw new LunoraError("INTERNAL", "@lunora/mail: `sendTimeoutMs` must be a positive, finite number of milliseconds");
+    }
+
     const transport = options.transport ?? buildDefaultTransport(options);
 
     const buildPayload = async (options_: SendOptions): Promise<SendPayload> => {
@@ -133,7 +168,7 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
         const payload = await buildPayload(options_);
 
         try {
-            return await transport.send(payload);
+            return await withSendDeadline(transport.send(payload), sendTimeoutMs);
         } catch (error) {
             // A custom transport that throws something unclassified is treated as
             // transient. The message is generic so a provider's raw text never

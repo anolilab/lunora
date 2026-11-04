@@ -10,5 +10,5 @@ export { consumeQueuedSend, toQueuedPayload } from "./queue";
 export { default as renderEmail } from "./render";
 export { default as createResendTransport } from "./resend-transport";
 export type { MailSendErrorData } from "./send-error";
-export { isRetryableMailError, MailSendError } from "./send-error";
+export { isOutcomeUnknownMailError, isRetryableMailError, MailSendError } from "./send-error";
 export type { LunoraMailOptions, Mailer, MailTransport, QueueLike, SendOptions, SendPayload } from "./types";

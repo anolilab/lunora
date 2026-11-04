@@ -72,6 +72,16 @@ export interface LunoraMailOptions {
     from: string;
     /** Default queue binding for `mailer.queue()`. */
     queue?: QueueLike;
+
+    /**
+     * How long `send()` waits for the transport before giving up, in milliseconds
+     * (default 60 000). A send cut off here may still have been delivered, so it
+     * fails with an `outcomeUnknown`, non-retryable `MailSendError`: a queue
+     * consumer acks and reports it instead of redelivering a possible duplicate.
+     * The transport's own work is not cancelled — the Cloudflare binding and the
+     * provider client take no abort signal.
+     */
+    sendTimeoutMs?: number;
     /** Override the underlying transport. Useful for tests, the dev capture transport, + multi-provider setups. */
     transport?: MailTransport;
 }

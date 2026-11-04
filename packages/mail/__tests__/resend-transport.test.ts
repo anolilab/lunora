@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import createMailer from "../src/create-mailer";
-import { isRetryableMailError, MailSendError } from "../src/send-error";
+import { isOutcomeUnknownMailError, isRetryableMailError, MailSendError } from "../src/send-error";
 
 // Drive the private Resend transport's error-mapping branches by faking the
 // underlying @visulima/email provider. Each test swaps `sendEmail`'s result.
@@ -159,6 +159,17 @@ describe("resend transport error mapping", () => {
             expect.assertions(1);
 
             expect(isRetryableMailError(await failure(new Error("Request failed: fetch failed", { cause: new TypeError("fetch failed") })))).toBe(true);
+        });
+
+        it("marks the provider's own request timeout outcome-unknown, never retryable: the API may have accepted the send", async () => {
+            expect.assertions(3);
+
+            // The shape `@visulima/email`'s HTTP client returns when it aborts a request at its timeout.
+            const error = await failure(Object.assign(new Error("Request timed out after 30000ms"), { code: "ETIMEDOUT" }));
+
+            expect(error).toBeInstanceOf(MailSendError);
+            expect(isOutcomeUnknownMailError(error)).toBe(true);
+            expect(isRetryableMailError(error)).toBe(false);
         });
     });
 });

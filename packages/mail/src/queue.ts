@@ -72,6 +72,13 @@ export const toQueuedPayload = (options: SendOptions): QueuedSend => {
  *       try {
  *         await consumeQueuedSend(mailer, message.body);
  *       } catch (error) {
+ *         // Timed out: the provider may have delivered it, so a retry could send a second copy.
+ *         if (isOutcomeUnknownMailError(error)) {
+ *           console.error("mail outcome unknown", error);
+ *           message.ack();
+ *           continue;
+ *         }
+ *
  *         // A refusal the provider will never accept: a retry only dead-letters it.
  *         if (!isRetryableMailError(error)) {
  *           console.error("mail refused", error);
