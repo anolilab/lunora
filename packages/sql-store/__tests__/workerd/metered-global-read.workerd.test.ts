@@ -35,4 +35,30 @@ describe("an unlimited global findMany under the read meter on D1", () => {
         expect(selects()).toBe(2);
         expect(fetchedRows()).toBeLessThan(ROW_COUNT);
     });
+
+    it("reads a bounded (endCursor) range in one statement, whole, with its cursors", async () => {
+        expect.assertions(4);
+
+        const table = "metered_read_bounded";
+        const { selects, store, writer } = await openMeteredRead({ dialect: d1Dialect, exec: d1Exec, table });
+        const orderBy = [{ bucket: "asc" as const }];
+        const head = await store.findMany(table, { limit: 600, orderBy });
+        const bounded = await writer.findMany(table, { endCursor: head.continueCursor, orderBy, select: ["label"] });
+
+        expect(bounded.page.map((row) => row["_id"])).toStrictEqual(head.page.map((row) => row["_id"]));
+        expect(bounded).toMatchObject({ continueCursor: head.continueCursor, isDone: true });
+        expect(typeof bounded.splitCursor).toBe("string");
+        expect(selects()).toBe(1);
+    });
+
+    it("charges a bounded range against the read cap", async () => {
+        expect.assertions(1);
+
+        const table = "metered_read_bounded_capped";
+        const { store, writer } = await openMeteredRead({ capRows: 300, dialect: d1Dialect, exec: d1Exec, table });
+        const orderBy = [{ bucket: "asc" as const }];
+        const head = await store.findMany(table, { limit: 600, orderBy });
+
+        await expect(writer.findMany(table, { endCursor: head.continueCursor, orderBy })).rejects.toMatchObject({ code: "TRANSACTION_LIMIT_EXCEEDED" });
+    });
 });

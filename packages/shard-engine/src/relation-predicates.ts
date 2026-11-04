@@ -34,7 +34,16 @@ import type { RelationOperator } from "../../../shared/relation-operators";
 import { isRelationPredicate as isSharedRelationPredicate, RELATION_OPERATOR_SET } from "../../../shared/relation-operators";
 import { mergeWhere } from "./aggregates";
 import { isMemoryTable } from "./ctx-db-memory";
-import { buildSeekWhere, decodeCursor, equalityPinnedFields, normalizeOrderKeys, softDeleteScope, uniqueIndexFields } from "./query-args";
+import {
+    buildSeekBeforeWhere,
+    buildSeekWhere,
+    decodeCursor,
+    encodeCursor,
+    equalityPinnedFields,
+    normalizeOrderKeys,
+    softDeleteScope,
+    uniqueIndexFields,
+} from "./query-args";
 import { distinctValues } from "./relations";
 import type {
     KeyedRelationDefinitionLike,
@@ -619,10 +628,16 @@ const resolveRelationPredicates = async (where: WhereInput | undefined, options:
  * the ordering and keyset seek come from the cursor's own columns; `baseWhere` (RLS / aggregate
  * scope) AND-merges with `where`; the soft-delete scope joins them; relation predicates are then
  * resolved to flat columns (the one await, which reads through `relation.fetcher`); and the seek
- * is ANDed in last. A malformed cursor throws before any child fetch runs.
+ * is ANDed in last. A malformed cursor or end cursor throws before any child fetch runs.
+ *
+ * `endCursor` adds the inclusive upper bound, so the read selects the fixed range
+ * `(cursor, endCursor]` a reactive page subscribes to — the same bound `paginateStage` uses.
+ * It is `buildSeekBeforeWhere` and not `NOT (after endCursor)`: for a nullable key the strict
+ * seek is a bare comparator, and `NOT (col > x)` is UNKNOWN on a NULL row that sorts before `x`.
  *
  * Each dialect compiles the result to its own SQL. `fetchLimit` is `limit + 1`, the over-fetch
- * that tells the caller whether another page exists without a second query.
+ * that tells the caller whether another page exists without a second query — except on a bounded
+ * read, whose end is pinned, so there is no next page to probe for.
  */
 const composeReadPredicate = async (
     definition: TableDefinitionLike,
@@ -634,6 +649,10 @@ const composeReadPredicate = async (
         uniqueBy: uniqueIndexFields(definition.indexes, definition.shape),
     });
     const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
+    // `typeof`, not truthiness, as in `paginateStage` and `findManyPage`: an empty string is a
+    // malformed cursor to refuse, not an absent one to read past.
+    const bounded = typeof args.endCursor === "string";
+    const end = bounded ? buildSeekBeforeWhere(orderKeys, decodeCursor(args.endCursor as string)) : undefined;
 
     let predicate: WhereInput | undefined = mergeWhere(args.baseWhere, args.where);
     predicate = mergeWhere(predicate, softDeleteScope(definition.softDeleteMode, args.includeDeleted));
@@ -642,13 +661,64 @@ const composeReadPredicate = async (
     // `with`-load `resolveWith` calls do; without it a relation predicate could read rows the caller may not.
     predicate = await resolveRelationPredicates(predicate, { ...relation, relationBaseWhere: args.relationBaseWhere });
 
-    if (seek) {
-        predicate = predicate ? { AND: [predicate, seek] } : seek;
+    for (const bound of [seek, end]) {
+        if (bound) {
+            predicate = predicate ? { AND: [predicate, bound] } : bound;
+        }
     }
 
     const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
+    let fetchLimit: number | undefined;
 
-    return { fetchLimit: limit === undefined ? undefined : limit + 1, limit, orderKeys, predicate };
+    if (limit !== undefined) {
+        fetchLimit = bounded ? limit : limit + 1;
+    }
+
+    return { fetchLimit, limit, orderKeys, predicate };
+};
+
+/**
+ * Turn the rows a composed `findMany` statement returned into its page envelope. Shared by every
+ * store's `findMany` so the open-ended and bounded shapes cannot drift between them.
+ *
+ * Open-ended: the rows past `limit` are the over-fetch, so their presence is `!isDone` and the last
+ * kept row is `continueCursor`. Bounded (`endCursor` set): the shape `query().paginate()` gives a
+ * fixed range — `isDone: true`, `continueCursor` echoing `endCursor` so the next page still starts
+ * exactly where this one ends, and `splitCursor` naming the midpoint row (`null` under two rows) so
+ * a client whose page has grown can split it. The midpoint is taken over the rows RETURNED, after
+ * `limit` caps them: a capped range then splits inside what was read, and the half past the split
+ * reads the rows the cap held back.
+ *
+ * Cursors encode the full rows, so call this before `applySelect` trims them.
+ */
+const findManyPage = (
+    documents: Record<string, unknown>[],
+    read: { endCursor?: null | string; limit: number | undefined; omitContinueCursor?: boolean; orderKeys: OrderKey[] },
+): QueryPage => {
+    const { endCursor, limit, omitContinueCursor, orderKeys } = read;
+    const overLimit = limit !== undefined && documents.length > limit;
+    const page = overLimit ? documents.slice(0, limit) : documents;
+
+    if (typeof endCursor === "string") {
+        const middle = page.length >= 2 ? page[Math.floor(page.length / 2) - 1] : undefined;
+
+        return {
+            continueCursor: endCursor,
+            isDone: true,
+            page,
+            // eslint-disable-next-line unicorn/no-null -- splitCursor is `null | string`; null marks "too small to split", as `paginateStage` returns it
+            splitCursor: middle && omitContinueCursor !== true ? encodeCursor(middle, orderKeys) : null,
+        };
+    }
+
+    const last = page.at(-1);
+
+    return {
+        // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
+        continueCursor: overLimit && last && omitContinueCursor !== true ? encodeCursor(last, orderKeys) : null,
+        isDone: !overLimit,
+        page,
+    };
 };
 
 /**
@@ -827,6 +897,7 @@ export {
     composeReadPredicate,
     containsRelationPredicate,
     DEFAULT_MAX_RELATION_KEYS,
+    findManyPage,
     isRelationPredicate,
     resolveRelationPredicates,
 };

@@ -197,6 +197,18 @@ export interface QueryArgsOf<DM, REL extends Record<keyof DM, object>, T extends
     cursor?: null | string;
 
     /**
+     * Pin the page's end to an earlier page's `continueCursor`, for reactive pagination: the read is
+     * the fixed range `(cursor, endCursor]` under this call's `orderBy`, so a row inserted inside it
+     * grows this page and the next page (starting at `endCursor`) is unchanged. The result is
+     * `isDone: true`, echoes `endCursor` as `continueCursor`, and carries `splitCursor`.
+     *
+     * `limit` still caps the read; the rows past the cap come back once the page is split at
+     * `splitCursor`. The client splits a page holding more than twice its page size, so pass a
+     * `limit` above 2x the page size or a capped page never grows large enough to split.
+     */
+    endCursor?: null | string;
+
+    /**
      * Include soft-deleted rows (`.softDelete()` tables only). Default hides them;
      * `true` returns deleted rows alongside live ones. No effect on a table
      * without `.softDelete()`.
@@ -211,6 +223,12 @@ export interface QueryPage<TDocument> {
     continueCursor: null | string;
     isDone: boolean;
     page: TDocument[];
+
+    /**
+     * Only on an `endCursor` read: the cursor of the page's midpoint row, `null` under two rows. Paging
+     * `(cursor, splitCursor]` and `(splitCursor, endCursor]` reproduces the range in two halves.
+     */
+    splitCursor?: null | string;
 }
 
 /** The nested `with` sub-argument inside a relation's with-value, or `{}`. */
@@ -491,11 +509,11 @@ export interface TableReaderFacade<
      * the read rather than as a wrong answer downstream. `findFirst` drops that
      * assertion; this is the ORM spelling of the fluent reader's `.unique()`.
      *
-     * `limit`/`cursor` are not accepted rather than silently ignored: paging a read
+     * `limit`/`cursor`/`endCursor` are not accepted rather than silently ignored: paging a read
      * that must match at most one row is the assertion being dropped again.
      */
     findUnique: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
-        args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "limit"> & { select?: S; with?: W },
+        args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "endCursor" | "limit"> & { select?: S; with?: W },
     ) => Promise<LoadWith<DM, REL, T, W, S> | null>;
     get: (id: Id<string & T>) => Promise<DM[T] | null>;
 

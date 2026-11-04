@@ -327,6 +327,13 @@ export interface QueryArgs {
     consistency?: "primary";
     cursor?: null | string;
 
+    /**
+     * Inclusive upper bound — an earlier page's `continueCursor`. Set, the read is the fixed range
+     * `(cursor, endCursor]` a reactive page subscribes to: `isDone: true`, `continueCursor` echoing
+     * `endCursor`, and a `splitCursor` midpoint. `limit` still caps it.
+     */
+    endCursor?: null | string;
+
     includeDeleted?: boolean;
 
     limit?: number;
