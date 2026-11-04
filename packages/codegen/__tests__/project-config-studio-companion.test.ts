@@ -81,13 +81,13 @@ describe("the generated companion Worker", () => {
         writeFileSync(join(projectRoot, "lunora.config.ts"), "export default { studio: { companion: true } };\n", "utf8");
     };
 
-    it("copies the app's observability settings into the companion's config", () => {
+    it("turns observability on for the companion, or copies the app's settings when it has them", () => {
         expect.assertions(2);
 
         enable();
         runCodegen({ projectRoot, wranglerQueueProducers: [] });
 
-        expect(JSON.parse(readFileSync(join(companion, "wrangler.jsonc"), "utf8"))).not.toHaveProperty("observability");
+        expect(JSON.parse(readFileSync(join(companion, "wrangler.jsonc"), "utf8"))).toMatchObject({ observability: { enabled: true } });
 
         writeFileSync(
             join(projectRoot, "wrangler.jsonc"),

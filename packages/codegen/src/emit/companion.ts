@@ -3,8 +3,10 @@ import { companionName, wranglerString, wranglerValue } from "../companion";
 
 const emitCompanionWrangler = (projectRoot: string): string => {
     const compatibilityDate = wranglerString(projectRoot, "compatibility_date");
-    // The app's own logs and traces settings, so the companion is as observable as the Worker that calls it.
-    const observability = wranglerValue(projectRoot, "observability");
+    // The app's own logs and traces settings when it has them. Otherwise logs and traces are on: the companion's only failure mode is a
+    // request the app forwarded, and with Workers observability off there is nowhere to look at it.
+    const appObservability = wranglerValue(projectRoot, "observability");
+    const observability = typeof appObservability === "object" && appObservability !== null ? appObservability : { enabled: true };
 
     return `${JSON.stringify(
         {
@@ -12,7 +14,7 @@ const emitCompanionWrangler = (projectRoot: string): string => {
             ...(compatibilityDate === undefined ? {} : { compatibility_date: compatibilityDate }),
             main: "src/worker.ts",
             name: companionName(projectRoot),
-            ...(typeof observability === "object" && observability !== null ? { observability } : {}),
+            observability,
             // The Worker has no admin check, so an exposed URL would serve the procedure list unauthenticated: the app's Worker
             // reaches it over the service binding only. Both are set explicitly because wrangler's defaults can enable either.
             preview_urls: false,
