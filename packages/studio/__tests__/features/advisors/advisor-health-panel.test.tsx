@@ -12,24 +12,28 @@ import { createMockClient } from "../../mock-client";
  * `token` is the admin bearer the client carries (the mock's default is a non-empty one);
  * `null` models a client with no credential.
  */
-const renderPanel = (localProcedures: boolean, token: null | string = null, advisorCompanion = true): ReactElement => (
-    <LunoraProvider
-        client={Object.assign(
-            createMockClient({
-                query: (reference): unknown => {
-                    if (reference === ADMIN_FUNCTIONS.getAdvisories) {
-                        return { advisories: [] };
-                    }
+const defaultQuery = (reference: string): unknown => {
+    if (reference === ADMIN_FUNCTIONS.getAdvisories) {
+        return { advisories: [] };
+    }
 
-                    throw new Error(`unexpected query: ${reference}`);
-                },
-            }).asClient,
-            { getAuthToken: () => token },
-        )}
-    >
-        <AdvisorHealthPanel advisorCompanion={advisorCompanion} localProcedures={localProcedures} />
-    </LunoraProvider>
-);
+    throw new Error(`unexpected query: ${reference}`);
+};
+
+/** The `query` mock the last `renderPanel` built, so a case can assert which admin reads were issued. */
+let queryMock: ReturnType<typeof vi.fn> | undefined;
+
+const renderPanel = (localProcedures: boolean, token: null | string = null, advisorCompanion = true, query = defaultQuery): ReactElement => {
+    const client = createMockClient({ query });
+
+    queryMock = client.query;
+
+    return (
+        <LunoraProvider client={Object.assign(client.asClient, { getAuthToken: () => token })}>
+            <AdvisorHealthPanel advisorCompanion={advisorCompanion} localProcedures={localProcedures} />
+        </LunoraProvider>
+    );
+};
 
 const stubProceduresResponse = (status: number, body: unknown) => {
     const fetchMock = vi.fn<typeof fetch>(async () => Response.json(body, { status }));
@@ -44,8 +48,8 @@ describe("advisorHealthPanel", () => {
         vi.unstubAllGlobals();
     });
 
-    it("does not request the procedure list on a host that cannot serve it, and says why", async () => {
-        expect.assertions(2);
+    it("does not request the procedure list or the advisories on a host that cannot serve them, and says why", async () => {
+        expect.assertions(3);
 
         const fetchMock = stubProceduresResponse(200, { procedures: [] });
 
@@ -55,6 +59,7 @@ describe("advisorHealthPanel", () => {
 
         expect(notice.textContent).toContain("lunora dev");
         expect(fetchMock).not.toHaveBeenCalled();
+        expect(queryMock).not.toHaveBeenCalled();
     });
 
     it("scores the deployment when the dev host serves the procedure list", async () => {
@@ -125,15 +130,38 @@ describe("advisorHealthPanel", () => {
         expect(screen.queryByTestId("advisor-health-error")).toBeNull();
     });
 
-    it("fetches the list once when the advisories arrive after the first request", async () => {
+    it("says the analysis was disabled instead of scoring an empty roster", async () => {
+        expect.assertions(2);
+
+        stubProceduresResponse(200, { analysis: "disabled", procedures: [] });
+
+        render(renderPanel(true));
+
+        const notice = await screen.findByTestId("advisor-health-lint-disabled");
+
+        expect(notice.textContent).toContain("lint: false");
+        expect(screen.queryByTestId("advisor-health-score")).toBeNull();
+    });
+
+    it("re-reads the list on remount instead of serving the cached roster", async () => {
         expect.assertions(1);
 
         const fetchMock = stubProceduresResponse(200, { procedures: [] });
+        const client = Object.assign(createMockClient({ query: defaultQuery }).asClient, { getAuthToken: () => null });
+        const panel = (show: boolean): ReactElement => <LunoraProvider client={client}>{show ? <AdvisorHealthPanel localProcedures /> : null}</LunoraProvider>;
 
-        render(renderPanel(true));
+        const view = render(panel(true));
+
         await screen.findByTestId("advisor-health-score");
 
-        expect(fetchMock).toHaveBeenCalledTimes(1);
+        view.rerender(panel(false));
+        view.rerender(panel(true));
+
+        // The generated roster changes without its query key changing, so a remount must not
+        // serve the previous mount's cache indefinitely (`staleTime: 0`).
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+        });
     });
 
     it("reports a failing list at once instead of retrying behind a loading state", async () => {

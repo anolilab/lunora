@@ -1,8 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
 
 import type { AdvisorProceduresResult } from "../../lib/admin";
-import { errorMessage } from "../../lib/internal";
+import { errorMessage, workerBaseUrl } from "../../lib/internal";
 
 /**
  * Host route that serves `_generated/advisor-procedures.json` (see
@@ -12,11 +11,51 @@ import { errorMessage } from "../../lib/internal";
  */
 const ADVISOR_PROCEDURES_ENDPOINT = "/__lunora/advisor-procedures";
 
+/**
+ * How often an open panel re-reads the list. Codegen rewrites it while the studio
+ * runs — on every dev save, and once per deploy — and the query key cannot see
+ * that, so without a poll a panel opened before the rewrite keeps scoring the old
+ * roster until it remounts.
+ */
+const ADVISOR_PROCEDURES_REFRESH_MS = 60_000;
+
 /** A hosted Studio's worker: where to fetch from and the admin bearer to present. */
 interface RemoteProceduresSource {
     readonly baseUrl: string;
     readonly token: string;
 }
+
+/**
+ * Where this host can read the health map's denominator. `"local"` is a dev host
+ * serving the generated file itself, `"remote"` a hosted Studio reaching the
+ * companion through its worker, and `"none"` neither — which the panel renders as
+ * a notice instead of scoring.
+ */
+type AdvisorProceduresSource = { readonly kind: "local" } | { readonly kind: "none" } | { readonly kind: "remote"; readonly remote: RemoteProceduresSource };
+
+/**
+ * Resolve the source from the two host flags. The local route wins: a dev host
+ * serves the file it generated. Otherwise a hosted Studio reads it from the worker
+ * it already talks to, provided it has the admin token that route is gated on;
+ * without one the panel says what is missing rather than firing a request that
+ * would only come back 401.
+ */
+const resolveAdvisorProceduresSource = (options: {
+    readonly advisorCompanion: boolean;
+    readonly localProcedures: boolean;
+    readonly token: null | string;
+    readonly workerUrl: string;
+}): AdvisorProceduresSource => {
+    if (options.localProcedures) {
+        return { kind: "local" };
+    }
+
+    if (options.advisorCompanion && options.token !== null && options.token !== "") {
+        return { kind: "remote", remote: { baseUrl: workerBaseUrl(options.workerUrl), token: options.token } };
+    }
+
+    return { kind: "none" };
+};
 
 /**
  * The worker answered 404 for the remote route: it forwards to the companion
@@ -59,13 +98,6 @@ interface AdvisorProceduresOptions {
     /** `false` on a host that cannot serve the route: no request is made. */
     readonly enabled: boolean;
 
-    /**
-     * Changes whenever the numerator changes (the live advisories). A new value
-     * refetches the procedures too, so the score never mixes a fresh finding list
-     * with a denominator from before a codegen run.
-     */
-    readonly refreshKey: unknown;
-
     /** Set on a hosted Studio: fetch from this worker with the bearer instead of the same origin. */
     readonly remote?: RemoteProceduresSource;
 }
@@ -76,7 +108,6 @@ interface AdvisorProceduresOptions {
  */
 const useAdvisorProcedures = ({
     enabled,
-    refreshKey,
     remote,
 }: AdvisorProceduresOptions): {
     data: AdvisorProceduresResult | undefined;
@@ -88,27 +119,13 @@ const useAdvisorProcedures = ({
         queryFn: () => fetchAdvisorProcedures(remote),
         // The source is a query input: a new worker or token must not be served the previous one's list.
         queryKey: ["studio", "advisor-procedures", remote],
+        refetchInterval: ADVISOR_PROCEDURES_REFRESH_MS,
         // No retries: a 404/500 is a state the host reports, and retrying would keep the panel on "Loading" for seconds first.
         retry: false,
+        // The studio's client defaults to `staleTime: Infinity`. Generated output changes without the key changing,
+        // so this query must refetch on mount and on window focus instead of serving the cache indefinitely.
+        staleTime: 0,
     });
-    const { refetch } = query;
-    const previousKey = useRef(refreshKey);
-
-    useEffect(() => {
-        if (!enabled || previousKey.current === refreshKey) {
-            return;
-        }
-
-        const wasLoaded = previousKey.current !== undefined;
-
-        previousKey.current = refreshKey;
-
-        // The first arrival (undefined -> data) is not a change: the initial fetch already covers it.
-        if (wasLoaded) {
-            // A failed refetch is already recorded on the query's `error`, so the rejection is not re-raised here.
-            refetch().catch(() => undefined);
-        }
-    }, [enabled, refreshKey, refetch]);
 
     return {
         data: query.data,
@@ -117,4 +134,4 @@ const useAdvisorProcedures = ({
     };
 };
 
-export default useAdvisorProcedures;
+export { resolveAdvisorProceduresSource, useAdvisorProcedures };
