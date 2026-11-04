@@ -461,6 +461,42 @@ interface DestructivePolicyEdit {
 type DetectedFramework = "astro" | "none" | "nuxt" | "react-router" | "solid-start" | "sveltekit" | "tanstack-start" | "tanstack-start-solid" | "vinext";
 ```
 
+### `DevEnvCheck` (type)
+
+```ts
+type DevEnvCheck = {
+    error: string;
+    kind: "unloadable";
+} | {
+    failures: DevEnvFailure[];
+    kind: "invalid";
+    sources: string[];
+} | {
+    kind: "absent";
+} | {
+    kind: "valid";
+};
+```
+
+### `DevEnvCheckOptions` (interface)
+
+```ts
+interface DevEnvCheckOptions {
+    load?: (path: string) => Promise<unknown>;
+    projectRoot: string;
+    schemaDirectory: string;
+}
+```
+
+### `DevEnvFailure` (interface)
+
+```ts
+interface DevEnvFailure {
+    key: string;
+    message: string;
+}
+```
+
 ### `DevProcess` (interface)
 
 ```ts
@@ -1361,6 +1397,12 @@ const buildPackageSecretsBlock: (packageNames: ReadonlyArray<string>, existingKe
 const canonicalPath: (path: string) => string;
 ```
 
+### `checkDevEnv` (const)
+
+```ts
+const checkDevEnv: (options: DevEnvCheckOptions) => Promise<DevEnvCheck>;
+```
+
 ### `claimAgentRulesHint` (const)
 
 ```ts
@@ -1415,6 +1457,15 @@ const createDiscoveryCache: () => DiscoveryCache;
 
 ```ts
 const deployTargetIds: () => ReadonlyArray<string>;
+```
+
+### `describeDevEnvCheck` (const)
+
+```ts
+const describeDevEnvCheck: (check: DevEnvCheck, schemaDirectory: string) => undefined | {
+    level: "info" | "warn";
+    message: string;
+};
 ```
 
 ### `detectAgentRules` (const)

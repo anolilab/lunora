@@ -81,6 +81,7 @@
         "dockerode": "catalog:tooling",
         "dotenv": "catalog:node",
         "es-module-lexer": "catalog:vite",
+        "jiti": "catalog:tooling",
         "jsonc-parser": "catalog:vite",
         "ts-morph": "catalog:tooling"
     },

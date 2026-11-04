@@ -1,9 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Plugin } from "vite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Plugin, ViteDevServer } from "vite";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import devVariablesPlugin from "../src/dev-variables-plugin";
 import { lunora } from "../src/index";
@@ -56,6 +56,7 @@ describe("devVariablesPlugin", () => {
     });
 
     afterEach(() => {
+        vi.restoreAllMocks();
         rmSync(dir, { force: true, recursive: true });
     });
 
@@ -121,6 +122,66 @@ describe("devVariablesPlugin", () => {
         await runHooks(devVariablesPlugin(RESOLVED(dir)));
 
         expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toMatch(/WORKER_ENV="staging"/u);
+    });
+
+    /** A self-contained stand-in for a `defineEnv` contract requiring `keys` (no `@lunora/server` import to resolve from a temp dir). */
+    const writeEnvContract = (keys: string[]): void => {
+        mkdirSync(join(dir, "lunora"), { recursive: true });
+        writeFileSync(
+            join(dir, "lunora", "env.ts"),
+            `const keys = ${JSON.stringify(keys)};
+
+const parse = (env: Record<string, unknown>): unknown => {
+    const failures = keys.filter((key) => env[key] === undefined).map((key) => ({ key, message: "Expected string at <root>, received undefined" }));
+
+    if (failures.length > 0) {
+        throw Object.assign(new Error("Invalid environment"), { failures });
+    }
+
+    return env;
+};
+
+export const env = Object.assign((value: unknown) => value, { parse });
+`,
+            "utf8",
+        );
+    };
+
+    it("warns at startup about a key the env contract needs and the dev env lacks, then confirms an env.ts fix", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(dir, ".dev.vars"), "API_URL=https://api.test\n", "utf8");
+        writeEnvContract(["API_URL", "STRIPE_KEY"]);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const plugin = devVariablesPlugin(RESOLVED(dir));
+
+        await runHooks(plugin);
+
+        expect(warn.mock.calls.map(([line]) => String(line)).join("\n")).toMatch(/lunora\/env\.ts: 1 key\(s\) missing[\s\S]*- STRIPE_KEY: Expected string/u);
+
+        // An env.ts edit restarts nothing, so the plugin's own watcher re-checks it.
+        let listener: ((file: string) => void) | undefined;
+        const fixed = new Promise<string>((resolve) => {
+            const server = {
+                config: { logger: { info: resolve, warn: resolve } },
+                watcher: {
+                    add: (): void => {},
+                    on: (event: string, handler: (file: string) => void): void => {
+                        if (event === "change") {
+                            listener = handler;
+                        }
+                    },
+                },
+            } as unknown as ViteDevServer;
+
+            (plugin.configureServer as (s: ViteDevServer) => void)(server);
+        });
+
+        writeEnvContract(["API_URL"]);
+        listener?.(join(dir, "lunora", "env.ts"));
+
+        await expect(fixed).resolves.toMatch(/lunora\/env\.ts: the dev env satisfies the contract again/u);
     });
 
     it("writes nothing under `vite preview`, which resolves as a `serve` command", async () => {

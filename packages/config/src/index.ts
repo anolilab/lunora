@@ -57,6 +57,8 @@ export type {
 } from "./deploy-driver";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
 export { detectFramework, projectUsesUmbrella } from "./detect-framework";
+export type { DevEnvCheck, DevEnvCheckOptions, DevEnvFailure } from "./dev-env-check";
+export { checkDevEnv, describeDevEnvCheck } from "./dev-env-check";
 export type { DevProcess, DevProcessOptions, DevProcessSpawner } from "./dev-process";
 export { acceptsConnection, startDevProcess } from "./dev-process";
 export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from "./dev-server-state";

@@ -2,10 +2,12 @@ import { runCodegen } from "@lunora/codegen";
 import type { ContainerLogStreamHandle, DiscoveryCache } from "@lunora/config";
 import {
     AGENT_RULES_HINT,
+    checkDevEnv,
     claimAgentRulesHint,
     claimDevServerState,
     clearDevServerState,
     createDiscoveryCache,
+    describeDevEnvCheck,
     detectAgentRules,
     detectAiAgent,
     DEV_BINDINGS_FILE,
@@ -118,6 +120,26 @@ const printAgentRulesHint = (logger: Logger, cwd: string): void => {
 
     logger.info(`  ⓘ  ${AGENT_RULES_HINT}`);
     logger.info("");
+};
+
+/**
+ * Warn about keys the project's `defineEnv` contract needs and the dev env
+ * lacks, which `defineEnv` would otherwise report only as a 500 from the first
+ * request that reads one. Never fails the start. Only on the wrangler flavor:
+ * the vite and framework-worker flavors run `@lunora/vite`, whose plugin runs
+ * the same check and re-runs it on an `env.ts` edit.
+ */
+const reportDevEnv = async (logger: Logger, cwd: string, plan: DevCommandPlan): Promise<void> => {
+    if (plan.flavor !== "wrangler") {
+        return;
+    }
+
+    const schemaDirectory = resolveSchemaDirectory(cwd);
+    const report = describeDevEnvCheck(await checkDevEnv({ projectRoot: cwd, schemaDirectory }), schemaDirectory);
+
+    if (report !== undefined) {
+        logger[report.level](report.message);
+    }
 };
 
 /**
@@ -612,6 +634,8 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         }
 
         await offerDevVariablesScaffold(options, cwd, discoveryCache);
+
+        await reportDevEnv(logger, cwd, plan);
 
         logger.info(startBanner(plan));
 

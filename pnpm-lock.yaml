@@ -3578,6 +3578,9 @@ importers:
       es-module-lexer:
         specifier: catalog:vite
         version: 2.3.2
+      jiti:
+        specifier: catalog:tooling
+        version: 2.7.0
       jsonc-parser:
         specifier: catalog:vite
         version: 3.3.1

@@ -1962,6 +1962,43 @@ describe("lunora dev", () => {
             expect(infos).toContain("  ➜  Queues:     emails → send a test message in http://127.0.0.1:6173/queues");
         });
 
+        it("warns at startup about a key the lunora/env.ts contract needs and the dev env lacks", async () => {
+            expect.assertions(1);
+
+            const warnings: string[] = [];
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ compatibility_date: "2026-01-01", main: "src/index.ts", name: "app" }), "utf8");
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
+            // Self-contained: a temp dir cannot resolve `@lunora/server`, and the contract is only ever read by shape.
+            writeFileSync(
+                join(workdir, "lunora", "env.ts"),
+                `export const env = Object.assign((value: unknown) => value, {
+    parse: (value: Record<string, unknown>): unknown => {
+        if (value["STRIPE_KEY"] === undefined) {
+            throw Object.assign(new Error("Invalid environment"), { failures: [{ key: "STRIPE_KEY", message: "Expected string" }] });
+        }
+
+        return value;
+    },
+});
+`,
+                "utf8",
+            );
+            await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
+                probeReady: async () => true,
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(warnings.join("\n")).toContain("lunora/env.ts: 1 key(s) missing or invalid in the dev env (wrangler vars + .dev.vars)");
+        });
+
         it("does not fail a project that has no wrangler config when nobody asked", async () => {
             expect.assertions(2);
 
