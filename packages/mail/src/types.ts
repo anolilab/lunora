@@ -17,8 +17,13 @@ export interface QueueLike {
 export interface MailTransport {
     /**
      * The provider drops a repeat of a send carrying the same `idempotencyKey`, so a
-     * timed-out send that carried one is safe to retry. Set only by a transport that
-     * forwards the key to such a provider (the Resend transport).
+     * send that may have landed is safe to retry when it carried one. Set only by a
+     * transport that forwards the key to such a provider (the Resend transport).
+     *
+     * A transport reports a send that may have landed by throwing
+     * `MailSendError({ outcomeUnknown: true, retryable: false })` and leaves the
+     * retry decision to `createMailer`'s `send()`, which makes it retryable when this
+     * flag is set and the send had a key.
      */
     dedupesOnIdempotencyKey?: boolean;
 
