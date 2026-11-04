@@ -268,8 +268,10 @@ describe.each(backends)("oauthProvider refresh-token reuse over %s", (_name, mak
         await expect(readTokens(await refresh(auth, client, grace.refresh))).resolves.toMatchObject({ refresh: expect.any(String) });
     });
 
-    it("answers a retry inside refreshTokenReuseInterval with the same tokens instead of revoking", async () => {
-        expect.assertions(3);
+    it("answers a retry inside refreshTokenReuseInterval with the same tokens, and revokes after it", async () => {
+        expect.assertions(5);
+
+        vi.useFakeTimers({ now: new Date("2026-01-01T00:00:00Z"), toFake: ["Date"] });
 
         const auth = deploy({ refreshTokenReuseInterval: 60 });
         const session = await signIn(auth, "ada@example.com");
@@ -281,6 +283,13 @@ describe.each(backends)("oauthProvider refresh-token reuse over %s", (_name, mak
         expect(retried).toStrictEqual(rotated);
         await expect(isActive(auth, client, rotated.access, "access_token")).resolves.toBe(true);
         await expect(isActive(auth, client, rotated.refresh, "refresh_token")).resolves.toBe(true);
+
+        vi.advanceTimersByTime(61_000);
+
+        const late = await refresh(auth, client, first.refresh);
+
+        expect(late.status).toBe(400);
+        await expect(isActive(auth, client, rotated.refresh, "refresh_token")).resolves.toBe(false);
     });
 
     // Each rotation restarts `refreshTokenExpiresIn`, so the lifetime slides: a
