@@ -106,7 +106,8 @@ two, so code-level headers do not reach the static assets. Keep them in
 `lunora.config` unless you need to compute them.
 
 An app built with the generated `defineApp()` gets the config value with no
-wiring. An app that calls `createWorker` itself passes it on:
+wiring. An app that calls `createWorker` itself passes it on. `_generated/app`
+exports `LUNORA_SECURITY_HEADERS` only while `lunora.config` sets `security.headers`:
 
 ```ts
 import { LUNORA_SECURITY_HEADERS } from "../lunora/_generated/app";

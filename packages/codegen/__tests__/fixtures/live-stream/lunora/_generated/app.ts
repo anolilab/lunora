@@ -15,13 +15,6 @@ type Selector<Env, T> = (env: Env) => T | undefined;
 /** The generated `createShardDO` config — `.observability()`, `.maxRelationKeys()` and the long-tail `.ai()` / `.kv()` / … methods pass straight through to it. */
 type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
 
-/**
- * `security.headers` from `lunora.config`: the baseline security headers the Worker sends, and the same
- * values the build writes into the static assets' `_headers`. `undefined` when the config sets none. An app
- * that calls `createWorker` itself passes it as `security: { headers: LUNORA_SECURITY_HEADERS }`.
- */
-const LUNORA_SECURITY_HEADERS: SecurityOptions["headers"] = undefined;
-
 /** What the worker reads only once a request arrives: loaded then, not at isolate startup (Cloudflare caps startup at 1 s of CPU). */
 interface DeferredModules {
     openApiSpec: unknown;
@@ -277,12 +270,6 @@ class AppBuilder<Env extends object> {
             Object.assign(options, fn(env, { ...options }));
         }
 
-        // `security.headers` from lunora.config, unless code set its own. After `.extend()`, whose shallow
-        // assign would otherwise drop it when an extension sets only `security.cors`.
-        if (LUNORA_SECURITY_HEADERS !== undefined && options.security?.headers === undefined) {
-            options.security = { ...options.security, headers: LUNORA_SECURITY_HEADERS };
-        }
-
         return options;
     }
 }
@@ -328,5 +315,5 @@ interface LunoraConfig<Env extends object = object> {
  */
 const defineApp = <Env extends object>(): AppBuilder<Env> => new AppBuilder<Env>();
 
-export { AppBuilder, defineApp, LUNORA_SECURITY_HEADERS };
+export { AppBuilder, defineApp };
 export type { ComposedApp, LunoraConfig, Selector };

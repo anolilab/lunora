@@ -162,6 +162,22 @@ ${targets("                    ")}
 `;
 };
 
+/**
+ * `LUNORA_SECURITY_HEADERS`, emitted only when `lunora.config` sets `security.headers`, so an app that does not
+ * use it gets the same output as before the option existed.
+ */
+const buildSecurityHeadersConst = (options: ResolvedAppOptions): string =>
+    options.securityHeaders === undefined
+        ? ""
+        : `
+/**
+ * \`security.headers\` from \`lunora.config\`: the baseline security headers the Worker sends, and the same values
+ * the build writes into the static assets' \`_headers\`. An app that calls \`createWorker\` itself passes it as
+ * \`security: { headers: LUNORA_SECURITY_HEADERS }\`.
+ */
+const LUNORA_SECURITY_HEADERS: SecurityOptions["headers"] = ${JSON.stringify(options.securityHeaders)};
+`;
+
 /** The `export type { ... }` list — only the declaration types that were emitted. */
 const buildExportedTypes = (options: ResolvedAppOptions): string =>
     [
@@ -348,14 +364,7 @@ type Selector<Env, T> = (env: Env) => T | undefined;
 
 /** The generated \`createShardDO\` config — \`.observability()\`, \`.maxRelationKeys()\` and the long-tail \`.ai()\` / \`.kv()\` / … methods pass straight through to it. */
 type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
-
-/**
- * \`security.headers\` from \`lunora.config\`: the baseline security headers the Worker sends, and the same
- * values the build writes into the static assets' \`_headers\`. \`undefined\` when the config sets none. An app
- * that calls \`createWorker\` itself passes it as \`security: { headers: LUNORA_SECURITY_HEADERS }\`.
- */
-const LUNORA_SECURITY_HEADERS: SecurityOptions["headers"] = ${options.securityHeaders === undefined ? "undefined" : JSON.stringify(options.securityHeaders)};
-${identityMemoStoreType(hasAuth)}${buildDeferredModules(options)}${
+${buildSecurityHeadersConst(options)}${identityMemoStoreType(hasAuth)}${buildDeferredModules(options)}${
         options.jurisdiction
             ? `
 // Module scope, so every isolate loading this script (the worker and each Durable
@@ -471,13 +480,17 @@ ${buildBaseWorkerOptions(options).join("\n")}
 ${workerOptionLines.join("\n\n")}${workerOptionLines.length > 0 ? "\n\n" : ""}        for (const fn of this.extendFns) {
             Object.assign(options, fn(env, { ...options }));
         }
-
+${
+    options.securityHeaders === undefined
+        ? ""
+        : `
         // \`security.headers\` from lunora.config, unless code set its own. After \`.extend()\`, whose shallow
         // assign would otherwise drop it when an extension sets only \`security.cors\`.
-        if (LUNORA_SECURITY_HEADERS !== undefined && options.security?.headers === undefined) {
+        if (options.security?.headers === undefined) {
             options.security = { ...options.security, headers: LUNORA_SECURITY_HEADERS };
         }
-
+`
+}
         return options;
     }
 }
@@ -523,7 +536,7 @@ interface LunoraConfig<Env extends object = object> {
  */
 const defineApp = <Env extends object>(): AppBuilder<Env> => new AppBuilder<Env>();
 
-export { AppBuilder, defineApp, LUNORA_SECURITY_HEADERS };
+export { AppBuilder, defineApp${options.securityHeaders === undefined ? "" : ", LUNORA_SECURITY_HEADERS"} };
 export type { ${buildExportedTypes(options)} };
 `;
 };

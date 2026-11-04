@@ -81,10 +81,14 @@ describe("security.headers in lunora.config", () => {
 });
 
 describe("emitApp — security.headers", () => {
-    it("emits undefined when the config sets none, leaving the runtime its defaults", () => {
-        expect.assertions(1);
+    it("emits nothing for it when the config sets none, so the output is what it was before the option", () => {
+        expect.assertions(3);
 
-        expect(emitApp(baseOptions)).toContain('const LUNORA_SECURITY_HEADERS: SecurityOptions["headers"] = undefined;');
+        const output = emitApp(baseOptions);
+
+        expect(output).not.toContain("LUNORA_SECURITY_HEADERS");
+        expect(output).not.toContain("options.security?.headers");
+        expect(output).toContain("export { AppBuilder, defineApp };");
     });
 
     it("emits the config's value and applies it only when code set no security.headers", () => {
@@ -93,7 +97,7 @@ describe("emitApp — security.headers", () => {
         const output = emitApp({ ...baseOptions, securityHeaders: { crossOriginOpenerPolicy: "unsafe-none" } });
 
         expect(output).toContain('const LUNORA_SECURITY_HEADERS: SecurityOptions["headers"] = {"crossOriginOpenerPolicy":"unsafe-none"};');
-        expect(output).toContain("if (LUNORA_SECURITY_HEADERS !== undefined && options.security?.headers === undefined) {");
+        expect(output).toContain("if (options.security?.headers === undefined) {");
         expect(output).toContain("export { AppBuilder, defineApp, LUNORA_SECURITY_HEADERS };");
     });
 });
