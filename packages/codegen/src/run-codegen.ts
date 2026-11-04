@@ -972,9 +972,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: wantsOpenRpc ? openRpcContent : "", kind: "optional", name: "openrpc.json" },
               { content: wantsOpenRpc ? openRpcModuleContent : "", kind: "optional", name: "openrpc.ts" },
               // Studio-only data (the health map's denominator). The main app Worker never
-              // carries it: the dev hosts serve this file to the studio, and a hosted Studio
-              // is to get it from an opt-in companion Worker (`studio.companion`, not yet in
-              // this branch).
+              // carries it: the dev hosts serve this file to the studio.
               { content: advisorProcedureDocument, kind: "optional", name: "advisor-procedures.json" },
               // Same pairing as the specs: the `.json` for tooling, the `.ts` for `createWorker({ architecture })`,
               // both removed when the last module goes.
