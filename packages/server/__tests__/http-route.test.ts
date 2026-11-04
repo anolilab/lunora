@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import type { HttpActionCtx as HttpActionContext, LunoraRouteHandler } from "../src/index";
 import { httpRoute, httpRouter, LunoraError, v } from "../src/index";
@@ -405,6 +405,107 @@ describe("httpRoute composition", () => {
         expect(response.headers.get("cache-control")).toBe("private, no-store");
         expect(response.headers.get("cache-tag")).toBe("session");
         await expect(response.text()).resolves.toBe("");
+    });
+
+    it.each([
+        ["cookie", { cookie: "session=abc" }, "public, max-age=300, stale-while-revalidate=3600", "private, max-age=300, stale-while-revalidate=3600"],
+        ["authorization", { authorization: "Bearer t" }, "public, s-maxage=600, max-age=60, proxy-revalidate", "private, max-age=60"],
+        ["a bare max-age with a cookie", { cookie: "session=abc" }, "max-age=300", "private, max-age=300"],
+        ["cf-access-jwt-assertion", { "cf-access-jwt-assertion": "jwt" }, "PUBLIC, max-age=300", "private, max-age=300"],
+    ])("narrows the declared Cache-Control to private for a request with %s", async (_label, headers, declared, sent) => {
+        expect.assertions(1);
+
+        const route = httpRoute
+            .get("/api/me")
+            .cacheControl(declared)
+            .handler(() => {
+                return { ok: true };
+            });
+
+        const response = await dispatch(route, "GET", "/api/me", new Request("https://x/api/me", { headers }));
+
+        expect(response.headers.get("cache-control")).toBe(sent);
+    });
+
+    it.each(["private, max-age=60", "no-store", "public, no-store"])("sends %s unchanged to a credentialed request", async (declared) => {
+        expect.assertions(1);
+
+        const route = httpRoute
+            .get("/api/me")
+            .cacheControl(declared)
+            .handler(() => {
+                return { ok: true };
+            });
+
+        const response = await dispatch(route, "GET", "/api/me", new Request("https://x/api/me", { headers: { cookie: "session=abc" } }));
+
+        expect(response.headers.get("cache-control")).toBe(declared);
+    });
+
+    it("narrows a 204 response to a credentialed request too", async () => {
+        expect.assertions(1);
+
+        const route = httpRoute
+            .get("/api/me")
+            .cacheControl("public, max-age=300")
+            .handler(() => undefined);
+
+        const response = await dispatch(route, "GET", "/api/me", new Request("https://x/api/me", { headers: { authorization: "Bearer t" } }));
+
+        expect(response.headers.get("cache-control")).toBe("private, max-age=300");
+    });
+
+    it("narrows the header when Cloudflare Access identified the caller on the ExecutionContext", async () => {
+        expect.assertions(1);
+
+        const route = httpRoute
+            .get("/api/me")
+            .cacheControl("public, max-age=300")
+            .handler(() => {
+                return { ok: true };
+            });
+        const app = httpRouter();
+
+        app.on("GET", "/api/me", route);
+
+        const executionContext = {
+            access: { aud: "aud", getIdentity: async () => undefined },
+            passThroughOnException: () => {},
+            props: {},
+            waitUntil: () => {},
+        };
+        const response = await app.fetch(new Request("https://x/api/me"), { __lunoraCtx: context }, executionContext);
+
+        expect(response.headers.get("cache-control")).toBe("private, max-age=300");
+    });
+
+    it("warns once per route in development when it narrows the header, and not in production", async () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const route = httpRoute
+            .get("/api/me")
+            .cacheControl("public, max-age=300")
+            .handler(() => {
+                return { ok: true };
+            });
+        const app = httpRouter();
+
+        app.on("GET", "/api/me", route);
+
+        const credentialed = (): Request => new Request("https://x/api/me", { headers: { cookie: "session=abc" } });
+
+        await app.fetch(credentialed(), { __lunoraCtx: context });
+
+        expect(warn).not.toHaveBeenCalled();
+
+        await app.fetch(credentialed(), { __lunoraCtx: context, WORKER_ENV: "development" });
+        await app.fetch(credentialed(), { __lunoraCtx: context, WORKER_ENV: "development" });
+
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0]?.[0])).toContain('instead of the declared "public, max-age=300"');
+
+        warn.mockRestore();
     });
 });
 

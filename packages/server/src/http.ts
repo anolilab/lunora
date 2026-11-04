@@ -1,11 +1,14 @@
 import { isLunoraError, LunoraError, toErrorBody } from "@lunora/errors";
+import { isDevEnvironment } from "@lunora/shard-engine";
 import type { Infer, Validator, ValidatorKind } from "@lunora/values";
 import { ValidationError } from "@lunora/values";
 import { encodeWire } from "@lunora/wire";
 import type { Context } from "hono";
 import { Hono } from "hono";
 
+import type { ExecutionContextLike } from "../../../shared/execution-context";
 import type { LiveTopicRef } from "../../../shared/live-stream";
+import { CREDENTIAL_HEADERS } from "../../../shared/rest-surface";
 import { isSafeHeaderValue, SSE_HEADERS, sseFrame } from "../../../shared/sse";
 import applyOutput from "./apply-output";
 import type { EmptyArgs } from "./builder/index";
@@ -308,6 +311,13 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
     /**
      * Attach a `Cache-Control` header to the response. Only meaningful when
      * Workers Cache is enabled in `wrangler.jsonc` (`"cache": { "enabled": true }`).
+     *
+     * Sent as written to an anonymous caller. When the request carries a
+     * credential (`Authorization`, `Cookie`, `Cf-Access-Jwt-Assertion`, an x402
+     * payment header, or a Cloudflare Access identity), a value that is not
+     * already `private` or `no-store` is sent as `private` with `public`,
+     * `s-maxage` and `proxy-revalidate` removed, so a shared cache never stores a
+     * per-caller body.
      */
     cacheControl: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
 
@@ -518,6 +528,55 @@ const parseBody = async (validators: ArgsValidator, c: Context<LunoraHttpEnv>): 
 };
 
 /**
+ * The credential the request presented, or `undefined` for an anonymous caller.
+ * Same sources as the REST cache's `requestCarriesCredentials`: the shared header
+ * list, plus a Cloudflare Access identity, which arrives on the `ExecutionContext`
+ * rather than as a header. hono's `executionCtx` getter throws when the app was
+ * fetched without one (a unit test, a sub-handler mount), which is anonymous.
+ */
+const presentedCredential = (c: Context<LunoraHttpEnv>): string | undefined => {
+    const header = CREDENTIAL_HEADERS.find((name) => c.req.raw.headers.has(name));
+
+    if (header !== undefined) {
+        return header;
+    }
+
+    try {
+        return (c.executionCtx as ExecutionContextLike).access === undefined ? undefined : "cloudflare access";
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * Narrow a declared `Cache-Control` to `private` for a credentialed exchange.
+ *
+ * The handler runs under the caller's `ctx.auth`, so a body produced for a
+ * credentialed request is presumed caller-specific, and a shared cache must never
+ * store it: Cloudflare keys its cache on the URL and ignores `Vary` beyond
+ * `Accept-Encoding`, so `public` on such a response hands one user's body to the
+ * next visitor. A value that is already `private` or `no-store` is returned as
+ * is. Anything else loses the directives that address shared caches (`public`,
+ * `s-maxage`, `proxy-revalidate`) and gains `private`, which also covers a bare
+ * `max-age=300` that a shared cache would otherwise store by default.
+ */
+const privateCacheControl = (value: string): string => {
+    const directives = value
+        .split(",")
+        .map((directive) => directive.trim())
+        .filter((directive) => directive !== "");
+    const names = directives.map((directive) => (directive.split("=", 1)[0] ?? "").trim().toLowerCase());
+
+    if (names.includes("private") || names.includes("no-store")) {
+        return value;
+    }
+
+    const kept = directives.filter((_, index) => !["proxy-revalidate", "public", "s-maxage"].includes(names[index] ?? ""));
+
+    return ["private", ...kept].join(", ");
+};
+
+/**
  * Reject a request whose verb is not the one the route was declared with.
  *
  * The verb is real routing information, not decoration: mounting
@@ -546,9 +605,31 @@ const methodNotAllowed = (state: RouteState, c: Context<LunoraHttpEnv>): Respons
  * decode failures (bad query / body / params) surface as 400; a result that
  * violates `.output()` surfaces as 500 (see {@link applyOutput}).
  */
-const buildRouteHandler =
-    (state: RouteState, userHandler: LooseHandler): LunoraRouteHandler =>
-    async (c) => {
+const buildRouteHandler = (state: RouteState, userHandler: LooseHandler): LunoraRouteHandler => {
+    let downgradeWarned = false;
+
+    /** The `Cache-Control` this exchange gets: the declared value, narrowed to `private` for a credentialed caller. */
+    const effectiveCacheControl = (declared: string, c: Context<LunoraHttpEnv>): string => {
+        const credential = presentedCredential(c);
+
+        if (credential === undefined) {
+            return declared;
+        }
+
+        const narrowed = privateCacheControl(declared);
+
+        if (narrowed !== declared && !downgradeWarned && isDevEnvironment(c.env)) {
+            downgradeWarned = true;
+            // eslint-disable-next-line no-console -- one dev-only notice per route: the declared header is not what was sent
+            console.warn(
+                `[lunora] httpRoute ${state.method} ${state.path}: sent Cache-Control "${narrowed}" instead of the declared "${declared}" because the request carries a credential (${credential}). A shared cache must not store a per-caller response. Further downgrades on this route are not reported.`,
+            );
+        }
+
+        return narrowed;
+    };
+
+    return async (c) => {
         const wrongMethod = methodNotAllowed(state, c);
 
         if (wrongMethod) {
@@ -566,7 +647,7 @@ const buildRouteHandler =
             const headers: Record<string, string> = {};
 
             if (state.cacheControl) {
-                headers["cache-control"] = state.cacheControl;
+                headers["cache-control"] = effectiveCacheControl(state.cacheControl, c);
             }
 
             if (state.cacheTag) {
@@ -589,6 +670,7 @@ const buildRouteHandler =
             return errorResponse(error);
         }
     };
+};
 
 type LooseStreamHandler = (options: {
     ctx: HttpActionCtx;

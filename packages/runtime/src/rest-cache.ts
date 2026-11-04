@@ -16,10 +16,11 @@
  * needs a live `Request`: deciding the effective scope, and deciding whether the
  * exchange is cacheable at all.
  *
- * Note the deliberate asymmetry with `httpRoute(...).cacheControl()` in
- * `@lunora/server`: that writes whatever value the author passed, with no
- * credential downgrade. It is the lower-level escape hatch; this is the guarded
- * surface. Do not describe them as equivalent.
+ * `httpRoute(...).cacheControl()` in `@lunora/server` applies the same
+ * credential downgrade to the author's free-form value, from the same
+ * `CREDENTIAL_HEADERS` list. It still does less than this module: no non-`GET`
+ * refusal, no credential headers folded into `Vary`, and no edge store
+ * that refuses a `Set-Cookie` response. Do not describe them as equivalent.
  */
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import type { RestCachePolicy } from "../../../shared/rest-surface";
