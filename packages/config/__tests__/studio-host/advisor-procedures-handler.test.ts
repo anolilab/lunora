@@ -36,21 +36,21 @@ describe("handleAdvisorProceduresRequest", () => {
         rmSync(projectRoot, { force: true, recursive: true });
     });
 
-    it("serves the generated procedure list on GET", () => {
+    it("serves the generated procedure list on GET", async () => {
         expect.assertions(2);
 
         writeFileSync(join(generatedDirectory, "advisor-procedures.json"), JSON.stringify(PROCEDURES));
 
-        const response = handleAdvisorProceduresRequest({ method: "GET", projectRoot });
+        const response = await handleAdvisorProceduresRequest({ method: "GET", projectRoot });
 
         expect(response.status).toBe(200);
         expect(response.body).toStrictEqual(PROCEDURES);
     });
 
-    it("answers 404 with a reason when codegen has not written the file yet", () => {
+    it("answers 404 with a reason when codegen has not written the file yet", async () => {
         expect.assertions(2);
 
-        const response = handleAdvisorProceduresRequest({ method: "GET", projectRoot });
+        const response = await handleAdvisorProceduresRequest({ method: "GET", projectRoot });
 
         expect(response.status).toBe(404);
         expect(response.body).toStrictEqual({
@@ -58,55 +58,55 @@ describe("handleAdvisorProceduresRequest", () => {
         });
     });
 
-    it("answers 500 when the file has no procedures array rather than an empty list", () => {
+    it("answers 500 when the file has no procedures array rather than an empty list", async () => {
         expect.assertions(2);
 
         writeFileSync(join(generatedDirectory, "advisor-procedures.json"), JSON.stringify({ something: true }));
 
-        const response = handleAdvisorProceduresRequest({ method: "GET", projectRoot });
+        const response = await handleAdvisorProceduresRequest({ method: "GET", projectRoot });
 
         expect(response.status).toBe(500);
         expect(response.body).toStrictEqual({ error: "advisor-procedures.json has no procedures array; re-run `lunora codegen`." });
     });
 
-    it("answers 500 when a procedure entry is malformed rather than letting the client cast it", () => {
+    it("answers 500 when a procedure entry is malformed rather than letting the client cast it", async () => {
         expect.assertions(2);
 
         writeFileSync(join(generatedDirectory, "advisor-procedures.json"), JSON.stringify({ procedures: [{ exportName: "list" }] }));
 
-        const response = handleAdvisorProceduresRequest({ method: "GET", projectRoot });
+        const response = await handleAdvisorProceduresRequest({ method: "GET", projectRoot });
 
         expect(response.status).toBe(500);
         expect(response.body).toStrictEqual({ error: "advisor-procedures.json has a malformed procedure entry; re-run `lunora codegen`." });
     });
 
-    it("answers 500 when the file is not JSON", () => {
+    it("answers 500 when the file is not JSON", async () => {
         expect.assertions(1);
 
         writeFileSync(join(generatedDirectory, "advisor-procedures.json"), "{ not json");
 
-        expect(handleAdvisorProceduresRequest({ method: "GET", projectRoot }).status).toBe(500);
+        await expect(handleAdvisorProceduresRequest({ method: "GET", projectRoot })).resolves.toHaveProperty("status", 500);
     });
 
-    it("answers 500 when an entry is not a procedure object", () => {
+    it("answers 500 when an entry is not a procedure object", async () => {
         expect.assertions(2);
 
         writeFileSync(join(generatedDirectory, "advisor-procedures.json"), JSON.stringify({ procedures: [null] }));
 
-        const response = handleAdvisorProceduresRequest({ method: "GET", projectRoot });
+        const response = await handleAdvisorProceduresRequest({ method: "GET", projectRoot });
 
         expect(response.status).toBe(500);
         expect(response.body).toStrictEqual({ error: "advisor-procedures.json has a malformed procedure entry; re-run `lunora codegen`." });
     });
 
-    it("reports a read failure as such and logs the cause", () => {
+    it("reports a read failure as such and logs the cause", async () => {
         expect.assertions(3);
 
         // A directory at the file's path exists but cannot be read as a file (EISDIR).
         mkdirSync(join(generatedDirectory, "advisor-procedures.json"));
 
         const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
-        const response = handleAdvisorProceduresRequest({ method: "GET", projectRoot });
+        const response = await handleAdvisorProceduresRequest({ method: "GET", projectRoot });
 
         expect(response.status).toBe(500);
         expect(response.body).toStrictEqual({ error: "advisor-procedures.json could not be read; see the dev server log." });
@@ -115,9 +115,9 @@ describe("handleAdvisorProceduresRequest", () => {
         consoleError.mockRestore();
     });
 
-    it("refuses any method other than GET", () => {
+    it("refuses any method other than GET", async () => {
         expect.assertions(1);
 
-        expect(handleAdvisorProceduresRequest({ method: "POST", projectRoot }).status).toBe(405);
+        await expect(handleAdvisorProceduresRequest({ method: "POST", projectRoot })).resolves.toHaveProperty("status", 405);
     });
 });

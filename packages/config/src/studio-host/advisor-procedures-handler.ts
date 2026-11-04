@@ -11,7 +11,7 @@
  * reason, not an empty list, so the studio cannot show a score computed from a
  * denominator that was never generated.
  */
-import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 
 import join from "../path";
 import type { LocalEndpointRequest, LocalEndpointResponse } from "./serve-json-handler";
@@ -45,7 +45,7 @@ const isProcedureEntry = (entry: unknown): boolean => {
     );
 };
 
-const handleAdvisorProceduresRequest = (request: LocalEndpointRequest): LocalEndpointResponse => {
+const handleAdvisorProceduresRequest = async (request: LocalEndpointRequest): Promise<LocalEndpointResponse> => {
     if (request.method !== "GET") {
         return { body: { error: "GET only" }, status: 405 };
     }
@@ -56,7 +56,7 @@ const handleAdvisorProceduresRequest = (request: LocalEndpointRequest): LocalEnd
     let source: string;
 
     try {
-        source = readFileSync(path, "utf8");
+        source = await readFile(path, "utf8");
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
             return { body: { error: "advisor-procedures.json is not generated yet; run `lunora codegen`." }, status: 404 };
