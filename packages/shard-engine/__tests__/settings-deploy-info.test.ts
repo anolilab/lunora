@@ -28,4 +28,12 @@ describe(readDeployInfo, () => {
 
         expect(readDeployInfo({ CF_VERSION_METADATA: { id: "dep_1", tag: "v3" } })).toMatchObject({ deploymentId: "dep_1", versionTag: "v3" });
     });
+
+    // Unlike the shared `workerVersionId`, which drops an empty id because it keys a
+    // cache: this reports what the binding holds.
+    it("reports an empty version id as it is", () => {
+        expect.assertions(1);
+
+        expect(readDeployInfo({ CF_VERSION_METADATA: { id: "", tag: "" } })).toStrictEqual({ deploymentId: "", versionTag: "" });
+    });
 });

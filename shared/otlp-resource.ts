@@ -20,6 +20,7 @@
  * Keep this genuinely zero-dependency (only built-ins) so inlining stays sound.
  */
 import type { OtlpResourceAttributes } from "./otlp";
+import { stringProperty, VERSION_METADATA_BINDING } from "./worker-version";
 
 /**
  * Reads one environment value by name, or `undefined` when absent. Lets a Worker
@@ -27,20 +28,6 @@ import type { OtlpResourceAttributes } from "./otlp";
  * one detector.
  */
 type ResourceEnvReader = (key: string) => string | undefined;
-
-/** The one binding read as an object rather than a string — see {@link readerFromRecord}. */
-const VERSION_METADATA_BINDING = "CF_VERSION_METADATA";
-
-/** Read a string property off a loosely-typed object (e.g. `request.cf`). */
-const stringProperty = (object: unknown, key: string): string | undefined => {
-    if (typeof object !== "object" || object === null) {
-        return undefined;
-    }
-
-    const value = (object as Record<string, unknown>)[key];
-
-    return typeof value === "string" && value.length > 0 ? value : undefined;
-};
 
 /**
  * Build a reader over a bindings-style bag. Non-string and empty values read as
@@ -84,7 +71,8 @@ const readerFromRecord =
 const detectServiceResource = (read: ResourceEnvReader): OtlpResourceAttributes => {
     const detected: OtlpResourceAttributes = {};
 
-    const serviceVersion = read("SERVICE_VERSION") ?? read("CF_VERSION_METADATA") ?? read("VERCEL_GIT_COMMIT_SHA") ?? read("GITHUB_SHA") ?? read("COMMIT_SHA");
+    const serviceVersion =
+        read("SERVICE_VERSION") ?? read(VERSION_METADATA_BINDING) ?? read("VERCEL_GIT_COMMIT_SHA") ?? read("GITHUB_SHA") ?? read("COMMIT_SHA");
 
     if (serviceVersion !== undefined) {
         detected["service.version"] = serviceVersion;
