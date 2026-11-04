@@ -2,7 +2,7 @@ import { existsSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
-import { readBoundServiceBindings, runCodegen } from "@lunora/codegen";
+import { readBoundServiceBindings, readServiceBindings, runCodegen } from "@lunora/codegen";
 import type { DeployDriver, DeployRequest, DiscoveryCache, ToolchainCommand } from "@lunora/config";
 import {
     clearApiSpecMarker,
@@ -546,9 +546,12 @@ const serviceDeploySkipReason = (options: DeployCommandOptions): string | undefi
     return undefined;
 };
 
-/** The Wrangler entrypoints of the services this run publishes, for the open-shard gate to read; none when it publishes no services. */
+/**
+ * The Wrangler entrypoints of the app's own services this run publishes, for the open-shard gate to read; none when it publishes no services.
+ * The companion is left out: it is generated, has no app code for the gate to read, and is written by codegen, which runs after this gate.
+ */
 const gateServicePaths = (cwd: string, options: DeployCommandOptions): string[] =>
-    serviceDeploySkipReason(options) === undefined ? readBoundServiceBindings(cwd).services.map((service) => service.wranglerPath) : [];
+    serviceDeploySkipReason(options) === undefined ? readServiceBindings(cwd).services.map((service) => service.wranglerPath) : [];
 
 // A service is its own Worker, so its own client build runs first, from its folder. The parent driver deploys it, so the build must
 // target the same host, and run for the environment wrangler deploys.
