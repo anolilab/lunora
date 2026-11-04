@@ -76,11 +76,13 @@ const handleAdvisorProceduresRequest = (request: LocalEndpointRequest): LocalEnd
         return { body: { error: "advisor-procedures.json is not valid JSON; re-run `lunora codegen`." }, status: 500 };
     }
 
-    if (typeof parsed !== "object" || parsed === null || !Array.isArray((parsed as { procedures?: unknown }).procedures)) {
+    const procedures = typeof parsed === "object" && parsed !== null ? (parsed as { procedures?: unknown }).procedures : undefined;
+
+    if (!Array.isArray(procedures)) {
         return { body: { error: "advisor-procedures.json has no procedures array; re-run `lunora codegen`." }, status: 500 };
     }
 
-    if (!(parsed as { procedures: unknown[] }).procedures.every((entry) => isProcedureEntry(entry))) {
+    if (!procedures.every((entry) => isProcedureEntry(entry))) {
         return { body: { error: "advisor-procedures.json has a malformed procedure entry; re-run `lunora codegen`." }, status: 500 };
     }
 
