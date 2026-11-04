@@ -1,3 +1,7 @@
+## @lunora/testing [1.0.0-alpha.334](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.333...@lunora/testing@1.0.0-alpha.334) (2026-11-04)
+
+- Updated dependency @lunora/notify@1.0.0-alpha.111
+
 ## @lunora/testing [1.0.0-alpha.333](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.332...@lunora/testing@1.0.0-alpha.333) (2026-11-04)
 
 - Release 1.0.0-alpha.333. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
