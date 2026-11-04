@@ -42,7 +42,7 @@ You can also enable cache for one named export, with `exports[name].cache.enable
 
 ## Declarative cache headers on `httpRoute`
 
-The `httpRoute` builder carries three chainable methods for cache headers. They attach automatically to the response, both JSON and streaming (SSE).
+The `httpRoute` builder carries three chainable methods for cache headers. They attach automatically to the JSON response. Streaming routes (a `.stream()` handler) send only the SSE headers.
 
 | Method                 | Header          | Purpose                                             |
 | ---------------------- | --------------- | --------------------------------------------------- |
@@ -51,7 +51,7 @@ The `httpRoute` builder carries three chainable methods for cache headers. They 
 | `.vary(value)`         | `Vary`          | Store separate cached variants per request header.  |
 
 ```ts title="lunora/products.ts"
-import { httpRoute, v } from "lunorash/server";
+import { httpRoute, LunoraError, v } from "lunorash/server";
 
 import { api } from "@/lunora/_generated/api";
 
@@ -64,11 +64,16 @@ export const getProduct = httpRoute
     .handler(async ({ ctx, params }) => {
         const product = await ctx.runQuery(api.products.get, params);
 
-        return product ?? new Response("Not Found", { status: 404 });
+        if (product === null) {
+            // A route handler returns a JSON payload, not a `Response`: throw to send a 404.
+            throw new LunoraError("NOT_FOUND", "Product not found");
+        }
+
+        return product;
     });
 ```
 
-The headers are sent on both **200 OK** and **204 No Content** responses, as well as streaming SSE responses.
+The headers are sent on **200 OK** and **204 No Content** responses. Error responses (a thrown `LunoraError`, a validation failure) and streaming SSE responses do not carry them.
 
 ### Credentialed requests
 
