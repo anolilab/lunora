@@ -242,6 +242,12 @@ class LunoraPaymentError extends LunoraError {
 }
 ```
 
+### `MAX_WEBHOOK_BODY_BYTES` (const)
+
+```ts
+const MAX_WEBHOOK_BODY_BYTES = 1048576;
+```
+
 ### `MemoryPaymentStore` (class)
 
 ```ts
@@ -764,6 +770,7 @@ interface WebhookInput {
 ```ts
 interface WebhookOutcome {
     applied: boolean;
+    referenceId?: string;
     status: number;
 }
 ```
@@ -922,6 +929,12 @@ const paymentExtension: SchemaExtension<Record<"customers" | "events" | "session
 
 ```ts
 const paymentsFromContext: (context: PaymentContextLike, options: PaymentsFromContextOptions) => LunoraPayment;
+```
+
+### `readWebhookBody` (const)
+
+```ts
+const readWebhookBody: (request: Request, maxBytes?: number) => Promise<string>;
 ```
 
 ### `reconcile` (const)

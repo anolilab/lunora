@@ -83,6 +83,9 @@ The cross-tenant read the admin's organization list needs goes through
 runs inside one shard and fanning out over every tenant per page view is a bill,
 not a design. better-auth's organization hooks in `lunora/auth/index.ts` keep it
 current as organizations are created, renamed, deleted and gain or lose members.
+The list is paged, and its search, plan filter and totals run there too
+(`saas.listOrganizations`, `saas.organizationTotals`), so the admin screen never
+holds every tenant at once.
 
 Billing is the deliberate exception: a provider webhook arrives with no tenant
 to route by, so the payment tables live on the root shard and carry the

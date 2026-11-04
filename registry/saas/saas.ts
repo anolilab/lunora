@@ -196,8 +196,29 @@ const requireWriter = async (ctx: MutationCtx): Promise<{ organizationId: string
  * one place that reaches it structurally.
  */
 interface OrganizationsReader {
+    aggregate: (args: { field: "seats"; op: "sum"; where: OrganizationsWhere }) => Promise<number | null>;
+    count: (where: OrganizationsWhere) => Promise<number>;
     findFirst: (args: { where: { organizationId: string } }) => Promise<Doc<"saas_organizations"> | null>;
-    findMany: (args: { where?: { status: { ne: string } } }) => Promise<{ page: Doc<"saas_organizations">[] }>;
+    findMany: (args: {
+        limit?: number;
+        orderBy?: Partial<Record<"organizationId" | "updatedAt", "asc" | "desc">>[];
+        where: OrganizationsWhere;
+    }) => Promise<{ isDone: boolean; page: Doc<"saas_organizations">[] }>;
+    groupBy: (args: {
+        agg: { field?: "seats"; op: "count" | "sum" };
+        by: ["status", "plan"];
+    }) => Promise<ReadonlyArray<{ key: { plan?: unknown; status?: unknown }; value: number | null }>>;
+}
+
+/**
+ * A `where` tree over `saas_organizations`, loose on purpose: the typed tree is
+ * the generated one, which this item cannot name (see {@link OrganizationsReader}).
+ */
+interface OrganizationsWhere {
+    [field: string]: unknown;
+    AND?: OrganizationsWhere[];
+    NOT?: OrganizationsWhere;
+    OR?: OrganizationsWhere[];
 }
 
 const organizations = (ctx: MutationCtx | QueryCtx): OrganizationsReader =>
@@ -421,31 +442,204 @@ export const archiveProject = mutation
         ctx.log.info("project.archived", { organizationId, project: String(projectId) });
     });
 
+/** {@link requireCaller}, and additionally that the caller holds better-auth's platform admin role. */
+const requirePlatformAdmin = async (ctx: QueryCtx): Promise<void> => {
+    const { appRole } = await requireCaller(ctx);
+
+    if (!hasRole(appRole, PLATFORM_ADMIN_ROLES)) {
+        throw new LunoraError("FORBIDDEN", "requires the platform admin role");
+    }
+};
+
+/** The most organisations one admin page may ask for. */
+const ORGANIZATIONS_PAGE_MAX = 100;
+
 /**
- * The admin's organisation list — the one read the shard model cannot serve, and
- * the reason `saas_organizations` is `.global()`. Listing tenants by fanning out
- * over every shard is a per-page-view bill; this is one D1 read.
+ * How far past its `numItems` a re-read page may run before the read stops. The
+ * client splits a page once it holds more than twice its `numItems`, at the
+ * `splitCursor` it is handed, so a page cut here is always split, and the rows
+ * past the cut come back in the upper half.
+ */
+const BOUNDED_PAGE_FACTOR = 4;
+
+/** The longest search the list takes; the admin screens' search boxes stop at it. */
+const ORGANIZATION_SEARCH_MAX = 100;
+
+/**
+ * The list's order, newest first, as a key tuple. It ends in `organizationId`,
+ * which is unique and never changes, so the tuple names exactly one row — the
+ * property the keyset cursor below depends on; two tenants updated in the same
+ * millisecond would otherwise straddle a page boundary in an order the database
+ * is free to change. `byUpdatedAt` and, under the plan filter, `byPlanUpdated`
+ * (see `schema.ts`) serve it, scanned backwards.
+ */
+const LIST_ORDER = ["updatedAt", "organizationId"] as const;
+
+/** The filters the list and its totals share, so the header always counts the rows the table pages through. */
+const organizationFilterArgs = {
+    /** Exact plan id; every plan when omitted. Bounded like any id a client sends, generously for a catalog's. */
+    plan: v.optional(v.string().max(256)),
+    /** Substring of the name or slug. */
+    search: v.optional(v.string().max(ORGANIZATION_SEARCH_MAX)),
+};
+
+/**
+ * The `where` for a filter. Deleted organisations stay as tombstones (see
+ * `syncOrganization`) and are not tenants, so they are always excluded.
+ *
+ * `contains` is a substring test. On D1 it folds ASCII case only, so "acme"
+ * finds "ACME" but "émile" does not find "Émile".
+ */
+const organizationFilter = ({ plan, search }: { plan?: string; search?: string }): OrganizationsWhere => {
+    const clauses: OrganizationsWhere[] = [{ status: { ne: "deleted" } }];
+    const term = search?.trim() ?? "";
+
+    if (plan !== undefined) {
+        clauses.push({ plan });
+    }
+
+    if (term !== "") {
+        clauses.push({ OR: [{ name: { contains: term } }, { slug: { contains: term } }] });
+    }
+
+    return { AND: clauses };
+};
+
+const encodeCursor = (row: Doc<"saas_organizations">): string => JSON.stringify(LIST_ORDER.map((field) => row[field]));
+
+/** A cursor's key values. A cursor is client-held, so it is input. */
+const decodeCursor = (cursor: string): [number, string] => {
+    let values: unknown;
+
+    try {
+        values = JSON.parse(cursor) as unknown;
+    } catch {
+        values = undefined;
+    }
+
+    if (!Array.isArray(values) || values.length !== 2 || typeof values[0] !== "number" || typeof values[1] !== "string") {
+        throw new LunoraError("VALIDATION_ERROR", "invalid organization cursor");
+    }
+
+    return [values[0], values[1]];
+};
+
+/** Rows strictly after `[updatedAt, organizationId]` in the list's order: older, or as old with a lower id. */
+const after = ([updatedAt, organizationId]: [number, string]): OrganizationsWhere => {
+    return { OR: [{ updatedAt: { lt: updatedAt } }, { AND: [{ updatedAt }, { organizationId: { lt: organizationId } }] }] };
+};
+
+const pageCursor = v.optional(v.union(v.string(), v.null()));
+
+/**
+ * The admin's organisation list, a page at a time, newest first — the one read
+ * the shard model cannot serve, and the reason `saas_organizations` is
+ * `.global()`. Listing tenants by fanning out over every shard is a
+ * per-page-view bill; this is one D1 read.
+ *
+ * Search and the plan filter run here, not over the rows a browser happens to
+ * have loaded, so the first page is the first page of the whole filtered set.
+ * The header's figures come from {@link organizationTotals} with the same
+ * filter.
+ *
+ * Paged for `usePaginatedQuery`, which re-reads each loaded page as the fixed
+ * range `(cursor, endCursor]` so a live insert grows one page instead of
+ * shifting a row across a boundary. `findMany` on D1 has no `endCursor`, so the
+ * cursor is minted here: the order's key tuple of the last row, bounded in
+ * `where`. `numItems` is at most 100, and a re-read page at most four times
+ * its `numItems`, so no caller can read the whole table in one page.
  *
  * Platform-admin only, on better-auth's `admin()` role. Note what it does NOT
  * do: it never reaches into a tenant's shard. An admin who needs one
  * organisation's data impersonates into it (better-auth's impersonation), which
  * keeps every tenant read on the same authorised path as the tenant's own.
  */
-export const listOrganizations = query.query(async ({ ctx }): Promise<Doc<"saas_organizations">[]> => {
-    const { appRole } = await requireCaller(ctx);
+export const listOrganizations = query
+    .input({ ...organizationFilterArgs, paginationOpts: v.object({ cursor: pageCursor, endCursor: pageCursor, numItems: v.number() }) })
+    .query(
+        async ({
+            args: { paginationOpts, ...filter },
+            ctx,
+        }): Promise<{ continueCursor: string | null; isDone: boolean; page: Doc<"saas_organizations">[]; splitCursor?: string | null }> => {
+            await requirePlatformAdmin(ctx);
 
-    if (!hasRole(appRole, PLATFORM_ADMIN_ROLES)) {
-        throw new LunoraError("FORBIDDEN", "requires the platform admin role");
+            const { cursor, endCursor, numItems } = paginationOpts;
+
+            // Refused rather than clamped: the client splits a page at twice the
+            // `numItems` IT asked for, so a larger request than this serves would
+            // never split, and rows past the bounded-page cap would never appear.
+            if (!Number.isInteger(numItems) || numItems < 1 || numItems > ORGANIZATIONS_PAGE_MAX) {
+                throw new LunoraError("VALIDATION_ERROR", `numItems must be a whole number from 1 to ${String(ORGANIZATIONS_PAGE_MAX)}`);
+            }
+
+            const clauses = [organizationFilter(filter)];
+
+            if (cursor) {
+                clauses.push(after(decodeCursor(cursor)));
+            }
+
+            if (endCursor) {
+                clauses.push({ NOT: after(decodeCursor(endCursor)) });
+            }
+
+            const where = { AND: clauses };
+            const orderBy = LIST_ORDER.map((field) => {
+                return { [field]: "desc" as const };
+            });
+
+            if (endCursor) {
+                // A bounded page is its whole range, up to a cap: a range that grew
+                // past it returns its first rows and a midpoint among them, which
+                // the client splits on, so no read holds more than the cap.
+                const { page } = await organizations(ctx).findMany({ limit: BOUNDED_PAGE_FACTOR * numItems, orderBy, where });
+                const middle = page.length >= 2 ? page[Math.floor(page.length / 2) - 1] : undefined;
+
+                return { continueCursor: endCursor, isDone: true, page, splitCursor: middle ? encodeCursor(middle) : null };
+            }
+
+            const { isDone, page } = await organizations(ctx).findMany({ limit: numItems, orderBy, where });
+            const last = page.at(-1);
+
+            return { continueCursor: isDone || !last ? null : encodeCursor(last), isDone, page };
+        },
+    );
+
+/**
+ * The organisation list's header figures over the same filter as
+ * {@link listOrganizations}: how many organisations match, and their seats.
+ *
+ * Without a search they come from the `countByStatusPlan` / `seatsByStatusPlan`
+ * aggregate indexes (see `schema.ts`): one row per status and plan, kept in step
+ * on every write, so a refresh reads a handful of rows however many tenants
+ * exist. A search is a substring test no index serves, so it counts and sums
+ * the matching rows.
+ *
+ * The count and the sum are two reads, so a write landing between them can pair
+ * them from different moments; that write also re-runs this live query, which
+ * then returns a matching pair.
+ */
+export const organizationTotals = query.input(organizationFilterArgs).query(async ({ args, ctx }): Promise<{ organizations: number; seats: number }> => {
+    await requirePlatformAdmin(ctx);
+
+    const reader = organizations(ctx);
+
+    if ((args.search?.trim() ?? "") !== "") {
+        const where = organizationFilter(args);
+        const [count, seats] = await Promise.all([reader.count(where), reader.aggregate({ field: "seats", op: "sum", where })]);
+
+        return { organizations: count, seats: seats ?? 0 };
     }
 
-    // Deleted organisations stay as tombstones (see `syncOrganization`) and are not tenants.
-    //
-    // No `limit`, so `findMany` returns every match in one unpaged result. Pass a
-    // `limit` and thread the returned `continueCursor` through once the tenant
-    // count outgrows one response.
-    const { page } = await organizations(ctx).findMany({ where: { status: { ne: "deleted" } } });
+    const [counts, seats] = await Promise.all([
+        reader.groupBy({ agg: { op: "count" }, by: ["status", "plan"] }),
+        reader.groupBy({ agg: { field: "seats", op: "sum" }, by: ["status", "plan"] }),
+    ]);
+    const counted = (groups: typeof counts): number =>
+        groups
+            .filter(({ key }) => key.status !== "deleted" && (args.plan === undefined || key.plan === args.plan))
+            .reduce((total, { value }) => total + (value ?? 0), 0);
 
-    return page;
+    return { organizations: counted(counts), seats: counted(seats) };
 });
 
 /**
@@ -522,4 +716,42 @@ export const syncOrganization = internalMutation
             status: status ?? "active",
             updatedAt,
         });
+    });
+
+/**
+ * Record an organisation's current plan in the projection — what the admin list
+ * shows and filters on. Internal: billing calls it when a subscription changes
+ * (`payment:processWebhook` in the saas template), never a client. A patch to an
+ * existing row only: a deleted organisation is left alone, and one not projected
+ * yet is refused as retryable, so the change is not lost.
+ *
+ * `asOf` is the billing version the plan was derived at (in the template, the
+ * latest `updatedAt` among the organisation's subscriptions). Billing derives in
+ * an action and writes here afterwards, so two changes can arrive in the
+ * opposite order; one derived from an older version than the stored plan's is
+ * dropped. Running again with the same arguments changes nothing.
+ */
+export const syncOrganizationPlan = internalMutation
+    .input({ asOf: v.number(), organizationId: v.string(), plan: v.string().max(256) })
+    .mutation(async ({ args: { asOf, organizationId, plan }, ctx }): Promise<void> => {
+        const existing = await organizations(ctx).findFirst({ where: { organizationId } });
+
+        // Not projected yet (the auth hook that writes the row failed or has not run): a 503, so the
+        // caller's provider redelivers the event once the row exists, rather than a success that
+        // records nothing and leaves the row to start on `free`.
+        if (!existing) {
+            throw new LunoraError("SERVICE_UNAVAILABLE", `organization ${organizationId} is not in the projection yet — retry once it is`);
+        }
+
+        if (existing["status"] === "deleted") {
+            return;
+        }
+
+        const stored = typeof existing["planAsOf"] === "number" ? existing["planAsOf"] : undefined;
+
+        if (stored !== undefined && (asOf < stored || (asOf === stored && existing["plan"] === plan))) {
+            return;
+        }
+
+        await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"] as Id<"saas_organizations">, { plan, planAsOf: asOf, updatedAt: ctx.now });
     });

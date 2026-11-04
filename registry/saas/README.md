@@ -102,12 +102,24 @@ organisation" — a bug that reads as data loss.
 | `saas.overview`                  | `query` (live)     | The tenant's projects + activity tail                  |
 | `saas.createProject`             | `mutation`         | Writer roles (`admin`, `owner`)                        |
 | `saas.archiveProject`            | `mutation`         | Writer roles                                           |
-| `saas.listOrganizations`         | `query` (live)     | Platform admins — reads the projection                 |
+| `saas.listOrganizations`         | `query` (live)     | Platform admins — one page of the projection           |
+| `saas.organizationTotals`        | `query` (live)     | Platform admins — count and seats of the same filter   |
 | `internal.saas.syncOrganization` | `internalMutation` | Server only                                            |
 
 Run `saas.me` on the root shard and everything else in the table with
-`{ shardKey: organizationId }` — except `listOrganizations`, which reads the
-`.global()` projection and works from either.
+`{ shardKey: organizationId }` — except the three admin reads, which read the
+`.global()` projection and work from either.
+
+`listOrganizations` is paged for `usePaginatedQuery` (`paginationOpts`, at most
+100 rows a page), newest first, and takes the admin table's `search` (at most
+100 characters) and `plan`. They run in D1: the search is a substring match on
+the name or slug that folds ASCII case only, and deleted organisations never
+appear. `organizationTotals` takes the same filter, so the header counts the
+whole filtered set rather than the pages loaded; without a search it reads the
+`countByStatusPlan` / `seatsByStatusPlan` aggregate indexes instead of the rows.
+`syncOrganizationPlan` records an organisation's plan when billing changes it
+(the saas template calls it from its payment webhook), which the plan filter and
+column read.
 
 Every query is a subscription: create a project in one tab and the other tabs'
 project lists and activity feeds update without a reload. That is the part no

@@ -3,8 +3,8 @@
 import type { ReactNode } from "react";
 import { useState } from "react";
 
-import type { AdminView } from "../core/admin-organizations";
-import { adminTotals, DEFAULT_ADMIN_VIEW, planOptions, selectOrganizations } from "../core/admin-organizations";
+import type { AdminView, OrganizationTotals } from "../core/admin-organizations";
+import { ORGANIZATION_SEARCH_MAX, planOptions } from "../core/admin-organizations";
 import type { AdminSubscriptionRow, PastDueSubscriptions, SubscriptionsView } from "../core/admin-subscriptions";
 import {
     DEFAULT_SUBSCRIPTIONS_VIEW,
@@ -20,9 +20,29 @@ import { Card, Empty } from "./primitives";
 
 interface AdminOrganizationsProps {
     now: number;
+
+    /**
+     * Fetch the next page — `usePaginatedQuery`'s `loadMore` over `saas.listOrganizations`.
+     * Pass it only while more pages remain (`status === "CanLoadMore"`).
+     */
+    onLoadMore?: () => void;
+
+    /**
+     * The admin changed the search or a filter. The list is filtered on the server, so
+     * the route owns the view and turns it into the query's arguments with
+     * `toOrganizationFilter` — debounce the search there, or every keystroke restarts
+     * the list at its first page.
+     */
+    onViewChange: (view: AdminView) => void;
+    /** The plan catalog, for the plan filter — every plan, not only those on loaded pages. */
+    plans: ReadonlyArray<Pick<Plan, "id" | "name">>;
+    /** The pages loaded so far — `usePaginatedQuery`'s `results`. `undefined` while the first page is in flight. */
     rows: ReadonlyArray<OrganizationRow> | undefined;
     /** IANA zone an older update's date is shown in — the viewer's. UTC when omitted. */
     timeZone?: string;
+    /** `saas.organizationTotals` over the same filter. The header waits for it. */
+    totals: OrganizationTotals | undefined;
+    view: AdminView;
 }
 
 /**
@@ -33,29 +53,55 @@ interface AdminOrganizationsProps {
  * tenancy boundary stops meaning anything — the supported path is better-auth's
  * impersonation, which puts the admin inside the tenant with the tenant's own
  * authorisation applied.
+ *
+ * Controlled: the rows arrive already searched and filtered. The
+ * toolbar stays mounted while a new filter's first page loads, so the search
+ * box keeps its focus.
  */
-const AdminOrganizations = ({ now, rows, timeZone }: AdminOrganizationsProps): ReactNode => {
-    const [view, setView] = useState<AdminView>(DEFAULT_ADMIN_VIEW);
+const AdminOrganizations = ({ now, onLoadMore, onViewChange, plans, rows, timeZone, totals, view }: AdminOrganizationsProps): ReactNode => {
+    let body: ReactNode;
 
     if (!rows) {
-        return (
-            <Card title="Organizations">
-                <div aria-busy="true" className="lu-saas-list lu-saas-list--loading" />
-            </Card>
+        body = <div aria-busy="true" className="lu-saas-list lu-saas-list--loading" />;
+    } else if (rows.length === 0) {
+        body = <Empty title="Nothing matches that filter" />;
+    } else {
+        body = (
+            <table className="lu-saas-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Organization</th>
+                        <th scope="col">Plan</th>
+                        <th scope="col">Seats</th>
+                        <th scope="col">Updated</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows.map((organization) => (
+                        <tr key={organization._id}>
+                            <td>
+                                {organization.name}
+                                <code className="lu-saas-row__slug">{organization.slug}</code>
+                            </td>
+                            <td>{planLabel(organization.plan)}</td>
+                            <td>{organization.seats}</td>
+                            <td>{relativeTime(organization.updatedAt, now, timeZone)}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
         );
     }
 
-    const totals = adminTotals(rows);
-    const visible = selectOrganizations(rows, view);
-
     return (
-        <Card subtitle={`${totals.organizations.toString()} organizations · ${totals.seats.toString()} seats`} title="Organizations">
+        <Card subtitle={totals ? `${totals.organizations.toString()} organizations · ${totals.seats.toString()} seats` : undefined} title="Organizations">
             <div className="lu-saas-toolbar">
                 <input
                     aria-label="Search organizations"
                     className="lu-saas-input"
+                    maxLength={ORGANIZATION_SEARCH_MAX}
                     onChange={(event) => {
-                        setView({ ...view, search: event.target.value });
+                        onViewChange({ ...view, search: event.target.value });
                     }}
                     placeholder="Search"
                     type="search"
@@ -65,11 +111,11 @@ const AdminOrganizations = ({ now, rows, timeZone }: AdminOrganizationsProps): R
                     aria-label="Filter by plan"
                     className="lu-saas-select"
                     onChange={(event) => {
-                        setView({ ...view, plan: event.target.value });
+                        onViewChange({ ...view, plan: event.target.value });
                     }}
                     value={view.plan}
                 >
-                    {planOptions(rows).map((option) => (
+                    {planOptions(plans).map((option) => (
                         <option key={option.value} value={option.value}>
                             {option.label}
                         </option>
@@ -77,33 +123,13 @@ const AdminOrganizations = ({ now, rows, timeZone }: AdminOrganizationsProps): R
                 </select>
             </div>
 
-            {visible.length === 0 ? (
-                <Empty title="Nothing matches that filter" />
-            ) : (
-                <table className="lu-saas-table">
-                    <thead>
-                        <tr>
-                            <th scope="col">Organization</th>
-                            <th scope="col">Plan</th>
-                            <th scope="col">Seats</th>
-                            <th scope="col">Updated</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {visible.map((organization) => (
-                            <tr key={organization._id}>
-                                <td>
-                                    {organization.name}
-                                    <code className="lu-saas-row__slug">{organization.slug}</code>
-                                </td>
-                                <td>{planLabel(organization.plan)}</td>
-                                <td>{organization.seats}</td>
-                                <td>{relativeTime(organization.updatedAt, now, timeZone)}</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            )}
+            {body}
+
+            {rows && onLoadMore ? (
+                <button className="lu-saas-button lu-saas-button--quiet" onClick={onLoadMore} type="button">
+                    Load more
+                </button>
+            ) : undefined}
         </Card>
     );
 };
@@ -122,7 +148,12 @@ interface AdminSubscriptionsProps {
      * as the whole table.
      */
     onLoadMore?: () => void;
-    /** The organisation list, for names. Subscriptions render with ids until it arrives. */
+
+    /**
+     * The organisations these subscriptions bill, for names — in the saas
+     * template, the `organization` each subscription row carries. A subscription
+     * whose organisation is missing renders with its id.
+     */
     organizations: ReadonlyArray<OrganizationRow> | undefined;
 
     /**

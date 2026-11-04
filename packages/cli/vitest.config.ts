@@ -19,8 +19,10 @@ const registryItemAliases = {
     "../_generated/internal.js": join(fixtures, "generated-internal.ts"),
     // Resolved from this package, because the items sit outside it and would look for it from `registry/`.
     "@lunora/errors": fileURLToPath(import.meta.resolve("@lunora/errors")),
+    "@lunora/payment": fileURLToPath(import.meta.resolve("@lunora/payment")),
     "@lunora/ratelimit": join(fixtures, "lunora-ratelimit.ts"),
     "@lunora/storage": join(fixtures, "lunora-storage.ts"),
+    "better-auth/api": join(fixtures, "better-auth-api.ts"),
     "cloudflare:workers": join(fixtures, "cloudflare-workers.ts"),
 };
 

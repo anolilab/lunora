@@ -115,15 +115,28 @@ export const saas = definePlugin("saas", {
                 name: v.string(),
                 organizationId: v.string(),
                 plan: v.string(),
+                /**
+                 * The billing version `plan` was derived at (see `syncOrganizationPlan`),
+                 * so an older derivation landing late cannot replace a newer plan.
+                 */
+                planAsOf: v.optional(v.number()),
                 seats: v.number(),
                 slug: v.string(),
                 status: v.string(),
                 updatedAt: v.number(),
             })
                 .global()
+                // The admin list's order (`saas.listOrganizations`: newest first),
+                // with and without its plan filter, so a page is an index range
+                // rather than a sort of every tenant.
                 .index("byOrganization", ["organizationId"], { unique: true })
-                .index("byPlan", ["plan"])
-                .index("bySlug", ["slug"], { unique: true }),
+                .index("byPlanUpdated", ["plan", "updatedAt", "organizationId"])
+                .index("bySlug", ["slug"], { unique: true })
+                .index("byUpdatedAt", ["updatedAt", "organizationId"])
+                // The list header's totals (`saas.organizationTotals`): a count and a
+                // seat sum per status and plan, kept in step on every write.
+                .aggregateIndex("countByStatusPlan", { by: ["status", "plan"] })
+                .aggregateIndex("seatsByStatusPlan", { by: ["status", "plan"], field: "seats", op: "sum" }),
         },
     }),
 });

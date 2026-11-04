@@ -101,6 +101,7 @@
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/payment": "^1.0.0-alpha.269",
         "@lunora/testing": "^1.0.0-alpha.334",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
