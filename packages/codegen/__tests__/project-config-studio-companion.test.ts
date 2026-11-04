@@ -81,6 +81,26 @@ describe("the generated companion Worker", () => {
         writeFileSync(join(projectRoot, "lunora.config.ts"), "export default { studio: { companion: true } };\n", "utf8");
     };
 
+    it("copies the app's observability settings into the companion's config", () => {
+        expect.assertions(2);
+
+        enable();
+        runCodegen({ projectRoot, wranglerQueueProducers: [] });
+
+        expect(JSON.parse(readFileSync(join(companion, "wrangler.jsonc"), "utf8"))).not.toHaveProperty("observability");
+
+        writeFileSync(
+            join(projectRoot, "wrangler.jsonc"),
+            '{ "name": "my-app", "compatibility_date": "2025-01-01", "observability": { "enabled": true, "head_sampling_rate": 0.2 } }\n',
+            "utf8",
+        );
+        runCodegen({ projectRoot, wranglerQueueProducers: [] });
+
+        expect(JSON.parse(readFileSync(join(companion, "wrangler.jsonc"), "utf8"))).toMatchObject({
+            observability: { enabled: true, head_sampling_rate: 0.2 },
+        });
+    });
+
     it("writes the wrangler config, the self-contained worker and the payload when on, and removes them when off", () => {
         expect.assertions(13);
 

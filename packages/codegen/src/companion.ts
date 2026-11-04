@@ -47,9 +47,12 @@ const readWrangler = (projectRoot: string): { config: Record<string, unknown>; p
     return undefined;
 };
 
+/** Top-level value of `key` in the wrangler file. */
+const wranglerValue = (projectRoot: string, key: string): unknown => readWrangler(projectRoot)?.config[key];
+
 /** Top-level string value of `key` in the wrangler file. */
 const wranglerString = (projectRoot: string, key: string): string | undefined => {
-    const value = readWrangler(projectRoot)?.config[key];
+    const value = wranglerValue(projectRoot, key);
 
     return typeof value === "string" && value !== "" ? value : undefined;
 };
@@ -78,4 +81,4 @@ const companionName = (projectRoot: string): string => {
 /** The folder codegen writes the companion into, under the project's lunora directory. */
 const companionDirectory = (projectRoot: string, lunoraDirectory = "lunora"): string => join(projectRoot, lunoraDirectory, "_generated", "companion");
 
-export { COMPANION_BINDING, COMPANION_FILES, COMPANION_SERVICE_NAME, companionDirectory, companionName, wranglerString };
+export { COMPANION_BINDING, COMPANION_FILES, COMPANION_SERVICE_NAME, companionDirectory, companionName, wranglerString, wranglerValue };
