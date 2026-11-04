@@ -400,7 +400,7 @@ lands in the Worker logs.
 
 What passes through unwrapped:
 
-- **Pay-rail refusals at payment time** are plain `Error`s from `@x402/fetch`, not
+- **Pay-rail refusals at payment time** are plain `Error`s from the x402 client (`@x402/core`, driven through `@x402/fetch`), not
   `LunoraError`s. An offer over `maxPerCall`, in an unlisted asset, or to an
   unlisted recipient is filtered out (`All payment requirements were filtered out
 by policies`); a payment past `maxPerRun` or declined by `onPaymentRequired` is

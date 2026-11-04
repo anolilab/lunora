@@ -86,7 +86,7 @@ where the cache left off instead of re-sending a full snapshot.
 ## Offline queue
 
 Mutations issued while disconnected land in `OfflineQueue`, a bounded FIFO
-(default `maxItems: 1000`, oldest rejected with `OFFLINE_QUEUE_OVERFLOW` on
+(default `maxItems: 1000`, oldest rejected with [`OFFLINE_QUEUE_OVERFLOW`](/docs/errors#offline_queue_overflow) on
 overflow). They replay in submission order once the socket reconnects. Each
 mutation carries a stable idempotency id, so a write that committed before the
 client lost the ack is deduplicated by the server on replay rather than

@@ -347,7 +347,7 @@ scim({
 ```
 
 That shape is the fix for [GHSA-j8v8-g9cx-5qf4](https://github.com/advisories/GHSA-j8v8-g9cx-5qf4)
-(HIGH), which affected every `@better-auth/scim` before `1.7.0-beta.4`: the old design
+(HIGH), which affected `@better-auth/scim` from `1.5.0` up to (not including) `1.7.0-beta.4`: the old design
 exposed a session-authenticated endpoint that minted connection tokens and stored them
 in plaintext in the database, so any signed-in user could take over another tenant's
 connection. Declaring credentials in config removes both the endpoint and the secret at
@@ -487,7 +487,7 @@ NULL` — per better-auth's
 audit log lives in the object like every other auth table, and the worker reads it back
 through an internal route.
 
-**The studio's auth admin pages do not.** `authAdmin` is a ~30-method surface that reads
+**The studio's auth admin pages do not.** `authAdmin` is a surface of more than 40 methods that reads
 the auth tables directly from the worker, which DO storage does not permit, so it
 reports "not configured" rather than returning empty data.
 

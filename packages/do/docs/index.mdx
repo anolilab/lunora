@@ -101,7 +101,7 @@ retryable `SHARD_UNAVAILABLE` (503). Invalid returned permits produce terminal `
 (500). On subscription refresh, `FORBIDDEN` and `INTERNAL` authority failures end the
 registration; other failures retain it and retry on the next write flush.
 An unclassified throw during the first subscription seed ends that seed with
-`SUBSCRIPTION_SEED_FAILED`.
+[`SUBSCRIPTION_SEED_FAILED`](/docs/errors#subscription_seed_failed).
 
 ```ts
 import { installDeliveryFence, type DeliveryPermit } from "@lunora/do";

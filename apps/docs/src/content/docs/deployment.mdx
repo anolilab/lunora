@@ -662,6 +662,6 @@ A couple of Cloudflare products are deliberately **not** wired into Lunora:
   [Static assets](#static-assets) block above instead.
 - **Pub/Sub (MQTT, Message Queuing Telemetry Transport).** Realtime fan-out is handled by Durable-Object-hibernated
   WebSocket subscriptions (see [Real-time](/docs/concepts/realtime)), which need
-  no external broker. Cloudflare Pub/Sub is a beta MQTT broker with no Worker
-  binding; the only thing it adds is native-MQTT device ingest, a narrow case
-  a narrow case to revisit if it reaches GA and a concrete need appears.
+  no external broker. Cloudflare Pub/Sub, an MQTT broker, never shipped a Worker
+  binding and no longer has a page in Cloudflare's docs; the only thing it would
+  add is native-MQTT device ingest, a narrow case.

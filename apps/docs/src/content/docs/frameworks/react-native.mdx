@@ -167,7 +167,7 @@ reintroduces the `FORBIDDEN_ORIGIN` loop. The client's `fetch` option feeds
 ## Local-first (shapes, custom mutators, TanStack DB)
 
 Lunora's [local-first tier](/docs/concepts/local-first) — `defineShape`,
-`defineMutator`, `defineCollections`, `bindMutators`, `useLiveQuery` — runs on
+`defineMutator`, `defineCollections`, `bindMutators`, plus TanStack DB's `useLiveQuery` — runs on
 React Native unchanged. One platform prerequisite:
 
 <Callout type="warn">
@@ -255,7 +255,7 @@ import { client } from "./lunora";
 // inside a component that renders once the session is known:
 const { data: session } = authClient.useSession();
 
-// `expoBearerToken` is async since better-auth 1.7.1, and an async function is
+// `expoBearerToken` is async since better-auth 1.7, and an async function is
 // not a valid effect cleanup return — so kick off a promise instead. `cancelled`
 // is load-bearing: two session changes in quick succession leave two reads in
 // flight, and without it the slower one reinstates the previous session's token.

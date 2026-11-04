@@ -125,7 +125,7 @@ export const client = createLunoraClient({
 
 // Sync the token into the client whenever the session changes, in an effect keyed
 // on `authClient.useSession()`. `expoBearerToken` is async since better-auth
-// 1.7.1, so guard the write with a cleanup flag — two session changes in quick
+// 1.7, so guard the write with a cleanup flag — two session changes in quick
 // succession leave two reads in flight, and the slower one would otherwise
 // reinstate the previous session's token:
 useEffect(() => {

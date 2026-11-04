@@ -77,7 +77,7 @@ island, and there is no cross-shard transaction and no cross-shard live join.
         },
         "Global tables (D1)": {
             type: "Read-your-writes, else eventual",
-            description: "A .global() table is read-your-writes via the Sessions API bookmark; replicas otherwise converge within the ~24h window.",
+            description: "A .global() table is read-your-writes via the Sessions API bookmark; a replica read without the bookmark may lag the primary.",
         },
     }}
 />

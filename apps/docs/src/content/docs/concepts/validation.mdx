@@ -164,7 +164,7 @@ second schema to keep in sync: the validator is the contract on both ends.
 | `v.number()`           | `number`                      | Finite JS number; `NaN` throws                                                                |
 | `v.boolean()`          | `boolean`                     | `true` / `false`                                                                              |
 | `v.null()`             | `null`                        | Only `null`                                                                                   |
-| `v.bigint()`           | `bigint`                      | Stored lossless as INTEGER in D1                                                              |
+| `v.bigint()`           | `bigint`                      | Stored lossless as a fixed-width, order-preserving TEXT key in D1                             |
 | `v.bytes()`            | `ArrayBuffer`                 | Binary (BLOB in D1); a typed-array view is copied to its own bytes                            |
 | `v.id(table)`          | `Id<table>`                   | Branded foreign-key id                                                                        |
 | `v.literal(value)`     | exact `value`                 | String / number / boolean / null literal                                                      |

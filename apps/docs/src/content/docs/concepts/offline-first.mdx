@@ -450,7 +450,7 @@ client.onMutationSettled((event) => {
 ```
 
 `event` carries the `functionPath`, `args`, `shardKey`, and, on rejection, the
-`code` (e.g. `CONFLICT`, `OFFLINE_QUEUE_OVERFLOW`, `OFFLINE_IDENTITY_CHANGED`)
+`code` (e.g. `CONFLICT`, [`OFFLINE_QUEUE_OVERFLOW`](/docs/errors#offline_queue_overflow), `OFFLINE_IDENTITY_CHANGED`)
 and `error`. Causally dependent writes that the server rejects in turn each
 surface their own event, in FIFO order. The [`@lunora/db`](/docs/packages/db)
 collection layer exposes the same idea as `onWriteRejected`.

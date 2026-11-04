@@ -6,7 +6,7 @@ description: Merchant-of-Record payments on Lunora with Dodo Payments — checko
 [Dodo Payments](https://dodopayments.com) is a **Merchant-of-Record (MoR)** for
 software, SaaS, and digital products. Unlike a raw payment processor, Dodo is the
 **legal seller** of your product: it runs hosted checkout, calculates, collects,
-and remits sales tax / VAT / GST across 190+ jurisdictions, issues compliant
+and remits sales tax / VAT / GST across 190+ countries, issues compliant
 invoices, and owns chargebacks and disputes. Your app never touches card data or
 a tax engine: you sell to Dodo's checkout, Dodo sells to the customer.
 
@@ -480,7 +480,7 @@ no insecure direct object reference (IDOR). The `returnUrl` argument is sent to 
 ## Tax, invoices & the MoR model
 
 Because `merchantOfRecord` is `true`, Dodo is the seller of record, not you: it
-calculates and remits VAT / sales tax / GST across 190+ jurisdictions,
+calculates and remits VAT / sales tax / GST across 190+ countries,
 generates compliant invoices, and absorbs chargebacks and disputes. Your Lunora
 app only records the normalized payment/subscription state; it never stores tax
 lines or card data. The stored `Money` is Dodo's `total_amount` (tax-inclusive)

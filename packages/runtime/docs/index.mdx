@@ -8,7 +8,7 @@ related:
 ---
 
 `@lunora/runtime` is the low-level Worker runtime. In a normal Lunora app you
-don't call it directly; codegen emits `src/server/index.ts` as a fluent
+don't call it directly; codegen emits `lunora/_generated/app.ts` with a fluent `defineApp()`
 builder that wires `createWorker` for you. Drop down to this package when you
 hand-write a Worker entry, add a custom HTTP route, or build your own transport.
 

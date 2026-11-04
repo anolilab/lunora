@@ -101,8 +101,22 @@ for the `exports` mapping that goes with it.
 
 The CLI scaffolds your functions under `lunora/`, with `_generated/` alongside.
 Import `api` from `_generated/api`, `internal` from `_generated/internal`, data-model types from
-`_generated/dataModel`, and the typed builders from `_generated/server`. Most
-projects alias the directory (e.g. `@/lunora/_generated/*`).
+`_generated/dataModel`, and the typed builders from `_generated/server`.
+
+The code samples in these docs import through an `@/lunora/...` path alias. The
+starter templates do not define it; they import with relative paths
+(`../lunora/_generated/api`). Use relative paths, or add the alias to
+`tsconfig.json` and to your bundler's resolver:
+
+```jsonc title="tsconfig.json"
+{
+    "compilerOptions": {
+        "paths": {
+            "@/lunora/*": ["./lunora/*"],
+        },
+    },
+}
+```
 
 ## `lunora/*` vs `@lunora/*` imports
 

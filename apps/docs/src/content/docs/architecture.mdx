@@ -290,7 +290,7 @@ badge) and the mechanism that provides it:
         },
         "Global tables (D1)": {
             type: "Read-your-writes, else eventual",
-            description: "Sessions API bookmark (x-d1-bookmark); replicas converge within the ~24h window.",
+            description: "Sessions API bookmark (x-d1-bookmark); a replica read without the bookmark may lag the primary.",
         },
         "Client ↔ server (live)": {
             type: "Monotonic, gap-detected",
@@ -348,8 +348,7 @@ The theme is **fail closed and re-derive**, never silently diverge.
   `watermark + 1`. Exactly-once effect, at-least-once delivery.
 - **D1 replica lag.** A `.global()` read without the caller's bookmark may hit a
   stale replica. Threading the `x-d1-bookmark` from the last write restores
-  read-your-writes; cross-replica convergence is otherwise bounded by the ~24 h
-  window.
+  read-your-writes; a replica read without it may lag the primary.
 - **Container crash / cold start.** `.get(name)` surfaces the error to the action;
   `.pool()` rides over it by retrying on a freshly-picked instance with backoff.
   Because containers reach data only through RPC, a crashed container can never
@@ -421,8 +420,8 @@ no external message broker.
 **Why.** The subscriptions live exactly where the writes happen, so a delta
 never leaves the process. Hibernation drops idle compute to zero. And it's
 type-safe end-to-end with your queries, so there is no second schema for an
-external broker to drift from. Cloudflare Pub/Sub adds only native-MQTT device
-ingest over this path, a narrow niche, and is itself beta with no Worker binding.
+external broker to drift from. Cloudflare Pub/Sub would have added only native-MQTT device
+ingest over this path, a narrow niche; it never shipped a Worker binding and no longer has a page in Cloudflare's docs.
 
 **Cost.** Fan-out is bounded by the per-DO WebSocket ceiling (~32 000
 hibernated). Truly account-wide broadcast (every user, one event) is not the
@@ -437,8 +436,7 @@ bookmark for consistency rather than a sticky-session router.
 one tenant's shard. D1 gives regional read replicas for low-latency reads; the
 Sessions API bookmark gives read-your-writes without pinning a user to a region.
 
-**Cost.** Global tables are eventually consistent across replicas (bounded by the
-~24 h bookmark window) and are **not** poke-live. It's the right tier for the
+**Cost.** Global tables are eventually consistent across replicas and are **not** poke-live. It's the right tier for the
 slow-changing spine of an app, the wrong one for a hot feed.
 
 ### Vite-first DX and build-time codegen

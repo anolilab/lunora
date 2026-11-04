@@ -23,7 +23,7 @@ const SESSION_TOKEN_COOKIE = /(?:^|;)[^;=]*session_token=([^;]+)/;
  * `Cookie`, which the runtime's CSRF guard rejects on an `Origin`-less native
  * request (React Native sends no `Origin`). Resolves `null` when signed out.
  *
- * **Async since better-auth 1.7.1**, which changed `@better-auth/expo`'s
+ * **Async since better-auth 1.7** (1.7.0-rc.4), which changed `@better-auth/expo`'s
  * `getCookie` from `() => string` to `() => Promise<string>` (it reads
  * `SecureStore` asynchronously now). The awaited value is what gets matched:
  * regexing the Promise itself would test `"[object Promise]"`, find no

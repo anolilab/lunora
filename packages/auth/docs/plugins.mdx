@@ -241,11 +241,11 @@ first account uninvited, at the cost described under
 
 Leave `emailAndPassword.disableSignUp` **off**. The invitee still uses the
 ordinary sign-up form; closing it would leave them nothing to submit. The sign-up
-cards in `@lunora/auth-ui` prefill the address from
+cards in [`@lunora/auth-ui`](/docs/concepts/auth-ui) prefill the address from
 `?email=`, so an invitation link can be
 `https://app.example/sign-up?email=ada%40example.com`.
 
-An uninvited attempt is refused with `SIGN_UP_INVITE_REQUIRED` and HTTP **400**.
+An uninvited attempt is refused with HTTP **400** and the better-auth error code `SIGN_UP_INVITE_REQUIRED`. Like every better-auth plugin code, it arrives in the auth endpoint's JSON body, not as a `LunoraError`, so it has no entry on the [error reference](/docs/errors).
 That status is deliberate and not a typo: better-auth's sign-up route treats a
 `403` from a create hook as a duplicate-account signal and answers it with a
 fabricated success — a user object it never persisted — whenever

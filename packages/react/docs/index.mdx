@@ -317,8 +317,8 @@ re-exported and do not work against a Lunora upload route: they read files over
 signed URL.
 
 For resumable uploads use `useTusUpload` (or `useUpload` with TUS).
-`useChunkedRestUpload` sends four chunks in parallel, which the binding-backed
-provider refuses, so it can only upload a file as one chunk; see
+`useChunkedRestUpload` sends one chunk at a time, which the binding-backed
+provider requires; see
 [Chunked REST](/docs/packages/storage#chunked-rest).
 
 ### Drag-and-drop uploader with a progress bar

@@ -74,8 +74,8 @@ import { createShardDO } from "./_generated/shard";
 export const ShardDO = createShardDO({
     payment: (env) => ({
         adapter: createStripeAdapter({
-            // A real `Stripe` instance satisfies the loaded client's type, so no cast — the fetch
-            // HTTP client is required on workerd.
+            // A real `Stripe` instance satisfies the loaded client's type, so no cast. The fetch
+            // HTTP client is already the default in the workerd build; passing it is explicit.
             client: async () => {
                 const { default: Stripe } = await import("stripe");
 
@@ -150,14 +150,13 @@ the Creem dashboard (no SDK endpoint), so `refundPayment` throws. Webhooks are
 verified with the `creem-signature` HMAC-SHA256 header.
 
 ```ts
-import type { CreemClientLike } from "@lunora/payment/creem";
 import { createCreemAdapter } from "@lunora/payment/creem";
 
 const creem = createCreemAdapter({
     client: async () => {
         const { Creem } = await import("creem");
 
-        return new Creem({ apiKey: env.CREEM_API_KEY }) as unknown as CreemClientLike;
+        return new Creem({ apiKey: env.CREEM_API_KEY });
     },
     webhookSecret: env.CREEM_WEBHOOK_SECRET,
 });
@@ -228,7 +227,7 @@ const { url } = await autumnFeatures.checkout(userId, { planId: "pro" });
 
 [Dodo Payments](https://dodopayments.com) is a **Merchant-of-Record**: like
 Polar, it is the legal seller of record and calculates, collects, and remits tax
-across 190+ jurisdictions, and owns chargebacks and disputes. So `merchantOfRecord`
+across 190+ countries, and owns chargebacks and disputes. So `merchantOfRecord`
 is `true` and manual authorize/capture throw, but **refunds are first-class**
 (`refunds.create`). The flow is checkout-session → subscription/payment, synced
 from Standard Webhooks (the `dodopayments` SDK exposes the full, verified event

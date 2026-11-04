@@ -611,10 +611,13 @@ providers, and an interrupted one resumes from `X-Upload-Offset`. Each chunk has
 to fit Cloudflare's request body limit, and `@visulima/storage` caps a chunk at
 100 MiB.
 
-### Upgrading
+### Upgrading from `@visulima/storage` before 2.0.33
 
-This release moves `@visulima/storage` to 2.0.33 and `@visulima/storage-client`
-to 1.0.8. What changes for an upload route:
+`@lunora/storage` pins `@visulima/storage` 3.0.0 and `@visulima/storage-client`
+1.0.9. The upload-route behaviour below changed in `@visulima/storage` 2.0.33
+and `@visulima/storage-client` 1.0.8; the 3.0.0 major only drops Deno support,
+which a Worker does not use. An app on an earlier version sees these changes
+when it upgrades:
 
 - **`GET` is refused** (`405`) on every protocol, before `authorize` runs, as
   described above. Nothing that uploads needs it. Code that read files back

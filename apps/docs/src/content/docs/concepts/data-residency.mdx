@@ -275,8 +275,8 @@ drift gate flags it as **breaking** and blocks the deploy:
 ```text
 Durable Object jurisdiction changed from (none) to us — this re-homes every DO
 and strands all existing shard, scheduler, and session-DO data in the old region
-(no in-place migration; export then import to move it). Revert the change, or
-override the gate to proceed intentionally.
+(export then import to move it). Revert the change, or declare a migration with
+covers: { jurisdiction: "us" } once the data is moved.
 ```
 
 Revert the change, or, if a region move is genuinely intended, follow the runbook
