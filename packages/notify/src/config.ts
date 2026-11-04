@@ -77,7 +77,7 @@ const projectIdOf = (rawServiceAccount: string): string | undefined => {
 const fcmFromEnv = (env: NotifyEnv, overrides?: Partial<FcmConfig>): FcmConfig | undefined => {
     const envProjectId = readString(env, FCM_ENV_KEYS.projectId); // secret-scanner:allow -- `projectId` is a config field name, not a credential
     const rawServiceAccount = readString(env, FCM_ENV_KEYS.serviceAccount);
-    const projectId = envProjectId ?? (rawServiceAccount === undefined ? undefined : projectIdOf(rawServiceAccount));
+    const projectId = overrides?.projectId ?? envProjectId ?? (rawServiceAccount === undefined ? undefined : projectIdOf(rawServiceAccount));
 
     if (projectId === undefined) {
         return undefined;

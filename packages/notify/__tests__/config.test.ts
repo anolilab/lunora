@@ -89,6 +89,22 @@ describe("fcmFromEnv with a service account", () => {
         await expect(config?.getAccessToken?.()).rejects.toThrow("neither valid JSON nor base64-encoded JSON");
     });
 
+    it("treats an empty project_id in the key file as missing", () => {
+        expect.hasAssertions();
+
+        const emptyProject = JSON.stringify({ client_email: "svc@acme.iam", private_key: "PEM", project_id: "" });
+
+        expect(fcmFromEnv({ FCM_SERVICE_ACCOUNT: emptyProject })).toBeUndefined();
+    });
+
+    it("resolves the project id from overrides when neither the env nor the key file names one", () => {
+        expect.hasAssertions();
+
+        const noProject = JSON.stringify({ client_email: "svc@acme.iam", private_key: "PEM" });
+
+        expect(fcmFromEnv({ FCM_SERVICE_ACCOUNT: noProject }, { projectId: "from-override" })?.projectId).toBe("from-override");
+    });
+
     it("returns undefined for a malformed key when no project id can be resolved", () => {
         expect.hasAssertions();
 

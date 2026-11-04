@@ -86,7 +86,8 @@ const parseServiceAccount = (raw: string): FcmServiceAccount => {
     return {
         client_email: candidate.client_email,
         private_key: candidate.private_key.replaceAll(String.raw`\n`, "\n"),
-        project_id: typeof candidate.project_id === "string" ? candidate.project_id : undefined,
+        // An empty id would reach `createFcmProvider`, which throws on it while the engine is built and takes every channel down.
+        project_id: typeof candidate.project_id === "string" && candidate.project_id !== "" ? candidate.project_id : undefined,
     };
 };
 
