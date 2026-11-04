@@ -89,8 +89,12 @@
     {
       "at": "2026-11-03T19:28:22.212Z",
       "key": "@lunora/privacy@1.0.0-alpha.57"
+    },
+    {
+      "at": "2026-11-04T12:24:17.906Z",
+      "key": "@lunora/studio@1.0.0-alpha.377"
     }
   ],
-  "updatedAt": "2026-11-03T19:28:22.213Z",
+  "updatedAt": "2026-11-04T12:24:17.907Z",
   "version": 1
 }
