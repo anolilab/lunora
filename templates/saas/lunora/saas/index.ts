@@ -477,8 +477,8 @@ const LIST_ORDER = ["updatedAt", "organizationId"] as const;
 
 /** The filters the list and its totals share, so the header always counts the rows the table pages through. */
 const organizationFilterArgs = {
-    /** Exact plan id; every plan when omitted. */
-    plan: v.optional(v.string().max(64)),
+    /** Exact plan id; every plan when omitted. Bounded like any id a client sends, generously for a catalog's. */
+    plan: v.optional(v.string().max(256)),
     /** Substring of the name or slug. */
     search: v.optional(v.string().max(ORGANIZATION_SEARCH_MAX)),
 };
@@ -613,6 +613,10 @@ export const listOrganizations = query
  * on every write, so a refresh reads a handful of rows however many tenants
  * exist. A search is a substring test no index serves, so it counts and sums
  * the matching rows.
+ *
+ * The count and the sum are two reads, so a write landing between them can pair
+ * them from different moments; that write also re-runs this live query, which
+ * then returns a matching pair.
  */
 export const organizationTotals = query.input(organizationFilterArgs).query(async ({ args, ctx }): Promise<{ organizations: number; seats: number }> => {
     await requirePlatformAdmin(ctx);
@@ -722,7 +726,7 @@ export const syncOrganization = internalMutation
  * `syncOrganization`, which starts every new row on `free`.
  */
 export const syncOrganizationPlan = internalMutation
-    .input({ organizationId: v.string(), plan: v.string().max(64) })
+    .input({ organizationId: v.string(), plan: v.string().max(256) })
     .mutation(async ({ args: { organizationId, plan }, ctx }): Promise<void> => {
         const existing = await organizations(ctx).findFirst({ where: { organizationId } });
 

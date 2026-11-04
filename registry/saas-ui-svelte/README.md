@@ -59,7 +59,7 @@ without a reload.
 is paged, newest first, and searches and filters on the server, so the route holds the
 `view` (start from `DEFAULT_ADMIN_VIEW`), turns it into the query's arguments
 with `toOrganizationFilter(view)`, reads the list with
-`paginatedQuery` from `@lunora/svelte`, and passes the loaded rows as `rows`, `onLoadMore` while another page can be
+`paginatedQuery` from `@lunora/svelte`, and passes the loaded rows as `rows` (`undefined` until the first page has loaded, so the first load does not read as an empty result), `onLoadMore` while another page can be
 asked for, and `onViewChange` to take the admin's changes. Debounce the search
 before it reaches the query, or every keystroke restarts the list. The header's
 `totals` come from `saas.organizationTotals` over the same filter, and the plan

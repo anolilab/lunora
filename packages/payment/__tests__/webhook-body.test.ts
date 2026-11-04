@@ -27,12 +27,20 @@ describe(readWebhookBody, () => {
         );
     });
 
-    it("refuses a declared Content-Length over the cap", async () => {
-        expect.assertions(1);
+    it("refuses a declared Content-Length over the cap, and releases the body it will not read", async () => {
+        expect.assertions(2);
 
         const request = new Request("https://app.test/payment/webhook", { body: "x".repeat(65), headers: { "content-length": "65" }, method: "POST" });
 
         await expect(readWebhookBody(request, 64)).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
+        // A cancelled stream is done: nothing is left for the host to keep receiving.
+        await expect(request.body!.getReader().read()).resolves.toStrictEqual({ done: true, value: undefined });
+    });
+
+    it("refuses a cap that is not a number rather than reading without one", async () => {
+        expect.assertions(1);
+
+        await expect(readWebhookBody(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }), Number.NaN)).rejects.toThrow(RangeError);
     });
 
     it("refuses a body with no Content-Length once the bytes read pass the cap", async () => {

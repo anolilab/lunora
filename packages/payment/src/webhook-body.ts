@@ -20,10 +20,19 @@ export const MAX_WEBHOOK_BODY_BYTES = 1_048_576;
  * answers the thrown error with its 413, so a route needs no branch.
  */
 export const readWebhookBody = async (request: Request, maxBytes: number = MAX_WEBHOOK_BODY_BYTES): Promise<string> => {
+    // NaN would turn both checks below off and read the whole body.
+    if (!Number.isFinite(maxBytes) || maxBytes < 0) {
+        throw new RangeError(`readWebhookBody: maxBytes must be a non-negative number, got ${String(maxBytes)}`);
+    }
+
     const tooLarge = (): LunoraError => new LunoraError("PAYLOAD_TOO_LARGE", `webhook body over ${String(maxBytes)} bytes`);
     const declared = Number(request.headers.get("content-length") ?? "");
 
     if (Number.isFinite(declared) && declared > maxBytes) {
+        // Released rather than left unread: a host that does not drop the connection after
+        // the 413 would otherwise keep receiving the upload.
+        await request.body?.cancel().catch(() => undefined);
+
         throw tooLarge();
     }
 
