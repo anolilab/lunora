@@ -145,8 +145,24 @@
     {
       "at": "2026-11-04T20:06:50.177Z",
       "key": "@lunora/testing@1.0.0-alpha.334"
+    },
+    {
+      "at": "2026-11-04T21:02:45.306Z",
+      "key": "@lunora/codegen@1.0.0-alpha.400"
+    },
+    {
+      "at": "2026-11-04T21:02:45.306Z",
+      "key": "@lunora/config@1.0.0-alpha.457"
+    },
+    {
+      "at": "2026-11-04T21:02:45.306Z",
+      "key": "@lunora/cli@1.0.0-alpha.484"
+    },
+    {
+      "at": "2026-11-04T21:02:45.306Z",
+      "key": "@lunora/notify@1.0.0-alpha.112"
     }
   ],
-  "updatedAt": "2026-11-04T20:06:50.178Z",
+  "updatedAt": "2026-11-04T21:02:45.307Z",
   "version": 1
 }
