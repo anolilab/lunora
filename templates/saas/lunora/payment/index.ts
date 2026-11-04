@@ -32,14 +32,16 @@
  *      deliberate 500 becomes a 200, the provider never retries it, and the
  *      update is lost for good.
  *      ```ts
- *      import { webhookResponse } from "@lunora/payment";
+ *      import { readWebhookBody, webhookResponse } from "@lunora/payment";
  *
  *      // Every header an adapter verifies with; add yours if it signs with another.
  *      const SIGNATURE_HEADERS = ["creem-signature", "stripe-signature", "svix-id", "svix-signature",
  *          "svix-timestamp", "webhook-id", "webhook-signature", "webhook-timestamp"];
  *
  *      app.post("/payment/webhook", httpAction(async (ctx, request) => {
- *          const body = await request.text();
+ *          // Capped: the body is read before its signature can be checked.
+ *          const body = await readWebhookBody(request);
+ *          if (body === undefined) return new Response("webhook body too large", { status: 413 });
  *          const headers = Object.fromEntries(SIGNATURE_HEADERS.flatMap((name) => {
  *              const value = request.headers.get(name);
  *              return value === null ? [] : [[name, value]];
@@ -56,12 +58,13 @@ import { env as workerEnv } from "cloudflare:workers";
 
 import { LunoraError } from "@lunora/errors";
 import type { SubscriptionState } from "@lunora/payment";
+import { resolveEntitlements } from "@lunora/payment";
 import type { PaginationResult } from "lunorash/server";
 import { internal } from "#lunora/_generated/internal.js";
 import { action, internalAction, internalMutation, query, v } from "#lunora/_generated/server.js";
 import type { CloudflareBindings, Id } from "#lunora/_generated/server.js";
 
-import { API_CALLS, PLANS } from "../plans.js";
+import { API_CALLS, entitlementsFromPlans, PLANS } from "../plans.js";
 
 /**
  * The Worker's bindings, narrowed so they can be looked up by name.
@@ -112,6 +115,24 @@ const appOrigin = (): string => {
 
 /** The shard a call that names none runs on, and the one the provider webhook reaches. */
 const ROOT_SHARD = "__root__";
+
+/**
+ * The members `referenceId`'s plan allows, or `null` when it is unmetered — the
+ * limit better-auth's `membershipLimit` enforces in `lunora/auth/index.ts`.
+ *
+ * Read from the organisation's active subscriptions, the same source the billing
+ * entitlements resolve against, rather than `saas_organizations.plan`, which
+ * nothing syncs from billing. With no active priced plan the organisation is on
+ * the catalog's free plan. Several active plans take the most generous, and one
+ * without a seat cap makes the whole allowance unmetered.
+ */
+export const seatAllowance = internalAction.input({ referenceId: v.string() }).action(async ({ args: { referenceId }, ctx }): Promise<number | null> => {
+    const { plans } = resolveEntitlements(entitlementsFromPlans(PLANS), await ctx.payments.listSubscriptions(referenceId));
+    const active = PLANS.filter((plan) => plans.includes(plan.id));
+    const granting = active.length > 0 ? active : PLANS.filter((plan) => plan.priceId === undefined);
+
+    return granting.some((plan) => plan.seats === undefined) ? null : Math.max(...granting.map((plan) => plan.seats ?? 0));
+});
 
 /** The org roles allowed to start a subscription or open the billing portal — the same pair `lunora/saas` lets write projects. */
 const BILLING_ADMIN_ROLES: ReadonlySet<string> = new Set(["admin", "owner"]);

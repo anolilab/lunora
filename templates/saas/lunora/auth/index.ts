@@ -179,6 +179,19 @@ const projectOrganization = async (env: AuthEnv, organization: OrganizationRecor
 };
 
 /**
+ * The organisation's seat cap for better-auth's `membershipLimit`, which checks it
+ * before an invitation is sent or accepted and before a member is added. The plan
+ * comes from billing on the root shard (`payment:seatAllowance`); an unmetered
+ * plan has no cap. A failed lookup throws, so the addition is refused rather
+ * than let through unchecked.
+ */
+const seatLimit = async (env: AuthEnv, organizationId: string): Promise<number> => {
+    const allowance = await createShardClient(env.SHARD, { shardKey: "__root__" }).call(internal.payment.seatAllowance, { referenceId: organizationId });
+
+    return allowance ?? Number.POSITIVE_INFINITY;
+};
+
+/**
  * The better-auth options. Edit freely — add `socialProviders`, `plugins` (from
  * `@lunora/auth/plugins`), or a `session` policy (`sessionPresets` from
  * `@lunora/auth`). The `auth-clerk` / `auth-auth0` registry items scaffold
@@ -230,6 +243,7 @@ export const authOptions = (env: AuthEnv): LunoraAuthOptions => {
              * `resolveIdentity` in `lunora/server.ts`.
              */
             organization({
+                membershipLimit: async (_user, record) => seatLimit(env, record.id),
                 // Keep the admin projection in step with the records it mirrors.
                 organizationHooks: {
                     afterAcceptInvitation: async ({ organization: record }) => projectOrganization(env, record),
