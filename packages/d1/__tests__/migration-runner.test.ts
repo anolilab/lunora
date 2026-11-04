@@ -15,6 +15,8 @@ const TRACKING_INSERT_HASH_RE = /VALUES \('([0-9a-f]{64})'/u;
 const DUPLICATE_VERSION_RE = /Duplicate migration version/;
 const IDENTICAL_SQL_RE = /identical SQL/u;
 const MULTI_STATEMENT_RE = /more than one SQL statement/u;
+const DESTRUCTIVE_RE = /destructive statement/u;
+const TRANSACTION_CONTROL_RE = /is transaction control/u;
 
 const AUDIT_TRIGGER_SQL = `CREATE TRIGGER posts_audit AFTER INSERT ON posts
 BEGIN
@@ -578,4 +580,117 @@ describe("migrationRunner", () => {
 
         await expect(plus.run()).rejects.toThrow(MULTI_STATEMENT_RE);
     });
+});
+
+describe("migrationRunner destructive statements", () => {
+    it.each([
+        ["DROP TABLE", "DROP TABLE legacy_sessions"],
+        ["DROP INDEX", "DROP INDEX IF EXISTS by_email;"],
+        ["DROP VIEW", "DROP VIEW recent"],
+        ["DROP TRIGGER", "DROP TRIGGER posts_audit"],
+        ["DROP COLUMN", "ALTER TABLE users DROP COLUMN email"],
+        ["DROP without COLUMN", "ALTER TABLE users DROP email"],
+        ["RENAME without COLUMN", "ALTER TABLE users RENAME email TO mail"],
+        ["RENAME TO", "ALTER TABLE users RENAME TO members"],
+        ["RENAME COLUMN", "ALTER TABLE users RENAME COLUMN email TO mail"],
+        ["INSERT OR REPLACE", "INSERT OR REPLACE INTO config (k, v) VALUES ('a', 'b')"],
+        ["REPLACE INTO", "REPLACE INTO config (k, v) VALUES ('a', 'b')"],
+        ["a comment between the keywords", "INSERT /* upsert */ OR REPLACE INTO config (k, v) VALUES ('a', 'b')"],
+    ])("refuses %s without an opt-in, before any I/O", async (_label, text) => {
+        expect.assertions(2);
+
+        const database = await createDatabase();
+
+        await expect(new MigrationRunner(database, [{ name: "drop", sql: text, version: 1 }]).run()).rejects.toThrow(DESTRUCTIVE_RE);
+        expect(database.executed).toStrictEqual([]);
+    });
+
+    it("refuses a destructive migration late in the list before applying the earlier ones", async () => {
+        expect.assertions(2);
+
+        const database = await createDatabase();
+        const runner = new MigrationRunner(database, [
+            { name: "init", sql: "CREATE TABLE a (id INTEGER);", version: 1 },
+            { name: "drop", sql: "DROP TABLE a;", version: 2 },
+        ]);
+
+        await expect(runner.run()).rejects.toThrow(DESTRUCTIVE_RE);
+        expect(database.executed).toStrictEqual([]);
+    });
+
+    it.each([
+        ["`allowDestructive: true`", { allowDestructive: true, sql: "DROP TABLE legacy_sessions" }],
+        ["a leading pragma comment", { sql: "-- lunora:allow-destructive\nDROP TABLE legacy_sessions;" }],
+        ["a pragma comment after the statement", { sql: "DROP TABLE legacy_sessions; -- lunora:allow-destructive" }],
+    ])("applies a destructive statement confirmed by %s", async (_label, migration) => {
+        expect.assertions(1);
+
+        const result = await new MigrationRunner(await createDatabase(), [{ name: "drop", version: 1, ...migration }]).run();
+
+        expect(result.applied.map((m) => m.version)).toStrictEqual([1]);
+    });
+
+    it.each([
+        ["a string literal", "INSERT INTO notes (body) VALUES ('DROP TABLE users; RENAME')"],
+        ["a line comment", "-- replaces the DROP TABLE we used to run\nCREATE TABLE c (id INTEGER);"],
+        ["a block comment", "/* DROP COLUMN email */ CREATE TABLE c (id INTEGER);"],
+        ["a quoted identifier", `CREATE TABLE "rename" (id INTEGER, [drop table] TEXT, \`replace into\` TEXT)`],
+        ["a function call", "UPDATE notes SET body = replace(body, 'a', 'b')"],
+    ])("does not read a keyword inside %s as destructive", async (_label, text) => {
+        expect.assertions(1);
+
+        const result = await new MigrationRunner(await createDatabase(), [{ name: "safe", sql: text, version: 1 }]).run();
+
+        expect(result.applied.map((m) => m.version)).toStrictEqual([1]);
+    });
+
+    it("does not take a pragma inside a string literal as the opt-in", async () => {
+        expect.assertions(1);
+
+        const runner = new MigrationRunner(await createDatabase(), [
+            { name: "replace", sql: "REPLACE INTO config (k, v) VALUES ('note', '\n-- lunora:allow-destructive')", version: 1 },
+        ]);
+
+        await expect(runner.run()).rejects.toThrow(DESTRUCTIVE_RE);
+    });
+
+    // The opt-in on the object is what an upgrade needs: a destructive migration applied by a build without this check
+    // would be refused now, and adding the pragma to its SQL would change its hash and read as drift.
+    it("skips an already-applied destructive migration once `allowDestructive` is set, without drift", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+
+        try {
+            const text = "DROP TABLE legacy_sessions;";
+
+            sqlite.exec(
+                "CREATE TABLE __drizzle_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL UNIQUE, created_at NUMERIC, version INTEGER)",
+            );
+            sqlite.prepare("INSERT INTO __drizzle_migrations (hash, created_at, version) VALUES (?, 1, 1)").run(await sha256Hex(text));
+
+            const result = await new MigrationRunner(createSqliteDatabase(sqlite), [{ allowDestructive: true, name: "drop", sql: text, version: 1 }]).run();
+
+            expect(result.skipped.map((m) => m.version)).toStrictEqual([1]);
+            expect(result.applied).toStrictEqual([]);
+        } finally {
+            sqlite.close();
+        }
+    });
+});
+
+describe("migrationRunner transaction control", () => {
+    it.each(["BEGIN TRANSACTION", "-- wrap it\nCOMMIT;", "SAVEPOINT before_drop", "ROLLBACK", "END TRANSACTION", "RELEASE before_drop"])(
+        "refuses %j, which the batch it runs in already provides",
+        async (text) => {
+            expect.assertions(2);
+
+            const database = await createDatabase();
+
+            await expect(new MigrationRunner(database, [{ allowDestructive: true, name: "tx", sql: text, version: 1 }]).run()).rejects.toThrow(
+                TRANSACTION_CONTROL_RE,
+            );
+            expect(database.executed).toStrictEqual([]);
+        },
+    );
 });

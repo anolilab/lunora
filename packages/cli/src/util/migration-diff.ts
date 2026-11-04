@@ -148,7 +148,13 @@ const renderCreateTable = (table: TableSnapshot): string => {
     return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(table.name)} (\n${lines}\n);`;
 };
 
-const renderDropTable = (tableName: string): string => `DROP TABLE IF EXISTS ${quoteIdentifier(tableName)};`;
+/**
+ * The opt-in `@lunora/d1`'s `MigrationRunner` requires on a destructive statement, written on the statement's own line so
+ * it travels with it when the file is split into one runner entry per statement.
+ */
+const ALLOW_DESTRUCTIVE = "-- lunora:allow-destructive";
+
+const renderDropTable = (tableName: string): string => `DROP TABLE IF EXISTS ${quoteIdentifier(tableName)}; ${ALLOW_DESTRUCTIVE}`;
 
 /**
  * `ALTER TABLE … ADD COLUMN`, always nullable. SQLite rejects `ADD COLUMN … NOT NULL` without a default on a table
@@ -175,7 +181,8 @@ const renderCreateIndex = (tableName: string, index: IndexSnapshot): string => {
     return `CREATE ${uniqueClause}INDEX IF NOT EXISTS ${physicalIndexName(tableName, index.name)} ON ${quoteIdentifier(tableName)} (${fields});`;
 };
 
-const renderDropIndex = (tableName: string, indexName: string): string => `DROP INDEX IF EXISTS ${physicalIndexName(tableName, indexName)};`;
+const renderDropIndex = (tableName: string, indexName: string): string =>
+    `DROP INDEX IF EXISTS ${physicalIndexName(tableName, indexName)}; ${ALLOW_DESTRUCTIVE}`;
 
 /**
  * The column's shape with `optional` stripped — that flag is the same fact as

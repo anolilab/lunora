@@ -126,6 +126,30 @@ describe("d1 (workerd)", () => {
         await env.DB.prepare("DROP TABLE IF EXISTS posts").run();
     });
 
+    it("migrationRunner applies a destructive migration only once it is confirmed", async () => {
+        expect.assertions(4);
+
+        const create = { name: "init", sql: "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT)", version: 1 };
+        const drop = { name: "drop_email", sql: "ALTER TABLE users DROP COLUMN email; -- lunora:allow-destructive", version: 2 };
+        const rename = { name: "rename_name", sql: "ALTER TABLE users RENAME COLUMN name TO display_name", version: 3 };
+
+        const refused = await SELF.fetch("https://test/migrate", { body: JSON.stringify({ migrations: [create, drop, rename] }), method: "POST" });
+
+        await expect(refused.json<{ error: string }>()).resolves.toMatchObject({ error: expect.stringMatching(/destructive statement \(RENAME\)/u) });
+
+        // Refused before any statement ran: not even the CREATE in front of it.
+        await expect(env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").first()).resolves.toBeNull();
+
+        const result = await SELF.fetch("https://test/migrate", {
+            body: JSON.stringify({ migrations: [create, drop, { ...rename, allowDestructive: true }] }),
+            method: "POST",
+        }).then((r) => r.json<MigrateResult>());
+        const ddl = await env.DB.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").first<{ sql: string }>();
+
+        expect(result.applied.map((m) => m.version)).toStrictEqual([1, 2, 3]);
+        expect(ddl?.sql).not.toContain("email");
+    });
+
     it("withSession() returns a real D1 bookmark after a write", async () => {
         expect.assertions(2);
 

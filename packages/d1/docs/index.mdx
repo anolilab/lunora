@@ -78,7 +78,7 @@ by its version and re-running is a no-op.
 ```ts
 import { MigrationRunner } from "@lunora/d1";
 
-const runner = new MigrationRunner(env.DB, [{ version: 1, name: "drop_legacy_sessions", sql: "DROP TABLE legacy_sessions" }]);
+const runner = new MigrationRunner(env.DB, [{ version: 1, name: "drop_legacy_sessions", sql: "DROP TABLE legacy_sessions", allowDestructive: true }]);
 
 const { applied, skipped } = await runner.run();
 ```
@@ -97,6 +97,27 @@ it into one entry per statement to get the runner's hash tracking. Most schema
 changes need neither: the worker provisions every `.global()` table on first
 use, additively and idempotently — what it never does is drop or retype, which
 is what a hand-written `Migration` is for.
+
+### Destructive statements need an opt-in
+
+A migration that discards data, or renames something every reader of the old name
+breaks on, is refused unless it says it means to: any `DROP` (a table, view,
+index, trigger or column), any `RENAME`, `TRUNCATE`, `INSERT OR REPLACE` and
+`REPLACE INTO`. Keywords inside a string, a quoted
+identifier or a comment do not count. Confirm one of two ways:
+
+- `allowDestructive: true` on the `Migration`. It is not part of the hashed SQL,
+  so it is the way to confirm a migration that has already run: editing that
+  migration's SQL would be refused as drift.
+- A `-- lunora:allow-destructive` line comment in the SQL, for a migration that
+  has not run yet. `lunora migrate generate` writes it after every `DROP` it
+  emits, so a generated file split into one entry per statement applies as is.
+
+Every migration is checked before the run touches the database, so a refused one
+late in the list leaves the earlier ones unapplied too. Transaction control
+(`BEGIN`, `COMMIT`, `END`, `ROLLBACK`, `SAVEPOINT`, `RELEASE`) is refused the same
+way: each migration already commits atomically with its tracking row, and D1
+rejects those statements itself.
 
 ### When a run refuses with `MIGRATION_DRIFT`
 
@@ -142,6 +163,7 @@ interface Migration {
     version: number; // monotonically increasing integer; orders application
     name: string; // human label, e.g. "001_init" (used in logs)
     sql: string; // raw SQL — exactly one statement per migration
+    allowDestructive?: boolean; // confirms a DROP / RENAME / TRUNCATE / REPLACE; see above
 }
 ```
 

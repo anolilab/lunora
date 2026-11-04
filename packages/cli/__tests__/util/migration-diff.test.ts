@@ -1,3 +1,5 @@
+import type { D1DatabaseLike, D1PreparedStatementLike } from "@lunora/d1";
+import { MigrationRunner } from "@lunora/d1";
 import { describe, expect, it } from "vitest";
 
 import type { SchemaSnapshot } from "../../src/util/migration-diff";
@@ -101,7 +103,7 @@ describe("sQL renderers", () => {
     it("renderDropTable emits DROP TABLE IF EXISTS", () => {
         expect.assertions(1);
 
-        expect(renderDropTable("users")).toBe('DROP TABLE IF EXISTS "users";');
+        expect(renderDropTable("users")).toBe('DROP TABLE IF EXISTS "users"; -- lunora:allow-destructive');
     });
 
     it("renderCreateIndex emits a `<table>_<name>` index over the physical columns", () => {
@@ -123,7 +125,47 @@ describe("sQL renderers", () => {
     it("renderDropIndex emits DROP INDEX IF EXISTS for the physical index name", () => {
         expect.assertions(1);
 
-        expect(renderDropIndex("users", "by_email")).toBe('DROP INDEX IF EXISTS "users_by_email";');
+        expect(renderDropIndex("users", "by_email")).toBe('DROP INDEX IF EXISTS "users_by_email"; -- lunora:allow-destructive');
+    });
+});
+
+/** A D1 binding that accepts every statement and records none: enough to reach the runner's own checks. */
+const acceptingDatabase = (): D1DatabaseLike => {
+    const prepare = (): D1PreparedStatementLike => {
+        const statement: D1PreparedStatementLike = {
+            all: async () => {
+                return { results: [], success: true };
+            },
+            bind: () => statement,
+            first: async () => null,
+            raw: async () => [],
+            run: async () => {
+                return { success: true };
+            },
+        };
+
+        return statement;
+    };
+
+    return {
+        batch: async () => [],
+        prepare,
+        withSession: () => {
+            return { getBookmark: () => null, prepare };
+        },
+    };
+};
+
+describe("generated destructive statements", () => {
+    it("carry the opt-in @lunora/d1's MigrationRunner requires, so a split file still applies", async () => {
+        expect.assertions(1);
+
+        const result = await new MigrationRunner(acceptingDatabase(), [
+            { name: "drop_table", sql: renderDropTable("users"), version: 1 },
+            { name: "drop_index", sql: renderDropIndex("users", "by_email"), version: 2 },
+        ]).run();
+
+        expect(result.applied.map((migration) => migration.version)).toStrictEqual([1, 2]);
     });
 });
 
@@ -183,7 +225,7 @@ describe("diffSnapshots", () => {
 
         expect(diff.entries).toHaveLength(1);
         expect(diff.entries[0]?.kind).toBe("dropTable");
-        expect(diff.entries[0]?.sql).toBe('DROP TABLE IF EXISTS "users";');
+        expect(diff.entries[0]?.sql).toBe('DROP TABLE IF EXISTS "users"; -- lunora:allow-destructive');
     });
 
     it("aDD COLUMN when a column appears on an existing table", () => {

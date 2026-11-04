@@ -21,6 +21,18 @@ interface Env {
 
 const json = (body: unknown, status = 200): Response => Response.json(body, { headers: { "content-type": "application/json" }, status });
 
+/** Run the posted migrations; a refusal comes back as a 500 carrying its message rather than an uncaught throw. */
+const migrate = async (request: Request, database: D1Database): Promise<Response> => {
+    const body = await request.json<{ migrations: { allowDestructive?: boolean; name: string; sql: string; version: number }[] }>();
+    const runner = new MigrationRunner(database as unknown as D1DatabaseLike, body.migrations);
+
+    try {
+        return json(await runner.run());
+    } catch (error) {
+        return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+    }
+};
+
 /** Minimal `D1Exec` over a real D1 binding — the ctx-db needs only `all` and `run`. */
 const d1CtxExec = (database: D1Database): D1Exec => {
     return {
@@ -344,11 +356,7 @@ export default {
         const url = new URL(request.url);
 
         if (url.pathname === "/migrate" && request.method === "POST") {
-            const body = await request.json<{ migrations: { name: string; sql: string; version: number }[] }>();
-            const runner = new MigrationRunner(env.DB as unknown as D1DatabaseLike, body.migrations);
-            const result = await runner.run();
-
-            return json(result);
+            return await migrate(request, env.DB);
         }
 
         if (url.pathname === "/insert" && request.method === "POST") {

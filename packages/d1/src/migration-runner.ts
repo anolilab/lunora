@@ -5,6 +5,12 @@ import type { D1DatabaseLike } from "./d1-client";
 import { D1Client } from "./d1-client";
 
 interface Migration {
+    /**
+     * Confirms a statement that discards data or breaks readers of the old shape (see
+     * {@link DESTRUCTIVE_STATEMENTS}) is meant to. Not part of the hashed SQL, so setting it on a migration that already
+     * ran does not read as drift; a `-- lunora:allow-destructive` line comment in the SQL does the same for new ones.
+     */
+    allowDestructive?: boolean;
     /** Human-readable name, e.g. `001_init` (used in logs). */
     name: string;
     /** Raw SQL to apply. Should be idempotent where possible. */
@@ -76,7 +82,7 @@ const LEADING_TRIVIA_RE = /^(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/u;
  *
  * Trivia is matched BETWEEN the keywords, not just before them: SQLite accepts
  * `CREATE /* … *\/ TRIGGER` as one statement, and a probe that only allowed
- * `\s` there stopped recognising it as a trigger — `assertSingleStatement` then
+ * `\s` there stopped recognising it as a trigger — `scanStatement` then
  * read the body's first `;` as a statement boundary and rejected the trailing
  * `END`, telling the author to split a statement SQLite cannot have split.
  */
@@ -84,6 +90,33 @@ const CREATE_TRIGGER_RE = new RegExp(String.raw`^CREATE${TRIVIA_SOURCE}+(?:TEMP$
 
 /** Lowercase hex SHA-256 shape guard before inlining the hash into SQL. Hoisted to avoid per-call recompilation. */
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/u;
+
+/**
+ * Statements that discard data, or rename something every reader of the old name breaks on. Matched against the
+ * statement with its strings, quoted identifiers and comments blanked out, so a `'DROP TABLE'` literal is not one;
+ * `\s+` also spans a blanked comment between two keywords. `REPLACE INTO` is SQLite's spelling of `INSERT OR REPLACE`,
+ * which deletes the conflicting row before inserting. `TRUNCATE` is not SQLite, but a D1-shaped binding over another
+ * engine may accept it.
+ */
+const DESTRUCTIVE_STATEMENTS: ReadonlyArray<readonly [label: string, pattern: RegExp]> = [
+    // Every SQLite DROP discards something, and `ALTER TABLE t DROP c` needs no COLUMN keyword; DROP is reserved, so
+    // a bare one in the blanked code cannot be an identifier.
+    ["DROP", /\bDROP\b/iu],
+    ["RENAME", /\bRENAME\b/iu],
+    ["TRUNCATE", /\bTRUNCATE\b/iu],
+    ["INSERT OR REPLACE", /\bINSERT\s+OR\s+REPLACE\b/iu],
+    ["REPLACE INTO", /\bREPLACE\s+INTO\b/iu],
+];
+
+/** The line comment that opts a migration's SQL into {@link DESTRUCTIVE_STATEMENTS}. */
+const ALLOW_DESTRUCTIVE_RE = /^--\s*lunora:allow-destructive\b/u;
+
+/**
+ * Transaction control at the head of a statement. Each migration already runs inside one atomic `batch()` with its
+ * tracking row, and D1 refuses these outright; a `CREATE TRIGGER … BEGIN … END` never matches, since it starts with
+ * `CREATE`.
+ */
+const TRANSACTION_CONTROL_RE = /^(?:BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE)\b/iu;
 
 /**
  * Matches D1/SQLite's `UNIQUE constraint failed: __drizzle_migrations.hash`
@@ -104,8 +137,18 @@ interface MigrationRunnerResult {
     skipped: { name: string; version: number }[];
 }
 
+/** What {@link scanStatement} reads off a migration's SQL. */
+interface StatementScan {
+    /** The SQL with every string, quoted identifier and comment blanked to spaces, so keyword checks see only code. */
+    code: string;
+    /** Each `--` comment, from its `--` to the end of its line. */
+    lineComments: string[];
+    /** Index of the `;` that ends the statement, when there is one. */
+    terminatorIndex: number | undefined;
+}
+
 /**
- * Reject a migration whose SQL contains more than one statement. Performs a
+ * Read a migration's SQL as one statement, rejecting it when it holds more than one. Performs a
  * quote- and comment-aware scan so semicolons inside `'...'`, `"..."`,
  * `--`-line comments, and `/* ... *\/` blocks don't trip the check. A trailing
  * `;` followed only by whitespace and/or comments is allowed (and `;` is
@@ -128,8 +171,12 @@ interface MigrationRunnerResult {
  * separate `Migration` entries — `batch()` runs them atomically anyway.
  */
 // eslint-disable-next-line sonarjs/cognitive-complexity -- hand-written single-pass SQL lexer; the mode branching is the grammar and inlines more clearly than split helpers sharing cursor state (see @lunora/do data-migration.ts)
-const assertSingleStatement = (migration: Migration): number | undefined => {
+const scanStatement = (migration: Migration): StatementScan => {
     const text = migration.sql;
+    const blanked: [start: number, end: number][] = [];
+    const lineComments: string[] = [];
+    // Where the string, quoted identifier or comment the scan is inside began.
+    let spanStart = 0;
     const isTrigger = CREATE_TRIGGER_RE.test(text.slice(LEADING_TRIVIA_RE.exec(text)?.[0].length ?? 0));
     let inSingle = false;
     let inDouble = false;
@@ -155,6 +202,8 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
 
         if (inLineComment) {
             if (character === "\n") {
+                lineComments.push(text.slice(spanStart, index));
+                blanked.push([spanStart, index]);
                 inLineComment = false;
             }
 
@@ -163,6 +212,7 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
 
         if (inBlockComment) {
             if (character === "*" && next === "/") {
+                blanked.push([spanStart, index + 2]);
                 inBlockComment = false;
                 index += 1;
             }
@@ -176,6 +226,7 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
                 if (next === "'") {
                     index += 1;
                 } else {
+                    blanked.push([spanStart, index + 1]);
                     inSingle = false;
                 }
             }
@@ -188,6 +239,7 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
                 if (next === '"') {
                     index += 1;
                 } else {
+                    blanked.push([spanStart, index + 1]);
                     inDouble = false;
                 }
             }
@@ -198,6 +250,7 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
         // A bracket-quoted identifier has no escape: it ends at the first `]`.
         if (inBracket) {
             if (character === "]") {
+                blanked.push([spanStart, index + 1]);
                 inBracket = false;
             }
 
@@ -209,6 +262,7 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
                 if (next === "`") {
                     index += 1;
                 } else {
+                    blanked.push([spanStart, index + 1]);
                     inBacktick = false;
                 }
             }
@@ -219,12 +273,14 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
         // Comment starts are allowed anywhere, including after the terminating
         // `;` (a trailing comment), so detect them before the terminator guard.
         if (character === "-" && next === "-") {
+            spanStart = index;
             inLineComment = true;
             index += 1;
             continue;
         }
 
         if (character === "/" && next === "*") {
+            spanStart = index;
             inBlockComment = true;
             index += 1;
             continue;
@@ -269,21 +325,25 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
         }
 
         if (character === "'") {
+            spanStart = index;
             inSingle = true;
             continue;
         }
 
         if (character === '"') {
+            spanStart = index;
             inDouble = true;
             continue;
         }
 
         if (character === "[") {
+            spanStart = index;
             inBracket = true;
             continue;
         }
 
         if (character === "`") {
+            spanStart = index;
             inBacktick = true;
             continue;
         }
@@ -302,7 +362,51 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
         }
     }
 
-    return terminatorIndex;
+    if (inSingle || inDouble || inBracket || inBacktick || inLineComment || inBlockComment) {
+        if (inLineComment) {
+            lineComments.push(text.slice(spanStart));
+        }
+
+        blanked.push([spanStart, text.length]);
+    }
+
+    let code = "";
+    let cursor = 0;
+
+    for (const [start, end] of blanked) {
+        code += text.slice(cursor, start) + " ".repeat(end - start);
+        cursor = end;
+    }
+
+    return { code: code + text.slice(cursor), lineComments, terminatorIndex };
+};
+
+/**
+ * Refuse transaction control, and a destructive statement the migration has not opted into. Both are decided from the
+ * blanked {@link StatementScan.code}, so a keyword inside a literal or a comment never counts.
+ */
+const assertAllowedStatement = (migration: Migration, scan: StatementScan): void => {
+    const label = `Migration "${migration.name}" (v${String(migration.version)})`;
+
+    if (TRANSACTION_CONTROL_RE.test(scan.code.trimStart())) {
+        throw new LunoraError(
+            "INTERNAL",
+            `${label} is transaction control (BEGIN/COMMIT/ROLLBACK/SAVEPOINT/RELEASE). Each migration already runs atomically with its tracking row in one batch(); remove it.`,
+        );
+    }
+
+    if (migration.allowDestructive === true || scan.lineComments.some((comment) => ALLOW_DESTRUCTIVE_RE.test(comment))) {
+        return;
+    }
+
+    const destructive = DESTRUCTIVE_STATEMENTS.find(([, pattern]) => pattern.test(scan.code));
+
+    if (destructive !== undefined) {
+        throw new LunoraError(
+            "INTERNAL",
+            `${label} contains a destructive statement (${destructive[0]}). Confirm it is meant to discard data or rename what readers depend on: set \`allowDestructive: true\` on the migration, or add a \`-- lunora:allow-destructive\` comment to a migration that has not run yet (editing an applied migration's SQL is drift).`,
+        );
+    }
 };
 
 /**
@@ -392,6 +496,16 @@ class MigrationRunner {
     }
 
     public async run(): Promise<MigrationRunnerResult> {
+        // Every migration's SQL is checked before the first I/O, so a refused one late in the list cannot leave the
+        // earlier ones applied.
+        const scans = this.migrations.map((migration) => {
+            const scan = scanStatement(migration);
+
+            assertAllowedStatement(migration, scan);
+
+            return scan;
+        });
+
         await this.ensureTrackingTable();
 
         // Hashing is pure and order-independent, so compute every hash up front
@@ -438,7 +552,7 @@ class MigrationRunner {
             }
 
             // eslint-disable-next-line no-await-in-loop -- migrations must apply strictly in version order; each applyOne writes the tracking row the next iteration relies on.
-            const didApply = await this.applyOne(migration, hash);
+            const didApply = await this.applyOne(migration, hash, scans[index]?.terminatorIndex);
 
             // `false` means a concurrent runner won the race and inserted the
             // tracking row first (UNIQUE(hash) rejected ours, batch rolled back)
@@ -522,15 +636,12 @@ class MigrationRunner {
         return backfilled ? await this.client.drizzle.all<TrackingRow>(select) : rows;
     }
 
-    private async applyOne(migration: Migration, hash: string): Promise<boolean> {
+    private async applyOne(migration: Migration, hash: string, terminatorIndex: number | undefined): Promise<boolean> {
         // D1 lacks user-level BEGIN/COMMIT, but `batch` runs statements
         // atomically. A migration is required to be a single statement (or
-        // a whitespace-only trailing `;`) — a naive split-on-`;` mishandles
-        // semicolons inside string literals, comments and trigger bodies.
-        // Callers wanting multiple statements per file should split them
-        // across migrations; a `CREATE TRIGGER … BEGIN …; END;` stays whole.
-        const terminatorIndex = assertSingleStatement(migration);
-
+        // a whitespace-only trailing `;`), which `run` checked with
+        // `scanStatement` — a naive split-on-`;` mishandles semicolons inside
+        // string literals, comments and trigger bodies.
         // Strip from the terminating `;` onward (the lexer's own index) rather
         // than regex-trimming just the final `;`: a trailing comment after the
         // `;` would otherwise survive and D1 rejects any content past the
