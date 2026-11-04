@@ -677,6 +677,11 @@ those paths, Lunora warns and names it. Routes your app serves from the Worker
 (an auth `basePath` such as `/api/auth/*`, or your own `httpRoute` paths) are
 yours to add; Lunora cannot see them at config time.
 
+Because an asset hit never runs the Worker, it also skips the Worker's security
+headers. `vite build` writes them into the client build's `_headers` file
+instead, in a block it manages beside your own rules. See [Static
+assets](/docs/concepts/security#static-assets) on the security page.
+
 ## Non-goals
 
 A couple of Cloudflare products are deliberately **not** wired into Lunora:

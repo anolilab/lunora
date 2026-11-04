@@ -17,6 +17,8 @@
 export { applyModify } from "../jsonc-edit";
 export type { AssertWranglerOptions } from "./assert-wrangler";
 export { assertWranglerSatisfiesSchema } from "./assert-wrangler";
+export type { AssetHeadersOptions, AssetHeadersResult } from "./asset-headers";
+export { securityHeadersDisabled, writeAssetHeaders } from "./asset-headers";
 export type { BindingManifest, BindingRequirement, ManifestConfigShape } from "./binding-manifest";
 export { BINDING_MANIFEST_VERSION, buildBindingManifest } from "./binding-manifest";
 export type { CloudflareCliConfigFinding } from "./cloudflare-cli-config";

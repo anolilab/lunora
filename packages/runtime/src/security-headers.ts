@@ -1,9 +1,12 @@
 /**
  * Secure-by-default HTTP edge for the Lunora worker.
  *
- * The worker's top-level `fetch` (see `./create-worker`) is the single choke
- * point every response passes through — RPC, auth, admin, `httpRoute` handlers,
- * and the SSR fallback alike. This module supplies what is applied there:
+ * The worker's top-level `fetch` (see `./create-worker`) is the choke point every
+ * response the Worker produces passes through — RPC, auth, admin, `httpRoute`
+ * handlers, and the SSR fallback alike. A static asset hit never reaches it:
+ * Cloudflare serves the file without running the Worker, so the build writes the
+ * same default headers into the assets' `_headers` file instead (see
+ * `@lunora/config`'s `asset-headers`). This module supplies what is applied here:
  * `decorateResponse` adds baseline security headers plus, for allowed
  * cross-origin requests, the matching `Access-Control-Allow-*` headers (never
  * overwriting a header the inner handler set); `handleCorsPreflight` answers
@@ -18,6 +21,14 @@
  */
 
 import { isEnvDisabled, isEnvEnabled } from "../../../shared/env-flag";
+import {
+    DEFAULT_CROSS_ORIGIN_OPENER_POLICY,
+    DEFAULT_FRAME_OPTIONS,
+    DEFAULT_HSTS_MAX_AGE_SECONDS,
+    DEFAULT_PERMISSIONS_POLICY,
+    DEFAULT_REFERRER_POLICY,
+    htmlCspFor,
+} from "../../../shared/security-header-defaults";
 import { LunoraError } from "./errors";
 
 /** Per-header overrides for {@link SecurityHeadersOptions}. `false` omits the header. */
@@ -143,34 +154,6 @@ interface ResolvedSecurity {
 const DEFAULT_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 /**
- * Conservative default CSP for HTML responses, derived from the resolved
- * `frameOptions` so the two framing controls agree — a static `frame-ancestors
- * 'self'` would otherwise *weaken* an `X-Frame-Options: DENY` policy, since
- * modern browsers prefer CSP `frame-ancestors` over the legacy header.
- * Deliberately omits `default-src`/`script-src`/`style-src`/`connect-src`/
- * `form-action` so it never breaks an SSR page's own resources or cross-origin
- * form posts (e.g. OAuth redirects); it only locks the `base` element's href,
- * forbids legacy plugins, and mirrors the framing policy: `DENY` → `'none'`,
- * `SAMEORIGIN` → `'self'`, disabled (`frameOptions: false`) → no
- * `frame-ancestors` (framing left unrestricted, matching the absent header).
- * Operators wanting a strict HTML policy pass an explicit `csp` string.
- */
-const htmlCspFor = (frameOptions: string | undefined): string => {
-    const parts = ["base-uri 'none'", "object-src 'none'"];
-
-    if (frameOptions === "DENY") {
-        parts.push("frame-ancestors 'none'");
-    } else if (frameOptions === "SAMEORIGIN") {
-        parts.push("frame-ancestors 'self'");
-    }
-
-    return parts.join("; ");
-};
-
-const DEFAULT_PERMISSIONS_POLICY =
-    "accelerometer=(), autoplay=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
-
-/**
  * Request headers a cross-origin caller may send by default.
  *
  * This is the allowlist the preflight intersects against, with no wildcard, so
@@ -202,8 +185,6 @@ const DEFAULT_CORS_HEADERS = [
 
 const DEFAULT_CORS_METHODS = ["DELETE", "GET", "HEAD", "PATCH", "POST", "PUT"];
 
-const ONE_YEAR_SECONDS = 31_536_000;
-
 /** Methods that never mutate state and so are exempt from the CSRF/origin guard. */
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -216,7 +197,7 @@ const resolveHstsHeader = (hsts: SecurityHeadersOptions["hsts"]): string | undef
     }
 
     const config = hsts === undefined || hsts === true ? {} : hsts;
-    const maxAge = config.maxAge ?? ONE_YEAR_SECONDS;
+    const maxAge = config.maxAge ?? DEFAULT_HSTS_MAX_AGE_SECONDS;
     const includeSubDomains = config.includeSubDomains ?? true;
 
     return `max-age=${String(maxAge)}${includeSubDomains ? "; includeSubDomains" : ""}${config.preload ? "; preload" : ""}`;
@@ -252,16 +233,16 @@ const resolveHeaders = (input: boolean | SecurityHeadersOptions | undefined): Re
 
     const options: SecurityHeadersOptions = input === undefined || input === true ? {} : input;
     // Resolve framing first so the default HTML CSP's `frame-ancestors` tracks it.
-    const frameOptions = options.frameOptions === false ? undefined : (options.frameOptions ?? "SAMEORIGIN");
+    const frameOptions = options.frameOptions === false ? undefined : (options.frameOptions ?? DEFAULT_FRAME_OPTIONS);
 
     return {
-        coop: "same-origin",
+        coop: DEFAULT_CROSS_ORIGIN_OPENER_POLICY,
         csp: resolveCspHeader(options.csp, htmlCspFor(frameOptions)),
         enabled: true,
         frameOptions,
         hsts: resolveHstsHeader(options.hsts),
         permissionsPolicy: options.permissionsPolicy === false ? undefined : (options.permissionsPolicy ?? DEFAULT_PERMISSIONS_POLICY),
-        referrerPolicy: options.referrerPolicy === false ? undefined : (options.referrerPolicy ?? "strict-origin-when-cross-origin"),
+        referrerPolicy: options.referrerPolicy === false ? undefined : (options.referrerPolicy ?? DEFAULT_REFERRER_POLICY),
     };
 };
 

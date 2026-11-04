@@ -2086,6 +2086,24 @@ interface AssertWranglerOptions {
 }
 ```
 
+### `AssetHeadersOptions` (interface)
+
+```ts
+interface AssetHeadersOptions {
+    securityHeaders: boolean;
+}
+```
+
+### `AssetHeadersResult` (interface)
+
+```ts
+interface AssetHeadersResult {
+    deferred: string[];
+    path: string | undefined;
+    warnings: string[];
+}
+```
+
 ### `BINDING_MANIFEST_VERSION` (const)
 
 ```ts
@@ -3081,6 +3099,12 @@ const resolveRemoteEnabled: (inputs: RemoteEnableInputs) => boolean;
 const scanWranglerVariablesForSecrets: (variables: Record<string, unknown> | undefined, file: string) => WranglerVariableIR[];
 ```
 
+### `securityHeadersDisabled` (const)
+
+```ts
+const securityHeadersDisabled: (wrangler: unknown, environment?: string) => boolean;
+```
+
 ### `startLocalHyperdrive` (const)
 
 ```ts
@@ -3133,6 +3157,12 @@ const wranglerCodegenInputs: (projectRoot: string) => WranglerCodegenInputs;
 
 ```ts
 const wranglerToAlchemy: (config: WranglerConfigShape) => AlchemyTranslation;
+```
+
+### `writeAssetHeaders` (const)
+
+```ts
+const writeAssetHeaders: (directory: string, options: AssetHeadersOptions) => AssetHeadersResult;
 ```
 
 ## `@lunora/config/studio-host`

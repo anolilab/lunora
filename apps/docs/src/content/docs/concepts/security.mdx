@@ -26,9 +26,10 @@ security advisor catalog with remediation.
 
 ## The HTTP edge
 
-The worker's top-level `fetch` is the single choke point every response passes
-through: RPC, auth, admin, `httpRoute` handlers, and the SSR fallback alike.
-Three layers are applied there, all on by default and configured through the
+The worker's top-level `fetch` is the choke point every response the Worker
+produces passes through: RPC, auth, admin, `httpRoute` handlers, and the SSR
+fallback alike. Static assets are the exception, covered
+[below](#static-assets). Three layers are applied there, all on by default and configured through the
 `security` option on `createWorker`. None ever overwrites a header or decision an
 inner handler already made; defaults _fill in_, they never clobber.
 
@@ -36,20 +37,22 @@ inner handler already made; defaults _fill in_, they never clobber.
 
 Added to every response when the inner handler didn't set them:
 
-| Header                       | Default                                                                                                                                                                  |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Strict-Transport-Security`  | `max-age=31536000; includeSubDomains` (HTTPS responses only)                                                                                                             |
-| `X-Content-Type-Options`     | `nosniff`                                                                                                                                                                |
-| `X-Frame-Options`            | `SAMEORIGIN`                                                                                                                                                             |
-| `Referrer-Policy`            | `strict-origin-when-cross-origin`                                                                                                                                        |
-| `Permissions-Policy`         | a minimal deny list (camera, microphone, geolocation, payment, …)                                                                                                        |
-| `Cross-Origin-Opener-Policy` | `same-origin`                                                                                                                                                            |
-| `Content-Security-Policy`    | `default-src 'none'; frame-ancestors 'none'; …` on **non-HTML** responses; a hardening policy (`base-uri 'none'; object-src 'none'`, plus framing) on **HTML** responses |
+| Header                       | Default                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------- |
+| `Strict-Transport-Security`  | `max-age=31536000; includeSubDomains` (HTTPS responses only)              |
+| `X-Content-Type-Options`     | `nosniff`                                                                 |
+| `X-Frame-Options`            | `SAMEORIGIN`                                                              |
+| `Referrer-Policy`            | `strict-origin-when-cross-origin`                                         |
+| `Permissions-Policy`         | a minimal deny list (camera, microphone, geolocation, payment, …)         |
+| `Cross-Origin-Opener-Policy` | `same-origin`                                                             |
+| `Content-Security-Policy`    | strict on **non-HTML** responses, a hardening-only policy on HTML (below) |
 
-The HTML policy sets no `default-src` or `script-src`, so an SSR page's own
-scripts, styles and fetches are never blocked. The restrictive `default-src 'none'`
-policy applies only to non-HTML (API/JSON) responses. Pass a `csp` string to apply your
-own policy to HTML too:
+Non-HTML (API/JSON) responses get the strict `default-src 'none';
+frame-ancestors 'none'; base-uri 'none'; form-action 'none'`. HTML responses get
+the HTML policy, `base-uri 'none'; object-src 'none'; frame-ancestors 'self'`
+(`'none'` when `frameOptions` is `DENY`). It sets no `default-src` or
+`script-src`, so an SSR page is never broken by a policy it didn't opt into.
+Pass a `csp` string to apply your own policy to every response:
 
 ```ts
 createWorker({
@@ -64,6 +67,60 @@ createWorker({
 
 Set `headers: false` to disable the layer entirely, or any individual field to
 `false` to omit that header.
+
+### Static assets
+
+Cloudflare serves a file from the [static assets](/docs/deployment#static-assets)
+directory without running the Worker. That covers your JS and CSS chunks, the SPA
+shell, and prerendered pages. The `fetch` above never sees those responses, so
+on its own it cannot add headers to them.
+
+Instead, `vite build` writes the same defaults into the client build's `_headers`
+file, which Cloudflare applies to asset responses only:
+
+```text
+# BEGIN lunora-managed: rewritten on every build. Put your own rules outside this block.
+/*
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: accelerometer=(), autoplay=(), camera=(), …
+  Cross-Origin-Opener-Policy: same-origin
+  Content-Security-Policy: base-uri 'none'; object-src 'none'; frame-ancestors 'self'
+# END lunora-managed
+```
+
+A few things differ from the Worker's layer:
+
+- **The CSP is the HTML policy for every file.** `_headers` matches paths, not
+  content types, and the strict non-HTML policy would stop a static page from
+  loading its own scripts.
+- **HSTS is sent on every response.** Browsers ignore it over plain HTTP, so
+  local development is not pinned to HTTPS.
+- **No CORS headers.** Static files are served to your own origin.
+- **Code options do not reach it.** The build cannot see the `security` you pass
+  to `createWorker`. Setting `LUNORA_SECURITY_HEADERS` to `off` in wrangler
+  `vars` (top level, or the `env.<name>` block you build for) drops the block. To
+  change one header for assets, set it in your own `public/_headers`.
+
+Your own rules in `public/_headers` are kept as written. The managed block goes
+at the top of the file, and Lunora rewrites only what sits between its two
+markers. When one of your rules sets a header the block would also set, the
+block leaves that header out, because Cloudflare comma-joins two values for the
+same header (for example `DENY, SAMEORIGIN`), and browsers reject the result. To
+remove a default from some paths only, detach it in one of your rules. A detach
+only removes a header an earlier rule added, which is why the block comes first:
+
+```text
+/embed/*
+  ! X-Frame-Options
+```
+
+The file is written when the build includes `@cloudflare/vite-plugin` (Lunora's
+own or one you add) and the target is Cloudflare. An rsbuild build, or a
+framework that writes its own output directory (Nuxt, Astro, Analog), gets no
+managed block. Add the headers to its `_headers` yourself.
 
 ### CORS: deny cross-origin by default
 

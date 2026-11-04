@@ -15,6 +15,7 @@ import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
 import agentRulesHintPlugin from "./agent-rules-hint-plugin";
+import assetHeadersPlugin from "./asset-headers-plugin";
 import bindingsProvisionPlugin from "./bindings-provision-plugin";
 import bundleMetaPlugin from "./bundle-meta-plugin";
 import { celldDevPlugin, celldDevSupport, withoutDevWhen } from "./celld-dev-plugin";
@@ -197,6 +198,9 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // Build-only: writes the server bundle's metafile for `lunora build`, which
         // cannot otherwise see what a Vite-built worker contains.
         bundleMetaPlugin(resolved.projectRoot),
+        // Build-only: Lunora's default security headers for the static assets
+        // Cloudflare serves without running the Worker, via the client build's `_headers`.
+        assetHeadersPlugin(resolved),
         logStreamPlugin(),
         // Registers the running dev server in `.lunora/dev.json` so
         // `lunora dev --background|stop|status|logs` manage Vite projects too.
