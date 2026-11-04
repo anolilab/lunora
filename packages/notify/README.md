@@ -36,6 +36,12 @@ FCM_SERVICE_ACCOUNT=<base64-of-your-service-account-key-json>
 the raw JSON works too: `wrangler secret put FCM_SERVICE_ACCOUNT < key.json`.
 `FCM_PROJECT_ID` is optional and overrides the key file's `project_id`.
 
+To mint tokens yourself, for example with `google-auth-library`, pass your own
+`getAccessToken`: `fcm: (env) => ({ ...fcmFromEnv(env), getAccessToken })` or
+`fcm: (env) => fcmFromEnv(env, { getAccessToken })`. Lunora reads that from
+`lunora/notify.ts`, so `lunora dev` and `lunora deploy` then ask only for
+`FCM_PROJECT_ID`, and nothing at all if the same object also sets `projectId`.
+
 Generate a VAPID keypair once: `npx web-push generate-vapid-keys`.
 
 ## Register a device (browser)

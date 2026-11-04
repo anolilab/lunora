@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverNotifyCalls, discoverNotifyConfig } from "../../src/discover/notify";
+import { discoverNotifyCalls, discoverNotifyChannels, discoverNotifyConfig } from "../../src/discover/notify";
 
 /** A mutation that sends a push via `ctx.push.send` — must be recorded (outside-action). */
 const MUTATION_PUSH_SEND = `
@@ -332,5 +332,94 @@ export default defineNotify(config);
         );
 
         expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesPush: false });
+    });
+});
+
+describe("fcm credentials read from defineNotify", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-notify-fcm-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    const channelsOf = (fcmValue: string): ReturnType<typeof discoverNotifyChannels> => {
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify, fcmFromEnv } from "@lunora/notify";
+import { getAccessToken } from "./google-auth";
+export default defineNotify({ fcm: ${fcmValue} });
+`,
+            "utf8",
+        );
+
+        return discoverNotifyChannels(project, lunoraDirectory());
+    };
+
+    it.each([
+        ["a spread of fcmFromEnv plus its own token", "(env) => ({ ...fcmFromEnv(env), getAccessToken })"],
+        ["fcmFromEnv overrides", "(env) => fcmFromEnv(env, { getAccessToken })"],
+        ["a block body returning the object", "(env) => { return { ...fcmFromEnv(env), getAccessToken: getAccessToken }; }"],
+    ])("reports its own token source for %s", (_label, fcmValue) => {
+        expect.assertions(1);
+
+        expect(channelsOf(fcmValue)).toMatchObject({ fcmOwnProjectId: false, fcmOwnTokenSource: true, hasFcm: true });
+    });
+
+    it("reports its own token source for an fcm method", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify, fcmFromEnv } from "@lunora/notify";
+import { getAccessToken } from "./google-auth";
+export default defineNotify({ fcm(env) { return fcmFromEnv(env, { getAccessToken }); } });
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyChannels(project, lunoraDirectory())).toMatchObject({ fcmOwnTokenSource: true, hasFcm: true });
+    });
+
+    it("reports its own project id when the same object also sets projectId", () => {
+        expect.assertions(1);
+
+        expect(channelsOf(`{ getAccessToken, projectId: "acme" }`)).toMatchObject({ fcmOwnProjectId: true, fcmOwnTokenSource: true });
+    });
+
+    it.each([
+        ["plain fcmFromEnv", "(env) => fcmFromEnv(env)"],
+        ["the bare fcmFromEnv reference", "fcmFromEnv"],
+        ["a static accessToken override", `(env) => fcmFromEnv(env, { accessToken: "tok" })`],
+        ["a spread after the token, which can replace it", "(env) => ({ getAccessToken, ...fcmFromEnv(env) })"],
+        ["a call to some other factory", "(env) => buildFcm(env, { getAccessToken })"],
+        ["a block body that does more than return", "(env) => { const base = fcmFromEnv(env); return { ...base, getAccessToken }; }"],
+    ])("reports no own token source for %s", (_label, fcmValue) => {
+        expect.assertions(1);
+
+        expect(channelsOf(fcmValue)).toMatchObject({ fcmOwnProjectId: false, fcmOwnTokenSource: false, hasFcm: true });
+    });
+
+    it("reports no own credentials when the config falls back to every channel", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify } from "@lunora/notify";
+import { base } from "./notify-base";
+export default defineNotify({ ...base, fcm: () => ({ getAccessToken: async () => "t", projectId: "p" }) });
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyChannels(project, lunoraDirectory())).toStrictEqual({
+            fcmOwnProjectId: false,
+            fcmOwnTokenSource: false,
+            hasFcm: true,
+            hasWebPush: true,
+        });
     });
 });

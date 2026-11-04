@@ -2313,6 +2313,36 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(packages.filter((name) => name.startsWith("@lunora/notify:"))).toStrictEqual(["@lunora/notify:fcm", "@lunora/notify:webPush"]);
     });
 
+    it("asks an fcm channel with its own getAccessToken for FCM_PROJECT_ID, not FCM_SERVICE_ACCOUNT", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/notify.ts",
+            `import { defineNotify, fcmFromEnv } from "@lunora/notify";\nimport { getAccessToken } from "./google-auth";\nexport default defineNotify({ fcm: (env) => ({ ...fcmFromEnv(env), getAccessToken }) });`,
+        );
+
+        const packages = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        expect(packages.filter((name) => name.startsWith("@lunora/notify:"))).toStrictEqual(["@lunora/notify:fcmTokenSource"]);
+    });
+
+    it("reports no fcm secret source when the channel sets both its own getAccessToken and projectId", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/notify.ts",
+            `import { defineNotify } from "@lunora/notify";\nimport { getAccessToken } from "./google-auth";\nexport default defineNotify({ fcm: { getAccessToken, projectId: "acme" } });`,
+        );
+
+        const packages = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        expect(packages.filter((name) => name.startsWith("@lunora/notify:"))).toStrictEqual([]);
+    });
+
     it("infers r2sql from a ctx.r2sql access so its R2_SQL_* secrets reach the pre-flights", async () => {
         expect.assertions(2);
 

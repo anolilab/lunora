@@ -794,6 +794,7 @@ interface InferredBindings {
     usesMail: boolean;
     usesNotify: boolean;
     usesNotifyFcm: boolean;
+    usesNotifyFcmTokenSource: boolean;
     usesNotifyWebPush: boolean;
     usesPaymentAutumn: boolean;
     usesPaymentCreem: boolean;

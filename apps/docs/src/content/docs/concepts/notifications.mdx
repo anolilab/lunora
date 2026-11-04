@@ -64,6 +64,12 @@ and caches each token until shortly before it expires, so the same
 overrides the `project_id` in the key. A static `FCM_ACCESS_TOKEN` is still accepted
 when no service account is set, for local work only: it expires within the hour.
 
+To mint tokens yourself, for example with `google-auth-library`, pass your own
+`getAccessToken`: `fcm: (env) => ({ ...fcmFromEnv(env), getAccessToken })` or
+`fcm: (env) => fcmFromEnv(env, { getAccessToken })`. Lunora reads that from
+`lunora/notify.ts`, so `lunora dev` and `lunora deploy` then ask only for
+`FCM_PROJECT_ID`, and nothing at all if the same object also sets `projectId`.
+
 A push payload must fit in 4096 bytes, the limit for both FCM and Web Push. A larger
 send is rejected with `PAYLOAD_TOO_LARGE` before any device is contacted.
 

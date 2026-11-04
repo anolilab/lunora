@@ -214,6 +214,17 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "<base64-of-your-service-account-key-json>",
         },
     ],
+    // An `fcm` channel that passes its own `getAccessToken` never reads FCM_SERVICE_ACCOUNT, but
+    // still takes its project from env unless it sets `projectId` too (then no source at all).
+    "@lunora/notify:fcmTokenSource": [
+        {
+            description:
+                "Firebase project id for FCM HTTP v1. Your fcm channel supplies its own getAccessToken, so only the project id comes from env. Find it in the Firebase console (Project settings).",
+            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
+            key: "FCM_PROJECT_ID",
+            placeholderValue: "<your-firebase-project-id>",
+        },
+    ],
     "@lunora/notify:webPush": [
         {
             description:

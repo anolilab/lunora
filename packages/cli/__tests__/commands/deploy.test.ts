@@ -3211,6 +3211,63 @@ export const backfillNames = defineMigration({
                 expect(errors.some((line) => line.includes("missing required secret"))).toBe(true);
             });
 
+            // Every secret the fixture needs except the FCM credential, which each case decides.
+            const DEPLOYED_WITHOUT_FCM_KEY = [
+                "LUNORA_ADMIN_TOKEN",
+                "LUNORA_RELAY_SECRET",
+                "FCM_PROJECT_ID",
+                "VAPID_PUBLIC_KEY",
+                "VAPID_PRIVATE_KEY",
+                "VAPID_SUBJECT",
+            ];
+
+            it("deploys an fcm channel with its own getAccessToken without FCM_SERVICE_ACCOUNT", async () => {
+                expect.assertions(1);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(
+                    join(workdir, "lunora", "notify.ts"),
+                    `import { defineNotify, fcmFromEnv, webPushFromEnv } from "@lunora/notify";
+const getAccessToken = async (): Promise<string> => "token-from-the-app";
+export default defineNotify({ fcm: (env) => ({ ...fcmFromEnv(env), getAccessToken }), webPush: (env) => webPushFromEnv(env) });
+`,
+                    "utf8",
+                );
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: false,
+                    logger,
+                    secretLister: () => Promise.resolve({ names: DEPLOYED_WITHOUT_FCM_KEY, ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(0);
+            });
+
+            it("still requires FCM_SERVICE_ACCOUNT when the fcm channel leaves its token to fcmFromEnv", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: false,
+                    logger,
+                    secretLister: () => Promise.resolve({ names: DEPLOYED_WITHOUT_FCM_KEY, ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(result.error).toMatch(/missing required secret\(s\) on the deploy target: FCM_SERVICE_ACCOUNT\./u);
+            });
+
             it("a staging deploy's missing-secret remediation names --env staging, not --prod", async () => {
                 expect.assertions(2);
 

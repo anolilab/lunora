@@ -23,7 +23,7 @@ import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
-import type { CapabilityKey, ServiceBindingIR, SourceCapabilitySignals } from "@lunora/codegen";
+import type { CapabilityKey, NotifyChannels, ServiceBindingIR, SourceCapabilitySignals } from "@lunora/codegen";
 import {
     capabilitiesUsedBy,
     CAPABILITY_PROBES,
@@ -193,6 +193,7 @@ const FLAG_PACKAGES: ReadonlyArray<readonly [CapabilityFlag, string]> = [
  */
 const SECRET_SOURCE_FLAGS = [
     ["usesNotifyFcm", "@lunora/notify:fcm"],
+    ["usesNotifyFcmTokenSource", "@lunora/notify:fcmTokenSource"],
     ["usesNotifyWebPush", "@lunora/notify:webPush"],
     // `ShardRegistryDO` refuses unsigned requests, so an app with a registry needs
     // `LUNORA_RELAY_SECRET` in `.dev.vars` and on deploy, with no package import to say so.
@@ -354,10 +355,12 @@ interface InferredBindings {
     usesKv: boolean;
     /** `@lunora/mail` is imported (Resend API key must be set in `.dev.vars`; no binding). No `ctx.mail` helper exists, so only the import counts. */
     usesMail: boolean;
-    /** `@lunora/notify` is imported or `ctx.notify` read (no binding; channel secrets ride `usesNotifyFcm` / `usesNotifyWebPush`). */
+    /** `@lunora/notify` is imported or `ctx.notify` read (no binding; channel secrets ride the `usesNotifyFcm*` / `usesNotifyWebPush` flags). */
     usesNotify: boolean;
-    /** `lunora/notify.ts` configures the `fcm` channel → the `FCM_*` secrets in `.dev.vars`. */
+    /** `lunora/notify.ts` configures the `fcm` channel and leaves its token to `fcmFromEnv` → `FCM_SERVICE_ACCOUNT` in `.dev.vars`. */
     usesNotifyFcm: boolean;
+    /** The `fcm` channel passes its own `getAccessToken` but takes its project from env → only `FCM_PROJECT_ID`. */
+    usesNotifyFcmTokenSource: boolean;
     /** `lunora/notify.ts` configures the `webPush` channel → the `VAPID_*` secrets in `.dev.vars`. */
     usesNotifyWebPush: boolean;
     /** `@lunora/payment/autumn` is imported → the Autumn secrets in `.dev.vars` (no binding). */
@@ -779,6 +782,29 @@ const hostsEventLog = (entry: ReturnType<typeof resolveWorkerEntry>): boolean =>
     !entry.composed && entry.path !== undefined && forwardsReplicaExport(entry.path, "EventLogDO", undefined, new Set());
 
 /**
+ * The notify channel flags behind the channels' secret sources. An unreadable `lunora/notify.ts`
+ * still declares notify: both channels are reported so their secrets are scaffolded and
+ * preflighted rather than silently dropped.
+ */
+const notifyChannelFlags = (
+    channels: NotifyChannels | undefined,
+    unreadable: boolean,
+): Pick<InferredBindings, "usesNotifyFcm" | "usesNotifyFcmTokenSource" | "usesNotifyWebPush"> => {
+    if (unreadable) {
+        return { usesNotifyFcm: true, usesNotifyFcmTokenSource: false, usesNotifyWebPush: true };
+    }
+
+    const hasFcm = channels?.hasFcm ?? false;
+    const ownToken = channels?.fcmOwnTokenSource ?? false;
+
+    return {
+        usesNotifyFcm: hasFcm && !ownToken,
+        usesNotifyFcmTokenSource: hasFcm && ownToken && !(channels?.fcmOwnProjectId ?? false),
+        usesNotifyWebPush: channels?.hasWebPush ?? false,
+    };
+};
+
+/**
  * Scan a Lunora project and report which Cloudflare bindings its code implies.
  * Read-only: performs no writes. Binding provisioning is driven by the worker
  * entry's Durable Object exports plus the schema's D1 need; capability imports
@@ -832,9 +858,6 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     // (its `app_id` is un-mintable → reconciled as a hint, never auto-written).
     const { flags } = discoverFlagsInfo(options.projectRoot, schemaDirectory);
     const notifyIr = discoverIr(options.projectRoot, schemaDirectory, NOTIFY_FILENAME, discoverNotifyChannels);
-    // An unreadable `lunora/notify.ts` still declares notify: report both channels so
-    // their secrets are scaffolded and preflighted rather than silently dropped.
-    const notifyChannels = notifyIr.error === undefined ? notifyIr.value : { hasFcm: true, hasWebPush: true };
     const flagshipBinding = flags?.provider === "flagship" && flags.mode === "binding" ? flags.bindingName : undefined;
 
     const generatedRoot = join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY);
@@ -895,8 +918,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         services,
         signals,
         usesFlags: flags !== undefined,
-        usesNotifyFcm: notifyChannels?.hasFcm ?? false,
-        usesNotifyWebPush: notifyChannels?.hasWebPush ?? false,
+        ...notifyChannelFlags(notifyIr.error === undefined ? notifyIr.value : undefined, notifyIr.error !== undefined),
         hostsEventLog: hostsLog,
         hostsShardRegistry: hostsRegistry,
         workflows,

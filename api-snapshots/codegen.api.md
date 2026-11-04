@@ -661,6 +661,8 @@ const NOTIFY_FILENAME = "notify.ts";
 
 ```ts
 interface NotifyChannels {
+    fcmOwnProjectId: boolean;
+    fcmOwnTokenSource: boolean;
     hasFcm: boolean;
     hasWebPush: boolean;
 }

@@ -33,10 +33,11 @@ the `ctx` facades from it.
 `webPushFromEnv` and `fcmFromEnv` read the conventional variables, so a project
 sets them in `.dev.vars` (or as secrets) rather than in code:
 
-| Channel  | Variables                                                |
-| -------- | -------------------------------------------------------- |
-| Web Push | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` |
-| FCM      | `FCM_SERVICE_ACCOUNT` (+ optional `FCM_PROJECT_ID`)      |
+| Channel                            | Variables                                                |
+| ---------------------------------- | -------------------------------------------------------- |
+| Web Push                           | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` |
+| FCM                                | `FCM_SERVICE_ACCOUNT` (+ optional `FCM_PROJECT_ID`)      |
+| FCM with your own `getAccessToken` | `FCM_PROJECT_ID`, unless the config sets `projectId`     |
 
 The key names are exported as `WEB_PUSH_ENV_KEYS` / `FCM_ENV_KEYS` so tooling can
 reference them without restating string literals.
