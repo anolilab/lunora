@@ -544,43 +544,33 @@ bound on what all first calls together would pay.
 ## 19. Defects in the registry and template copies the bench mirrors (medium)
 
 PR review on #1420 turned these up. The bench keeps its copies identical to
-`registry/*` and `templates/saas`, so each is fixed upstream or not at all.
+`registry/*` and `templates/saas`, so they are fixed upstream in #1481 and reach
+the bench when its copies are next resynced.
 
-- **`mail`: a Resend-only deployment cannot send.** `registry/mail/mail.ts`
-  passes `cloudflareSend` to `createMailerFromEnv` unconditionally, and
-  `createMailer` prefers it over `RESEND_API_KEY`, so a worker without the
-  `SEND_EMAIL` binding fails every send. The file's own comment says
-  `cloudflareSend` is used only when the binding exists. Fix: pass it only when
-  `env.SEND_EMAIL` is set.
-- **`storage`: the key an upload returns does not address the object.**
-  `generateUploadUrl` returns the user-scoped key, `getDownloadUrl` and
-  `deleteObject` run `scopeKey` over their input again (it is not idempotent),
-  and `listObjects` returns keys relative to the user. Passing an upload's key
-  to either targets `user/user/key`. Fix: return the relative key everywhere and
-  scope only when building the R2 key.
-- **`saas`: two reads grow with the tenant.** `overview` reads every project
-  of the organisation with `.collect()`, on every live update of the dashboard,
-  and `listOrganizations` returns every organisation in one unpaged result (its
-  comment says so). `overview` also returns archived projects, since nothing
-  filters on `archivedAt`. Fix: page both, and read active projects only.
-- **`ai`: `analyzeSentiment` casts free text to its label union.**
-  `result.text.trim().toLowerCase() as "positive" | "negative" | "neutral"`
-  returns whatever the model said. Fix: check the text against the three labels
-  and fail loudly otherwise.
-
-- **`templates/saas`: plan seat limits are shown, not enforced.** `PLANS`
-  gives Free one seat and Pro ten, and the auth hooks recount `member` rows into
-  `saas_organizations.seats` after a member joins, but nothing refuses an
-  invitation or addition past the plan's allowance. Fix: check the allowance in
-  the organization plugin's before-add hook, or stop presenting the numbers as
-  limits.
+- **`mail` (and `auth`, `auth-otp`, `auth-magic-link`): a Resend-only deployment
+  cannot send.** The items passed `cloudflareSend` to `createMailerFromEnv`
+  unconditionally, and the mailer prefers it over `RESEND_API_KEY`. Fixed in
+  #1481: they pass it only when `SEND_EMAIL` is bound.
 - **`templates/saas`: the payment webhook buffers any body.** `lunora/http.ts`
-  reads `request.text()` with no size cap before the signature is verified, so
-  an anonymous caller can make the Worker hold an arbitrarily large body. Fix:
-  refuse a large `content-length` and cap the stream read.
+  read `request.text()` with no cap before the signature is verified. Fixed in
+  #1481 with `readWebhookBody` from `@lunora/payment` (1 MiB), which
+  `handleWebhook` also applies.
+- **`templates/saas`: plan seat limits were shown, not enforced.** Fixed in #1481:
+  better-auth's `membershipLimit` checks the organisation's active subscription
+  against the catalog, and Free has three seats.
+- **`saas`: `listOrganizations` returned every organisation in one result.**
+  Fixed in #1481: it pages on the server with search, filters and sort, and the
+  admin UI pages through it.
+- **`ai`: `analyzeSentiment` cast free text to its label union.** Fixed in #1481:
+  the reply is checked against the three labels.
 
-**Repro (storage):** call `storage:generateUploadUrl({ key: "a.txt", … })`, then
-`storage:deleteObject({ key })` with the returned key; the object stays.
+Two review claims are intended behaviour, not defects:
+
+- **`storage` returns the scoped key from an upload.** Its README documents this:
+  persist the scoped key, pass the bare key back in.
+- **`saas.overview` returns archived projects.** The dashboard's "Archived" tile
+  counts them. Its read is still unbounded (`.collect()` of the organisation's
+  projects), which is left open.
 
 ## 20. A paid public procedure cannot be reached once `authorizeShard` is set (medium)
 
