@@ -30,6 +30,17 @@ export default defineSchema({
         referenceId: v.string(),
         url: v.optional(v.string()),
     }).index("byReference", ["referenceId"], { unique: true }),
+
+    /*
+     * One row per pending invitation, holding the seat it would take — see
+     * `lunora/seats.ts`. Taken inside a mutation for the same reason as a checkout
+     * hold: only a mutation serialises two invitations racing for the last seat.
+     */
+    invitation_holds: defineTable({
+        email: v.string(),
+        expiresAt: v.number(),
+        organizationId: v.string(),
+    }).index("byOrganizationEmail", ["organizationId", "email"], { unique: true }),
 })
     /*
      * The payment store's tables, as the package's own schema extension: the store
