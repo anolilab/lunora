@@ -185,18 +185,18 @@ const ALL_CHANNELS: NotifyChannels = { fcmOwnProjectId: false, fcmOwnTokenSource
 const DEFINE_NOTIFY_MODULES = new Set(["@lunora/notify"]);
 
 /**
- * Decide whether a callee identifier refers to `defineNotify` from one of
+ * Decide whether a callee identifier refers to `exportName` from one of
  * {@link DEFINE_NOTIFY_MODULES}. Mirrors `isFlagshipProvider` (`flags.ts`):
  * trust the import declaration when the symbol resolves, and a bare same-named
  * identifier when the ts-morph project can't always resolve the workspace
- * package. Anything else — a local wrapper factory around `defineNotify` — is
- * NOT `defineNotify`: its argument must not be read as the complete config.
+ * package. Anything else, such as a local wrapper factory around `defineNotify`
+ * or a local function that happens to be named `fcmFromEnv`, is not the export.
  */
-const isDefineNotify = (identifier: Identifier): boolean => {
+const isNotifyExport = (identifier: Identifier, exportName: string): boolean => {
     const symbol = identifier.getSymbol();
 
     if (!symbol) {
-        return identifier.getText() === "defineNotify";
+        return identifier.getText() === exportName;
     }
 
     for (const declaration of symbol.getDeclarations()) {
@@ -208,7 +208,7 @@ const isDefineNotify = (identifier: Identifier): boolean => {
             return false;
         }
 
-        return declaration.getNameNode().getText() === "defineNotify";
+        return declaration.getNameNode().getText() === exportName;
     }
 
     return false;
@@ -456,7 +456,7 @@ const fcmConfigObjectOf = (value: TsNode): ObjectLiteralExpression | undefined =
         const callee = result.getExpression();
         const overrides = result.getArguments()[1];
 
-        return Node.isIdentifier(callee) && callee.getText() === "fcmFromEnv" && overrides !== undefined ? fcmConfigObjectOf(overrides) : undefined;
+        return Node.isIdentifier(callee) && isNotifyExport(callee, "fcmFromEnv") && overrides !== undefined ? fcmConfigObjectOf(overrides) : undefined;
     }
 
     return result !== undefined && Node.isObjectLiteralExpression(result) ? result : undefined;
@@ -471,6 +471,18 @@ const setsLastWord = (object: ObjectLiteralExpression, name: string): boolean =>
 };
 
 /**
+ * Whether `object` sets `projectId` to a string literal. Any other value, such as
+ * `env.FCM_PROJECT_ID`, may still read the env key, so it does not count as the app's own.
+ */
+const setsLiteralProjectId = (object: ObjectLiteralExpression): boolean => {
+    const property = findObjectProperty(object, "projectId");
+    const value = Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
+    const literal = value === undefined ? undefined : unwrapExpression(value);
+
+    return setsLastWord(object, "projectId") && literal !== undefined && (Node.isStringLiteral(literal) || Node.isNoSubstitutionTemplateLiteral(literal));
+};
+
+/**
  * The FCM credentials the app supplies in `lunora/notify.ts` rather than through `FCM_*` keys.
  * Reports only what it reads for certain: a missed own token keeps the `FCM_SERVICE_ACCOUNT`
  * requirement, while a wrong match would let a deploy go out without the key it needs.
@@ -481,7 +493,7 @@ const fcmOwnCredentialsOf = (config: ObjectLiteralExpression): Pick<NotifyChanne
     const object = value === undefined ? undefined : fcmConfigObjectOf(value);
     const fcmOwnTokenSource = object !== undefined && setsLastWord(object, "getAccessToken");
 
-    return { fcmOwnProjectId: fcmOwnTokenSource && setsLastWord(object, "projectId"), fcmOwnTokenSource };
+    return { fcmOwnProjectId: fcmOwnTokenSource && setsLiteralProjectId(object), fcmOwnTokenSource };
 };
 
 /**
@@ -490,7 +502,7 @@ const fcmOwnCredentialsOf = (config: ObjectLiteralExpression): Pick<NotifyChanne
  * declares no notify config). The read is metadata-only (like `discoverFlags`):
  * a `webPush`/`fcm` property's mere presence counts as the channel being wired.
  * The argument is read as the complete config only when the callee resolves to
- * `defineNotify` itself (`isDefineNotify`) — a wrapper factory could add a
+ * `defineNotify` itself (`isNotifyExport`) — a wrapper factory could add a
  * channel before returning a valid definition, so its literal argument is not
  * trustworthy. A same-file `const` alias, a cross-file default re-export, and a
  * variable or imported config that resolves to an object literal
@@ -516,7 +528,7 @@ const discoverNotifyChannels = (project: Project, lunoraDirectory: string): Noti
     }
 
     const callee = exported.getExpression();
-    const argument = Node.isIdentifier(callee) && isDefineNotify(callee) ? exported.getArguments()[0] : undefined;
+    const argument = Node.isIdentifier(callee) && isNotifyExport(callee, "defineNotify") ? exported.getArguments()[0] : undefined;
     const config = argument === undefined ? undefined : configLiteralOf(argument);
 
     if (!config || config.getProperties().some((property) => Node.isSpreadAssignment(property))) {

@@ -384,6 +384,31 @@ export default defineNotify({ fcm(env) { return fcmFromEnv(env, { getAccessToken
         expect(discoverNotifyChannels(project, lunoraDirectory())).toMatchObject({ fcmOwnTokenSource: true, hasFcm: true });
     });
 
+    it("does not take a local function named fcmFromEnv for the package export", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify, fcmFromEnv as packageFcmFromEnv } from "@lunora/notify";
+import { getAccessToken } from "./google-auth";
+const fcmFromEnv = (env: Record<string, unknown>, _ignored?: unknown) => packageFcmFromEnv(env);
+export default defineNotify({ fcm: (env) => fcmFromEnv(env, { getAccessToken }) });
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyChannels(project, lunoraDirectory())).toMatchObject({ fcmOwnTokenSource: false, hasFcm: true });
+    });
+
+    it.each([
+        ["read from env", "{ getAccessToken, projectId: env.FCM_PROJECT_ID }"],
+        ["a shorthand variable", "{ getAccessToken, projectId }"],
+    ])("still asks for FCM_PROJECT_ID when projectId is %s", (_label, object) => {
+        expect.assertions(1);
+
+        expect(channelsOf(`(env) => (${object})`)).toMatchObject({ fcmOwnProjectId: false, fcmOwnTokenSource: true });
+    });
+
     it("reports its own project id when the same object also sets projectId", () => {
         expect.assertions(1);
 
