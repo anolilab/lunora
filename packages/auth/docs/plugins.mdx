@@ -146,9 +146,11 @@ deployed. When verifying with a library such as `jose`, log the error's `code`
     and other devices signed out. Neither plugin is affected until you enable the behaviour; check its options before turning it on for an existing user base.
 </Callout>
 
+<Callout type="info">
 `captcha`, `lastLoginMethod`, and `oneTap` have no dedicated
 `better-auth/plugins/<name>` subpath. They ship via the `better-auth/plugins`
 barrel, and `@lunora/auth/plugins` re-exports them from there.
+</Callout>
 
 Two entries are Lunora's own rather than better-auth re-exports. `uiConfig(options?)`
 publishes which plugins and social providers the deployment enabled, at
@@ -320,6 +322,7 @@ cron if you invite at any volume.
 
 ### Two checks, because the paths differ
 
+<Callout type="info">
 An invitation carries a **secret token** — 256 bits from a cryptographically secure random number generator (CSPRNG), stored only as a SHA-256 — and the sign-up link carries it back as `?invite=`.
 
 The token is checked on `/sign-up/email` and nowhere else, which is the design rather than an oversight. Every other path that mints an account has already
@@ -328,6 +331,8 @@ fire for whoever is holding the mailbox. Password sign-up is the one place where
 
 So there are two layers. `databaseHooks.user.create.before` is the universal backstop — an unspent, unexpired invitation must exist for the address,
 whatever created the row. The route hook on `/sign-up/email` additionally requires the token.
+
+</Callout>
 
 Without the token this would be guessable in bulk, and that is not theoretical:
 the common case is inviting a team, where addresses are `first.last@company`. The
