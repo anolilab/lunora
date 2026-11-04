@@ -16,7 +16,8 @@ export const quietEnv = () => {
 /**
  * `lunora build` into `outDir` (relative to `appDirectory`). `--no-strict-advisories`
  * because the advisory gate is about the app's security, not its startup, and CI
- * turns it on by default.
+ * turns it on by default. `--no-startup-check` because the scripts profile the
+ * build themselves, and the CLI's own profile would be unreported extra work.
  */
 export const buildWorker = (appDirectory, { cli, extraArgs = [], outDir = "out" }) => {
     if (!existsSync(cli)) {
