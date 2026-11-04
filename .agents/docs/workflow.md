@@ -9,7 +9,7 @@ touching release config — not for ordinary code changes.
 Git hooks are **vis-native** (no husky). Committed scripts live in `.vis/hooks/`, run via a generated dispatcher at `.vis/hooks/_/` (gitignored); the root `prepare` script (`vis hook install`) wires `core.hooksPath` on every `pnpm install`. The pre-commit stage runs (via `vis.config.ts`, `set -e`):
 
 - `vis secrets --staged` — gitleaks-compatible scan over staged files (aborts before linting on detection).
-- `vis staged` — per-glob commands from the top-level `staged` block: oxfmt on code, Prettier on Markdown, and for `packages/*` files a build of the staged packages' workspace dependencies (`scripts/staged-build-deps.mjs`) followed by ESLint per package. The build must run first: type-aware rules read dependency types from `dist/`, and unbuilt they collapse to `any`, which gives false errors and wrong `--fix` rewrites.
+- `vis staged` — per-glob commands from the top-level `staged` block: oxfmt on code, Prettier on Markdown, and for `packages/*` files a build of the staged packages' workspace dependencies (`buildStagedDependencies` in `vis.config.ts`) followed by ESLint per package. The build must run first: type-aware rules read dependency types from `dist/`, and unbuilt they collapse to `any`, which gives false errors and wrong `--fix` rewrites.
 
 If hooks aren't firing, run `pnpm exec vis hook install` (or `vis hook validate` to diagnose).
 
