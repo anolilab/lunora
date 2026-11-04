@@ -17,14 +17,14 @@
  * exchange is cacheable at all.
  *
  * `httpRoute(...).cacheControl()` in `@lunora/server` applies the same
- * credential downgrade to the author's free-form value, from the same
- * `CREDENTIAL_HEADERS` list. It still does less than this module: no non-`GET`
+ * credential downgrade to the author's free-form value, through the same
+ * `carriesCredential` predicate. It still does less than this module: no non-`GET`
  * refusal, no credential headers folded into `Vary`, and no edge store
  * that refuses a `Set-Cookie` response. Do not describe them as equivalent.
  */
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import type { RestCachePolicy } from "../../../shared/rest-surface";
-import { cacheControlValue, cacheVaryValue, credentialHeadersFor, mergeVary } from "../../../shared/rest-surface";
+import { cacheControlValue, cacheVaryValue, carriesCredential, mergeVary } from "../../../shared/rest-surface";
 
 /**
  * True when the request presented credentials, i.e. the response must be treated
@@ -41,7 +41,7 @@ import { cacheControlValue, cacheVaryValue, credentialHeadersFor, mergeVary } fr
  * visitor.
  */
 const requestCarriesCredentials = (request: Request, policy: RestCachePolicy, context?: ExecutionContextLike): boolean =>
-    context?.access !== undefined || credentialHeadersFor(policy).some((header) => request.headers.has(header));
+    carriesCredential(request.headers, context, policy.credentialHeaders);
 
 /**
  * The scope this exchange actually gets: `policy.scope` narrowed by

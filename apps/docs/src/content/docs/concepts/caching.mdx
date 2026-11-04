@@ -86,11 +86,30 @@ When the request carries `Authorization`, `Cookie`, `Cf-Access-Jwt-Assertion`, a
 x402 payment header (`Payment-Signature`, `X-Payment`), or a Cloudflare Access
 identity, Lunora rewrites the declared `Cache-Control` before sending it:
 
-- A value that already contains `private` or `no-store` is sent unchanged.
+- A value that already contains a bare `private` or `no-store` is sent unchanged.
 - Otherwise `public`, `s-maxage` and `proxy-revalidate` are removed and `private`
   is added. `public, max-age=300, stale-while-revalidate=3600` becomes
   `private, max-age=300, stale-while-revalidate=3600`. A bare `max-age=300` becomes
   `private, max-age=300`, because a shared cache would store it too.
+- A field-qualified `private="set-cookie"` does not count as private: it marks
+  only the named headers, and a shared cache may store the rest of the response.
+  It is replaced by a bare `private`.
+
+Only those credentials are recognised. If your app authenticates on another
+header, such as `X-Api-Key`, declare it, or those callers are treated as anonymous
+and get the declared value, `public` included:
+
+```ts
+httpRoute
+    .get("/api/me")
+    .cacheControl("public, max-age=60", { credentialHeaders: ["x-api-key"] })
+    .handler(handler);
+```
+
+This is the same list a REST endpoint declares with
+[`cache.credentialHeaders`](/docs/concepts/rest-api#caching). A credential that is
+not a header at all, such as a signed query parameter, cannot be detected: do not
+mark such a route `public`.
 
 Anonymous requests get the declared value unchanged. In development the first
 rewrite on each route logs a warning. A browser sends every cookie for your

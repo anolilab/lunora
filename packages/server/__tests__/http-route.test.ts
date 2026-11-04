@@ -427,6 +427,44 @@ describe("httpRoute composition", () => {
         expect(response.headers.get("cache-control")).toBe(sent);
     });
 
+    it.each([
+        ["a field-qualified private", 'public, private="set-cookie", max-age=60', "private, max-age=60"],
+        ["a quoted list that names private", 'public, no-cache="x-trace,private", max-age=60', 'private, no-cache="x-trace,private", max-age=60'],
+    ])("narrows %s for a credentialed request", async (_label, declared, sent) => {
+        expect.assertions(1);
+
+        const route = httpRoute
+            .get("/api/me")
+            .cacheControl(declared)
+            .handler(() => {
+                return { ok: true };
+            });
+
+        const response = await dispatch(route, "GET", "/api/me", new Request("https://x/api/me", { headers: { cookie: "session=abc" } }));
+
+        expect(response.headers.get("cache-control")).toBe(sent);
+    });
+
+    it("narrows for a credential header the route declares, and only then", async () => {
+        expect.assertions(2);
+
+        const handler = (): { ok: boolean } => {
+            return { ok: true };
+        };
+        const undeclared = httpRoute.get("/api/me").cacheControl("public, max-age=300").handler(handler);
+        const declared = httpRoute
+            .get("/api/me")
+            .cacheControl("public, max-age=300", { credentialHeaders: ["X-Api-Key"] })
+            .handler(handler);
+        const request = (): Request => new Request("https://x/api/me", { headers: { "x-api-key": "k" } });
+
+        const anonymous = await dispatch(undeclared, "GET", "/api/me", request());
+        const credentialed = await dispatch(declared, "GET", "/api/me", request());
+
+        expect(anonymous.headers.get("cache-control")).toBe("public, max-age=300");
+        expect(credentialed.headers.get("cache-control")).toBe("private, max-age=300");
+    });
+
     it.each(["private, max-age=60", "no-store", "public, no-store"])("sends %s unchanged to a credentialed request", async (declared) => {
         expect.assertions(1);
 

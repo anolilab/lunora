@@ -1,17 +1,15 @@
 import { isLunoraError, LunoraError, toErrorBody } from "@lunora/errors";
-import { isDevEnvironment } from "@lunora/shard-engine";
 import type { Infer, Validator, ValidatorKind } from "@lunora/values";
 import { ValidationError } from "@lunora/values";
 import { encodeWire } from "@lunora/wire";
 import type { Context } from "hono";
 import { Hono } from "hono";
 
-import type { ExecutionContextLike } from "../../../shared/execution-context";
 import type { LiveTopicRef } from "../../../shared/live-stream";
-import { CREDENTIAL_HEADERS } from "../../../shared/rest-surface";
 import { isSafeHeaderValue, SSE_HEADERS, sseFrame } from "../../../shared/sse";
 import applyOutput from "./apply-output";
 import type { EmptyArgs } from "./builder/index";
+import routeCacheControl from "./cache-control";
 import { parseValidatorMap } from "./functions";
 import type { ActionCtx as ActionContext, ArgsValidator, InferArgs } from "./types";
 
@@ -314,12 +312,17 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
      *
      * Sent as written to an anonymous caller. When the request carries a
      * credential (`Authorization`, `Cookie`, `Cf-Access-Jwt-Assertion`, an x402
-     * payment header, or a Cloudflare Access identity), a value that is not
-     * already `private` or `no-store` is sent as `private` with `public`,
-     * `s-maxage` and `proxy-revalidate` removed, so a shared cache never stores a
-     * per-caller body.
+     * payment header, a Cloudflare Access identity, or one of
+     * `options.credentialHeaders`), a value without a bare `private` or
+     * `no-store` is sent as `private`, with `public`, `s-maxage`,
+     * `proxy-revalidate` and a field-qualified `private="…"` removed.
+     *
+     * Only those credentials are recognised. An app that authenticates on
+     * another header (`x-api-key`, a tenant header) must list it in
+     * `options.credentialHeaders`, or its callers read as anonymous and get the
+     * declared value, `public` included.
      */
-    cacheControl: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
+    cacheControl: (value: string, options?: HttpRouteCacheOptions) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
 
     /**
      * Attach a `Cache-Tag` header to the response for tag-based purging via
@@ -366,6 +369,16 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
     vary: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
 }
 
+/** Options for {@link HttpRouteBuilder.cacheControl}. */
+interface HttpRouteCacheOptions {
+    /**
+     * Request headers this app authenticates on beyond the built-in ones, as
+     * `RestCachePolicy.credentialHeaders` declares them for a REST endpoint. A
+     * request carrying one gets the `private` narrowing.
+     */
+    readonly credentialHeaders?: ReadonlyArray<string>;
+}
+
 /** Opens a fresh {@link HttpRouteBuilder}. The `path` documents intent; hono owns the actual routing at mount. */
 type HttpRouteFactory = (path: string) => HttpRouteBuilder<EmptyArgs, EmptyArgs, EmptyArgs>;
 
@@ -385,6 +398,7 @@ interface RouteState {
     body: ArgsValidator;
     cacheControl?: string;
     cacheTag?: string;
+    credentialHeaders?: ReadonlyArray<string>;
     method: HttpMethod;
     output?: Validator;
     params: ArgsValidator;
@@ -528,55 +542,6 @@ const parseBody = async (validators: ArgsValidator, c: Context<LunoraHttpEnv>): 
 };
 
 /**
- * The credential the request presented, or `undefined` for an anonymous caller.
- * Same sources as the REST cache's `requestCarriesCredentials`: the shared header
- * list, plus a Cloudflare Access identity, which arrives on the `ExecutionContext`
- * rather than as a header. hono's `executionCtx` getter throws when the app was
- * fetched without one (a unit test, a sub-handler mount), which is anonymous.
- */
-const presentedCredential = (c: Context<LunoraHttpEnv>): string | undefined => {
-    const header = CREDENTIAL_HEADERS.find((name) => c.req.raw.headers.has(name));
-
-    if (header !== undefined) {
-        return header;
-    }
-
-    try {
-        return (c.executionCtx as ExecutionContextLike).access === undefined ? undefined : "cloudflare access";
-    } catch {
-        return undefined;
-    }
-};
-
-/**
- * Narrow a declared `Cache-Control` to `private` for a credentialed exchange.
- *
- * The handler runs under the caller's `ctx.auth`, so a body produced for a
- * credentialed request is presumed caller-specific, and a shared cache must never
- * store it: Cloudflare keys its cache on the URL and ignores `Vary` beyond
- * `Accept-Encoding`, so `public` on such a response hands one user's body to the
- * next visitor. A value that is already `private` or `no-store` is returned as
- * is. Anything else loses the directives that address shared caches (`public`,
- * `s-maxage`, `proxy-revalidate`) and gains `private`, which also covers a bare
- * `max-age=300` that a shared cache would otherwise store by default.
- */
-const privateCacheControl = (value: string): string => {
-    const directives = value
-        .split(",")
-        .map((directive) => directive.trim())
-        .filter((directive) => directive !== "");
-    const names = directives.map((directive) => (directive.split("=", 1)[0] ?? "").trim().toLowerCase());
-
-    if (names.includes("private") || names.includes("no-store")) {
-        return value;
-    }
-
-    const kept = directives.filter((_, index) => !["proxy-revalidate", "public", "s-maxage"].includes(names[index] ?? ""));
-
-    return ["private", ...kept].join(", ");
-};
-
-/**
  * Reject a request whose verb is not the one the route was declared with.
  *
  * The verb is real routing information, not decoration: mounting
@@ -605,31 +570,9 @@ const methodNotAllowed = (state: RouteState, c: Context<LunoraHttpEnv>): Respons
  * decode failures (bad query / body / params) surface as 400; a result that
  * violates `.output()` surfaces as 500 (see {@link applyOutput}).
  */
-const buildRouteHandler = (state: RouteState, userHandler: LooseHandler): LunoraRouteHandler => {
-    let downgradeWarned = false;
-
-    /** The `Cache-Control` this exchange gets: the declared value, narrowed to `private` for a credentialed caller. */
-    const effectiveCacheControl = (declared: string, c: Context<LunoraHttpEnv>): string => {
-        const credential = presentedCredential(c);
-
-        if (credential === undefined) {
-            return declared;
-        }
-
-        const narrowed = privateCacheControl(declared);
-
-        if (narrowed !== declared && !downgradeWarned && isDevEnvironment(c.env)) {
-            downgradeWarned = true;
-            // eslint-disable-next-line no-console -- one dev-only notice per route: the declared header is not what was sent
-            console.warn(
-                `[lunora] httpRoute ${state.method} ${state.path}: sent Cache-Control "${narrowed}" instead of the declared "${declared}" because the request carries a credential (${credential}). A shared cache must not store a per-caller response. Further downgrades on this route are not reported.`,
-            );
-        }
-
-        return narrowed;
-    };
-
-    return async (c) => {
+const buildRouteHandler =
+    (state: RouteState, userHandler: LooseHandler): LunoraRouteHandler =>
+    async (c) => {
         const wrongMethod = methodNotAllowed(state, c);
 
         if (wrongMethod) {
@@ -647,7 +590,7 @@ const buildRouteHandler = (state: RouteState, userHandler: LooseHandler): Lunora
             const headers: Record<string, string> = {};
 
             if (state.cacheControl) {
-                headers["cache-control"] = effectiveCacheControl(state.cacheControl, c);
+                headers["cache-control"] = routeCacheControl(state, state.cacheControl, c);
             }
 
             if (state.cacheTag) {
@@ -670,7 +613,6 @@ const buildRouteHandler = (state: RouteState, userHandler: LooseHandler): Lunora
             return errorResponse(error);
         }
     };
-};
 
 type LooseStreamHandler = (options: {
     ctx: HttpActionCtx;
@@ -925,7 +867,8 @@ const buildStreamHandler =
 const makeRouteBuilder = (state: RouteState): Record<string, unknown> => {
     return {
         body: (validators: ArgsValidator) => makeRouteBuilder({ ...state, body: { ...state.body, ...validators } }),
-        cacheControl: (value: string) => makeRouteBuilder({ ...state, cacheControl: value }),
+        cacheControl: (value: string, options?: HttpRouteCacheOptions) =>
+            makeRouteBuilder({ ...state, cacheControl: value, credentialHeaders: options?.credentialHeaders }),
         cacheTag: (value: string) => makeRouteBuilder({ ...state, cacheTag: value }),
         handler: (userHandler: LooseHandler): LunoraRouteHandler => buildRouteHandler(state, userHandler),
         output: (validator: Validator) => makeRouteBuilder({ ...state, output: validator }),
@@ -990,6 +933,7 @@ export type {
     HttpMethod,
     HttpRoute,
     HttpRouteBuilder,
+    HttpRouteCacheOptions,
     HttpRouteFactory,
     HttpRouteHandlerOptions,
     HttpRunners,

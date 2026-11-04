@@ -36,6 +36,7 @@ export type {
     HttpMethod,
     HttpRoute,
     HttpRouteBuilder,
+    HttpRouteCacheOptions,
     HttpRouteFactory,
     HttpRouteHandlerOptions,
     HttpRunners,
