@@ -11,7 +11,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { readServiceBindings, SCHEMA_SNAPSHOT_FILENAME } from "@lunora/codegen";
+import { readBoundServiceBindings, SCHEMA_SNAPSHOT_FILENAME } from "@lunora/codegen";
 import { generateSecretValue } from "@lunora/config";
 import { applyModify, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
@@ -1057,7 +1057,7 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
         // every binding the code needs, not the ones the last deploy happened to write.
         await provisionBindings(cwd, logger, undefined, "cloudflare", undefined);
 
-        const { services } = readServiceBindings(cwd);
+        const { services } = readBoundServiceBindings(cwd);
 
         // Services deploy under their own names, which are production's, and the app's bindings reach them.
         if (services.length > 0) {

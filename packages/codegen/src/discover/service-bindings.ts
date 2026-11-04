@@ -3,8 +3,9 @@ import { isAbsolute, join, resolve } from "node:path";
 
 import { ts } from "ts-morph";
 
+import { COMPANION_BINDING, companionDirectory, companionName } from "../companion";
 import type { ServiceBindingIR } from "../ir";
-import { readProjectConfigLiterals } from "../project-config-file";
+import { readProjectConfigLiterals, readProjectStudioCompanion } from "../project-config-file";
 
 /** A JS identifier — both the `ctx.services.<key>` name and an RPC `entrypoint` export must be one. */
 const IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
@@ -151,4 +152,38 @@ const readServiceBindings = (projectRoot: string): { error?: string; services: S
     }
 };
 
-export { readServiceBindings, resolveServiceBindings };
+/**
+ * The companion advisor Worker as a service binding, when `studio.companion` is on. Kept out of `resolveServiceBindings`: that list
+ * types `ctx.services`, and the companion is Lunora's own Worker, not an app service. Only the callers that bind or deploy a Worker add it
+ * (see `readBoundServiceBindings`). The folder need not exist yet: a refusal check or the reconcile can run before codegen writes it.
+ */
+const companionServiceBinding = (projectRoot: string): ServiceBindingIR | undefined => {
+    if (!readProjectStudioCompanion(join(projectRoot, "lunora"))) {
+        return undefined;
+    }
+
+    const directory = companionDirectory(projectRoot);
+
+    return {
+        binding: COMPANION_BINDING,
+        envWorkers: {},
+        main: join(directory, "src", "worker.ts"),
+        name: "advisorCompanion",
+        publicScopes: [],
+        worker: companionName(projectRoot),
+        wranglerPath: join(directory, "wrangler.jsonc"),
+    };
+};
+
+/**
+ * `readServiceBindings` plus the companion, for the tools that bind a Worker to it or deploy it: the reconcile into the app's
+ * `services[]`, deploy, and dev. Codegen's own `ctx.services` emission keeps using `resolveServiceBindings`.
+ */
+const readBoundServiceBindings = (projectRoot: string): { error?: string; services: ServiceBindingIR[] } => {
+    const { error, services } = readServiceBindings(projectRoot);
+    const companion = companionServiceBinding(projectRoot);
+
+    return { ...(error === undefined ? {} : { error }), services: companion === undefined ? services : [...services, companion] };
+};
+
+export { companionServiceBinding, readBoundServiceBindings, readServiceBindings, resolveServiceBindings };

@@ -84,7 +84,7 @@ describe("the generated companion Worker", () => {
 
         expect(wrangler).toMatchObject({ compatibility_date: "2025-01-01", main: "src/worker.ts", name: "my-app-advisor" });
         expect(wrangler).not.toHaveProperty("bindings");
-        expect(Array.isArray(JSON.parse(payload))).toBe(true);
+        expect(JSON.parse(payload)).toHaveProperty("procedures");
         expect(worker).toContain(JSON.stringify(payload));
         expect(wrangler).toMatchObject({ workers_dev: false });
         expect(worker).not.toContain("LUNORA_ADMIN_TOKEN");

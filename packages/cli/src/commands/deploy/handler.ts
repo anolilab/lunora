@@ -2,7 +2,7 @@ import { existsSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
-import { readServiceBindings, runCodegen } from "@lunora/codegen";
+import { readBoundServiceBindings, runCodegen } from "@lunora/codegen";
 import type { DeployDriver, DeployRequest, DiscoveryCache, ToolchainCommand } from "@lunora/config";
 import {
     clearApiSpecMarker,
@@ -548,7 +548,7 @@ const serviceDeploySkipReason = (options: DeployCommandOptions): string | undefi
 
 /** The Wrangler entrypoints of the services this run publishes, for the open-shard gate to read; none when it publishes no services. */
 const gateServicePaths = (cwd: string, options: DeployCommandOptions): string[] =>
-    serviceDeploySkipReason(options) === undefined ? readServiceBindings(cwd).services.map((service) => service.wranglerPath) : [];
+    serviceDeploySkipReason(options) === undefined ? readBoundServiceBindings(cwd).services.map((service) => service.wranglerPath) : [];
 
 // A service is its own Worker, so its own client build runs first, from its folder. The parent driver deploys it, so the build must
 // target the same host, and run for the environment wrangler deploys.
@@ -619,7 +619,7 @@ const firstServiceRefusal = (
  * bindings and runs the same refusal check the service loop runs. Services the deploy skips are not checked, as in the loop.
  */
 const serviceRefusalBeforeWrites = (cwd: string, options: DeployCommandOptions, target: string): string | undefined => {
-    const { error, services } = readServiceBindings(cwd);
+    const { error, services } = readBoundServiceBindings(cwd);
 
     // A read error is reported by the deploy itself; there is nothing to refuse here.
     if (error !== undefined || services.length === 0) {
@@ -1203,7 +1203,7 @@ const deployService = async (target: ServiceDeployTarget, run: ServiceDeployRun)
  * first deploy, so a refusal in one service leaves none of them live.
  */
 const deployServices = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver, spawner: Spawner): Promise<BeforeSpawnFailure | undefined> => {
-    const { error, services } = readServiceBindings(cwd);
+    const { error, services } = readBoundServiceBindings(cwd);
 
     if (error !== undefined) {
         return { code: EXIT_CODE.FAILURE, error };

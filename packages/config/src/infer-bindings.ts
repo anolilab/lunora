@@ -32,7 +32,7 @@ import {
     foldCapabilitySignals,
     mayReadCapabilityContext,
     NOTIFY_FILENAME,
-    readServiceBindings,
+    readBoundServiceBindings,
     sourceCapabilitySignals,
 } from "@lunora/codegen";
 // `worker-entry.ts` lexes the entry's exports; the lexer's wasm must be initialised first.
@@ -854,14 +854,21 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
 
     // Codegen throws, naming the entry, on a declaration it cannot wire; that
     // error surfaces there, so inference only reconciles what resolves.
-    const resolved = readServiceBindings(options.projectRoot);
+    const resolved = readBoundServiceBindings(options.projectRoot);
     const services = resolved.error === undefined ? resolved.services : undefined;
 
     if (resolved.error !== undefined) {
         signals.push(`hint: lunora.config \`services\` not reconciled — ${resolved.error}`);
     }
 
-    signals.push(...resolved.services.map((service) => `${service.binding} → ${service.worker} (lunora.config services.${service.name})`));
+    signals.push(
+        ...resolved.services.map((service) =>
+            // The companion is Lunora's own Worker, enabled by `studio.companion`, not a `services` declaration.
+            service.name === "advisorCompanion"
+                ? `${service.binding} → ${service.worker} (studio.companion)`
+                : `${service.binding} → ${service.worker} (lunora.config services.${service.name})`,
+        ),
+    );
 
     return {
         // The scanned flags first: `needsD1` below replaces the raw `env.DB` flag
