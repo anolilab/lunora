@@ -1,3 +1,7 @@
+## @lunora/advisor [1.0.0-alpha.288](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.287...@lunora/advisor@1.0.0-alpha.288) (2026-11-04)
+
+- Serve the advisor procedure list from a generated sidecar and an opt-in companion Worker instead of the generated worker (#1465, #1473). Breaking on alpha: `__lunora_admin__:getAdvisorProcedures`, `ShardDO.advisorProcedures()` and the `LUNORA_ADVISOR_PROCEDURES` literal are removed; re-run `lunora codegen` after upgrading, or `tsc` fails with TS4113 on the old `_generated/shard.ts`.
+
 ## @lunora/advisor [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.286...@lunora/advisor@1.0.0-alpha.287) (2026-11-04)
 
 - Release 1.0.0-alpha.287. Commit a2f1851 set this version and it was never published, so it is released from HEAD.

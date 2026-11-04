@@ -1,3 +1,7 @@
+## @lunora/vite [1.0.0-alpha.427](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.426...@lunora/vite@1.0.0-alpha.427) (2026-11-04)
+
+- Serve the advisor procedure list from a generated sidecar and an opt-in companion Worker instead of the generated worker (#1465, #1473). Breaking on alpha: `__lunora_admin__:getAdvisorProcedures`, `ShardDO.advisorProcedures()` and the `LUNORA_ADVISOR_PROCEDURES` literal are removed; re-run `lunora codegen` after upgrading, or `tsc` fails with TS4113 on the old `_generated/shard.ts`.
+
 ## @lunora/vite [1.0.0-alpha.426](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.425...@lunora/vite@1.0.0-alpha.426) (2026-11-04)
 
 - Release 1.0.0-alpha.426. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
