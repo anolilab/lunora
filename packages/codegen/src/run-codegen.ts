@@ -797,9 +797,6 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const advisorProcedureDocument: AdvisorProcedureDocument =
         advisorContext === undefined ? { analysis: "disabled", procedures: [] } : { procedures: [...advisorProcedureData] };
     const advisorProceduresJson = `${JSON.stringify(advisorProcedureDocument, undefined, 2)}\n`;
-    // The sidecar file itself is only written with evidence: a `lint: false` run would otherwise replace a real
-    // roster with the marker below.
-    const hasAdvisorProcedures = advisorContext !== undefined;
     const wantsOpenRpc = apiSpec === "openrpc" || apiSpec === "both";
 
     // The fluent worker-composition builder. Emits one method per package-backed
@@ -990,11 +987,10 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: wantsOpenRpc ? openRpcModuleContent : "", kind: "optional", name: "openrpc.ts" },
               // Studio-only data (the health map's denominator). The main app Worker never
               // carries it: the dev hosts serve this file to the studio, and a hosted Studio
-              // gets it from the opt-in companion Worker (`studio.companion`). Shape-checked
-              // against `@lunora/shard-engine`'s `AdvisorProcedure` before it is written, so a
-              // field added to the advisor's type and forgotten there fails codegen. Skipped
-              // without advisor evidence, leaving any existing file.
-              ...(hasAdvisorProcedures ? [{ content: advisorProceduresJson, kind: "optional" as const, name: "advisor-procedures.json" }] : []),
+              // gets it from the opt-in companion Worker (`studio.companion`). A `lint: false`
+              // run writes the marker here too, so the dev host never serves a roster from an
+              // earlier run next to this run's (empty) advisories.
+              { content: advisorProceduresJson, kind: "optional", name: "advisor-procedures.json" },
               // Same pairing as the specs: the `.json` for tooling, the `.ts` for `createWorker({ architecture })`,
               // both removed when the last module goes.
               {

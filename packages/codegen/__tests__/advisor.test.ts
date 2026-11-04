@@ -325,7 +325,7 @@ export const tally = internalMutation.mutation(async ({ ctx }) => {
         expect((emittedAdvisories(shard) as { name: string }[]).map((advisory) => advisory.name)).toContain("unindexed_foreign_key");
     });
 
-    it("leaves an existing advisor-procedures.json intact under `lint: false`", () => {
+    it("replaces an earlier roster with the disabled marker under `lint: false`", () => {
         expect.assertions(3);
 
         runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
@@ -333,12 +333,12 @@ export const tally = internalMutation.mutation(async ({ ctx }) => {
         const sidecar = join(workdir, "lunora", "_generated", "advisor-procedures.json");
         const written = readFileSync(sidecar, "utf8");
 
-        // Stand in for a real list so an overwrite with the empty placeholder is visible.
-        writeFileSync(sidecar, '{"procedures":[{"exportName":"kept"}]}\n', "utf8");
+        expect(written).toContain('"procedures"');
+
+        // A roster kept from the earlier run would no longer match this run's (empty) advisories.
         runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
-        expect(written).toContain('"procedures"');
-        expect(readFileSync(sidecar, "utf8")).toBe('{"procedures":[{"exportName":"kept"}]}\n');
+        expect(JSON.parse(readFileSync(sidecar, "utf8"))).toStrictEqual({ analysis: "disabled", procedures: [] });
 
         runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
