@@ -1926,6 +1926,42 @@ describe("lunora dev", () => {
             expect(withoutConfig.join("\n")).not.toContain("dev-bindings.json");
         });
 
+        it("points the banner at the studio's cron and queue triggers", async () => {
+            expect.assertions(2);
+
+            const infos: string[] = [];
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-01-01",
+                    main: "src/index.ts",
+                    name: "app",
+                    queues: { producers: [{ binding: "EMAILS", queue: "emails" }] },
+                    triggers: { crons: ["0 * * * *"] },
+                }),
+                "utf8",
+            );
+            await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), info: (message: string) => infos.push(message) },
+                probeReady: async () => true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+            });
+
+            expect(infos).toContain("  ➜  Crons:      1 scheduled → run one now in http://127.0.0.1:6173/schedule");
+            expect(infos).toContain("  ➜  Queues:     emails → send a test message in http://127.0.0.1:6173/queues");
+        });
+
         it("does not fail a project that has no wrangler config when nobody asked", async () => {
             expect.assertions(2);
 

@@ -15,6 +15,7 @@ import {
     DEV_STATE_FILE,
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
+    devTriggerHints,
     ensureDevVariables,
     ensureDevVarsExample,
     fillDevSecrets,
@@ -55,7 +56,7 @@ import { normalizeAllowMail, printPublicWarning, startTunnelForPlan } from "./tu
 import type { DevCommandOptions, DevCommandPlan, DevTunnelRequest, WorkerProcess, WorkerSpawner } from "./types";
 
 /** Print the Convex-style startup banner once the studio + worker URLs are known. */
-const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | undefined, manifestPath: string | undefined): void => {
+const printBanner = (logger: Logger, plan: DevCommandPlan, cwd: string, studioUrl: string | undefined, manifestPath: string | undefined): void => {
     logger.info("");
     logger.success("Lunora dev");
     logger.info(`  ➜  Worker:     ${plan.workerOrigin}`);
@@ -68,6 +69,12 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | u
 
     if (plan.runsCodegenWatch) {
         logger.info("  ➜  Codegen:    watching lunora/");
+    }
+
+    // Studio pointers only: `wrangler dev` already prints the `curl` for its
+    // `/cdn-cgi/local/scheduled` route when the config declares crons.
+    for (const { label, text } of devTriggerHints({ projectRoot: cwd, studioUrl })) {
+        logger.info(`  ➜  ${`${label}:`.padEnd(12)}${text}`);
     }
 
     // The two files a task runner reads. The manifest is written whether or not
@@ -229,7 +236,7 @@ const afterWorkerSpawn = (
         /* never fatal */
     }
 
-    printBanner(logger, plan, studioUrl, manifestPath);
+    printBanner(logger, plan, cwd, studioUrl, manifestPath);
 
     return containerLogs;
 };

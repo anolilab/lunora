@@ -539,6 +539,25 @@ interface DevServerState {
 }
 ```
 
+### `DevTriggerHint` (interface)
+
+```ts
+interface DevTriggerHint {
+    label: "Crons" | "Queues";
+    text: string;
+}
+```
+
+### `DevTriggerHintOptions` (interface)
+
+```ts
+interface DevTriggerHintOptions {
+    projectRoot: string;
+    scheduledUrl?: string;
+    studioUrl?: string;
+}
+```
+
 ### `DiscoverAgentInfoResult` (interface)
 
 ```ts
@@ -1432,6 +1451,12 @@ const detectLintTools: (projectRoot: string) => LintTool[];
 
 ```ts
 const detectPackageManager: (startDirectory: string) => PackageManager;
+```
+
+### `devTriggerHints` (const)
+
+```ts
+const devTriggerHints: (options: DevTriggerHintOptions) => DevTriggerHint[];
 ```
 
 ### `discoverAgentInfo` (const)
