@@ -28,8 +28,8 @@ export const refreshHeadline = internalMutation.input({ organizationId: v.string
     ]);
     const next: Headline = { computedAt: Date.now(), done, open: all - done - archived };
 
-    await ctx.kv.put(`headline:${args.organizationId}`, next, { expirationTtl: 86_400 });
-    ctx.analytics.track("headline.refresh", { dimensions: { organizationId: args.organizationId }, metrics: { open: next.open } });
+    await ctx.kv.put(`headline:${organizationId}`, next, { expirationTtl: 86_400 });
+    ctx.analytics.track("headline.refresh", { dimensions: { organizationId }, metrics: { open: next.open } });
 
     return next;
 });

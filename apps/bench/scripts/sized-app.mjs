@@ -7,16 +7,13 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { buildWorker } from "./worker-startup-measure.js";
+import { buildWorker, quietEnv as measureEnv } from "./worker-startup-measure.js";
 import { appDirectory, generate } from "./generate.mjs";
 
 export const benchDirectory = join(appDirectory, ".bench");
 export const cli = join(appDirectory, "node_modules", "lunorash", "dist", "bin.mjs");
 export const wrangler = join(appDirectory, "node_modules", ".bin", "wrangler");
-// An exported LUNORA_LAZY_FUNCTIONS opts in as well as the flag, so it would turn every eager build lazy.
-const { LUNORA_LAZY_FUNCTIONS: _inheritedLazy, ...inheritedEnv } = process.env;
-
-export const quietEnv = { ...inheritedEnv, CI: "1", WRANGLER_SEND_METRICS: "false" };
+export const quietEnv = measureEnv();
 
 export const parseModes = (list) => {
     const modes = list.split(",").map((mode) => mode.trim());
