@@ -20,10 +20,10 @@ const ADVISOR_PROCEDURES_ENDPOINT = "/__lunora/advisor-procedures";
  */
 const ADVISOR_PROCEDURES_REFRESH_MS = 60_000;
 
-/** A hosted Studio's worker: where to fetch from and the admin bearer to present. */
+/** A hosted Studio's worker: where to fetch from and the admin bearer to present, if the client holds one. */
 interface RemoteProceduresSource {
     readonly baseUrl: string;
-    readonly token: string;
+    readonly token: string | undefined;
 }
 
 /**
@@ -37,9 +37,9 @@ type AdvisorProceduresSource = { readonly kind: "local" } | { readonly kind: "no
 /**
  * Resolve the source from the two host flags. The local route wins: a dev host
  * serves the file it generated. Otherwise a hosted Studio reads it from the worker
- * it already talks to, provided it has the admin token that route is gated on;
- * without one the panel says what is missing rather than firing a request that
- * would only come back 401.
+ * it already talks to. A client without a bearer still asks: an operator signed
+ * in through Cloudflare Access or a cookie session passes the worker's admin gate
+ * on the cookie alone.
  */
 const resolveAdvisorProceduresSource = (options: {
     readonly advisorCompanion: boolean;
@@ -51,8 +51,10 @@ const resolveAdvisorProceduresSource = (options: {
         return { kind: "local" };
     }
 
-    if (options.advisorCompanion && options.token !== null && options.token !== "") {
-        return { kind: "remote", remote: { baseUrl: workerBaseUrl(options.workerUrl), token: options.token } };
+    if (options.advisorCompanion) {
+        const token = options.token === null || options.token === "" ? undefined : options.token;
+
+        return { kind: "remote", remote: { baseUrl: workerBaseUrl(options.workerUrl), token } };
     }
 
     return { kind: "none" };
@@ -74,7 +76,11 @@ const fetchAdvisorProcedures = async (remote: RemoteProceduresSource | undefined
     const response =
         remote === undefined
             ? await fetch(ADVISOR_PROCEDURES_ENDPOINT)
-            : await fetch(`${remote.baseUrl}${ADVISOR_PROCEDURES_ENDPOINT}`, { headers: { authorization: `Bearer ${remote.token}` } });
+            : await fetch(`${remote.baseUrl}${ADVISOR_PROCEDURES_ENDPOINT}`, {
+                  // Same as the client's admin requests: the bearer when it has one, and the session cookie either way.
+                  credentials: "include",
+                  headers: remote.token === undefined ? {} : { authorization: `Bearer ${remote.token}` },
+              });
 
     if (remote !== undefined && response.status === 404) {
         throw new CompanionNotDeployedError();
@@ -92,7 +98,14 @@ const fetchAdvisorProcedures = async (remote: RemoteProceduresSource | undefined
         throw new Error(reason);
     }
 
-    return (await response.json()) as AdvisorProceduresResult;
+    const body: unknown = await response.json();
+
+    // Anything without a roster (the disabled marker carries an empty one) would leave the panel on "Loading…".
+    if (typeof body !== "object" || body === null || !Array.isArray((body as { procedures?: unknown }).procedures)) {
+        throw new Error("The advisor procedure route answered without a procedure list.");
+    }
+
+    return body as AdvisorProceduresResult;
 };
 
 interface AdvisorProceduresOptions {

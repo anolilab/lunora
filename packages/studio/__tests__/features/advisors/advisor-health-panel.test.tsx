@@ -70,7 +70,7 @@ describe("advisorHealthPanel", () => {
 
         const fetchMock = stubProceduresResponse(200, { procedures: [] });
 
-        render(renderPanel(false));
+        render(renderPanel(false, null, false));
 
         const notice = await screen.findByTestId("advisor-health-local-only");
 
@@ -148,7 +148,35 @@ describe("advisorHealthPanel", () => {
         const score = await screen.findByTestId("advisor-health-score");
 
         expect(score.textContent).toMatch(/^\d+$/);
-        expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8787/__lunora/advisor-procedures", { headers: { authorization: "Bearer test-token" } });
+        expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8787/__lunora/advisor-procedures", {
+            credentials: "include",
+            headers: { authorization: "Bearer test-token" },
+        });
+    });
+
+    it("asks the worker on the session cookie alone when the client holds no bearer", async () => {
+        expect.assertions(2);
+
+        const fetchMock = stubProceduresResponse(200, { procedures: [] });
+
+        render(renderPanel(false, null));
+
+        await screen.findByTestId("advisor-health-score");
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8787/__lunora/advisor-procedures", { credentials: "include", headers: {} });
+    });
+
+    it("reports a response without a procedure list instead of loading forever", async () => {
+        expect.assertions(1);
+
+        stubProceduresResponse(200, {});
+
+        render(renderPanel(true));
+
+        const alert = await screen.findByTestId("advisor-health-error");
+
+        expect(alert.textContent).toContain("without a procedure list");
     });
 
     it("says the companion is not deployed when the configured worker answers 404", async () => {
