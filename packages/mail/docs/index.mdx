@@ -237,7 +237,12 @@ schema declares `.jurisdiction(...)`, this RPC and the dev capture inbox go to t
 jurisdiction-pinned shard with no option passed; see
 [Data residency](/docs/concepts/data-residency#pinning-mail).
 
-Failures split by whether a redelivery could ever succeed. A **parse or verify**
+A message over `maxRawBytes` (default 10 MiB, checked against `message.rawSize`) is
+refused before it is read: parsing holds the raw bytes, the decoded parts and every
+attachment at once, and a message near Email Routing's 25 MiB ceiling can outgrow
+the isolate. It goes down the same path as a parse failure.
+
+Failures split by whether a redelivery could ever succeed. A **size, parse or verify**
 failure is permanent — the same bytes fail the same way — so the handler calls
 `message.setReject(reason)` and Cloudflare bounces the mail to the sender;
 override `onError` to log/forward/swallow instead. A **dispatch** failure (a

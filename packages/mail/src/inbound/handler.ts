@@ -56,6 +56,12 @@ interface ForwardableEmailMessageLike {
     readonly headers: Headers;
     /** Stream of the raw RFC 822 message content. */
     readonly raw: ReadableStream<Uint8Array>;
+
+    /**
+     * Size of `raw` in bytes. Cloudflare always sets it; it is optional so a hand-built
+     * test double can omit it, which skips the handler's size guard.
+     */
+    readonly rawSize?: number;
     /** Reply to the sender with a new message. */
     reply: (message: { from: string; raw: string; to: string }) => Promise<unknown>;
 
@@ -120,10 +126,20 @@ interface InboundEmailHandlerOptions<TEnv = Record<string, unknown>> {
     dispatch: InboundDispatch<TEnv>;
 
     /**
-     * Called when `parse`, `verify`, or `dispatch` fails — but with two DIFFERENT
-     * contracts, because only the first two decide the message's fate here:
+     * Largest message, in bytes (`message.rawSize`), the handler parses; anything
+     * bigger is refused through `onError` before a byte of it is read. Default
+     * 10 MiB. Parsing holds the raw bytes, the decoded parts and every attachment
+     * at once, so a message near Email Routing's 25 MiB ceiling can outgrow the
+     * isolate's 128 MB.
+     */
+    maxRawBytes?: number;
+
+    /**
+     * Called when the size guard (`maxRawBytes`), `parse`, `verify`, or `dispatch`
+     * fails — but with two DIFFERENT contracts, because only the first three decide
+     * the message's fate here:
      *
-     * - `parse` / `verify` — this hook DECIDES the outcome. The default
+     * - size / `parse` / `verify` — this hook DECIDES the outcome. The default
      * ({@link rejectOnError}) rejects via `message.setReject`; supplying your own
      * replaces that, so the message is accepted unless you reject it yourself.
      * - `dispatch` — this hook is OBSERVABILITY ONLY. It is called for the side
@@ -168,6 +184,8 @@ type InboundEmailHandler<TEnv = Record<string, unknown>> = (message: Forwardable
  */
 const GENERIC_REJECT_REASON = "message could not be processed";
 
+const DEFAULT_MAX_RAW_BYTES = 10 * 1024 * 1024;
+
 /**
  * Default `onError`: reject the message so Cloudflare reports a permanent
  * failure, but with a fixed generic reason — the detailed error is logged
@@ -182,13 +200,13 @@ const rejectOnError = <TEnv = Record<string, unknown>>(error: unknown, context: 
 };
 
 /**
- * Build the `email(message, env, ctx)` handler. It (a) reads `message.raw`,
- * (b) parses it via `parse`, (c) runs the optional `verify` gate, then
- * (d) calls `dispatch(parsed, { message, env, ctx })`.
+ * Build the `email(message, env, ctx)` handler. It (a) refuses a message over
+ * `maxRawBytes`, (b) parses `message.raw` via `parse`, (c) runs the optional
+ * `verify` gate, then (d) calls `dispatch(parsed, { message, env, ctx })`.
  *
  * The two failure classes are routed differently:
  *
- * - `parse` / `verify` (including a falsy `verify`) → `onError` (default: a
+ * - size / `parse` / `verify` (including a falsy `verify`) → `onError` (default: a
  * generic `message.setReject`). A malformed or unauthenticated message fails
  * the same way on every redelivery, so bouncing it is the honest answer.
  * - `dispatch` (or its transport) → a custom `onError` is called for
@@ -246,14 +264,27 @@ const rejectOnError = <TEnv = Record<string, unknown>>(error: unknown, context: 
 // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- mirrors InboundVerify's public return type, which admits `void` for a no-return hook
 const verifyPassed = (verified: boolean | void): boolean => verified === true || verified === undefined;
 
+/** Refuse a message too big to parse safely, before its stream is read. */
+const assertWithinSizeLimit = (message: ForwardableEmailMessageLike, maxRawBytes: number): void => {
+    if (message.rawSize !== undefined && message.rawSize > maxRawBytes) {
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/mail/inbound: message is ${String(message.rawSize)} bytes, over the ${String(maxRawBytes)}-byte limit (maxRawBytes)`,
+        );
+    }
+};
+
 const createInboundEmailHandler = <TEnv = Record<string, unknown>>(options: InboundEmailHandlerOptions<TEnv>): InboundEmailHandler<TEnv> => {
     const onError = options.onError ?? rejectOnError;
+    const maxRawBytes = options.maxRawBytes ?? DEFAULT_MAX_RAW_BYTES;
 
     return async (message, env, context_) => {
         const context: InboundDispatchContext<TEnv> = { ctx: context_, env, message };
         let parsed: InboundEmail;
 
         try {
+            assertWithinSizeLimit(message, maxRawBytes);
+
             parsed = await options.parse(message.raw);
 
             if (options.verify) {

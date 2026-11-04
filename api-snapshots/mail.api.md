@@ -285,6 +285,7 @@ interface ForwardableEmailMessageLike {
     readonly from: string;
     readonly headers: Headers;
     readonly raw: ReadableStream<Uint8Array>;
+    readonly rawSize?: number;
     reply: (message: {
         from: string;
         raw: string;
@@ -372,6 +373,7 @@ type InboundEmailHandler<TEnv = Record<string, unknown>> = (message: Forwardable
 ```ts
 interface InboundEmailHandlerOptions<TEnv = Record<string, unknown>> {
     dispatch: InboundDispatch<TEnv>;
+    maxRawBytes?: number;
     onError?: (error: unknown, context: InboundDispatchContext<TEnv>) => Promise<void> | void;
     parse: (raw: RawInboundEmail) => Promise<InboundEmail>;
     retain?: InboundRetain<TEnv>;

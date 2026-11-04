@@ -31,6 +31,53 @@ const fakeMessage = (overrides: Partial<ForwardableEmailMessageLike> = {}): Forw
 };
 
 describe("createInboundEmailHandler", () => {
+    describe("size guard", () => {
+        const TEN_MIB = 10 * 1024 * 1024;
+
+        it("refuses a message over the default 10 MiB through the reject path, without reading or parsing it", async () => {
+            expect.assertions(3);
+
+            const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const parse = vi.fn<() => Promise<InboundEmail>>(async () => fixture);
+            const dispatch = vi.fn<() => Promise<void>>(async () => undefined);
+            const message = fakeMessage({ rawSize: TEN_MIB + 1 });
+
+            await createInboundEmailHandler({ dispatch, parse })(message, {}, undefined);
+
+            consoleError.mockRestore();
+
+            expect(parse).not.toHaveBeenCalled();
+            expect(dispatch).not.toHaveBeenCalled();
+            expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
+        });
+
+        it("parses a message at exactly the limit", async () => {
+            expect.assertions(2);
+
+            const parse = vi.fn<() => Promise<InboundEmail>>(async () => fixture);
+            const message = fakeMessage({ rawSize: TEN_MIB });
+
+            await createInboundEmailHandler({ dispatch: async () => undefined, parse })(message, {}, undefined);
+
+            expect(parse).toHaveBeenCalledTimes(1);
+            expect(message.setReject).not.toHaveBeenCalled();
+        });
+
+        it("honours a custom maxRawBytes and hands the refusal to a custom onError", async () => {
+            expect.assertions(3);
+
+            const parse = vi.fn<() => Promise<InboundEmail>>(async () => fixture);
+            const onError = vi.fn<(error: unknown) => void>();
+            const message = fakeMessage({ rawSize: 2048 });
+
+            await createInboundEmailHandler({ dispatch: async () => undefined, maxRawBytes: 1024, onError, parse })(message, {}, undefined);
+
+            expect(parse).not.toHaveBeenCalled();
+            expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("maxRawBytes") }), expect.anything());
+            expect(message.setReject).not.toHaveBeenCalled();
+        });
+    });
+
     it("reads raw, parses, and dispatches the parsed message", async () => {
         expect.assertions(4);
 
