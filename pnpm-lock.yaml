@@ -540,8 +540,8 @@ catalogs:
       specifier: 4.1.0
       version: 4.1.0
     '@visulima/vis':
-      specifier: 6.5.1
-      version: 6.5.1
+      specifier: 6.5.3
+      version: 6.5.3
     csv-parse:
       specifier: 7.0.3
       version: 7.0.3
@@ -1234,7 +1234,7 @@ importers:
         version: 4.1.0
       '@visulima/vis':
         specifier: catalog:prod
-        version: 6.5.1(@grpc/grpc-js@1.14.5)(@grpc/proto-loader@0.8.1)(@shikijs/langs@4.6.0)(@shikijs/themes@4.6.0)(ai@7.0.127(zod@4.6.6))(cfonts@3.3.1)(diff@9.0.0)(fb-watchman@2.0.2)(graphology-types@0.24.8)(marked@18.1.2)(mysql2@3.24.6(@types/node@26.6.4))(pg@8.23.1)(shiki@4.6.0)
+        version: 6.5.3(@grpc/grpc-js@1.14.5)(@grpc/proto-loader@0.8.1)(@shikijs/langs@4.6.0)(@shikijs/themes@4.6.0)(ai@7.0.127(zod@4.6.6))(cfonts@3.3.1)(diff@9.0.0)(fb-watchman@2.0.2)(graphology-types@0.24.8)(marked@18.1.2)(mysql2@3.24.6(@types/node@26.6.4))(pg@8.23.1)(shiki@4.6.0)
       cz-conventional-changelog:
         specifier: catalog:prod
         version: 3.3.0(@types/node@26.6.4)(typescript@6.0.3)
@@ -16209,60 +16209,60 @@ packages:
       shiki:
         optional: true
 
-  '@visulima/vis-binding-darwin-arm64@6.5.1':
-    resolution: {integrity: sha512-GjEI4VkXAKiwnHTHJ5cSkSKm2XC0S+cbsgdKxma0CHL1lIdFVHLiwiqz5WrDxY1kK3ZjayfaIzYQAOmTkr2fbw==}
+  '@visulima/vis-binding-darwin-arm64@6.5.3':
+    resolution: {integrity: sha512-qRvysskwLJoBHCJMjpWisupA3JyAXbNqofs3MU27KL89Q84kA2Hbc3eWSE6Bt1Auh9cRbPAXvegwGeq6zqC4Rg==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [darwin]
 
-  '@visulima/vis-binding-darwin-x64@6.5.1':
-    resolution: {integrity: sha512-b6sXGOXfwhKYLR0qB+XZ8OT6U8EMNmMI4nJO6bxeaOn2w99CYvQRvUQzREtKB5Ac99yLVqBVHSw2Cm8iXCIt5Q==}
+  '@visulima/vis-binding-darwin-x64@6.5.3':
+    resolution: {integrity: sha512-edAWhcDGLm1Y5YlIggN3ZexCPYJcZxdF2AcoMla8PA6ynKl9chwUwQ1qURIFmgGBahfxQPtp3nfJT05PByapGQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [darwin]
 
-  '@visulima/vis-binding-linux-arm64-gnu@6.5.1':
-    resolution: {integrity: sha512-ZfysBuJraY1O94dD8n+3+SeIylXM27utxrRaZT/cgYAFxJWs0KV7AFTxmNdq6Qac19n4OewoJV061XHz19daLQ==}
+  '@visulima/vis-binding-linux-arm64-gnu@6.5.3':
+    resolution: {integrity: sha512-hhUqXaNg6G0nUoezOeYN53Ka1oKE2TEPQevfByQxEn6g8fzl/nN1e/6Ir4nSwPadLBfFII1EA5TI8j3FHyTzbA==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@visulima/vis-binding-linux-arm64-musl@6.5.1':
-    resolution: {integrity: sha512-TjOuVLQ/NSI0GfwK+IKgsqhOfE+UYxurhDFiSjgTcbPPz7DC1huUBcTnmKwCnj2ibxsio9kgrBIZc4Q8T73bgQ==}
+  '@visulima/vis-binding-linux-arm64-musl@6.5.3':
+    resolution: {integrity: sha512-5Gl67L4rcgXGZ0OnayLy6xkZjcuW88jaMp9gjvNgWruLwEVTDiqXGxsZ9686jPjzop8Ty8BGy+eIgU6ur91DVw==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  '@visulima/vis-binding-linux-x64-gnu@6.5.1':
-    resolution: {integrity: sha512-W/f0g9nm7CrTcu88J17Jqwn3dVirj4TixCNPYa/gSxg0wUVvQyVGVwWpR6LJw/byaoYbOpU145SW6swZQqTQRQ==}
+  '@visulima/vis-binding-linux-x64-gnu@6.5.3':
+    resolution: {integrity: sha512-tMR013w2jlA+TUV78IUtxkXydYszt8taHiIntpxPPBM6jut2cQnNeyk66N6xltBom3fKA3xzlm+ufjyiphggUg==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@visulima/vis-binding-linux-x64-musl@6.5.1':
-    resolution: {integrity: sha512-mWPwXAyd0+7mnolniR9GsBIbauQiFhlXRItE8y3ugoqi14IJpKZEnU1dNlJ2VrD/d1kf5DXGeRLDXv4RBmM8CA==}
+  '@visulima/vis-binding-linux-x64-musl@6.5.3':
+    resolution: {integrity: sha512-Di4Oqk0jZ65B5ouvNQGh5JCN//yOcmdkrkFyoxRPYon0DOqG7xdrpIItPFSIwN1DpexKywuHqDx+rISxeF3WaA==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@visulima/vis-binding-win32-arm64-msvc@6.5.1':
-    resolution: {integrity: sha512-bTjTHbq8Umlf+5oY776F48sgngPlPSLMNLv2iBK7fIQa3L92NmMZ1Wdf3EfkDnCPkImfqpahpGFGNkycB7K4Dw==}
+  '@visulima/vis-binding-win32-arm64-msvc@6.5.3':
+    resolution: {integrity: sha512-GoFrEeRMYBlpOlfAA8A1yWuBd4O3hoL5hzpP0A4U6TDQ4dRDshDdVB/KAwPPZa6rrc2S9OiyVx1gCQyTf93b/Q==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [win32]
 
-  '@visulima/vis-binding-win32-x64-msvc@6.5.1':
-    resolution: {integrity: sha512-xbT7Tn+bRuQANayPUBwOE03rvVgZeT7k+umUn9bWTFpXue/Yj0aZHDyBiJuJAj8qARvkFePhqpd1NOaqefPH1g==}
+  '@visulima/vis-binding-win32-x64-msvc@6.5.3':
+    resolution: {integrity: sha512-ngoRmWvMxiECXJ/81dJCi4PWQtoBgWZq/hpRmfeqLvONkkNOGbE8V67IgiOtKWzGfpcIMf9NA+gGXpi7PqgR3Q==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [win32]
 
-  '@visulima/vis@6.5.1':
-    resolution: {integrity: sha512-gTYz12cXA+25jozCgfaaRw2xRYAViAFRb72gvZMWmw4AOZo9VowyRIZm9cyfOQh0tXLTmbUThK7iNADEA4UZ9A==}
+  '@visulima/vis@6.5.3':
+    resolution: {integrity: sha512-MGMBBejbqkdzOiXdFWIBEos/CCGE3ol/uIH4/xsTYANGqCiu0dQ/2c8o8qLORXUNGdophos7ZeVuJ2RN0vUvbA==}
     engines: {node: ^22.14.0 || >=24.10.0}
     hasBin: true
     peerDependencies:
@@ -38393,7 +38393,7 @@ snapshots:
 
   '@visulima/secret-scanner@2.1.0(@grpc/grpc-js@1.14.5)(mysql2@3.24.6(@types/node@26.6.4))(pg@8.23.1)':
     dependencies:
-      ignore: 7.0.12
+      ignore: 7.0.14
     optionalDependencies:
       '@grpc/grpc-js': 1.14.5
       '@visulima/secret-scanner-binding-darwin-arm64': 2.1.0
@@ -38669,31 +38669,31 @@ snapshots:
     transitivePeerDependencies:
       - ai
 
-  '@visulima/vis-binding-darwin-arm64@6.5.1':
+  '@visulima/vis-binding-darwin-arm64@6.5.3':
     optional: true
 
-  '@visulima/vis-binding-darwin-x64@6.5.1':
+  '@visulima/vis-binding-darwin-x64@6.5.3':
     optional: true
 
-  '@visulima/vis-binding-linux-arm64-gnu@6.5.1':
+  '@visulima/vis-binding-linux-arm64-gnu@6.5.3':
     optional: true
 
-  '@visulima/vis-binding-linux-arm64-musl@6.5.1':
+  '@visulima/vis-binding-linux-arm64-musl@6.5.3':
     optional: true
 
-  '@visulima/vis-binding-linux-x64-gnu@6.5.1':
+  '@visulima/vis-binding-linux-x64-gnu@6.5.3':
     optional: true
 
-  '@visulima/vis-binding-linux-x64-musl@6.5.1':
+  '@visulima/vis-binding-linux-x64-musl@6.5.3':
     optional: true
 
-  '@visulima/vis-binding-win32-arm64-msvc@6.5.1':
+  '@visulima/vis-binding-win32-arm64-msvc@6.5.3':
     optional: true
 
-  '@visulima/vis-binding-win32-x64-msvc@6.5.1':
+  '@visulima/vis-binding-win32-x64-msvc@6.5.3':
     optional: true
 
-  '@visulima/vis@6.5.1(@grpc/grpc-js@1.14.5)(@grpc/proto-loader@0.8.1)(@shikijs/langs@4.6.0)(@shikijs/themes@4.6.0)(ai@7.0.127(zod@4.6.6))(cfonts@3.3.1)(diff@9.0.0)(fb-watchman@2.0.2)(graphology-types@0.24.8)(marked@18.1.2)(mysql2@3.24.6(@types/node@26.6.4))(pg@8.23.1)(shiki@4.6.0)':
+  '@visulima/vis@6.5.3(@grpc/grpc-js@1.14.5)(@grpc/proto-loader@0.8.1)(@shikijs/langs@4.6.0)(@shikijs/themes@4.6.0)(ai@7.0.127(zod@4.6.6))(cfonts@3.3.1)(diff@9.0.0)(fb-watchman@2.0.2)(graphology-types@0.24.8)(marked@18.1.2)(mysql2@3.24.6(@types/node@26.6.4))(pg@8.23.1)(shiki@4.6.0)':
     dependencies:
       '@floating-ui/core': 1.8.0
       '@floating-ui/dom': 1.8.0
@@ -38711,14 +38711,14 @@ snapshots:
       react-reconciler: 0.33.0(react@19.3.1)
       sigma: 4.0.3(graphology-types@0.24.8)
     optionalDependencies:
-      '@visulima/vis-binding-darwin-arm64': 6.5.1
-      '@visulima/vis-binding-darwin-x64': 6.5.1
-      '@visulima/vis-binding-linux-arm64-gnu': 6.5.1
-      '@visulima/vis-binding-linux-arm64-musl': 6.5.1
-      '@visulima/vis-binding-linux-x64-gnu': 6.5.1
-      '@visulima/vis-binding-linux-x64-musl': 6.5.1
-      '@visulima/vis-binding-win32-arm64-msvc': 6.5.1
-      '@visulima/vis-binding-win32-x64-msvc': 6.5.1
+      '@visulima/vis-binding-darwin-arm64': 6.5.3
+      '@visulima/vis-binding-darwin-x64': 6.5.3
+      '@visulima/vis-binding-linux-arm64-gnu': 6.5.3
+      '@visulima/vis-binding-linux-arm64-musl': 6.5.3
+      '@visulima/vis-binding-linux-x64-gnu': 6.5.3
+      '@visulima/vis-binding-linux-x64-musl': 6.5.3
+      '@visulima/vis-binding-win32-arm64-msvc': 6.5.3
+      '@visulima/vis-binding-win32-x64-msvc': 6.5.3
       fb-watchman: 2.0.2
     transitivePeerDependencies:
       - '@aws-sdk/client-sts'
@@ -43542,7 +43542,7 @@ snapshots:
     dependencies:
       '@sindresorhus/merge-streams': 4.0.0
       fast-glob: 3.3.3
-      ignore: 7.0.12
+      ignore: 7.0.14
       is-path-inside: 4.0.0
       micromatch: 4.0.8
       slash: 5.1.0

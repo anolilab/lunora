@@ -416,7 +416,7 @@ catalogs:
     "@commitlint/cli": ^21.2.4
     "@commitlint/config-conventional": ^21.2.4
     cz-conventional-changelog: ^3.3.0
-    "@visulima/vis": 6.5.1
+    "@visulima/vis": 6.5.3
     "@visulima/tabular": 4.1.0
     "@visulima/error": 6.1.0
   test:
@@ -1163,6 +1163,16 @@ minimumReleaseAgeExclude:
   - '@visulima/vis-binding-linux-x64-musl@6.5.1'
   - '@visulima/vis-binding-win32-arm64-msvc@6.5.1'
   - '@visulima/vis-binding-win32-x64-msvc@6.5.1'
+  # Published 2026-11-03 23:17 UTC for the vis 6.5.3 bump (stranded-version recovery); drop once past the 24h window.
+  - '@visulima/vis@6.5.3'
+  - '@visulima/vis-binding-darwin-arm64@6.5.3'
+  - '@visulima/vis-binding-darwin-x64@6.5.3'
+  - '@visulima/vis-binding-linux-arm64-gnu@6.5.3'
+  - '@visulima/vis-binding-linux-arm64-musl@6.5.3'
+  - '@visulima/vis-binding-linux-x64-gnu@6.5.3'
+  - '@visulima/vis-binding-linux-x64-musl@6.5.3'
+  - '@visulima/vis-binding-win32-arm64-msvc@6.5.3'
+  - '@visulima/vis-binding-win32-x64-msvc@6.5.3'
   - '@visulima/secret-scanner-binding-darwin-arm64@2.1.0'
   - '@visulima/secret-scanner-binding-darwin-x64@2.1.0'
   - '@visulima/secret-scanner-binding-linux-arm64-gnu@2.1.0'
