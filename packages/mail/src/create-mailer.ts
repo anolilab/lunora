@@ -19,8 +19,9 @@ const IDEMPOTENCY_KEY_PATTERN = /^[\u0021-\u007E]{1,256}$/u;
  * Settle with the transport's answer, or fail as outcome-unknown once the
  * deadline passes — a hung provider call must not hold a queue message until
  * the consumer's wall-clock limit, which redelivers a send that may have gone out.
+ * Whether that failure may be retried is decided by `send()`, not here.
  */
-const withSendDeadline = async <T>(work: Promise<T>, timeoutMs: number, retryable: boolean): Promise<T> => {
+const withSendDeadline = async <T>(work: Promise<T>, timeoutMs: number): Promise<T> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const deadline = new Promise<never>((_resolve, reject) => {
@@ -29,7 +30,7 @@ const withSendDeadline = async <T>(work: Promise<T>, timeoutMs: number, retryabl
                 new MailSendError({
                     message: `@lunora/mail: send timed out after ${String(timeoutMs)}ms, so it may have been delivered`,
                     outcomeUnknown: true,
-                    retryable,
+                    retryable: false,
                 }),
             );
         }, timeoutMs);
@@ -174,21 +175,25 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
 
     const send = async (options_: SendOptions): Promise<{ id: string }> => {
         const payload = await buildPayload(options_);
+        const { idempotencyKey } = options_;
 
         try {
-            const { idempotencyKey } = options_;
-
-            if (idempotencyKey === undefined) {
-                return await withSendDeadline(transport.send(payload), sendTimeoutMs, false);
+            return await withSendDeadline(transport.send(payload, { idempotencyKey }), sendTimeoutMs);
+        } catch (error) {
+            if (!(error instanceof MailSendError)) {
+                // A custom transport that throws something unclassified is treated as
+                // transient. The message is generic so a provider's raw text never
+                // reaches the caller; the original error stays on `cause`.
+                throw new MailSendError({ cause: error, retryable: true });
             }
 
-            // A provider that dedupes on the key drops the repeat if the timed-out send landed.
-            return await withSendDeadline(transport.send(payload, { idempotencyKey }), sendTimeoutMs, transport.dedupesOnIdempotencyKey === true);
-        } catch (error) {
-            // A custom transport that throws something unclassified is treated as
-            // transient. The message is generic so a provider's raw text never
-            // reaches the caller; the original error stays on `cause`.
-            throw error instanceof MailSendError ? error : new MailSendError({ cause: error, retryable: true });
+            // The one place a send that may have landed is made retryable: only a provider that
+            // dedupes on the key it was given drops the repeat, so a redelivery cannot mail twice.
+            if (error.outcomeUnknown && !error.retryable && idempotencyKey !== undefined && transport.dedupesOnIdempotencyKey === true) {
+                throw new MailSendError({ cause: error.cause, message: error.message, outcomeUnknown: true, retryable: true });
+            }
+
+            throw error;
         }
     };
 

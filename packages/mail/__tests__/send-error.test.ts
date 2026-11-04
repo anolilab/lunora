@@ -24,8 +24,8 @@ describe("mail send classification", () => {
         expect(isRetryableProviderError(wrap(new Error("socket reset")))).toBe(true);
     });
 
-    it("retries unless the provider gave an explicit permanent status or timed out", () => {
-        expect.assertions(7);
+    it("retries unless the provider gave an explicit permanent status", () => {
+        expect.assertions(6);
 
         const withCode = (code: number | string): Error => Object.assign(new Error("failed"), { code });
 
@@ -35,7 +35,6 @@ describe("mail send classification", () => {
         expect(isRetryableProviderError(withCode("403"))).toBe(false);
         expect(isRetryableProviderError(withCode(429))).toBe(true);
         expect(isRetryableProviderError(withCode(503))).toBe(true);
-        expect(isRetryableProviderError(withCode("ETIMEDOUT"))).toBe(false);
     });
 
     it("treats a transport error it did not classify as retryable, without leaking its text", async () => {
@@ -139,6 +138,32 @@ describe("send deadline", () => {
         expect(isRetryableMailError(await timedOut(true, "order-42"))).toBe(true);
         expect(isRetryableMailError(await timedOut(true))).toBe(false);
         expect(isRetryableMailError(await timedOut(false, "order-42"))).toBe(false);
+    });
+
+    it("decides retryability for a transport's own outcome-unknown failure by the same rule as the deadline", async () => {
+        expect.assertions(4);
+
+        const unknown = async (dedupes: boolean, idempotencyKey?: string): Promise<unknown> => {
+            const cause = new Error("provider aborted the request");
+            const mailer = createMailer({
+                from: "noreply@x.test",
+                transport: {
+                    dedupesOnIdempotencyKey: dedupes,
+                    send: async () => {
+                        throw new MailSendError({ cause, message: "@lunora/mail: provider timed out", outcomeUnknown: true, retryable: false });
+                    },
+                },
+            });
+
+            return mailer.send({ idempotencyKey, subject: "Hi", to: "a@x.test" }).catch((error: unknown) => error);
+        };
+
+        const promoted = await unknown(true, "order-42");
+
+        expect((promoted as MailSendError).data).toStrictEqual({ outcomeUnknown: true, retryable: true });
+        expect((promoted as MailSendError).message).toBe("@lunora/mail: provider timed out");
+        expect(isRetryableMailError(await unknown(true))).toBe(false);
+        expect(isRetryableMailError(await unknown(false, "order-42"))).toBe(false);
     });
 
     it("waits 60 seconds by default", async () => {

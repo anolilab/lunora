@@ -5,8 +5,8 @@ interface MailSendErrorData {
     /**
      * The send was cut off before the provider answered (the mailer's send deadline, or the
      * provider's own request timeout), so it may have been delivered. `retryable` is then true
-     * only when the provider dedupes on the send's idempotency key, so a repeat cannot mail a
-     * second copy.
+     * only when the send carried an idempotency key and its transport's provider dedupes on it
+     * (`MailTransport.dedupesOnIdempotencyKey`), so a repeat cannot mail a second copy.
      */
     outcomeUnknown: boolean;
     /** Whether repeating the same message may succeed. A refused address or malformed message never will. */

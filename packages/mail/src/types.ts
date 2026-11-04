@@ -88,10 +88,17 @@ export interface LunoraMailOptions {
     /**
      * How long `send()` waits for the transport before giving up, in milliseconds
      * (default 60 000). A send cut off here may still have been delivered, so it
-     * fails with an `outcomeUnknown`, non-retryable `MailSendError`: a queue
-     * consumer acks and reports it instead of redelivering a possible duplicate.
-     * The transport's own work is not cancelled — the Cloudflare binding and the
-     * provider client take no abort signal.
+     * fails with an `outcomeUnknown` `MailSendError`. It is retryable only when the
+     * send carried an `idempotencyKey` and the transport's provider dedupes on it
+     * (Resend); otherwise a queue consumer acks and reports it instead of
+     * redelivering a possible duplicate. The transport's own work is not
+     * cancelled — the Cloudflare binding and the provider client take no abort
+     * signal.
+     *
+     * Resend's HTTP client has its own clock: it aborts each request after 30
+     * seconds (`ETIMEDOUT`, outcome-unknown the same way and never repeated by the
+     * client) and repeats a 408, 429 or 503 up to three times, so one Resend send
+     * can keep running for about two minutes after this deadline has failed it.
      */
     sendTimeoutMs?: number;
     /** Override the underlying transport. Useful for tests, the dev capture transport, + multi-provider setups. */
