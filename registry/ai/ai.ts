@@ -76,8 +76,27 @@ export const summarize = action
         return { summary: result.text };
     });
 
+const SENTIMENTS = ["positive", "negative", "neutral"] as const;
+
+type Sentiment = (typeof SENTIMENTS)[number];
+
+/** The model's one word, checked: a reply that is not one of the labels fails rather than reaching the caller as one. */
+const toSentiment = (reply: string): Sentiment => {
+    const word = reply
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z]+$/u, "");
+    const sentiment = SENTIMENTS.find((label) => label === word);
+
+    if (sentiment === undefined) {
+        throw new LunoraError("INTERNAL", `analyzeSentiment: the model answered ${JSON.stringify(reply.slice(0, 40))}, not one of ${SENTIMENTS.join(", ")}`);
+    }
+
+    return sentiment;
+};
+
 /**
- * Analyze sentiment with structured output.
+ * Classify the sentiment of `text` as one of {@link SENTIMENTS}.
  */
 export const analyzeSentiment = action
     .input({ text: v.string().max(20_000) })
@@ -92,5 +111,5 @@ export const analyzeSentiment = action
             prompt: `Analyze the sentiment. Respond with one word: positive, negative, or neutral.\n\n${text}`,
         });
 
-        return { sentiment: result.text.trim().toLowerCase() as "positive" | "negative" | "neutral" };
+        return { sentiment: toSentiment(result.text) };
     });
