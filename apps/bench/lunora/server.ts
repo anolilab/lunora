@@ -1,4 +1,3 @@
-import { launch } from "@cloudflare/playwright";
 import type { BrowserBindingLike } from "@lunora/browser";
 import { createBrowser } from "@lunora/browser";
 import type { D1DatabaseLike } from "@lunora/d1";
@@ -13,8 +12,6 @@ import type { R2BucketLike } from "@lunora/storage";
 import { createProcedureChargeGate } from "@lunora/x402/charge";
 import type { ShardNamespaceLike } from "lunorash/runtime";
 import { consoleSink, otlpSink } from "lunorash/runtime";
-import postgres from "postgres";
-import { Stripe } from "stripe";
 
 import { defineApp } from "./_generated/app.js";
 import { openRpcSpec } from "./_generated/openrpc.js";
@@ -68,7 +65,7 @@ const serveMcp = async (request: Request, env: Env): Promise<Response> => {
         return new Response("unauthorized", { status: 401 });
     }
 
-    return serveStateless(createFunctionMcpServer({ allowWrites: false, openRpcSpec, token, url: env.LUNORA_ORIGIN_URL }), request);
+    return serveStateless(await createFunctionMcpServer({ allowWrites: false, openRpcSpec, token, url: env.LUNORA_ORIGIN_URL }), request);
 };
 
 /**
@@ -88,57 +85,30 @@ const ENTITLEMENTS: EntitlementsConfig = entitlementsFromPlans(PLANS);
  * The Stripe adapter, built once per isolate.
  *
  * The runtime calls the `.payment()` factory for every function context, not
- * just the ones that touch `ctx.payments`, so constructing `new Stripe(key)`
- * there made EVERY call — `saas.overview` included — throw when the key was
- * unset. The adapter only reaches its client inside a method, so the client is
- * resolved on first use instead, and a missing key fails that payment call with
- * a message that says what to set.
+ * just the ones that touch `ctx.payments`, so the adapter must not need the key
+ * to be built: an unset key would make EVERY call — `saas.overview` included —
+ * throw. The `client` loader runs on the first payment call instead, so a
+ * missing key fails that call with a message that says what to set (and the
+ * next call retries), and `stripe` is imported there rather than evaluated at
+ * Worker startup.
  */
 let stripeAdapter: PaymentAdapter | undefined;
-let stripe: Stripe | undefined;
-
-const stripeClient = (env: Env): Stripe => {
-    if (!env.STRIPE_SECRET_KEY) {
-        throw new LunoraError("NOT_IMPLEMENTED", "payments are not configured — set STRIPE_SECRET_KEY (and STRIPE_WEBHOOK_SECRET) in .dev.vars or as a secret");
-    }
-
-    // `stripe` is an optional peer dependency; the fetch HTTP client is required
-    // on workerd.
-    stripe ??= new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() });
-
-    return stripe;
-};
 
 const paymentAdapter = (env: Env): PaymentAdapter => {
     stripeAdapter ??= createStripeAdapter({
-        client: {
-            get billing() {
-                return stripeClient(env).billing;
-            },
-            get billingPortal() {
-                return stripeClient(env).billingPortal;
-            },
-            get checkout() {
-                return stripeClient(env).checkout;
-            },
-            get customers() {
-                return stripeClient(env).customers;
-            },
-            get paymentIntents() {
-                return stripeClient(env).paymentIntents;
-            },
-            get refunds() {
-                return stripeClient(env).refunds;
-            },
-            get subscriptionItems() {
-                return stripeClient(env).subscriptionItems;
-            },
-            get subscriptions() {
-                return stripeClient(env).subscriptions;
-            },
-            get webhooks() {
-                return stripeClient(env).webhooks;
-            },
+        client: async () => {
+            if (!env.STRIPE_SECRET_KEY) {
+                throw new LunoraError(
+                    "NOT_IMPLEMENTED",
+                    "payments are not configured — set STRIPE_SECRET_KEY (and STRIPE_WEBHOOK_SECRET) in .dev.vars or as a secret",
+                );
+            }
+
+            const { default: Stripe } = await import("stripe");
+
+            // `stripe` is an optional peer dependency; the fetch HTTP client is required
+            // on workerd.
+            return new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() });
         },
         webhookSecret: env.STRIPE_WEBHOOK_SECRET ?? "",
     });
@@ -225,8 +195,20 @@ const app = defineApp<Env>()
     .storage({ bucket: (env) => env.UPLOADS, signingSecret: (env) => env.STORAGE_SIGNING_SECRET })
     .observability((env) => telemetry(env as Env))
     // `ctx.sql` (actions only). Local dev runs on embedded PGlite; the connection is opened per call.
-    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE).connectionString)))
-    .browser((env) => createBrowser({ allowedHosts: ["github.com", "docs.github.com", "developers.cloudflare.com"], binding: env.BROWSER, launch }))
+    .hyperdrive((env) =>
+        fromPostgresJs(async () => {
+            const { default: postgres } = await import("postgres");
+
+            return postgres(createHyperdrive(env.HYPERDRIVE).connectionString);
+        }),
+    )
+    .browser((env) =>
+        createBrowser({
+            allowedHosts: ["github.com", "docs.github.com", "developers.cloudflare.com"],
+            binding: env.BROWSER,
+            playwright: async () => await import("@cloudflare/playwright"),
+        }),
+    )
     .route("/mcp", async (request, env) => serveMcp(request, env as Env))
     // The D1 writer behind the `.global()` `saas_organizations` table. Omit it and
     // the shard has no global backend, so every admin list and every slug lookup
@@ -298,7 +280,12 @@ const app = defineApp<Env>()
             resolveIdentity: async (request: Request) => resolveIdentity(env, request),
             // Settles `.x402({ price })` procedures (`lunora/public-api`) on testnet before dispatch.
             x402Charge: env.X402_PAYOUT_ADDRESS
-                ? createProcedureChargeGate({ network: "base-sepolia", recipient: { evm: env.X402_PAYOUT_ADDRESS } })
+                ? createProcedureChargeGate({
+                      // The public facilitator serves testnets only, which is all this bench settles on.
+                      facilitator: { url: "https://x402.org/facilitator" },
+                      network: "base-sepolia",
+                      recipient: { evm: env.X402_PAYOUT_ADDRESS },
+                  })
                 : undefined,
         };
     })
