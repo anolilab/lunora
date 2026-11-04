@@ -95,9 +95,9 @@ export interface WebhookOutcome {
     applied: boolean;
 
     /**
-     * The reference an applied subscription event changed, when there is one — what an app
-     * re-derives plan-dependent state for. Never sent back to the provider: {@link webhookResponse}
-     * answers with `applied` only.
+     * The reference a verified subscription event concerns (applied, duplicate or stale alike),
+     * from the stored subscription — what an app re-derives plan-dependent state for, idempotently.
+     * Never sent back to the provider: {@link webhookResponse} answers with `applied` only.
      */
     referenceId?: string;
     /** The status {@link LunoraPayment.handleWebhook} answered — 500 for an orphaned event. */
@@ -202,15 +202,19 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         throw new LunoraPaymentError("CONFIG_INVALID", "createPayment(): `authorize` must be a function (per-caller authorization is required)");
     }
 
-    /** The reference a subscription event changed: its own when it names one, else the stored subscription's. */
-    const changedReference = async (provider: ProviderId, subscriptionId: string, named: string | undefined): Promise<string | undefined> => {
-        if (named !== undefined && named.trim() !== "") {
-            return named.trim();
-        }
-
+    /**
+     * The reference a subscription event concerns, read from the stored subscription after the
+     * event is applied, so it follows the owner the merge kept rather than whatever the event
+     * named. The event's own reference only stands in when nothing was stored.
+     */
+    const subscriptionReference = async (provider: ProviderId, subscriptionId: string, named: string | undefined): Promise<string | undefined> => {
         const stored = await store.getSubscription(provider, subscriptionId);
 
-        return stored === undefined || stored.referenceId.trim() === "" ? undefined : stored.referenceId;
+        if (stored !== undefined && stored.referenceId.trim() !== "") {
+            return stored.referenceId;
+        }
+
+        return named !== undefined && named.trim() !== "" ? named.trim() : undefined;
     };
 
     const ensureAuthorized = async (referenceId: string): Promise<void> => {
@@ -520,13 +524,12 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             }
 
             // Every other outcome acknowledges: once verified, a no-op is still a 200 and the provider
-            // stops retrying. An applied subscription event names the reference it changed, so the
-            // app can refresh what it derives from that reference's plan; a later event for an
-            // existing subscription may carry only the subscription id, so the stored row decides.
+            // stops retrying. A subscription event names the reference it concerns, so the app can
+            // refresh what it derives from that reference's plan. A duplicate or stale one does
+            // too: when the app's refresh failed and the route answered 5xx, the provider's retry
+            // arrives as a duplicate, and is the app's chance to finish it.
             const referenceId =
-                result.applied && action.subscriptionId !== undefined
-                    ? await changedReference(action.provider, action.subscriptionId, action.referenceId)
-                    : undefined;
+                action.subscriptionId === undefined ? undefined : await subscriptionReference(action.provider, action.subscriptionId, action.referenceId);
 
             return jsonResponse({ applied: result.applied, reason: result.reason, ...(referenceId === undefined ? {} : { referenceId }) }, 200);
         },

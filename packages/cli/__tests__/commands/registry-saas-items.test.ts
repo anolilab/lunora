@@ -50,7 +50,7 @@ describe("saas kit functions", () => {
         listOrganizations: Handler<OrganizationListArgs, { continueCursor: string | null; isDone: boolean; page: Row[]; splitCursor?: string | null }>;
         organizationTotals: Handler<OrganizationFilter, { organizations: number; seats: number }>;
         syncOrganization: Handler<{ name: string; organizationId: string; plan?: string; seats?: number; slug: string; status?: string }, void>;
-        syncOrganizationPlan: Handler<{ organizationId: string; plan: string }, void>;
+        syncOrganizationPlan: Handler<{ asOf: number; organizationId: string; plan: string }, void>;
     }
 
     const SAAS_UNIQUE = {
@@ -223,13 +223,31 @@ describe("saas kit functions", () => {
 
             await saas.syncOrganization({ args: { name: "Acme", organizationId: "org-1", slug: "acme" }, ctx: writer });
             await saas.syncOrganization({ args: { name: "Gone", organizationId: "org-2", slug: "gone", status: "deleted" }, ctx: writer });
-            await saas.syncOrganizationPlan({ args: { organizationId: "org-1", plan: "pro" }, ctx: writer });
-            await saas.syncOrganizationPlan({ args: { organizationId: "org-2", plan: "pro" }, ctx: writer });
-            await saas.syncOrganizationPlan({ args: { organizationId: "org-3", plan: "pro" }, ctx: writer });
+            await saas.syncOrganizationPlan({ args: { asOf: 1, organizationId: "org-1", plan: "pro" }, ctx: writer });
+            await saas.syncOrganizationPlan({ args: { asOf: 1, organizationId: "org-2", plan: "pro" }, ctx: writer });
+            await saas.syncOrganizationPlan({ args: { asOf: 1, organizationId: "org-3", plan: "pro" }, ctx: writer });
 
             expect(rows("saas_organizations").find((row) => row["organizationId"] === "org-1")).toMatchObject({ plan: "pro" });
             expect(rows("saas_organizations").find((row) => row["organizationId"] === "org-2")).toMatchObject({ plan: "free" });
             expect(rows("saas_organizations")).toHaveLength(2);
+        });
+
+        it("keeps the newer plan when an older derivation lands after it", async () => {
+            expect.assertions(2);
+
+            const { rows, saas, writer } = await setup();
+            const plan = () => rows("saas_organizations")[0]!["plan"];
+
+            await saas.syncOrganization({ args: { name: "Acme", organizationId: "org-1", slug: "acme" }, ctx: writer });
+            // Billing moved free → pro → scale; the scale derivation lands first, the pro one last.
+            await saas.syncOrganizationPlan({ args: { asOf: 20, organizationId: "org-1", plan: "scale" }, ctx: writer });
+            await saas.syncOrganizationPlan({ args: { asOf: 10, organizationId: "org-1", plan: "pro" }, ctx: writer });
+
+            expect(plan()).toBe("scale");
+
+            await saas.syncOrganizationPlan({ args: { asOf: 30, organizationId: "org-1", plan: "free" }, ctx: writer });
+
+            expect(plan()).toBe("free");
         });
     });
 

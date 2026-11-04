@@ -66,18 +66,26 @@ describe("saas template plan sync", () => {
 
         await expect(
             process({ applied: true, referenceId: "org-1" }, [
-                { priceId: "price_pro", state: "active" },
-                { priceId: "price_scale", state: "active" },
+                { priceId: "price_pro", state: "active", updatedAt: 5 },
+                { priceId: "price_scale", state: "active", updatedAt: 9 },
             ]),
-        ).resolves.toStrictEqual([{ organizationId: "org-1", plan: "scale" }]);
+        ).resolves.toStrictEqual([{ asOf: 9, organizationId: "org-1", plan: "scale" }]);
     });
 
     it("puts an organisation whose subscription ended back on the free plan", async () => {
         expect.hasAssertions();
 
-        await expect(process({ applied: true, referenceId: "org-1" }, [{ priceId: "price_pro", state: "canceled" }])).resolves.toStrictEqual([
-            { organizationId: "org-1", plan: "free" },
+        await expect(process({ applied: true, referenceId: "org-1" }, [{ priceId: "price_pro", state: "canceled", updatedAt: 7 }])).resolves.toStrictEqual([
+            { asOf: 7, organizationId: "org-1", plan: "free" },
         ]);
+    });
+
+    it("syncs again on a redelivered event, so a sync that failed the first time is finished", async () => {
+        expect.hasAssertions();
+
+        await expect(
+            process({ applied: false, reason: "duplicate", referenceId: "org-1" }, [{ priceId: "price_pro", state: "active", updatedAt: 3 }]),
+        ).resolves.toStrictEqual([{ asOf: 3, organizationId: "org-1", plan: "pro" }]);
     });
 
     it("touches no plan for an event that names no organisation", async () => {

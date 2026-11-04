@@ -1170,8 +1170,8 @@ describe("createPayment", () => {
         expect(session?.capturedAmount.minorUnits).toBe(1000n);
     });
 
-    it("names the reference an applied subscription event changed, from the event or the stored subscription", async () => {
-        expect.assertions(2);
+    it("names the reference a subscription event concerns, from the stored subscription, on a redelivery too", async () => {
+        expect.assertions(4);
 
         const store = new MemoryPaymentStore();
 
@@ -1188,6 +1188,15 @@ describe("createPayment", () => {
         await expect(handle({ eventId: "evt_cancel", provider: "stripe", subscriptionId: "sub_1", type: "subscription.canceled" })).resolves.toMatchObject({
             referenceId: "org_1",
         });
+        // The provider's retry of the same event is a duplicate, and still names it, so a refresh that failed can finish.
+        await expect(handle({ eventId: "evt_cancel", provider: "stripe", subscriptionId: "sub_1", type: "subscription.canceled" })).resolves.toMatchObject({
+            applied: false,
+            referenceId: "org_1",
+        });
+        // An event naming another owner reports the owner the stored row kept, not the one it named.
+        await expect(
+            handle({ eventId: "evt_other", provider: "stripe", referenceId: "org_2", subscriptionId: "sub_1", type: "subscription.active" }),
+        ).resolves.toMatchObject({ referenceId: "org_1" });
         // A payment event changes no plan, so it names no reference.
         await expect(
             handle({ amount: money(1000, "USD"), eventId: "evt_pay", provider: "stripe", referenceId: "org_1", sessionId: "pi_1", type: "payment.captured" }),

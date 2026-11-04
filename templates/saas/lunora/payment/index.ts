@@ -126,10 +126,17 @@ const FREE_PLAN = PLANS.find((plan) => plan.priceId === undefined);
 const currentPlans = async (
     ctx: { payments: { listSubscriptions: (referenceId: string) => Promise<Parameters<typeof resolveEntitlements>[1]> } },
     referenceId: string,
-): Promise<{ entitlements: ReturnType<typeof resolveEntitlements>; plans: ReadonlyArray<(typeof PLANS)[number]> }> => {
-    const entitlements = resolveEntitlements(CATALOG_ENTITLEMENTS, await ctx.payments.listSubscriptions(referenceId));
+): Promise<{ asOf: number; entitlements: ReturnType<typeof resolveEntitlements>; plans: ReadonlyArray<(typeof PLANS)[number]> }> => {
+    const subscriptions = await ctx.payments.listSubscriptions(referenceId);
+    const entitlements = resolveEntitlements(CATALOG_ENTITLEMENTS, subscriptions);
 
-    return { entitlements, plans: PLANS.filter((plan) => entitlements.plans.includes(plan.id)) };
+    return {
+        // The billing version these plans were read at: the root shard stamps a subscription's
+        // `updatedAt` on every write, so a later change always carries a later version.
+        asOf: Math.max(0, ...subscriptions.map((subscription) => subscription.updatedAt)),
+        entitlements,
+        plans: PLANS.filter((plan) => entitlements.plans.includes(plan.id)),
+    };
 };
 
 /**
@@ -636,11 +643,14 @@ export const processWebhook = internalAction
 
         // A subscription change moves the organisation's plan, which the admin list
         // shows and filters on. Re-derived from every active subscription rather than
-        // this event, so a cancellation lands back on the free plan.
+        // this event, so a cancellation lands back on the free plan. Every verified
+        // subscription event names its organisation, duplicates included: if this
+        // write fails, the route answers 5xx and the provider's retry finishes it.
         if (result.referenceId !== undefined) {
-            const [plan] = (await currentPlans(ctx, result.referenceId)).plans.toSorted((a, b) => b.priceMinor - a.priceMinor);
+            const { asOf, plans } = await currentPlans(ctx, result.referenceId);
+            const [plan] = plans.toSorted((a, b) => b.priceMinor - a.priceMinor);
 
-            await ctx.runMutation(internal.saas.syncOrganizationPlan, { organizationId: result.referenceId, plan: (plan ?? FREE_PLAN)?.id ?? "free" });
+            await ctx.runMutation(internal.saas.syncOrganizationPlan, { asOf, organizationId: result.referenceId, plan: (plan ?? FREE_PLAN)?.id ?? "free" });
         }
 
         return { applied: result.applied ?? false, status: response.status };

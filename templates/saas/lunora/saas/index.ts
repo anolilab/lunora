@@ -724,15 +724,27 @@ export const syncOrganization = internalMutation
  * (`payment:processWebhook` in the saas template), never a client. A patch to an
  * existing row only: an organisation not yet projected, or deleted, is left to
  * `syncOrganization`, which starts every new row on `free`.
+ *
+ * `asOf` is the billing version the plan was derived at (in the template, the
+ * latest `updatedAt` among the organisation's subscriptions). Billing derives in
+ * an action and writes here afterwards, so two changes can arrive in the
+ * opposite order; one derived from an older version than the stored plan's is
+ * dropped. Running again with the same arguments changes nothing.
  */
 export const syncOrganizationPlan = internalMutation
-    .input({ organizationId: v.string(), plan: v.string().max(256) })
-    .mutation(async ({ args: { organizationId, plan }, ctx }): Promise<void> => {
+    .input({ asOf: v.number(), organizationId: v.string(), plan: v.string().max(256) })
+    .mutation(async ({ args: { asOf, organizationId, plan }, ctx }): Promise<void> => {
         const existing = await organizations(ctx).findFirst({ where: { organizationId } });
 
-        if (!existing || existing["status"] === "deleted" || existing["plan"] === plan) {
+        if (!existing || existing["status"] === "deleted") {
             return;
         }
 
-        await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"] as Id<"saas_organizations">, { plan, updatedAt: ctx.now });
+        const stored = typeof existing["planAsOf"] === "number" ? existing["planAsOf"] : undefined;
+
+        if (stored !== undefined && (asOf < stored || (asOf === stored && existing["plan"] === plan))) {
+            return;
+        }
+
+        await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"] as Id<"saas_organizations">, { plan, planAsOf: asOf, updatedAt: ctx.now });
     });
