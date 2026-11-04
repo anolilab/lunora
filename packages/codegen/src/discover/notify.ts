@@ -9,6 +9,7 @@ import { defaultExportExpression, descendantsOfKind, findObjectProperty, handler
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { isContextSurface } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
+import { staticPropertyName } from "./property-name";
 
 /** The only file a `@lunora/notify` provider may be declared in — mirrors `lunora/flags.ts`. */
 const NOTIFY_FILENAME = "notify.ts";
@@ -462,12 +463,26 @@ const fcmConfigObjectOf = (value: TsNode): ObjectLiteralExpression | undefined =
     return result !== undefined && Node.isObjectLiteralExpression(result) ? result : undefined;
 };
 
-/** Whether `object` sets `name` with no spread after it that could replace the value. */
+/**
+ * Whether `object` sets `name` with nothing after it that could replace the value: no spread,
+ * no computed key that cannot be resolved statically, and no later member of the same name.
+ */
 const setsLastWord = (object: ObjectLiteralExpression, name: string): boolean => {
     const property = findObjectProperty(object, name);
     const properties = object.getProperties();
 
-    return property !== undefined && !properties.slice(properties.indexOf(property)).some((other) => Node.isSpreadAssignment(other));
+    return (
+        property !== undefined &&
+        !properties.slice(properties.indexOf(property) + 1).some((other) => {
+            if (Node.isSpreadAssignment(other)) {
+                return true;
+            }
+
+            const key = staticPropertyName(other.getNameNode());
+
+            return key === undefined || key === name;
+        })
+    );
 };
 
 /**
@@ -479,7 +494,13 @@ const setsLiteralProjectId = (object: ObjectLiteralExpression): boolean => {
     const value = Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
     const literal = value === undefined ? undefined : unwrapExpression(value);
 
-    return setsLastWord(object, "projectId") && literal !== undefined && (Node.isStringLiteral(literal) || Node.isNoSubstitutionTemplateLiteral(literal));
+    // `fcmFromEnv` treats an empty override as unset and falls back to env, so `""` is not the app's own.
+    return (
+        setsLastWord(object, "projectId") &&
+        literal !== undefined &&
+        (Node.isStringLiteral(literal) || Node.isNoSubstitutionTemplateLiteral(literal)) &&
+        literal.getLiteralText() !== ""
+    );
 };
 
 /**

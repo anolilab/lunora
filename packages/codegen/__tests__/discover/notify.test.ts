@@ -403,10 +403,19 @@ export default defineNotify({ fcm: (env) => fcmFromEnv(env, { getAccessToken }) 
     it.each([
         ["read from env", "{ getAccessToken, projectId: env.FCM_PROJECT_ID }"],
         ["a shorthand variable", "{ getAccessToken, projectId }"],
+        ["an empty string, which fcmFromEnv treats as unset", `fcmFromEnv(env, { getAccessToken, projectId: "" })`],
+        ["replaced by a later computed key", `{ projectId: "acme", [key]: env.FCM_PROJECT_ID, getAccessToken }`],
+        ["replaced by a later member of the same name", `{ getAccessToken, projectId: "acme", projectId: env.FCM_PROJECT_ID }`],
     ])("still asks for FCM_PROJECT_ID when projectId is %s", (_label, object) => {
         expect.assertions(1);
 
         expect(channelsOf(`(env) => (${object})`)).toMatchObject({ fcmOwnProjectId: false, fcmOwnTokenSource: true });
+    });
+
+    it("still reads a later computed key it can resolve statically", () => {
+        expect.assertions(1);
+
+        expect(channelsOf(`{ getAccessToken, projectId: "acme", ["region"]: "eu" }`)).toMatchObject({ fcmOwnProjectId: true, fcmOwnTokenSource: true });
     });
 
     it("reports its own project id when the same object also sets projectId", () => {
@@ -420,6 +429,7 @@ export default defineNotify({ fcm: (env) => fcmFromEnv(env, { getAccessToken }) 
         ["the bare fcmFromEnv reference", "fcmFromEnv"],
         ["a static accessToken override", `(env) => fcmFromEnv(env, { accessToken: "tok" })`],
         ["a spread after the token, which can replace it", "(env) => ({ getAccessToken, ...fcmFromEnv(env) })"],
+        ["a computed key after the token, which can replace it", "(env) => ({ ...fcmFromEnv(env), getAccessToken, [key]: undefined })"],
         ["a call to some other factory", "(env) => buildFcm(env, { getAccessToken })"],
         ["a block body that does more than return", "(env) => { const base = fcmFromEnv(env); return { ...base, getAccessToken }; }"],
     ])("reports no own token source for %s", (_label, fcmValue) => {
