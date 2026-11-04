@@ -204,7 +204,9 @@ export interface QueryArgsOf<DM, REL extends Record<keyof DM, object>, T extends
      *
      * `limit` still caps the read; the rows past the cap come back once the page is split at
      * `splitCursor`. The client splits a page holding more than twice its page size, so pass a
-     * `limit` above 2x the page size or a capped page never grows large enough to split.
+     * `limit` above 2x the page size or a capped page never grows large enough to split. On a
+     * `.global()` table a read with no `limit` is capped at 4096 rows, so keep the page size under
+     * 2048 there or pass a `limit`.
      */
     endCursor?: null | string;
 
