@@ -1,7 +1,6 @@
-## @lunora/astro 1.0.0-alpha.311 (2026-11-03)
+## @lunora/astro [1.0.0-alpha.311](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.310...@lunora/astro@1.0.0-alpha.311) (2026-11-04)
 
-- Updated dependency @lunora/client@1.0.0-alpha.286
-- Updated dependency @lunora/runtime@1.0.0-alpha.276
+- Release 1.0.0-alpha.311. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
 
 ## @lunora/astro [1.0.0-alpha.310](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.309...@lunora/astro@1.0.0-alpha.310) (2026-11-03)
 

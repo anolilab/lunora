@@ -1,6 +1,6 @@
-## @lunora/react 1.0.0-alpha.296 (2026-11-03)
+## @lunora/react [1.0.0-alpha.296](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.295...@lunora/react@1.0.0-alpha.296) (2026-11-04)
 
-- Updated dependency @lunora/client@1.0.0-alpha.286
+- Release 1.0.0-alpha.296. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
 
 ## @lunora/react [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.294...@lunora/react@1.0.0-alpha.295) (2026-11-03)
 

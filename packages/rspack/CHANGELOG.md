@@ -1,7 +1,6 @@
-## @lunora/rspack 1.0.0-alpha.149 (2026-11-03)
+## @lunora/rspack [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.148...@lunora/rspack@1.0.0-alpha.149) (2026-11-04)
 
-- Updated dependency @lunora/codegen@1.0.0-alpha.397
-- Updated dependency @lunora/config@1.0.0-alpha.453
+- Release 1.0.0-alpha.149. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
 
 ## @lunora/rspack [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.147...@lunora/rspack@1.0.0-alpha.148) (2026-11-03)
 

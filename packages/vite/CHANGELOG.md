@@ -1,7 +1,6 @@
-## @lunora/vite 1.0.0-alpha.426 (2026-11-03)
+## @lunora/vite [1.0.0-alpha.426](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.425...@lunora/vite@1.0.0-alpha.426) (2026-11-04)
 
-- Updated dependency @lunora/codegen@1.0.0-alpha.397
-- Updated dependency @lunora/config@1.0.0-alpha.453
+- Release 1.0.0-alpha.426. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
 
 ## @lunora/vite [1.0.0-alpha.425](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.424...@lunora/vite@1.0.0-alpha.425) (2026-11-03)
 

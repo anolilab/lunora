@@ -1,6 +1,6 @@
-## @lunora/observability 1.0.0-alpha.201 (2026-11-03)
+## @lunora/observability [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.200...@lunora/observability@1.0.0-alpha.201) (2026-11-04)
 
-- Updated dependency @lunora/shard-engine@1.0.0-alpha.187
+- Release 1.0.0-alpha.201. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
 
 ## @lunora/observability [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.199...@lunora/observability@1.0.0-alpha.200) (2026-11-03)
 

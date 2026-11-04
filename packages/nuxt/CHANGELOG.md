@@ -1,7 +1,6 @@
-## @lunora/nuxt 1.0.0-alpha.303 (2026-11-03)
+## @lunora/nuxt [1.0.0-alpha.303](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.302...@lunora/nuxt@1.0.0-alpha.303) (2026-11-04)
 
-- Updated dependency @lunora/client@1.0.0-alpha.286
-- Updated dependency @lunora/runtime@1.0.0-alpha.276
+- Release 1.0.0-alpha.303. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
 
 ## @lunora/nuxt [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.301...@lunora/nuxt@1.0.0-alpha.302) (2026-11-03)
 

@@ -1,6 +1,6 @@
-## @lunora/advisor 1.0.0-alpha.287 (2026-11-03)
+## @lunora/advisor [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.286...@lunora/advisor@1.0.0-alpha.287) (2026-11-04)
 
-- Updated dependency @lunora/server@1.0.0-alpha.268
+- Release 1.0.0-alpha.287. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
 
 ## @lunora/advisor [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.285...@lunora/advisor@1.0.0-alpha.286) (2026-11-03)
 

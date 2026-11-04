@@ -1,6 +1,6 @@
-## @lunora/auth 1.0.0-alpha.257 (2026-11-03)
+## @lunora/auth [1.0.0-alpha.257](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.256...@lunora/auth@1.0.0-alpha.257) (2026-11-04)
 
-- Updated dependency @lunora/values@1.0.0-alpha.95
+- Release 1.0.0-alpha.257. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
 
 ## @lunora/auth [1.0.0-alpha.256](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.255...@lunora/auth@1.0.0-alpha.256) (2026-11-03)
 

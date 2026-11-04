@@ -1,6 +1,6 @@
-## @lunora/runtime 1.0.0-alpha.276 (2026-11-03)
+## @lunora/runtime [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.275...@lunora/runtime@1.0.0-alpha.276) (2026-11-04)
 
-- Updated dependency @lunora/observability@1.0.0-alpha.201
+- Release 1.0.0-alpha.276. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
 
 ## @lunora/runtime [1.0.0-alpha.275](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.274...@lunora/runtime@1.0.0-alpha.275) (2026-11-03)
 

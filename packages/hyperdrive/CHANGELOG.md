@@ -1,7 +1,6 @@
-## @lunora/hyperdrive 1.0.0-alpha.229 (2026-11-03)
+## @lunora/hyperdrive [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.228...@lunora/hyperdrive@1.0.0-alpha.229) (2026-11-04)
 
-- Updated dependency @lunora/shard-engine@1.0.0-alpha.187
-- Updated dependency @lunora/sql-store@1.0.0-alpha.234
+- Release 1.0.0-alpha.229. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
 
 ## @lunora/hyperdrive [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.227...@lunora/hyperdrive@1.0.0-alpha.228) (2026-11-03)
 

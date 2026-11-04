@@ -1,6 +1,6 @@
-## @lunora/angular 1.0.0-alpha.268 (2026-11-03)
+## @lunora/angular [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.267...@lunora/angular@1.0.0-alpha.268) (2026-11-04)
 
-- Updated dependency @lunora/client@1.0.0-alpha.286
+- Release 1.0.0-alpha.268. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
 
 ## @lunora/angular [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.266...@lunora/angular@1.0.0-alpha.267) (2026-11-03)
 

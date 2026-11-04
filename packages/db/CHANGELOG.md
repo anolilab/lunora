@@ -1,6 +1,6 @@
-## @lunora/db 1.0.0-alpha.285 (2026-11-03)
+## @lunora/db [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.284...@lunora/db@1.0.0-alpha.285) (2026-11-04)
 
-- Updated dependency @lunora/client@1.0.0-alpha.286
+- Release 1.0.0-alpha.285. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
 
 ## @lunora/db [1.0.0-alpha.284](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.283...@lunora/db@1.0.0-alpha.284) (2026-11-03)
 

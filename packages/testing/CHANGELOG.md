@@ -1,8 +1,6 @@
-## @lunora/testing 1.0.0-alpha.333 (2026-11-03)
+## @lunora/testing [1.0.0-alpha.333](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.332...@lunora/testing@1.0.0-alpha.333) (2026-11-04)
 
-- Updated dependency @lunora/agent@1.0.0-alpha.281
-- Updated dependency @lunora/scheduler@1.0.0-alpha.169
-- Updated dependency @lunora/server@1.0.0-alpha.268
+- Release 1.0.0-alpha.333. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
 
 ## @lunora/testing [1.0.0-alpha.332](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.331...@lunora/testing@1.0.0-alpha.332) (2026-11-03)
 

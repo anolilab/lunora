@@ -1,8 +1,6 @@
-## @lunora/do 1.0.0-alpha.281 (2026-11-03)
+## @lunora/do [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.280...@lunora/do@1.0.0-alpha.281) (2026-11-04)
 
-- Updated dependency @lunora/shard-engine@1.0.0-alpha.187
-- Updated dependency @lunora/values@1.0.0-alpha.95
-- Updated dependency @lunora/observability@1.0.0-alpha.201
+- Release 1.0.0-alpha.281. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
 
 ## @lunora/do [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.279...@lunora/do@1.0.0-alpha.280) (2026-11-03)
 
