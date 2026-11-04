@@ -157,11 +157,13 @@ export const startupActiveMs = (appDirectory, { profile, timeout = 120_000, wran
     return Number(match[1]);
 };
 
-/** min / median / max of a sample list. */
+/** min / median / max of a sample list; an even count takes the mean of the two middle samples. */
 export const summarize = (samples) => {
     const sorted = [...samples].sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
 
-    return { max: sorted.at(-1), median: sorted[Math.floor(sorted.length / 2)], min: sorted[0], runs: sorted.length };
+    return { max: sorted.at(-1), median, min: sorted[0], runs: sorted.length };
 };
 
 /** Owning package of a metafile input path: `@scope/name` / `name` under node_modules, `packages/<dir>` in the workspace, else the path's first segment. */

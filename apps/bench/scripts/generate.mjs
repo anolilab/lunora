@@ -19,6 +19,7 @@
  *   node scripts/generate.mjs --preset customer   # ≈ 1,000 functions / 130 tables, heavy SDKs in half the domains
  *   node scripts/generate.mjs --domains 0         # back to the committed core-only state
  */
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -894,5 +895,12 @@ export const sizeFromArgs = ({ domains, heavyShare, preset }) => {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const { values } = parseArgs({ options: { domains: { type: "string" }, "heavy-share": { type: "string" }, preset: { type: "string" } } });
 
-    process.stdout.write(`${JSON.stringify(generate(sizeFromArgs({ domains: values.domains, heavyShare: values["heavy-share"], preset: values.preset })))}\n`);
+    const shape = generate(sizeFromArgs({ domains: values.domains, heavyShare: values["heavy-share"], preset: values.preset }));
+
+    // `_generated/` registers every domain module; without codegen it still names the ones just removed.
+    execFileSync(process.execPath, [join(appDirectory, "node_modules", "lunorash", "dist", "bin.mjs"), "codegen", "--api-spec", "both"], {
+        cwd: appDirectory,
+        stdio: "ignore",
+    });
+    process.stdout.write(`${JSON.stringify(shape)}\n`);
 }

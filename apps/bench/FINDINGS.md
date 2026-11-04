@@ -561,7 +561,12 @@ PR review on #1420 turned these up. The bench keeps its copies identical to
 - **`saas`: two reads grow with the tenant.** `overview` reads every project
   of the organisation with `.collect()`, on every live update of the dashboard,
   and `listOrganizations` returns every organisation in one unpaged result (its
-  comment says so). Fix: page both.
+  comment says so). `overview` also returns archived projects, since nothing
+  filters on `archivedAt`. Fix: page both, and read active projects only.
+- **`ai`: `analyzeSentiment` casts free text to its label union.**
+  `result.text.trim().toLowerCase() as "positive" | "negative" | "neutral"`
+  returns whatever the model said. Fix: check the text against the three labels
+  and fail loudly otherwise.
 
 - **`templates/saas`: plan seat limits are shown, not enforced.** `PLANS`
   gives Free one seat and Pro ten, and the auth hooks recount `member` rows into
