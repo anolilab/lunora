@@ -304,7 +304,7 @@ interface ForwardableEmailMessageLike {
     readonly from: string;
     readonly headers: Headers;
     readonly raw: ReadableStream<Uint8Array>;
-    readonly rawSize?: number;
+    readonly rawSize: number;
     reply: (message: {
         from: string;
         raw: string;
