@@ -540,8 +540,8 @@ catalogs:
       specifier: 4.1.0
       version: 4.1.0
     '@visulima/vis':
-      specifier: 6.5.3
-      version: 6.5.3
+      specifier: 6.5.4
+      version: 6.5.4
     csv-parse:
       specifier: 7.0.3
       version: 7.0.3
@@ -1234,7 +1234,7 @@ importers:
         version: 4.1.0
       '@visulima/vis':
         specifier: catalog:prod
-        version: 6.5.3(@grpc/grpc-js@1.14.5)(@grpc/proto-loader@0.8.1)(@shikijs/langs@4.6.0)(@shikijs/themes@4.6.0)(ai@7.0.127(zod@4.6.6))(cfonts@3.3.1)(diff@9.0.0)(fb-watchman@2.0.2)(graphology-types@0.24.8)(marked@18.1.2)(mysql2@3.24.6(@types/node@26.6.4))(pg@8.23.1)(shiki@4.6.0)
+        version: 6.5.4(@grpc/grpc-js@1.14.5)(@grpc/proto-loader@0.8.1)(@shikijs/langs@4.6.0)(@shikijs/themes@4.6.0)(ai@7.0.127(zod@4.6.6))(cfonts@3.3.1)(diff@9.0.0)(fb-watchman@2.0.2)(graphology-types@0.24.8)(marked@18.1.2)(mysql2@3.24.6(@types/node@26.6.4))(pg@8.23.1)(shiki@4.6.0)
       cz-conventional-changelog:
         specifier: catalog:prod
         version: 3.3.0(@types/node@26.6.4)(typescript@6.0.3)
@@ -16209,60 +16209,60 @@ packages:
       shiki:
         optional: true
 
-  '@visulima/vis-binding-darwin-arm64@6.5.3':
-    resolution: {integrity: sha512-qRvysskwLJoBHCJMjpWisupA3JyAXbNqofs3MU27KL89Q84kA2Hbc3eWSE6Bt1Auh9cRbPAXvegwGeq6zqC4Rg==}
+  '@visulima/vis-binding-darwin-arm64@6.5.4':
+    resolution: {integrity: sha512-kR9NBqqyyDXKEyaLFIIgpji6f3g4r4xHPgQC55uQaoGlTrvR7H+5c1C1/MsVkBLwqHKI/DRRRmdDwBAys1gcig==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [darwin]
 
-  '@visulima/vis-binding-darwin-x64@6.5.3':
-    resolution: {integrity: sha512-edAWhcDGLm1Y5YlIggN3ZexCPYJcZxdF2AcoMla8PA6ynKl9chwUwQ1qURIFmgGBahfxQPtp3nfJT05PByapGQ==}
+  '@visulima/vis-binding-darwin-x64@6.5.4':
+    resolution: {integrity: sha512-tYyzgC/vXwMt8QB98i+/JZGVURBnkY30dX8FvZxn3nd2SXQPmgQ8K5bCkxjk4qS1cquGWoV81s7w8oEafbCOsQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [darwin]
 
-  '@visulima/vis-binding-linux-arm64-gnu@6.5.3':
-    resolution: {integrity: sha512-hhUqXaNg6G0nUoezOeYN53Ka1oKE2TEPQevfByQxEn6g8fzl/nN1e/6Ir4nSwPadLBfFII1EA5TI8j3FHyTzbA==}
+  '@visulima/vis-binding-linux-arm64-gnu@6.5.4':
+    resolution: {integrity: sha512-zs58OzyBFheLExzg03KskF6lI6gVXkmKFzDE/6Gh7zxSS6b8hwtosKWyH2GDahLbhOYOKDRhGTDF94rxWlffww==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@visulima/vis-binding-linux-arm64-musl@6.5.3':
-    resolution: {integrity: sha512-5Gl67L4rcgXGZ0OnayLy6xkZjcuW88jaMp9gjvNgWruLwEVTDiqXGxsZ9686jPjzop8Ty8BGy+eIgU6ur91DVw==}
+  '@visulima/vis-binding-linux-arm64-musl@6.5.4':
+    resolution: {integrity: sha512-Bq0EJi9UUWiaAbZmvE1fGIVuaxpnWTqLVu9WCAk85MtFN7MVxj1ZU2fFl8qWBNZ3yspsK8JQ4bSGzAObEEyykQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  '@visulima/vis-binding-linux-x64-gnu@6.5.3':
-    resolution: {integrity: sha512-tMR013w2jlA+TUV78IUtxkXydYszt8taHiIntpxPPBM6jut2cQnNeyk66N6xltBom3fKA3xzlm+ufjyiphggUg==}
+  '@visulima/vis-binding-linux-x64-gnu@6.5.4':
+    resolution: {integrity: sha512-zRpkpb573RDYekCSil8HJIZJVPmMt1n+qR8cbckKOtqS47TbTAn9VW0lZWad7QGp1gjeFBmi/j21BuYQf+ZiXA==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@visulima/vis-binding-linux-x64-musl@6.5.3':
-    resolution: {integrity: sha512-Di4Oqk0jZ65B5ouvNQGh5JCN//yOcmdkrkFyoxRPYon0DOqG7xdrpIItPFSIwN1DpexKywuHqDx+rISxeF3WaA==}
+  '@visulima/vis-binding-linux-x64-musl@6.5.4':
+    resolution: {integrity: sha512-XG5UMrjq3dug0lfwjeNmzcVpoE7NI+sxh7UWZS3pHFlvzxQU5+BfIalzeU1lwr35D8vbBcicViIBCwirezcNJQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@visulima/vis-binding-win32-arm64-msvc@6.5.3':
-    resolution: {integrity: sha512-GoFrEeRMYBlpOlfAA8A1yWuBd4O3hoL5hzpP0A4U6TDQ4dRDshDdVB/KAwPPZa6rrc2S9OiyVx1gCQyTf93b/Q==}
+  '@visulima/vis-binding-win32-arm64-msvc@6.5.4':
+    resolution: {integrity: sha512-2LVSV84sws8n88/2hFKdDbIBd1p4M84cfJoWvun9L5zews0PGZX13XsDj1Gte2Ao3a8jWzkyXmW9uVipsY0y7A==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [win32]
 
-  '@visulima/vis-binding-win32-x64-msvc@6.5.3':
-    resolution: {integrity: sha512-ngoRmWvMxiECXJ/81dJCi4PWQtoBgWZq/hpRmfeqLvONkkNOGbE8V67IgiOtKWzGfpcIMf9NA+gGXpi7PqgR3Q==}
+  '@visulima/vis-binding-win32-x64-msvc@6.5.4':
+    resolution: {integrity: sha512-FlmxpjO6TZa2vQxGgp8kshvh35cApoKl0yxCdHMWaTCFXVVQdwekTOWMjXLY1qMBLlI1DrOrS00J4lwfYgu2oA==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [win32]
 
-  '@visulima/vis@6.5.3':
-    resolution: {integrity: sha512-MGMBBejbqkdzOiXdFWIBEos/CCGE3ol/uIH4/xsTYANGqCiu0dQ/2c8o8qLORXUNGdophos7ZeVuJ2RN0vUvbA==}
+  '@visulima/vis@6.5.4':
+    resolution: {integrity: sha512-k21Uvih3na1oXSu1dhpAU53FliDSvW0Oldhy/wmGh8AQ4IleZ5bzAz8oXFNxInqyzMFkfmd6G6M45HBitNx9Kg==}
     engines: {node: ^22.14.0 || >=24.10.0}
     hasBin: true
     peerDependencies:
@@ -37148,7 +37148,7 @@ snapshots:
       '@typescript-eslint/utils': 8.59.4(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)
       '@typescript-eslint/visitor-keys': 8.59.4
       eslint: 10.12.0(jiti@2.7.0)(supports-color@10.2.2)
-      ignore: 7.0.12
+      ignore: 7.0.14
       natural-compare: 1.4.0
       ts-api-utils: 2.5.0(typescript@6.0.3)
       typescript: 6.0.3
@@ -38669,31 +38669,31 @@ snapshots:
     transitivePeerDependencies:
       - ai
 
-  '@visulima/vis-binding-darwin-arm64@6.5.3':
+  '@visulima/vis-binding-darwin-arm64@6.5.4':
     optional: true
 
-  '@visulima/vis-binding-darwin-x64@6.5.3':
+  '@visulima/vis-binding-darwin-x64@6.5.4':
     optional: true
 
-  '@visulima/vis-binding-linux-arm64-gnu@6.5.3':
+  '@visulima/vis-binding-linux-arm64-gnu@6.5.4':
     optional: true
 
-  '@visulima/vis-binding-linux-arm64-musl@6.5.3':
+  '@visulima/vis-binding-linux-arm64-musl@6.5.4':
     optional: true
 
-  '@visulima/vis-binding-linux-x64-gnu@6.5.3':
+  '@visulima/vis-binding-linux-x64-gnu@6.5.4':
     optional: true
 
-  '@visulima/vis-binding-linux-x64-musl@6.5.3':
+  '@visulima/vis-binding-linux-x64-musl@6.5.4':
     optional: true
 
-  '@visulima/vis-binding-win32-arm64-msvc@6.5.3':
+  '@visulima/vis-binding-win32-arm64-msvc@6.5.4':
     optional: true
 
-  '@visulima/vis-binding-win32-x64-msvc@6.5.3':
+  '@visulima/vis-binding-win32-x64-msvc@6.5.4':
     optional: true
 
-  '@visulima/vis@6.5.3(@grpc/grpc-js@1.14.5)(@grpc/proto-loader@0.8.1)(@shikijs/langs@4.6.0)(@shikijs/themes@4.6.0)(ai@7.0.127(zod@4.6.6))(cfonts@3.3.1)(diff@9.0.0)(fb-watchman@2.0.2)(graphology-types@0.24.8)(marked@18.1.2)(mysql2@3.24.6(@types/node@26.6.4))(pg@8.23.1)(shiki@4.6.0)':
+  '@visulima/vis@6.5.4(@grpc/grpc-js@1.14.5)(@grpc/proto-loader@0.8.1)(@shikijs/langs@4.6.0)(@shikijs/themes@4.6.0)(ai@7.0.127(zod@4.6.6))(cfonts@3.3.1)(diff@9.0.0)(fb-watchman@2.0.2)(graphology-types@0.24.8)(marked@18.1.2)(mysql2@3.24.6(@types/node@26.6.4))(pg@8.23.1)(shiki@4.6.0)':
     dependencies:
       '@floating-ui/core': 1.8.0
       '@floating-ui/dom': 1.8.0
@@ -38711,14 +38711,14 @@ snapshots:
       react-reconciler: 0.33.0(react@19.3.1)
       sigma: 4.0.3(graphology-types@0.24.8)
     optionalDependencies:
-      '@visulima/vis-binding-darwin-arm64': 6.5.3
-      '@visulima/vis-binding-darwin-x64': 6.5.3
-      '@visulima/vis-binding-linux-arm64-gnu': 6.5.3
-      '@visulima/vis-binding-linux-arm64-musl': 6.5.3
-      '@visulima/vis-binding-linux-x64-gnu': 6.5.3
-      '@visulima/vis-binding-linux-x64-musl': 6.5.3
-      '@visulima/vis-binding-win32-arm64-msvc': 6.5.3
-      '@visulima/vis-binding-win32-x64-msvc': 6.5.3
+      '@visulima/vis-binding-darwin-arm64': 6.5.4
+      '@visulima/vis-binding-darwin-x64': 6.5.4
+      '@visulima/vis-binding-linux-arm64-gnu': 6.5.4
+      '@visulima/vis-binding-linux-arm64-musl': 6.5.4
+      '@visulima/vis-binding-linux-x64-gnu': 6.5.4
+      '@visulima/vis-binding-linux-x64-musl': 6.5.4
+      '@visulima/vis-binding-win32-arm64-msvc': 6.5.4
+      '@visulima/vis-binding-win32-x64-msvc': 6.5.4
       fb-watchman: 2.0.2
     transitivePeerDependencies:
       - '@aws-sdk/client-sts'
