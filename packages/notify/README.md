@@ -39,8 +39,11 @@ the raw JSON works too: `wrangler secret put FCM_SERVICE_ACCOUNT < key.json`.
 To mint tokens yourself, for example with `google-auth-library`, pass your own
 `getAccessToken`: `fcm: (env) => ({ ...fcmFromEnv(env), getAccessToken })` or
 `fcm: (env) => fcmFromEnv(env, { getAccessToken })`. Lunora reads that from
-`lunora/notify.ts`, so `lunora dev` and `lunora deploy` then ask only for
-`FCM_PROJECT_ID`, and nothing at all if the same object also sets `projectId`.
+the `fcm` entry of an inline `defineNotify({...})` in `lunora/notify.ts`, so `lunora dev`
+and `lunora deploy` then ask for `FCM_PROJECT_ID` instead of `FCM_SERVICE_ACCOUNT`. Set
+it even if the key file is still in env: the preflight does not take the project id from
+the key file. If the same object also sets `projectId` to a string, no FCM key is asked
+for at all. A config the build cannot read keeps asking for `FCM_SERVICE_ACCOUNT`.
 
 Generate a VAPID keypair once: `npx web-push generate-vapid-keys`.
 

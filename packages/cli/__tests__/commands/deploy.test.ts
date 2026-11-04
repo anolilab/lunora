@@ -3211,58 +3211,62 @@ export const backfillNames = defineMigration({
                 expect(errors.some((line) => line.includes("missing required secret"))).toBe(true);
             });
 
-            // Every secret the fixture needs except the FCM credential, which each case decides.
-            const DEPLOYED_WITHOUT_FCM_KEY = [
-                "LUNORA_ADMIN_TOKEN",
-                "LUNORA_RELAY_SECRET",
-                "FCM_PROJECT_ID",
-                "VAPID_PUBLIC_KEY",
-                "VAPID_PRIVATE_KEY",
-                "VAPID_SUBJECT",
-            ];
+            // Every secret the app needs apart from its FCM keys, which each case decides.
+            const DEPLOYED_WITHOUT_FCM_KEYS = ["LUNORA_ADMIN_TOKEN", "LUNORA_RELAY_SECRET", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"];
 
-            it("deploys an fcm channel with its own getAccessToken without FCM_SERVICE_ACCOUNT", async () => {
-                expect.assertions(1);
-
-                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            const writeNotifyWithFcm = (fcmValue: string): void => {
                 writeFileSync(
                     join(workdir, "lunora", "notify.ts"),
                     `import { defineNotify, fcmFromEnv, webPushFromEnv } from "@lunora/notify";
 const getAccessToken = async (): Promise<string> => "token-from-the-app";
-export default defineNotify({ fcm: (env) => ({ ...fcmFromEnv(env), getAccessToken }), webPush: (env) => webPushFromEnv(env) });
+export default defineNotify({ fcm: ${fcmValue}, webPush: (env) => webPushFromEnv(env) });
 `,
                     "utf8",
                 );
+            };
+
+            const deployWithSecrets = (names: ReadonlyArray<string>): ReturnType<typeof runDeployCommand> => {
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
                 const { spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
 
-                const result = await runDeployCommand({
+                return runDeployCommand({
                     cwd: workdir,
                     interactive: false,
                     logger,
-                    secretLister: () => Promise.resolve({ names: DEPLOYED_WITHOUT_FCM_KEY, ok: true }),
+                    secretLister: () => Promise.resolve({ names: [...names], ok: true }),
                     spawner,
                 });
+            };
+
+            it("deploys an fcm channel with its own getAccessToken without FCM_SERVICE_ACCOUNT", async () => {
+                expect.assertions(1);
+
+                writeNotifyWithFcm("(env) => ({ ...fcmFromEnv(env), getAccessToken })");
+
+                const result = await deployWithSecrets([...DEPLOYED_WITHOUT_FCM_KEYS, "FCM_PROJECT_ID"]);
 
                 expect(result.code).toBe(0);
+            });
+
+            it("asks an fcm channel with its own getAccessToken for FCM_PROJECT_ID", async () => {
+                expect.assertions(2);
+
+                writeNotifyWithFcm("(env) => ({ ...fcmFromEnv(env), getAccessToken })");
+
+                const result = await deployWithSecrets(DEPLOYED_WITHOUT_FCM_KEYS);
+
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(result.error).toMatch(/missing required secret\(s\) on the deploy target: FCM_PROJECT_ID\./u);
             });
 
             it("still requires FCM_SERVICE_ACCOUNT when the fcm channel leaves its token to fcmFromEnv", async () => {
                 expect.assertions(2);
 
-                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeNotifyWithFcm("(env) => fcmFromEnv(env)");
 
-                const { spawner } = createRecordingSpawner();
-                const { logger } = silentLogger();
-
-                const result = await runDeployCommand({
-                    cwd: workdir,
-                    interactive: false,
-                    logger,
-                    secretLister: () => Promise.resolve({ names: DEPLOYED_WITHOUT_FCM_KEY, ok: true }),
-                    spawner,
-                });
+                const result = await deployWithSecrets([...DEPLOYED_WITHOUT_FCM_KEYS, "FCM_PROJECT_ID"]);
 
                 expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(result.error).toMatch(/missing required secret\(s\) on the deploy target: FCM_SERVICE_ACCOUNT\./u);

@@ -25,6 +25,7 @@ import { resolve } from "node:path";
 
 import type { CapabilityKey, NotifyChannels, ServiceBindingIR, SourceCapabilitySignals } from "@lunora/codegen";
 import {
+    ALL_NOTIFY_CHANNELS,
     capabilitiesUsedBy,
     CAPABILITY_PROBES,
     COMPANION_BINDING,
@@ -359,7 +360,7 @@ interface InferredBindings {
     usesNotify: boolean;
     /** `lunora/notify.ts` configures the `fcm` channel and leaves its token to `fcmFromEnv` → `FCM_SERVICE_ACCOUNT` in `.dev.vars`. */
     usesNotifyFcm: boolean;
-    /** The `fcm` channel passes its own `getAccessToken` but takes its project from env → only `FCM_PROJECT_ID`. */
+    /** The `fcm` channel passes its own `getAccessToken` but takes its project from env → `FCM_PROJECT_ID`. */
     usesNotifyFcmTokenSource: boolean;
     /** `lunora/notify.ts` configures the `webPush` channel → the `VAPID_*` secrets in `.dev.vars`. */
     usesNotifyWebPush: boolean;
@@ -781,25 +782,13 @@ const entryConstructsEventLogClient = (entryPath: string, scannedFiles: Readonly
 const hostsEventLog = (entry: ReturnType<typeof resolveWorkerEntry>): boolean =>
     !entry.composed && entry.path !== undefined && forwardsReplicaExport(entry.path, "EventLogDO", undefined, new Set());
 
-/**
- * The notify channel flags behind the channels' secret sources. An unreadable `lunora/notify.ts`
- * still declares notify: both channels are reported so their secrets are scaffolded and
- * preflighted rather than silently dropped.
- */
+/** The notify channel flags behind the channels' secret sources; `ownCredentials` FCM needs none. */
 const notifyChannelFlags = (
     channels: NotifyChannels | undefined,
-    unreadable: boolean,
 ): Pick<InferredBindings, "usesNotifyFcm" | "usesNotifyFcmTokenSource" | "usesNotifyWebPush"> => {
-    if (unreadable) {
-        return { usesNotifyFcm: true, usesNotifyFcmTokenSource: false, usesNotifyWebPush: true };
-    }
-
-    const hasFcm = channels?.hasFcm ?? false;
-    const ownToken = channels?.fcmOwnTokenSource ?? false;
-
     return {
-        usesNotifyFcm: hasFcm && !ownToken,
-        usesNotifyFcmTokenSource: hasFcm && ownToken && !(channels?.fcmOwnProjectId ?? false),
+        usesNotifyFcm: channels?.fcm === "env",
+        usesNotifyFcmTokenSource: channels?.fcm === "ownToken",
         usesNotifyWebPush: channels?.hasWebPush ?? false,
     };
 };
@@ -918,7 +907,9 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         services,
         signals,
         usesFlags: flags !== undefined,
-        ...notifyChannelFlags(notifyIr.error === undefined ? notifyIr.value : undefined, notifyIr.error !== undefined),
+        // An unreadable `lunora/notify.ts` still declares notify: both channels are reported so
+        // their secrets are scaffolded and preflighted rather than silently dropped.
+        ...notifyChannelFlags(notifyIr.error === undefined ? notifyIr.value : ALL_NOTIFY_CHANNELS),
         hostsEventLog: hostsLog,
         hostsShardRegistry: hostsRegistry,
         workflows,

@@ -214,8 +214,10 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "<base64-of-your-service-account-key-json>",
         },
     ],
-    // An `fcm` channel that passes its own `getAccessToken` never reads FCM_SERVICE_ACCOUNT, but
-    // still takes its project from env unless it sets `projectId` too (then no source at all).
+    // An `fcm` channel that passes its own `getAccessToken` needs no key file for its token, but still
+    // takes its project from env unless it sets a literal `projectId` too (then no source at all).
+    // fcmFromEnv would also read the project from FCM_SERVICE_ACCOUNT; the registry cannot express
+    // "either key", so it asks for the dedicated one.
     "@lunora/notify:fcmTokenSource": [
         {
             description:

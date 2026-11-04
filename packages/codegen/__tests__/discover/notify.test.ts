@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { FcmCredentials } from "../../src/discover/notify";
 import { discoverNotifyCalls, discoverNotifyChannels, discoverNotifyConfig } from "../../src/discover/notify";
 
 /** A mutation that sends a push via `ctx.push.send` — must be recorded (outside-action). */
@@ -346,58 +347,39 @@ describe("fcm credentials read from defineNotify", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    const channelsOf = (fcmValue: string): ReturnType<typeof discoverNotifyChannels> => {
-        writeFileSync(
-            join(workdir, "lunora", "notify.ts"),
-            `import { defineNotify, fcmFromEnv } from "@lunora/notify";
+    const fcmOfSource = (source: string): FcmCredentials | undefined => {
+        writeFileSync(join(workdir, "lunora", "notify.ts"), source, "utf8");
+
+        return discoverNotifyChannels(project, lunoraDirectory())?.fcm;
+    };
+
+    const fcmOf = (fcmValue: string): FcmCredentials | undefined =>
+        fcmOfSource(`import { defineNotify, fcmFromEnv } from "@lunora/notify";
 import { getAccessToken } from "./google-auth";
 export default defineNotify({ fcm: ${fcmValue} });
-`,
-            "utf8",
-        );
-
-        return discoverNotifyChannels(project, lunoraDirectory());
-    };
+`);
 
     it.each([
         ["a spread of fcmFromEnv plus its own token", "(env) => ({ ...fcmFromEnv(env), getAccessToken })"],
         ["fcmFromEnv overrides", "(env) => fcmFromEnv(env, { getAccessToken })"],
+        ["a non-null fcmFromEnv overrides call", "(env) => fcmFromEnv(env, { getAccessToken })!"],
         ["a block body returning the object", "(env) => { return { ...fcmFromEnv(env), getAccessToken: getAccessToken }; }"],
-    ])("reports its own token source for %s", (_label, fcmValue) => {
+        ["an inline token function", `(env) => ({ ...fcmFromEnv(env), getAccessToken: async () => "t" })`],
+    ])("reads its own token source for %s", (_label, fcmValue) => {
         expect.assertions(1);
 
-        expect(channelsOf(fcmValue)).toMatchObject({ fcmOwnProjectId: false, fcmOwnTokenSource: true, hasFcm: true });
+        expect(fcmOf(fcmValue)).toBe("ownToken");
     });
 
-    it("reports its own token source for an fcm method", () => {
+    it("reads its own token source for an fcm method", () => {
         expect.assertions(1);
 
-        writeFileSync(
-            join(workdir, "lunora", "notify.ts"),
-            `import { defineNotify, fcmFromEnv } from "@lunora/notify";
+        expect(
+            fcmOfSource(`import { defineNotify, fcmFromEnv } from "@lunora/notify";
 import { getAccessToken } from "./google-auth";
 export default defineNotify({ fcm(env) { return fcmFromEnv(env, { getAccessToken }); } });
-`,
-            "utf8",
-        );
-
-        expect(discoverNotifyChannels(project, lunoraDirectory())).toMatchObject({ fcmOwnTokenSource: true, hasFcm: true });
-    });
-
-    it("does not take a local function named fcmFromEnv for the package export", () => {
-        expect.assertions(1);
-
-        writeFileSync(
-            join(workdir, "lunora", "notify.ts"),
-            `import { defineNotify, fcmFromEnv as packageFcmFromEnv } from "@lunora/notify";
-import { getAccessToken } from "./google-auth";
-const fcmFromEnv = (env: Record<string, unknown>, _ignored?: unknown) => packageFcmFromEnv(env);
-export default defineNotify({ fcm: (env) => fcmFromEnv(env, { getAccessToken }) });
-`,
-            "utf8",
-        );
-
-        expect(discoverNotifyChannels(project, lunoraDirectory())).toMatchObject({ fcmOwnTokenSource: false, hasFcm: true });
+`),
+        ).toBe("ownToken");
     });
 
     it.each([
@@ -406,39 +388,73 @@ export default defineNotify({ fcm: (env) => fcmFromEnv(env, { getAccessToken }) 
         ["an empty string, which fcmFromEnv treats as unset", `fcmFromEnv(env, { getAccessToken, projectId: "" })`],
         ["replaced by a later computed key", `{ projectId: "acme", [key]: env.FCM_PROJECT_ID, getAccessToken }`],
         ["replaced by a later member of the same name", `{ getAccessToken, projectId: "acme", projectId: env.FCM_PROJECT_ID }`],
-    ])("still asks for FCM_PROJECT_ID when projectId is %s", (_label, object) => {
+    ])("still takes the project id from env when projectId is %s", (_label, object) => {
         expect.assertions(1);
 
-        expect(channelsOf(`(env) => (${object})`)).toMatchObject({ fcmOwnProjectId: false, fcmOwnTokenSource: true });
+        expect(fcmOf(`(env) => (${object})`)).toBe("ownToken");
     });
 
-    it("still reads a later computed key it can resolve statically", () => {
+    it.each([
+        ["a literal projectId", `{ getAccessToken, projectId: "acme" }`],
+        ["a later computed key it can resolve statically", `{ getAccessToken, projectId: "acme", ["region"]: "eu" }`],
+    ])("reads own credentials for %s", (_label, fcmValue) => {
         expect.assertions(1);
 
-        expect(channelsOf(`{ getAccessToken, projectId: "acme", ["region"]: "eu" }`)).toMatchObject({ fcmOwnProjectId: true, fcmOwnTokenSource: true });
-    });
-
-    it("reports its own project id when the same object also sets projectId", () => {
-        expect.assertions(1);
-
-        expect(channelsOf(`{ getAccessToken, projectId: "acme" }`)).toMatchObject({ fcmOwnProjectId: true, fcmOwnTokenSource: true });
+        expect(fcmOf(fcmValue)).toBe("ownCredentials");
     });
 
     it.each([
         ["plain fcmFromEnv", "(env) => fcmFromEnv(env)"],
         ["the bare fcmFromEnv reference", "fcmFromEnv"],
         ["a static accessToken override", `(env) => fcmFromEnv(env, { accessToken: "tok" })`],
+        ["a literal projectId with no token of its own", `(env) => fcmFromEnv(env, { projectId: "acme" })`],
         ["a spread after the token, which can replace it", "(env) => ({ getAccessToken, ...fcmFromEnv(env) })"],
         ["a computed key after the token, which can replace it", "(env) => ({ ...fcmFromEnv(env), getAccessToken, [key]: undefined })"],
+        ["getAccessToken set to undefined", "(env) => fcmFromEnv(env, { getAccessToken: undefined })"],
+        ["a conditional getAccessToken", "(env) => fcmFromEnv(env, { getAccessToken: useOwn ? getAccessToken : undefined })"],
+        ["a function passed as the overrides argument", `(env) => fcmFromEnv(env, () => ({ getAccessToken, projectId: "p" }))`],
         ["a call to some other factory", "(env) => buildFcm(env, { getAccessToken })"],
         ["a block body that does more than return", "(env) => { const base = fcmFromEnv(env); return { ...base, getAccessToken }; }"],
-    ])("reports no own token source for %s", (_label, fcmValue) => {
+    ])("reads env credentials for %s", (_label, fcmValue) => {
         expect.assertions(1);
 
-        expect(channelsOf(fcmValue)).toMatchObject({ fcmOwnProjectId: false, fcmOwnTokenSource: false, hasFcm: true });
+        expect(fcmOf(fcmValue)).toBe("env");
     });
 
-    it("reports no own credentials when the config falls back to every channel", () => {
+    it.each([
+        [
+            "a local function that is only named fcmFromEnv",
+            `import { defineNotify, fcmFromEnv as packageFcmFromEnv } from "@lunora/notify";
+import { getAccessToken } from "./google-auth";
+const fcmFromEnv = (env: Record<string, unknown>, _ignored?: unknown) => packageFcmFromEnv(env);
+export default defineNotify({ fcm: (env) => fcmFromEnv(env, { getAccessToken }) });
+`,
+        ],
+        [
+            "an fcm member that a later computed key can replace",
+            `import { defineNotify, fcmFromEnv } from "@lunora/notify";
+import { getAccessToken } from "./google-auth";
+const key: string = "fcm";
+export default defineNotify({ fcm: (env) => ({ ...fcmFromEnv(env), getAccessToken }), [key]: (env) => fcmFromEnv(env) });
+`,
+        ],
+        [
+            "a variable config that an alias of it rewrites",
+            `import { defineNotify, fcmFromEnv } from "@lunora/notify";
+import { getAccessToken } from "./google-auth";
+const config = { fcm: (env) => ({ ...fcmFromEnv(env), getAccessToken }) };
+const alias = config;
+alias.fcm = (env) => fcmFromEnv(env);
+export default defineNotify(config);
+`,
+        ],
+    ])("reads env credentials for %s", (_label, source) => {
+        expect.assertions(1);
+
+        expect(fcmOfSource(source)).toBe("env");
+    });
+
+    it("reads env credentials and both channels when the config falls back to every channel", () => {
         expect.assertions(1);
 
         writeFileSync(
@@ -450,11 +466,6 @@ export default defineNotify({ ...base, fcm: () => ({ getAccessToken: async () =>
             "utf8",
         );
 
-        expect(discoverNotifyChannels(project, lunoraDirectory())).toStrictEqual({
-            fcmOwnProjectId: false,
-            fcmOwnTokenSource: false,
-            hasFcm: true,
-            hasWebPush: true,
-        });
+        expect(discoverNotifyChannels(project, lunoraDirectory())).toStrictEqual({ fcm: "env", hasWebPush: true });
     });
 });

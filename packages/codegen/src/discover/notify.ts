@@ -2,10 +2,31 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "@lunora/advisor";
-import type { CallExpression, Expression, Identifier, Node as TsNode, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
+import type {
+    ArrowFunction,
+    CallExpression,
+    Expression,
+    FunctionExpression,
+    Identifier,
+    MethodDeclaration,
+    Node as TsNode,
+    ObjectLiteralExpression,
+    Project,
+    SourceFile,
+    VariableDeclaration,
+} from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
-import { defaultExportExpression, descendantsOfKind, findObjectProperty, handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import {
+    defaultExportExpression,
+    descendantsOfKind,
+    findObjectProperty,
+    handlerOf,
+    listLunoraSourceFiles,
+    lunoraRelativePath,
+    propertyInitializer,
+    unwrapExpression,
+} from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { isContextSurface } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
@@ -164,30 +185,34 @@ const projectUsesPush = (project: Project, lunoraDirectory: string): boolean => 
     return false;
 };
 
-/** Which push channels `lunora/notify.ts` wires. */
+/**
+ * Where the `fcm` channel gets its credentials, which decides the `FCM_*` keys a deploy needs:
+ * - `absent`: no `fcm` channel.
+ * - `env`: `fcmFromEnv` mints the token from `FCM_SERVICE_ACCOUNT`.
+ * - `ownToken`: the app passes its own `getAccessToken`; the project id still comes from env.
+ * - `ownCredentials`: the app also sets a literal `projectId`, so no `FCM_*` key is needed.
+ */
+type FcmCredentials = "absent" | "env" | "ownCredentials" | "ownToken";
+
+/** Which push channels `lunora/notify.ts` wires, and where the `fcm` channel's credentials come from. */
 interface NotifyChannels {
-    /** The `fcm` value sets `projectId` itself, beside its own `getAccessToken`, so it reads no `FCM_*` key. */
-    fcmOwnProjectId: boolean;
-    /** The `fcm` value passes its own `getAccessToken`, so `fcmFromEnv` never reads `FCM_SERVICE_ACCOUNT`. */
-    fcmOwnTokenSource: boolean;
-    hasFcm: boolean;
+    fcm: FcmCredentials;
     hasWebPush: boolean;
 }
 
-/** Every channel, with no FCM credential of the app's own: the fallback when the config cannot be read. */
-const ALL_CHANNELS: NotifyChannels = { fcmOwnProjectId: false, fcmOwnTokenSource: false, hasFcm: true, hasWebPush: true };
+/** Both channels, with env-backed FCM: the reading for a config that cannot be read, so no secret is dropped. */
+const ALL_NOTIFY_CHANNELS: NotifyChannels = { fcm: "env", hasWebPush: true };
 
 /**
- * The specifier that exports the `defineNotify` config factory: the granular
- * `@lunora/notify` package. Unlike `ctx.flags`, the umbrella never re-exports
- * notify's surface (`shard-bindings.ts`), so there is no umbrella variant to
- * accept.
+ * The specifiers whose exports (`defineNotify`, `fcmFromEnv`) this discovery recognises: the
+ * granular `@lunora/notify` package. Unlike `ctx.flags`, the umbrella never re-exports
+ * notify's surface (`shard-bindings.ts`), so there is no umbrella variant to accept.
  */
-const DEFINE_NOTIFY_MODULES = new Set(["@lunora/notify"]);
+const NOTIFY_MODULES = new Set(["@lunora/notify"]);
 
 /**
  * Decide whether a callee identifier refers to `exportName` from one of
- * {@link DEFINE_NOTIFY_MODULES}. Mirrors `isFlagshipProvider` (`flags.ts`):
+ * {@link NOTIFY_MODULES}. Mirrors `isFlagshipProvider` (`flags.ts`):
  * trust the import declaration when the symbol resolves, and a bare same-named
  * identifier when the ts-morph project can't always resolve the workspace
  * package. Anything else, such as a local wrapper factory around `defineNotify`
@@ -205,7 +230,7 @@ const isNotifyExport = (identifier: Identifier, exportName: string): boolean => 
             continue;
         }
 
-        if (!DEFINE_NOTIFY_MODULES.has(declaration.getImportDeclaration().getModuleSpecifierValue())) {
+        if (!NOTIFY_MODULES.has(declaration.getImportDeclaration().getModuleSpecifierValue())) {
             return false;
         }
 
@@ -418,22 +443,11 @@ const configLiteralOf = (argument: TsNode): ObjectLiteralExpression | undefined 
     return undefined;
 };
 
-const unwrapExpression = (node: TsNode): TsNode => {
-    let current = node;
-
-    while (Node.isParenthesizedExpression(current) || Node.isAsExpression(current) || Node.isSatisfiesExpression(current)) {
-        current = current.getExpression();
-    }
-
-    return current;
-};
+const isFactory = (node: TsNode): node is ArrowFunction | FunctionExpression | MethodDeclaration =>
+    Node.isArrowFunction(node) || Node.isFunctionExpression(node) || Node.isMethodDeclaration(node);
 
 /** The expression a factory returns: its expression body, or a block body that is a single `return`. */
-const returnedExpressionOf = (factory: TsNode): TsNode | undefined => {
-    if (!Node.isArrowFunction(factory) && !Node.isFunctionExpression(factory) && !Node.isMethodDeclaration(factory)) {
-        return factory;
-    }
-
+const factoryResultOf = (factory: ArrowFunction | FunctionExpression | MethodDeclaration): TsNode | undefined => {
     const body = factory.getBody();
 
     if (!Node.isBlock(body)) {
@@ -447,17 +461,19 @@ const returnedExpressionOf = (factory: TsNode): TsNode | undefined => {
 
 /**
  * The object literal an `fcm` value resolves to: the value itself, the object its factory returns,
- * or the overrides in `fcmFromEnv(env, { ... })`. `undefined` for anything not read statically.
+ * or the overrides object in `fcmFromEnv(env, { ... })`. `undefined` for anything not read statically.
  */
 const fcmConfigObjectOf = (value: TsNode): ObjectLiteralExpression | undefined => {
-    const returned = returnedExpressionOf(unwrapExpression(value));
-    const result = returned === undefined ? undefined : unwrapExpression(returned);
+    const unwrapped = unwrapExpression(value);
+    const result = unwrapExpression(unwrapped !== undefined && isFactory(unwrapped) ? factoryResultOf(unwrapped) : unwrapped);
 
     if (result !== undefined && Node.isCallExpression(result)) {
         const callee = result.getExpression();
-        const overrides = result.getArguments()[1];
+        const overrides = unwrapExpression(result.getArguments()[1]);
 
-        return Node.isIdentifier(callee) && isNotifyExport(callee, "fcmFromEnv") && overrides !== undefined ? fcmConfigObjectOf(overrides) : undefined;
+        return Node.isIdentifier(callee) && isNotifyExport(callee, "fcmFromEnv") && overrides !== undefined && Node.isObjectLiteralExpression(overrides)
+            ? overrides
+            : undefined;
     }
 
     return result !== undefined && Node.isObjectLiteralExpression(result) ? result : undefined;
@@ -486,15 +502,40 @@ const setsLastWord = (object: ObjectLiteralExpression, name: string): boolean =>
 };
 
 /**
- * Whether `object` sets `projectId` to a string literal. Any other value, such as
- * `env.FCM_PROJECT_ID`, may still read the env key, so it does not count as the app's own.
+ * Whether `object`'s `getAccessToken` is certainly a token source: a method, a shorthand, a
+ * function, or a reference to one. `undefined`, `null` or a conditional may leave no token
+ * source at all, so they do not count.
+ */
+const setsTokenSource = (object: ObjectLiteralExpression): boolean => {
+    const property = findObjectProperty(object, "getAccessToken");
+
+    if (property === undefined || !setsLastWord(object, "getAccessToken")) {
+        return false;
+    }
+
+    if (Node.isShorthandPropertyAssignment(property) || Node.isMethodDeclaration(property)) {
+        return true;
+    }
+
+    const value = unwrapExpression(propertyInitializer(object, "getAccessToken"));
+
+    return (
+        value !== undefined &&
+        (Node.isArrowFunction(value) ||
+            Node.isFunctionExpression(value) ||
+            Node.isCallExpression(value) ||
+            Node.isPropertyAccessExpression(value) ||
+            (Node.isIdentifier(value) && value.getText() !== "undefined"))
+    );
+};
+
+/**
+ * Whether `object` sets `projectId` to a non-empty string literal. Any other value, such as
+ * `env.FCM_PROJECT_ID`, may still read the env key, and `fcmFromEnv` treats `""` as unset.
  */
 const setsLiteralProjectId = (object: ObjectLiteralExpression): boolean => {
-    const property = findObjectProperty(object, "projectId");
-    const value = Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
-    const literal = value === undefined ? undefined : unwrapExpression(value);
+    const literal = unwrapExpression(propertyInitializer(object, "projectId"));
 
-    // `fcmFromEnv` treats an empty override as unset and falls back to env, so `""` is not the app's own.
     return (
         setsLastWord(object, "projectId") &&
         literal !== undefined &&
@@ -504,17 +545,31 @@ const setsLiteralProjectId = (object: ObjectLiteralExpression): boolean => {
 };
 
 /**
- * The FCM credentials the app supplies in `lunora/notify.ts` rather than through `FCM_*` keys.
- * Reports only what it reads for certain: a missed own token keeps the `FCM_SERVICE_ACCOUNT`
- * requirement, while a wrong match would let a deploy go out without the key it needs.
+ * Where the `fcm` channel of an inline or variable `defineNotify` config gets its credentials.
+ * Own credentials count only on positive evidence: a missed own token keeps the
+ * `FCM_SERVICE_ACCOUNT` requirement, while a wrong match would let a deploy go out without a
+ * key it needs. So a variable config, which an alias of it could rewrite, and an `fcm` member
+ * that a later key could replace both read as `env`.
  */
-const fcmOwnCredentialsOf = (config: ObjectLiteralExpression): Pick<NotifyChannels, "fcmOwnProjectId" | "fcmOwnTokenSource"> => {
+const fcmCredentialsOf = (config: ObjectLiteralExpression, inline: boolean): FcmCredentials => {
     const property = findObjectProperty(config, "fcm");
-    const value = Node.isPropertyAssignment(property) ? property.getInitializer() : property;
-    const object = value === undefined ? undefined : fcmConfigObjectOf(value);
-    const fcmOwnTokenSource = object !== undefined && setsLastWord(object, "getAccessToken");
 
-    return { fcmOwnProjectId: fcmOwnTokenSource && setsLiteralProjectId(object), fcmOwnTokenSource };
+    if (property === undefined) {
+        return "absent";
+    }
+
+    if (!inline || !setsLastWord(config, "fcm")) {
+        return "env";
+    }
+
+    const value = Node.isMethodDeclaration(property) ? property : propertyInitializer(config, "fcm");
+    const object = value === undefined ? undefined : fcmConfigObjectOf(value);
+
+    if (object === undefined || !setsTokenSource(object)) {
+        return "env";
+    }
+
+    return setsLiteralProjectId(object) ? "ownCredentials" : "ownToken";
 };
 
 /**
@@ -545,7 +600,7 @@ const discoverNotifyChannels = (project: Project, lunoraDirectory: string): Noti
     const exported = notifyConfigExpression(source);
 
     if (!exported || !Node.isCallExpression(exported)) {
-        return ALL_CHANNELS;
+        return ALL_NOTIFY_CHANNELS;
     }
 
     const callee = exported.getExpression();
@@ -553,14 +608,10 @@ const discoverNotifyChannels = (project: Project, lunoraDirectory: string): Noti
     const config = argument === undefined ? undefined : configLiteralOf(argument);
 
     if (!config || config.getProperties().some((property) => Node.isSpreadAssignment(property))) {
-        return ALL_CHANNELS;
+        return ALL_NOTIFY_CHANNELS;
     }
 
-    return {
-        ...fcmOwnCredentialsOf(config),
-        hasFcm: findObjectProperty(config, "fcm") !== undefined,
-        hasWebPush: findObjectProperty(config, "webPush") !== undefined,
-    };
+    return { fcm: fcmCredentialsOf(config, Node.isObjectLiteralExpression(argument)), hasWebPush: findObjectProperty(config, "webPush") !== undefined };
 };
 
 /**
@@ -573,8 +624,8 @@ const discoverNotifyConfig = (project: Project, lunoraDirectory: string): Adviso
 
     return channels === undefined
         ? undefined
-        : { hasFcm: channels.hasFcm, hasWebPush: channels.hasWebPush, usesPush: projectUsesPush(project, lunoraDirectory) };
+        : { hasFcm: channels.fcm !== "absent", hasWebPush: channels.hasWebPush, usesPush: projectUsesPush(project, lunoraDirectory) };
 };
 
-export type { NotifyChannels };
-export { discoverNotifyCalls, discoverNotifyChannels, discoverNotifyConfig, NOTIFY_FILENAME };
+export type { FcmCredentials, NotifyChannels };
+export { ALL_NOTIFY_CHANNELS, discoverNotifyCalls, discoverNotifyChannels, discoverNotifyConfig, NOTIFY_FILENAME };
