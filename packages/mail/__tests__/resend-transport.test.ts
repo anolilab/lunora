@@ -165,13 +165,16 @@ describe("resend transport error mapping", () => {
     });
 
     describe("send failure classification", () => {
-        const failure = (error: unknown) => {
+        const failure = (error: unknown, idempotencyKey?: string) => {
             sendEmail.mockResolvedValue({ error, success: false });
 
             return mailer()
-                .send({ subject: "Hi", to: "a@x.test" })
+                .send({ idempotencyKey, subject: "Hi", to: "a@x.test" })
                 .catch((error_: unknown) => error_);
         };
+
+        /** The shape `@visulima/email`'s HTTP client returns when it aborts a request at its timeout. */
+        const requestTimeout = (): Error => Object.assign(new Error("Request timed out after 30000ms"), { code: "ETIMEDOUT" });
 
         it("refuses a 422 from the API: retrying the same message cannot succeed", async () => {
             expect.assertions(2);
@@ -206,15 +209,48 @@ describe("resend transport error mapping", () => {
             expect(isRetryableMailError(await failure(new Error("Request failed: fetch failed", { cause: new TypeError("fetch failed") })))).toBe(true);
         });
 
-        it("marks the provider's own request timeout outcome-unknown, never retryable: the API may have accepted the send", async () => {
+        it("does not retry a keyless request timeout: the API may have accepted the send and nothing would drop the repeat", async () => {
             expect.assertions(3);
 
-            // The shape `@visulima/email`'s HTTP client returns when it aborts a request at its timeout.
-            const error = await failure(Object.assign(new Error("Request timed out after 30000ms"), { code: "ETIMEDOUT" }));
+            const error = await failure(requestTimeout());
 
             expect(error).toBeInstanceOf(MailSendError);
             expect(isOutcomeUnknownMailError(error)).toBe(true);
             expect(isRetryableMailError(error)).toBe(false);
+        });
+
+        it("retries a request timeout that carried an idempotency key: Resend drops the repeat if the first one landed", async () => {
+            expect.assertions(2);
+
+            const error = await failure(requestTimeout(), "order-42-receipt");
+
+            expect(isOutcomeUnknownMailError(error)).toBe(true);
+            expect(isRetryableMailError(error)).toBe(true);
+        });
+
+        it("retries a send that outran the mailer's deadline when it carried an idempotency key", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            sendEmail.mockReturnValue(
+                new Promise(() => {
+                    // never settles
+                }),
+            );
+
+            const settled = createMailer({ apiKey: "test-key", from: "noreply@x.test", sendTimeoutMs: 1000 })
+                .send({ idempotencyKey: "order-42-receipt", subject: "Hi", to: "a@x.test" })
+                .catch((error_: unknown) => error_);
+
+            await vi.advanceTimersByTimeAsync(1000);
+
+            const error = await settled;
+
+            vi.useRealTimers();
+
+            expect(isOutcomeUnknownMailError(error)).toBe(true);
+            expect(isRetryableMailError(error)).toBe(true);
         });
     });
 });

@@ -4,8 +4,9 @@ import { LunoraError } from "@lunora/errors";
 interface MailSendErrorData {
     /**
      * The send was cut off before the provider answered (the mailer's send deadline, or the
-     * provider's own request timeout), so it may have been delivered. Always paired with
-     * `retryable: false`: repeating it risks a second copy.
+     * provider's own request timeout), so it may have been delivered. `retryable` is then true
+     * only when the provider dedupes on the send's idempotency key, so a repeat cannot mail a
+     * second copy.
      */
     outcomeUnknown: boolean;
     /** Whether repeating the same message may succeed. A refused address or malformed message never will. */
@@ -19,20 +20,18 @@ interface MailSendErrorData {
  * clear on a redelivery. Retrying a refusal only drains the queue into its
  * dead-letter queue.
  *
- * A send that timed out is neither: the provider may have accepted it, so it is
- * `outcomeUnknown` and never `retryable` — a queue consumer acks and reports it
- * rather than mailing the recipient a second copy.
+ * A send that timed out is `outcomeUnknown`: the provider may have accepted it.
+ * It is `retryable` only when the transport forwarded the send's idempotency key
+ * to a provider that dedupes on it (Resend), so the repeat is dropped if the
+ * first one landed. Otherwise a queue consumer acks and reports it rather than
+ * mailing the recipient a second copy.
  */
 class MailSendError extends LunoraError {
     public readonly outcomeUnknown: boolean;
 
     public readonly retryable: boolean;
 
-    public constructor(
-        options:
-            | { cause?: unknown; message?: string; outcomeUnknown: true; retryable: false }
-            | { cause?: unknown; message?: string; outcomeUnknown?: false; retryable: boolean },
-    ) {
+    public constructor(options: { cause?: unknown; message?: string; outcomeUnknown?: boolean; retryable: boolean }) {
         const outcomeUnknown = options.outcomeUnknown ?? false;
         const data: MailSendErrorData = { outcomeUnknown, retryable: options.retryable };
 
@@ -53,8 +52,9 @@ const isRetryableMailError = (error: unknown): boolean => error instanceof MailS
 
 /**
  * Whether a failed send may nonetheless have been delivered — it timed out
- * before the provider answered. Report it (and check the provider's logs);
- * do not resend it.
+ * before the provider answered. Check {@link isRetryableMailError} first: a
+ * retryable one is safe to redeliver because the provider dedupes on its key.
+ * One that is not must be reported (check the provider's logs), not resent.
  */
 const isOutcomeUnknownMailError = (error: unknown): boolean => error instanceof MailSendError && error.outcomeUnknown;
 

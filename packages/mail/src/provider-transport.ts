@@ -104,7 +104,9 @@ const isProviderTimeout = (rawError: unknown): boolean => causeChain(rawError).s
  * that explicit permanent status; anything the provider did not classify (a plain
  * `Error`, a network failure, a non-`Error` result) is retried, because a wrong
  * retry only dead-letters the message and a wrong drop loses it. A provider
- * timeout is the exception: it may have delivered, so it is never retried.
+ * timeout is the exception: it may have delivered, so it is not retried here;
+ * {@link interpretSendResult}, which knows whether the provider can dedupe the
+ * repeat, decides.
  */
 const isRetryableProviderError = (rawError: unknown): boolean => {
     if (!(rawError instanceof Error)) {
@@ -163,8 +165,10 @@ const toProviderEmail = (payload: SendPayload, defaultFrom: string, to: Provider
  * Interpret a provider send result: on failure, log the redacted reason
  * (server-side only — surfacing it to callers can disclose provider internals)
  * and throw a stable, generic error; on success, return the message id.
+ * `keyForwarded`: the send carried an idempotency key the provider dedupes on,
+ * which makes a timed-out send safe to retry.
  */
-const interpretSendResult = (result: ProviderSendResult): { id: string } => {
+const interpretSendResult = (result: ProviderSendResult, keyForwarded = false): { id: string } => {
     if (result.success && !result.data) {
         // The provider accepted the send, so a redelivery would email the recipient twice.
         throw new MailSendError({ message: "@lunora/mail: provider accepted the send but returned no message id", retryable: false });
@@ -179,7 +183,7 @@ const interpretSendResult = (result: ProviderSendResult): { id: string } => {
                 cause: result.error,
                 message: "@lunora/mail: the provider timed out, so the send may have been delivered",
                 outcomeUnknown: true,
-                retryable: false,
+                retryable: keyForwarded,
             });
         }
 

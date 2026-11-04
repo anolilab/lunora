@@ -15,6 +15,7 @@ const createResendTransport = (apiKey: string, defaultFrom: string): MailTranspo
     const provider = resendProvider({ apiKey });
 
     return {
+        dedupesOnIdempotencyKey: true,
         send: async (payload: SendPayload, options?: { idempotencyKey?: string }) => {
             await provider.initialize();
 
@@ -25,7 +26,7 @@ const createResendTransport = (apiKey: string, defaultFrom: string): MailTranspo
             // retries), so a repeat of the same send inside Resend's 24-hour window is not delivered twice.
             const result = (await provider.sendEmail({ ...email, idempotencyKey: options?.idempotencyKey })) as ProviderSendResult;
 
-            return interpretSendResult(result);
+            return interpretSendResult(result, options?.idempotencyKey !== undefined);
         },
     };
 };

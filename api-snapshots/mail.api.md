@@ -82,12 +82,7 @@ class MailSendError extends LunoraError {
     constructor(options: {
         cause?: unknown;
         message?: string;
-        outcomeUnknown: true;
-        retryable: false;
-    } | {
-        cause?: unknown;
-        message?: string;
-        outcomeUnknown?: false;
+        outcomeUnknown?: boolean;
         retryable: boolean;
     });
 }
@@ -106,6 +101,7 @@ interface MailSendErrorData {
 
 ```ts
 interface MailTransport {
+    dedupesOnIdempotencyKey?: boolean;
     send: (payload: SendPayload, options?: {
         idempotencyKey?: string;
     }) => Promise<{

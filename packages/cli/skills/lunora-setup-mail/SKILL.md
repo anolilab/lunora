@@ -110,8 +110,9 @@ with `consumeQueuedSend(mailer, message.body, { sent: env.SENT })` and then call
 message ack without a second send. On a throw, branch on `isRetryableMailError(error)`: retry with
 `message.retry()` when it is true, and ack and log when it is false, since a refused
 address or malformed body never sends and a retry only dead-letters it. A send
-that timed out (`isOutcomeUnknownMailError(error)`) is not retryable either: the
-provider may have delivered it, so ack it and report it instead of resending. With a queue bound in dev, the message still goes through the
+that timed out (`isOutcomeUnknownMailError(error)`) may have been delivered: it is
+retryable only through Resend with an idempotency key (Resend drops the repeat), and
+otherwise is acked and reported instead of resent. With a queue bound in dev, the message still goes through the
 queue and the consumer's mailer captures it into the inbox. Queues deliver at least once: with
 per-message acks a later throw retries only the unacknowledged messages, while
 without them a single throw resends the whole batch. The full wiring is in the "Queueing"

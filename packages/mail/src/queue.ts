@@ -193,21 +193,16 @@ const toSendOptions = (payload: unknown): SendOptions => {
  *       try {
  *         await consumeQueuedSend(mailer, message.body, { sent: env.SENT });
  *       } catch (error) {
- *         // Timed out: the provider may have delivered it, so a retry could send a second copy.
- *         if (isOutcomeUnknownMailError(error)) {
- *           console.error("mail outcome unknown", error);
- *           message.ack();
+ *         // Transient, or a timeout the provider dedupes on the key (Resend): redeliver.
+ *         if (isRetryableMailError(error)) {
+ *           message.retry();
  *           continue;
  *         }
  *
- *         // A refusal or a malformed body: a retry only dead-letters it.
- *         if (!isRetryableMailError(error)) {
- *           console.error("mail refused", error);
- *           message.ack();
- *           continue;
- *         }
- *
- *         message.retry();
+ *         // A timeout no provider dedupes may have been delivered, so a retry could send a second
+ *         // copy: check the provider's logs. Anything else is a refusal or a malformed body.
+ *         console.error(isOutcomeUnknownMailError(error) ? "mail outcome unknown" : "mail refused", error);
+ *         message.ack();
  *         continue;
  *       }
  *       // Per message: without it a single throw retries the whole batch.

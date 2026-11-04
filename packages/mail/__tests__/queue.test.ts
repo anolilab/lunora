@@ -164,6 +164,31 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         expect(puts).toHaveLength(1);
     });
 
+    it("does not record a retryable timed-out send, so the redelivery re-sends under the same key and is then recorded", async () => {
+        expect.assertions(5);
+
+        const { puts, store } = memoryStore();
+        const send = vi
+            .fn<Mailer["send"]>()
+            .mockRejectedValueOnce(new MailSendError({ outcomeUnknown: true, retryable: true }))
+            .mockResolvedValueOnce({ id: "provider-original" });
+        const mailer: Mailer = {
+            queue: async () => {
+                return { queued: true };
+            },
+            send,
+        };
+
+        const timedOut = await consumeQueuedSend(mailer, body, { sent: store }).catch((error: unknown) => error);
+
+        expect(isRetryableMailError(timedOut)).toBe(true);
+        expect(puts).toHaveLength(0);
+
+        await expect(consumeQueuedSend(mailer, body, { sent: store })).resolves.toStrictEqual({ deduplicated: false, id: "provider-original" });
+        expect(send.mock.calls.map(([options]) => options.idempotencyKey)).toStrictEqual(["order-42", "order-42"]);
+        await expect(consumeQueuedSend(mailer, body, { sent: store })).resolves.toStrictEqual({ deduplicated: true, id: "provider-original" });
+    });
+
     it("fails as retryable without sending when the store cannot be read: nothing has gone out yet", async () => {
         expect.assertions(2);
 

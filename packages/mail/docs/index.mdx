@@ -115,11 +115,14 @@ is retried with `message.retry()` (until the dead-letter queue), while a send th
 provider refused with an explicit permanent HTTP status (for example a rejected
 address or message) or a malformed body is acked and logged, because a retry
 would fail the same way and only fill the dead-letter queue. A send that timed out
-is not retryable either: the provider may already have accepted it, so it fails
-with `isOutcomeUnknownMailError(error)` true and the consumer acks and reports it
-rather than mailing a possible second copy. `send()` gives the transport 60 seconds
-by default (`sendTimeoutMs` on `createMailer` / `createMailerFromEnv`), and Resend's
-own 30-second request timeout counts the same way. Build the consumer's mailer with
+may already have been accepted, so it fails with `isOutcomeUnknownMailError(error)`
+true. Whether it is retried depends on the provider: Resend receives the send's
+`idempotencyKey` and drops a repeat, so a timed-out Resend send with a key is
+retryable and redelivered; through the Cloudflare binding, or without a key, it is
+not, and the consumer acks and reports it rather than mailing a possible second
+copy. `send()` gives the transport 60 seconds by default (`sendTimeoutMs` on
+`createMailer` / `createMailerFromEnv`), and Resend's own 30-second request timeout
+counts the same way. Build the consumer's mailer with
 `createMailerFromEnv` so that in dev the queued message is captured into the
 studio inbox at consume time instead of delivered:
 
@@ -135,22 +138,16 @@ export default {
                 // `env.SENT` is a KV namespace: a redelivered key is acked without a second send.
                 await consumeQueuedSend(mailer, message.body, { sent: env.SENT });
             } catch (error) {
-                // Timed out: the provider may have delivered it, and a retry could send a
-                // second copy. Ack it and check the provider's logs.
-                if (isOutcomeUnknownMailError(error)) {
-                    console.error("mail outcome unknown", error);
-                    message.ack();
+                // Transient, or a timeout the provider dedupes on the key (Resend): redeliver.
+                if (isRetryableMailError(error)) {
+                    message.retry();
                     continue;
                 }
 
-                // A refusal or a malformed body: a retry only dead-letters it.
-                if (!isRetryableMailError(error)) {
-                    console.error("mail refused", error);
-                    message.ack();
-                    continue;
-                }
-
-                message.retry();
+                // A timeout no provider dedupes may have been delivered, so a retry could send a second
+                // copy: check the provider's logs. Anything else is a refusal or a malformed body.
+                console.error(isOutcomeUnknownMailError(error) ? "mail outcome unknown" : "mail refused", error);
+                message.ack();
                 continue;
             }
             message.ack();
@@ -342,8 +339,8 @@ rules; that lifecycle stays in Cloudflare.
 | `renderEmail(element)`                      | Render a React Email element to `{ html, text }`                                                                                                                                                                                                                 |
 | `toQueuedPayload(options)`                  | Narrow `SendOptions` to its serializable `QueuedSend` (drops `react`)                                                                                                                                                                                            |
 | `consumeQueuedSend(mailer, body, options?)` | Validate a queued payload and `mailer.send(...)` it, skipping a key already in `options.sent`; returns `{ id, deduplicated }`                                                                                                                                    |
-| `isRetryableMailError(error)`               | Whether a failed send is worth a redelivery: `false` for a refusal carrying an explicit permanent HTTP status and for a timed-out send, `true` for everything else                                                                                               |
-| `isOutcomeUnknownMailError(error)`          | Whether a failed send timed out and may have been delivered; never retryable, so ack and report it                                                                                                                                                               |
+| `isRetryableMailError(error)`               | Whether a failed send is worth a redelivery: `false` for a refusal carrying an explicit permanent HTTP status and for a timed-out send the provider cannot dedupe, `true` for everything else                                                                    |
+| `isOutcomeUnknownMailError(error)`          | Whether a failed send timed out and may have been delivered; when it is not also retryable, ack and report it                                                                                                                                                    |
 | `MailSendError`                             | The error a failed send throws; `retryable` / `outcomeUnknown` (also on `data`) carry the decision                                                                                                                                                               |
 | Type-only                                   | `Mailer`, `MailTransport`, `SendOptions`, `SendPayload`, `QueueLike`, `LunoraMailOptions`, `QueuedSend`, `SentMailStore`, `ConsumeQueuedSendOptions`, `CapturedMail`, `MailboxSink`, `CloudflareSend`, `CloudflareTransportOptions`, `FromEnvOptions`, `MailEnv` |
 

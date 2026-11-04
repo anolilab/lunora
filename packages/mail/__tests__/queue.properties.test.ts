@@ -4,14 +4,17 @@ import { describe, expect, it } from "vitest";
 import createMailer from "../src/create-mailer";
 import type { SentMailStore } from "../src/queue";
 import { consumeQueuedSend } from "../src/queue";
-import { isOutcomeUnknownMailError, isRetryableMailError, MailSendError } from "../src/send-error";
+import { isRetryableMailError, MailSendError } from "../src/send-error";
 
 /**
  * Model-based checks over random Cloudflare Queues delivery histories. Each step
  * delivers one live message to the consumer and fixes what the provider does if
  * it is asked to send. The consumer acks or retries exactly as the documented
  * recipe does; an `okAckLost` step is a send the provider accepted whose ack
- * never landed, so the queue delivers the message again. Time comes from the
+ * never landed, so the queue delivers the message again. `unknown` is a timeout
+ * through a provider that cannot dedupe (acked); `unknownDeduped` is a timeout
+ * through one that dedupes on the key, as Resend does (retried): the provider
+ * delivered it, and drops a later send under the same key. Time comes from the
  * history and drives the store's TTL.
  *
  * Not generated: a crash between the provider accepting the send and the key
@@ -21,7 +24,7 @@ import { isOutcomeUnknownMailError, isRetryableMailError, MailSendError } from "
 const KEYS = ["a", "b", "c"] as const;
 const TTL_SECONDS = 86_400;
 
-type Outcome = "ok" | "okAckLost" | "permanent" | "retryable" | "unknown";
+type Outcome = "ok" | "okAckLost" | "permanent" | "retryable" | "unknown" | "unknownDeduped";
 
 interface Step {
     advance: number;
@@ -33,7 +36,7 @@ const stepArbitrary: fc.Arbitrary<Step> = fc.record({
     // Bounded so a whole history stays inside the TTL: past it, a resend is the documented behaviour.
     advance: fc.integer({ max: 600, min: 0 }),
     message: fc.integer({ max: KEYS.length - 1, min: 0 }),
-    outcome: fc.constantFrom<Outcome>("ok", "okAckLost", "permanent", "retryable", "unknown"),
+    outcome: fc.constantFrom<Outcome>("ok", "okAckLost", "permanent", "retryable", "unknown", "unknownDeduped"),
 });
 
 const historyArbitrary = fc.array(stepArbitrary, { maxLength: 60 });
@@ -65,6 +68,8 @@ const replay = async (steps: ReadonlyArray<Step>): Promise<Replay> => {
     let now = 0;
     let outcome: Outcome = "ok";
     const delivered = new Map<string, number>();
+    // Keys the provider holds under its own idempotency dedupe: only a timeout through a deduping provider puts one here.
+    const providerDeduped = new Set<string>();
     const acked = new Set<string>();
     const store = expiringStore(() => now);
     let neverDoubled = true;
@@ -83,11 +88,20 @@ const replay = async (steps: ReadonlyArray<Step>): Promise<Replay> => {
                     throw new MailSendError({ retryable: false });
                 }
 
-                // An outcome-unknown send is counted as delivered: the worst case for duplicates.
-                delivered.set(key, (delivered.get(key) ?? 0) + 1);
+                // The provider drops a repeat of a key it accepted under its dedupe and answers with the original.
+                if (!providerDeduped.has(key)) {
+                    // An outcome-unknown send is counted as delivered: the worst case for duplicates.
+                    delivered.set(key, (delivered.get(key) ?? 0) + 1);
+                }
 
                 if (outcome === "unknown") {
                     throw new MailSendError({ outcomeUnknown: true, retryable: false });
+                }
+
+                if (outcome === "unknownDeduped") {
+                    providerDeduped.add(key);
+
+                    throw new MailSendError({ outcomeUnknown: true, retryable: true });
                 }
 
                 return { id: `id-${key}` };
@@ -115,7 +129,8 @@ const replay = async (steps: ReadonlyArray<Step>): Promise<Replay> => {
                 acked.add(key);
             }
         } catch (error) {
-            if (isOutcomeUnknownMailError(error) || !isRetryableMailError(error)) {
+            // The documented recipe: redeliver whatever is retryable, ack the rest.
+            if (!isRetryableMailError(error)) {
                 acked.add(key);
             }
         }
@@ -162,7 +177,7 @@ describe("consumeQueuedSend dedupe properties", () => {
                     }
 
                     settled.add(key);
-                } else if (step.outcome !== "retryable") {
+                } else if (step.outcome !== "retryable" && step.outcome !== "unknownDeduped") {
                     settled.add(key);
                 }
             }

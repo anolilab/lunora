@@ -16,6 +16,13 @@ export interface QueueLike {
  */
 export interface MailTransport {
     /**
+     * The provider drops a repeat of a send carrying the same `idempotencyKey`, so a
+     * timed-out send that carried one is safe to retry. Set only by a transport that
+     * forwards the key to such a provider (the Resend transport).
+     */
+    dedupesOnIdempotencyKey?: boolean;
+
+    /**
      * `options.idempotencyKey` is the send's stable dedupe key, when it has one. A
      * transport whose provider dedupes on a key forwards it (the Resend transport
      * sends it as the `Idempotency-Key` request header); others ignore it. It is

@@ -20,7 +20,7 @@ const IDEMPOTENCY_KEY_PATTERN = /^[\u0021-\u007E]{1,256}$/u;
  * deadline passes — a hung provider call must not hold a queue message until
  * the consumer's wall-clock limit, which redelivers a send that may have gone out.
  */
-const withSendDeadline = async <T>(work: Promise<T>, timeoutMs: number): Promise<T> => {
+const withSendDeadline = async <T>(work: Promise<T>, timeoutMs: number, retryable: boolean): Promise<T> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const deadline = new Promise<never>((_resolve, reject) => {
@@ -29,7 +29,7 @@ const withSendDeadline = async <T>(work: Promise<T>, timeoutMs: number): Promise
                 new MailSendError({
                     message: `@lunora/mail: send timed out after ${String(timeoutMs)}ms, so it may have been delivered`,
                     outcomeUnknown: true,
-                    retryable: false,
+                    retryable,
                 }),
             );
         }, timeoutMs);
@@ -178,7 +178,12 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
         try {
             const { idempotencyKey } = options_;
 
-            return await withSendDeadline(idempotencyKey === undefined ? transport.send(payload) : transport.send(payload, { idempotencyKey }), sendTimeoutMs);
+            if (idempotencyKey === undefined) {
+                return await withSendDeadline(transport.send(payload), sendTimeoutMs, false);
+            }
+
+            // A provider that dedupes on the key drops the repeat if the timed-out send landed.
+            return await withSendDeadline(transport.send(payload, { idempotencyKey }), sendTimeoutMs, transport.dedupesOnIdempotencyKey === true);
         } catch (error) {
             // A custom transport that throws something unclassified is treated as
             // transient. The message is generic so a provider's raw text never

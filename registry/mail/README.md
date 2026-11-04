@@ -140,23 +140,16 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
                     // A KV namespace bound as `SENT`: a redelivered message is acked without a second send.
                     await consumeQueuedSend(mailer, message.body, { sent: env.SENT });
                 } catch (error) {
-                    // Timed out: the provider may have delivered it, so a retry could send a
-                    // second copy. Ack it and check the provider's logs.
-                    if (isOutcomeUnknownMailError(error)) {
-                        console.error("mail outcome unknown", error);
-                        message.ack();
+                    // Transient, or a timeout the provider dedupes on the key (Resend): redeliver.
+                    if (isRetryableMailError(error)) {
+                        message.retry();
                         continue;
                     }
 
-                    // A refusal (a rejected address or a malformed body) fails the same way
-                    // on every retry, so ack it and log it rather than filling the dead-letter queue.
-                    if (!isRetryableMailError(error)) {
-                        console.error("mail refused", error);
-                        message.ack();
-                        continue;
-                    }
-
-                    message.retry();
+                    // A timeout no provider dedupes may have been delivered, so a retry could send a second
+                    // copy: check the provider's logs. Anything else is a refusal or a malformed body.
+                    console.error(isOutcomeUnknownMailError(error) ? "mail outcome unknown" : "mail refused", error);
+                    message.ack();
                     continue;
                 }
                 // Queues are at-least-once: without a per-message ack a single throw

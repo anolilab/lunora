@@ -112,6 +112,35 @@ describe("send deadline", () => {
         expect((error as MailSendError).data).toStrictEqual({ outcomeUnknown: true, retryable: false });
     });
 
+    it("retries a timed-out send only when it carried a key and the transport's provider dedupes on it", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const timedOut = async (dedupes: boolean, idempotencyKey?: string): Promise<unknown> => {
+            const mailer = createMailer({
+                from: "noreply@x.test",
+                sendTimeoutMs: 1000,
+                transport: {
+                    dedupesOnIdempotencyKey: dedupes,
+                    send: async () =>
+                        new Promise<{ id: string }>(() => {
+                            // never settles
+                        }),
+                },
+            });
+            const settled = mailer.send({ idempotencyKey, subject: "Hi", to: "a@x.test" }).catch((error: unknown) => error);
+
+            await vi.advanceTimersByTimeAsync(1000);
+
+            return settled;
+        };
+
+        expect(isRetryableMailError(await timedOut(true, "order-42"))).toBe(true);
+        expect(isRetryableMailError(await timedOut(true))).toBe(false);
+        expect(isRetryableMailError(await timedOut(false, "order-42"))).toBe(false);
+    });
+
     it("waits 60 seconds by default", async () => {
         expect.assertions(2);
 
