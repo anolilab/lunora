@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -323,6 +323,26 @@ export const tally = internalMutation.mutation(async ({ ctx }) => {
         expect(shard).toContain("const LUNORA_ADVISORY_ROWS = ");
         expect(shard).toContain("protected override advisories(): AdvisoryFinding[]");
         expect((emittedAdvisories(shard) as { name: string }[]).map((advisory) => advisory.name)).toContain("unindexed_foreign_key");
+    });
+
+    it("leaves an existing advisor-procedures.json intact under `lint: false`", () => {
+        expect.assertions(3);
+
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
+
+        const sidecar = join(workdir, "lunora", "_generated", "advisor-procedures.json");
+        const written = readFileSync(sidecar, "utf8");
+
+        // Stand in for a real list so an overwrite with the empty placeholder is visible.
+        writeFileSync(sidecar, '{"procedures":[{"exportName":"kept"}]}\n', "utf8");
+        runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(written).toContain('"procedures"');
+        expect(readFileSync(sidecar, "utf8")).toBe('{"procedures":[{"exportName":"kept"}]}\n');
+
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(readFileSync(sidecar, "utf8")).toBe(written);
     });
 
     it("emits an empty advisory list under `lint: false`", () => {

@@ -1119,6 +1119,7 @@ interface StudioI18nProviderProps {
 ```ts
 interface StudioProps {
     readonly advisorCompanion?: boolean;
+    readonly advisorProcedures?: boolean;
     readonly analyticsSqlQuery?: AnalyticsPanelProps["runQuery"];
     readonly basePath?: string;
     readonly chrome?: StudioChrome;

@@ -56,9 +56,8 @@ interface AdvisorHealthPanelProps {
     readonly advisorCompanion?: boolean;
 
     /**
-     * `true` on a dev host, which serves the advisor procedure list from its own origin.
-     * Elsewhere the list is fetched from the client's worker when the client carries an
-     * admin token; without one the panel says so instead of scoring.
+     * `true` only when the host mounts the advisor procedure route (`StudioProps.advisorProcedures`).
+     * Without it the panel says so instead of scoring.
      */
     readonly localProcedures?: boolean;
     /** Scopes the `data-testid`s. */
