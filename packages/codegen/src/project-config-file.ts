@@ -752,6 +752,8 @@ const readProjectLazyFunctions = (lunoraDirectory: string): boolean => {
     return codegen?.lazyFunctions === true;
 };
 
+const studioCompanionWarnedFor = new Set<string>();
+
 /**
  * `lunora.config`'s `studio.companion`: opt in to the generated companion Worker. An unreadable value is said
  * out loud and treated as off, since the flag deploys an extra Worker and is never switched on by a value the parser could not prove.
@@ -760,7 +762,9 @@ const readProjectStudioCompanion = (lunoraDirectory: string): boolean => {
     const configPath = findCodegenConfigFile(lunoraDirectory);
     const { studio } = configPath === undefined ? {} : readConfigLiterals(configPath);
 
-    if (studio?.unreadable) {
+    // Codegen and every binding read call this, so the warning is said once per config file rather than once per call.
+    if (studio?.unreadable && configPath !== undefined && !studioCompanionWarnedFor.has(configPath)) {
+        studioCompanionWarnedFor.add(configPath);
         // eslint-disable-next-line no-console -- codegen has no diagnostic sink for config literals; matches `durableObjects.merge`'s warning.
         console.warn("@lunora/codegen: `studio.companion` in lunora.config is not a boolean literal, so the companion Worker is not generated.");
     }

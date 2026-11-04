@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -54,6 +54,10 @@ describe("studio.companion in lunora.config", () => {
         writeConfig("{ studio: { companion: process.env.C === '1' } }");
 
         expect(readProjectStudioCompanion(join(projectRoot, "lunora"))).toBe(false);
+
+        // Codegen and each binding read call this; one warning per config file is enough.
+        readProjectStudioCompanion(join(projectRoot, "lunora"));
+
         expect(warn).toHaveBeenCalledTimes(1);
     });
 });
@@ -73,10 +77,15 @@ describe("the generated companion Worker", () => {
         rmSync(projectRoot, { force: true, recursive: true });
     });
 
+    const enable = (): void => {
+        writeFileSync(join(projectRoot, "lunora.config.ts"), "export default { studio: { companion: true } };\n", "utf8");
+    };
+
     it("writes the wrangler config, the self-contained worker and the payload when on, and removes them when off", () => {
         expect.assertions(13);
 
-        runCodegen({ projectRoot, studioCompanion: true, wranglerQueueProducers: [] });
+        enable();
+        runCodegen({ projectRoot, wranglerQueueProducers: [] });
 
         const wrangler: unknown = JSON.parse(readFileSync(join(companion, "wrangler.jsonc"), "utf8"));
         const worker = readFileSync(join(companion, "src", "worker.ts"), "utf8");
@@ -86,7 +95,8 @@ describe("the generated companion Worker", () => {
         expect(wrangler).not.toHaveProperty("bindings");
         expect(JSON.parse(payload)).toHaveProperty("procedures");
         expect(worker).toContain(JSON.stringify(payload));
-        expect(wrangler).toMatchObject({ workers_dev: false });
+        // The Worker has no admin check, so neither kind of public address may be left to wrangler's defaults.
+        expect(wrangler).toMatchObject({ preview_urls: false, workers_dev: false });
         expect(worker).not.toContain("LUNORA_ADMIN_TOKEN");
         expect(worker).toContain("/__lunora/advisor-procedures");
         expect(worker).toContain("export default");
@@ -94,14 +104,36 @@ describe("the generated companion Worker", () => {
         expect(worker).not.toContain('from "@lunora');
         expect(worker).not.toContain('from "node:');
 
+        writeFileSync(join(projectRoot, "lunora.config.ts"), "export default {};\n", "utf8");
         runCodegen({ projectRoot, wranglerQueueProducers: [] });
 
         expect(existsSync(companion)).toBe(false);
 
-        runCodegen({ projectRoot, studioCompanion: true, wranglerQueueProducers: [] });
+        enable();
+        runCodegen({ projectRoot, wranglerQueueProducers: [] });
         writeFileSync(join(projectRoot, "lunora.config.ts"), "export default { studio: { companion: false } };\n", "utf8");
         runCodegen({ projectRoot, wranglerQueueProducers: [] });
 
         expect(existsSync(companion)).toBe(false);
+    });
+
+    it("leaves files other tools keep in the companion folder alone, on regeneration and when switched off", () => {
+        expect.assertions(4);
+
+        enable();
+        runCodegen({ projectRoot, wranglerQueueProducers: [] });
+
+        mkdirSync(join(companion, ".wrangler", "tmp"), { recursive: true });
+        writeFileSync(join(companion, ".wrangler", "tmp", "bundle.js"), "x", "utf8");
+        runCodegen({ projectRoot, wranglerQueueProducers: [] });
+
+        expect(existsSync(join(companion, ".wrangler", "tmp", "bundle.js"))).toBe(true);
+
+        writeFileSync(join(projectRoot, "lunora.config.ts"), "export default {};\n", "utf8");
+        runCodegen({ projectRoot, wranglerQueueProducers: [] });
+
+        expect(existsSync(join(companion, ".wrangler", "tmp", "bundle.js"))).toBe(true);
+        expect(existsSync(join(companion, "wrangler.jsonc"))).toBe(false);
+        expect(existsSync(join(companion, "src"))).toBe(false);
     });
 });

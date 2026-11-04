@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,6 +65,34 @@ describe("lunora deploy with the studio companion", () => {
 
         const { calls } = await deploy(false);
 
+        expect(calls.some((call) => call.descriptor.args.join(" ").includes("companion"))).toBe(false);
+    });
+
+    const deployForReal = async (skipServices: boolean) => {
+        writeFileSync(join(workdir, "lunora.config.ts"), "export default { studio: { companion: true } };\n", "utf8");
+
+        const { calls, spawner } = createRecordingSpawner();
+
+        await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, skipServices, spawner });
+
+        return { calls, wrangler: readFileSync(join(workdir, "wrangler.jsonc"), "utf8") };
+    };
+
+    it("binds the companion in the app's wrangler config when it deploys it", async () => {
+        expect.assertions(1);
+
+        const { wrangler } = await deployForReal(false);
+
+        expect(wrangler).toContain("ADVISOR_COMPANION");
+    });
+
+    it("does not bind the companion when --skip-services leaves it undeployed", async () => {
+        expect.assertions(2);
+
+        const { calls, wrangler } = await deployForReal(true);
+
+        // The app's `wrangler deploy` would fail to resolve a service no deploy published.
+        expect(wrangler).not.toContain("ADVISOR_COMPANION");
         expect(calls.some((call) => call.descriptor.args.join(" ").includes("companion"))).toBe(false);
     });
 });

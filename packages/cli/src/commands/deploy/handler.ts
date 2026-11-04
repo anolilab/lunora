@@ -182,6 +182,7 @@ const provisionBindings = async (
     target: string,
     environment: string | undefined,
     cache?: DiscoveryCache,
+    skipCompanion = false,
 ): Promise<void> => {
     try {
         // Resolved for its side effect: reject an unregistered target before
@@ -190,7 +191,7 @@ const provisionBindings = async (
         // through this function, so this is the one guard.
         resolveDeployDriver(target);
 
-        const inferred = await inferLunoraBindings({ cache, projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) });
+        const inferred = await inferLunoraBindings({ cache, projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd), skipCompanion });
         const reconciled = reconcileWranglerBindings(cwd, inferred, { environment, target });
 
         const writtenTo = reconciled.wranglerPath ?? "wrangler.jsonc";
@@ -622,7 +623,7 @@ const firstServiceRefusal = (
  * bindings and runs the same refusal check the service loop runs. Services the deploy skips are not checked, as in the loop.
  */
 const serviceRefusalBeforeWrites = (cwd: string, options: DeployCommandOptions, target: string): string | undefined => {
-    const { error, services } = readBoundServiceBindings(cwd);
+    const { error, services } = readBoundServiceBindings(cwd, resolveSchemaDirectory(cwd));
 
     // A read error is reported by the deploy itself; there is nothing to refuse here.
     if (error !== undefined || services.length === 0) {
@@ -912,7 +913,16 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     // function returns. Restoring here derived both from the reverted config, so
     // `build --emit-bindings` handed a deployer `"crons": []` for an app with a
     // nightly cron. See `snapshotWranglerConfig`.
-    await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target, options.env, options.discoveryCache);
+    // A deploy that skips services never ships the companion Worker either, so the app must not bind it: wrangler would fail to resolve it.
+    await provisionBindings(
+        cwd,
+        options.logger,
+        codegen?.cronTriggers,
+        target,
+        options.env,
+        options.discoveryCache,
+        serviceDeploySkipReason(options) !== undefined,
+    );
 
     // Checks only, here: the Hyperdrive config is created just before wrangler runs (in `executeDeploy`),
     // so a later precheck or validation failure cannot leave an account resource behind.
@@ -1206,7 +1216,7 @@ const deployService = async (target: ServiceDeployTarget, run: ServiceDeployRun)
  * first deploy, so a refusal in one service leaves none of them live.
  */
 const deployServices = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver, spawner: Spawner): Promise<BeforeSpawnFailure | undefined> => {
-    const { error, services } = readBoundServiceBindings(cwd);
+    const { error, services } = readBoundServiceBindings(cwd, resolveSchemaDirectory(cwd));
 
     if (error !== undefined) {
         return { code: EXIT_CODE.FAILURE, error };

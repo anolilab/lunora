@@ -441,7 +441,16 @@ interface InferOptions {
     scanDirs?: ReadonlyArray<string>;
     /** Lunora source directory holding `schema.ts`. Defaults to `lunora`. */
     schemaDir?: string;
+    /** Leave the `studio.companion` Worker out of the inferred services, for a run that does not deploy it. */
+    skipCompanion?: boolean;
 }
+
+/** The service bindings to reconcile; `skipCompanion` drops the companion for a run that does not deploy it. */
+const readInferredServiceBindings = (projectRoot: string, schemaDirectory: string, skipCompanion: boolean): ReturnType<typeof readBoundServiceBindings> => {
+    const bound = readBoundServiceBindings(projectRoot, schemaDirectory);
+
+    return skipCompanion ? { ...bound, services: bound.services.filter((service) => service.name !== "advisorCompanion") } : bound;
+};
 
 /** The schema facts binding inference reads. */
 interface SchemaFacts {
@@ -854,7 +863,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
 
     // Codegen throws, naming the entry, on a declaration it cannot wire; that
     // error surfaces there, so inference only reconciles what resolves.
-    const resolved = readBoundServiceBindings(options.projectRoot);
+    const resolved = readInferredServiceBindings(options.projectRoot, schemaDirectory, options.skipCompanion === true);
     const services = resolved.error === undefined ? resolved.services : undefined;
 
     if (resolved.error !== undefined) {

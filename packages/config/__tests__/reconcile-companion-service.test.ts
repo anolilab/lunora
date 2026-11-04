@@ -49,4 +49,28 @@ describe("reconcile the companion service binding", () => {
         expect(config()["services"]).toStrictEqual([{ binding: "LEGACY", service: "legacy-worker" }]);
         expect(lunora()).toBeUndefined();
     });
+
+    it("leaves the companion out when the run does not deploy it, so the app never binds a Worker nobody published", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "lunora.config.ts"), "export default { studio: { companion: true } };\n", "utf8");
+
+        const inferred = await inferLunoraBindings({ projectRoot: root, skipCompanion: true });
+
+        expect(inferred.services).toStrictEqual([]);
+
+        reconcileWranglerBindings(root, inferred);
+
+        expect(config()["services"]).toStrictEqual([{ binding: "LEGACY", service: "legacy-worker" }]);
+    });
+
+    it("points the inferred companion at the project's own lunora directory", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(root, "lunora.config.ts"), "export default { studio: { companion: true } };\n", "utf8");
+
+        const inferred = await inferLunoraBindings({ projectRoot: root, schemaDir: "backend" });
+
+        expect(inferred.services?.[0]?.wranglerPath).toBe(join(root, "backend", "_generated", "companion", "wrangler.jsonc"));
+    });
 });

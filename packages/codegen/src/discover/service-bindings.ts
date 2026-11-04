@@ -156,13 +156,14 @@ const readServiceBindings = (projectRoot: string): { error?: string; services: S
  * The companion advisor Worker as a service binding, when `studio.companion` is on. Kept out of `resolveServiceBindings`: that list
  * types `ctx.services`, and the companion is Lunora's own Worker, not an app service. Only the callers that bind or deploy a Worker add it
  * (see `readBoundServiceBindings`). The folder need not exist yet: a refusal check or the reconcile can run before codegen writes it.
+ * `lunoraDirectory` is the project's Lunora source folder (relative to `projectRoot`), where codegen writes `_generated/companion`.
  */
-const companionServiceBinding = (projectRoot: string): ServiceBindingIR | undefined => {
-    if (!readProjectStudioCompanion(join(projectRoot, "lunora"))) {
+const companionServiceBinding = (projectRoot: string, lunoraDirectory = "lunora"): ServiceBindingIR | undefined => {
+    if (!readProjectStudioCompanion(join(projectRoot, lunoraDirectory))) {
         return undefined;
     }
 
-    const directory = companionDirectory(projectRoot);
+    const directory = companionDirectory(projectRoot, lunoraDirectory);
 
     return {
         binding: COMPANION_BINDING,
@@ -176,14 +177,22 @@ const companionServiceBinding = (projectRoot: string): ServiceBindingIR | undefi
 };
 
 /**
- * `readServiceBindings` plus the companion, for the tools that bind a Worker to it or deploy it: the reconcile into the app's
- * `services[]`, deploy, and dev. Codegen's own `ctx.services` emission keeps using `resolveServiceBindings`.
+ * `readServiceBindings` plus the companion, for the callers that must bind or run it: the reconcile into the app's `services[]`,
+ * the deploy of services, and dev (the app's wrangler config carries the `ADVISOR_COMPANION` binding, so dev has to run that Worker too).
+ * Callers that read the app's own services (the open-shard gate, `lunora preview`'s refusal, doctor) or RPC entrypoints (the companion
+ * has none) keep `readServiceBindings`.
  */
-const readBoundServiceBindings = (projectRoot: string): { error?: string; services: ServiceBindingIR[] } => {
+const readBoundServiceBindings = (projectRoot: string, lunoraDirectory = "lunora"): { error?: string; services: ServiceBindingIR[] } => {
     const { error, services } = readServiceBindings(projectRoot);
-    const companion = companionServiceBinding(projectRoot);
 
-    return { ...(error === undefined ? {} : { error }), services: companion === undefined ? services : [...services, companion] };
+    try {
+        const companion = companionServiceBinding(projectRoot, lunoraDirectory);
+
+        return { ...(error === undefined ? {} : { error }), services: companion === undefined ? services : [...services, companion] };
+    } catch (companionError: unknown) {
+        // The companion's Worker name is derived from the app's wrangler config; an unreadable one is reported like a bad `services` entry.
+        return { error: error ?? (companionError instanceof Error ? companionError.message : String(companionError)), services };
+    }
 };
 
 export { companionServiceBinding, readBoundServiceBindings, readServiceBindings, resolveServiceBindings };

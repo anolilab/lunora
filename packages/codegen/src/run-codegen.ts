@@ -14,6 +14,7 @@ import type { CallSites } from "./architecture";
 import { buildArchitecture, emitArchitectureModule } from "./architecture";
 import assertNoNamespaceCollisions from "./assert-namespace-collisions";
 import { createCodegenProject } from "./codegen-project";
+import { COMPANION_FILES } from "./companion";
 import { buildDeclarationSurface } from "./declaration-surface";
 import { listLunoraSourceFiles, withSourceListMemo } from "./discover/ast";
 import discoverCallEdges from "./discover/call-edges";
@@ -399,8 +400,8 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // Read whatever the caller passes, so an unreadable config value is said even when the caller already opts in.
     const projectLazyFunctions = readProjectLazyFunctions(lunoraDirectory);
     const lazyFunctions = options.lazyFunctions === true || projectLazyFunctions;
-    // Same either-opt-in rule as `lazyFunctions`, so an entry point that omits the flag does not delete the folder.
-    const studioCompanion = options.studioCompanion === true || readProjectStudioCompanion(lunoraDirectory);
+    // Read from the config alone, so every entry point that regenerates `_generated/` agrees and none deletes the folder.
+    const studioCompanion = readProjectStudioCompanion(lunoraDirectory);
     const schemaPath = join(lunoraDirectory, "schema.ts");
 
     if (!existsSync(schemaPath)) {
@@ -965,7 +966,12 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: collectionsContent, kind: "optional", name: "collections.ts" },
               { files: serviceDeclarations, kind: "services" },
               // Off removes the folder, so turning the flag off leaves no stale deployable Worker behind.
-              { files: emitCompanion(options.projectRoot, advisorContext?.procedureProtections ?? [], studioCompanion), kind: "directory", name: "companion" },
+              {
+                  files: emitCompanion(options.projectRoot, advisorProcedureDocument, studioCompanion),
+                  kind: "directory",
+                  name: "companion",
+                  owned: COMPANION_FILES,
+              },
               // The `.json` is the portable artifact for external tooling; the `.ts` (same
               // document, inlined) is what the worker imports and passes to `createWorker({
               // openApiSpec })`. Both are gated on the same `apiSpec` choice so they regenerate

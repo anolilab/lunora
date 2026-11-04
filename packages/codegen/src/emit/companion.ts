@@ -1,3 +1,4 @@
+import type { COMPANION_FILES } from "../companion";
 import { companionName, wranglerString } from "../companion";
 
 const emitCompanionWrangler = (projectRoot: string): string => {
@@ -9,7 +10,9 @@ const emitCompanionWrangler = (projectRoot: string): string => {
             ...(compatibilityDate === undefined ? {} : { compatibility_date: compatibilityDate }),
             main: "src/worker.ts",
             name: companionName(projectRoot),
-            // No address of its own: the app's Worker reaches it over the service binding only.
+            // The Worker has no admin check, so an exposed URL would serve the procedure list unauthenticated: the app's Worker
+            // reaches it over the service binding only. Both are set explicitly because wrangler's defaults can enable either.
+            preview_urls: false,
             workers_dev: false,
         },
         undefined,
@@ -43,20 +46,22 @@ export default {
 };
 `;
 
-/** The `_generated/companion/` files keyed relative to that folder; `{}` when the flag is off, which removes the folder. */
-const emitCompanion = (projectRoot: string, procedures: ReadonlyArray<unknown>, enabled: boolean): Record<string, string> => {
+/**
+ * The `_generated/companion/` files keyed relative to that folder; `{}` when the flag is off, which removes the folder.
+ * `proceduresJson` is the `{ procedures }` document codegen already built for `advisor-procedures.json`, so the two cannot diverge.
+ */
+const emitCompanion = (projectRoot: string, proceduresJson: string, enabled: boolean): Record<string, string> => {
     if (!enabled) {
         return {};
     }
 
-    // The same `{ procedures }` document the dev host serves, so the Studio reads one shape from either.
-    const proceduresJson = `${JSON.stringify({ procedures }, undefined, 2)}\n`;
-
-    return {
+    const files: Record<(typeof COMPANION_FILES)[number], string> = {
         "advisor-procedures.json": proceduresJson,
         "src/worker.ts": emitCompanionWorker(proceduresJson),
         "wrangler.jsonc": emitCompanionWrangler(projectRoot),
     };
+
+    return files;
 };
 
 export default emitCompanion;

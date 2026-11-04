@@ -7,6 +7,31 @@ import { dirname, join, relative } from "node:path";
 import { readJsonSync } from "@visulima/fs";
 import type { Project } from "ts-morph";
 
+/** Remove only the `owned` paths this run did not emit, then the folders that leave empty (a folder with someone else's file stays). */
+const sweepOwned = (directory: string, files: Record<string, string>, owned: ReadonlyArray<string>): void => {
+    for (const path of owned) {
+        if (files[path] === undefined) {
+            rmSync(join(directory, path), { force: true });
+        }
+    }
+
+    for (const folder of [...new Set(owned.map((path) => dirname(join(directory, path))))].toSorted((a, b) => b.length - a.length)) {
+        if (existsSync(folder) && readdirSync(folder).length === 0) {
+            rmSync(folder, { recursive: true });
+        }
+    }
+};
+
+const sweepUnlisted = (directory: string, files: Record<string, string>): void => {
+    for (const entry of readdirSync(directory, { recursive: true, withFileTypes: true })) {
+        const path = join(entry.parentPath, entry.name);
+
+        if (entry.isFile() && files[relative(directory, path)] === undefined) {
+            rmSync(path);
+        }
+    }
+};
+
 export const writeIfChanged = (filePath: string, content: string): void => {
     // Avoid spurious writes (and downstream HMR reloads) when the rendered
     // content is identical to what's on disk.
@@ -74,24 +99,21 @@ export const writeServiceDeclarations = (outputDirectory: string, files: Record<
     }
 };
 
-/** Write a codegen-owned directory and remove stale generated files from the previous render. */
-export const writeGeneratedDirectory = (outputDirectory: string, name: string, files: Record<string, string>): void => {
+/**
+ * Write a codegen-owned directory and remove stale generated files from the previous render. With `owned`, only those paths are
+ * ever removed: the folder also holds files other tools write (wrangler's `.wrangler/`), which a full sweep would delete.
+ */
+export const writeGeneratedDirectory = (outputDirectory: string, name: string, files: Record<string, string>, owned?: ReadonlyArray<string>): void => {
     const directory = join(outputDirectory, name);
 
-    if (Object.keys(files).length === 0) {
+    if (owned !== undefined) {
+        sweepOwned(directory, files, owned);
+    } else if (Object.keys(files).length === 0) {
         rmSync(directory, { force: true, recursive: true });
 
         return;
-    }
-
-    if (existsSync(directory)) {
-        for (const entry of readdirSync(directory, { recursive: true, withFileTypes: true })) {
-            const path = join(entry.parentPath, entry.name);
-
-            if (entry.isFile() && files[relative(directory, path)] === undefined) {
-                rmSync(path);
-            }
-        }
+    } else if (existsSync(directory)) {
+        sweepUnlisted(directory, files);
     }
 
     for (const [path, content] of Object.entries(files)) {
@@ -158,7 +180,7 @@ export const projectFileMatches = (project: Project, filePath: string, content: 
  */
 export type GeneratedFileStep =
     | { content: string; kind: "always" | "optional"; name: string }
-    | { files: Record<string, string>; kind: "directory"; name: string }
+    | { files: Record<string, string>; kind: "directory"; name: string; owned?: ReadonlyArray<string> }
     | { files: Record<string, string>; kind: "services" };
 
 /**
@@ -181,7 +203,7 @@ export const writeGeneratedFiles = (outputDirectory: string, steps: ReadonlyArra
                 break;
             }
             case "directory": {
-                writeGeneratedDirectory(outputDirectory, step.name, step.files);
+                writeGeneratedDirectory(outputDirectory, step.name, step.files, step.owned);
                 written.push(...Object.keys(step.files).map((path) => join(step.name, path)));
                 break;
             }

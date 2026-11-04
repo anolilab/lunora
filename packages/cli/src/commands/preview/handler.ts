@@ -11,7 +11,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { readBoundServiceBindings, SCHEMA_SNAPSHOT_FILENAME } from "@lunora/codegen";
+import { readServiceBindings, SCHEMA_SNAPSHOT_FILENAME } from "@lunora/codegen";
 import { generateSecretValue } from "@lunora/config";
 import { applyModify, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
@@ -1055,9 +1055,12 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
 
         // Bindings do not inherit into an environment: reconcile the top level first, so the env block copies
         // every binding the code needs, not the ones the last deploy happened to write.
-        await provisionBindings(cwd, logger, undefined, "cloudflare", undefined);
+        // No companion: it is not deployed by a preview, so its binding would point at a Worker that may not exist.
+        // The route answers 404 when the binding is absent, so the preview works without it.
+        await provisionBindings(cwd, logger, undefined, "cloudflare", undefined, undefined, true);
 
-        const { services } = readBoundServiceBindings(cwd);
+        // The app's own services only: the generated companion is not a service the preview would share with production.
+        const { services } = readServiceBindings(cwd);
 
         // Services deploy under their own names, which are production's, and the app's bindings reach them.
         if (services.length > 0) {
