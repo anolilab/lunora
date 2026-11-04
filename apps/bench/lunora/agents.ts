@@ -40,12 +40,21 @@ export const support = defineAgent({
     tools: {
         findTasks: defineAgentTool({
             description: "Search the organisation's tasks by title.",
-            execute: async ({ term }, context) => context.run(internal.assistant.searchTasks, { organizationId: runOrganization(context), term }),
+            execute: async ({ term }, context) => {
+                const organizationId = runOrganization(context);
+
+                return context.run(internal.assistant.searchTasks, { organizationId, term }, { shardKey: organizationId });
+            },
             inputSchema: jsonSchema<{ term: string }>({ properties: { term: { type: "string" } }, required: ["term"], type: "object" }),
         }),
         openTasks: defineAgentTool({
             description: "List the organisation's open tasks, newest first.",
-            execute: async (_input, context) => context.run(internal.assistant.openTasks, { organizationId: runOrganization(context) }),
+            execute: async (_input, context) => {
+                const organizationId = runOrganization(context);
+
+                // `tasks` is `.shardBy("organizationId")`; the default shard holds none of the tenant's rows.
+                return context.run(internal.assistant.openTasks, { organizationId }, { shardKey: organizationId });
+            },
             inputSchema: jsonSchema<Record<string, never>>({ properties: {}, type: "object" }),
         }),
     },

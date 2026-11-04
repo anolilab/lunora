@@ -51,8 +51,15 @@ export interface OrgCaller {
     userId: string;
 }
 
-/** The caller's tenant from the verified identity claim — never from an argument. */
-export const requireOrg = async (ctx: Pick<QueryContext, "auth">): Promise<OrgCaller> => {
+/**
+ * The caller's tenant from the verified identity claim — never from an argument.
+ *
+ * A query or mutation must also run on that tenant's shard: `authorizeShard`
+ * admits the root shard too (for `saas.me` and billing), and a tenant read there
+ * sees none of its rows while a write lands where nothing reads it. Actions carry
+ * no `shardKey`; the functions they dispatch to check it themselves.
+ */
+export const requireOrg = async (ctx: Pick<QueryContext, "auth"> & { shardKey?: string }): Promise<OrgCaller> => {
     const { userId } = ctx.auth;
 
     if (!userId) {
@@ -66,10 +73,14 @@ export const requireOrg = async (ctx: Pick<QueryContext, "auth">): Promise<OrgCa
         throw new LunoraError("UNPROCESSABLE", "no active organization");
     }
 
+    if (ctx.shardKey !== undefined && ctx.shardKey !== organizationId) {
+        throw new LunoraError("FORBIDDEN", "call this on the active organization's shard ({ shardKey: organizationId })");
+    }
+
     return { organizationId, orgRole: typeof identity["orgRole"] === "string" ? identity["orgRole"] : undefined, userId };
 };
 
-export const requireWriter = async (ctx: Pick<MutationContext, "auth">): Promise<OrgCaller> => {
+export const requireWriter = async (ctx: Pick<MutationContext, "auth"> & { shardKey?: string }): Promise<OrgCaller> => {
     const caller = await requireOrg(ctx);
 
     if (!hasRole(caller.orgRole, WRITER_ROLES)) {
@@ -123,19 +134,11 @@ export const orgBulkMutation = mutation.use(rateLimit(mutationLimiter, "bulk", {
 
 const tenantRls = (tables: string[]) => rls(definePolicies(tables.flatMap((table) => tenantPolicies(table))));
 
-/*
- * `rls()` types its context against the runtime writer shape, which the generated
- * `QueryCtx` / `MutationCtx` do not structurally satisfy (see FINDINGS.md), so the
- * two tenant guards are cast once here, the way `examples/clerk-auth` does.
- */
-
 /** Tenant RLS over the given tables, for a query. */
-export const tenantRead = (...tables: string[]): Middleware<QueryContext, QueryContext> =>
-    tenantRls(tables) as unknown as Middleware<QueryContext, QueryContext>;
+export const tenantRead = (...tables: string[]): Middleware<QueryContext, QueryContext> => tenantRls(tables);
 
 /** Tenant RLS over the given tables, for a mutation. */
-export const tenantWrite = (...tables: string[]): Middleware<MutationContext, MutationContext> =>
-    tenantRls(tables) as unknown as Middleware<MutationContext, MutationContext>;
+export const tenantWrite = (...tables: string[]): Middleware<MutationContext, MutationContext> => tenantRls(tables);
 
 /** Signed-in actions. */
 export const authAction = action.use(async ({ ctx, next }) => {

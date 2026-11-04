@@ -2,7 +2,7 @@
  * The in-app notification feed (per tenant shard) and the device-push plane.
  */
 import { action, internalMutation, v } from "../_generated/server.js";
-import { orgMutation, orgQuery, requireOrg, tenantRead, tenantWrite } from "../lib/crpc.js";
+import { orgMutation, orgQuery, requireOrg, tenantRead, tenantWrite } from "../lib/crpc";
 
 /** Written by the `events` queue consumer, on the tenant's shard. */
 export const record = internalMutation
@@ -23,13 +23,13 @@ export const list = orgQuery
     .query(async ({ args, ctx }) => {
         const { organizationId } = await requireOrg(ctx);
         const pageSize = await ctx.flags.number("page_size", 25);
-        const rows = await ctx.db
+        const feed = ctx.db
             .query("notifications")
             .withIndex("byOrgCreatedAt", (q) => q.eq("organizationId", organizationId))
-            .order("desc")
-            .take(pageSize);
+            .order("desc");
 
-        return args.unreadOnly ? rows.filter((row) => row.readAt === undefined) : rows;
+        // Filtered before `take`, so the page is `pageSize` unread rows, not the unread part of the newest `pageSize`.
+        return (args.unreadOnly ? feed.filter((row) => row.readAt === undefined) : feed).take(pageSize);
     });
 
 export const markRead = orgMutation

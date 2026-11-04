@@ -3,7 +3,7 @@
  * `BROWSER` binding needs a Cloudflare account, and the call fails only when made.
  */
 import { v } from "../_generated/server.js";
-import { authAction } from "../lib/crpc.js";
+import { authAction } from "../lib/crpc";
 
 const TITLE = /<title>([^<]*)<\/title>/iu;
 

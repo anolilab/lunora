@@ -11,7 +11,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { internalMutation, internalQuery, v } from "./_generated/server.js";
-import { orgBulkMutation, requireWriter } from "./lib/crpc.js";
+import { orgBulkMutation, requireWriter } from "./lib/crpc";
 
 /**
  * Idempotent per organisation: the instance id is derived from the tenant, so a

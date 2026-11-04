@@ -15,9 +15,9 @@ import { consoleSink, otlpSink } from "lunorash/runtime";
 
 import { defineApp } from "./_generated/app.js";
 import { openRpcSpec } from "./_generated/openrpc.js";
-import { authOptions, getAuth } from "./auth/index.js";
-import http from "./http.js";
-import { entitlementsFromPlans, PLANS } from "./plans.js";
+import { authOptions, getAuth } from "./auth/index";
+import http from "./http";
+import { entitlementsFromPlans, PLANS } from "./plans";
 
 interface Env extends Record<string, unknown> {
     BETTER_AUTH_SECRET: string;
@@ -146,10 +146,9 @@ const resolveIdentity = async (env: Env, request: Request): Promise<{ [claim: st
      * and that must not become a tenant claim (it is what `authorizeShard`
      * admits the caller to).
      */
+    const { adapter } = await auth.$context;
     const member = activeOrganizationId
-        ? await (
-              await auth.$context
-          ).adapter.findOne<{ role: string }>({
+        ? await adapter.findOne<{ role: string }>({
               model: "member",
               where: [
                   { field: "organizationId", value: activeOrganizationId },

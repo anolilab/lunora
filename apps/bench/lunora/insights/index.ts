@@ -3,7 +3,7 @@
  * headline numbers, and Analytics Engine for product events.
  */
 import { internalMutation, v } from "../_generated/server.js";
-import { orgQuery, requireOrg } from "../lib/crpc.js";
+import { orgQuery, requireOrg } from "../lib/crpc";
 
 interface Headline {
     computedAt: number;
@@ -19,15 +19,14 @@ export const headline = orgQuery.query(async ({ ctx }): Promise<Headline | null>
 
 /** Recomputes the cached headline; the hourly `headline-refresh` cron and the nightly sweep queue it per tenant. */
 export const refreshHeadline = internalMutation.input({ organizationId: v.string() }).mutation(async ({ args, ctx }) => {
-    const rows = await ctx.db
-        .query("tasks")
-        .withIndex("byOrgStatus", (q) => q.eq("organizationId", args.organizationId))
-        .take(5000);
-    const next: Headline = {
-        computedAt: Date.now(),
-        done: rows.filter((row) => row.status === "done").length,
-        open: rows.filter((row) => row.status !== "done" && row.status !== "archived").length,
-    };
+    const { organizationId } = args;
+    // Served by the `countByOrgStatus` aggregate index, so a busy tenant costs the same as an idle one.
+    const [all, done, archived] = await Promise.all([
+        ctx.db.tasks.count({ organizationId }),
+        ctx.db.tasks.count({ organizationId, status: "done" }),
+        ctx.db.tasks.count({ organizationId, status: "archived" }),
+    ]);
+    const next: Headline = { computedAt: Date.now(), done, open: all - done - archived };
 
     await ctx.kv.put(`headline:${args.organizationId}`, next, { expirationTtl: 86_400 });
     ctx.analytics.track("headline.refresh", { dimensions: { organizationId: args.organizationId }, metrics: { open: next.open } });

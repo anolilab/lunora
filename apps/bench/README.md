@@ -66,6 +66,11 @@ The dev server serves on the playground's per-checkout port, which it prints as
 `LUNORA_ORIGIN_URL` names a different port, because workflow, scheduler and agent
 callbacks dispatch to that origin.
 
+The bench runs locally and is never deployed. `wrangler.jsonc` carries
+placeholders that only a deploy would need filled: the D1, R2 and Hyperdrive ids,
+the KV namespace id, and `LUNORA_ORIGIN_URL`, which the scheduler, agent and MCP
+callbacks dispatch to and which `.dev.vars` sets only for local dev.
+
 None of this needs credentials. Workers AI, Browser Rendering, Stripe, x402,
 Web Push and OTLP are wired but stay inert until configured; see
 `.dev.vars.example`. Each of those calls fails on its own while the rest of the
@@ -171,8 +176,9 @@ preset. `lines`, `notes`, `mutations` and `catalog` are not sampled. Each isolat
 as its own verified owner of its own organisation. The app's `read` rate limit
 (200 per 10 s per caller) is persisted, so a shared caller would be refused
 after the first isolate. The same limit caps `--warm`: each isolate makes
-`domains × (1 + warm)` rate-limited reads (`queries:list`; the actions are not
-limited), which must stay under 200.
+`1 + domains × (1 + warm)` rate-limited reads (`insights:headline` once, then
+`queries:list`; `saas:me` and the actions are not limited), which must stay at or
+under 200. The script refuses a run that would exceed it.
 
 ### Chunked builds
 

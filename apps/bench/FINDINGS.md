@@ -238,8 +238,11 @@ The documented form `query.use(rls(definePolicies([...])))` fails `tsc`:
 - `RlsContextIn` is not exported, so a generic helper cannot name the constraint.
 
 `examples/clerk-auth`, `examples/workos-auth` and the playground all cast:
-`rls(p) as unknown as Middleware<QueryCtx, QueryCtx>`. The bench does the same,
+`rls(p) as unknown as Middleware<QueryCtx, QueryCtx>`. The bench did the same,
 once, in `lib/crpc.ts`.
+
+**Status:** fixed on `alpha`; `lib/crpc.ts` no longer casts, and the lint rule
+against unnecessary assertions now rejects the cast.
 
 **Repro:** `export const x = query.use(rls(definePolicies([]))).query(async () => null);`
 makes `tsc` report TS2345 (`'Middleware<RlsContextIn, RlsContextIn>' is not assignable …`).
@@ -493,6 +496,9 @@ reading `packages/agent`; it was not run, since a run needs Workers AI.
 
 **Suggestion:** let `AgentToolContext.run` take a `shardKey`, or default it to
 the shard the run was started from.
+
+**Status:** `AgentRunOptions.shardKey` has since landed on `alpha`; both tools now
+pass the organisation's shard.
 
 **Suggestion:** have the agent tool `run` accept only generated references, or
 have codegen check `__lunoraRef` literals against the registry.

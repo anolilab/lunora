@@ -54,7 +54,9 @@ export default defineSchema({
         .index("byOrgStatus", ["organizationId", "status", "updatedAt"])
         .index("byOrgAssignee", ["organizationId", "assigneeId", "dueAt"])
         .index("byOrgProject", ["organizationId", "projectId", "createdAt"])
-        .searchIndex("search_title", { filterFields: ["organizationId", "status"], field: "title" }),
+        .searchIndex("search_title", { filterFields: ["organizationId", "status"], field: "title" })
+        // Trigger-maintained counters, so the headline counts every task without scanning them.
+        .aggregateIndex("countByOrgStatus", { by: ["organizationId", "status"] }),
 
     taskComments: defineTable({
         authorId: v.string(),

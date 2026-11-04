@@ -7,14 +7,13 @@
  * how many organisations are on each plan, never a row of any one tenant.
  */
 import { query } from "../_generated/server.js";
+import { PLANS } from "../plans";
 
+/** One `COUNT` per catalog plan, so the work is the catalog's size, not the tenant count. */
 export const planMix = query.x402({ price: "$0.001" }).query(async ({ ctx }): Promise<{ byPlan: Record<string, number>; organizations: number }> => {
-    const { page } = await ctx.db.saas_organizations.findMany({ where: { status: { ne: "deleted" } } });
-    const byPlan: Record<string, number> = {};
+    const counts = await Promise.all(
+        PLANS.map(async (plan) => [plan.id, await ctx.db.saas_organizations.count({ plan: plan.id, status: { ne: "deleted" } })] as const),
+    );
 
-    for (const organization of page) {
-        byPlan[organization.plan] = (byPlan[organization.plan] ?? 0) + 1;
-    }
-
-    return { byPlan, organizations: page.length };
+    return { byPlan: Object.fromEntries(counts), organizations: counts.reduce((sum, [, count]) => sum + count, 0) };
 });

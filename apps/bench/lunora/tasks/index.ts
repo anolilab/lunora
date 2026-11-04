@@ -4,10 +4,11 @@
  * the shared builders in `../lib/crpc`, the same path every generated domain takes.
  */
 import { LunoraError } from "@lunora/errors";
+import type { PaginationResult } from "lunorash/server";
 
 import type { Doc, Id } from "../_generated/server.js";
 import { internalMutation, v } from "../_generated/server.js";
-import { orgBulkMutation, orgMutation, orgQuery, pageArgs, requireOrg, requireWriter, tagsSchema, tenantRead, tenantWrite } from "../lib/crpc.js";
+import { orgBulkMutation, orgMutation, orgQuery, pageArgs, requireOrg, requireWriter, tagsSchema, tenantRead, tenantWrite } from "../lib/crpc";
 
 const status = v.union(v.literal("todo"), v.literal("doing"), v.literal("review"), v.literal("done"), v.literal("archived"));
 const priority = v.union(v.literal("low"), v.literal("normal"), v.literal("high"), v.literal("urgent"));
@@ -15,15 +16,16 @@ const priority = v.union(v.literal("low"), v.literal("normal"), v.literal("high"
 export const list = orgQuery
     .use(tenantRead("tasks"))
     .input({ ...pageArgs, status: v.optional(status) })
-    .query(async ({ args, ctx }): Promise<Doc<"tasks">[]> => {
+    .query(async ({ args, ctx }): Promise<PaginationResult<Doc<"tasks">>> => {
         const { organizationId } = await requireOrg(ctx);
-        const rows = ctx.db
+
+        return ctx.db
             .query("tasks")
             .withIndex("byOrgStatus", (q) =>
                 args.status === undefined ? q.eq("organizationId", organizationId) : q.eq("organizationId", organizationId).eq("status", args.status),
-            );
-
-        return rows.order("desc").take(args.limit ?? 50);
+            )
+            .order("desc")
+            .paginate({ cursor: args.cursor, numItems: args.limit ?? 50 });
     });
 
 export const mine = orgQuery
@@ -86,6 +88,16 @@ export const create = orgMutation
     })
     .mutation(async ({ args, ctx }): Promise<Id<"tasks">> => {
         const { organizationId, userId } = await requireWriter(ctx);
+
+        if (args.projectId !== undefined) {
+            const project = await ctx.db.get("saas_projects", args.projectId);
+
+            // Another organisation's project answers as missing, so an id says nothing about other tenants.
+            if (project?.organizationId !== organizationId || project.archivedAt !== undefined) {
+                throw new LunoraError("NOT_FOUND", "project not found");
+            }
+        }
+
         const now = Date.now();
         const id = await ctx.db.insert("tasks", {
             assigneeId: args.assigneeId,
@@ -157,14 +169,24 @@ export const bulkArchive = orgBulkMutation
         return { archived: args.ids.length };
     });
 
-/** Nightly sweep (see `lunora/crons.ts`): archive tasks done for 30 days. */
+const SWEEP_BATCH = 500;
+
+/**
+ * Nightly sweep (see `lunora/crons.ts`): archive tasks done for 30 days. One
+ * bounded batch per mutation; a full batch queues the next one, so a backlog
+ * drains over several messages instead of in one unbounded write.
+ */
 export const sweepDone = internalMutation.input({ organizationId: v.string(), before: v.number() }).mutation(async ({ args, ctx }) => {
     const done = await ctx.db
         .query("tasks")
         .withIndex("byOrgStatus", (q) => q.eq("organizationId", args.organizationId).eq("status", "done").lt("updatedAt", args.before))
-        .take(500);
+        .take(SWEEP_BATCH);
 
     await Promise.all(done.map(async (row) => ctx.db.patch("tasks", row._id, { status: "archived" })));
+
+    if (done.length === SWEEP_BATCH) {
+        await ctx.queues.events.send({ kind: "maintenance.sweep", organizationId: args.organizationId });
+    }
 
     return { archived: done.length };
 });

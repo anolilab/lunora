@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import { api } from "../../lunora/_generated/api";
 import type { Id } from "../../lunora/_generated/dataModel";
@@ -20,6 +20,8 @@ const field = (form: FormData, name: string): string => {
 
 const SignIn = (): ReactElement => {
     const [error, setError] = useState<string>();
+    const emailId = useId();
+    const passwordId = useId();
 
     const submit = async (form: FormData): Promise<void> => {
         const email = field(form, "email");
@@ -41,8 +43,14 @@ const SignIn = (): ReactElement => {
     return (
         <form action={submit}>
             <h1>Lunora bench</h1>
-            <input autoComplete="email" name="email" placeholder="email" required type="email" />
-            <input autoComplete="current-password" minLength={8} name="password" placeholder="password" required type="password" />
+            <label htmlFor={emailId}>
+                Email
+                <input autoComplete="email" id={emailId} name="email" required type="email" />
+            </label>
+            <label htmlFor={passwordId}>
+                Password
+                <input autoComplete="current-password" id={passwordId} minLength={8} name="password" required type="password" />
+            </label>
             <button name="mode" type="submit" value="in">
                 Sign in
             </button>
@@ -68,7 +76,10 @@ const CreateOrganization = (): ReactElement => {
     return (
         <form action={submit}>
             <h1>Create an organization</h1>
-            <input name="name" placeholder="Acme" required />
+            <label htmlFor="organization-name">
+                Name
+                <input id="organization-name" name="name" placeholder="Acme" required />
+            </label>
             <button type="submit">Create</button>
         </form>
     );
@@ -92,11 +103,14 @@ const Tasks = ({ organizationId }: { organizationId: string }): ReactElement => 
     return (
         <main>
             <form action={submit}>
-                <input name="title" placeholder="New task" required />
+                <label htmlFor="task-title">
+                    New task
+                    <input id="task-title" name="title" required />
+                </label>
                 <button type="submit">Add</button>
             </form>
             <ul>
-                {(tasks ?? []).map((task) => (
+                {(tasks?.page ?? []).map((task) => (
                     <li key={task._id}>
                         {task.title} — {task.status}{" "}
                         {task.status === "done" ? undefined : (

@@ -8,7 +8,7 @@
  * {@link ask} sets, from the caller's verified identity.
  */
 import { internalQuery, v } from "../_generated/server.js";
-import { orgMutation, requireWriter } from "../lib/crpc.js";
+import { orgMutation, requireWriter } from "../lib/crpc";
 
 export const ask = orgMutation.input({ message: v.string().min(1).max(4000) }).mutation(async ({ args, ctx }) => {
     const { organizationId, userId } = await requireWriter(ctx);

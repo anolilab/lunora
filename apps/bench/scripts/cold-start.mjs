@@ -293,6 +293,18 @@ mkdirSync(join(benchDirectory, "results"), { recursive: true });
 
 const loadBefore = loadavg();
 const calls = sampleCalls();
+
+// `appLimits.read` in lunora/lib/crpc.ts: 200 per 10 s per caller. An isolate makes one
+// `insights:headline` read to wake its tenant, then every sampled query once cold and
+// `--warm` more times; past the budget the last calls fail and skew the latencies.
+const READ_BUDGET = 200;
+const readsPerIsolate = 1 + calls.filter((call) => call.kind === "query").length * (1 + warmCalls);
+
+if (readsPerIsolate > READ_BUDGET) {
+    throw new Error(
+        `cold-start: ${String(readsPerIsolate)} rate-limited reads per isolate exceed the read limit of ${String(READ_BUDGET)} — lower --warm or --domains`,
+    );
+}
 const runs = Object.fromEntries(modes.map((mode) => [mode, []]));
 const shape = await withSizedApp(size, { keep: values.keep }, async (generated) => {
     for (const mode of modes) {

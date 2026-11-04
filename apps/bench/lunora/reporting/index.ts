@@ -3,7 +3,7 @@
  * PGlite, so this needs no database; deploy sets the real connection.
  */
 import { v } from "../_generated/server.js";
-import { authAction, requireOrg } from "../lib/crpc.js";
+import { authAction, requireOrg } from "../lib/crpc";
 
 export const revenueByMonth = authAction.input({ months: v.optional(v.number().int().min(1).max(36)) }).action(async ({ args, ctx }) => {
     const { organizationId } = await requireOrg(ctx);

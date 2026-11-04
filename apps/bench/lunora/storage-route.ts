@@ -8,18 +8,33 @@ import { verifySignedUrl } from "@lunora/storage";
 /** Cap what a single signed PUT may store. */
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
+/** The floor `lunora/storage` enforces when it signs; a shorter secret is brute-forceable, so nothing it "signed" is trusted. */
+const MIN_SIGNING_SECRET_LENGTH = 32;
+
+/**
+ * The bucket name `lunora/storage` binds into every URL it mints. A URL signed for
+ * another bucket under a shared secret must not reach `UPLOADS`.
+ */
+const SIGNED_BUCKET = "default";
+
 export const serveStorage = async (request: Request, env: { STORAGE_SIGNING_SECRET?: string; UPLOADS: R2BucketLike }): Promise<Response> => {
     const url = new URL(request.url);
 
     // The verb is part of the signed payload; checked anyway so a GET URL is never replayed as a PUT.
-    if (request.method !== (url.searchParams.get("method") ?? "GET") || env.STORAGE_SIGNING_SECRET === undefined) {
+    if (request.method !== (url.searchParams.get("method") ?? "GET")) {
         return new Response("method not allowed", { status: 405 });
     }
 
-    const result = await verifySignedUrl(url, env.STORAGE_SIGNING_SECRET);
+    const secret = env.STORAGE_SIGNING_SECRET;
+
+    if (secret === undefined || secret.length < MIN_SIGNING_SECRET_LENGTH) {
+        return new Response("storage is not configured", { status: 503 });
+    }
+
+    const result = await verifySignedUrl(url, secret);
 
     // Only `valid` is exposed: a precise reason is a signing oracle.
-    if (!result.valid || result.key === undefined) {
+    if (!result.valid || result.key === undefined || result.bucketName !== SIGNED_BUCKET) {
         return new Response("forbidden", { status: 403 });
     }
 
