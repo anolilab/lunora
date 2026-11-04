@@ -117,6 +117,23 @@ describe("the generated companion Worker", () => {
         expect(existsSync(companion)).toBe(false);
     });
 
+    it("marks the companion payload as disabled when the run skipped the analysis", () => {
+        expect.assertions(3);
+
+        enable();
+
+        const result = runCodegen({ lint: false, projectRoot, wranglerQueueProducers: [] });
+
+        const payload = readFileSync(join(companion, "advisor-procedures.json"), "utf8");
+        const worker = readFileSync(join(companion, "src", "worker.ts"), "utf8");
+
+        // A `{ procedures: [] }` payload would score as a deployment with nothing wrong; the marker keeps the
+        // studio from presenting a skipped analysis as a clean one.
+        expect(JSON.parse(payload)).toStrictEqual({ analysis: "disabled", procedures: [] });
+        expect(result.generated.advisorProceduresJson).toBe(payload);
+        expect(worker).toContain(JSON.stringify(payload));
+    });
+
     it("leaves files other tools keep in the companion folder alone, on regeneration and when switched off", () => {
         expect.assertions(4);
 

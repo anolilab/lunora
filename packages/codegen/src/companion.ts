@@ -6,6 +6,13 @@ import { ts } from "ts-morph";
 /** The binding the app's Worker reaches the companion through; the runtime advisor route reads it. */
 const COMPANION_BINDING = "ADVISOR_COMPANION";
 
+/**
+ * The companion's `services[].name` in the app's wrangler config: a stable key for the generated Worker, never
+ * one of the app's own `lunora.config` services. Callers that must tell the companion apart from those services
+ * (dev, deploy, binding inference) compare against this, not a copy of the literal.
+ */
+const COMPANION_SERVICE_NAME = "advisorCompanion";
+
 /** Every file codegen writes into the companion folder; the sweep touches nothing else, so wrangler's own `.wrangler/` survives. */
 const COMPANION_FILES = ["advisor-procedures.json", "src/worker.ts", "wrangler.jsonc"] as const;
 
@@ -71,4 +78,4 @@ const companionName = (projectRoot: string): string => {
 /** The folder codegen writes the companion into, under the project's lunora directory. */
 const companionDirectory = (projectRoot: string, lunoraDirectory = "lunora"): string => join(projectRoot, lunoraDirectory, "_generated", "companion");
 
-export { COMPANION_BINDING, COMPANION_FILES, companionDirectory, companionName, wranglerString };
+export { COMPANION_BINDING, COMPANION_FILES, COMPANION_SERVICE_NAME, companionDirectory, companionName, wranglerString };

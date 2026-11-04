@@ -3,8 +3,8 @@
  * health map's denominator and Studio-only data, so codegen writes it to
  * `_generated/advisor-procedures.json` instead of embedding it in the main app
  * Worker. The dev hosts mount this read-only handler on a loopback bind; a hosted
- * Studio is to get the list from an opt-in companion Worker (`studio.companion`),
- * which this branch does not contain yet.
+ * Studio reads the same document from the opt-in companion Worker
+ * (`studio.companion`), which the app's Worker forwards to after its admin check.
  *
  * Transport-agnostic like its siblings: it takes a {@link LocalEndpointRequest}
  * and returns a {@link LocalEndpointResponse}. A missing file is a 404 with a

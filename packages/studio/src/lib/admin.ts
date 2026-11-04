@@ -15,7 +15,7 @@
 
 // Canonical captured-mail wire type, owned by `@lunora/mail`. Type-only: erased
 // at build time, so no mail *runtime* enters the studio's browser bundle.
-import type { AdvisorProcedureProtection, Finding } from "@lunora/advisor";
+import type { AdvisorProcedureDocument, Finding } from "@lunora/advisor";
 import type { CapturedMail } from "@lunora/mail";
 // Canonical registered-device wire type, owned by `@lunora/notify` (the
 // secret-stripped projection the `listPushSubscriptions` RPC returns). Type-only,
@@ -527,13 +527,11 @@ export interface AdvisoriesResult {
  * Body of the host's `/__lunora/advisor-procedures` route: the contents of the
  * generated `advisor-procedures.json`, the health map's denominator.
  *
- * Reuses `@lunora/advisor`'s type rather than re-declaring the 20-field shape:
- * studio already depends on that package, so a local copy would be one more
+ * Reuses `@lunora/advisor`'s document type rather than re-declaring the 20-field
+ * shape: studio already depends on that package, so a local copy would be one more
  * transcription to keep in lockstep for no isolation benefit.
  */
-export interface AdvisorProceduresResult {
-    procedures: AdvisorProcedureProtection[];
-}
+export type AdvisorProceduresResult = AdvisorProcedureDocument;
 
 /** The operation an RLS policy gates, mirroring `@lunora/do`'s `RlsPolicyMetadata["on"]`. `read` covers get/query/findMany. */
 export type RlsOperation = "delete" | "insert" | "read" | "update";

@@ -116,6 +116,18 @@ export interface AdvisorProcedureProtection {
 }
 
 /**
+ * The document codegen writes for the studio's health map — `advisor-procedures.json`
+ * and the companion Worker's payload. `procedures` is the denominator; `analysis`
+ * distinguishes a real (possibly empty) roster from a `lint: false` run, whose
+ * empty list must not be scored as a deployment with nothing wrong.
+ */
+export interface AdvisorProcedureDocument {
+    /** `"disabled"` when the run had no advisor evidence (`lint: false`); absent for a real roster. */
+    analysis?: "disabled";
+    procedures: AdvisorProcedureProtection[];
+}
+
+/**
  * Fail-closed reading of a tri-state behavioural fact: `true` when the feeder
  * proved it, and — just as importantly — also `true` when the feeder couldn't
  * read the handler body at all (`undefined`, a genuinely cross-file handler).

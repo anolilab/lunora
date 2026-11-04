@@ -48,7 +48,8 @@ export default {
 
 /**
  * The `_generated/companion/` files keyed relative to that folder; `{}` when the flag is off, which removes the folder.
- * `proceduresJson` is the `{ procedures }` document codegen already built for `advisor-procedures.json`, so the two cannot diverge.
+ * `proceduresJson` is the document codegen already built for `advisor-procedures.json` (a roster, or the
+ * disabled-analysis marker of a `lint: false` run), so the two cannot diverge.
  */
 const emitCompanion = (projectRoot: string, proceduresJson: string, enabled: boolean): Record<string, string> => {
     if (!enabled) {

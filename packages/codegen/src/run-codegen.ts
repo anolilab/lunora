@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { performance } from "node:perf_hooks";
 
+import type { AdvisorProcedureDocument } from "@lunora/advisor";
 import { runAdvisor } from "@lunora/advisor";
 import { LunoraError } from "@lunora/errors";
 import type { AdvisorProcedure } from "@lunora/shard-engine";
@@ -791,9 +792,13 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const apiSpec = options.apiSpec ?? "openapi";
     const wantsOpenApi = apiSpec === "openapi" || apiSpec === "both";
     const advisorProcedureData: ReadonlyArray<AdvisorProcedure> = advisorContext?.procedureProtections ?? [];
-    const advisorProcedureDocument = `${JSON.stringify({ procedures: advisorProcedureData }, undefined, 2)}\n`;
-    // No advisor evidence (`lint: false`) means the list above is a placeholder, not a result. Writing it would
-    // replace a real list with an empty one and the health score would read ~100 with nothing checked.
+    // A `lint: false` run has no evidence, so it writes a marker instead of `{ procedures: [] }`: the studio reads
+    // the marker as "analysis disabled" rather than scoring an empty roster as a deployment with nothing wrong.
+    const advisorProcedureDocument: AdvisorProcedureDocument =
+        advisorContext === undefined ? { analysis: "disabled", procedures: [] } : { procedures: [...advisorProcedureData] };
+    const advisorProceduresJson = `${JSON.stringify(advisorProcedureDocument, undefined, 2)}\n`;
+    // The sidecar file itself is only written with evidence: a `lint: false` run would otherwise replace a real
+    // roster with the marker below.
     const hasAdvisorProcedures = advisorContext !== undefined;
     const wantsOpenRpc = apiSpec === "openrpc" || apiSpec === "both";
 
@@ -970,7 +975,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { files: serviceDeclarations, kind: "services" },
               // Off removes the folder, so turning the flag off leaves no stale deployable Worker behind.
               {
-                  files: emitCompanion(options.projectRoot, advisorProcedureDocument, studioCompanion),
+                  files: emitCompanion(options.projectRoot, advisorProceduresJson, studioCompanion),
                   kind: "directory",
                   name: "companion",
                   owned: COMPANION_FILES,
@@ -985,11 +990,11 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               { content: wantsOpenRpc ? openRpcModuleContent : "", kind: "optional", name: "openrpc.ts" },
               // Studio-only data (the health map's denominator). The main app Worker never
               // carries it: the dev hosts serve this file to the studio, and a hosted Studio
-              // is to get it from an opt-in companion Worker (`studio.companion`, not yet in
-              // this branch). Shape-checked against `@lunora/shard-engine`'s `AdvisorProcedure`
-              // before it is written, so a field added to the advisor's type and forgotten
-              // there fails codegen. Skipped without advisor evidence, leaving any existing file.
-              ...(hasAdvisorProcedures ? [{ content: advisorProcedureDocument, kind: "optional" as const, name: "advisor-procedures.json" }] : []),
+              // gets it from the opt-in companion Worker (`studio.companion`). Shape-checked
+              // against `@lunora/shard-engine`'s `AdvisorProcedure` before it is written, so a
+              // field added to the advisor's type and forgotten there fails codegen. Skipped
+              // without advisor evidence, leaving any existing file.
+              ...(hasAdvisorProcedures ? [{ content: advisorProceduresJson, kind: "optional" as const, name: "advisor-procedures.json" }] : []),
               // Same pairing as the specs: the `.json` for tooling, the `.ts` for `createWorker({ architecture })`,
               // both removed when the last module goes.
               {
@@ -1033,6 +1038,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         // so the reconciler and the CLI's limit warning have to see one list.
         cronTriggers: [...new Set([...emitWranglerCronTriggers(crons), ...entryCronTriggers])],
         generated: {
+            advisorProceduresJson,
             agents: agentsContent,
             api: apiContent,
             app: appContent,
@@ -1050,7 +1056,6 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
             openApi: openApiContent,
             openApiModule: openApiModuleContent,
             openRpc: openRpcContent,
-            advisorProceduresJson: advisorProcedureDocument,
             openRpcModule: openRpcModuleContent,
             queues: queuesContent,
             seed: seedContent,

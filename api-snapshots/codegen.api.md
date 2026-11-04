@@ -60,6 +60,18 @@ interface AuthApiCallIR {
 const CAPABILITY_PROBES: Readonly<Record<CapabilityKey, CapabilityProbe>>;
 ```
 
+### `COMPANION_BINDING` (const)
+
+```ts
+const COMPANION_BINDING = "ADVISOR_COMPANION";
+```
+
+### `COMPANION_SERVICE_NAME` (const)
+
+```ts
+const COMPANION_SERVICE_NAME = "advisorCompanion";
+```
+
 ### `CONTAINERS_FILENAME` (const)
 
 ```ts
@@ -733,6 +745,10 @@ interface ProjectConfigLiterals {
         declared?: Record<string, ServiceLiteral>;
         unreadable?: boolean;
     };
+    studio?: {
+        companion?: boolean;
+        unreadable?: boolean;
+    };
     target?: string;
     unreadable?: boolean;
 }
@@ -1228,6 +1244,12 @@ const buildSchemaSnapshot: (schema: SchemaIR, migrationIds: ReadonlyArray<string
 const capabilitiesUsedBy: (signals: Pick<SourceCapabilitySignals, "contextReads" | "valueImports">) => ReadonlySet<CapabilityKey>;
 ```
 
+### `companionServiceBinding` (const)
+
+```ts
+const companionServiceBinding: (projectRoot: string, lunoraDirectory?: string) => ServiceBindingIR | undefined;
+```
+
 ### `createCodegenProject` (const)
 
 ```ts
@@ -1688,6 +1710,15 @@ const platformMatrixIds: () => ReadonlyArray<string>;
 
 ```ts
 const projectConfigCandidatePaths: (lunoraDirectory: string) => string[];
+```
+
+### `readBoundServiceBindings` (const)
+
+```ts
+const readBoundServiceBindings: (projectRoot: string, lunoraDirectory?: string) => {
+    error?: string;
+    services: ServiceBindingIR[];
+};
 ```
 
 ### `readPackageDependencies` (const)
