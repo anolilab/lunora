@@ -722,8 +722,8 @@ export const syncOrganization = internalMutation
  * Record an organisation's current plan in the projection — what the admin list
  * shows and filters on. Internal: billing calls it when a subscription changes
  * (`payment:processWebhook` in the saas template), never a client. A patch to an
- * existing row only: an organisation not yet projected, or deleted, is left to
- * `syncOrganization`, which starts every new row on `free`.
+ * existing row only: a deleted organisation is left alone, and one not projected
+ * yet is refused as retryable, so the change is not lost.
  *
  * `asOf` is the billing version the plan was derived at (in the template, the
  * latest `updatedAt` among the organisation's subscriptions). Billing derives in
@@ -736,7 +736,14 @@ export const syncOrganizationPlan = internalMutation
     .mutation(async ({ args: { asOf, organizationId, plan }, ctx }): Promise<void> => {
         const existing = await organizations(ctx).findFirst({ where: { organizationId } });
 
-        if (!existing || existing["status"] === "deleted") {
+        // Not projected yet (the auth hook that writes the row failed or has not run): a 503, so the
+        // caller's provider redelivers the event once the row exists, rather than a success that
+        // records nothing and leaves the row to start on `free`.
+        if (!existing) {
+            throw new LunoraError("SERVICE_UNAVAILABLE", `organization ${organizationId} is not in the projection yet — retry once it is`);
+        }
+
+        if (existing["status"] === "deleted") {
             return;
         }
 

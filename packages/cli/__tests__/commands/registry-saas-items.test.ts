@@ -216,8 +216,8 @@ describe("saas kit functions", () => {
     });
 
     describe("syncOrganizationPlan", () => {
-        it("records the plan on a projected organisation and leaves a deleted or unknown one alone", async () => {
-            expect.assertions(3);
+        it("records the plan on a projected organisation, leaves a deleted one alone, and refuses an unknown one as retryable", async () => {
+            expect.assertions(4);
 
             const { rows, saas, writer } = await setup();
 
@@ -225,7 +225,11 @@ describe("saas kit functions", () => {
             await saas.syncOrganization({ args: { name: "Gone", organizationId: "org-2", slug: "gone", status: "deleted" }, ctx: writer });
             await saas.syncOrganizationPlan({ args: { asOf: 1, organizationId: "org-1", plan: "pro" }, ctx: writer });
             await saas.syncOrganizationPlan({ args: { asOf: 1, organizationId: "org-2", plan: "pro" }, ctx: writer });
-            await saas.syncOrganizationPlan({ args: { asOf: 1, organizationId: "org-3", plan: "pro" }, ctx: writer });
+
+            // Not projected yet: a 503 the webhook's provider retries, not a success that records nothing.
+            await expect(saas.syncOrganizationPlan({ args: { asOf: 1, organizationId: "org-3", plan: "pro" }, ctx: writer })).rejects.toMatchObject({
+                code: "SERVICE_UNAVAILABLE",
+            });
 
             expect(rows("saas_organizations").find((row) => row["organizationId"] === "org-1")).toMatchObject({ plan: "pro" });
             expect(rows("saas_organizations").find((row) => row["organizationId"] === "org-2")).toMatchObject({ plan: "free" });
