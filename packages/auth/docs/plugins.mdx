@@ -128,6 +128,51 @@ coincidence, so `lunora dev` may not reproduce a mismatch that appears once
 deployed. When verifying with a library such as `jose`, log the error's `code`
 (for example `ERR_JWT_CLAIM_VALIDATION_FAILED`) on failure, never the token.
 
+#### Refresh-token rotation and reuse with `oauthProvider`
+
+When your app is the OAuth provider, every `refresh_token` grant rotates the
+refresh token: the client gets a new one and the old one is marked used.
+Presenting a used refresh token again is treated as theft, as RFC 9700 §4.14.2
+recommends. The request fails with `invalid_grant`, and every refresh token
+and opaque access token that **user** holds for that **client** is revoked,
+including the rotated token the replay came from. The user has to authorize
+the client again. better-auth implements this; Lunora pins it with a test
+against its own SQL store.
+
+Four details decide how it behaves in practice:
+
+- **The family is the client and user, not one authorization.** A replay from
+  one device also signs that user's other devices out of the same client. Other
+  users' grants, and the user's grants to other clients, are left alone.
+- **JWT access tokens survive.** When a grant carries a `resource`, the
+  provider issues JWT access tokens, and a JWT cannot be revoked. It stays valid until it expires, so keep access-token lifetimes
+  short when resources are in play. Opaque access tokens, issued when no
+  `resource` is requested, are revoked immediately.
+- **Expiry slides.** Each rotation gives the new refresh token a fresh
+  `refreshTokenExpiresIn`, 30 days by default. A client that keeps refreshing
+  never hits it, and a refresh token family has no absolute lifetime. An expired
+  token fails with `invalid_grant` but does not revoke the family.
+- **Retries are refused by default.** `refreshTokenReuseInterval` is `0`, so a
+  client that retries a refresh after losing the response (a timeout, two tabs
+  racing) trips the reuse detection and loses its grant. Setting it to a few
+  seconds makes a retry inside that window return the same response instead.
+  A replay after the window still revokes the family.
+
+Both options go straight to `oauthProvider`:
+
+```ts
+oauthProvider({
+    consentPage: "/consent",
+    loginPage: "/login",
+    refreshTokenExpiresIn: 60 * 60 * 24 * 14, // seconds
+    refreshTokenReuseInterval: 5, // seconds
+});
+```
+
+The revocation happens in two separate deletes, not one transaction. A
+rotation that runs on another isolate between them can leave one fresh token
+alive. better-auth tracks this upstream.
+
 ### Abuse protection
 
 | Export           | What it adds                                                                                                                      | Reference                                                                       |
