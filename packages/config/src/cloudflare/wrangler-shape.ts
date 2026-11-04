@@ -80,6 +80,8 @@ interface WranglerShape {
     analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string }>;
     // Hint-only: the namespace's jurisdiction is fixed at creation — warned, never written.
     artifacts?: ReadonlyArray<{ binding?: string; namespace?: string }>;
+    // Only `run_worker_first` is written, and only when absent (see reconcileAssetRouting).
+    assets?: unknown;
     // Self-describing: a parameterless { binding } — auto-writeable like `ai` (see reconcileBrowser).
     browser?: { binding?: string };
     containers?: ReadonlyArray<ContainerEntry>;

@@ -5,12 +5,12 @@
     "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     // The SPA `rsbuild build` writes. Unknown paths fall back to `index.html` so
-    // client-side routes deep-link; `/_lunora/*` always reaches the Worker first,
+    // client-side routes deep-link; `/_lunora/*` and `/__lunora/*` reach the Worker first,
     // or a navigation there would get the SPA shell instead of Lunora.
     "assets": {
         "directory": "./dist",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/_lunora/*"],
+        "run_worker_first": ["/_lunora/*", "/__lunora/*"],
     },
     "durable_objects": {
         "bindings": [

@@ -29,6 +29,7 @@ import type { DurableObjectSpec, GeneratedClassModule } from "../worker-entry";
 import type { Manifest } from "./lunora-manifest";
 import { readManifest } from "./lunora-manifest";
 import { D1_PLACEHOLDER_ID, HYPERDRIVE_PLACEHOLDER_ID } from "./placeholder-ids";
+import { reconcileAssetRouting } from "./reconcile-assets";
 import type { OwnedTuning } from "./reconcile-queues";
 import { readOwnedTuning, reconcileEnvQueues, reconcileQueues, recordOwnedTuning } from "./reconcile-queues";
 import type { OwnedServices } from "./reconcile-services";
@@ -1015,7 +1016,7 @@ const reconcileWranglerBindings = (
     // original `parsed`. This is only safe because the steps touch disjoint
     // top-level keys (durable_objects / migrations vs d1_databases vs ai vs
     // ai_search_namespaces vs analytics vs browser vs images vs analytics_engine_datasets vs worker_loaders vs containers /
-    // observability vs exports + workflows vs queues vs services + env.*.services;
+    // observability vs assets + env.*.assets vs exports + workflows vs queues vs services + env.*.services;
     // the env queue step writes only env.<name>.queues). A future step that depends on a key an
     // earlier step mutated must re-parse rather than reuse `parsed`.
     // Self-describing bindings (SELF_DESCRIBING_BINDINGS, plus the array-shaped
@@ -1070,6 +1071,8 @@ const reconcileWranglerBindings = (
         { enabled: true, run: (text) => reconcileObservability(text, parsed) },
         // Cloudflare-only; an omitted target is the default, Cloudflare.
         { enabled: target === undefined || target === "cloudflare", run: (text) => reconcileUploadSourceMaps(text, parsed) },
+        // Cloudflare-only: `run_worker_first` is a Workers Static Assets key no other host reads.
+        { enabled: target === undefined || target === "cloudflare", run: (text) => reconcileAssetRouting(text, parsed) },
         { enabled: exportedContainers.length > 0, run: (text) => reconcileContainers(text, parsed, exportedContainers) },
         {
             enabled: exportedWorkflows.length > 0 || exportedAgents.length > 0,

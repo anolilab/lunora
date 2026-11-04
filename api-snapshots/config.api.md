@@ -2613,6 +2613,7 @@ interface WranglerConfig {
         directory?: string;
         html_handling?: string;
         not_found_handling?: string;
+        run_worker_first?: boolean | ReadonlyArray<string>;
     };
     browser?: {
         binding?: string;

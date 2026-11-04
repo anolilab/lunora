@@ -649,9 +649,33 @@ SSR/API fetch handler still runs underneath:
 ```
 
 The validator requires a non-empty `directory` (pointing at the built client
-output) and shape-checks the optional `binding` / `html_handling` /
-`not_found_handling` fields. Lunora does **not** auto-inject this block; the
-output directory is framework-adapter-specific, so you declare it.
+output), a non-empty `binding` when one is set, an `html_handling` / `not_found_handling` value
+wrangler accepts, and a `run_worker_first` that is a boolean or a list of path
+rules (each starting with `/` or `!/`, at most 100 rules of 100 characters).
+Lunora does **not** auto-inject this block; the output directory is
+framework-adapter-specific, so you declare it.
+
+Once the block exists, Lunora adds one key to it. Cloudflare answers from the
+assets directory before the Worker whenever a file matches, and with
+`not_found_handling: "single-page-application"` it answers every unmatched
+browser navigation with `index.html`. Either way a request for Lunora's own
+endpoints could get a static file instead. So when `run_worker_first` is absent,
+the dev server and `lunora deploy` write it with Lunora's reserved paths (for the
+top-level block and for each `env.<name>.assets` block):
+
+```jsonc
+{
+    "assets": {
+        "directory": "./dist/client",
+        "run_worker_first": ["/_lunora/*", "/__lunora/*"],
+    },
+}
+```
+
+A `run_worker_first` you wrote yourself is never changed. If it leaves out one of
+those paths, Lunora warns and names it. Routes your app serves from the Worker
+(an auth `basePath` such as `/api/auth/*`, or your own `httpRoute` paths) are
+yours to add; Lunora cannot see them at config time.
 
 ## Non-goals
 

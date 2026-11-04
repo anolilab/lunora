@@ -351,15 +351,59 @@ const validateExports = (wrangler: WranglerConfig, errors: string[]): void => {
     }
 };
 
+/** The values wrangler accepts for `assets.html_handling`. */
+const HTML_HANDLING = ["auto-trailing-slash", "drop-trailing-slash", "force-trailing-slash", "none"];
+
+/** The values wrangler accepts for `assets.not_found_handling`. */
+const NOT_FOUND_HANDLING = ["404-page", "none", "single-page-application"];
+
+/** Cloudflare's caps on `assets.run_worker_first`: rules per list, and characters per rule. */
+const MAX_RUN_WORKER_FIRST_RULES = 100;
+const MAX_RUN_WORKER_FIRST_RULE_LENGTH = 100;
+
+const validateEnumSetting = (key: string, value: unknown, allowed: ReadonlyArray<string>, errors: string[]): void => {
+    if (value !== undefined && (typeof value !== "string" || !allowed.includes(value))) {
+        errors.push(`assets.${key} must be one of ${allowed.map((entry) => `"${entry}"`).join(", ")} (got ${JSON.stringify(value)})`);
+    }
+};
+
+/** `run_worker_first` is `true`/`false`, or a list of path rules — `/…` to run the Worker first, `!/…` to exempt a path. */
+const validateRunWorkerFirst = (value: unknown, errors: string[]): void => {
+    if (value === undefined || typeof value === "boolean") {
+        return;
+    }
+
+    if (!Array.isArray(value)) {
+        errors.push('assets.run_worker_first must be a boolean or an array of path rules (e.g. ["/_lunora/*"])');
+
+        return;
+    }
+
+    if (value.length > MAX_RUN_WORKER_FIRST_RULES) {
+        errors.push(`assets.run_worker_first has ${String(value.length)} rules; Cloudflare accepts at most ${String(MAX_RUN_WORKER_FIRST_RULES)}`);
+    }
+
+    for (const rule of value as unknown[]) {
+        if (typeof rule !== "string" || !(rule.startsWith("/") || rule.startsWith("!/"))) {
+            errors.push(`assets.run_worker_first entry ${JSON.stringify(rule)} must be a path rule starting with "/" (or "!/" to exempt a path)`);
+        } else if (rule.length > MAX_RUN_WORKER_FIRST_RULE_LENGTH) {
+            errors.push(
+                `assets.run_worker_first entry "${rule}" is ${String(rule.length)} characters; Cloudflare accepts at most ${String(MAX_RUN_WORKER_FIRST_RULE_LENGTH)}`,
+            );
+        }
+    }
+};
+
 /**
  * `assets` is the Workers Static Assets block — serves the client build from the
- * same worker (Cloudflare serves files for free, only invoking the worker on a
- * miss, so the Lunora SSR/API handler is unaffected). NOT Cloudflare Pages,
- * which is an explicit non-goal — the worker is the deploy unit. A present block
- * must declare a non-empty string `directory`; `binding`/`html_handling`/
- * `not_found_handling` if present must be strings. The directory-existence
- * nicety is FS-aware (it lives in `validateWranglerProject`, not here) because
- * the dir is created by the client build and may legitimately not exist yet.
+ * same worker. NOT Cloudflare Pages, which is an explicit non-goal — the worker
+ * is the deploy unit. A present block must declare a non-empty string
+ * `directory`; `binding` must be a non-empty string, `html_handling` /
+ * `not_found_handling` one of wrangler's values, and `run_worker_first` a boolean
+ * or a list of path rules, so a typo fails here rather than at `wrangler deploy`.
+ * The directory-existence nicety is FS-aware (it lives in
+ * `validateWranglerProject`, not here) because the dir is created by the client
+ * build and may legitimately not exist yet.
  */
 const validateAssets = (wrangler: WranglerConfig, errors: string[]): void => {
     const { assets } = wrangler;
@@ -382,13 +426,9 @@ const validateAssets = (wrangler: WranglerConfig, errors: string[]): void => {
         errors.push('assets.binding must be a non-empty string (e.g. "ASSETS")');
     }
 
-    if (assets.html_handling !== undefined && typeof assets.html_handling !== "string") {
-        errors.push("assets.html_handling must be a string");
-    }
-
-    if (assets.not_found_handling !== undefined && typeof assets.not_found_handling !== "string") {
-        errors.push("assets.not_found_handling must be a string");
-    }
+    validateEnumSetting("html_handling", assets.html_handling, HTML_HANDLING, errors);
+    validateEnumSetting("not_found_handling", assets.not_found_handling, NOT_FOUND_HANDLING, errors);
+    validateRunWorkerFirst(assets.run_worker_first, errors);
 };
 
 /**

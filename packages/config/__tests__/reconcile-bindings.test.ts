@@ -230,6 +230,93 @@ describe("reconcileWranglerBindings", () => {
         });
     });
 
+    describe("assets.run_worker_first", () => {
+        const withAssets = (assets: string, environment = ""): string => `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    // the client build
+    "assets": ${assets},
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true },
+    "upload_source_maps": true,${environment}
+}
+`;
+
+        it("routes the reserved Lunora paths to the Worker first when the key is absent, keeping comments", () => {
+            expect.assertions(4);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets('{ "directory": "./dist/client", "not_found_handling": "single-page-application" }'),
+                "utf8",
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(result.added).toContain("assets.run_worker_first");
+            expect(readConfig().assets).toEqual({
+                directory: "./dist/client",
+                not_found_handling: "single-page-application",
+                run_worker_first: ["/_lunora/*", "/__lunora/*"],
+            });
+            expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toContain("// the client build");
+
+            // Idempotent: the second pass finds the key and writes nothing.
+            expect(reconcileWranglerBindings(root, baseInferred()).changed).toBe(false);
+        });
+
+        it("writes an env block's own assets too", () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets(
+                    '{ "directory": "./dist/client", "run_worker_first": true }',
+                    '\n    "env": { "staging": { "assets": { "directory": "./dist/staging" } } },',
+                ),
+                "utf8",
+            );
+
+            reconcileWranglerBindings(root, baseInferred());
+
+            expect(readConfig().env.staging.assets).toEqual({
+                directory: "./dist/staging",
+                run_worker_first: ["/_lunora/*", "/__lunora/*"],
+            });
+        });
+
+        it("never rewrites an authored value, and warns when it leaves a reserved path to the assets", () => {
+            expect.assertions(3);
+
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client", "run_worker_first": ["/api/*"] }'), "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(result.changed).toBe(false);
+            expect((readConfig().assets as { run_worker_first: unknown }).run_worker_first).toEqual(["/api/*"]);
+            expect(result.warnings.join(" ")).toContain("assets.run_worker_first does not send /_lunora/*, /__lunora/* to the Worker first");
+        });
+
+        it("leaves a config with no assets block alone", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets("{}").replace('    // the client build\n    "assets": {},\n', ""), "utf8");
+
+            expect(reconcileWranglerBindings(root, baseInferred()).added).not.toContain("assets.run_worker_first");
+        });
+
+        it.each([["celld"], ["node"]])("leaves assets alone on the %s target", (target) => {
+            expect.assertions(1);
+
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client" }'), "utf8");
+
+            reconcileWranglerBindings(root, baseInferred(), { target });
+
+            expect((readConfig().assets as { run_worker_first?: unknown }).run_worker_first).toBeUndefined();
+        });
+    });
+
     it("binds a newly-exported SCHEDULER DO and registers its migration class", () => {
         expect.assertions(4);
 

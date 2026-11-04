@@ -3364,6 +3364,31 @@ export const schema = defineSchema({
             );
         });
 
+        it("checks assets.html_handling and assets.not_found_handling against wrangler's values", () => {
+            expect.assertions(4);
+
+            const assets = (extra: Record<string, unknown>) => validBase({ assets: { directory: "./dist/client", ...extra } });
+
+            expect(validateWranglerConfig(assets({ html_handling: "drop-trailing-slash", not_found_handling: "single-page-application" })).valid).toBe(true);
+            expect(validateWranglerConfig(assets({ not_found_handling: "spa" })).errors.join(" ")).toContain("assets.not_found_handling must be one of");
+            expect(validateWranglerConfig(assets({ html_handling: "trailing-slash" })).errors.join(" ")).toContain("assets.html_handling must be one of");
+            expect(validateWranglerConfig(assets({ html_handling: 1 })).errors.join(" ")).toContain("assets.html_handling must be one of");
+        });
+
+        it("accepts assets.run_worker_first as a boolean or a list of path rules, and rejects anything else", () => {
+            expect.assertions(7);
+
+            const assets = (runWorkerFirst: unknown) => validBase({ assets: { directory: "./dist/client", run_worker_first: runWorkerFirst } as never });
+
+            expect(validateWranglerConfig(assets(true)).valid).toBe(true);
+            expect(validateWranglerConfig(assets(["/_lunora/*", "!/_lunora/static/*"])).valid).toBe(true);
+            expect(validateWranglerConfig(assets("/_lunora/*")).errors.join(" ")).toContain("must be a boolean or an array of path rules");
+            expect(validateWranglerConfig(assets(["_lunora/*"])).errors.join(" ")).toContain('must be a path rule starting with "/"');
+            expect(validateWranglerConfig(assets([5])).errors.join(" ")).toContain('must be a path rule starting with "/"');
+            expect(validateWranglerConfig(assets([`/${"a".repeat(100)}`])).errors.join(" ")).toContain("Cloudflare accepts at most 100");
+            expect(validateWranglerConfig(assets(Array.from({ length: 101 }, (_, index) => `/r${String(index)}`))).errors.join(" ")).toContain("has 101 rules");
+        });
+
         it("accepts a well-formed cache block and rejects bad shapes", () => {
             expect.assertions(5);
 
