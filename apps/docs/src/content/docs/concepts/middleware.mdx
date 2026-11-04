@@ -30,14 +30,14 @@ Middleware attaches to a builder with `.use(...)`. Functions built from the
 returned builder all run through it:
 
 ```ts
-import { initLunora } from "lunorash/server";
+import { initLunora, v } from "lunorash/server";
 import type { DataModel } from "./_generated/dataModel";
 
 const c = initLunora.dataModel<DataModel>().create();
 
 const authed = c.mutation.use(({ ctx, next }) => {
     if (!ctx.auth.userId) throw new Error("must be signed in");
-    // Narrow ctx for downstream handlers: `user` is now guaranteed.
+    // Narrow ctx for downstream handlers: `userId` is now guaranteed.
     return next({ ctx: { ...ctx, userId: ctx.auth.userId } });
 });
 

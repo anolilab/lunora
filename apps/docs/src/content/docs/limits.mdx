@@ -133,7 +133,7 @@ keep heavy imports off the startup path.
 | `sendBatch`         | **100 msgs / 256 KB** | Whichever comes first; `ctx.queues` enforces the count  |
 | Consumer batch      | **100 messages**      | Per consumer invocation                                 |
 | Consumer wall-clock | **15 min**            | CPU configurable up to 5 min                            |
-| Retries             | **100**               | Then the message goes to the DLQ                        |
+| Retries             | **100**               | Then the message goes to the dead-letter queue (DLQ)    |
 | Throughput / queue  | **5 000 msgs/s**      | Past it, sends get `Too Many Requests`                  |
 | Backlog / queue     | **25 GB**             | Then `Storage Limit Exceeded`                           |
 | `delaySeconds`      | **12 h**              | `ctx.queues` refuses more; longer → `@lunora/scheduler` |

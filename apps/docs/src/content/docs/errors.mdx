@@ -20,7 +20,7 @@ import { isLunoraError } from "@lunora/errors";
 if (isLunoraError(error)) {
     error.code; //   "CONFLICT"
     error.status; // 409
-    error.hint; //   actionable Markdown, when the catalog has one
+    error.hint; //   actionable Markdown, when the throw site or the wire supplied one
 }
 ```
 
@@ -66,8 +66,9 @@ guidance:
 
 ## Throwing your own
 
-`LunoraError` takes a code and a message, and fills in status, title, and hint
-from the catalog:
+`LunoraError` takes a code and a message, and fills in `status` and `title` from
+the catalog. The catalog hint is not copied onto the error; `resolveHint(error)`
+returns it when you need the fallback:
 
 ```ts
 import { LunoraError } from "@lunora/errors";

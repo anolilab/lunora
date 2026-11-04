@@ -3,7 +3,7 @@ title: Public REST API
 description: "Publish a query, mutation, or action as a plain REST endpoint with .expose({ rest: true }) — default-closed, routed through the procedure so auth, RLS, and validators still apply, and described by the generated OpenAPI."
 ---
 
-Lunora's own clients speak typed RPC over WebSocket. When something else has to
+Lunora's own clients call your functions over typed RPC: one-shot calls ride HTTP POST, and subscriptions ride a WebSocket. When something else has to
 call your backend (a partner integration, a mobile app you don't control, a
 `curl` in a runbook), you can publish an existing procedure as a plain REST
 endpoint without rewriting it:
@@ -16,7 +16,7 @@ export const list = query
 ```
 
 The call is routed **through the procedure**, so everything that guards it over
-RPC still guards it over REST: `ctx.auth`, [RLS](/docs/concepts/rls), and the
+RPC still guards it over REST: `ctx.auth`, [row-level security (RLS)](/docs/concepts/rls), and the
 `v.*` [validators](/docs/concepts/validation). It is the same code path, not a
 parallel one.
 

@@ -39,8 +39,8 @@ bun add @lunora/x402
 
 </Tabs>
 
-**Networks.** EVM chains (Base, Arbitrum, Ethereum, Polygon, …) are signed via
-`@x402/evm` + viem; pass a raw CAIP-2 id for chains without a friendly alias.
+**Networks.** EVM (Ethereum Virtual Machine) chains (Base, Arbitrum, Ethereum, Polygon, …) are signed via
+`@x402/evm` + viem; pass a raw CAIP-2 (Chain Agnostic Improvement Proposal 2) id for chains without a friendly alias.
 Solana is signed via `@x402/svm`. The charge rail needs a facilitator — there is
 no default: the public `https://x402.org/facilitator` serves testnets only, so a
 mainnet route needs `facilitator: { url, headers }` pointed at a keyed CDP
@@ -258,7 +258,7 @@ The `signer` config selects who holds the key, with three shapes:
   read from `ctx.secrets` (viem on EVM, a `@solana/kit` keypair on Solana).
   Works on **EVM and Solana**. Simplest.
 - **`{ type: "cdp", account }`**: a Coinbase-managed
-  [CDP](https://docs.cdp.coinbase.com) server wallet via the optional
+  [Coinbase Developer Platform (CDP)](https://docs.cdp.coinbase.com) server wallet via the optional
   `@coinbase/cdp-sdk` peer. The SDK gets-or-creates the named account and
   signs the EIP-712 authorization, so the key never leaves Coinbase. The three
   CDP credentials are read from `ctx.secrets` (`CDP_API_KEY_ID` /
@@ -415,3 +415,58 @@ fails verification, and (on the settle-first rails) a settlement the facilitator
 declines. A facilitator that fails rather than declines is the
 `X402_FACILITATOR_ERROR` above. The handler runs in none of these cases, except
 that settle-after runs it before settling.
+
+## Other exports
+
+The helpers below are exported from the subpaths named in each heading. The
+[charge rail](#the-charge-rail-sell-a-resource) and [pay rail](#the-pay-rail-buy-a-resource)
+sections describe how they are used.
+
+### `toCaip2(network)`
+
+**Type:** `(network: X402Network) => Caip2`
+
+Converts a friendly network name, such as `base`, to its CAIP-2 id.
+
+### `resolveFacilitatorUrl(facilitator?)`
+
+**Type:** `(facilitator?: FacilitatorConfig) => string`
+
+Returns the facilitator URL to call for a `FacilitatorConfig`.
+
+### `isEvmNetwork(network)` and `isSvmNetwork(network)`
+
+**Type:** `(network: X402Network) => boolean`
+
+Return `true` when the network belongs to the EVM or Solana family.
+
+### `NETWORK_TO_CAIP2`, `EVM_NETWORKS` and `SVM_NETWORKS`
+
+Constants. `NETWORK_TO_CAIP2` maps each friendly network name to its CAIP-2 id.
+`EVM_NETWORKS` and `SVM_NETWORKS` list the friendly names in each family.
+
+### `DEFAULT_ALLOWED_ASSETS` and `DEFAULT_STABLECOIN_DECIMALS`
+
+Constants. `DEFAULT_ALLOWED_ASSETS` is the stablecoin list used when a spend policy
+omits `allowedAssets`. `DEFAULT_STABLECOIN_DECIMALS` is the decimal precision of those
+default stablecoins. See [The spend policy](#the-spend-policy).
+
+### `createX402Pay(config, deps)`
+
+**Type:** `(config: X402PayConfig, deps: X402PayDeps) => Promise<X402Pay>`
+
+Builds the pay rail directly. The returned `X402Pay` has the `fetch` shown in
+[The pay rail](#the-pay-rail-buy-a-resource).
+
+### `X402Receipt` and `X402ReceiptSink`
+
+**Type:** `X402ReceiptSink = (receipt: X402Receipt) => void | Promise<void>`
+
+`X402Receipt` describes one settled payment. The `onReceipt` sink receives it. See
+[Receipts](#receipts).
+
+### `toPaymentEventRow(receipt)`
+
+**Type:** `(receipt: X402Receipt) => PaymentEventRow`
+
+Maps a receipt to a row for the `@lunora/payment` events table. See [Receipts](#receipts).

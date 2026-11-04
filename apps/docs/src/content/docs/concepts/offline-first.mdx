@@ -62,6 +62,7 @@ the same contract without touching IndexedDB.
 In React, build the client once and hand it to the provider:
 
 ```tsx
+import { LunoraClient, createIndexedDbPersistence, createIndexedDbQueryCache } from "lunorash/client";
 import { LunoraProvider } from "@lunora/react";
 import { useState } from "react";
 
@@ -393,7 +394,7 @@ Opt a table into judging a patch against what its author could actually see:
 documents: defineTable({ title: v.string(), body: v.string() }).dropStalePatches(),
 ```
 
-The client stamps every write with its **CDC baseline** — the changelog cursor
+The client stamps every write with its **change data capture (CDC) baseline** — the changelog cursor
 its live queries had reached when the write was composed — and replays that
 cursor verbatim off the offline queue. The shard reads the row's post-image as of
 that cursor out of `__cdc_log` and compares the fields the patch writes against
@@ -427,7 +428,7 @@ per-shard changelog to establish a baseline from, so the flag would be inert.
 ## Surfacing rejected writes
 
 A queued write that the server ultimately rejects (a coded conflict, a validation
-or RLS denial) rolls its optimistic row back. For a write you `await` directly,
+or row-level security (RLS) denial) rolls its optimistic row back. For a write you `await` directly,
 that surfaces as the rejected `mutation()` Promise. But a write queued in one
 session and replayed in the next, after a reload, has no awaiter left, and the
 same is true for a write the queue evicts on overflow or discards on an identity

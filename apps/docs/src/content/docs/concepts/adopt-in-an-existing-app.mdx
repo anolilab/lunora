@@ -40,7 +40,7 @@ export default createWorker({
         }
 
         // `userId` becomes ctx.auth.userId on the shard; the rest is forwarded as
-        // claims for ctx.auth.getIdentity() and any claim-reading RLS policy.
+        // claims for ctx.auth.getIdentity() and any claim-reading row-level security (RLS) policy.
         return { email: session.user.email, userId: session.user.id };
     },
 
@@ -54,7 +54,7 @@ export default createWorker({
 
 If that authority is a hosted identity provider that issues JWTs (Clerk, WorkOS
 AuthKit, Auth0, Supabase, or any OIDC issuer), you don't need to write this
-function. `@lunora/jwt-auth` verifies the token against the provider's JWKS and
+function. `@lunora/jwt-auth` verifies the token against the provider's JSON Web Key Set (JWKS) and
 returns the identity, org and role claims included:
 
 ```ts
@@ -83,6 +83,11 @@ stale identity; it just stops the duplication. If verification is genuinely expe
 (a JWKS fetch, a database read), `memoizeIdentity(resolver, { ttlMs: 5000 })` also
 caches across requests. `ttlMs` is in **milliseconds** (`5000` is five seconds), and it
 is your revocation delay, so keep it to a few seconds.
+
+The default cross-request cache key is the raw `Cookie` and `Authorization` headers. If the resolver
+authenticates on anything else, such as an `X-API-Key` header, a client-certificate fingerprint or the
+request origin, pass a `cacheKey` option that covers exactly those attributes. Otherwise two principals
+can share one cache entry and receive each other's identity.
 
 ## Declare ownership once
 
@@ -117,7 +122,7 @@ silently. `false` works as sugar for the same thing.
 ## Call Lunora from your own Worker
 
 Your app probably has server-side code that needs Lunora data: an MCP server, a
-webhook handler, a cron, an admin route. Don't reach for the raw DO stub and
+webhook handler, a cron, an admin route. Don't reach for the raw Durable Object (DO) stub and
 hand-roll the protocol. Use the typed client:
 
 ```ts

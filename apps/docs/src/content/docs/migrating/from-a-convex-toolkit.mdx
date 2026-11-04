@@ -132,7 +132,7 @@ const rowId = await ctx.db.insert("threadPins", { ... });
 Convex components are mountable mini-backends with their own tables, functions
 and durability. Lunora has no component system, so each one is taken apart, and
 what comes out is not always equivalent. Each component bundles a capability
-with a guarantee; the capability is usually easy to replace and the guarantee
+with a guarantee; the capability is usually cheap to replace and the guarantee
 usually is not.
 
 | Component      | Capability      | Guarantee                  | In Lunora                                               |

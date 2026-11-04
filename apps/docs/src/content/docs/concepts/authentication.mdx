@@ -88,8 +88,7 @@ box that gives you:
   immediately. See
   [invite-only sign-up](/docs/packages/auth/plugins#invite-only-sign-up).
 
-```ts
-// lunora/auth.ts
+```ts title="lunora/auth.ts"
 import { createAuth } from "@lunora/auth";
 import { passkey } from "@lunora/auth/plugins";
 
@@ -152,8 +151,7 @@ refresh, and each enabled plugin's routes). Call it at the top of your worker's
 `fetch`; it returns a `Response` for an auth request and a falsy value otherwise,
 so you fall through to the Lunora worker for everything else:
 
-```ts
-// src/server/index.ts
+```ts title="src/server/index.ts"
 import { handleAuthRequest } from "@lunora/auth";
 import { ensureMigrated } from "@lunora/auth/migrate";
 

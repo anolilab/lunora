@@ -27,7 +27,7 @@ Your app reads the first two in the usual sink wiring, with no cloud-specific
 code:
 
 ```ts
-import { analyticsEngineSink, combineSinks, otlpSink } from "@lunora/runtime";
+import { combineSinks, createWorker, otlpSink } from "@lunora/runtime";
 
 export default createWorker({
     // …schema, functions…
@@ -36,7 +36,7 @@ export default createWorker({
 ```
 
 Everything the framework emits flows over the
-[standard OTLP contract](/docs/concepts/observability#the-wire-contract) to the
+[standard OpenTelemetry Protocol (OTLP) contract](/docs/concepts/observability#the-wire-contract) to the
 cloud: one `SERVER` span per RPC, nested
 [`ctx.trace`](/docs/concepts/observability#tracing-sub-operations-with-ctxtrace)
 spans, [`ctx.log`](/docs/concepts/observability#structured-logging-with-ctxlog)

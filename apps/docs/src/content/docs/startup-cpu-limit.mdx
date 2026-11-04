@@ -66,24 +66,21 @@ than at startup, which applies whether or not the registry is lazy.
 
 There are three ways to opt in, and they are not read by the same commands:
 
-| Opt in with                                        | Read by                                                                                      |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `LUNORA_LAZY_FUNCTIONS=1` in your shell and in CI  | every `lunora` command and both bundler plugins                                              |
-| `--lazy-functions`                                 | the one `lunora` command you pass it to                                                      |
-| `lazyFunctions: true` in the Vite or Rspack plugin | `vite dev` / `vite build` (Rsbuild alike), and `lunora dev`, `build`, `deploy` that run them |
+| Opt in with                                             | Read by                                                                                          |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `LUNORA_LAZY_FUNCTIONS=1` in your shell and in CI       | every `lunora` command and both bundler plugins                                                  |
+| `--lazy-functions`                                      | the one `lunora` command you pass it to                                                          |
+| `codegen: { lazyFunctions: true }` in `lunora.config.*` | Codegen itself, so every command that writes `_generated/`, including the Vite and Rspack builds |
 
-The environment variable is the only setting every surface reads, so set it
-wherever the project builds. In a Vite or Rspack project you can also set the
-plugin option:
+The environment variable works on every surface, so set it wherever the project
+builds. To make the setting part of the project, set it in `lunora.config.ts`:
 
-```ts
-// vite.config.ts
-import { defineConfig } from "vite";
-import { lunora } from "@lunora/vite";
+```ts title="lunora.config.ts"
+import type { LunoraConfig } from "./lunora/_generated/app";
 
-export default defineConfig({
-    plugins: [lunora({ lazyFunctions: true })],
-});
+export default {
+    codegen: { lazyFunctions: true },
+} satisfies LunoraConfig;
 ```
 
 How the setting travels:
@@ -96,13 +93,12 @@ How the setting travels:
   both bundler plugins, in dev and in production builds. Either opt-in enables
   lazy loading; a false flag value does not switch off an enabled environment
   variable.
-- **The plugin option** covers `lunora build` / `deploy` in a Vite or Rspack
-  project: the framework build writes `_generated/` there, and the CLI's own
-  codegen pass after it is a dry run. It does **not** reach `lunora codegen`,
-  `prepare` or `verify`, which run codegen without the bundler. Without the
-  environment variable, `lunora prepare` in CI regenerates an eager registry and
-  its smoke-load has nothing to check.
-- **There is no `lunora.config.ts` option.**
+- **The config key** is read by codegen itself, so `lunora codegen`, `prepare`,
+  `verify`, and the Vite and Rspack builds all generate the lazy registry.
+  Without the key or the environment variable, `lunora prepare` in CI
+  regenerates an eager registry and its smoke-load has nothing to check.
+- **Passing `lazyFunctions` to `lunora()` throws.** The Vite plugin refuses the
+  removed option and names the config key to use instead.
 
 Keep dev, build and deploy on the same setting. `_generated/` is committed and
 deterministic, so any eager run (a teammate's `lunora codegen`, a CI job without

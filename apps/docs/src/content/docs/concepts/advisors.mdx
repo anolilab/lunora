@@ -22,7 +22,7 @@ discovered query/insert/middleware sites, so they catch a problem _before_ it
 ships. A smaller set is **runtime**: it needs observed signal from a running
 shard (full-scan attribution, index hit counts, per-shard traffic, row samples).
 
-Findings surface in the Studio's **Advisors** domain (Security, RLS, and
+Findings surface in the Studio's **Advisors** domain (Security, row-level security (RLS), and
 Insights panels) and on the Home overview. Static findings ride along in the
 generated code; runtime findings are computed by the Studio backend from each
 shard's durable metrics.
@@ -33,7 +33,7 @@ Run against the declared schema alone: deterministic, no running shard needed.
 
 ### Correctness
 
-The last four come from codegen rather than `@lunora/advisor`, so they are not in the
+The last five come from codegen rather than `@lunora/advisor`, so they are not in the
 programmatic `ALL_LINTS` catalog below — they travel the same channel to the terminal and the
 studio.
 
@@ -72,19 +72,19 @@ studio.
 
 ### Security
 
-| Lint                                     | Level | Detects                                                                                                                                                                |
-| ---------------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hardcoded_secret`                       | error | A secret-shaped literal (`sk_live…`, `AKIA…`, a PEM header, a high-entropy 32+ char token) checked into `lunora/` source. Rotate it and move it to a binding/secret.   |
-| `sql_injection_risk`                     | error | A `ctx.sql` tagged-template splices an unparameterized string expression into the query. Pass request input through a bound placeholder instead.                       |
-| `rls_uncovered_table`                    | warn  | A **public** procedure reads/writes a table that's RLS-protected elsewhere but has no `.use(rls(...))`: an authorization bypass.                                       |
-| `mask_uncovered_pii_column`              | warn  | A **public** procedure reads a table whose columns are [masked](/docs/concepts/masking) elsewhere but has no `.use(mask(...))`: PII returned in the clear.             |
-| `auth_api_call_without_headers`          | warn  | A `ctx.authApi.<method>(...)` call omits `headers`, so better-auth skips session authorization and runs with full privilege.                                           |
-| `public_mutation_without_ratelimit`      | warn  | A public `mutation`/`action` installs no `rateLimit`. Abuse-sensitive names (login/signup/reset/magic/subscribe/contact) raise the urgency. Wrap with `protectPublic`. |
-| `user_creating_mutation_without_captcha` | warn  | A public procedure writes a user/session/account table (or calls `ctx.mail`) with no CAPTCHA. Add `verifyTurnstile` or `protectPublic({ captcha })`.                   |
-| `public_arg_uses_any`                    | warn  | A public procedure accepts a `v.any()` argument: unvalidated input. Give it a concrete validator.                                                                      |
-| `admin_route_without_guard`              | warn  | An `httpRoute` on an admin/privileged-looking path whose handler references no auth/admin guard.                                                                       |
-| `unbounded_string_arg`                   | info  | A public `v.string()` argument with no max-length bound: a storage/DoS abuse vector. Add a length `.check`.                                                            |
-| `container_public_internet`              | info  | A container with `enableInternet` unset (defaults on): egress billed per GB, wider attack surface.                                                                     |
+| Lint                                     | Level | Detects                                                                                                                                                                                                                        |
+| ---------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `hardcoded_secret`                       | error | A secret-shaped literal (`sk_live…`, `AKIA…`, a PEM header, a high-entropy token: a 40+ character mixed-case base64 run, or a 32+ character hex run) checked into `lunora/` source. Rotate it and move it to a binding/secret. |
+| `sql_injection_risk`                     | error | A `ctx.sql` tagged-template splices an unparameterized string expression into the query. Pass request input through a bound placeholder instead.                                                                               |
+| `rls_uncovered_table`                    | warn  | A **public** procedure reads/writes a table that's RLS-protected elsewhere but has no `.use(rls(...))`: an authorization bypass.                                                                                               |
+| `mask_uncovered_pii_column`              | warn  | A **public** procedure reads a table whose columns are [masked](/docs/concepts/masking) elsewhere but has no `.use(mask(...))`: PII returned in the clear.                                                                     |
+| `auth_api_call_without_headers`          | warn  | A `ctx.authApi.<method>(...)` call omits `headers`, so better-auth skips session authorization and runs with full privilege.                                                                                                   |
+| `public_mutation_without_ratelimit`      | warn  | A public `mutation`/`action` installs no `rateLimit`. Abuse-sensitive names (login/signup/reset/magic/subscribe/contact) raise the urgency. Wrap with `protectPublic`.                                                         |
+| `user_creating_mutation_without_captcha` | warn  | A public procedure writes a user/session/account table (or calls `ctx.mail`) with no CAPTCHA. Add `verifyTurnstile` or `protectPublic({ captcha })`.                                                                           |
+| `public_arg_uses_any`                    | warn  | A public procedure accepts a `v.any()` argument: unvalidated input. Give it a concrete validator.                                                                                                                              |
+| `admin_route_without_guard`              | warn  | An `httpRoute` on an admin/privileged-looking path whose handler references no auth/admin guard.                                                                                                                               |
+| `unbounded_string_arg`                   | info  | A public `v.string()` argument with no max-length bound: a storage/DoS abuse vector. Add an enforced bound with `.max(n)`.                                                                                                     |
+| `container_public_internet`              | info  | A container with `enableInternet` unset (defaults on): egress billed per GB, wider attack surface.                                                                                                                             |
 
 ### Operational
 
@@ -103,7 +103,7 @@ Need observed signal from a live shard, aggregated by the Studio backend.
 
 | Lint                | Level     | Detects                                                                                                                                     |
 | ------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hot_shard`         | warn      | One shard takes >50% of a `shardBy(...)` function's traffic while siblings idle (fires above a minimum request volume).                     |
+| `hot_shard`         | warn      | One shard takes 50% or more of a `shardBy(...)` function's traffic while siblings idle (fires only with at least 50 total requests).        |
 | `index_utilization` | info/warn | Two checks: a **dead index** with zero recorded reads (info), and a **hot unindexed scan**, a table full-scanned ≥25× with no index (warn). |
 | `fan_out_breadth`   | warn      | A shard group with enough active shards that a cross-shard read over it would approach the per-invocation internal-subrequest ceiling.      |
 

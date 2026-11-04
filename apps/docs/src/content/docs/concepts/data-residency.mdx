@@ -10,7 +10,7 @@ related:
       note: "full `lunora export`, `lunora import`, and `lunora deploy` reference"
 ---
 
-Cloudflare [Durable Object jurisdictions](https://developers.cloudflare.com/durable-objects/reference/data-location/)
+Cloudflare [Durable Object (DO) jurisdictions](https://developers.cloudflare.com/durable-objects/reference/data-location/)
 restrict where a DO runs and stores data, for GDPR, FedRAMP, or US data
 residency. Declare one on your schema and Lunora pins every DO the app reaches
 to that region.
@@ -299,7 +299,7 @@ import are not carried over.
 ### Export first, before changing anything
 
 While the deployed worker still resolves the **current** region's DOs, dump every
-table to NDJSON. This is your only window to read the old data.
+table to newline-delimited JSON (NDJSON). This is your only window to read the old data.
 
 ```bash
 LUNORA_ADMIN_TOKEN=… lunora export --prod --url https://app.example.com \

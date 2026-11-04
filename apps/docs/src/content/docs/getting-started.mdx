@@ -117,7 +117,7 @@ my-app/
 ├── src/
 │   ├── server.ts          # defineApp() worker entry + ShardDO export
 │   └── main.tsx           # LunoraProvider + your React app
-├── wrangler.jsonc         # DO + D1 + R2 bindings
+├── wrangler.jsonc         # Durable Object (DO), D1, and R2 bindings
 └── vite.config.ts         # lunora() Vite plugin
 ```
 
@@ -127,8 +127,8 @@ my-app/
 
 ### Run
 
-`pnpm dev` boots Vite and Wrangler in one terminal. Edits to `lunora/schema.ts`
-trigger codegen and a typed-API hot reload within ~200 ms.
+`pnpm dev` boots Vite and Wrangler in one terminal. Edits under `lunora/`, such as
+`lunora/schema.ts`, trigger codegen after a 100 ms debounce and then a typed-API hot reload.
 
 <Callout type="info">
     Throw inside a handler and the `@visulima/vite-overlay` integration shows a mapped source frame pointing at your code, not the bundle.
@@ -161,8 +161,8 @@ bun run lunora deploy
 </Tabs>
 
 This runs codegen, validates `wrangler.jsonc`, and calls `wrangler deploy` to
-publish the Worker. Data migrations run only with `--migrate` (plus
-`--migrate-yes` in production); the D1 schema SQL `lunora migrate generate` emits
+publish the Worker. Data migrations run only with `--migrate`, which also requires `--migrate-url` and
+`--migrate-yes`; the D1 schema SQL `lunora migrate generate` emits
 is never applied for you. Everything lives on your account, reachable through your own
 `*.workers.dev` hostname or a custom domain.
 

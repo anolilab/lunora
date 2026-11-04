@@ -28,8 +28,8 @@ Pick by the question you are actually asking:
   staging"**, or **"keep a copy somewhere Cloudflare is not."** Snapshot
   backups. Portable NDJSON, no window, restorable into a different deployment.
 
-The two share nothing: PITR never reads a snapshot, and a snapshot restore never
-touches the change log.
+The two share nothing: point-in-time recovery (PITR) never reads a snapshot, and a
+snapshot restore never touches the change log.
 
 Everything below talks to admin-gated endpoints on a running worker, so each
 command needs an admin bearer token. Prefer the `LUNORA_ADMIN_TOKEN` environment
@@ -381,7 +381,8 @@ Import the referenced table before the table that references it.
 ## Streaming data out continuously
 
 Snapshots are point-in-time. To keep an external warehouse or ETL sink in step
-with the deployment as it changes, use the continuous CDC export tap instead: it
+with the deployment as it changes, use the continuous change data capture (CDC)
+export tap instead: it
 streams the shard op-log to named sinks with at-least-once, per-shard-ordered,
 resumable delivery.
 

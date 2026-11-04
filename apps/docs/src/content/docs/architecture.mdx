@@ -6,7 +6,7 @@ description: The full picture — topology, request lifecycle, the data tiers, t
 This page is the map of how Lunora works and _why it works that way_. The first
 half is the **architecture**: the Cloudflare primitives, how a request flows
 through them, and the consistency guarantees you get. The second half is the
-**design decisions**: the forks in the road and why we took the branch we did.
+**design decisions**: the forks in the road and the reason for each choice.
 
 If you only read one section, read [The mental model](#the-mental-model). If
 you're evaluating Lunora against Convex or a hand-rolled Workers stack, jump to
@@ -16,7 +16,7 @@ you're evaluating Lunora against Convex or a hand-rolled Workers stack, jump to
 
 The rest of the page leans on these terms:
 
-- **Shard**: one Durable Object instance owning a slice of state. The default
+- **Shard**: one Durable Object (DO) instance owning a slice of state. The default
   app has a single shard addressed as `__root__`; `.shardBy(field)` creates one
   shard per value of `field`.
 - **Op-log (`__cdc_log`)**: the append-only change log every shard keeps. Each
@@ -83,7 +83,7 @@ Three ideas carry the whole design:
 | Component        | Package                     | Responsibility                                                                                                                                                                                            |
 | ---------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Worker**       | `@lunora/runtime`           | Entry point. Parses the RPC envelope, authenticates, resolves the target shard, runs the query coordinator for fan-out, terminates WebSockets. Stateless, so it scales horizontally on Cloudflare's edge. |
-| **ShardDO**      | `@lunora/do`                | The workhorse. SQLite-backed state, OCC, serialized mutations, hibernatable WebSocket subscriptions, and the op-log (`__cdc_log`) that powers live sync. One per shard.                                   |
+| **ShardDO**      | `@lunora/do`                | The workhorse. SQLite-backed state, optimistic concurrency control (OCC), serialized mutations, hibernatable WebSocket subscriptions, and the op-log (`__cdc_log`) that powers live sync. One per shard.  |
 | **SessionDO**    | `@lunora/do`                | Per-session coordination state (presence, auth session, transient fan-in).                                                                                                                                |
 | **SchedulerDO**  | `@lunora/scheduler`         | Alarm-driven `runAfter` / `runAt` and Cron Triggers.                                                                                                                                                      |
 | **Container DO** | `@lunora/container`         | A Docker workload running as a Durable Object, for jobs that don't fit the Workers runtime (ffmpeg, headless Chrome, an ML model, a long-running process). Reached from actions via `ctx.containers`.     |
@@ -106,8 +106,8 @@ The four function kinds take four different paths through the topology.
 The client calls `api.messages.list`. The Worker authenticates the RPC, asks the
 shard resolver for the DO that owns the data (the `__root__` DO, or the one
 keyed by `.shardBy()`), and forwards the call. The DO runs the handler against
-its local SQLite (**no network hop inside the read**), applies the table's RLS
-read-`where`, and returns rows. If the query targets a `.shardBy()` table
+its local SQLite (**no network hop inside the read**), applies the table's row-level
+security (RLS) read `where`, and returns rows. If the query targets a `.shardBy()` table
 without pinning a shard, it becomes a **fan-out**: the Query Coordinator in the
 Worker dispatches to every shard and merges results.
 
@@ -143,10 +143,11 @@ subscribers.
 
 ### An action (`ctx.fetch`, third-party I/O)
 
-Actions are the **non-deterministic escape hatch**: they run in the Worker (not
-the DO), may call external services, and may _not_ touch `ctx.db` directly.
-They reach data by calling queries/mutations, which keeps the deterministic
-core deterministic. Long work belongs here (and in the scheduler), not in a
+Actions are the **non-deterministic escape hatch**: they run outside the shard's
+storage transaction and may call external services. An action called over RPC runs
+inside the shard's Durable Object; an HTTP action runs in the Worker. Their `ctx.db`
+writes are not transactional, so they reach data by calling queries and mutations,
+which keeps the deterministic core deterministic. Long work belongs here (and in the scheduler), not in a
 mutation bound by the 30 s CPU envelope.
 
 </Step>
@@ -363,7 +364,7 @@ The theme is **fail closed and re-derive**, never silently diverge.
 
 ## Design decisions
 
-Each decision below is the same shape: what we chose, why, and what it costs.
+Each decision below follows the same shape: the choice, the reason, and the cost.
 
 ### Durable Objects as the database, not D1-as-truth
 
@@ -380,7 +381,7 @@ version-snapshot engine to rebuild reactive state, machinery the DO topology
 makes unnecessary.
 
 **Cost.** No cross-shard transactions; cross-shard reads are fan-out; the 10 GB
-/ ~1 000 req/s per-DO ceiling is real. We answer it with opt-in sharding rather
+/ ~1 000 req/s per-DO ceiling is real. Lunora answers it with opt-in sharding rather
 than a bigger central database.
 
 ### One DO by default, opt-in sharding
@@ -401,7 +402,7 @@ ceiling looks lower than a sharded-from-day-one system until you opt in.
 ### Serialized mutations, no OCC-retry loop
 
 **Decision.** Mutations run inside `blockConcurrencyWhile` + a storage
-transaction. We deliberately do **not** ship an optimistic-retry loop.
+transaction. Lunora deliberately does **not** ship an optimistic-retry loop.
 
 **Why.** Because the DO serializes, there is no concurrent writer to race. A
 `ConflictError` is therefore a _deterministic self-conflict_ (a handler's own
@@ -463,7 +464,7 @@ deterministic serialized writes, actions are the I/O escape hatch.
 
 **Why.** The kind _is_ the contract. Queries can be cached, subscribed, and
 fanned out because they're deterministic; mutations can broadcast because they're
-the linearization point; actions are quarantined from `ctx.db` so the
+the linearization point; actions reach transactional data only through queries and mutations, so the
 deterministic core stays deterministic. Splitting them lets the runtime apply the
 right machinery to each.
 

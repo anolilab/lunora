@@ -88,7 +88,7 @@ See [Reactive loaders](/docs/frameworks/reactive-loaders).
 
 ## Class B: the framework owns the CF adapter
 
-**SvelteKit, Nuxt, Astro.** These ship their own Cloudflare adapter and build
+**SvelteKit and Astro.** These ship their own Cloudflare adapter and build
 their own Worker, so Lunora does **not** take over the entry. Instead the Lunora
 worker composition is injected into the framework's server entry / hooks: Lunora
 realtime mounts under `/_lunora/*`, and the framework keeps everything else.
@@ -98,11 +98,13 @@ realtime mounts under `/_lunora/*`, and the framework keeps everything else.
   `defineApp().buildFrameworkWorker(host)` (`@lunora/svelte` is client/loader
   only). `ShardDO` and the migrations are declared in the adapter's
   `wrangler.jsonc`.
-- **Nuxt**: Nitro's `cloudflare-module` preset builds the Worker; Lunora is
-  composed into the Nitro server entry, with `ShardDO` exported from the same
-  module.
 - **Astro**: `@astrojs/cloudflare` builds the Worker; Lunora mounts under
-  `/_lunora/*` from the Astro middleware / server entry.
+  `/_lunora/*` from the composed server entry (`src/server.ts`) through
+  `withLunora`. See [Astro](/docs/frameworks/astro).
+
+Nuxt is not class B. The [`@lunora/nuxt`](/docs/frameworks/nuxt) module mounts
+Lunora inside Nitro as a server route instead. See
+[Bring your framework](/docs/frameworks/bring-your-framework#the-per-framework-matrix).
 
 The deploy command is still the framework's own build plus `wrangler deploy`. The
 one thing you must reconcile by hand for class B today is that the **Durable
@@ -111,9 +113,9 @@ the framework adapter's `wrangler.jsonc`, because the framework owns that file,
 not Lunora.
 
 <Callout type="warn">
-    **Status: be honest about the tier.** Class-A deploy (TanStack Start) is proven. Class-B composition (SvelteKit / Nuxt / Astro) is **preview**: the
-    templates and adapters exist, but the hook-injection and single-bundle deploy have not been run end-to-end in production. Treat the class-B steps above as
-    the intended shape, and verify against your framework's current Cloudflare adapter when you scaffold.
+    **Status: be honest about the tier.** Class-A deploy (TanStack Start) is proven. Class-B composition (SvelteKit / Astro) is **preview**: the templates and
+    adapters exist, but the hook-injection and single-bundle deploy have not been run end-to-end in production. Treat the class-B steps above as the intended
+    shape, and verify against your framework's current Cloudflare adapter when you scaffold.
 </Callout>
 
 ## Class C: SPA / SSR-less

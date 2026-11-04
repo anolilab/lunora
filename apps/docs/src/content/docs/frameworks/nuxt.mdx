@@ -21,13 +21,14 @@ app in-process. One `wrangler.jsonc`, one deploy, a same-origin client.
 Nuxt _is_ Vue, so the reactive layer is [`@lunora/vue`](/docs/frameworks/vue)
 (`useQuery`, `useMutation`, `hydratePreloaded`); `@lunora/nuxt` owns only the
 server-side composition. This is the Nuxt-specific companion to
-[Bring your framework](/docs/frameworks/bring-your-framework) (Nuxt is a
-**class-B** framework there) and
+[Bring your framework](/docs/frameworks/bring-your-framework) (Nuxt is not class B
+there, because Nitro does not expose its handler as an importable module) and
 [Reactive loaders](/docs/frameworks/reactive-loaders); for the full reference
 see [`@lunora/nuxt`](/docs/packages/nuxt).
 
 <Callout type="warn">
-    **Preview.** Class-B single-worker composition is preview maturity; run the [verify before deploy](#verify-before-deploy) checks below before shipping.
+    **Preview.** Single-worker composition through this module is preview maturity; run the [verify before deploy](#verify-before-deploy) checks below before
+    shipping.
 </Callout>
 
 ## Install

@@ -21,7 +21,7 @@ server-side seams Astro needs:
 1. **Single-worker composition.** `withLunora` wraps the worker
    `@astrojs/cloudflare` emits so Lunora realtime (`/_lunora/rpc`, `/_lunora/ws`,
    `/_lunora/admin/*`) mounts _inside_ it, and everything else falls through to
-   Astro's SSR handler. One worker, one deploy.
+   Astro's server-side rendering (SSR) handler. One worker, one deploy.
 2. **Reactive-loader server helpers.** The framework-neutral
    `@lunora/client/ssr` contract is re-exported from `@lunora/astro/server` for
    preloading queries in Astro endpoints / `.astro` frontmatter.
@@ -137,8 +137,8 @@ export default withLunora(
 ```
 
 <Callout type="info">
-    **Injection point (Astro 6 / `@astrojs/cloudflare` v13).** The adapter no longer emits a `dist/_worker.js` bundle as a custom-entry target. Import `handle`
-    from `@astrojs/cloudflare/handler` (the adapter's built-in SSR fetch function) and wrap it at that boundary, as above.
+    **Injection point (Astro 6+ / `@astrojs/cloudflare` v13+).** The adapter no longer emits a `dist/_worker.js` bundle as a custom-entry target. Import
+    `handle` from `@astrojs/cloudflare/handler` (the adapter's built-in SSR fetch function) and wrap it at that boundary, as above.
 </Callout>
 
 The factory runs once per `env` object, so its bindings wire in correctly and the

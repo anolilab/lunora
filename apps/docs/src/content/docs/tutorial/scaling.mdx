@@ -19,9 +19,9 @@ when the numbers say so.
 
 ## Know when to act
 
-A Durable Object holds up to **10 GB of SQLite** and sustains roughly **1 000
+A Durable Object holds up to **10 GiB of SQLite** and sustains roughly **1 000
 requests per second**. Lunora warns you well before either ceiling: when the
-`__root__` DO crosses 1 GB (10% of the storage limit), the runtime logs once per
+`__root__` Durable Object (DO) crosses 1 GiB (10% of the storage limit), the runtime logs once per
 DO lifetime.
 
 ```text
@@ -30,7 +30,7 @@ DO lifetime.
 before you hit the wall.
 ```
 
-The margin is deliberate: a sharding migration needs runway, and 9 GB of it is
+The margin is deliberate: a sharding migration needs runway, and 9 GiB of it is
 plenty.
 
 For the throughput side, `lunora insights` is the signal:
@@ -40,13 +40,13 @@ lunora insights
 ```
 
 Write-conflict hot-spots mean writers are contending. Read
-[OCC & atomicity](/docs/concepts/occ) before assuming that means sharding;
+[optimistic concurrency control (OCC) and atomicity](/docs/concepts/occ) before assuming that means sharding;
 a _persistent_ conflict is often a handler conflicting with itself. But
 contention spread across many callers is exactly what a shard key fixes.
 
 ## Step 1: shard the messages
 
-Our chat has one DO holding every channel's messages. Channels are independent
+The chat has one DO holding every channel's messages. Channels are independent
 (nobody reads two channels in one transaction), which makes `channelId` a natural
 shard key. That is the whole test for a good key: _what set of rows changes
 together?_

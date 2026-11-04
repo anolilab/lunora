@@ -7,7 +7,7 @@ Every framework is defined as much by what it refuses to do as by what it ships.
 This page states Lunora's deliberate boundaries plainly, so a gap you find in a
 feature comparison reads as an **intentional trade-off**, not a missing feature.
 
-Each boundary below follows the same shape: **what** we don't do, **why** it's a
+Each boundary below follows the same shape: **what** Lunora does not do, **why** it's a
 boundary, and the **escape hatch** for when your app genuinely needs past it. If
 you're weighing Lunora against Convex, Supabase, or Firebase, read this alongside
 [Architecture → Design decisions](/docs/architecture#design-decisions); the two
@@ -19,12 +19,12 @@ pages are the same argument from two angles.
 typed queries and mutations. There is no `SELECT … JOIN` you write by hand across
 arbitrary tables, and no connection to a central SQL database that owns your data.
 
-**Why.** The single-threaded DO is what buys strong consistency, an authoritative
+**Why.** The single-threaded Durable Object (DO) is what buys strong consistency, an authoritative
 op-log, and real-time fan-out without a process hop; see
 [Durable Objects as the database](/docs/architecture#durable-objects-as-the-database-not-d1-as-truth).
 Opening the store to arbitrary SQL would mean giving up the serialized cut those
 guarantees rest on, and routing every join through a query planner Lunora would
-then have to own. Typed RPC keeps RLS, validators, and the reactive engine in the
+then have to own. Typed RPC keeps row-level security (RLS), validators, and the reactive engine in the
 path of every read; raw SQL would route around all three.
 
 **Escape hatch.** When you genuinely need raw SQL against an existing relational
@@ -66,7 +66,7 @@ island, and there is no cross-shard transaction and no cross-shard live join.
 <TypeTable
     type={{
         "Single-DO write": {
-            type: "Serializable (OCC)",
+            type: "Serializable (optimistic concurrency control, OCC)",
             description:
                 "A mutation runs inside blockConcurrencyWhile + one storage transaction; the DO serializes writes, so the commit order is the consistency cut. All-or-nothing on eviction, never a half-written row.",
         },
@@ -172,7 +172,7 @@ A few smaller boundaries, most of them covered in depth on
 ## See also
 
 - [Architecture](/docs/architecture): the topology and the design decisions these
-  boundaries fall out of, each stated as what-we-chose / why / what-it-costs.
+  boundaries fall out of, each stated as what was chosen / why / what it costs.
 - [Sharding](/docs/concepts/sharding): the `__root__` → `.shardBy()` → `.global()`
   progression that the cross-shard boundary lives on.
 - [`@lunora/hyperdrive`](/docs/packages/hyperdrive): the BYO external-SQL escape

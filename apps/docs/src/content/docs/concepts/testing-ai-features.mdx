@@ -95,7 +95,7 @@ dev server opens a remote session for that binding at boot, and the session need
 Cloudflare credentials. Without them, `lunora dev` and `vite dev` leave the
 binding out and print a warning instead of failing to boot:
 
-- **Locally** it usually just works: a `wrangler login` is stored under `HOME`,
+- **Locally** it usually works: a `wrangler login` is stored under `HOME`,
   which the runner passes through, and the binding stays on.
 - **In CI**, or anywhere without a login, the app still boots. Models from
   `LUNORA_AI_PROXY_URL` and AI SDK providers keep working, and only `@cf/…`

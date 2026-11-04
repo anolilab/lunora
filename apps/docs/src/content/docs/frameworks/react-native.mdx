@@ -177,7 +177,7 @@ client-side id through `@tanstack/db`'s `safeRandomUUID`, which needs
 `crypto.randomUUID` or `crypto.getRandomValues`. Hermes ships **neither**.
 Without the polyfill `@lunora/db` throws at setup naming this; before that guard
 existed the first write failed as an unhandled promise rejection with
-`No secure random number generator available` — no UI error, the row simply
+`No secure random number generator available` — no UI error, and the row
 never appeared.
 
 </Callout>

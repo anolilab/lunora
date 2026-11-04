@@ -11,7 +11,7 @@ related:
 
 `@lunora/notify` adds multi-channel notifications, wrapping the
 [`@visulima/notification`](https://visulima.com/packages/notification) engine.
-**Web Push** and **FCM** come first, alongside chat, in-app inbox, and webhook
+**Web Push** and **Firebase Cloud Messaging (FCM)** come first, alongside chat, in-app inbox, and webhook
 channels; both are edge-safe under workerd (`fetch` + Web Crypto, no `node:*`).
 It exposes two facades on the function context:
 
@@ -19,8 +19,8 @@ It exposes two facades on the function context:
 - `ctx.push`: the device-push sub-facade (`register`, `send`, `broadcast`, `list`, `unregister`).
 
 <Callout type="info">
-    APNs (`node:http2`) and SMS, plus the BullMQ / pg-boss / SQS queue adapters, are Node-only and are **not** wired into the edge facade. Route heavy fan-out
-    or those channels through [`@lunora/queue`](/docs/packages/queue) instead.
+    Apple Push Notification service (APNs) over `node:http2`, SMS, plus the BullMQ / pg-boss / SQS queue adapters, are Node-only and are **not** wired into the
+    edge facade. Route heavy fan-out or those channels through [`@lunora/queue`](/docs/packages/queue) instead.
 </Callout>
 
 ## Configure `defineNotify`
@@ -44,7 +44,7 @@ export default defineNotify({
 ## VAPID / FCM config via `.dev.vars`
 
 `lunora dev` scaffolds these keys into `.dev.vars` from `@lunora/config`'s
-package-secrets registry — only for the channels `defineNotify` configures. Generate a VAPID keypair once with
+package-secrets registry — only for the channels `defineNotify` configures. Generate a Voluntary Application Server Identification (VAPID) keypair once with
 `npx web-push generate-vapid-keys`:
 
 ```
