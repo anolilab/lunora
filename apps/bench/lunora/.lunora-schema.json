@@ -1,6 +1,968 @@
 {
   "migrationIds": [],
   "tables": {
+    "agent_approval_grants": {
+      "commitOrdered": false,
+      "fields": {
+        "agent": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "threadKey": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "toolName": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byThreadAgentTool": {
+          "fields": [
+            "threadKey",
+            "agent",
+            "toolName"
+          ],
+          "unique": true
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root",
+      "refinementsRecorded": true
+    },
+    "agent_edges": {
+      "commitOrdered": false,
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "dstName": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "label": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "messageKey": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "owner": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "srcName": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "weight": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byOwnerDst": {
+          "fields": [
+            "owner",
+            "dstName"
+          ],
+          "unique": false
+        },
+        "byOwnerSrc": {
+          "fields": [
+            "owner",
+            "srcName"
+          ],
+          "unique": false
+        },
+        "byTriple": {
+          "fields": [
+            "owner",
+            "srcName",
+            "label",
+            "dstName"
+          ],
+          "unique": true
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root",
+      "refinementsRecorded": true
+    },
+    "agent_entities": {
+      "commitOrdered": false,
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "firstMessageKey": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "owner": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "type": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "weight": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byOwnerName": {
+          "fields": [
+            "owner",
+            "name"
+          ],
+          "unique": true
+        },
+        "byOwnerUpdatedAt": {
+          "fields": [
+            "owner",
+            "updatedAt"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root",
+      "refinementsRecorded": true
+    },
+    "agent_episodes": {
+      "commitOrdered": false,
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "messageKey": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "owner": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "summary": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "threadKey": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byOwnerCreatedAt": {
+          "fields": [
+            "owner",
+            "createdAt"
+          ],
+          "unique": false
+        },
+        "byOwnerMessageKey": {
+          "fields": [
+            "owner",
+            "messageKey"
+          ],
+          "unique": true
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root",
+      "refinementsRecorded": true
+    },
+    "agent_messages": {
+      "commitOrdered": false,
+      "fields": {
+        "approvalAgent": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "approvalScope": {
+          "kind": "literal",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "literal": "\"thread\""
+        },
+        "content": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "expiresAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "messageKey": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "role": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"assistant\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"system\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"tool\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"user\""
+            }
+          ]
+        },
+        "seq": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "status": {
+          "kind": "union",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"approved\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"awaiting_approval\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"awaiting_secret\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"rejected\""
+            }
+          ]
+        },
+        "stepName": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "threadKey": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "toolCallId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "toolCalls": {
+          "kind": "array",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "of": {
+            "kind": "object",
+            "nullable": false,
+            "optional": false,
+            "unique": false,
+            "fields": {
+              "id": {
+                "kind": "string",
+                "nullable": false,
+                "optional": false,
+                "unique": false
+              },
+              "input": {
+                "kind": "any",
+                "nullable": false,
+                "optional": false,
+                "unique": false
+              },
+              "name": {
+                "kind": "string",
+                "nullable": false,
+                "optional": false,
+                "unique": false
+              }
+            }
+          }
+        },
+        "toolName": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byMessageKey": {
+          "fields": [
+            "threadKey",
+            "messageKey"
+          ],
+          "unique": true
+        },
+        "byThread": {
+          "fields": [
+            "threadKey",
+            "seq"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root",
+      "refinementsRecorded": true
+    },
+    "agent_run_queue": {
+      "commitOrdered": false,
+      "fields": {
+        "agent": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "enqueuedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "instanceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "position": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "threadKey": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byThread": {
+          "fields": [
+            "threadKey",
+            "position"
+          ],
+          "unique": false
+        },
+        "byThreadInstance": {
+          "fields": [
+            "threadKey",
+            "instanceId"
+          ],
+          "unique": true
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root",
+      "refinementsRecorded": true
+    },
+    "agent_secret_requests": {
+      "commitOrdered": false,
+      "fields": {
+        "callId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "consumerTool": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "expiresAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "instanceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "label": {
+          "kind": "string",
+          "nullable": true,
+          "optional": true,
+          "unique": false
+        },
+        "ref": {
+          "kind": "string",
+          "nullable": true,
+          "optional": true,
+          "unique": false
+        },
+        "status": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"consumed\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"declined\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"expired\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"pending\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"supplied\""
+            }
+          ]
+        },
+        "threadKey": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "toolCallId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "toolName": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byThreadCall": {
+          "fields": [
+            "threadKey",
+            "toolCallId"
+          ],
+          "unique": true
+        },
+        "byThreadCallId": {
+          "fields": [
+            "threadKey",
+            "callId"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root",
+      "refinementsRecorded": true
+    },
+    "agent_threads": {
+      "commitOrdered": false,
+      "fields": {
+        "agent": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "completedInstanceId": {
+          "kind": "string",
+          "nullable": true,
+          "optional": true,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "error": {
+          "kind": "string",
+          "nullable": true,
+          "optional": true,
+          "unique": false
+        },
+        "instanceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "key": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "messageCount": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "owner": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "state": {
+          "kind": "any",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "status": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"awaiting_input\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"cancelled\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"error\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"idle\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"running\""
+            }
+          ]
+        },
+        "summary": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "summaryConfig": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "summaryRebuiltSeq": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "summaryThroughSeq": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "title": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "usage": {
+          "kind": "object",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "fields": {
+            "cacheReadTokens": {
+              "kind": "number",
+              "nullable": false,
+              "optional": true,
+              "unique": false
+            },
+            "cacheWriteTokens": {
+              "kind": "number",
+              "nullable": false,
+              "optional": true,
+              "unique": false
+            },
+            "inputTokens": {
+              "kind": "number",
+              "nullable": false,
+              "optional": true,
+              "unique": false
+            },
+            "outputTokens": {
+              "kind": "number",
+              "nullable": false,
+              "optional": true,
+              "unique": false
+            },
+            "reasoningTokens": {
+              "kind": "number",
+              "nullable": false,
+              "optional": true,
+              "unique": false
+            },
+            "status": {
+              "kind": "union",
+              "nullable": false,
+              "optional": true,
+              "unique": false,
+              "members": [
+                {
+                  "kind": "literal",
+                  "nullable": false,
+                  "optional": false,
+                  "unique": false,
+                  "literal": "\"complete\""
+                },
+                {
+                  "kind": "literal",
+                  "nullable": false,
+                  "optional": false,
+                  "unique": false,
+                  "literal": "\"partial\""
+                },
+                {
+                  "kind": "literal",
+                  "nullable": false,
+                  "optional": false,
+                  "unique": false,
+                  "literal": "\"unavailable\""
+                }
+              ]
+            },
+            "totalTokens": {
+              "kind": "number",
+              "nullable": false,
+              "optional": true,
+              "unique": false
+            }
+          }
+        }
+      },
+      "indexes": {
+        "byAgent": {
+          "fields": [
+            "agent"
+          ],
+          "unique": false
+        },
+        "byInstance": {
+          "fields": [
+            "instanceId"
+          ],
+          "unique": false
+        },
+        "byKey": {
+          "fields": [
+            "key"
+          ],
+          "unique": true
+        },
+        "byOwnerStatus": {
+          "fields": [
+            "owner",
+            "status",
+            "updatedAt"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root",
+      "refinementsRecorded": true
+    },
+    "checkout_holds": {
+      "commitOrdered": false,
+      "fields": {
+        "expiresAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "priceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "referenceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "url": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byReference": {
+          "fields": [
+            "referenceId"
+          ],
+          "unique": true
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "root"
+    },
+    "notifications": {
+      "commitOrdered": false,
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "kind": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "readAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "subjectId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byOrgCreatedAt": {
+          "fields": [
+            "organizationId",
+            "createdAt"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "shardBy:organizationId"
+    },
     "payment_customers": {
       "commitOrdered": false,
       "fields": {
@@ -52,7 +1014,8 @@
       },
       "memory": false,
       "relations": {},
-      "shardMode": "root"
+      "shardMode": "root",
+      "refinementsRecorded": true
     },
     "payment_events": {
       "commitOrdered": false,
@@ -93,7 +1056,8 @@
       },
       "memory": false,
       "relations": {},
-      "shardMode": "root"
+      "shardMode": "root",
+      "refinementsRecorded": true
     },
     "payment_sessions": {
       "commitOrdered": false,
@@ -102,13 +1066,15 @@
           "kind": "number",
           "nullable": false,
           "optional": false,
-          "unique": false
+          "unique": false,
+          "refined": true
         },
         "capturedMinor": {
           "kind": "number",
           "nullable": false,
           "optional": false,
-          "unique": false
+          "unique": false,
+          "refined": true
         },
         "createdAt": {
           "kind": "number",
@@ -144,7 +1110,8 @@
           "kind": "number",
           "nullable": false,
           "optional": false,
-          "unique": false
+          "unique": false,
+          "refined": true
         },
         "revision": {
           "kind": "number",
@@ -195,7 +1162,8 @@
       },
       "memory": false,
       "relations": {},
-      "shardMode": "root"
+      "shardMode": "root",
+      "refinementsRecorded": true
     },
     "payment_subscriptions": {
       "commitOrdered": false,
@@ -304,11 +1272,18 @@
             "referenceId"
           ],
           "unique": false
+        },
+        "by_state": {
+          "fields": [
+            "state"
+          ],
+          "unique": false
         }
       },
       "memory": false,
       "relations": {},
-      "shardMode": "root"
+      "shardMode": "root",
+      "refinementsRecorded": true
     },
     "payment_usageEvents": {
       "commitOrdered": false,
@@ -388,7 +1363,8 @@
       },
       "memory": false,
       "relations": {},
-      "shardMode": "root"
+      "shardMode": "root",
+      "refinementsRecorded": true
     },
     "presence_present": {
       "commitOrdered": false,
@@ -429,6 +1405,12 @@
           "optional": false,
           "unique": false
         },
+        "tenantId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
         "userId": {
           "kind": "string",
           "nullable": false,
@@ -437,8 +1419,9 @@
         }
       },
       "indexes": {
-        "byRoomSession": {
+        "byTenantRoomSession": {
           "fields": [
+            "tenantId",
             "roomId",
             "sessionId"
           ],
@@ -447,7 +1430,11 @@
       },
       "memory": false,
       "relations": {},
-      "shardMode": "root"
+      "shardMode": "root",
+      "ttl": {
+        "after": 30000,
+        "field": "lastSeen"
+      }
     },
     "ratelimit_buckets": {
       "commitOrdered": false,
@@ -677,6 +1664,247 @@
             "slug"
           ],
           "unique": true
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "shardBy:organizationId"
+    },
+    "taskComments": {
+      "commitOrdered": false,
+      "fields": {
+        "authorId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "body": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "editedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "taskId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "tasks"
+        }
+      },
+      "indexes": {
+        "byTask": {
+          "fields": [
+            "organizationId",
+            "taskId",
+            "createdAt"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "shardBy:organizationId"
+    },
+    "tasks": {
+      "commitOrdered": false,
+      "fields": {
+        "assigneeId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdBy": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "description": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "dueAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "estimate": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "labels": {
+          "kind": "array",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "of": {
+            "kind": "string",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          }
+        },
+        "organizationId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "priority": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"high\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"low\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"normal\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"urgent\""
+            }
+          ]
+        },
+        "projectId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "ref": "saas_projects"
+        },
+        "status": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"archived\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"doing\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"done\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"review\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"todo\""
+            }
+          ]
+        },
+        "title": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byOrgAssignee": {
+          "fields": [
+            "organizationId",
+            "assigneeId",
+            "dueAt"
+          ],
+          "unique": false
+        },
+        "byOrgProject": {
+          "fields": [
+            "organizationId",
+            "projectId",
+            "createdAt"
+          ],
+          "unique": false
+        },
+        "byOrgStatus": {
+          "fields": [
+            "organizationId",
+            "status",
+            "updatedAt"
+          ],
+          "unique": false
         }
       },
       "memory": false,

@@ -54,12 +54,11 @@ export interface OrgCaller {
 /**
  * The caller's tenant from the verified identity claim — never from an argument.
  *
- * A query or mutation must also run on that tenant's shard: `authorizeShard`
- * admits the root shard too (for `saas.me` and billing), and a tenant read there
- * sees none of its rows while a write lands where nothing reads it. Actions carry
- * no `shardKey`; the functions they dispatch to check it themselves.
+ * The call must also run on that tenant's shard: `authorizeShard` admits the
+ * root shard too (for `saas.me` and billing), and a tenant read there sees none
+ * of its rows while a write lands where nothing reads it.
  */
-export const requireOrg = async (ctx: Pick<QueryContext, "auth"> & { shardKey?: string }): Promise<OrgCaller> => {
+export const requireOrg = async (ctx: Pick<QueryContext, "auth" | "shardKey">): Promise<OrgCaller> => {
     const { userId } = ctx.auth;
 
     if (!userId) {
@@ -73,14 +72,14 @@ export const requireOrg = async (ctx: Pick<QueryContext, "auth"> & { shardKey?: 
         throw new LunoraError("UNPROCESSABLE", "no active organization");
     }
 
-    if (ctx.shardKey !== undefined && ctx.shardKey !== organizationId) {
+    if (ctx.shardKey !== organizationId) {
         throw new LunoraError("FORBIDDEN", "call this on the active organization's shard ({ shardKey: organizationId })");
     }
 
     return { organizationId, orgRole: typeof identity["orgRole"] === "string" ? identity["orgRole"] : undefined, userId };
 };
 
-export const requireWriter = async (ctx: Pick<MutationContext, "auth"> & { shardKey?: string }): Promise<OrgCaller> => {
+export const requireWriter = async (ctx: Pick<MutationContext, "auth" | "shardKey">): Promise<OrgCaller> => {
     const caller = await requireOrg(ctx);
 
     if (!hasRole(caller.orgRole, WRITER_ROLES)) {
