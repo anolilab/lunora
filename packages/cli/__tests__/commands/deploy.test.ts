@@ -270,15 +270,10 @@ describe("lunora deploy", () => {
             // celld has no secret store, so every required secret (the core admin token and
             // the push/mail keys this app declares) has to be carried as a plain `vars` entry.
             const CELLD_VARS = Object.fromEntries(
-                [
-                    "LUNORA_ADMIN_TOKEN",
-                    "LUNORA_RELAY_SECRET",
-                    "FCM_PROJECT_ID",
-                    "FCM_ACCESS_TOKEN",
-                    "VAPID_PUBLIC_KEY",
-                    "VAPID_PRIVATE_KEY",
-                    "VAPID_SUBJECT",
-                ].map((key) => [key, "set"]),
+                ["LUNORA_ADMIN_TOKEN", "LUNORA_RELAY_SECRET", "FCM_SERVICE_ACCOUNT", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"].map((key) => [
+                    key,
+                    "set",
+                ]),
             );
             const CELLD_WRANGLER = JSON.stringify({ ...JSON.parse(VALID_WRANGLER), vars: CELLD_VARS });
 

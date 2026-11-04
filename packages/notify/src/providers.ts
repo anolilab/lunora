@@ -10,6 +10,7 @@ import { createWebPushProvider } from "@visulima/notification/providers/web-push
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { SsrfResolution } from "../../../shared/ssrf-resolve";
 import { resolveHostSsrf } from "../../../shared/ssrf-resolve";
+import { assertPushPayloadFits } from "./payload-size";
 import { isGoneError } from "./subscriptions/normalize";
 
 /**
@@ -632,6 +633,11 @@ export const routingPushProvider = (options: RoutingPushOptions): Provider<unkno
                 // no `fcm` channel is configured" for a send naming no recipient.
                 throw new LunoraError("BAD_REQUEST", "@lunora/notify: push send has no recipients — `to` is an empty array");
             }
+
+            // Before any group is sent: a mixed `to` must not deliver one transport and then
+            // reject the other for an oversize body. Applies to every target, Web Push included,
+            // so `notify.send()` cannot skip the guard that `push.send` and `broadcast` enforce.
+            assertPushPayloadFits(payload);
 
             const endpoints = targets.map((entry) => webPushEndpoint(entry));
 

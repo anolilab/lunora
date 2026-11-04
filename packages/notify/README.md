@@ -17,7 +17,7 @@ import { defineNotify, webPushFromEnv, fcmFromEnv, d1SubscriptionStore } from "@
 
 export default defineNotify({
     webPush: (env) => webPushFromEnv(env), // reads VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT
-    fcm: (env) => fcmFromEnv(env), // reads FCM_PROJECT_ID / FCM_ACCESS_TOKEN (prefer a getAccessToken in prod)
+    fcm: (env) => fcmFromEnv(env), // reads FCM_SERVICE_ACCOUNT (+ optional FCM_PROJECT_ID)
     store: (env) => d1SubscriptionStore(env.DB),
 });
 ```
@@ -28,9 +28,13 @@ export default defineNotify({
 VAPID_PUBLIC_KEY=<your-vapid-public-key>
 VAPID_PRIVATE_KEY=<your-vapid-private-key>
 VAPID_SUBJECT=mailto:you@example.com
-FCM_PROJECT_ID=<your-firebase-project-id>
-FCM_ACCESS_TOKEN=<your-fcm-access-token>
+FCM_SERVICE_ACCOUNT=<base64-of-your-service-account-key-json>
 ```
+
+`.dev.vars` cannot hold the JSON's quotes, so store the key file base64-encoded:
+`lunora env set FCM_SERVICE_ACCOUNT "$(base64 < key.json | tr -d '\n')"`. In production
+the raw JSON works too: `wrangler secret put FCM_SERVICE_ACCOUNT < key.json`.
+`FCM_PROJECT_ID` is optional and overrides the key file's `project_id`.
 
 Generate a VAPID keypair once: `npx web-push generate-vapid-keys`.
 

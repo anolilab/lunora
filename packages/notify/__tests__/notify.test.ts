@@ -157,6 +157,18 @@ describe("ctx.push lifecycle", () => {
         expect(sends).toHaveLength(0);
     });
 
+    it("rejects an oversize payload with PAYLOAD_TOO_LARGE before any provider is contacted", async () => {
+        expect.hasAssertions();
+
+        const { push, sends } = setup();
+        const stored = await push.register({ subscription: okSub });
+        const body = "x".repeat(5000);
+
+        await expect(push.send(stored.id, { body })).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
+        await expect(push.broadcast({ body })).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
+        expect(sends).toHaveLength(0);
+    });
+
     it("unregisters the caller's own subscription", async () => {
         expect.hasAssertions();
 
@@ -1694,5 +1706,26 @@ describe("push circuit-breaker scope", () => {
         const errors = receipt?.successful === false ? receipt.errorMessages.join(" ") : "";
 
         expect(errors).toContain("partially delivered");
+    });
+});
+
+describe("push router payload size", () => {
+    it("rejects a mixed-kind send before either transport is contacted", async () => {
+        expect.hasAssertions();
+
+        const webPush = mockPushProvider();
+        const fcm = mockPushProvider();
+        const router = routingPushProvider({
+            allowedPushOrigins: ["https://push.example.test"],
+            fcm: fcm.provider,
+            webPush: webPush.provider,
+        });
+        const webPushTarget = JSON.stringify({ endpoint: "https://push.example.test/p/1", keys: { auth: "a", p256dh: "p" } });
+
+        await expect(router.send({ body: "x".repeat(5000), to: [webPushTarget, "device-token-xyz"] })).rejects.toMatchObject({
+            code: "PAYLOAD_TOO_LARGE",
+        });
+        expect(webPush.sends).toHaveLength(0);
+        expect(fcm.sends).toHaveLength(0);
     });
 });

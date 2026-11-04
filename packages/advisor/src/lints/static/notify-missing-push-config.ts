@@ -23,7 +23,7 @@ const notifyMissingPushConfig: Lint = {
     level: "WARN",
     name: "notify_missing_push_config",
     remediation:
-        "In `lunora/notify.ts`, wire a push channel: `defineNotify({ webPush: (env) => webPushFromEnv(env) })` and set `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` in `.dev.vars` (or configure `fcm` with `FCM_PROJECT_ID`). Generate a VAPID keypair with `npx web-push generate-vapid-keys`.",
+        "In `lunora/notify.ts`, wire a push channel: `defineNotify({ webPush: (env) => webPushFromEnv(env) })` and set `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` in `.dev.vars` (or configure `fcm` with `FCM_SERVICE_ACCOUNT`). Generate a VAPID keypair with `npx web-push generate-vapid-keys`.",
     run: (context) => {
         const config = context.notifyConfig;
 
