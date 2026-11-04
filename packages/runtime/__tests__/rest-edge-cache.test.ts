@@ -262,6 +262,34 @@ describe("the cache key", () => {
         await expect(edge?.lookup(get({ url: "https://api.example.com/_lunora/rest/messages/list?limit=20" }), context)).resolves.toBeUndefined();
     });
 
+    it("shares one entry between query strings that differ only in parameter order", async () => {
+        expect.assertions(1);
+
+        const { cache } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const request = get({ url: "https://api.example.com/_lunora/rest/messages/list?a=1&b=2" });
+
+        edge?.store(applyRestCache(Response.json({}), publicCache, request, context), request, context);
+        await settled();
+
+        await expect(edge?.lookup(get({ url: "https://api.example.com/_lunora/rest/messages/list?b=2&a=1" }), context)).resolves.toBeDefined();
+    });
+
+    it("keeps a repeated parameter's value order in the key, since the last value is the arg", async () => {
+        expect.assertions(1);
+
+        const { cache } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const request = get({ url: "https://api.example.com/_lunora/rest/messages/list?a=1&a=2" });
+
+        edge?.store(applyRestCache(Response.json({}), publicCache, request, context), request, context);
+        await settled();
+
+        await expect(edge?.lookup(get({ url: "https://api.example.com/_lunora/rest/messages/list?a=2&a=1" }), context)).resolves.toBeUndefined();
+    });
+
     it("ignores a caller-supplied copy of the reserved parameter rather than keying on it", async () => {
         expect.assertions(2);
 

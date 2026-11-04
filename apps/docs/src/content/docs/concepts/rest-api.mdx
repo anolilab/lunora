@@ -211,6 +211,8 @@ Cloudflare's cache honours `Vary` for `Accept-Encoding` only, so Lunora does not
 delegate it: every header the policy varies on — including `x-lunora-shard-key`
 and `x-d1-bookmark`, which select _which_ data a request sees — is folded into the
 cache key itself. Two requests that differ on any of them can never share an entry.
+Query parameter order is not part of the key: `?a=1&b=2` and `?b=2&a=1` are the
+same call and share one entry.
 
 Only a `200` is stored, and a response carrying `Set-Cookie` is skipped. So is a
 response advertising a `Vary` header the key does not fence on — a procedure that

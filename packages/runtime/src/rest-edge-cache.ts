@@ -204,6 +204,11 @@ const restEdgeCacheFor = (policy: RestCachePolicy | undefined, edgeCache: HttpCa
         const url = new URL(request.url);
 
         url.searchParams.delete(VARY_KEY_PARAM);
+        // Procedure args are read by name, so `?a=1&b=2` and `?b=2&a=1` are the
+        // same call and must share one entry. The sort is stable: a repeated name
+        // keeps its values' relative order, which matters because the last one
+        // is the arg (`argsFromQuery`), so `?a=1&a=2` and `?a=2&a=1` stay apart.
+        url.searchParams.sort();
 
         const deploymentId = deploymentIdOf(env);
         const segments = fenced.map((name) => `${name}=${request.headers.get(name) ?? ""}`);
