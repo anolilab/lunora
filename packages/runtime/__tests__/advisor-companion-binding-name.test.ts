@@ -26,7 +26,7 @@ describe("advisor companion binding name", () => {
     it("is the binding the runtime route forwards to", async () => {
         expect.assertions(2);
 
-        const companionFetch = vi.fn(async (_request: Request) => new Response("{}", { status: 200 }));
+        const companionFetch = vi.fn<(request: Request) => Promise<Response>>(async () => new Response("{}", { status: 200 }));
         const worker = createWorker({
             adminToken: "t",
             shardDO: {

@@ -27,7 +27,7 @@ const request = (options: { method?: string; token?: boolean } = {}): Request =>
     });
 
 const setup = () => {
-    const companionFetch = vi.fn(async (_request: Request) => new Response('{"procedures":[]}', { status: 200 }));
+    const companionFetch = vi.fn<(request: Request) => Promise<Response>>(async () => new Response('{"procedures":[]}', { status: 200 }));
 
     return { companionFetch, env: { ADVISOR_COMPANION: { fetch: companionFetch } }, worker: createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace }) };
 };
@@ -121,7 +121,7 @@ describe("createWorker — advisor companion route", () => {
     it("forwards for a caller the adminGate admits without the root bearer (Access / named-token path)", async () => {
         expect.assertions(2);
 
-        const companionFetch = vi.fn(async (_request: Request) => new Response('{"procedures":[]}', { status: 200 }));
+        const companionFetch = vi.fn<(request: Request) => Promise<Response>>(async () => new Response('{"procedures":[]}', { status: 200 }));
         const worker = createWorker({ adminGate: () => true, adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
         const response = await worker.fetch(request({ token: false }), { ADVISOR_COMPANION: { fetch: companionFetch } }, fakeContext);
 
