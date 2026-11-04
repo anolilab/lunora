@@ -2090,6 +2090,7 @@ interface AssertWranglerOptions {
 
 ```ts
 interface AssetHeadersOptions {
+    immutableDirectory?: string;
     securityHeaders: boolean;
 }
 ```

@@ -101,7 +101,8 @@ A few things differ from the Worker's layer:
 - **No CORS headers.** Static files are served to your own origin.
 - **Code options do not reach it.** The build cannot see the `security` you pass
   to `createWorker`. Setting `LUNORA_SECURITY_HEADERS` to `off` in wrangler
-  `vars` (top level, or the `env.<name>` block you build for) drops the block. To
+  `vars` (top level, or the `env.<name>` block you build for) drops these headers
+  from the block. To
   change one header for assets, set it in your own `public/_headers`.
 
 Your own rules in `public/_headers` are kept as written. The managed block goes

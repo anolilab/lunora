@@ -54,7 +54,25 @@ const SECURITY_HEADERS: ReadonlyArray<readonly [string, string]> = [
     ["Content-Security-Policy", htmlCspFor(DEFAULT_FRAME_OPTIONS)],
 ];
 
+/**
+ * For fingerprinted build output: a file whose name changes with its content can
+ * be cached for good. Cloudflare's default for an asset is `public, max-age=0,
+ * must-revalidate`, which costs a revalidation round-trip per chunk on every
+ * navigation; a `_headers` value replaces it.
+ */
+const IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
+
 interface AssetHeadersOptions {
+    /**
+     * The directory, relative to the assets root, that holds only content-hashed
+     * files (Vite's `build.assetsDir`). Its files get {@link IMMUTABLE_CACHE_CONTROL}.
+     * Omit it when that cannot be promised: one unhashed file there would be
+     * cached for a year. Omit it too when `not_found_handling` is a fallback
+     * (`single-page-application`, `404-page`): `_headers` matches the request
+     * path, so a request for a chunk a later deploy removed would get the
+     * fallback page with this policy, and keep it for a year.
+     */
+    immutableDirectory?: string;
     /** Write the default security headers for `/*`. `false` when the deployment opted out (`LUNORA_SECURITY_HEADERS=off`). */
     securityHeaders: boolean;
 }
@@ -128,6 +146,60 @@ const userHeaderNames = (lines: ReadonlyArray<string>): Set<string> => {
     return names;
 };
 
+/** The path part of a `_headers` rule, which may be an absolute `https://host/path` URL. */
+const rulePath = (rule: string): string => {
+    if (!rule.startsWith("https://")) {
+        return rule;
+    }
+
+    const slash = rule.indexOf("/", "https://".length);
+
+    return slash === -1 ? "/" : rule.slice(slash);
+};
+
+/**
+ * Whether `rule` could match a request for some file under `/<directory>/`: each
+ * directory segment must be equal, a `:placeholder` (one segment) or a splat
+ * (the rest), and anything past the directory names some file in it.
+ */
+const ruleReaches = (rule: string, directory: string): boolean => {
+    const ruleSegments = rulePath(rule).split("/").slice(1);
+    const directorySegments = directory.split("/");
+
+    for (const [index, segment] of ruleSegments.entries()) {
+        const expected = directorySegments[index];
+
+        if (segment.includes("*") || expected === undefined) {
+            return true;
+        }
+
+        if (!segment.startsWith(":") && segment !== expected) {
+            return false;
+        }
+    }
+
+    return false;
+};
+
+/**
+ * Whether a user rule that sets `Cache-Control` could match a file under
+ * `/<directory>/`. Only then would Cloudflare comma-join it with the immutable
+ * rule; a user policy for `/img/*` leaves the hashed directory alone.
+ */
+const userCachesUnder = (lines: ReadonlyArray<string>, directory: string): boolean => {
+    let rule: string | undefined;
+
+    for (const line of lines) {
+        if (isRuleLine(line)) {
+            rule = line.trim();
+        } else if (rule !== undefined && isIndented(line) && line.trim().toLowerCase().startsWith("cache-control:") && ruleReaches(rule, directory)) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
 const renderBlock = (rules: ReadonlyArray<HeaderRule>): string[] => [
     BEGIN_MARKER,
     ...rules.flatMap((rule) => [rule.path, ...rule.headers.map(([name, value]) => `  ${name}: ${value}`)]),
@@ -162,6 +234,20 @@ const mergeAssetHeaders = (
 
         if (headers.length > 0) {
             rules.push({ headers, path: "/*" });
+        }
+    }
+
+    const immutable = options.immutableDirectory
+        ?.replaceAll("\\", "/")
+        .split("/")
+        .filter((segment) => segment !== "" && segment !== ".")
+        .join("/");
+
+    if (immutable !== undefined && immutable !== "") {
+        if (userCachesUnder(user, immutable)) {
+            deferred.push("Cache-Control");
+        } else {
+            rules.push({ headers: [["Cache-Control", IMMUTABLE_CACHE_CONTROL]], path: `/${immutable}/*` });
         }
     }
 

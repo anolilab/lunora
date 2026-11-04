@@ -12,7 +12,11 @@ let projectRoot: string;
 const options = (target = "cloudflare"): ResolvedLunoraPluginOptions => ({ projectRoot, target }) as ResolvedLunoraPluginOptions;
 
 /** Drive the plugin through the two hooks a client build calls, with the given plugin names in the resolved config. */
-const build = (plugin: ReturnType<typeof assetHeadersPlugin>, pluginNames: string[]): { info: ReturnType<typeof vi.fn<(message: string) => void>> } => {
+const build = (
+    plugin: ReturnType<typeof assetHeadersPlugin>,
+    pluginNames: string[],
+    buildConfig: Record<string, unknown> = {},
+): { info: ReturnType<typeof vi.fn<(message: string) => void>> } => {
     const info = vi.fn<(message: string) => void>();
     const logger = { info, warn: vi.fn<(message: string) => void>() };
 
@@ -21,7 +25,16 @@ const build = (plugin: ReturnType<typeof assetHeadersPlugin>, pluginNames: strin
             return { name };
         }),
     });
-    (plugin.writeBundle as (this: unknown) => void).call({ environment: { config: { build: { outDir: "dist/client" }, logger, root: projectRoot } } });
+    (plugin.writeBundle as (this: unknown) => void).call({
+        environment: {
+            config: {
+                build: { assetsDir: "assets", outDir: "dist/client", rolldownOptions: {}, ...buildConfig },
+                logger,
+                publicDir: join(projectRoot, "public"),
+                root: projectRoot,
+            },
+        },
+    });
 
     return { info };
 };
@@ -76,12 +89,90 @@ describe(assetHeadersPlugin, () => {
     });
 
     it("leaves the security headers out when wrangler vars turn LUNORA_SECURITY_HEADERS off", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         writeFileSync(join(projectRoot, "wrangler.jsonc"), '{ "name": "app", "vars": { "LUNORA_SECURITY_HEADERS": "off" } }\n', "utf8");
 
         build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
 
-        expect(existsSync(headersFile())).toBe(false);
+        const text = readFileSync(headersFile(), "utf8");
+
+        expect(text).not.toContain("X-Frame-Options");
+        // Caching is not a security layer, so the opt-out leaves it on.
+        expect(text).toContain("/assets/*\n  Cache-Control: public, max-age=31536000, immutable");
+    });
+
+    it("caches Vite's hashed assets directory for good", () => {
+        expect.assertions(1);
+
+        build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"], { assetsDir: "static" });
+
+        expect(readFileSync(headersFile(), "utf8")).toContain("/static/*\n  Cache-Control: public, max-age=31536000, immutable\n");
+    });
+
+    it.each([
+        ["an output name has no [hash]", { rolldownOptions: { output: { assetFileNames: "assets/[name][extname]" } } }],
+        [
+            "Vite 6/7's rollupOptions names an output without [hash]",
+            { rolldownOptions: undefined, rollupOptions: { output: { entryFileNames: "assets/[name].js" } } },
+        ],
+        ["an output name is a function", { rolldownOptions: { output: [{ chunkFileNames: () => "assets/chunk.js" }] } }],
+        ["the assets sit at the root", { assetsDir: "" }],
+    ])("writes no immutable rule when %s", (_reason, buildConfig: Record<string, unknown>) => {
+        expect.assertions(2);
+
+        build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"], buildConfig);
+
+        const text = readFileSync(headersFile(), "utf8");
+
+        expect(text).not.toContain("Cache-Control");
+        // The security headers still go out.
+        expect(text).toContain("X-Content-Type-Options: nosniff");
+    });
+
+    it("writes no immutable rule when a publicDir subfolder of the same name copies unhashed files into it", () => {
+        expect.assertions(1);
+
+        mkdirSync(join(projectRoot, "public", "assets"), { recursive: true });
+
+        build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
+
+        expect(readFileSync(headersFile(), "utf8")).not.toContain("Cache-Control");
+    });
+
+    it.each([["single-page-application"], ["404-page"]])(
+        "writes no immutable rule under not_found_handling %s, whose fallback page would be cached for a year",
+        (mode) => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(projectRoot, "wrangler.jsonc"),
+                `{ "name": "app", "assets": { "directory": "./dist/client", "not_found_handling": "${mode}" } }\n`,
+                "utf8",
+            );
+
+            build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
+
+            expect(readFileSync(headersFile(), "utf8")).not.toContain("Cache-Control");
+        },
+    );
+
+    it("reads not_found_handling from the CLOUDFLARE_ENV block, which overrides the top level", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(projectRoot, "wrangler.jsonc"),
+            '{ "name": "app", "assets": { "directory": "./dist/client", "not_found_handling": "single-page-application" }, "env": { "api": { "assets": { "directory": "./dist/client", "not_found_handling": "none" } } } }\n',
+            "utf8",
+        );
+        vi.stubEnv("CLOUDFLARE_ENV", "api");
+
+        try {
+            build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
+        } finally {
+            vi.unstubAllEnvs();
+        }
+
+        expect(readFileSync(headersFile(), "utf8")).toContain("Cache-Control: public, max-age=31536000, immutable");
     });
 });

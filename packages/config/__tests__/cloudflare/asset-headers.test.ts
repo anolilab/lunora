@@ -73,6 +73,41 @@ describe(mergeAssetHeaders, () => {
         expect(mergeAssetHeaders(`${generated ?? ""}\n/a\n  X-A: 1\n`, { securityHeaders: false }).text).toBe("/a\n  X-A: 1\n");
     });
 
+    it("gives the hashed assets directory a year-long immutable Cache-Control", () => {
+        expect.assertions(2);
+
+        expect(mergeAssetHeaders(undefined, { immutableDirectory: "assets", securityHeaders: false }).text).toBe(
+            [
+                "# BEGIN lunora-managed: rewritten on every build. Put your own rules outside this block.",
+                "/assets/*",
+                "  Cache-Control: public, max-age=31536000, immutable",
+                "# END lunora-managed",
+                "",
+            ].join("\n"),
+        );
+        expect(mergeAssetHeaders(undefined, { immutableDirectory: "./static/js/", securityHeaders: true }).text).toContain("/static/js/*\n  Cache-Control:");
+    });
+
+    it.each([["/*"], ["/assets/*"], ["/assets/app.js"], ["/:dir/*"], ["https://example.com/assets/*"]])(
+        "leaves the immutable rule out when a user rule for %s sets Cache-Control, which Cloudflare would comma-join",
+        (rule) => {
+            expect.assertions(2);
+
+            const merged = mergeAssetHeaders(`${rule}\n  Cache-Control: no-store\n`, { immutableDirectory: "assets", securityHeaders: true });
+
+            expect(merged.deferred).toEqual(["Cache-Control"]);
+            expect(merged.text).not.toContain("immutable");
+        },
+    );
+
+    it.each([["/img/*"], ["/assets"], ["/static/assets/*"]])("keeps the immutable rule beside a user Cache-Control for %s, which never reaches it", (rule) => {
+        expect.assertions(1);
+
+        expect(mergeAssetHeaders(`${rule}\n  Cache-Control: max-age=60\n`, { immutableDirectory: "assets", securityHeaders: true }).text).toContain(
+            "/assets/*\n  Cache-Control: public, max-age=31536000, immutable",
+        );
+    });
+
     it("warns when the block pushes the file past Cloudflare's 100-rule cap", () => {
         expect.assertions(1);
 
