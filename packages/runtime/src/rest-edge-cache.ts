@@ -39,6 +39,13 @@
  * `clone()`s, and the `put` rides `waitUntil` so a slow write never delays the
  * response.
  *
+ * - **A deploy starts cold.** The key carries the Worker version id from the
+ * `CF_VERSION_METADATA` binding, so a response the previous code produced is
+ * never served once a new version answers. Nothing purges on deploy: the old
+ * version's entries are simply never looked up again and age out on their own
+ * `max-age`. Without the binding the key has no version segment and a deploy
+ * keeps serving the old entries until they expire — see {@link deploymentIdOf}.
+ *
  * - **Neither path can fail a request.** Every cache interaction — including
  * building the key, which reads request headers by policy-supplied name — is
  * wrapped so a throw degrades to a miss. A cache is an optimization; a host
@@ -87,6 +94,37 @@ const defaultHttpCache = (): HttpCacheLike | undefined => {
     }
 };
 
+/**
+ * The running Worker version's id, or `undefined` when the `version_metadata`
+ * binding is not declared (most `lunora init` templates declare it).
+ *
+ * The `id`, never the `tag`: a tag is user-set, optional and may be reused
+ * across uploads, and an unchanged tag would quietly let a new deploy read the
+ * old one's entries.
+ */
+const deploymentIdOf = (env: unknown): string | undefined => {
+    if (typeof env !== "object" || env === null) {
+        return undefined;
+    }
+
+    const metadata = (env as Record<string, unknown>)["CF_VERSION_METADATA"];
+
+    if (typeof metadata !== "object" || metadata === null) {
+        return undefined;
+    }
+
+    const { id } = metadata as Record<string, unknown>;
+
+    return typeof id === "string" && id !== "" ? id : undefined;
+};
+
+/**
+ * The key segment carrying the deploy id inside {@link VARY_KEY_PARAM}. A `:` is
+ * not a valid header-name character, so no policy `vary` name can produce an
+ * entry that collides with it.
+ */
+const DEPLOY_KEY_SEGMENT = ":deploy";
+
 /** Split a `Vary` header value into lowercased names. */
 const varyNames = (value: string): string[] =>
     value
@@ -122,10 +160,10 @@ const fencedBy = (response: Response, fenced: ReadonlyArray<string>): boolean =>
  * decided at construction rather than re-derived on every request.
  */
 interface RestEdgeCache {
-    /** A stored response for `request`, or `undefined` on a miss. */
-    lookup: (request: Request, context?: ExecutionContextLike) => Promise<Response | undefined>;
+    /** A stored response for `request`, or `undefined` on a miss. `env` supplies the deploy id the key is scoped by. */
+    lookup: (request: Request, context?: ExecutionContextLike, env?: unknown) => Promise<Response | undefined>;
     /** Store `response` when the exchange is shared-cacheable; returns the response the caller should return. */
-    store: (response: Response, request: Request, context?: ExecutionContextLike) => Response;
+    store: (response: Response, request: Request, context?: ExecutionContextLike, env?: unknown) => Response;
 }
 
 /**
@@ -150,10 +188,10 @@ const restEdgeCacheFor = (policy: RestCachePolicy | undefined, edgeCache: HttpCa
     const fenced = varyNames(cacheVaryValue(policy) ?? "");
 
     /**
-     * The cache key for one exchange: the request URL plus the values of every
-     * header the policy varies on.
+     * The cache key for one exchange: the request URL plus the running deploy's
+     * id and the values of every header the policy varies on.
      *
-     * Header values are folded under a single reserved query parameter as
+     * The deploy id and header values are folded under a single reserved query parameter as
      * `name=value` pairs joined by NUL — a byte that cannot appear in a header
      * field-value, so no combination of values can be made to collide with a
      * different one. Absent headers contribute an empty value rather than being
@@ -162,13 +200,20 @@ const restEdgeCacheFor = (policy: RestCachePolicy | undefined, edgeCache: HttpCa
      * only the first occurrence, so a second one would otherwise ride into the
      * key.
      */
-    const keyFor = (request: Request): Request => {
+    const keyFor = (request: Request, env: unknown): Request => {
         const url = new URL(request.url);
 
         url.searchParams.delete(VARY_KEY_PARAM);
 
-        if (fenced.length > 0) {
-            url.searchParams.set(VARY_KEY_PARAM, fenced.map((name) => `${name}=${request.headers.get(name) ?? ""}`).join("\0"));
+        const deploymentId = deploymentIdOf(env);
+        const segments = fenced.map((name) => `${name}=${request.headers.get(name) ?? ""}`);
+
+        if (deploymentId !== undefined) {
+            segments.unshift(`${DEPLOY_KEY_SEGMENT}=${deploymentId}`);
+        }
+
+        if (segments.length > 0) {
+            url.searchParams.set(VARY_KEY_PARAM, segments.join("\0"));
         }
 
         // A cache key is a lookup token, never a request that gets sent: method and
@@ -182,7 +227,7 @@ const restEdgeCacheFor = (policy: RestCachePolicy | undefined, edgeCache: HttpCa
         request.method === "GET" && effectiveRestScope(policy, request, context) === "public";
 
     return {
-        lookup: async (request, context) => {
+        lookup: async (request, context, env) => {
             const cache = resolve();
 
             if (cache === undefined || !shareable(request, context)) {
@@ -192,7 +237,7 @@ const restEdgeCacheFor = (policy: RestCachePolicy | undefined, edgeCache: HttpCa
             let hit: Response | undefined;
 
             try {
-                hit = await cache.match(keyFor(request));
+                hit = await cache.match(keyFor(request, env));
             } catch {
                 return undefined;
             }
@@ -210,7 +255,7 @@ const restEdgeCacheFor = (policy: RestCachePolicy | undefined, edgeCache: HttpCa
             return served;
         },
 
-        store: (response, request, context) => {
+        store: (response, request, context, env) => {
             const cache = resolve();
 
             if (cache === undefined || !shareable(request, context)) {
@@ -246,7 +291,7 @@ const restEdgeCacheFor = (policy: RestCachePolicy | undefined, edgeCache: HttpCa
                     stored.headers.delete(name);
                 }
 
-                const write = Promise.resolve(cache.put(keyFor(request), stored)).catch(() => {
+                const write = Promise.resolve(cache.put(keyFor(request, env), stored)).catch(() => {
                     // A cache write is an optimization, and a host that refuses one must
                     // not turn a served response into an error.
                 });

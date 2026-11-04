@@ -282,6 +282,44 @@ describe("the cache key", () => {
     });
 });
 
+describe("the deploy a key belongs to", () => {
+    const versioned = (id: string): Record<string, unknown> => {
+        return { CF_VERSION_METADATA: { id, tag: "v1", timestamp: "2026-01-01T00:00:00Z" } };
+    };
+
+    it("never serves a response stored by a previous deploy", async () => {
+        expect.assertions(3);
+
+        const { cache, entries } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const request = get();
+
+        edge?.store(applyRestCache(Response.json({ code: "old" }), publicCache, request, context), request, context, versioned("version-a"));
+        await settled();
+
+        expect(onlyKey(entries)).toContain("version-a");
+        await expect(edge?.lookup(get(), context, versioned("version-a"))).resolves.toBeDefined();
+        // Same tag, new upload: the id is what separates the two.
+        await expect(edge?.lookup(get(), context, versioned("version-b"))).resolves.toBeUndefined();
+    });
+
+    it("keeps caching, unscoped, when the version_metadata binding is not declared", async () => {
+        expect.assertions(2);
+
+        const { cache, entries } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const request = get();
+
+        edge?.store(applyRestCache(Response.json({}), publicCache, request, context), request, context, { CF_VERSION_METADATA: { id: "" } });
+        await settled();
+
+        expect(new URL(onlyKey(entries)).searchParams.get(VARY_KEY_PARAM)).not.toContain(":deploy");
+        await expect(edge?.lookup(get(), context, {})).resolves.toBeDefined();
+    });
+});
+
 describe("what never reaches a second caller", () => {
     it("strips the per-caller headers a shard response carries", async () => {
         expect.assertions(3);

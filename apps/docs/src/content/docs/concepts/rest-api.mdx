@@ -221,6 +221,25 @@ The stored copy also drops the headers that describe the exchange rather than th
 resource (`X-D1-Bookmark`, `X-Lunora-Shard-Key`): the first caller still receives
 them, but replaying them would hand a later caller someone else's read cursor.
 
+### A deploy starts cold
+
+The key Lunora stores under also carries the running Worker version's id, read
+from the `version_metadata` binding (`CF_VERSION_METADATA`, declared by most
+`lunora init` templates). After a deploy the Worker therefore never answers from
+an entry the previous code wrote: the old entries are not purged, they are just
+never looked up again and expire on their own `maxAge`. This covers only the
+colo entry Lunora writes. A browser, a CDN, or Workers Cache in front of the
+Worker keys on the URL and still honours the emitted `Cache-Control` for up to
+`maxAge`. If your `wrangler.jsonc` does not declare the binding, the key has no
+version in it and entries written before a deploy keep being served until they
+expire:
+
+```jsonc
+{
+    "version_metadata": { "binding": "CF_VERSION_METADATA" },
+}
+```
+
 ### Opting out
 
 Pass `restEdgeCache: null` to `createWorker` to keep the surface headers-only —

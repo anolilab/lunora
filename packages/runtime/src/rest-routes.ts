@@ -217,7 +217,7 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
             // cache hit must still be metered (it is a request this caller made,
             // and it still costs a Worker invocation), but it must not cost a
             // shard round trip.
-            const hit = await edge?.lookup(request, context);
+            const hit = await edge?.lookup(request, context, env);
 
             if (hit) {
                 return hit;
@@ -261,7 +261,7 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
 
             // Stored only once the headers are on it, so a later hit replays the
             // exact response the first caller got rather than a bare body.
-            return edge ? edge.store(answered, request, context) : answered;
+            return edge ? edge.store(answered, request, context, env) : answered;
         };
     }
 

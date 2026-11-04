@@ -186,6 +186,26 @@ describe("createWorker — REST edge cache", () => {
         expect(shard.calls).toHaveLength(1);
     });
 
+    it("starts cold on a new deploy: the worker env's version id scopes the key", async () => {
+        expect.assertions(2);
+
+        const shard = createShardSpy(Response.json({ items: [] }));
+        const { cache } = fakeCache();
+        const { context, settled } = collectingContext();
+        const worker = createWorker({ functions: cachedFunctions, restEdgeCache: cache, shardDO: shard.namespace });
+        const deployed = (id: string) => {
+            return { CF_VERSION_METADATA: { id, tag: "", timestamp: "2026-01-01T00:00:00Z" } };
+        };
+
+        await worker.fetch(listRequest(), deployed("version-a"), context);
+        await settled();
+
+        const afterDeploy = await worker.fetch(listRequest(), deployed("version-b"), context);
+
+        expect(afterDeploy.headers.get("x-lunora-edge-cache")).toBeNull();
+        expect(shard.calls).toHaveLength(2);
+    });
+
     it("stores nothing, and dispatches every time, when the caller presents a credential", async () => {
         expect.assertions(2);
 
