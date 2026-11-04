@@ -61,9 +61,8 @@ const projectIdOf = (rawServiceAccount: string): string | undefined => {
  * Resolve an {@link FcmConfig} from the Worker `env`.
  *
  * Production: `FCM_SERVICE_ACCOUNT` holds the Google service-account key file, as JSON or
- * base64 of it.
- * The access token is minted from it on demand and cached until shortly before it
- * expires, so `defineNotify({ fcm: (env) => fcmFromEnv(env) })` is correct as written.
+ * base64 of it. The access token is minted from it on demand and cached until shortly
+ * before it expires, so `defineNotify({ fcm: (env) => fcmFromEnv(env) })` is correct as written.
  * `FCM_PROJECT_ID` overrides the project id in the key file.
  *
  * Dev: a static `FCM_ACCESS_TOKEN` is accepted when no service account is set. It
