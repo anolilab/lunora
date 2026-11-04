@@ -72,11 +72,20 @@ render(
 | `createRateLimit`                                   | primitive | Client-side rate-limit mirror: `{ ok, disabled, retryAfter, check, consume, reset }`.                              |
 | `createConnectionStatus`                            | primitive | Reactive accessor of the live-socket `ConnectionStatus`.                                                           |
 | `hydratePreloaded`                                  | primitive | Seed a query accessor synchronously from an SSR `Preloaded` token, then attach the subscription.                   |
+| `createStream`                                      | primitive | Streaming query: chunks, lifecycle status and cancel as accessors. Changing `args` resets the stream.              |
+| `createFlag` / `createFlags`                        | primitive | Reactive accessor of one feature flag, or a record of several. The accessor reads the default until evaluation.    |
+| `createMutator`                                     | primitive | Wrapper over a bound custom mutator handle from `@lunora/db`: `{ mutate, pending, error, isError, reset }`.        |
+| `createAgent`                                       | primitive | Thread `status` plus `run` / `cancel` for one agent, without the chat message surface.                             |
+| `createAgentChat`                                   | primitive | Full agent conversation for one thread: durable history, streaming deltas, approvals and `send` / `cancel`.        |
+| `createAgentState`                                  | primitive | Live synced state of one agent thread. Updates only on a real `setState`.                                          |
+| `createAgentToolEvents`                             | primitive | Tool calls, results, approval pauses and progress events for one agent thread.                                     |
+| `createVoiceAgent`                                  | primitive | Full-duplex voice call against an agent's `<name>Voice` reference, with `status`, `transcript` and call controls.  |
+| `SolidChildren`                                     | type      | Children type that compiles on both Solid 1.x and 2.x.                                                             |
 
 Re-exported types: `ArgsOf`, `FunctionReference`, `OptimisticUpdate`,
-`Preloaded`, `ReturnOf`, `Unsubscribe`, plus `LunoraProviderProps`,
-`CreateQueryOptions`, `MutationClient`, `ActionClient`, and the
-`MutationHandle` / `ActionHandle` interfaces.
+`Preloaded`, `ReturnOf`, `SubscriptionError`, `SubscriptionErrorCallback`,
+`Unsubscribe`, plus `LunoraProviderProps`, `CreateQueryOptions`, `MutationClient`,
+`ActionClient`, and the `MutationHandle` / `ActionHandle` interfaces.
 
 ## `<LunoraProvider client={...}>`
 
@@ -244,7 +253,7 @@ next one. A same-user token refresh does not count as a switch. The accessor
 is typed `Accessor<T | undefined>` for that reason, like `createQuery`.
 
 Pass `{ onError }` as the second argument to observe a subscription-scoped error
-the server pushes after hydration (a session expiry, an RLS denial). Without it
+the server pushes after hydration (a session expiry, a row-level security (RLS) denial). Without it
 such an error is dropped and the accessor keeps rendering the SSR snapshot as if
 it were live.
 

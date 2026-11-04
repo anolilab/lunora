@@ -6,7 +6,7 @@ description: Durable AI agents — defineAgent compiles a replay-safe tool-loop 
 `@lunora/agent` is Lunora's durable-agent primitive. `defineAgent` declares a
 model + tools + memory; the definition compiles onto a **Cloudflare Workflow**
 where each LLM turn and each tool call is a named durable step, and every
-message persists idempotently into DO SQLite thread tables. The client
+message persists idempotently into Durable Object (DO) SQLite thread tables. The client
 subscribes to the thread query and watches the conversation stream in live, so
 there is no new transport and no HTTP streaming infrastructure to run.
 
@@ -16,7 +16,9 @@ pnpm add @lunora/agent
 
 ## Declaring an agent
 
-```ts
+The following file declares a `support` agent with one tool:
+
+```ts title="lunora/agents.ts"
 // lunora/agents.ts
 import { defineAgent, defineAgentTool, jsonSchema } from "@lunora/agent/core";
 
@@ -59,6 +61,7 @@ Merge the thread tables into your schema. They auto-prefix to
 
 ```ts
 // lunora/schema.ts
+import { defineSchema } from "@lunora/server";
 import { agentExtension } from "@lunora/agent/component";
 
 export default defineSchema({/* your tables */}).extend(agentExtension);
@@ -72,6 +75,8 @@ vis generate lunora-agent --name=support
 ```
 
 ## Running + observing
+
+The following snippets start a run from a mutation or action, then subscribe to the thread from the client:
 
 ```ts
 // inside a mutation or action:
@@ -88,12 +93,12 @@ persisted history each turn.
 
 `ctx.agents.<name>` is the typed producer surface on Mutation/Action ctx:
 
-| Method               | Does                                                                          |
-| -------------------- | ----------------------------------------------------------------------------- |
-| `run(params)`        | Start (or continue) a run; returns `{ id }` (the Workflow instance id).       |
-| `cancel(id)`         | Terminate the in-flight instance and mark the thread `"cancelled"`.           |
-| `status(id)`         | Read the instance's current status.                                           |
-| `sendEvent(id, evt)` | Deliver an event to a hibernated run (the primitive HITL approvals build on). |
+| Method               | Does                                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------ |
+| `run(params)`        | Start (or continue) a run; returns `{ id }` (the Workflow instance id).                                |
+| `cancel(id)`         | Terminate the in-flight instance and mark the thread `"cancelled"`.                                    |
+| `status(id)`         | Read the instance's current status.                                                                    |
+| `sendEvent(id, evt)` | Deliver an event to a hibernated run (the primitive that human-in-the-loop (HITL) approvals build on). |
 
 ## Loop control
 
@@ -286,7 +291,7 @@ paused approvals (newest thread first, default 50), each carrying the
 `threadKey`, `instanceId` and `toolCallId` that `agentResolveApproval` takes.
 It is owner-scoped: an anonymous caller gets `[]`, and ownerless threads are
 never listed. The React `useAgentApprovals` hook subscribes to it. The inbox is not
-exposed over MCP: MCP clients authenticate with a static deployment token, so a run
+exposed over the Model Context Protocol (MCP): MCP clients authenticate with a static deployment token, so a run
 started over MCP has no owner and would never be listed.
 
 ## Human-supplied secrets (`requestSecretTool`)
@@ -443,9 +448,9 @@ if (request?.toolCallId !== undefined) await chat.supplySecret(request.toolCallI
   records a tool's input and output, and a thrown error reaches the tool row.
 - **Only shards on a target that rates `secretValues` native can hold a value**
   (Cloudflare today). Elsewhere the supply mutation refuses with `NOT_IMPLEMENTED`.
-- The value expires 15 minutes after it is supplied. That covers the gap to the
-  model's next turn, not a long pause, so the consuming call has to follow soon
-  after the supply.
+- The value lives at least 15 minutes after it is supplied, and longer only up to the request deadline plus the 60-second grace (see
+  [Human-supplied secrets](#human-supplied-secrets-requestsecrettool)). The 15 minutes cover the gap to the model's next turn, not a long pause, so the
+  consuming call has to follow soon after the supply.
 
 ## Client hooks
 
@@ -579,7 +584,7 @@ Each returns an `AgentToolDefinition` you drop into the `tools` map:
   `pollIntervalMs` (default 500) — together a **five-minute** wall-clock budget,
   past which the child is terminated and the parent is told it did not finish.
   The child thread inherits the parent run's `owner`, so it stays under the same
-  RLS scope. A child that runs out of turns reports its turn cap rather than
+  row-level security (RLS) scope. A child that runs out of turns reports its turn cap rather than
   returning an empty answer.
 - **`mcpTools`**: adapt the tools an MCP server lists. Pass a pre-connected
   `client` (the SSE/HTTP transport cannot run in workerd), optionally filtered
@@ -661,7 +666,7 @@ export const operator = defineAgent({
   identifiers, so a retried step overwrites its own object instead of leaking one
   per attempt. Without a `bucket` those two ops are refused as a tool result and
   never dispatched, so nothing is billed. The
-  model picks the `url` with no allowlist, so this is an **SSRF surface**: a
+  model picks the `url` with no allowlist, so this is a **server-side request forgery (SSRF) surface**: a
   prompt-injected model can aim it at an internal/link-local endpoint. It runs
   **unattended by default**; pass `opts.needsApproval` (a boolean or a predicate)
   to gate it.

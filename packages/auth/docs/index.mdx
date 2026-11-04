@@ -143,7 +143,7 @@ Sessions are better-auth's, stored in the `session` table on the same D1
 database as the `user` / `account` / `verification` tables. better-auth writes
 the session cookie and validates it on each request; `createAuth` applies a
 secure-by-default cookie posture on top: `httpOnly`, `sameSite: "lax"`,
-`path: "/"`, and `useSecureCookies` forced on for an HTTPS `baseURL` (the
+`path: "/"`, and `useSecureCookies` on unless `baseURL` is an explicit `http://` URL (the
 `process.env.NODE_ENV` heuristic better-auth uses to decide this is unreliable
 on Workers).
 
@@ -177,7 +177,7 @@ scaffold. Sessions are then served from the signed cookie instead of a database
 read, which is what keeps `ctx.auth` off the hot path.
 
 <Callout type="warn">
-    **A revoked session keeps authenticating for up to `maxAge` (60 seconds by default.)** A sign-out on another device, a ban, a session deletion, or a role
+    **A revoked session keeps authenticating for up to `maxAge` (60 seconds by default).** A sign-out on another device, a ban, a session deletion, or a role
     change is not seen until the cached cookie expires, because nothing in the request path reads the `session` row while the cache is warm. Turn it off where
     that window is unacceptable:
 
@@ -195,7 +195,7 @@ read, which is what keeps `ctx.auth` off the hot path.
 OAuth is entirely better-auth's. Built-in social providers run through its
 `socialProviders` config, and anything else goes through the `genericOAuth`
 plugin (re-exported from `@lunora/auth/plugins`). `createAuth` forwards
-`socialProviders` unchanged; the code/token/userinfo exchange, PKCE, and
+`socialProviders` unchanged; the code/token/userinfo exchange, Proof Key for Code Exchange (PKCE), and
 `id_token` verification are all better-auth's:
 
 ```ts
@@ -215,13 +215,13 @@ Callbacks are served under `/api/auth/callback/<provider>` by
 `handleAuthRequest`. For providers beyond the built-in list, add
 `genericOAuth({ config: [...] })` to `plugins`.
 
-## Enterprise SSO and SCIM provisioning
+## Enterprise single sign-on (SSO) and System for Cross-domain Identity Management (SCIM) provisioning
 
 Two plugins cover what enterprise buyers ask for: sign-in through the customer's own
 identity provider, and user lifecycle driven by their directory.
 
 `scim` ships in the general plugin barrel. **`sso` does not**: it statically imports
-`samlify` for its SAML path (pulling `xml-crypto`, `node-rsa`, and `@xmldom/xmldom`,
+`samlify` for its Security Assertion Markup Language (SAML) path (pulling `xml-crypto`, `node-rsa`, and `@xmldom/xmldom`,
 ~1.1 MB), and tree-shaking keeps that out of your _bundle_ but not out of your
 _install_. So it lives behind its own subpath as an **optional peer** you install only
 if you want it:
@@ -286,11 +286,11 @@ Four things to set deliberately, because the defaults are permissive:
   too if only staff should register providers at all.
 - **Domain matching is suffix-based.** A provider registered for `com` catches every
   `.com` address without a more specific provider. Register exact domains.
-- **Registration makes an outbound call.** better-auth fetches the issuer's OIDC
+- **Registration makes an outbound call.** better-auth fetches the issuer's OpenID Connect (OIDC)
   discovery document during `registerSSOProvider`, unconditionally, deriving the URL
   from `issuer` when you don't pass `discoveryEndpoint`. In a Worker that is a
   subrequest at registration time, so a firewalled IdP fails there, not at sign-in.
-- **`trustedOrigins` is an SSRF gate, not boilerplate.** Discovery URLs are checked for
+- **`trustedOrigins` is a server-side request forgery (SSRF) gate, not boilerplate.** Discovery URLs are checked for
   public-routability first (loopback, RFC 1918, link-local, and cloud-metadata hosts
   like `169.254.169.254` are refused), then against your `trustedOrigins`. A
   self-hosted IdP needs its origin listed or registration fails
@@ -494,7 +494,7 @@ reports "not configured" rather than returning empty data.
 Identity resolution costs a round-trip to the object on requests that touch `ctx.auth`.
 `createAuth` already serves most of them from the signed cookie instead: `session.cookieCache`
 is filled with `{ enabled: true, maxAge: 60 }` unless you set it, so a revoked session keeps
-authenticating for up to 60 seconds here as everywhere else — see
+authenticating for up to 60 seconds from the cookie cache, and the worker's identity cache can add up to another 60 seconds on top of that — see
 [the session cookie cache](#the-session-cookie-cache-is-on-by-default).
 
 ### Scaffolding it
@@ -598,7 +598,7 @@ requirement and runs on `lunoraD1Adapter` as usual.
 
 What is **not** measured is the SAML _code path_: assertion verification runs pure-JS
 RSA, and upstream
-[better-auth#10343](https://github.com/better-auth/better-auth/issues/10343) flags ACS
+[better-auth#10343](https://github.com/better-auth/better-auth/issues/10343) flags the assertion consumer service (ACS)
 as a poor fit for a Worker's CPU budget, proposing a pluggable remote executor.
 
 Treat **OIDC/OAuth2 as the supported mode** and SAML as unverified until that
@@ -701,7 +701,7 @@ for the full pattern and the `withoutHeaders()` escape hatch.
 
 Reject throwaway/disposable signups (and branch on free-vs-business email) at
 registration by reusing the visulima email lists. The classification is
-**pure-data and edge-safe on the default path**, with no DNS and no filesystem
+**pure-data and edge-safe on the default path**, with no Domain Name System (DNS) lookup and no filesystem
 access. The lists (~3 MB) are not evaluated when `@lunora/auth` is imported; they
 load on the first gated check, so their cost is paid there instead of during
 Worker startup. They are still part of the bundle, so upload size is unaffected.
@@ -796,7 +796,7 @@ public account-creating mutation with no email gate (pairs with the existing
 ## Security / audit trail
 
 Record authentication and security events to a durable, queryable audit trail:
-sign-in, sign-up, password change, MFA enable/disable, token refresh, session
+sign-in, sign-up, password change, multi-factor authentication (MFA) enable/disable, token refresh, session
 revoke, account link/unlink. That is the compliance/forensics surface Supabase
 and Firebase expose. Install the better-auth `hooks.after` recorder with
 `authAuditHook` (or compose via `withAuthAudit`):

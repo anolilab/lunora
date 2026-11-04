@@ -9,7 +9,7 @@ related:
     - to: /docs/architecture
 ---
 
-`@lunora/scheduler` ships a `SchedulerDO` you mount once per app. It stores
+`@lunora/scheduler` ships a `SchedulerDO`, a Durable Object (DO), that you mount once per app. It stores
 pending invocations sorted by scheduled time and fires them via HTTP on the DO
 alarm. On top of that it gives you deferred jobs (`runAfter`/`runAt`), code-first
 cron jobs, and two workpool flavours for bounded-concurrency background work.
@@ -36,8 +36,8 @@ and return the job id.
 Under the hood `ctx.scheduler.runAfter` POSTs to the SchedulerDO's `/schedule`
 endpoint with `functionPath`, `args` and `scheduledFor`. The origin it is called
 back on is NOT on that request: the DO reads it from its own
-`env.LUNORA_ORIGIN_URL`, because a caller-supplied dispatch target would be an
-SSRF vector. Set that var (in `vars` for local dev, as a secret in production) or
+`env.LUNORA_ORIGIN_URL`, because a caller-supplied dispatch target would be a
+server-side request forgery (SSRF) vector. Set that var (in `vars` for local dev, as a secret in production) or
 every schedule is refused with `ORIGIN_NOT_CONFIGURED`.
 
 ### Standalone scheduler
@@ -139,7 +139,7 @@ const trigger = createCronTrigger({
 // trigger.dispatcher    → { functionPath, args }
 ```
 
-Both surfaces validate the expression eagerly via `cron-parser`, so a malformed
+Both surfaces validate the expression eagerly via `@visulima/cron-parser`, so a malformed
 schedule throws at authoring time. `isValidCronExpression` /
 `assertValidCronExpression` are exported if you need the check standalone.
 
@@ -173,7 +173,7 @@ a whole rather than to one job:
 
 - **Six concurrent dispatches.** A Durable Object may have at most six
   connections simultaneously waiting for response headers, so one alarm drain
-  keeps six jobs in flight. A `maxConcurrency` above six is not wrong, just not
+  keeps six jobs in flight. A `maxConcurrency` above six is not wrong, but not
   reachable in a single drain — the surplus goes out on the following alarms.
 - **A 15-minute alarm.** An alarm handler has 15 minutes of wall time, and the
   whole drain shares it. Work that does not fit is deferred to the next alarm,

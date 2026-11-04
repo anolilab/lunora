@@ -121,7 +121,7 @@ export const login = action.action(async ({ ctx, args }) => {
 
 <Callout type="warn">
     **DB-store consumption commits with the mutation.** A mutation's `ctx.db` writes ride its storage transaction, and a throw rolls all of them back —
-    including the unit `limit()` just consumed. Written as a mutation, the example above charges nothing for a wrong password (`authenticate` throws), so only
+    including the unit that `limit()` consumed. Written as a mutation, the example above charges nothing for a wrong password (`authenticate` throws), so only
     successful logins count and an attacker gets an unlimited number of guesses. Consume from an **action** when failed attempts must count: its writes commit
     on their own, so the unit stays spent whether or not the handler throws. The same applies to `.use(dbRateLimit(...))` on a mutation whose handler rejects. A
     mutation that must keep the charge can return a failure value instead of throwing.
@@ -173,6 +173,7 @@ for the resolver above; it builds the per-call `RateLimiter` + `createDbStore`
 for you:
 
 ```ts
+import type { RateLimitConfigMap } from "@lunora/ratelimit";
 import { dbRateLimit } from "@lunora/ratelimit";
 
 import { mutation } from "./_generated/server";
@@ -215,10 +216,12 @@ const limiter = new RateLimiter({
 });
 ```
 
-The list is consulted as-is. If you also pass a `normalize` function (applied to
-every incoming `key` for case-folding, trimming, or canonicalizing IPs/emails),
-both the normalized and raw form are checked, but normalize your deny-list
-entries up front to be safe.
+Each entry is stored both as given and in its normalized form
+(`packages/ratelimit/src/rate-limiter.ts:133`). If you pass a `normalize` function
+(applied to every incoming `key` for case-folding, trimming, or canonicalizing
+IPs/emails), the limiter checks both the normalized and the raw form of each key.
+Normalize your deny-list entries up front anyway, so that they match the form the
+limiter stores.
 
 ## Pluggable stores
 
@@ -267,7 +270,7 @@ added before expiry runs; without it each sweep scans the whole table.
 
 ## Token budgets
 
-A request limit is the wrong shape for an LLM: one call can cost a hundred
+A request limit is the wrong shape for a large language model (LLM): one call can cost a hundred
 tokens or a hundred thousand, so "20 calls a minute" bounds nothing that
 matters. `tokenBudget` binds one named limit whose unit is model tokens (or
 cents) and spends it **in arrears**, which is how tokens actually work — the
@@ -328,3 +331,99 @@ export const send = mutation.use(ratelimitPlugin(limiter).middleware!).mutation(
 
 The plugin ships no schema extension (persistence is whatever store the limiter
 was built with), so it is middleware-only and skipped by the plugin schema fold.
+
+## API
+
+Reference for the main exports of `@lunora/ratelimit`. The config and status types
+(`RateLimitConfig`, `RateLimitConfigMap`, `RateLimitKind`, `RateLimitStatus`,
+`RateLimitStore`, `RateLimitArgs`) are listed under [Limit config](#limit-config),
+[Consuming a limit](#consuming-a-limit) and [Pluggable stores](#pluggable-stores).
+
+### `RateLimiter`
+
+**Type:** `class`, constructed with `new RateLimiter({ config, store?, denyList?, normalize?, now? })`
+
+Holds the named limits and evaluates them. `limit` consumes, `check` peeks, and
+`reset` clears accounting for one name and key.
+
+### `RateLimiterOptions`
+
+**Type:** `{ config: RateLimitConfigMap; denyList?: Iterable<string>; normalize?: (key: string) => string; now?: () => number; store?: RateLimitStore }`
+
+**Default:** `store` is an in-memory store per instance. A warning is logged once when
+you omit it.
+
+The options for `new RateLimiter`. `denyList` denies matching keys with `reason: "deny"`.
+`now` is a clock for tests. After `normalize` runs, an IPv6 key is collapsed to its
+`/64` prefix (`packages/ratelimit/src/rate-limiter.ts:75-77`).
+
+### `rateLimit`
+
+**Type:** `(limiter: LimiterResolver, name: string, options?: RateLimitMiddlewareOptions) => Middleware`
+
+Returns procedure middleware that consumes the named limit before the handler
+runs. `limiter` is a `RateLimiter` or a function that returns one from the context.
+
+### `RateLimitMiddlewareOptions`
+
+**Type:** `{ key?: (ctx) => string | undefined; count?: number; message?: string; failOpen?: boolean }`
+
+**Default:** `count` is `1`, and `failOpen` is `false`.
+
+The options for `rateLimit`. `failOpen: false` returns `503` when the limiter throws.
+
+### `dbRateLimit`
+
+**Type:** `(config: RateLimitConfigMap, name: string, options?: RateLimitMiddlewareOptions & { store? }) => Middleware`
+
+`options.store` points the default table at a different table, index or key column.
+
+Returns `rateLimit` middleware that builds a `RateLimiter` backed by `createDbStore`
+for each call.
+
+### `RateLimitError`
+
+**Type:** `class extends LunoraError`, constructed with `(status: RateLimitStatus, message?: string)`
+
+Thrown when a limit rejects. Its wire code is `TOO_MANY_REQUESTS` (429), or
+`FORBIDDEN` (403) for a deny-list hit.
+
+### `createMemoryStore`
+
+**Type:** `() => RateLimitStore`
+
+An in-process `Map`. It is the default when `RateLimiter` gets no `store`.
+
+### `createSqlStore`
+
+**Type:** `(options: SqlStoreOptions) => RateLimitStore`
+
+Stores the state in a raw SQL connection, such as `state.storage.sql`. It creates the
+`_lunora_rate_limits` table when it is missing. `table` overrides the name.
+
+### `createDbStore`
+
+**Type:** `(options: DbStoreOptions) => RateLimitStore`
+
+Stores the state in a table declared in your schema, through `ctx.db`. `table`
+defaults to `rateLimits`, and the key column defaults to `key`.
+
+### `createReadOnlyDbStore`
+
+**Type:** `(options: ReadOnlyDbStoreOptions) => RateLimitStore`
+
+Reads the same table through a query context. Only `getValue` and `check` work on it.
+
+### `tokenBudget`
+
+**Type:** `<Names extends string>(limiter: RateLimiter<Names>, name: Names) => TokenBudget`
+
+Binds one named limit to a token budget. `check` runs before a call and consumes
+nothing, and `record(key, tokens)` runs after it.
+
+### `ratelimitPlugin`
+
+**Type:** `(limiter: RateLimiter) => Plugin`
+
+Exposes the limiter as `ctx.api.ratelimit`, and provides the enforcing middleware in
+`middleware`.

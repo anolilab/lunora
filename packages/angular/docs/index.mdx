@@ -23,12 +23,12 @@ WebSocket transport, subscription registry, offline queue, and delta-merge.
 Angular signals map directly onto Lunora's per-subscription deltas, so a live
 query is a `signal` the WebSocket writes to.
 
-The API is signal-first and at parity with the other adapters: a DI token
+The API is signal-first and at parity with the other adapters: a dependency injection (DI) token
 carrying one shared client, `liveQuery`, `subscription`, `mutate`/`mutator`,
 `runAction`, `stream`, `paginatedQuery`/`infiniteQuery`, `presence`,
 `rateLimit`, `flag`/`flags`, `auth`/`authGate`, `liveTopic`, the agent and voice primitives,
 `connectionStatus`, and `hydratePreloaded` alongside the `@lunora/angular/server`
-subpath for the SSR handoff.
+subpath for the server-side rendering (SSR) handoff.
 
 ## Install
 
@@ -58,7 +58,7 @@ Beyond the table: `subscription`, `mutator`, `stream`, `paginatedQuery` /
 too — see the sections below and the package's `src/index.ts` for the full list.
 
 Re-exported types: `ArgsOf`, `ConnectionStatus`, `FunctionReference`,
-`LunoraClient`, `LunoraClientOptions`, `MutationCallOptions`, `ReturnOf`,
+`LunoraClient`, `LunoraClientOptions`, `MutationCallOptions`, `Preloaded`, `ReturnOf`,
 `SubscriptionError`, `Unsubscribe`, plus `ProvideLunoraOptions`,
 `LiveQueryOptions`, `ConnectionStatusOptions`, `MutateOptions`, and
 `RunActionOptions`. The `SKIP` sentinel (`"skip"`) is re-exported from
@@ -149,7 +149,7 @@ context needs an explicit `injector` alongside `client`/`destroyRef`.
 `{ shardKey }` to route to a specific shard when the target
 function is `.shardBy(...)`-partitioned, and `{ onError }` to observe a
 post-attach subscription failure (without it, a failure after the initial
-attach is dropped silently and the signal just stops updating). To call
+attach is dropped silently and the signal stops updating). To call
 outside an injection context (e.g. lazily in `ngOnInit`), supply `client` and
 `destroyRef` explicitly via the options object.
 
@@ -165,7 +165,7 @@ one. The stream's route is resolved against the injected `LunoraClient`, and
 makes the topic reactive: a new topic resubscribes, while a new `onEvent` or
 `onError` is read at call time and does not. `options` takes `client`,
 `destroyRef` and `injector`, which the reactive form needs when called outside an
-injection context, plus `shardKey` and `sessionKey` (each a string or a signal, which resubscribes on change) and the transport tuning `headers`,
+injection context, plus `shardKey` and `sessionKey` (each a string or a function returning one, which resubscribes on change) and the transport tuning `headers`,
 `withCredentials`, `retryDelay` and `maxDelayMs`.
 
 ```ts
@@ -244,7 +244,7 @@ When called from within an injection context you may omit `client`.
 
 A `signal` of the client's aggregate live-socket status across all shard
 connections. Reads the current status synchronously and updates on every
-transition (`idle` → `connecting` → `connected` → `offline`). The listener is
+transition (`idle`, `connecting`, `connected`, `offline` or `polling`). The listener is
 removed when the owning `DestroyRef` fires.
 
 ```ts
@@ -252,7 +252,7 @@ import { connectionStatus } from "@lunora/angular";
 
 @Component({/* … */})
 export class ConnectionBadge {
-    readonly status = connectionStatus(); // Signal<"idle" | "connecting" | "connected" | "offline">
+    readonly status = connectionStatus(); // Signal<"idle" | "connecting" | "connected" | "offline" | "polling">
 }
 ```
 
@@ -276,6 +276,7 @@ Each event discriminates on `type`:
 | `call`              | `toolCallId`, `toolName`, `input`, `seq`               | durable     |
 | `result`            | `toolCallId?`, `toolName?`, `output`, `status?`, `seq` | durable     |
 | `awaiting-approval` | `toolCallId?`, `toolName?`, `seq`                      | durable     |
+| `awaiting-secret`   | `toolCallId?`, `toolName?`, `seq`                      | durable     |
 | `progress`          | `toolCallId`, `data`                                   | live stream |
 
 Durable events come first, oldest first by `seq`, followed by the ephemeral
@@ -356,7 +357,7 @@ The part the type signature does not tell you:
 - **`endCall()` releases everything** — the socket, the microphone tracks, and
   the Web Audio graph — and is idempotent. The owning `DestroyRef` calls it on
   destroy, so a destroyed component ends its call.
-- **`audioLevel` is the live input RMS (0–1).** It drives a mic meter, and it is
+- **`audioLevel` is the live input root mean square (RMS) level (0–1).** It drives a mic meter, and it is
   also what the heuristics read: `silenceThreshold` + `silenceDurationMs` decide
   when an utterance auto-commits (defaults `0.01` / `1200`ms), and
   `interruptThreshold` + `interruptChunks` decide when the user barges in on the
@@ -367,3 +368,142 @@ The part the type signature does not tell you:
   for tests and non-DOM hosts. The defaults are `getUserMedia` + Web Audio +
   `new WebSocket(url)`, so the primitive is inert (and mockable) anywhere those
   are missing.
+
+## API reference
+
+Each entry lists the signature, then the options and the result. The
+signatures are taken from `packages/angular/src`.
+
+### `subscription(reference, args, options?)`
+
+**Type:** `(reference, args: ArgsOf<F> | "skip" | (() => ArgsOf<F> | "skip"), options?: SubscriptionOptions) => SubscriptionResult<ReturnOf<F>>`
+
+Subscribes to a query and returns its `data` and `error` signals. Use it when
+you need the error signal, because `liveQuery` only reports failures through
+`onError`. Options are `client`, `destroyRef`, `injector`, `onError` and
+`shardKey`.
+
+### `paginatedQuery(reference, args, options)`
+
+**Type:** `(reference, args: PaginatedArgs<F> | "skip" | (() => PaginatedArgs<F> | "skip"), options: PaginatedQueryOptions) => PaginatedQueryResult<PageItemOf<F>>`
+
+Subscribes to a paginated query. `initialNumItems` is required. Returns the
+`results`, `status`, `isLoading` and `error` signals and `loadMore(numberItems)`.
+Options also take `client`, `destroyRef`, `injector`, `onError` and `shardKey`.
+
+### `infiniteQuery(reference, args, options)`
+
+**Type:** `(reference, args: PaginatedArgs<F> | "skip" | (() => PaginatedArgs<F> | "skip"), options: PaginatedQueryOptions) => InfiniteQueryResult<PageItemOf<F>>`
+
+The same subscription as `paginatedQuery`, shaped for infinite scroll. Returns
+the `pages`, `status`, `hasNextPage`, `isFetchingNextPage`, `isLoading` and
+`error` signals and `fetchNextPage(numberItems?)`.
+
+### `stream(reference, args, options?)`
+
+**Type:** `(reference, args: ArgsOf<F> | "skip", options?: StreamOptions) => StreamResult<ReturnOf<F>>`
+
+Subscribes to a stream function. Returns the `chunks` and `error` signals, a
+`status` signal (`"idle" | "streaming" | "complete" | "error"`) and `cancel()`.
+Options are `client`, `destroyRef`, `durable`, `maxBuffer` and `shardKey`.
+
+### `mutator(handle)`
+
+**Type:** `<TArgs>(handle: MutatorHandle<TArgs>) => MutatorResult<TArgs>`
+
+Wraps a mutation handle for template-driven calls. Returns `mutate(args)`, which
+resolves once the write completes, and the `pending`, `error` and `isError`
+signals. `reset()` clears the error.
+
+### `presence(roomId, options)`
+
+**Type:** `<H, L>(roomId: string, options: PresenceOptions<H, L>) => PresenceResult<L>`
+
+Joins a presence room. `heartbeat` and `listPresent` are required. Options
+also take `client`, `data`, `destroyRef`, `intervalMs`, `onError`, `sessionId`
+and `shardKey`. Returns the `present` and `error` signals, the `sessionId`, and
+`setData(data)`.
+
+### `rateLimit(config, options?)`
+
+**Type:** `(config: RateLimitConfig, options?: RateLimitOptions) => RateLimitResult`
+
+Tracks a client-side rate limit. Options are `destroyRef`, `now` (a clock
+returning milliseconds) and `tickMs`, which defaults to `1000`. Returns the
+`ok`, `disabled` and `retryAfter` signals, `check(count?)`, `consume(count?)`
+and `reset()`.
+
+### `flag(key, defaultValue, options?)`
+
+**Type:** `<T extends FlagValue>(key: string, defaultValue: T, options?: FlagOptions) => Signal<T>`
+
+Returns a signal of one feature flag's value. Options are `client` and
+`destroyRef`.
+
+### `flags(defaults, options?)`
+
+**Type:** `<T extends Record<string, FlagValue>>(flagDefaults: T, options?: FlagsOptions) => Signal<T>`
+
+Returns a signal of several feature flags, keyed as in `defaults`. Options are
+`client` and `destroyRef`.
+
+### `auth(options?)`
+
+**Type:** `(options?: AuthOptions) => AuthResult`
+
+Returns the signed-in `user`, the `token` and the `status` signals, and
+`setToken(token)`, which takes `null` to clear the session. Options are `client`
+and `destroyRef`.
+
+### `authGate(options?)`
+
+**Type:** `(options?: AuthOptions) => AuthGateResult`
+
+Returns the `isAuthenticated` and `isLoading` signals for guarding a route or a
+template. Takes the same options as `auth`.
+
+### `hydratePreloaded(preloaded, options?)`
+
+**Type:** `<T>(preloaded: Preloaded<T>, options?: HydratePreloadedOptions) => HydratePreloadedResult<T>`
+
+Hydrates a query that the server preloaded into a live subscription. Returns
+the `data` and `error` signals. Options are `client`
+and `destroyRef`. The `Preloaded` value comes from the `@lunora/angular/server`
+helpers.
+
+### `agentState(options)`
+
+**Type:** `<T>(options: AgentStateOptions) => AgentStateResult<T>`
+
+Subscribes to one agent thread's state through the generated
+`api.agents.agentState` query. Options are `api`, `threadKey`, `client` and
+`destroyRef`. Returns the `state` and `error` signals.
+
+### `agentChat(options)`
+
+**Type:** `(options: AgentChatOptions) => AgentChatResult`
+
+Renders one agent thread's messages and sends turns to it. Options are `api`,
+`threadKey`, `stream`, `send`, `sendArgs`, `cancel`, `limit`, `onError` and
+`client`.
+
+### `agent(options)`
+
+**Type:** `(options: AgentOptions) => AgentResult`
+
+Thread-level agent primitive. The options and result are typed by
+`AgentOptions` and `AgentResult` in `packages/angular/src/agent.ts`.
+
+### `@lunora/angular/upload`
+
+**Type:** `(options: UploadOptions) => UploadApi`
+
+Uploads files through the framework-neutral storage client. The subpath also
+exports `createUpload`, `createTusAdapter`, `createMultipartAdapter`,
+`createChunkedRestAdapter` and `UploadControl`.
+
+### `@lunora/angular/server`
+
+Re-exports `createServerClient`, `preloadQuery`, `preloadedQueryResult`,
+`getServerSession`, `serializePreloaded` and `deserializePreloaded` from
+`@lunora/client/ssr`.

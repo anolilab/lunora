@@ -48,7 +48,7 @@ path). Internally `fetch`:
 
 1. Decodes the RPC envelope (`POST /_lunora/rpc`).
 2. Resolves the calling identity (via `resolveIdentity`, if configured).
-3. Routes to the right `ShardDO` via [`resolveShard`](#resolveshard), or fans
+3. Routes to the right `ShardDO` via [`resolveShard`](#resolveshardnamespace-shardkey), or fans
    out across shards through the `queryCoordinator` when the envelope sets
    `fanOut`.
 4. Forwards the request to the shard, which validates args and runs the
@@ -451,7 +451,7 @@ Publish a procedure over REST by tagging it with `.expose({ rest: true })` in
 export const list = query
     .input({ channelId: v.id("channels") })
     .expose({ rest: true })
-    .query(async ({ ctx, args }) => ctx.db.query("messages")./* … */);
+    .query(async ({ ctx, args }) => ctx.db.messages.findMany({ where: { channelId: args.channelId } }));
 ```
 
 The runtime then mints `GET /_lunora/rest/messages/list` (queries; also `POST`)

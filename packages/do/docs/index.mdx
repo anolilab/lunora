@@ -6,7 +6,7 @@ related:
     - to: /docs/concepts/sharding
 ---
 
-`@lunora/do` ships the Durable Object base classes. `ShardDO` is the one the runtime
+`@lunora/do` ships the Durable Object (DO) base classes. `ShardDO` is the one the runtime
 drives on every request; `SessionDO` is a standalone building block (see the caveat
 below).
 You only touch them in `src/server/*.ts` when you need to add a custom RPC
@@ -76,7 +76,7 @@ export const ShardDO = createShardDO({
 ```
 
 `reactiveCache` is per-shard and in-memory: it is lost on DO restart and on
-hibernation, so a cold shard simply re-runs the query. Only registered
+hibernation, so a cold shard re-runs the query. Only registered
 `query` functions are memoized — a `mutation` or `action` always runs. Live
 counters (`hits`, `misses`, `evictions`, `entries`, `bytes`) show up on the
 studio's metrics panel.
@@ -156,7 +156,7 @@ authorization can fence recent pre-opt-in operations.
 ## `SessionDO`
 
 A TTL'd session store in a Durable Object: records expire after
-`SESSION_DO_TTL_DEFAULT` seconds (7 days) unless a shorter TTL is requested, a GC
+`SESSION_DO_TTL_DEFAULT` seconds (7 days) unless the request passes its own `ttlSeconds`, which can be any whole number of seconds up to 90 days. A GC
 alarm sweeps daily, and instance count stays bounded by keying on the token prefix
 (`idFromName(token.slice(0, 16))`). Every request must present the
 `SESSION_DO_SECRET` shared secret in the `x-lunora-session-do-secret` header; when
@@ -173,7 +173,7 @@ the secret is unset the DO rejects all calls with 401.
     from [`@lunora/auth`](/docs/packages/auth). That path puts the whole better-auth
     schema, sessions included, in an object with real transactions (which is what
     `@better-auth/scim` requires). `SessionDO` remains usable on its own terms as a
-    TTL'd token store; it is just not wired into auth.
+    TTL'd token store; it is not wired into auth.
 
 </Callout>
 
@@ -310,3 +310,13 @@ import them from
 - `ROOT_SHARD_NAME`: the DO instance name used by the root shard
 - `ROOT_DO_SIZE_WARN_BYTES`: soft cap above which the root DO logs a warning
 - `SESSION_DO_TTL_DEFAULT`: default session TTL (`SessionDO`)
+
+## Other exports
+
+| Export                                                             | Purpose                                                                                                                                      |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mergeDurableObjects(...)`, `MERGED_ROLES`                         | Combines the framework roles listed in `MERGED_ROLES` (`adminRevocations`, `scheduler`, `shardRegistry`) into one Durable Object class.      |
+| `AdminRevocationDO`, `ADMIN_REVOCATION_DO_NAME`                    | Durable Object that records revoked admin tokens outside shard storage, so a point-in-time restore cannot bring a revoked token back.        |
+| `ShardRegistryDO`, `hostedShardRegistry`, `SHARD_REGISTRY_DO_NAME` | Durable Object that holds the live set of shard keys per sharded table. The query coordinator reads it to fan out cross-shard reads.         |
+| `createStableIdFactory(mutationId, scope)`                         | Returns the `ctx.newId()` generator. A replay of the same mutation issues the same ids, so a retried insert does not create a duplicate row. |
+| `createShardPlatform`, `createWorkerPlatform`                      | The Cloudflare composition roots. Each assembles the `@lunora/platform` contracts from the Durable Object state or the Worker env.           |

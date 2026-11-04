@@ -129,7 +129,7 @@ defineApp().analyticsSql((env) => createAnalyticsSqlRest({ accountId: env.CF_ACC
 const analyticsSql = createAnalyticsSql({ binding: createAnalyticsSqlRest({ accountId, apiToken }) });
 ```
 
-The REST transport fails with the same error: a non-2xx status (`429`, `500`, `503` and `507` are retryable), the `timeoutMs` deadline (`504`, retryable, default 60 s), or a request that never reached the API, such as a DNS failure or a reset connection (retryable).
+The REST transport fails with the same error: a non-2xx status (`429`, `500`, `503` and `507` are retryable), the `timeoutMs` deadline (`504`, retryable, default 60 s), or a request that never reached the API, such as a domain name system (DNS) failure or a reset connection (retryable).
 
 The binding has no local simulator, so `lunora dev` queries the account's live analytics: miniflare proxies the binding to Cloudflare even without `--remote`, and every query is billed. On celld and Node the binding does not exist, so codegen omits `ctx.analyticsSql` and reports `platform_unsupported_feature`.
 
@@ -197,7 +197,7 @@ Rows written before an index existed are not synced by the write hook. Index the
 
 ### Tenant isolation on `.shardBy()` tables
 
-Vectorize indexes are **account-global**: every shard DO shares the same index, so a query with no `namespace` matches every tenant's vectors. When a `.shardBy()`'d table declares a vector index, codegen scopes both sides automatically: the auto-sync write hook and `ctx.vectors` itself default `namespace` to the owning DO's shard key for that specific index, so `ctx.vectors.query`/`getByIds`/`deleteByIds`/`upsert`/`upsertNow` only ever see this tenant's vectors unless you pass an explicit `namespace` yourself. That override is deliberate, not a hole: `ctx.vectors` is trusted server-side app code (the same trust level `ctx.db` gives any table read), so an explicit `namespace` is trusted to mean a genuine cross-tenant admin operation, the same way an explicit `table` argument on `ctx.db` is.
+Vectorize indexes are **account-global**: every shard Durable Object (DO) shares the same index, so a query with no `namespace` matches every tenant's vectors. When a `.shardBy()`'d table declares a vector index, codegen scopes both sides automatically: the auto-sync write hook and `ctx.vectors` itself default `namespace` to the owning DO's shard key for that specific index, so `ctx.vectors.query`/`getByIds`/`deleteByIds`/`upsert`/`upsertNow` only ever see this tenant's vectors unless you pass an explicit `namespace` yourself. That override is deliberate, not a hole: `ctx.vectors` is trusted server-side app code (the same trust level `ctx.db` gives any table read), so an explicit `namespace` is trusted to mean a genuine cross-tenant admin operation, the same way an explicit `table` argument on `ctx.db` is.
 
 A schema can mix `.shardBy()`'d and root-scoped vectorized tables. `ctx.vectors` is one flat facade over every declared index, reachable from any DO instance, so the default above only applies to indexes sourced from a `.shardBy()`'d table; a root-scoped index always stays namespace-less, from any instance. The single default (root) DO instance owns no shard key at all: calling a **sharded** index from it with no explicit `namespace` throws (rather than silently searching/mutating every tenant, or silently returning nothing). Pass an explicit `namespace`, or issue the call from the sharded DO instance that owns the tenant.
 
@@ -292,7 +292,7 @@ export const publish = action.input({ repo: v.string() }).action(async ({ ctx, a
 });
 ```
 
-The Git client can be a container (see [`@lunora/container`'s Artifacts recipe](/docs/packages/container#pushing-to-a-cloudflare-artifacts-repo)) or a CI runner the action starts. Don't send the authenticated remote, or `token.plaintext`, back to a browser: anyone holding it can push until it expires. Keep write tokens short-lived and `revokeToken(token.id)` when the session that needed one ends.
+The Git client can be a container (see [`@lunora/container`'s Artifacts recipe](/docs/packages/container#pushing-to-a-cloudflare-artifacts-repo)) or a continuous integration (CI) runner the action starts. Don't send the authenticated remote, or `token.plaintext`, back to a browser: anyone holding it can push until it expires. Keep write tokens short-lived and `revokeToken(token.id)` when the session that needed one ends.
 
 ### Namespaces and jurisdiction
 
@@ -345,7 +345,7 @@ Repo-level activity (`pushed`, `cloned`, `fetched`, `token.created`, `token.revo
 
 ### Development and testing
 
-There is no local simulator: miniflare only proxies the binding to the remote service, so `lunora dev` needs an authenticated wrangler, and every call reaches your account. In unit tests, use the in-memory fake from `@lunora/testing`:
+There is no local simulator: miniflare only proxies the binding to the remote service, so `lunora dev` needs an authenticated wrangler, and every call reaches your account. In unit tests, use the in-memory fake from [`@lunora/testing`](/docs/packages/testing):
 
 ```ts
 import { createArtifacts } from "@lunora/bindings/artifacts";

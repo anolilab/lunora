@@ -11,8 +11,9 @@ related:
 
 `@lunora/d1` is the D1-backed storage adapter for tables marked
 `.global()`. It wraps the Workers `D1Database` binding with the Sessions
-API (so read-your-writes works across replicas) and ships a migration
-runner the CLI's `migrate` command relies on.
+API (so read-your-writes works across replicas) and ships a `MigrationRunner`
+for hand-written `Migration` records. The output of `lunora migrate generate` is
+applied with `wrangler`, not by this runner.
 
 ```ts
 import { D1Client } from "@lunora/d1";
@@ -133,6 +134,9 @@ migration's own concern.
 
 ## `Migration`
 
+A `Migration` has a numeric `version` that orders it, a `name` for logs, and one
+SQL statement:
+
 ```ts
 interface Migration {
     version: number; // monotonically increasing integer; orders application
@@ -163,7 +167,7 @@ are infrastructural, not query-shaped:
 The last two are judgement calls rather than certainties: an isolate over its
 memory limit, or a storage operation past its timeout, is transient when the
 runtime recycled it under unrelated load and deterministic when the query is
-simply too big for D1 to serve. In the second case the retries are wasted work
+too big for D1 to serve. In the second case the retries are wasted work
 before the same failure surfaces — if you see them repeat on one query, the
 query is the problem.
 
@@ -219,8 +223,8 @@ With neither set — which is how the automatic paths run — a failure that too
 longer than two seconds is treated as a stall and **not** retried, so the
 unconfigured case cannot compound one hang into three.
 
-<strong>A timeout abandons the wait, not the work.</strong> There is no way to cancel an in-flight D1 operation from a Worker, so the subrequest continues and
-still counts against the request's subrequest budget. What you buy is that *your* request stops waiting — the difference between a fast error and a user
+**A timeout abandons the wait, not the work.** There is no way to cancel an in-flight D1 operation from a Worker, so the subrequest continues and
+still counts against the request's subrequest budget. What you buy is that _your_ request stops waiting: a fast error instead of a user
 watching a spinner for half a minute.
 
 ### Retries are not enough on a critical write path
@@ -328,3 +332,21 @@ migration matches the table the runtime creates byte for byte. Exports
 `quoteIdentifier`, `sqlAffinityForKind`, `frameworkColumnDdl`, `columnRef`,
 `physicalIndexName`, and the `SqlAffinity` type. You rarely import this directly;
 it exists so those two code paths stay in lockstep.
+
+## Other exports
+
+The entries below come from the same modules as the sections above. The first group is
+the `.global()` store that the runtime builds over the D1 binding. The second is the
+admin and Studio tooling that reads and writes `.global()` tables.
+
+| Export                                                                                                                        | Purpose                                                                                                                  |
+| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `createD1CtxDb(options)`                                                                                                      | Builds the D1-backed `.global()` writer over the SQLite dialect. `options` is `D1CtxDbOptions`.                          |
+| `retryingExec(exec, options?)`                                                                                                | Wraps a `SqlCtxExec` so its read-only statements retry transient D1 failures. This is the seam `.global()` reads use.    |
+| `sqliteDialect`                                                                                                               | The SQLite dialect that the store core and the migration helpers are injected with.                                      |
+| `runD1GlobalTableMigrations`, `runD1AggregateMigrations`, `runD1RankMigrations`, `runD1SearchMigrations`, `runD1CdcMigration` | Create the tables, companion tables and CDC log that a schema needs. Each one is idempotent.                             |
+| `backfillD1SearchIndexes(exec, schema)`                                                                                       | Indexes existing rows into every search companion table, including the ones that migrations leave empty.                 |
+| `readD1CdcChanges`, `sweepD1CdcRetention`                                                                                     | Reads `.global()` changelog entries in commit order, and deletes entries older than a retention window.                  |
+| `emitD1QueryCost(sql, meta)`                                                                                                  | Writes the per-query cost event for one statement, using `d1QueryTag` as its tag.                                        |
+| `listGlobalTables`, `readGlobalTablePage`, `facetGlobalColumn`                                                                | Introspection for the Studio database browser: table list with row counts, one page of rows, and distinct column values. |
+| `exportGlobalRows`, `importGlobalRows`, `selectGlobalTables`                                                                  | Admin bulk export and import for `.global()` tables.                                                                     |

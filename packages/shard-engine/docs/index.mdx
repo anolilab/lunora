@@ -4,9 +4,9 @@ description: The host-neutral reactive engine — everything a shard does that i
 ---
 
 `@lunora/shard-engine` is the reactive engine extracted out of `@lunora/do`:
-`ctx.db`, dependency tracking, the reactive cache, the CDC op-log and poke
-protocol, relations, RLS, search, rank and aggregate indexes, the relay tier, and
-the admin/ops surfaces. None of it knows what a Durable Object is; it takes a
+`ctx.db`, dependency tracking, the reactive cache, the change data capture (CDC) op-log and poke
+protocol, relations, row-level security (RLS), search, rank and aggregate indexes, the relay tier, and
+the admin/ops surfaces. None of it knows what a Durable Object (DO) is; it takes a
 `SqlExec` and the `@lunora/platform` host contracts and runs anywhere those can
 be implemented.
 
@@ -54,7 +54,7 @@ engine-level legs need `createShardCtxDb` and the relay hub, which live here, so
 importing the engine from `@lunora/platform` would invert the dependency and
 cycle. A host is proven only when it passes both suites.
 
-The engine legs cover OCC snapshot-CAS conflicts (and the trigger-recursion
+The engine legs cover optimistic concurrency control (OCC) snapshot-CAS conflicts (and the trigger-recursion
 ceiling, which is a _different_ `ConflictKind` and must stay distinct),
 shape-poke ordering with per-socket cursor resume, and RLS identity under a live
 subscription.

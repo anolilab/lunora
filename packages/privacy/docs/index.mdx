@@ -67,7 +67,7 @@ export const privacyConfig = {
 export const privacyFor = definePrivacy(privacyConfig);
 ```
 
-Call it with the caller's context, and with the caller's identity when the caller is the data subject: `await privacyFor(ctx, identity).requestExport()`. Resolve `identity` (`{ subjectId, sessionAgeMs }`) from the session, never from an argument, so a caller cannot act on another subject's data. An operator call, a cron or a workflow passes no identity, and the subject methods (`requestExport`, `requestErasure`, `cancelRequest`, `downloadUrl`, `myRequests`) refuse such a call with `UNAUTHENTICATED`.
+Call it with the caller's context, and with the caller's identity when the caller is the data subject: `await privacyFor(ctx, identity).requestExport()`. Resolve `identity` (`{ subjectId, sessionAgeMs }`) from the session, never from an argument, so a caller cannot act on another subject's data. An operator call, a cron or a workflow passes no identity, and the subject methods (`requestExport`, `requestErasure`, `cancelRequest`, `downloadUrl`, `myRequests`) refuse such a call with `UNAUTHENTICATED` (see [errors](/docs/errors)).
 
 The request store implements the package's own `privacy_requests` table. `fromRequestRow`, `toRequestRow`, `toRequestPatch` and `OPEN_STATUSES` map its rows, so the column layout is not written again in the app. The patch includes `subjectId`, which a completed erasure rewrites.
 
@@ -139,3 +139,124 @@ A table that holds user data must be covered by a dataset, or excluded with a re
 - An admin retry of an export that includes the D1 sign-in tables is recorded as failed. The retry runs inside a mutation, and a mutation has no D1 binding. Erasure retries restart the workflow and are unaffected.
 - The Studio's Privacy requests tab appears only when the app declares `@lunora/privacy`.
 - The legal and tax review of the defaults is still open. See the [legal basis page](/docs/packages/privacy/legal).
+
+## API
+
+Reference for the main exports of `@lunora/privacy`, `@lunora/privacy/eu`,
+`@lunora/privacy/de` and `@lunora/privacy/workflow`. The port and record interfaces
+not listed here are in `api-snapshots/privacy.api.md`.
+
+### `definePrivacy`
+
+**Type:** `<C>(config: PrivacyConfig<C>) => PrivacyFor<C>`
+
+Builds the privacy object for an app. Call the returned function with the caller's
+context and identity, for example `privacyFor(ctx, identity).requestExport()`.
+
+### `PrivacyConfig`
+
+**Type:** interface
+
+The options for `definePrivacy`. `datasets` and `ports` are required. `presets`,
+`erasure`, `exclude` and `subjectKey` are optional. `tombstoneSecret` is required
+for any erasure. `ports` receives the call context and returns a `PrivacyPorts`
+object.
+
+### `PrivacyPorts`
+
+**Type:** interface
+
+The ports the app supplies: `data`, `files` (a `StorePort`), `store` (a
+`RequestStore`), `now`, `newId`, and the optional `archive` and `tombstones`
+ports.
+
+### `defineDataset`
+
+**Type:** `(id: string, spec: DatasetSpec) => Dataset`
+
+Declares the personal data of one module. `spec` takes `legalBasis`, `origin`,
+`purpose`, `tables` and the optional `files`, `phase`, `placement` and `recipients`.
+
+### `DatasetSpec`
+
+**Type:** interface
+
+The options for `defineDataset`. Each entry in `tables` is a `TableSpec`. An entry
+with `omit` leaves those columns out of the export.
+
+### `retain`
+
+**Type:** `(rule: string, options?: { from: ... }) => RetentionRule`
+
+Declares a retention rule for a table column. The column must hold a `Date` or
+epoch milliseconds, and any other value is refused.
+
+### `RetentionRule`
+
+**Type:** interface
+
+A retention period for a table. `dispositionFor` turns a set of rules into the
+`RowDisposition` that `eraseBatch` calls for each row.
+
+### `legalClaimsHold`
+
+**Type:** `RetentionRule`
+
+The retention rule for legal claims in the German preset.
+
+### `eu`
+
+**Type:** `(options?: EuOptions) => PrivacyPreset`
+
+Imported from `@lunora/privacy/eu`. Its policy sets `extensionMonths` to `2`,
+`responseMonths` to `1` (`EU_RESPONSE_MONTHS`), and `reviewRequired` to `true`.
+`DEFAULT_ERASURE_GRACE_DAYS` is `14`.
+
+### `germany`
+
+**Type:** `(options?: GermanyOptions) => PrivacyPreset`
+
+Imported from `@lunora/privacy/de`. Adds the German retention rules.
+`GermanyOptions.voucherYears` accepts `8` or `10`.
+
+### `TombstonePort`
+
+**Type:** interface
+
+Stores the tombstone key of each erased subject. `add` must be an idempotent upsert.
+`has` answers whether one key is on record. `keys` returns all of them.
+
+### `ArchivePort`
+
+**Type:** interface
+
+Holds the rows that retention keeps. `purgeBatch(before)` deletes one batch of archived
+rows whose retention period has ended, and the sweep calls it.
+
+### `OPEN_STATUSES`
+
+**Type:** `ReadonlyArray<RequestStatus>`
+
+The request statuses that are still open. `isTerminal` returns `true` for the others.
+
+### `fromRequestRow`
+
+**Type:** `(row: RequestRow) => RequestRecord`
+
+Maps a `privacy_requests` row to a `RequestRecord`. `toRequestRow` maps the other way,
+and `toRequestPatch` maps a partial record to a partial row.
+
+### `authDataset`
+
+**Type:** `(names?: AuthTableNames) => Dataset`
+
+Declares the personal data of the authentication tables. `names` renames the user
+table when the app uses a different name.
+
+### `ERASE_BATCH`
+
+**Type:** `number`
+
+**Default:** `100`
+
+The number of rows `eraseBatch` deletes per call.

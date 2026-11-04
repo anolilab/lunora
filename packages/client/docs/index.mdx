@@ -55,9 +55,8 @@ A pure-JSON payload encodes byte-identically, so this is transparent and
 back-compatible. A value a stable form can't represent is **rejected at the send
 site** (never silently corrupted): a `RegExp`, `Headers`, or any class instance
 throws a `TypeError`, and anything nested deeper than 64 levels throws a
-`RangeError`. An over-long `bigint` (more than 1024 digits) is rejected on the
-**decode** side, also with a `RangeError` — the encoder has no length check, so
-one is caught by the peer that reads it rather than by the sender.
+`RangeError`. An over-long `bigint` (more than 1024 digits) is rejected with a `RangeError` on
+both the encode and decode sides, so the sender sees it at the call site.
 
 > **Cache-keyed args included.** A subscription / `useQuery` / shape arg doubles
 > as the reactive **cache key**: it is keyed on its _wire form_
@@ -92,10 +91,11 @@ overflow). They replay in submission order once the socket reconnects. Each
 mutation carries a stable idempotency id, so a write that committed before the
 client lost the ack is deduplicated by the server on replay rather than
 applied twice. On reconnect the replay **coalesces** the queued writes for a shard
-into batched round trips (one `/_lunora/rpc-batch` per ≤500-write chunk) instead of
+into batched round trips (one `/_lunora/rpc-batch` request per chunk of up to 500 writes, split smaller when a body would exceed 1 MiB) instead of
 one request per write: a flaky reconnect with a full outbox flushes in a handful
-of round trips, not hundreds. The queue lives in memory by default; for durability
-across a reload pass a `persistence` adapter:
+of round trips, not hundreds. In a browser that has `indexedDB`, the queue persists to
+IndexedDB by default. Pass `persistence: false` to keep it in memory, or pass an
+adapter to choose the store:
 
 ```ts
 import { LunoraClient, createIndexedDbPersistence, createAsyncStoragePersistence } from "lunorash/client";
@@ -312,3 +312,105 @@ const preloaded = await preloadQuery(client, api.messages.list, { channelId: "ge
 
 // Embed `serializePreloaded(preloaded)` in HTML; rehydrate with usePreloadedQuery on the client.
 ```
+
+## API
+
+### `LunoraClientOptions`
+
+**Type:** `interface`. The options object for `new LunoraClient()`. `url` is the
+only required field. These fields set the defaults the client uses:
+
+- `reconnect`: backoff for the WebSocket. **Default:** a 250 ms initial delay that
+  doubles up to 30 s, with equal jitter.
+- `persistence`: the store for the offline queue. **Default:** IndexedDB when
+  `indexedDB` exists and no `outbox` is set, otherwise in memory. `false` turns
+  persistence off.
+- `queryCache`: the read cache. **Default:** IndexedDB when `indexedDB` exists,
+  otherwise none. `false` turns the cache off.
+- `offlineQueue`: queue limits. `maxItems` **defaults to** 1000.
+- `connectTimeoutMs`: **Default:** 10 000 ms.
+- `rpcTimeoutMs`: **Default:** 30 000 ms.
+- `heartbeatIntervalMs`: **Default:** 30 000 ms.
+
+### `createInMemoryPersistence()`
+
+**Type:** `() => PersistenceAdapter`. Keeps the offline queue in memory. It does
+not survive a reload. Use it in tests, during SSR, or where no durable store is wanted.
+
+### `createInMemoryQueryCache(options?)`
+
+**Type:** `(options?: { maxEntries?: number }) => QueryCacheAdapter`. An in-memory
+read cache, capped at `maxEntries` rows. It does not survive a reload.
+
+### `createIndexedDbQueryCache(options?)`
+
+**Type:** `(options?: IndexedDbQueryCacheOptions) => QueryCacheAdapter`. A durable
+read cache stored in the `lunora-query-cache` IndexedDB database. It throws when no
+`IDBFactory` exists, so use `createInMemoryQueryCache` outside a browser.
+
+### `subscribeLiveTopic(options)`
+
+**Type:** `(options: SubscribeLiveTopicOptions) => () => void`. Follows a live topic
+on the connection shared by a URL. It returns an unsubscribe function. The last
+unsubscribe closes the connection.
+
+### `httpStream(route, args?, options?)`
+
+**Type:** `(route, args?, options?) => StreamIterable`. Reads a streaming HTTP
+route as an async iterable. The iterable ends when the server sends
+`event: complete`. An `event: error` frame, or a transport failure, rejects the
+next `next()` call. Call `.cancel()`, or abort `options.signal`, to stop the fetch.
+
+### `getIdentityStore(client)`
+
+**Type:** `(client: LunoraClient) => IdentityStore`. Returns the identity store that
+`@lunora/client/auth` uses for one client. The store is created on first access and
+reused for that client, so each client makes one identity request.
+
+### `createUpload(options)`
+
+**Type:** `(options: CreateUploadOptions) => UploadAdapter`. Creates an upload
+adapter for an RLS-gated endpoint. TUS is the default protocol, and it resumes after
+a pause or a dropped connection. Import it from `@lunora/client/upload`.
+
+### `lunoraQueryOptions(client, function_, args, options?)`
+
+**Type:** `(client: LunoraClient, function_: FunctionReference, args, options?) => LunoraQueryOptions`.
+TanStack Query options for a one-shot fetch. `staleTime` is infinite, so TanStack
+never refetches on its own, and no WebSocket opens. Import it from `@lunora/client/query`.
+
+### `LunoraAdminClient`
+
+**Type:** `class`, extends `LunoraClient`. Adds admin operations such as
+`setDeploymentPause`, `listScheduledJobs`, `schedulerStatus` and
+`listWorkflowInstances`. Import it from `@lunora/client/admin`.
+
+### `createServiceClient(binding)`
+
+**Type:** `(binding: ServiceBindingLike) => LunoraServiceClient`. Calls another
+Worker through a service binding, for example `env.BACKEND`. Import it from
+`@lunora/client/service`.
+
+### `getServerSession(request, auth)`
+
+**Type:** `<Result>(request: HeadersSource, auth: AuthLike<Result>) => Promise<NonNullable<Result> | null>`.
+Reads the signed-in session on the server. Forward the session's token to
+`createServerClient` so the server-side load runs as the same user. Import it from
+`@lunora/client/ssr`.
+
+### `isUnauthorizedError(error)`
+
+**Type:** `(error: unknown) => error is Error & { code: "UNAUTHORIZED" }`. True when a
+rejection is an authentication failure (HTTP 401), such as a missing or invalid identity.
+
+### `isForbiddenError(error)`
+
+**Type:** `(error: unknown) => error is Error & { code: "FORBIDDEN" }`. True when a
+rejection is an RLS or policy denial (HTTP 403). The caller is authenticated but
+not allowed to read or write that row.
+
+### `LunoraClientError`
+
+**Type:** `type`. The error that client calls reject with. It extends `Error` with
+optional `code`, `data`, `docsUrl`, `headers`, `hint` and `why` fields. Branch on
+`code`, or use the `is*Error` guards above.

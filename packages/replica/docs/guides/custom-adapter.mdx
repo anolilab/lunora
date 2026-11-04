@@ -11,6 +11,8 @@ write a custom adapter.
 
 ## The `SqliteAdapter` interface
 
+An adapter implements the four members of `SqliteAdapter`, which `packages/replica/src/adapters/types.ts:9` defines:
+
 ```ts
 interface SqliteAdapter {
     close: () => void;
@@ -93,6 +95,9 @@ export const createExpoSqliteAdapter = (database: SQLiteDatabase): SqliteAdapter
 Pass your adapter to `LocalMirror`:
 
 ```ts
+import { Database } from "bun:sqlite";
+import { LocalMirror } from "@lunora/replica";
+
 const adapter = createBunSqliteAdapter(new Database(":memory:"));
 const mirror = new LocalMirror({ db: adapter });
 ```

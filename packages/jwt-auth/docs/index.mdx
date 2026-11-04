@@ -5,9 +5,11 @@ description: Bring your own auth — verify JWTs from Clerk, WorkOS AuthKit, Aut
 
 `@lunora/jwt-auth` turns an external identity provider's JWT into a Lunora
 identity. The provider owns users and sessions. The Worker verifies each
-request's token against the provider's JWKS. The verified user becomes
-`ctx.auth` for every query, mutation and action, and feeds RLS and live
-subscriptions.
+request's token against the provider's JSON Web Key Set (JWKS). The verified user
+becomes `ctx.auth` for every query, mutation and action, and feeds row-level
+security (RLS) and live subscriptions.
+
+Install the package:
 
 ```sh
 pnpm add @lunora/jwt-auth
@@ -63,7 +65,51 @@ The verify step the resolver is built on, shared with
 genuine token whose only fault is a past `exp`. `verifyJwt` verifies one
 token and throws `jose`'s error on any failure.
 
+## Token sources
+
+The `token` option reads the token from the request. Each helper returns a
+`TokenSource`, `(request: Request) => string | null | undefined`.
+
+### `bearerToken`
+
+**Type:** `TokenSource`
+
+**Default:** the `token` option when it is not set.
+
+Reads the `Authorization: Bearer <token>` header. It returns `undefined` when the
+header is missing or uses another scheme.
+
+### `headerToken(name)`
+
+**Type:** `(name: string) => TokenSource`
+
+Reads the value of the named header verbatim.
+
+### `cookieToken(name)`
+
+**Type:** `(name: string) => TokenSource`
+
+Reads the named cookie from the `Cookie` header.
+
+### `firstToken(...sources)`
+
+**Type:** `(...sources: TokenSource[]) => TokenSource`
+
+Returns the first token that any of the sources yields. For example,
+`firstToken(bearerToken, cookieToken("__session"))` checks the bearer header
+first, then the Clerk session cookie.
+
+## `ANONYMOUS`
+
+**Type:** `null`
+
+The value a resolver returns for an anonymous request. Use it when a custom
+`claims` mapper or resolver needs to refuse a token.
+
 ## Presets
+
+Each preset takes its provider's options and returns a `resolveIdentity`-compatible
+resolver:
 
 ```ts
 import { auth0, clerk, supabase, workos } from "@lunora/jwt-auth";

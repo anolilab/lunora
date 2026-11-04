@@ -34,7 +34,7 @@ codegen and the runtime.
 
 Create a `TableBuilder`. Fluent methods:
 
-- `.global({ backend? })`: store in D1 (cross-shard) instead of a Durable Object
+- `.global({ backend? })`: store in D1 (cross-shard) instead of a Durable Object (DO)
 - `.shardBy(field)`: partition by the named field
 - `.source({ binding, query, tenantBy?, idColumn?, map?, columns?, refresh?, mode? })`: materialize this table from an external Postgres/MySQL behind Cloudflare Hyperdrive. A system poll loop reads the (tenant-scoped) slice and lands it in the DO's SQLite, then `defineShape` carries it to clients. Implies `.externallyManaged()`; under `.shardBy()`, `tenantBy` is mandatory (the tenant-isolation boundary, enforced by the `external_source_unscoped` advisor lint)
 - `.index(name, fields, { unique? })`: secondary index
@@ -159,7 +159,7 @@ mechanisms cooperate to guarantee this on the DO-backed runtime:
 - **Idempotency dedup.** A client-issued `x-lunora-mutation-id` is deduped by
   `(identity, mutationId)`. A replay of an unacknowledged write returns the
   **cached** result without re-running the handler at all.
-- **OCC surfaces as an error, not a retry.** A write guarded by optimistic
+- **Optimistic concurrency control (OCC) surfaces as an error, not a retry.** A write guarded by optimistic
   concurrency that loses the race fails the request with a `409 Conflict`
   response back to the caller. The runtime does not catch it and re-invoke the
   handler internally; the caller decides whether to retry, and a retry is a
@@ -199,7 +199,7 @@ export const messagesByChannel = defineShape({
 });
 ```
 
-`where` returns the same `WhereInput` the RLS DSL uses, so there is no second
+`where` returns the same `WhereInput` the row-level security (RLS) DSL uses, so there is no second
 predicate implementation. Because it runs with an identity the client can't
 forge, a shape is a _read-as-permission_.
 
@@ -323,8 +323,8 @@ export const listPublicPosts = c.query
 
 Caching a procedure-backed endpoint can leak data, because the procedure runs
 under `ctx.auth` and RLS. So `scope` is enforced, not
-trusted: **a request carrying `Authorization`, `Cookie`, or
-`Cf-Access-Jwt-Assertion` is always answered `private`**, even under
+trusted: **a request carrying `Authorization`, `Cookie`,
+`Cf-Access-Jwt-Assertion`, `Payment-Signature`, or `X-Payment` is always answered `private`**, even under
 `scope: "public"`. A per-caller response therefore never reaches a shared or edge
 cache, and the worst a mis-declared `scope` costs you is a missed cache hit.
 

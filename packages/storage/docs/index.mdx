@@ -295,8 +295,8 @@ const url = await storage.getPresignedUrl("exports/report.csv", { method: "GET",
 ```
 
 `s3` has to reach the `createStorage` call that built the instance you are
-calling — a `Storage` without it throws `INTERNAL: 's3' credentials are
-required` on every `getPresignedUrl`. Build the instance yourself (as above)
+calling — a `Storage` without it throws an `INTERNAL` error,
+"@lunora/storage: `s3` credentials are required for getPresignedUrl()", on every call. Build the instance yourself (as above)
 when the app's `.storage()` declaration does not carry `s3`.
 
 ## Large objects (multipart)
@@ -320,7 +320,7 @@ by an `adminToken`, which is right for the file browser and wrong for end users.
 browser-driven uploads with **live progress, pause/resume, large-file resumable
 and per-part retry**, `@lunora/storage/upload` mounts `@visulima/storage`'s
 resumable upload handlers (TUS / chunked-REST / multipart) behind an app-supplied
-**RLS** gate. Drive it from the client with
+**row-level security (RLS)** gate. Drive it from the client with
 [`@lunora/react/upload`](/docs/packages/react#file-uploads-lunorareactupload)
 (or `@lunora/vue` / `@lunora/solid` / `@lunora/svelte`, or the framework-agnostic
 `@lunora/client/upload`). Lunora does not hand-roll the uploader.

@@ -168,3 +168,199 @@ not guaranteed to `deserialize` under another. A SQLite file carried across a
 Node upgrade can fail to read back values it wrote. See
 `packages/platform-node/src/node-kv-store.ts` and
 [`plans/234-node-host-findings.md`](https://github.com/anolilab/lunora/blob/alpha/plans/234-node-host-findings.md).
+
+## API
+
+Every public export of `src/index.ts`, plus the conformance entry point.
+
+### `createNodePlatform`
+
+**Type:** `(options?: NodePlatformOptions<Queues, Workflows>) => NodePlatform<Queues, Workflows>`
+
+Composes every contract this package provides over one `better-sqlite3` database
+file. The `queues`, `workflows`, `objectStorage` and `globalTables` members are
+`undefined` when the matching option (`queues`, `workflows`,
+`objectStorageDirectory`, `globalTablesPath`) is omitted. Call `drain()` and then
+`close()` for a graceful shutdown. After `close()`, `scheduler.schedule()` and
+`shard.alarms.set()` throw.
+
+### `NodePlatform`
+
+**Type:** interface
+
+The object `createNodePlatform` returns. It exposes `shard`, `kv`, `sockets`,
+`scheduler`, `directory`, `dispatch`, `capabilities`, `drain`, `close` and
+`[Symbol.dispose]`, plus the optional `queues`, `workflows`, `objectStorage` and
+`globalTables` members described above.
+
+### `NodePlatformOptions`
+
+**Type:** `{ dispatch?, globalTablesPath?, objectStorageDirectory?, onQueueBatch?, queues?, workflows? } & NodeSchedulerHostOptions & NodeShardHostOptions & NodeShardRegistryOptions`
+
+The options for `createNodePlatform`. The shard host reads `path`, `shardKey` and
+`onAlarm`, the scheduler reads `onDispatch`, and the shard registry reads
+`directory`, `onAlarm` and `onFetch`. `queues` requires `onQueueBatch`, which the
+platform calls for each assembled batch.
+
+### `NodePlatformDispatchOptions`
+
+**Type:** `{ adminToken?: string; schedulerSecret?: string }`
+
+The secrets the dispatch route checks. `adminToken` must match the
+`LUNORA_ADMIN_TOKEN` the queue caller sends. `schedulerSecret` verifies a signed
+scheduler body. With neither set, the route refuses every request.
+
+### `createNodeDispatchRoute`
+
+**Type:** `(options: NodeDispatchRouteOptions) => (request: Request) => Promise<Response>`
+
+Builds the in-process dispatch route. Mount the returned handler at
+`NODE_SCHEDULER_DISPATCH_PATH` yourself. The route does not register a path.
+
+### `NODE_SCHEDULER_DISPATCH_PATH`
+
+**Type:** `"/_lunora/scheduler/dispatch"`
+
+The path `@lunora/dispatch` and `@lunora/scheduler` post to.
+
+### `createNodeGlobalStore`
+
+**Type:** `(options?: NodeGlobalStoreOptions) => NodeGlobalStore`
+
+Creates the `.global()` backend on its own SQLite file, using the
+`@lunora/sql-store` core. `writer(options)` returns the `createSqlCtxDb` facade
+that a shard's `d1` thunk expects.
+
+### `createNodeSqlExec`
+
+**Type:** `(database: Database.Database) => SqlCtxExec`
+
+Builds the SQL executor over a `better-sqlite3` connection. Its `transaction`
+holds `BEGIN IMMEDIATE` open across the awaits of an async closure.
+
+### `createNodeHttpServer`
+
+**Type:** `(options: NodeHttpServerOptions) => Promise<NodeHttpServer>`
+
+Serves an app worker's `fetch` over `node:http` and resolves once the server is
+listening. `fetch` is required. `host` defaults to the loopback interface.
+
+### `createNodeProfileHandler`
+
+**Type:** `({ token }: NodeProfileHandlerOptions) => NodeProfileHandler`
+
+Builds a fetch-style handler that captures a CPU or heap profile of the running
+process. It accepts `POST` requests with `Authorization: Bearer <token>`. The
+`token` option is required and non-empty, and creating the handler throws when it
+is empty.
+
+### `NodeProfileHandlerOptions`
+
+**Type:** `{ token: string }`
+
+The bearer token the profile handler checks, compared as SHA-256 digests.
+
+### `createNodeQueueHost`
+
+**Type:** `<Queues>(database: Database.Database, options: NodeQueueHostOptions<Queues>) => NodeQueueHost<Queues>`
+
+Creates the queue host over the `_lunora_queue_messages` table, with one producer
+binding per declared queue. Delivery runs on `poll()`, because the host owns no
+timer.
+
+### `createNodeR2Bucket`
+
+**Type:** `(options: NodeR2BucketOptions) => R2BucketLike`
+
+Creates a bucket over a local directory, with one file per object. Use it with
+`createStorage({ bucket, bucketName })`.
+
+### `createNodeSchedulerHost`
+
+**Type:** `(database: Database.Database, options?: NodeSchedulerHostOptions) => NodeSchedulerHost`
+
+Creates a scheduler whose jobs persist in a SQLite table and re-arm on
+construction. `onDispatch` receives due jobs. Its `schedule()` refuses
+`retry.forever`.
+
+### `createNodeShardHost`
+
+**Type:** `(options?: NodeShardHostOptions) => { database, dispose, drain, host }`
+
+Creates the single-writer shard host over a `better-sqlite3` database. `path` is
+the database file. `dispose()` clears the pending alarm timer and closes the
+database together.
+
+### `createNodeShardKvStore`
+
+**Type:** `(database: Database.Database) => ShardKvStore`
+
+Builds the key-value store over a `better-sqlite3` table in the shard's database.
+Values use `node:v8` serialization, so see [Known divergences](#known-divergences).
+
+### `createNodeShardNamespace`
+
+**Type:** `(directory: DirectShardDirectory) => ShardNamespaceLike`
+
+Presents a shard registry as the namespace a worker is built over
+(`createWorker({ shardDO })`). Both `idForName` and `idFromName` return the key
+itself.
+
+### `createNodeShardRegistry`
+
+**Type:** `(options?: NodeShardRegistryOptions) => NodeShardRegistry`
+
+Builds the in-process shard registry. `directory` names the folder that holds one
+SQLite file per shard. Omit it for in-memory shards, which do not survive a
+restart. `onAlarm` and `onFetch` are the registry's delivery hooks.
+
+### `createNodeShardState`
+
+**Type:** `(shard: NodeShard) => NodeShardState`
+
+Builds the `DurableObjectState`-shaped object for a shard. It omits the native
+point-in-time-recovery methods, so `getPitrBookmark` and `pitrRestore` answer
+`PITR_UNAVAILABLE`.
+
+### `bindShardSockets`
+
+**Type:** `(shard: ShardSocketHooks, inbound: Pick<NodeShard["inbound"], "onClose" | "onMessage">) => void`
+
+Delivers a shard's inbound socket events. Call it once for each shard instance,
+at the point where you build the shard. Cloudflare calls `webSocketMessage` and
+`webSocketClose` for you, but Node does not.
+
+### `createNodeSocketHost`
+
+**Type:** `(database: Database.Database) => NodeSocketHost`
+
+Builds the socket registry. Attachments and tags persist to `database`. The
+returned `socket` member implements `SocketHost`.
+
+### `createNodeWorkflowHost`
+
+**Type:** `<Workflows>(options: NodeWorkflowHostOptions<Workflows>) => NodeWorkflowHost<Workflows>`
+
+Compiles each declared workflow onto the `@visulima/workflow` engine. It requires
+a `store` from `createNodeWorkflowStore`, so runs survive a restart.
+
+### `createNodeWorkflowStore`
+
+**Type:** `(database: Database.Database) => WorkflowStore`
+
+Builds the durable workflow store over a `better-sqlite3` connection. Pass the
+result to `createNodeWorkflowHost({ store })`.
+
+### `createNodeConformanceHost`
+
+**Type:** `() => ConformanceHost`
+
+Imported from `@lunora/platform-node/conformance`. Builds a fresh host over an
+in-memory `better-sqlite3` database for one run of the `@lunora/platform`
+conformance suite.
+
+### `NodeShardRegistryOptions`
+
+**Type:** `{ directory?: string; onAlarm?: (shard: NodeShard) => Promise<void> | void; onFetch?: (request: Request, shard: NodeShard) => Promise<Response> | Response }`
+
+Options for `createNodeShardRegistry`. Omit `directory` for in-memory shards.

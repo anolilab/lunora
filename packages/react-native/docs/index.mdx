@@ -30,6 +30,8 @@ Web Audio, `WebSocket`) — on native, supply your own `createMicrophone` /
 See the [React Native / Expo guide](/docs/frameworks/react-native) for the
 task-oriented walkthrough.
 
+The following root component creates a client with AsyncStorage and mounts the provider:
+
 ```tsx
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createLunoraClient, LunoraProvider, useQuery } from "@lunora/react-native";
@@ -103,6 +105,9 @@ should wrap it in `withoutAmbientCookies`.
 - **`expoClient`, `setupExpoFocusManager`, `setupExpoOnlineManager`**: re-exported
   from `@better-auth/expo/client`.
 
+The following module creates the better-auth client and the Lunora client, both
+against the same base URL, and syncs the session token into the Lunora client:
+
 ```tsx
 import { createAuthClient } from "better-auth/react";
 import { expoClient, expoBearerToken } from "@lunora/react-native/auth";
@@ -150,3 +155,46 @@ web app.
 On the server, add better-auth's `expo()` **and** `bearer()` plugins and read
 the session from the request headers in `resolveIdentity` (see
 [`@lunora/auth`](/docs/packages/auth)).
+
+## API
+
+Reference for the native exports of this package. The hooks and provider that it
+re-exports from `@lunora/react` are documented on the [`@lunora/react`](/docs/packages/react)
+page.
+
+### `createLunoraClient`
+
+**Type:** `(options: CreateLunoraClientOptions) => LunoraClient`
+
+Creates a `LunoraClient`. The `storage` option wires the AsyncStorage offline queue
+and query cache, and `getAuthHeaders` adds a custom credential header to every HTTP
+request and the WebSocket upgrade. See [`createLunoraClient(options)`](#createlunoraclientoptions)
+above for the options.
+
+### `CreateLunoraClientOptions`
+
+**Type:** interface
+
+The options for `createLunoraClient`. It extends `LunoraClientOptions` with the
+`storage` and `getAuthHeaders` conveniences.
+
+### `AuthHeadersFactory`
+
+**Type:** `() => Record<string, string> | undefined`
+
+Returns the headers that `getAuthHeaders` attaches to each request.
+
+### `withoutAmbientCookies`
+
+**Type:** `(fetchImpl: typeof fetch) => typeof fetch`
+
+Wraps a `fetch` so that it sends `credentials: "omit"`. Use it when you pass your
+own `fetch` to the client, so that cookies in the platform cookie jar are not
+attached to requests.
+
+### `expoBearerToken`
+
+**Type:** `(authClient: { getCookie: () => Promise<string> | string }) => Promise<string | null>`
+
+Imported from `@lunora/react-native/auth`. Returns the better-auth Expo session
+token, or `null` when signed out. Pass the result to `client.setAuthToken`.

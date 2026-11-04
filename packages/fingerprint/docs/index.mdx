@@ -36,14 +36,15 @@ const fp = fingerprintError({
 sha256("lunora::" + functionPath + "::" + bucket(message))
 ```
 
-truncated to 16 hex characters. Two things follow from that:
+truncated to 16 hex characters. An empty `functionPath` hashes as `unknown`. Two things follow from that:
 
 - **`functionPath` + normalized message is the whole identity.** That pair is
   the one thing every Lunora error source can supply: an in-flight
   observability event carries `{ code, message, status }`, while the durable
-  request log (`__lunora_reqlog__`) persists only `outcome` + `error_message`,
-  with no stored code. Hashing anything more would split a live Issue from
-  one recomputed from history.
+  request log (`__lunora_reqlog__`) stores `outcome`, `error_message` and the
+  hash in `error_fingerprint`, with no stored code. The hash is computed from the
+  raw message when the row is written, so it is the same pair. Hashing anything
+  more would split a live Issue from one recomputed from history.
 - **`code` is display metadata, never hashed.** It rides along on the result
   (`fp.code`) for badges and filtering, but changing it does not create a new
   Issue.
@@ -63,7 +64,7 @@ or a per-user id in the message must not explode one bug into 5,000 Issues.
 `messageBucketFor(message)` normalizes the message before hashing by
 stripping/tokenizing:
 
-- URLs and request paths
+- URLs, request paths and email addresses
 - UUIDs, long ids, and hex blobs
 - IP addresses and timestamps
 - bare numbers (`"User 12345 not found"` → `"user <n> not found"`)
@@ -74,7 +75,7 @@ tests.
 
 ## Stack-aware variants
 
-For OTLP-sourced telemetry that carries a real `exception.stacktrace`, the
+For telemetry that arrives over the OpenTelemetry Protocol (OTLP) and carries a real `exception.stacktrace`, the
 stack-aware `fingerprint` / `fingerprintLog` exports add top-5 user-frame
 normalization on top of the message bucket, the vendored superlog behavior.
 Inside a Lunora deployment you almost always want `fingerprintError`: Lunora
@@ -82,13 +83,25 @@ errors carry no stack frames on the wire.
 
 ## Where it feeds
 
-- **`@lunora/do`** computes fingerprints over the bounded request-log readout
-  behind the `getIssues` admin RPC.
+- **`@lunora/observability`** calls `fingerprintError` when it writes an error
+  row to the request log, and stores the hash in `error_fingerprint`.
+  `readErrorIssues` groups by that stored hash, and computes it only for rows that
+  lack one.
+- **`@lunora/do`** serves the `getIssues` admin RPC over that readout.
 - **Studio** renders the grouped result in the Issues panel: one row per
   hash, with occurrence counts, first/last seen, and the `code` badge.
 - **Lunora Cloud** computes the same hash over durable OTLP telemetry, so a
   local Issue and a cloud incident share an identity.
 
 You normally don't install this package directly; it arrives as a dependency
-of `@lunora/do` and the Studio. Reach for it yourself only to group errors in
+of `@lunora/observability`. Reach for it yourself only to group errors in
 your own tooling with the same identity Lunora uses.
+
+## Other exports
+
+| Export                  | Purpose                                                                                                                |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `sha256Hex(message)`    | Synchronous SHA-256 of a string as lowercase hex. The grouping hash is its first 16 characters.                        |
+| `stripNullBytes(value)` | Removes NUL bytes from a string so the value can be stored in SQLite or Postgres. `null` and `undefined` pass through. |
+| `ErrorFingerprint`      | The result of `fingerprintError`: `hash`, `title`, `culprit`, `bucket`, and the optional `code`.                       |
+| `FingerprintErrorInput` | The input to `fingerprintError`: `functionPath`, `message`, and the optional `code`.                                   |

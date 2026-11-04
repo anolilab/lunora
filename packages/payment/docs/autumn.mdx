@@ -257,8 +257,9 @@ const { url } = await autumnFeatures.checkout(userId, { planId: "pro" });
 <Callout type="warn">
     **`createAutumnFeatures` does not authorize the caller.** Unlike the `ctx.payments` facade, which checks the caller owns the `referenceId` on every call,
     these methods take the `referenceId` (and `entityId`) positionally and trust them. Forwarding an unvalidated reference straight from a request is an
-    app-layer IDOR: before exposing any of these on a handler, match the reference against the authenticated user (e.g. `ctx.auth.userId`). Credit systems need
-    no method here: Autumn models them as features, so their balances flow through `check` / `listBalances` like any other.
+    app-layer insecure direct object reference (IDOR): before exposing any of these on a handler, match the reference against the authenticated user (e.g.
+    `ctx.auth.userId`). Credit systems need no method here: Autumn models them as features, so their balances flow through `check` / `listBalances` like any
+    other.
 </Callout>
 
 ## Attach a product, then check and track
@@ -268,7 +269,7 @@ attach flow: when the change needs a payment it returns a **hosted checkout URL*
 to redirect the browser to; when Autumn can apply the change directly (e.g. a free
 plan or an update within an existing subscription) the `url` is empty. `attach` is
 the plan-oriented alias with `mode` defaulting to `"subscription"`, so attaching a
-product is just `{ referenceId, priceId, successUrl, cancelUrl }`:
+product needs only `{ referenceId, priceId, successUrl, cancelUrl }`:
 
 ```ts
 import { action, v } from "./_generated/server";
@@ -367,6 +368,8 @@ app.post(
     }),
 );
 ```
+
+The following internal action runs in the shard and passes the Svix headers to `handleWebhook`:
 
 ```ts
 // lunora/billing.ts

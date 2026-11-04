@@ -13,6 +13,8 @@ concurrent React works correctly out of the box. The hooks live in the package
 root (a client boundary); server-side data loading for React Server Components /
 the Next.js App Router lives in [`@lunora/react/server`](#server-components-nextjs-app-router).
 
+The following root component creates a client and mounts the provider around the chat view:
+
 ```tsx
 import { LunoraClient } from "lunorash/client";
 import { LunoraProvider, useMutation, useQuery } from "@lunora/react";
@@ -37,6 +39,8 @@ Subscribes to a query. Returns `T | undefined` (undefined until the first
 response). Pass `"skip"` for `args` to short-circuit (no network call).
 Multiple `useQuery` calls with identical args share a single underlying
 network call via the in-memory cache.
+
+The following calls subscribe to a channel's messages and to the signed-in user's profile:
 
 ```tsx
 const messages = useQuery(api.messages.list, { channelId });
@@ -100,6 +104,8 @@ is never retried: `client.action` has no offline queue and sends no idempotency
 key, so a paused call would fire minutes later on reconnect and a retry could run
 a third-party side effect twice. It fails fast instead and lets you decide.
 
+The following handler runs a verification command and reads its pending state:
+
 ```tsx
 const { call: runVerify, pending } = useAction(api.commands.run);
 await runVerify({ command: "lunora", args: ["verify"] });
@@ -130,6 +136,8 @@ reached — gates as authenticated). Branch on it, never on whether `user` is
 null: `user` is null both when signed out and when a held credential's identity
 has not resolved, so a `user` gate renders the sign-in form to a signed-in user.
 See the [`@lunora/client` reference](/docs/packages/client) for the full table.
+
+The following component renders by `status` and passes `setToken` to the sign-in form:
 
 ```tsx
 const { setToken, status, user } = useAuth();
@@ -291,10 +299,10 @@ End-user file uploads (live progress, pause/resume, large-file resumable and
 per-part retry) are re-exported from `@visulima/storage-client` (Lunora does not
 hand-roll the uploader). `useUpload` speaks the protocol named in `method`; without it, it uses the only
 endpoint given, or picks between several by file size against `tusThreshold`.
-The TUS path survives a pause/resume and a dropped connection.
+The TUS (resumable upload protocol) path survives a pause/resume and a dropped connection.
 Point the endpoint at a route backed by
 [`@lunora/storage/upload`](/docs/packages/storage#end-user-uploads-rls-gated);
-these uploads are gated by _your_ per-user RLS policy, **not** the studio
+these uploads are gated by _your_ per-user row-level security (RLS) policy, **not** the studio
 `adminToken`. [File storage](/docs/concepts/file-storage#resumable-uploads-from-the-browser)
 walks through mounting the handler, authenticating the route, and the size limits.
 
@@ -384,8 +392,8 @@ is the lower-level hook when you always want the resumable protocol.
 ## Admin auth hooks
 
 Reactive reads over the **admin-gated auth plane** — the `/_lunora/admin/auth/*`
-HTTP endpoints `LunoraClient` exposes as `listAuthUsers`, `listAuthSessions`,
-`listAuthOrganizations`, and `impersonateAuthUser`. They are HTTP-only: unlike
+HTTP endpoints that the admin client exposes as `listAuthUsers`, `listAuthSessions`,
+`listAuthOrganizations`, and `impersonateAuthUser` (`packages/client/src/admin/admin-client.ts`). They are HTTP-only: unlike
 `useQuery` there is no live subscription behind them (the auth-admin surface
 does not ride the WS transport at all), so they are one-shot TanStack reads with
 an explicit `refetch()`. The worker must be built with an `authAdmin` and an
@@ -481,6 +489,8 @@ Durable events come first, oldest first by `seq`, followed by the ephemeral
 durable lifecycle is surfaced. The array is rebuilt on every update — treat it
 as derived, not identity-stable, and key rendered rows on `toolCallId`/`seq`.
 
+The following component renders one thread's tool timeline, keyed by event type:
+
 ```tsx
 import { useAgentToolEvents } from "@lunora/react";
 import { api } from "@/lunora/_generated/api";
@@ -519,6 +529,8 @@ Returns `{ status, connected, transcript, interimTranscript, audioLevel,
 isMuted, error, startCall, endCall, sendText, toggleMute }`. `status` is
 `"idle" | "listening" | "thinking" | "speaking"`.
 
+The following component starts and ends a call from one button:
+
 ```tsx
 import { useVoiceAgent } from "@lunora/react";
 import { api } from "@/lunora/_generated/api";
@@ -556,7 +568,7 @@ The part the type signature does not tell you:
 - **`endCall()` releases everything** — the socket, the microphone tracks, and
   the Web Audio graph — and is idempotent. The hook also tears the call down on
   unmount, so a component that navigates away mid-call leaks nothing.
-- **`audioLevel` is the live input RMS (0–1).** It drives a mic meter, and it is
+- **`audioLevel` is the live input root mean square (RMS, 0–1).** It drives a mic meter, and it is
   also what the heuristics read: `silenceThreshold` + `silenceDurationMs` decide
   when an utterance auto-commits (defaults `0.01` / `1200`ms), and
   `interruptThreshold` + `interruptChunks` decide when the user barges in on the

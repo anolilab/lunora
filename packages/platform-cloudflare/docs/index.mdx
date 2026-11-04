@@ -14,9 +14,10 @@ Reach for it when you are writing your own Durable Object against the engine, or
 reading it as the reference for a second host.
 
 The two composition roots below (`createShardPlatform` / `createWorkerPlatform`)
-are the one-call form. `ShardDO` and `SessionDO` do not use them yet — they call
-`createShardHost` / `createSocketHost` / `createShardKvStore` themselves — so
-today the roots serve new Durable Objects and this package's tests.
+are the one-call form. `ShardDO` and `SessionDO` do not use them yet: `ShardDO`
+calls `createShardHost` and `createSocketHost` itself (`packages/do/src/shard-do.ts:3603`),
+and `SessionDO` calls `createShardKvStore` itself (`packages/do/src/session-do.ts:208`).
+Today the roots serve new Durable Objects and this package's tests.
 
 ```ts
 import { createShardPlatform } from "@lunora/platform-cloudflare";
@@ -27,17 +28,17 @@ const platform = createShardPlatform(state, env);
 
 ## What it provides
 
-| Factory                  | Contract           | Backed by                                                                                                                                                                                           |
-| ------------------------ | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createShardHost`        | `ShardHost`        | `state.storage.sql`, `blockConcurrencyWhile`, `storage.transaction`                                                                                                                                 |
-| `createSocketHost`       | `SocketHost`       | `state.acceptWebSocket` + hibernation, `state.getWebSockets(tag)`                                                                                                                                   |
-| `createShardAlarms`      | alarm surface      | `storage.setAlarm` / `getAlarm` / `deleteAlarm`                                                                                                                                                     |
-| `createShardKvStore`     | `ShardKvStore`     | `storage.list` with prefix scan; hides secret records under the reserved secret-value prefix                                                                                                        |
-| `createSecretValueHost`  | `SecretValueHost`  | `createSecretValueStore` wrapped in AES-256-GCM. The key is the `LUNORA_SECRET_VALUE_KEY` Worker secret (`_PREVIOUS` during rotation), read from `env`; no key means every `put` and `take` refuses |
-| `createSecretValueStore` | `SecretValueStore` | `storage.put` / `get` / `delete` under a reserved prefix; `storage.transaction` for `take`, which binds the claimant only once `open` accepts the record; holds only what `seal(ref)` returns       |
-| `createShardDirectory`   | `ShardDirectory`   | `idFromName` / `get`, with jurisdiction pinning                                                                                                                                                     |
-| `createShardPlatform`    | all of the above   | one call, for a DO constructor                                                                                                                                                                      |
-| `createWorkerPlatform`   | worker-tier host   | the fetch/scheduled/queue entry, outside a shard                                                                                                                                                    |
+| Factory                  | Contract           | Backed by                                                                                                                                                                                                                                                                      |
+| ------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `createShardHost`        | `ShardHost`        | `state.storage.sql`, `blockConcurrencyWhile`, `storage.transaction`                                                                                                                                                                                                            |
+| `createSocketHost`       | `SocketHost`       | `state.acceptWebSocket` + hibernation, `state.getWebSockets(tag)`                                                                                                                                                                                                              |
+| `createShardAlarms`      | alarm surface      | `storage.setAlarm` / `getAlarm` / `deleteAlarm`                                                                                                                                                                                                                                |
+| `createShardKvStore`     | `ShardKvStore`     | `storage.list` with prefix scan; hides secret records under the reserved secret-value prefix                                                                                                                                                                                   |
+| `createSecretValueHost`  | `SecretValueHost`  | `createSecretValueStore` wrapped in AES-256-GCM (Advanced Encryption Standard, Galois/Counter Mode). The key is the `LUNORA_SECRET_VALUE_KEY` Worker secret (`LUNORA_SECRET_VALUE_KEY_PREVIOUS` during rotation), read from `env`; no key means every `put` and `take` refuses |
+| `createSecretValueStore` | `SecretValueStore` | `storage.put` / `get` / `delete` under a reserved prefix; `storage.transaction` for `take`, which binds the claimant only once `open` accepts the record; holds only what `seal(ref)` returns                                                                                  |
+| `createShardDirectory`   | `ShardDirectory`   | `idFromName` / `get`, with jurisdiction pinning                                                                                                                                                                                                                                |
+| `createShardPlatform`    | all of the above   | one call, for a DO constructor                                                                                                                                                                                                                                                 |
+| `createWorkerPlatform`   | worker-tier host   | the fetch/scheduled/queue entry, outside a shard                                                                                                                                                                                                                               |
 
 ## Two things it does deliberately
 
