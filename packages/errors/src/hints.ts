@@ -78,6 +78,10 @@ const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> = {
         "",
         "Make one row keep each key. For a shard table, write a `defineMigration` in `lunora/migrations.ts` that deletes or merges the duplicates, deploy it, then run `lunora migrate up <id>` with that migration's id; the `lunora-migration-helper` skill covers the pattern. A `.global()` table lives in your SQL database, not a shard, so `defineMigration` does not reach it: delete or merge the duplicate rows directly in the database. Either way the index build is retried on its own, so no second deploy is needed.",
     ],
+    OFFLINE_QUEUE_OVERFLOW:
+        "The client held `offlineQueue.maxItems` writes (1000 by default) while offline, so it dropped the oldest one to make room and rejected it with this code. The dropped write was never sent. Raise `maxItems` on the `LunoraClient`, or stop issuing writes while the connection is down; `client.onMutationSettled` reports every dropped write, including one restored after a reload. See [offline-first](/docs/concepts/offline-first).",
+    SUBSCRIPTION_SEED_FAILED:
+        "The query behind a subscription threw on its first run, and the error was not a deliberate `LunoraError`, so its message was redacted before it reached the client. Find the real error in the worker log (`lunora logs`, or Studio's Logs tab) under the subscribed function path. A query that throws a `LunoraError` keeps its own code and message instead.",
     OFFLINE_NOT_QUEUED:
         "A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).",
     IDENTITY_MISMATCH: [

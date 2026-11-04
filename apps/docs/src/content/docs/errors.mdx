@@ -83,7 +83,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 211 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 213 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -673,6 +673,12 @@ An applied SQL migration is never re-run, so the runner stopped before applying 
 
 A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).
 
+### `OFFLINE_QUEUE_OVERFLOW`
+
+`503` — Offline queue full, oldest write dropped
+
+The client held `offlineQueue.maxItems` writes (1000 by default) while offline, so it dropped the oldest one to make room and rejected it with this code. The dropped write was never sent. Raise `maxItems` on the `LunoraClient`, or stop issuing writes while the connection is down; `client.onMutationSettled` reports every dropped write, including one restored after a reload. See [offline-first](/docs/concepts/offline-first).
+
 ### `OUT_OF_ORDER`
 
 `409` — Out-of-order mutation
@@ -936,6 +942,12 @@ Without it a bucket-backed `lunora backup restore --bucket` cannot read the snap
 ### `SUBSCRIPTION_RESULT_TOO_LARGE`
 
 `413` — Subscription result too large
+
+### `SUBSCRIPTION_SEED_FAILED`
+
+`500` — Subscription seed failed
+
+The query behind a subscription threw on its first run, and the error was not a deliberate `LunoraError`, so its message was redacted before it reached the client. Find the real error in the worker log (`lunora logs`, or Studio's Logs tab) under the subscribed function path. A query that throws a `LunoraError` keeps its own code and message instead.
 
 ### `TOKEN_EXPIRED`
 
