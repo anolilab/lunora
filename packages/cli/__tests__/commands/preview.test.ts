@@ -1251,12 +1251,14 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             writeFileSync(join(workdir, "lunora.config.ts"), "export default { studio: { companion: true } };\n", "utf8");
 
             const account = fakeAccount();
-            const { logger } = silentLogger();
+            const { infos, logger } = silentLogger();
 
             const result = await runPreviewCommand({ cwd: workdir, environment: CREDENTIALS, fetch: account.fetch, logger, name: "42", subcommand: "deploy" });
 
             expect(result.error ?? "").not.toMatch(/declares lunora.config services/u);
-            expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).not.toContain("ADVISOR_COMPANION");
+            // The command restores the wrangler config before it returns, so assert on what provisioning reported:
+            // a reconciled `ADVISOR_COMPANION` binding would point the preview at a Worker it never deploys.
+            expect(infos.join("\n")).not.toMatch(/ADVISOR_COMPANION|advisorCompanion/u);
         });
 
         it("refuses a config's required secret that was not passed with --secret, before creating anything", async () => {

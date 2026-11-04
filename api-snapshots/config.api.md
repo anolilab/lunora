@@ -751,6 +751,7 @@ interface InferOptions {
     projectRoot: string;
     scanDirs?: ReadonlyArray<string>;
     schemaDir?: string;
+    skipCompanion?: boolean;
 }
 ```
 
@@ -3318,6 +3319,7 @@ interface StudioAssets {
 ```ts
 interface StudioHtmlConfig {
     readonly adminToken?: string;
+    readonly advisorProcedures?: boolean;
     readonly basePath: string;
     readonly dataEditable?: boolean;
     readonly rulesInstalled?: boolean;

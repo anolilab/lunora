@@ -3,7 +3,7 @@ import { isAbsolute, join, resolve } from "node:path";
 
 import { ts } from "ts-morph";
 
-import { COMPANION_BINDING, companionDirectory, companionName } from "../companion";
+import { COMPANION_BINDING, COMPANION_SERVICE_NAME, companionDirectory, companionName } from "../companion";
 import type { ServiceBindingIR } from "../ir";
 import { readProjectConfigLiterals, readProjectStudioCompanion } from "../project-config-file";
 
@@ -169,7 +169,7 @@ const companionServiceBinding = (projectRoot: string, lunoraDirectory = "lunora"
         binding: COMPANION_BINDING,
         envWorkers: {},
         main: join(directory, "src", "worker.ts"),
-        name: "advisorCompanion",
+        name: COMPANION_SERVICE_NAME,
         publicScopes: [],
         worker: companionName(projectRoot),
         wranglerPath: join(directory, "wrangler.jsonc"),

@@ -27,6 +27,7 @@ import type { CapabilityKey, ServiceBindingIR, SourceCapabilitySignals } from "@
 import {
     capabilitiesUsedBy,
     CAPABILITY_PROBES,
+    COMPANION_SERVICE_NAME,
     createTargetScope,
     discoverNotifyChannels,
     foldCapabilitySignals,
@@ -449,7 +450,7 @@ interface InferOptions {
 const readInferredServiceBindings = (projectRoot: string, schemaDirectory: string, skipCompanion: boolean): ReturnType<typeof readBoundServiceBindings> => {
     const bound = readBoundServiceBindings(projectRoot, schemaDirectory);
 
-    return skipCompanion ? { ...bound, services: bound.services.filter((service) => service.name !== "advisorCompanion") } : bound;
+    return skipCompanion ? { ...bound, services: bound.services.filter((service) => service.name !== COMPANION_SERVICE_NAME) } : bound;
 };
 
 /** The schema facts binding inference reads. */
@@ -873,7 +874,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     signals.push(
         ...resolved.services.map((service) =>
             // The companion is Lunora's own Worker, enabled by `studio.companion`, not a `services` declaration.
-            service.name === "advisorCompanion"
+            service.name === COMPANION_SERVICE_NAME
                 ? `${service.binding} → ${service.worker} (studio.companion)`
                 : `${service.binding} → ${service.worker} (lunora.config services.${service.name})`,
         ),

@@ -21,6 +21,7 @@ export { describeErrorLevelFindings, errorAdvisoryNames, errorPlatformDiagnostic
 // The capability table's usage-probe facets, read by `@lunora/config` (see below).
 export type { CapabilityKey, CapabilityProbe } from "./capabilities";
 export { CAPABILITY_PROBES } from "./capabilities";
+export { COMPANION_BINDING, COMPANION_SERVICE_NAME } from "./companion";
 export { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
 export { AGENTS_FILENAME, discoverAgents } from "./discover/agents";
 // The canonical `lunora/` source walk — exported so a consumer deciding what
