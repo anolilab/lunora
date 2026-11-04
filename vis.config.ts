@@ -203,7 +203,11 @@ export default defineConfig({
         // cwd = that package dir (replacing the old scripts/staged-eslint.mjs
         // wrapper). Running eslint from the repo root would load the wrong
         // plugin set and break rules + disable directives.
-        "packages/**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx}": [{ command: "pnpm exec eslint --fix", perPackage: true }],
+        // The type-aware rules read @lunora/* types from each dependency's dist/, so
+        // the staged packages' dependencies are built first, in one vis run, before
+        // eslint starts. Unbuilt, those types resolve to `any`, which gives false
+        // errors and lets `--fix` rewrite code against the wrong types (#1456).
+        "packages/**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx}": ["node scripts/staged-build-deps.mjs", { command: "pnpm exec eslint --fix", perPackage: true }],
         "**/*.{md,mdx}": ["pnpm exec prettier --write"],
     },
     secrets: {
