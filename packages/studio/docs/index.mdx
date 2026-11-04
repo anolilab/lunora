@@ -151,7 +151,7 @@ Everything that reads or shapes stored state.
   data-migration run-state and kick one off.
 - **Vectors**: _Browse Vectorize indexes and run similarity searches._
 - **Time Travel**: _Restore a shard to a point in the last 30 days_ (point-in-time recovery, PITR).
-- **Export / Import**: _Export a shard to NDJSON, or import NDJSON rows, or a CSV file into a table you pick._ The import mode decides what happens to a row whose `_id` already exists. Append leaves it unchanged and counts it as a conflict. Upsert overwrites it. Replace overwrites it and also deletes the shard's rows in the file's tables that the file lacks.
+- **Export / Import**: _Export a shard to NDJSON, or import NDJSON rows, or a CSV file into a table you pick._ The import mode decides what happens to a row whose `_id` already exists. Append leaves it unchanged and counts it as a conflict. Upsert overwrites it. Replace overwrites it and also deletes the shard's rows in the file's tables that the file lacks. Require empty refuses the import unless the file's tables hold no rows in this shard.
 
 ## Functions
 
