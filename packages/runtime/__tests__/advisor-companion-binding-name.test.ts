@@ -29,7 +29,14 @@ describe("advisor companion binding name", () => {
         const companionFetch = vi.fn(async (_request: Request) => new Response("{}", { status: 200 }));
         const worker = createWorker({
             adminToken: "t",
-            shardDO: { get: () => {return { fetch: async () => new Response("not used") }}, idFromName: (name) => {return { __name: name }} },
+            shardDO: {
+                get: () => {
+                    return { fetch: async () => new Response("not used") };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            },
         });
         const env = { [companionServiceBinding(root)?.binding ?? "undeclared"]: { fetch: companionFetch } };
         const response = await worker.fetch(new Request("https://app.example/__lunora/advisor-procedures", { headers: { authorization: "Bearer t" } }), env, {
