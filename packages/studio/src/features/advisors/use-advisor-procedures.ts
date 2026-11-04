@@ -43,9 +43,8 @@ interface AdvisorProceduresOptions {
  */
 const useAdvisorProcedures = ({ enabled, refreshKey }: AdvisorProceduresOptions): { data: AdvisorProceduresResult | undefined; error: string | undefined } => {
     // Bump a revision when the advisories change and key the query on it, so React
-    // Query fetches once per change instead of an effect calling `refetch()`. The
-    // first value (advisories still loading → loaded) is not a change: the mount
-    // fetch already covers it.
+    // Query fetches once per change. The first value (advisories still loading →
+    // loaded) is not a change: the mount fetch already covers it.
     const [seenKey, setSeenKey] = useState(refreshKey);
     const [revision, setRevision] = useState(0);
 
