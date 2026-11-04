@@ -36,7 +36,7 @@ import { defineNotify, webPushFromEnv, fcmFromEnv, d1SubscriptionStore } from "@
 
 export default defineNotify({
     webPush: (env) => webPushFromEnv(env), // VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT
-    fcm: (env) => fcmFromEnv(env), // FCM_PROJECT_ID / FCM_ACCESS_TOKEN (prefer a getAccessToken in prod)
+    fcm: (env) => fcmFromEnv(env), // FCM_SERVICE_ACCOUNT (+ optional FCM_PROJECT_ID)
     store: (env) => d1SubscriptionStore(env.DB),
 });
 ```
@@ -51,9 +51,32 @@ package-secrets registry — only for the channels `defineNotify` configures. Ge
 VAPID_PUBLIC_KEY=<your-vapid-public-key>
 VAPID_PRIVATE_KEY=<your-vapid-private-key>
 VAPID_SUBJECT=mailto:you@example.com
-FCM_PROJECT_ID=<your-firebase-project-id>
-FCM_ACCESS_TOKEN=<your-fcm-access-token>
+FCM_SERVICE_ACCOUNT=<base64-of-your-service-account-key-json>
 ```
+
+`FCM_SERVICE_ACCOUNT` is the Google service-account key file, as JSON or base64 of it.
+`.dev.vars` cannot hold the JSON's quotes, so store it base64-encoded there:
+`lunora env set FCM_SERVICE_ACCOUNT "$(base64 < key.json | tr -d '\n')"`. In production
+the raw JSON works too: `wrangler secret put FCM_SERVICE_ACCOUNT < key.json`.
+`fcmFromEnv` mints FCM access tokens from it on demand (edge-safe, via Web Crypto)
+and caches each token until shortly before it expires, so the same
+`fcmFromEnv(env)` line is correct in production. `FCM_PROJECT_ID` is optional; it
+overrides the `project_id` in the key. A static `FCM_ACCESS_TOKEN` is still accepted
+when no service account is set, for local work only: it expires within the hour.
+
+A push payload must fit in 4096 bytes, the limit for both FCM and Web Push. A larger
+send is rejected with `PAYLOAD_TOO_LARGE` before any device is contacted.
+
+## Native devices (Android and iOS)
+
+Native FCM tokens come from the device, not from Expo's push service:
+
+- **Android:** `getDevicePushTokenAsync()` from `expo-notifications` returns the FCM
+  registration token. Register it with `ctx.push.register({ kind: "fcm", token, userId })`.
+- **iOS:** `getDevicePushTokenAsync()` returns an APNs token, which FCM v1 does not
+  accept. Get an FCM token from the Firebase Messaging SDK instead (with your APNs key
+  uploaded to the Firebase project) and register that the same way. Direct APNs
+  delivery uses `node:http2`, so it is not on the edge facade.
 
 ## Register a browser push subscription
 

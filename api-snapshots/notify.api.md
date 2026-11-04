@@ -84,6 +84,7 @@ interface D1StoreOptions {
 const FCM_ENV_KEYS: {
     readonly accessToken: "FCM_ACCESS_TOKEN";
     readonly projectId: "FCM_PROJECT_ID";
+    readonly serviceAccount: "FCM_SERVICE_ACCOUNT";
 };
 ```
 

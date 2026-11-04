@@ -455,6 +455,7 @@ export const DOC_TOPICS: ReadonlyArray<{
         headings: [
             "Configure defineNotify",
             "VAPID / FCM config via .dev.vars",
+            "Native devices (Android and iOS)",
             "Register a browser push subscription",
             "Send from an action",
             "Queue-backed fan-out",

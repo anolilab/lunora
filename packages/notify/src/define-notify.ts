@@ -13,7 +13,7 @@ import type { NotifyConfig, NotifyDefinition } from "./types";
  *
  * export default defineNotify({
  *     webPush: (env) => webPushFromEnv(env),   // VAPID_* from .dev.vars
- *     fcm: (env) => fcmFromEnv(env),           // FCM_PROJECT_ID / FCM_ACCESS_TOKEN
+ *     fcm: (env) => fcmFromEnv(env),           // FCM_SERVICE_ACCOUNT (+ FCM_PROJECT_ID)
  *     store: (env) => d1SubscriptionStore(env.DB),
  * });
  * ```
