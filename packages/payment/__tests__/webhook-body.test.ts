@@ -32,7 +32,7 @@ describe(readWebhookBody, () => {
 
         const request = new Request("https://app.test/payment/webhook", { body: "x".repeat(65), headers: { "content-length": "65" }, method: "POST" });
 
-        await expect(readWebhookBody(request, 64)).resolves.toBeUndefined();
+        await expect(readWebhookBody(request, 64)).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
     });
 
     it("refuses a body with no Content-Length once the bytes read pass the cap", async () => {
@@ -41,6 +41,6 @@ describe(readWebhookBody, () => {
         const request = chunked("x".repeat(65));
 
         expect(request.headers.get("content-length")).toBeNull();
-        await expect(readWebhookBody(request, 64)).resolves.toBeUndefined();
+        await expect(readWebhookBody(request, 64)).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
     });
 });

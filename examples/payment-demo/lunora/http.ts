@@ -48,12 +48,8 @@ const SIGNATURE_HEADERS = [
 app.post(
     "/payment/webhook",
     httpAction(async (ctx, request) => {
-        // Capped: the route is public and the body is read before its signature can be checked.
+        // Capped (413 past 1 MiB): the route is public and the body is read before its signature can be checked.
         const body = await readWebhookBody(request);
-
-        if (body === undefined) {
-            return new Response("webhook body too large", { status: 413 });
-        }
 
         const headers = Object.fromEntries(
             SIGNATURE_HEADERS.flatMap((name): [string, string][] => {

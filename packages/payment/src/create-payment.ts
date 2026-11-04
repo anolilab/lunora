@@ -5,7 +5,7 @@
  * authorization (no IDOR), outbound idempotency keys (no double-charge), and webhook ingestion
  * that verifies, normalizes, and applies through the FSM.
  */
-import { toErrorBody } from "@lunora/errors";
+import { LunoraError, toErrorBody } from "@lunora/errors";
 
 import { jsonResponse } from "../../../shared/json-response";
 import type { PaymentAdapter } from "./adapter";
@@ -30,6 +30,7 @@ import type {
     FeatureBalance,
     Money,
     PaymentSession,
+    ProviderId,
     RefundInput,
     Subscription,
     TrackInput,
@@ -92,6 +93,13 @@ const stripReferenceId = (metadata: Record<string, string> | undefined): Record<
 export interface WebhookOutcome {
     /** Whether the event advanced a row. A verified no-op/duplicate is `false`. */
     applied: boolean;
+
+    /**
+     * The reference an applied subscription event changed, when there is one — what an app
+     * re-derives plan-dependent state for. Never sent back to the provider: {@link webhookResponse}
+     * answers with `applied` only.
+     */
+    referenceId?: string;
     /** The status {@link LunoraPayment.handleWebhook} answered — 500 for an orphaned event. */
     status: number;
 }
@@ -193,6 +201,17 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     if (typeof options.authorize !== "function") {
         throw new LunoraPaymentError("CONFIG_INVALID", "createPayment(): `authorize` must be a function (per-caller authorization is required)");
     }
+
+    /** The reference a subscription event changed: its own when it names one, else the stored subscription's. */
+    const changedReference = async (provider: ProviderId, subscriptionId: string, named: string | undefined): Promise<string | undefined> => {
+        if (named !== undefined && named.trim() !== "") {
+            return named.trim();
+        }
+
+        const stored = await store.getSubscription(provider, subscriptionId);
+
+        return stored === undefined || stored.referenceId.trim() === "" ? undefined : stored.referenceId;
+    };
 
     const ensureAuthorized = async (referenceId: string): Promise<void> => {
         // `unknown`, compared to an exact `true`. The authorizer is app code and
@@ -465,12 +484,12 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             try {
                 const payload = await readWebhookBody(request);
 
-                if (payload === undefined) {
+                action = await adapter.parseWebhook({ headers: request.headers, payload });
+            } catch (error) {
+                if (error instanceof LunoraError && error.code === "PAYLOAD_TOO_LARGE") {
                     return jsonResponse({ error: "webhook body too large" }, 413);
                 }
 
-                action = await adapter.parseWebhook({ headers: request.headers, payload });
-            } catch (error) {
                 // Only surface our own (non-sensitive) error messages; mask anything
                 // unexpected. Routed through `toErrorBody` so a payment code's
                 // echo-vs-redact posture is governed centrally by the shared
@@ -501,8 +520,15 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             }
 
             // Every other outcome acknowledges: once verified, a no-op is still a 200 and the provider
-            // stops retrying.
-            return jsonResponse({ applied: result.applied, reason: result.reason }, 200);
+            // stops retrying. An applied subscription event names the reference it changed, so the
+            // app can refresh what it derives from that reference's plan; a later event for an
+            // existing subscription may carry only the subscription id, so the stored row decides.
+            const referenceId =
+                result.applied && action.subscriptionId !== undefined
+                    ? await changedReference(action.provider, action.subscriptionId, action.referenceId)
+                    : undefined;
+
+            return jsonResponse({ applied: result.applied, reason: result.reason, ...(referenceId === undefined ? {} : { referenceId }) }, 200);
         },
 
         listBalances: async (referenceId) => {

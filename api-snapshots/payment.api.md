@@ -770,6 +770,7 @@ interface WebhookInput {
 ```ts
 interface WebhookOutcome {
     applied: boolean;
+    referenceId?: string;
     status: number;
 }
 ```
@@ -933,7 +934,7 @@ const paymentsFromContext: (context: PaymentContextLike, options: PaymentsFromCo
 ### `readWebhookBody` (const)
 
 ```ts
-const readWebhookBody: (request: Request, maxBytes?: number) => Promise<string | undefined>;
+const readWebhookBody: (request: Request, maxBytes?: number) => Promise<string>;
 ```
 
 ### `reconcile` (const)

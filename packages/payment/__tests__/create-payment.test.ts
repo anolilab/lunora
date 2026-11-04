@@ -1170,6 +1170,30 @@ describe("createPayment", () => {
         expect(session?.capturedAmount.minorUnits).toBe(1000n);
     });
 
+    it("names the reference an applied subscription event changed, from the event or the stored subscription", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("org_1", "active"));
+
+        const handle = async (action: WebhookAction) => {
+            const payment = createPayment({ adapter: fakeAdapter({ parseWebhook: async () => action }), authorize: () => true, store });
+            const response = await payment.handleWebhook(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }));
+
+            return response.json();
+        };
+
+        // A later event for an existing subscription carries only its id.
+        await expect(handle({ eventId: "evt_cancel", provider: "stripe", subscriptionId: "sub_1", type: "subscription.canceled" })).resolves.toMatchObject({
+            referenceId: "org_1",
+        });
+        // A payment event changes no plan, so it names no reference.
+        await expect(
+            handle({ amount: money(1000, "USD"), eventId: "evt_pay", provider: "stripe", referenceId: "org_1", sessionId: "pi_1", type: "payment.captured" }),
+        ).resolves.not.toHaveProperty("referenceId");
+    });
+
     it("refuses an oversized webhook body with 413 before the adapter parses it", async () => {
         expect.assertions(2);
 
