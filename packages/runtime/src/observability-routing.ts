@@ -174,7 +174,25 @@ interface CopyState {
 /** The copy of one object, given a function that copies its children. */
 const copyObject = (value: object, copyChild: (child: unknown) => unknown): unknown => {
     if (value instanceof Error) {
-        return copyChild({ ...Object.fromEntries(Object.entries(value)), message: value.message, name: value.name });
+        // `stack`, `cause` and an AggregateError's `errors` are own but non-enumerable, so the
+        // entries spread misses them. They go through `copyChild` like every other field: a
+        // `cause` that loops back to an error on the path is cut there, and redaction walks
+        // the stack string, which repeats the message.
+        const record: Record<string, unknown> = { ...Object.fromEntries(Object.entries(value)), message: value.message, name: value.name };
+
+        if (value.stack !== undefined) {
+            record.stack = value.stack;
+        }
+
+        if (value.cause !== undefined) {
+            record.cause = value.cause;
+        }
+
+        if (value instanceof AggregateError) {
+            record.errors = value.errors;
+        }
+
+        return copyChild(record);
     }
 
     const toJson: unknown = Reflect.get(value, "toJSON");
@@ -209,7 +227,8 @@ const newCopyState = (): CopyState => {
 
 /**
  * A copy of a value in the shape normalizing will serialize, so redaction sees what is exported.
- * An `Error` at any depth becomes a plain record of its name, message and enumerable fields; an
+ * An `Error` at any depth becomes a plain record of its name, message, stack, cause (copied the
+ * same way), an AggregateError's `errors`, and its enumerable fields; an
  * object with `toJSON()` becomes what that returns, or its own fields when that is the object itself.
  * Plain objects and arrays are rebuilt, and other class instances keep their value.
  *
