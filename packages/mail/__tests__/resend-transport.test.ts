@@ -228,6 +228,36 @@ describe("resend transport error mapping", () => {
             expect(isRetryableMailError(error)).toBe(true);
         });
 
+        /** What `@visulima/email` returns for a 409: the status only, Resend's response body is dropped. */
+        const idempotencyConflict = (): Error => Object.assign(new Error("Request failed with status 409"), { code: "409" });
+
+        it("retries a 409 for a forwarded key: the first send under it may still land, and Resend drops the repeat", async () => {
+            expect.assertions(2);
+
+            const error = await failure(idempotencyConflict(), "order-42-receipt");
+
+            expect(isOutcomeUnknownMailError(error)).toBe(true);
+            expect(isRetryableMailError(error)).toBe(true);
+        });
+
+        it("acks a 409 on a keyless send as outcome-unknown rather than retrying it", async () => {
+            expect.assertions(2);
+
+            const error = await failure(idempotencyConflict());
+
+            expect(isOutcomeUnknownMailError(error)).toBe(true);
+            expect(isRetryableMailError(error)).toBe(false);
+        });
+
+        it("still refuses any other 4xx sent with a key", async () => {
+            expect.assertions(2);
+
+            const error = await failure(Object.assign(new Error("Request failed with status 422"), { code: "422" }), "order-42-receipt");
+
+            expect(isOutcomeUnknownMailError(error)).toBe(false);
+            expect(isRetryableMailError(error)).toBe(false);
+        });
+
         it("retries a send that outran the mailer's deadline when it carried an idempotency key", async () => {
             expect.assertions(2);
 

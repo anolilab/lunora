@@ -97,6 +97,31 @@ const causeChain = (rawError: unknown): Error[] => {
  */
 const isProviderTimeout = (rawError: unknown): boolean => causeChain(rawError).some((error) => "code" in error && error.code === PROVIDER_TIMEOUT_CODE);
 
+/** The HTTP status the provider answered with, from the first error in the cause chain that carries one. */
+const providerStatusOf = (rawError: unknown): number | undefined => {
+    for (const error of causeChain(rawError)) {
+        const status = httpStatusOf("code" in error ? error.code : undefined);
+
+        if (status !== undefined) {
+            return status;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * Resend answers 409 for a request whose `Idempotency-Key` it has seen: either the
+ * first request under it is still in flight (`concurrent_idempotent_requests`) or
+ * it carried a different body (`invalid_idempotent_request`). `@visulima/email`
+ * 4.2 drops the response body, so only the status reaches here and the two cannot
+ * be told apart. Both are treated as the first: the original may yet be accepted,
+ * so the outcome is unknown and a deduping provider makes the retry safe. The
+ * mismatched-body case then retries into the dead-letter queue rather than being
+ * acked, which is the cheaper mistake.
+ */
+const IDEMPOTENCY_CONFLICT_STATUS = 409;
+
 /**
  * Whether a provider's failed send is worth repeating. `@visulima/email` puts an
  * HTTP status on the error as a numeric `code`, so 408, 429 and 5xx are
@@ -110,15 +135,7 @@ const isRetryableProviderError = (rawError: unknown): boolean => {
         return true;
     }
 
-    let status: number | undefined;
-
-    for (const error of causeChain(rawError)) {
-        status = httpStatusOf("code" in error ? error.code : undefined);
-
-        if (status !== undefined) {
-            break;
-        }
-    }
+    const status = providerStatusOf(rawError);
 
     if (status !== undefined && status >= 100 && status <= 599) {
         return status === 408 || status === 429 || status >= 500;
@@ -175,6 +192,15 @@ const interpretSendResult = (result: ProviderSendResult): { id: string } => {
             throw new MailSendError({
                 cause: result.error,
                 message: "@lunora/mail: the provider timed out, so the send may have been delivered",
+                outcomeUnknown: true,
+                retryable: false,
+            });
+        }
+
+        if (providerStatusOf(result.error) === IDEMPOTENCY_CONFLICT_STATUS) {
+            throw new MailSendError({
+                cause: result.error,
+                message: "@lunora/mail: the provider is still processing a send with this idempotency key, so it may be delivered",
                 outcomeUnknown: true,
                 retryable: false,
             });

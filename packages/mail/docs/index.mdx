@@ -122,7 +122,17 @@ retryable and redelivered; through the Cloudflare binding, or without a key, it 
 not, and the consumer acks and reports it rather than mailing a possible second
 copy. `send()` gives the transport 60 seconds by default (`sendTimeoutMs` on
 `createMailer` / `createMailerFromEnv`), and Resend's own 30-second request timeout
-counts the same way. Build the consumer's mailer with
+counts the same way. A 409 from Resend, which means a request under the same key is
+still being processed, is outcome-unknown too and retried the same way.
+
+Redeliver an outcome-unknown send with a delay (`message.retry({ delaySeconds })`):
+the mailer gives up after 60 seconds, but Resend's client can keep the first
+request going for about two minutes (a 30-second timeout per attempt and up to
+three retries of a 408, 429 or 503), and a repeat that arrives while it runs is
+answered with a 409 rather than deduped. Three minutes clears that window.
+`@visulima/email` does not pass on Resend's response body, so a 409 for a key
+reused with a _different_ message (`invalid_idempotent_request`) looks the same
+and is retried into the dead-letter queue rather than acked. Build the consumer's mailer with
 `createMailerFromEnv` so that in dev the queued message is captured into the
 studio inbox at consume time instead of delivered:
 
@@ -138,9 +148,11 @@ export default {
                 // `env.SENT` is a KV namespace: a redelivered key is acked without a second send.
                 await consumeQueuedSend(mailer, message.body, { sent: env.SENT });
             } catch (error) {
-                // Transient, or a timeout the provider dedupes on the key (Resend): redeliver.
+                // Transient, or a send that may have landed with a provider that dedupes on the key (Resend).
                 if (isRetryableMailError(error)) {
-                    message.retry();
+                    // The first attempt may still be running at the provider (Resend's client keeps a request
+                    // going for about two minutes), so give it time: a repeat inside that window is a 409.
+                    message.retry(isOutcomeUnknownMailError(error) ? { delaySeconds: 180 } : undefined);
                     continue;
                 }
 
@@ -340,7 +352,7 @@ rules; that lifecycle stays in Cloudflare.
 | `toQueuedPayload(options)`                  | Narrow `SendOptions` to its serializable `QueuedSend` (drops `react`)                                                                                                                                                                                            |
 | `consumeQueuedSend(mailer, body, options?)` | Validate a queued payload and `mailer.send(...)` it, skipping a key already in `options.sent`; returns `{ id, deduplicated }`                                                                                                                                    |
 | `isRetryableMailError(error)`               | Whether a failed send is worth a redelivery: `false` for a refusal carrying an explicit permanent HTTP status and for a timed-out send the provider cannot dedupe, `true` for everything else                                                                    |
-| `isOutcomeUnknownMailError(error)`          | Whether a failed send timed out and may have been delivered; when it is not also retryable, ack and report it                                                                                                                                                    |
+| `isOutcomeUnknownMailError(error)`          | Whether a failed send timed out (or hit Resend's 409 for a key in flight) and may have been delivered; retry it with a delay when it is also retryable, else ack and report it                                                                                   |
 | `MailSendError`                             | The error a failed send throws; `retryable` / `outcomeUnknown` (also on `data`) carry the decision                                                                                                                                                               |
 | Type-only                                   | `Mailer`, `MailTransport`, `SendOptions`, `SendPayload`, `QueueLike`, `LunoraMailOptions`, `QueuedSend`, `SentMailStore`, `ConsumeQueuedSendOptions`, `CapturedMail`, `MailboxSink`, `CloudflareSend`, `CloudflareTransportOptions`, `FromEnvOptions`, `MailEnv` |
 

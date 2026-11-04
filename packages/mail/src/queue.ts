@@ -193,9 +193,11 @@ const toSendOptions = (payload: unknown): SendOptions => {
  *       try {
  *         await consumeQueuedSend(mailer, message.body, { sent: env.SENT });
  *       } catch (error) {
- *         // Transient, or a timeout the provider dedupes on the key (Resend): redeliver.
+ *         // Transient, or a send that may have landed with a provider that dedupes on the key (Resend).
  *         if (isRetryableMailError(error)) {
- *           message.retry();
+ *           // The first attempt may still be running at the provider (Resend's client keeps a request
+ *           // going for about two minutes), so give it time: a repeat inside that window is a 409.
+ *           message.retry(isOutcomeUnknownMailError(error) ? { delaySeconds: 180 } : undefined);
  *           continue;
  *         }
  *

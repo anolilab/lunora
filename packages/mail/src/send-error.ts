@@ -4,7 +4,8 @@ import { LunoraError } from "@lunora/errors";
 interface MailSendErrorData {
     /**
      * The send was cut off before the provider answered (the mailer's send deadline, or the
-     * provider's own request timeout), so it may have been delivered. `retryable` is then true
+     * provider's own request timeout), or the provider is still processing an earlier send under
+     * the same idempotency key (Resend's 409), so it may have been delivered. `retryable` is then true
      * only when the send carried an idempotency key and its transport's provider dedupes on it
      * (`MailTransport.dedupesOnIdempotencyKey`), so a repeat cannot mail a second copy.
      */
@@ -52,7 +53,8 @@ const isRetryableMailError = (error: unknown): boolean => error instanceof MailS
 
 /**
  * Whether a failed send may nonetheless have been delivered — it timed out
- * before the provider answered. Check {@link isRetryableMailError} first: a
+ * before the provider answered, or the provider is still processing an earlier
+ * send under its key. Check {@link isRetryableMailError} first: a
  * retryable one is safe to redeliver because the provider dedupes on its key.
  * One that is not must be reported (check the provider's logs), not resent.
  */
