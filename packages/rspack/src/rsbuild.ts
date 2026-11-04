@@ -4,7 +4,6 @@ import { join, resolve } from "node:path";
 
 import type { CelldDevSession } from "@lunora/config";
 import { lunoraLine, startCelldDevSession, targetRunsOwnDevServer } from "@lunora/config";
-import { reportAssetHeaders, writeProjectAssetHeaders } from "@lunora/config/cloudflare";
 
 import { resolveOptions } from "./options";
 import { LunoraRspackPlugin } from "./plugin";
@@ -213,31 +212,34 @@ const hashedDirectoryOf = (environment: BuildEnvironmentLike, root: string): str
  * An SSR environment's output never matches, so it never gets a `_headers` file.
  */
 const writeAssetHeadersAfterBuild = (api: RsbuildApiLike, options: ResolvedLunoraRspackOptions): void => {
-    api.onAfterBuild(({ environments, isWatch }) => {
+    api.onAfterBuild(async ({ environments, isWatch }) => {
         if (isWatch) {
             return;
         }
 
-        for (const environment of Object.values(environments)) {
-            const outcome = writeProjectAssetHeaders({
-                hashedDirectory: hashedDirectoryOf(environment, options.projectRoot),
-                outputDirectory: environment.distPath,
-                projectRoot: options.projectRoot,
-                requireAssetsDirectory: true,
-                schemaDir: options.schemaDir,
-                target: options.target,
-            });
+        const { emitProjectAssetHeaders } = await import("@lunora/config/cloudflare");
 
-            reportAssetHeaders(outcome, {
-                 
-                info: (message) => {
-                    console.info(lunoraLine(message));
+        for (const environment of Object.values(environments)) {
+            emitProjectAssetHeaders(
+                {
+                    hashedDirectory: hashedDirectoryOf(environment, options.projectRoot),
+                    outputDirectory: environment.distPath,
+                    projectRoot: options.projectRoot,
+                    requireAssetsDirectory: true,
+                    schemaDir: options.schemaDir,
+                    target: options.target,
                 },
-                 
-                warn: (message) => {
-                    console.warn(lunoraLine(message));
+                {
+                    info: (message) => {
+                        // eslint-disable-next-line no-console -- build summary line; the structural plugin API carries no logger
+                        console.info(lunoraLine(message));
+                    },
+                    warn: (message) => {
+                        // eslint-disable-next-line no-console -- as above, for a warning
+                        console.warn(lunoraLine(message));
+                    },
                 },
-            });
+            );
         }
     });
 };

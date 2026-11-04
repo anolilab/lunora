@@ -12,11 +12,11 @@ let projectRoot: string;
 const options = (target = "cloudflare"): ResolvedLunoraPluginOptions => ({ projectRoot, schemaDir: "lunora", target }) as ResolvedLunoraPluginOptions;
 
 /** Drive the plugin through the two hooks a client build calls, with the given plugin names in the resolved config. */
-const build = (
+const build = async (
     plugin: ReturnType<typeof assetHeadersPlugin>,
     pluginNames: string[],
     buildConfig: Record<string, unknown> = {},
-): { info: ReturnType<typeof vi.fn<(message: string) => void>> } => {
+): Promise<{ info: ReturnType<typeof vi.fn<(message: string) => void>> }> => {
     const info = vi.fn<(message: string) => void>();
     const logger = { info, warn: vi.fn<(message: string) => void>() };
 
@@ -25,7 +25,7 @@ const build = (
             return { name };
         }),
     });
-    (plugin.writeBundle as (this: unknown) => void).call({
+    await (plugin.writeBundle as (this: unknown) => Promise<void>).call({
         environment: {
             config: {
                 build: { assetsDir: "assets", outDir: "dist/client", rolldownOptions: {}, ...buildConfig },
@@ -63,12 +63,12 @@ describe(assetHeadersPlugin, () => {
         expect(applies({ name: "ssr" })).toBe(false);
     });
 
-    it("writes the security headers into the client outDir, merged after a _headers copied from publicDir", () => {
+    it("writes the security headers into the client outDir, merged after a _headers copied from publicDir", async () => {
         expect.assertions(3);
 
         writeFileSync(headersFile(), "/*\n  X-Frame-Options: DENY\n", "utf8");
 
-        const { info } = build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
+        const { info } = await build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
         const text = readFileSync(headersFile(), "utf8");
 
         expect(text).toContain("  Strict-Transport-Security: max-age=31536000; includeSubDomains");
@@ -76,24 +76,24 @@ describe(assetHeadersPlugin, () => {
         expect(info).toHaveBeenCalledWith(expect.stringContaining("kept your own X-Frame-Options"));
     });
 
-    it("writes nothing without @cloudflare/vite-plugin in the build, or on another target", () => {
+    it("writes nothing without @cloudflare/vite-plugin in the build, or on another target", async () => {
         expect.assertions(2);
 
-        build(assetHeadersPlugin(options()), ["vite:build"]);
+        await build(assetHeadersPlugin(options()), ["vite:build"]);
 
         expect(existsSync(headersFile())).toBe(false);
 
-        build(assetHeadersPlugin(options("celld")), ["vite-plugin-cloudflare"]);
+        await build(assetHeadersPlugin(options("celld")), ["vite-plugin-cloudflare"]);
 
         expect(existsSync(headersFile())).toBe(false);
     });
 
-    it("leaves the security headers out when wrangler vars turn LUNORA_SECURITY_HEADERS off", () => {
+    it("leaves the security headers out when wrangler vars turn LUNORA_SECURITY_HEADERS off", async () => {
         expect.assertions(2);
 
         writeFileSync(join(projectRoot, "wrangler.jsonc"), '{ "name": "app", "vars": { "LUNORA_SECURITY_HEADERS": "off" } }\n', "utf8");
 
-        build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
+        await build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
 
         const text = readFileSync(headersFile(), "utf8");
 
@@ -102,7 +102,7 @@ describe(assetHeadersPlugin, () => {
         expect(text).toContain("/assets/*\n  Cache-Control: public, max-age=31536000, immutable");
     });
 
-    it("writes the security.headers lunora.config sets, the value codegen also hands the Worker", () => {
+    it("writes the security.headers lunora.config sets, the value codegen also hands the Worker", async () => {
         expect.assertions(2);
 
         writeFileSync(
@@ -111,7 +111,7 @@ describe(assetHeadersPlugin, () => {
             "utf8",
         );
 
-        build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
+        await build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
 
         const text = readFileSync(headersFile(), "utf8");
 
@@ -119,10 +119,10 @@ describe(assetHeadersPlugin, () => {
         expect(text).toContain("frame-ancestors 'self' https://partner.example");
     });
 
-    it("caches Vite's hashed assets directory for good", () => {
+    it("caches Vite's hashed assets directory for good", async () => {
         expect.assertions(1);
 
-        build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"], { assetsDir: "static" });
+        await build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"], { assetsDir: "static" });
 
         expect(readFileSync(headersFile(), "utf8")).toContain("/static/*\n  Cache-Control: public, max-age=31536000, immutable\n");
     });
@@ -135,10 +135,10 @@ describe(assetHeadersPlugin, () => {
         ],
         ["an output name is a function", { rolldownOptions: { output: [{ chunkFileNames: () => "assets/chunk.js" }] } }],
         ["the assets sit at the root", { assetsDir: "" }],
-    ])("writes no immutable rule when %s", (_reason, buildConfig: Record<string, unknown>) => {
+    ])("writes no immutable rule when %s", async (_reason, buildConfig: Record<string, unknown>) => {
         expect.assertions(2);
 
-        build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"], buildConfig);
+        await build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"], buildConfig);
 
         const text = readFileSync(headersFile(), "utf8");
 
@@ -147,19 +147,19 @@ describe(assetHeadersPlugin, () => {
         expect(text).toContain("X-Content-Type-Options: nosniff");
     });
 
-    it("writes no immutable rule when a publicDir subfolder of the same name copies unhashed files into it", () => {
+    it("writes no immutable rule when a publicDir subfolder of the same name copies unhashed files into it", async () => {
         expect.assertions(1);
 
         mkdirSync(join(projectRoot, "public", "assets"), { recursive: true });
 
-        build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
+        await build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
 
         expect(readFileSync(headersFile(), "utf8")).not.toContain("Cache-Control");
     });
 
     it.each([["single-page-application"], ["404-page"]])(
         "writes no immutable rule under not_found_handling %s, whose fallback page would be cached for a year",
-        (mode) => {
+        async (mode) => {
             expect.assertions(1);
 
             writeFileSync(
@@ -168,13 +168,13 @@ describe(assetHeadersPlugin, () => {
                 "utf8",
             );
 
-            build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
+            await build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
 
             expect(readFileSync(headersFile(), "utf8")).not.toContain("Cache-Control");
         },
     );
 
-    it("reads not_found_handling from the CLOUDFLARE_ENV block, which overrides the top level", () => {
+    it("reads not_found_handling from the CLOUDFLARE_ENV block, which overrides the top level", async () => {
         expect.assertions(1);
 
         writeFileSync(
@@ -185,7 +185,7 @@ describe(assetHeadersPlugin, () => {
         vi.stubEnv("CLOUDFLARE_ENV", "api");
 
         try {
-            build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
+            await build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
         } finally {
             vi.unstubAllEnvs();
         }

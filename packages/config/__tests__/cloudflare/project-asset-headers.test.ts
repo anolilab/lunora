@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { writeProjectAssetHeaders } from "../../src/cloudflare/project-asset-headers";
+import { emitProjectAssetHeaders } from "../../src/cloudflare/project-asset-headers";
 
-describe(writeProjectAssetHeaders, () => {
+describe(emitProjectAssetHeaders, () => {
     let projectRoot: string;
     let output: string;
 
@@ -14,16 +14,21 @@ describe(writeProjectAssetHeaders, () => {
         writeFileSync(join(projectRoot, "wrangler.jsonc"), JSON.stringify({ name: "app", ...config }), "utf8");
     };
 
-    const run = (overrides: Partial<Parameters<typeof writeProjectAssetHeaders>[0]> = {}) =>
-        writeProjectAssetHeaders({
-            hashedDirectory: "_astro",
-            outputDirectory: output,
-            projectRoot,
-            requireAssetsDirectory: true,
-            schemaDir: "lunora",
-            target: "cloudflare",
-            ...overrides,
-        });
+    const logger = { info: vi.fn<(message: string) => void>(), warn: vi.fn<(message: string) => void>() };
+
+    const run = (overrides: Partial<Parameters<typeof emitProjectAssetHeaders>[0]> = {}) =>
+        emitProjectAssetHeaders(
+            {
+                hashedDirectory: "_astro",
+                outputDirectory: output,
+                projectRoot,
+                requireAssetsDirectory: true,
+                schemaDir: "lunora",
+                target: "cloudflare",
+                ...overrides,
+            },
+            logger,
+        );
 
     beforeEach(() => {
         projectRoot = mkdtempSync(join(tmpdir(), "lunora-project-asset-headers-"));
@@ -35,6 +40,7 @@ describe(writeProjectAssetHeaders, () => {
     afterEach(() => {
         rmSync(projectRoot, { force: true, recursive: true });
         vi.unstubAllEnvs();
+        vi.restoreAllMocks();
     });
 
     it("writes into the build output when it is wrangler's assets.directory", () => {
@@ -98,5 +104,73 @@ describe(writeProjectAssetHeaders, () => {
 
         expect(text).toContain("  X-Content-Type-Options: nosniff");
         expect(text).not.toContain("Cache-Control");
+    });
+
+    it("reads LUNORA_SECURITY_HEADERS from the top-level vars, or the env block's own, when lunora.config sets nothing", () => {
+        expect.assertions(4);
+
+        const headersFor = (environment: string | undefined): string => {
+            if (environment === undefined) {
+                vi.unstubAllEnvs();
+            } else {
+                vi.stubEnv("CLOUDFLARE_ENV", environment);
+            }
+
+            rmSync(join(output, "_headers"), { force: true });
+            run();
+
+            return existsSync(join(output, "_headers")) ? readFileSync(join(output, "_headers"), "utf8") : "";
+        };
+
+        writeWrangler({
+            assets: { directory: "./dist/client" },
+            env: { open: { vars: {} }, staging: { vars: { LUNORA_SECURITY_HEADERS: "false" } } },
+            vars: { LUNORA_SECURITY_HEADERS: "off" },
+        });
+
+        expect(headersFor(undefined)).not.toContain("nosniff");
+        expect(headersFor("staging")).not.toContain("nosniff");
+        // `vars` is not inheritable: an env block without the key does not inherit the top-level off.
+        expect(headersFor("open")).toContain("nosniff");
+
+        writeWrangler({ assets: { directory: "./dist/client" } });
+
+        expect(headersFor(undefined)).toContain("nosniff");
+    });
+
+    it("prefers lunora.config's security.headers over the env var, as the Worker does", () => {
+        expect.assertions(1);
+
+        writeWrangler({ assets: { directory: "./dist/client" }, vars: { LUNORA_SECURITY_HEADERS: "off" } });
+        writeFileSync(join(projectRoot, "lunora.config.ts"), 'export default { security: { headers: { crossOriginOpenerPolicy: "unsafe-none" } } };\n', "utf8");
+        run();
+
+        expect(readFileSync(join(output, "_headers"), "utf8")).toContain("  Cross-Origin-Opener-Policy: unsafe-none");
+    });
+
+    it("keeps the defaults for a security.headers that would break a header line", () => {
+        expect.assertions(1);
+
+        writeWrangler({ assets: { directory: "./dist/client" } });
+        writeFileSync(
+            join(projectRoot, "lunora.config.ts"),
+            'export default { security: { headers: { frameAncestors: ["https://a.example; script-src *"] } } };\n',
+            "utf8",
+        );
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        run();
+
+        expect(readFileSync(join(output, "_headers"), "utf8")).toContain("  X-Frame-Options: SAMEORIGIN");
+    });
+
+    it("reports the headers left to the user's own rules, and each warning, through the build's logger", () => {
+        expect.assertions(2);
+
+        writeWrangler({ assets: { directory: "./dist/client" } });
+        writeFileSync(join(output, "_headers"), "/*\n  X-Frame-Options: DENY\n/admin/*\n  Referrer-Policy: no-referrer\n", "utf8");
+        run();
+
+        expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("kept your own X-Frame-Options"));
+        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('"/admin/*" sets Referrer-Policy'));
     });
 });

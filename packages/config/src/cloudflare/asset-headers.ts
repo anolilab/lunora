@@ -15,9 +15,6 @@
  */
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
-import { readProjectSecurityHeaders } from "@lunora/codegen";
-
-import { isEnvDisabled } from "../../../../shared/env-flag";
 import type { SecurityHeadersOptions } from "../../../../shared/security-headers";
 import { resolveSecurityHeaders } from "../../../../shared/security-headers";
 import join from "../path";
@@ -45,7 +42,7 @@ const MAX_HEADERS_LINE_LENGTH = 2000;
  * strict policy would stop every static HTML page from loading its own scripts.
  * CORS is left to the Worker; static files are served same-origin.
  */
-const securityHeaderLines = (headers: boolean | SecurityHeadersOptions): (readonly [string, string])[] => {
+const securityHeaderLines = (headers: boolean | SecurityHeadersOptions | undefined): (readonly [string, string])[] => {
     const resolved = resolveSecurityHeaders(headers);
 
     if (!resolved.enabled) {
@@ -76,9 +73,9 @@ const IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 interface AssetHeadersOptions {
     /**
      * The security headers to write for `/*`, in the runtime's `security.headers`
-     * shape: `true` for the defaults, `false` for none. See {@link resolveProjectSecurityHeaders}.
+     * shape: `undefined` or `true` for the defaults, `false` for none.
      */
-    headers: boolean | SecurityHeadersOptions;
+    headers: boolean | SecurityHeadersOptions | undefined;
 
     /**
      * The directory, relative to the assets root, that holds only content-hashed
@@ -358,30 +355,5 @@ const writeAssetHeaders = (directory: string, options: AssetHeadersOptions): Ass
     return { deferred: merged.deferred, path, warnings: merged.warnings };
 };
 
-const variablesOf = (scope: unknown): Record<string, unknown> | undefined => {
-    if (typeof scope !== "object" || scope === null) {
-        return undefined;
-    }
-
-    const { vars } = scope as { vars?: unknown };
-
-    return typeof vars === "object" && vars !== null ? (vars as Record<string, unknown>) : undefined;
-};
-
-/**
- * The security headers a build writes for the static assets, in the precedence
- * the Worker applies them: `lunora.config`'s `security.headers` (read and
- * validated by `@lunora/codegen`, which also emits it into the Worker), then
- * an off value for `LUNORA_SECURITY_HEADERS` in wrangler's `vars` (`vars` is not inheritable,
- * so an `env.<name>` build reads that block's own), then the defaults. A
- * `security.headers` passed to `createWorker` in code cannot be seen here; set it
- * in `lunora.config` to cover both.
- */
-const resolveProjectSecurityHeaders = (lunoraDirectory: string, wrangler: unknown, environment?: string): boolean | SecurityHeadersOptions => {
-    const scope = environment === undefined ? wrangler : (wrangler as { env?: Record<string, unknown> } | undefined)?.env?.[environment];
-
-    return readProjectSecurityHeaders(lunoraDirectory) ?? !isEnvDisabled(variablesOf(scope)?.["LUNORA_SECURITY_HEADERS"]);
-};
-
 export type { AssetHeadersOptions, AssetHeadersResult };
-export { mergeAssetHeaders, resolveProjectSecurityHeaders, writeAssetHeaders };
+export { mergeAssetHeaders, writeAssetHeaders };

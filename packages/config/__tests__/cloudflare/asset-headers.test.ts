@@ -1,10 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { mergeAssetHeaders, resolveProjectSecurityHeaders, writeAssetHeaders } from "../../src/cloudflare/asset-headers";
+import { mergeAssetHeaders, writeAssetHeaders } from "../../src/cloudflare/asset-headers";
 
 const BEGIN = "# BEGIN lunora-managed";
 const END = "# END lunora-managed";
@@ -172,54 +172,5 @@ describe(writeAssetHeaders, () => {
         writeAssetHeaders(directory, { headers: false });
 
         expect(existsSync(join(directory, "_headers"))).toBe(false);
-    });
-});
-
-describe(resolveProjectSecurityHeaders, () => {
-    let projectRoot: string;
-
-    beforeEach(() => {
-        projectRoot = mkdtempSync(join(tmpdir(), "lunora-asset-security-"));
-        mkdirSync(join(projectRoot, "lunora"));
-    });
-
-    afterEach(() => {
-        rmSync(projectRoot, { force: true, recursive: true });
-    });
-
-    it("reads LUNORA_SECURITY_HEADERS from the top-level vars, or the env block's own, when lunora.config sets nothing", () => {
-        expect.assertions(4);
-
-        const lunora = join(projectRoot, "lunora");
-        const wrangler = { env: { open: { vars: {} }, staging: { vars: { LUNORA_SECURITY_HEADERS: "false" } } }, vars: { LUNORA_SECURITY_HEADERS: "off" } };
-
-        expect(resolveProjectSecurityHeaders(lunora, wrangler)).toBe(false);
-        expect(resolveProjectSecurityHeaders(lunora, wrangler, "staging")).toBe(false);
-        // `vars` is not inheritable: an env block without the key does not inherit the top-level off.
-        expect(resolveProjectSecurityHeaders(lunora, wrangler, "open")).toBe(true);
-        expect(resolveProjectSecurityHeaders(lunora, undefined)).toBe(true);
-    });
-
-    it("prefers lunora.config's security.headers over the env var, as the Worker does", () => {
-        expect.assertions(1);
-
-        writeFileSync(join(projectRoot, "lunora.config.ts"), 'export default { security: { headers: { crossOriginOpenerPolicy: "unsafe-none" } } };\n', "utf8");
-
-        expect(resolveProjectSecurityHeaders(join(projectRoot, "lunora"), { vars: { LUNORA_SECURITY_HEADERS: "off" } })).toEqual({
-            crossOriginOpenerPolicy: "unsafe-none",
-        });
-    });
-
-    it("keeps the defaults for a security.headers that would break a header line", () => {
-        expect.assertions(1);
-
-        writeFileSync(
-            join(projectRoot, "lunora.config.ts"),
-            'export default { security: { headers: { frameAncestors: ["https://a.example; script-src *"] } } };\n',
-            "utf8",
-        );
-        vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-        expect(resolveProjectSecurityHeaders(join(projectRoot, "lunora"), undefined)).toBe(true);
     });
 });

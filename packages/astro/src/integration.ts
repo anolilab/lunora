@@ -83,28 +83,26 @@ const writeAstroAssetHeaders = async (context: BuildDoneContext, config: ConfigD
         return;
     }
 
-    const projectRoot = fileURLToPath(root);
-    const { resolveProjectTarget } = await import("@lunora/config");
-    const { reportAssetHeaders, writeProjectAssetHeaders } = await import("@lunora/config/cloudflare");
-    const outcome = writeProjectAssetHeaders({
-        hashedDirectory: config?.build?.assets ?? "_astro",
-        outputDirectory: fileURLToPath(context.dir),
-        projectRoot,
-        publicDirectory: config?.publicDir === undefined ? undefined : fileURLToPath(config.publicDir),
-        requireAssetsDirectory: true,
-        schemaDir: "lunora",
-        target: resolveProjectTarget(projectRoot),
-    });
+    const { emitProjectAssetHeaders } = await import("@lunora/config/cloudflare");
 
     // Closures, not detached methods: Astro's logger reads `this`.
-    reportAssetHeaders(outcome, {
-        info: (message) => {
-            context.logger?.info(message);
+    emitProjectAssetHeaders(
+        {
+            hashedDirectory: config?.build?.assets ?? "_astro",
+            outputDirectory: fileURLToPath(context.dir),
+            projectRoot: fileURLToPath(root),
+            publicDirectory: config?.publicDir === undefined ? undefined : fileURLToPath(config.publicDir),
+            requireAssetsDirectory: true,
         },
-        warn: (message) => {
-            context.logger?.warn(message);
+        {
+            info: (message) => {
+                context.logger?.info(message);
+            },
+            warn: (message) => {
+                context.logger?.warn(message);
+            },
         },
-    });
+    );
 };
 
 /** Copy/paste wiring snippet shown when `serverEntry` composes nothing. */

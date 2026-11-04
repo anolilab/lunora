@@ -8,10 +8,16 @@
 import { existsSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 
+import { readProjectSecurityHeaders } from "@lunora/codegen";
+
+import { isPlainObject } from "../../../../shared/is-plain-object";
+import type { SecurityHeadersOptions } from "../../../../shared/security-headers";
+import { effectiveSecurityHeaders } from "../../../../shared/security-headers";
 import canonicalPath from "../canonical-path";
 import join from "../path";
+import { resolveProjectTarget } from "../project-config";
 import type { AssetHeadersResult } from "./asset-headers";
-import { resolveProjectSecurityHeaders, writeAssetHeaders } from "./asset-headers";
+import { writeAssetHeaders } from "./asset-headers";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 interface ProjectAssetHeadersInput {
@@ -33,16 +39,19 @@ interface ProjectAssetHeadersInput {
      * client `outDir` is the assets root even when wrangler declares no `assets` block.
      */
     requireAssetsDirectory: boolean;
-    /** Schema directory relative to `projectRoot`; `lunora.config` is looked up from it. */
-    schemaDir: string;
-    /** The resolved deploy target; only `"cloudflare"` serves `_headers`. */
-    target: string;
+    /** Schema directory relative to `projectRoot`; `lunora.config` is looked up from it. Defaults to `lunora`. */
+    schemaDir?: string;
+    /** The deploy target an integration was configured with; resolved from `lunora.config` when omitted. Only `"cloudflare"` serves `_headers`. */
+    target?: string;
 }
 
-type ProjectAssetHeadersOutcome = { result: AssetHeadersResult; written: true } | { reason: string; written: false };
+/** Where an integration's build log goes. */
+interface AssetHeadersLogger {
+    info: (message: string) => void;
+    warn: (message: string) => void;
+}
 
-const recordOf = (value: unknown): Record<string, unknown> | undefined =>
-    typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+type ProjectAssetHeadersOutcome = { reason: string; written: false } | { result: AssetHeadersResult; written: true };
 
 /** The `CLOUDFLARE_ENV` the build targets; an empty value is no environment, as wrangler reads it. */
 const cloudflareEnvironment = (): string | undefined => {
@@ -51,13 +60,48 @@ const cloudflareEnvironment = (): string | undefined => {
     return value === undefined || value === "" ? undefined : value;
 };
 
-/** The `assets` block the build deploys: `assets` is inheritable, so an `env.<name>` without its own falls back to the top level. */
-const assetsBlock = (wrangler: unknown, environment: string | undefined): Record<string, unknown> | undefined => {
-    const top = recordOf(wrangler);
-    const scoped = environment === undefined ? undefined : recordOf(recordOf(recordOf(top?.["env"])?.[environment])?.["assets"]);
+/**
+ * The wrangler block under `key` that an `env.<environment>` build uses. An
+ * inheritable key (`assets`) falls back to the top level when the environment
+ * has none of its own; a non-inheritable one (`vars`) does not.
+ */
+const scopedBlock = (
+    wrangler: unknown,
+    environment: string | undefined,
+    key: string,
+    { inherit }: { inherit: boolean },
+): Record<string, unknown> | undefined => {
+    const top = isPlainObject(wrangler) ? wrangler : undefined;
+    const topBlock = isPlainObject(top?.[key]) ? top[key] : undefined;
 
-    return scoped ?? recordOf(top?.["assets"]);
+    if (environment === undefined) {
+        return topBlock;
+    }
+
+    const environments = top?.["env"];
+    const scope = isPlainObject(environments) ? environments[environment] : undefined;
+    const own = isPlainObject(scope) ? scope[key] : undefined;
+
+    if (isPlainObject(own)) {
+        return own;
+    }
+
+    return inherit ? topBlock : undefined;
 };
+
+/**
+ * The security headers a build writes for the static assets, in the precedence
+ * the Worker applies them: `lunora.config`'s `security.headers` (read and parsed
+ * by `@lunora/codegen`, which also emits it into the Worker), then an off value
+ * for `LUNORA_SECURITY_HEADERS` in the build's own `vars`, then the defaults. A
+ * `security.headers` passed to `createWorker` in code cannot be seen here; set it
+ * in `lunora.config` to cover both.
+ */
+const projectSecurityHeaders = (lunoraDirectory: string, wrangler: unknown, environment: string | undefined): boolean | SecurityHeadersOptions | undefined =>
+    effectiveSecurityHeaders(
+        readProjectSecurityHeaders(lunoraDirectory),
+        scopedBlock(wrangler, environment, "vars", { inherit: false })?.["LUNORA_SECURITY_HEADERS"],
+    );
 
 /**
  * The hashed directory, or `undefined` when caching it for good could cache the
@@ -79,14 +123,16 @@ const cacheableDirectory = (input: ProjectAssetHeadersInput, notFoundHandling: u
 
 /** Write the managed `_headers` block into a build's output when that output is what Cloudflare serves; otherwise say why not. */
 const writeProjectAssetHeaders = (input: ProjectAssetHeadersInput): ProjectAssetHeadersOutcome => {
-    if (input.target !== "cloudflare") {
-        return { reason: `target "${input.target}" does not serve _headers`, written: false };
+    const target = resolveProjectTarget(input.projectRoot, input.target);
+
+    if (target !== "cloudflare") {
+        return { reason: `target "${target}" does not serve _headers`, written: false };
     }
 
     const wranglerPath = findWranglerFile(input.projectRoot);
     const wrangler = wranglerPath === undefined ? undefined : readWranglerJsonc(wranglerPath).parsed;
     const environment = cloudflareEnvironment();
-    const assets = assetsBlock(wrangler, environment);
+    const assets = scopedBlock(wrangler, environment, "assets", { inherit: true });
 
     if (input.requireAssetsDirectory) {
         const directory = assets?.["directory"];
@@ -104,27 +150,34 @@ const writeProjectAssetHeaders = (input: ProjectAssetHeadersInput): ProjectAsset
     }
 
     const result = writeAssetHeaders(input.outputDirectory, {
-        headers: resolveProjectSecurityHeaders(resolve(input.projectRoot, input.schemaDir), wrangler, environment),
+        headers: projectSecurityHeaders(resolve(input.projectRoot, input.schemaDir ?? "lunora"), wrangler, environment),
         immutableDirectory: cacheableDirectory(input, assets?.["not_found_handling"]),
     });
 
     return { result, written: true };
 };
 
-/** Report a written block through a build's logger: the headers left to the user's own rules, then each warning. */
-const reportAssetHeaders = (outcome: ProjectAssetHeadersOutcome, logger: { info: (message: string) => void; warn: (message: string) => void }): void => {
-    if (!outcome.written) {
-        return;
+/**
+ * Write the managed `_headers` block for one build output and report it through
+ * the build's logger: the headers left to the user's own rules, then each
+ * warning. The single entry point every bundler integration calls after its
+ * client build.
+ */
+const emitProjectAssetHeaders = (input: ProjectAssetHeadersInput, logger: AssetHeadersLogger): ProjectAssetHeadersOutcome => {
+    const outcome = writeProjectAssetHeaders(input);
+
+    if (outcome.written) {
+        if (outcome.result.deferred.length > 0) {
+            logger.info(`_headers: kept your own ${outcome.result.deferred.join(", ")} for static assets instead of Lunora's default`);
+        }
+
+        for (const warning of outcome.result.warnings) {
+            logger.warn(warning);
+        }
     }
 
-    if (outcome.result.deferred.length > 0) {
-        logger.info(`_headers: kept your own ${outcome.result.deferred.join(", ")} for static assets instead of Lunora's default`);
-    }
-
-    for (const warning of outcome.result.warnings) {
-        logger.warn(warning);
-    }
+    return outcome;
 };
 
-export type { ProjectAssetHeadersInput, ProjectAssetHeadersOutcome };
-export { reportAssetHeaders, writeProjectAssetHeaders };
+export type { AssetHeadersLogger, ProjectAssetHeadersInput, ProjectAssetHeadersOutcome };
+export { emitProjectAssetHeaders };

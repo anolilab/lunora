@@ -1,7 +1,6 @@
 import { resolve } from "node:path";
 
 import { lunoraLine } from "@lunora/config";
-import { reportAssetHeaders, writeProjectAssetHeaders } from "@lunora/config/cloudflare";
 import type { Plugin, ResolvedConfig } from "vite";
 
 import type { ResolvedLunoraPluginOptions } from "./types";
@@ -35,6 +34,9 @@ const namesCarryHash = (build: ResolvedConfig["build"]): boolean => {
  * output name the build is configured with carries `[hash]`; `@lunora/config`
  * applies the rest of the decision (public folder, `not_found_handling`).
  *
+ * `@lunora/config/cloudflare` is imported when the build gets here, the way every
+ * integration's `_headers` step loads it.
+ *
  * Runs in `writeBundle`, after Vite has copied `publicDir` (and with it any
  * `_headers` the user wrote) into `outDir`, so the user's rules are merged
  * rather than replaced. Only when `@cloudflare/vite-plugin` is in the build
@@ -52,30 +54,33 @@ const assetHeadersPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             cloudflareBuild = config.plugins.some((plugin) => plugin.name === CLOUDFLARE_PLUGIN_NAME);
         },
         name: "lunora:asset-headers",
-        writeBundle() {
+        async writeBundle() {
             if (!cloudflareBuild) {
                 return;
             }
 
             const { config } = this.environment;
-            const outcome = writeProjectAssetHeaders({
-                hashedDirectory: namesCarryHash(config.build) ? config.build.assetsDir : undefined,
-                outputDirectory: resolve(config.root, config.build.outDir),
-                projectRoot: options.projectRoot,
-                publicDirectory: config.publicDir === "" ? undefined : config.publicDir,
-                requireAssetsDirectory: false,
-                schemaDir: options.schemaDir,
-                target: options.target,
-            });
+            const { emitProjectAssetHeaders } = await import("@lunora/config/cloudflare");
 
-            reportAssetHeaders(outcome, {
-                info: (message) => {
-                    config.logger.info(lunoraLine(message));
+            emitProjectAssetHeaders(
+                {
+                    hashedDirectory: namesCarryHash(config.build) ? config.build.assetsDir : undefined,
+                    outputDirectory: resolve(config.root, config.build.outDir),
+                    projectRoot: options.projectRoot,
+                    publicDirectory: config.publicDir === "" ? undefined : config.publicDir,
+                    requireAssetsDirectory: false,
+                    schemaDir: options.schemaDir,
+                    target: options.target,
                 },
-                warn: (message) => {
-                    config.logger.warn(lunoraLine(message));
+                {
+                    info: (message) => {
+                        config.logger.info(lunoraLine(message));
+                    },
+                    warn: (message) => {
+                        config.logger.warn(lunoraLine(message));
+                    },
                 },
-            });
+            );
         },
     };
 };

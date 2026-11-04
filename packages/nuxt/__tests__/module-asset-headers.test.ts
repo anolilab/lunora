@@ -4,12 +4,11 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { NitroLike } from "../src/module";
-import { writeNuxtAssetHeaders } from "../src/module";
+import writeNuxtAssetHeaders from "../src/asset-headers";
 
 /** A built Nitro, as the `compiled` hook sees it: its public output already holds the preset's own route-rule headers. */
-const nitroFor = (publicDirectory: string, dev = false): NitroLike => {
-    return { hooks: { hook: () => {} }, options: { dev, output: { publicDir: publicDirectory } } };
+const nitroFor = (publicDirectory: string, dev = false): { dev: boolean; publicDirectory: string } => {
+    return { dev, publicDirectory };
 };
 
 describe(writeNuxtAssetHeaders, () => {
