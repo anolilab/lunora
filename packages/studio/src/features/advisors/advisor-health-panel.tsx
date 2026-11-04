@@ -71,7 +71,7 @@ interface AdvisorHealthPanelProps {
  */
 const AdvisorHealthPanel = ({ localProcedures = false, testId = "advisor-health" }: AdvisorHealthPanelProps): ReactElement => {
     const t = useT();
-    const advisoriesQuery = useAdminQuery<AdvisoriesResult>(ADMIN_FUNCTIONS.getAdvisories, {}, { live: true });
+    const advisoriesQuery = useAdminQuery<AdvisoriesResult>(ADMIN_FUNCTIONS.getAdvisories, {}, { enabled: localProcedures, live: true });
     const proceduresQuery = useAdvisorProcedures({ enabled: localProcedures, refreshKey: advisoriesQuery.data });
 
     if (!localProcedures) {

@@ -4,24 +4,37 @@ import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import AdvisorHealthPanel from "../../../src/features/advisors/advisor-health-panel";
+import type { AdvisoryFinding } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import { createMockClient } from "../../mock-client";
 
-/** The panel under a mock client whose only admin read is the (empty) advisory list. */
-const renderPanel = (localProcedures: boolean): ReactElement => (
-    <LunoraProvider
-        client={
-            createMockClient({
-                query: (reference): unknown => {
-                    if (reference === ADMIN_FUNCTIONS.getAdvisories) {
-                        return { advisories: [] };
-                    }
+/** A mock client whose only admin read is the (empty) advisory list. */
+const createAdvisoriesClient = () =>
+    createMockClient({
+        query: (reference): unknown => {
+            if (reference === ADMIN_FUNCTIONS.getAdvisories) {
+                return { advisories: [] };
+            }
 
-                    throw new Error(`unexpected query: ${reference}`);
-                },
-            }).asClient
-        }
-    >
+            throw new Error(`unexpected query: ${reference}`);
+        },
+    });
+
+const NEW_FINDING: AdvisoryFinding = {
+    cacheKey: "unindexed_foreign_key:todos",
+    categories: ["PERFORMANCE"],
+    description: "",
+    detail: "",
+    facing: "INTERNAL",
+    level: "WARN",
+    metadata: {},
+    name: "unindexed_foreign_key",
+    remediation: "",
+    title: "Unindexed foreign key",
+};
+
+const renderPanel = (localProcedures: boolean, mock = createAdvisoriesClient()): ReactElement => (
+    <LunoraProvider client={mock.asClient}>
         <AdvisorHealthPanel localProcedures={localProcedures} />
     </LunoraProvider>
 );
@@ -40,16 +53,37 @@ describe("advisorHealthPanel", () => {
     });
 
     it("does not request the procedure list on a host that cannot serve it, and says why", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const fetchMock = stubProceduresResponse(200, { procedures: [] });
 
-        render(renderPanel(false));
+        const mock = createAdvisoriesClient();
+
+        render(renderPanel(false, mock));
 
         const notice = await screen.findByTestId("advisor-health-local-only");
 
         expect(notice.textContent).toContain("lunora dev");
         expect(fetchMock).not.toHaveBeenCalled();
+        expect(mock.subscribe).not.toHaveBeenCalled();
+    });
+
+    it("fetches the procedure list again when the live advisories change", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = stubProceduresResponse(200, { procedures: [] });
+        const mock = createAdvisoriesClient();
+
+        render(renderPanel(true, mock));
+
+        await screen.findByTestId("advisor-health-score");
+
+        // A different list: React Query keeps the old reference for deep-equal data, which is no change.
+        mock.emit(ADMIN_FUNCTIONS.getAdvisories, { advisories: [NEW_FINDING] });
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+        });
     });
 
     it("scores the deployment when the dev host serves the procedure list", async () => {
