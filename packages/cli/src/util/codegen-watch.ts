@@ -43,7 +43,7 @@ import {
     runCodegen,
 } from "@lunora/codegen";
 import { resolveLazyFunctions } from "@lunora/config";
-import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
+import { WRANGLER_FILES, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 import { consumeStudioWrite, STUDIO_WRITE_TEMP_SUFFIX } from "@lunora/config/studio-host";
 import { LunoraError } from "@lunora/errors";
 import type { Project } from "ts-morph";
@@ -353,7 +353,8 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     let settledAt = 0;
     // The config content the last codegen run read; a replayed config save that leaves it unchanged regenerates nothing.
     let codegenDigest: string | undefined;
-    const configPaths = projectConfigCandidatePaths(watchDirectory);
+    // Codegen also reads the app's wrangler config (cron triggers, the companion Worker's name and observability), at the project root.
+    const configPaths = [...projectConfigCandidatePaths(watchDirectory), ...WRANGLER_FILES.map((name) => join(options.projectRoot, name))];
     let idle: Promise<void> = Promise.resolve();
     const project = createReusableProject(options.projectRoot, watchDirectory);
 
@@ -548,10 +549,10 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
 
     // An RPC service's folder too: `_generated/services/` snapshots its types.
     const serviceWatchers: FSWatcher[] = [];
-    // The config files codegen reads for `codegen.exclude` and `codegen.lazyFunctions` sit beside the Lunora folder or above it,
-    // outside the watched tree, so each folder that can hold one is watched for those files alone.
+    // The config files codegen reads (`codegen.exclude`, `codegen.lazyFunctions`, the wrangler config) sit beside the Lunora folder or
+    // above it, outside the watched tree, so each folder that can hold one is watched for those files alone.
     const configWatchers: FSWatcher[] = [];
-    const configCandidates = new Set(projectConfigCandidatePaths(watchDirectory));
+    const configCandidates = new Set(configPaths);
     // A config save that lands while a hook runs, or in its settle window, is replayed once the window is over. The hook's own
     // writes are dropped there; a save of the config is not one of them, so it must not be lost.
     let configReplay: ReturnType<typeof setTimeout> | undefined;
