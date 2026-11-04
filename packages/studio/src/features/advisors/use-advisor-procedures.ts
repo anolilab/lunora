@@ -135,6 +135,8 @@ const useAdvisorProcedures = ({
     data: AdvisorProceduresResult | undefined;
     error: string | undefined;
     notDeployed: boolean;
+    /** `data` was read before the current `refreshKey`, so it must not be paired with it. */
+    stale: boolean;
 } => {
     // Bump a revision when the advisories change and key the query on it, so React
     // Query fetches once per change. The first value (advisories still loading →
@@ -167,6 +169,8 @@ const useAdvisorProcedures = ({
         data: query.data,
         error: query.error ? errorMessage(query.error) : undefined,
         notDeployed: query.error instanceof CompanionNotDeployedError,
+        // The render that sees a new `refreshKey` still holds the previous revision's list: the bump keys a new fetch next render.
+        stale: seenKey !== refreshKey,
     };
 };
 

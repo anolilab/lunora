@@ -96,6 +96,33 @@ describe("advisorHealthPanel", () => {
         });
     });
 
+    it("keeps the last score on screen while the list for new advisories loads", async () => {
+        expect.hasAssertions();
+
+        const second = Promise.withResolvers<Response>();
+        const fetchMock = vi
+            .fn<typeof fetch>()
+            .mockResolvedValueOnce(Response.json({ procedures: [] }))
+            .mockReturnValueOnce(second.promise);
+
+        vi.stubGlobal("fetch", fetchMock);
+        render(renderPanel(true));
+
+        const score = await screen.findByTestId("advisor-health-score");
+        const before = score.textContent;
+
+        lastClient?.emit(ADMIN_FUNCTIONS.getAdvisories, { advisories: [NEW_FINDING] });
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+        });
+
+        expect(screen.queryByTestId("advisor-health-loading")).toBeNull();
+        expect(screen.getByTestId("advisor-health-score").textContent).toBe(before);
+
+        second.resolve(Response.json({ procedures: [] }));
+    });
+
     it("scores the deployment when the dev host serves the procedure list", async () => {
         expect.assertions(2);
 

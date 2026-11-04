@@ -1,6 +1,7 @@
-import type { AdvisorMap, Coverage, Grade, ProcedureScore } from "@lunora/advisor";
+import type { AdvisorMap, AdvisorProcedureProtection, Coverage, Grade, ProcedureScore } from "@lunora/advisor";
 import { scoreAdvisor } from "@lunora/advisor";
 import type { ReactElement } from "react";
+import { useState } from "react";
 
 import ErrorAlert from "../../components/error-alert";
 import { Card, CardContent } from "../../components/ui/card";
@@ -8,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
-import type { AdvisoriesResult } from "../../lib/admin";
+import type { AdvisoriesResult, AdvisoryFinding } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { cn } from "../../lib/utils";
 import { resolveAdvisorProceduresSource, useAdvisorProcedures } from "./use-advisor-procedures";
@@ -96,6 +97,16 @@ const AdvisorHealthPanel = ({ advisorCompanion = false, localProcedures = false,
         remote: source.kind === "remote" ? source.remote : undefined,
     });
 
+    // Score only a pair read together: new advisories against the previous revision's list would mix two codegen runs.
+    // While the list for the latest advisories loads, the last pair stays on screen rather than blanking to "Loading…".
+    const [scored, setScored] = useState<{ advisories: AdvisoryFinding[]; procedures: AdvisorProcedureProtection[] }>();
+    const freshAdvisories = advisoriesQuery.data?.advisories;
+    const freshProcedures = proceduresQuery.stale ? undefined : proceduresQuery.data?.procedures;
+
+    if (freshAdvisories !== undefined && freshProcedures !== undefined && (scored?.advisories !== freshAdvisories || scored.procedures !== freshProcedures)) {
+        setScored({ advisories: freshAdvisories, procedures: freshProcedures });
+    }
+
     if (source.kind === "none") {
         return (
             <Card>
@@ -128,10 +139,7 @@ const AdvisorHealthPanel = ({ advisorCompanion = false, localProcedures = false,
         );
     }
 
-    const advisories = advisoriesQuery.data?.advisories ?? null;
-    const procedures = proceduresQuery.data?.procedures ?? null;
-
-    const map: AdvisorMap | null = advisories === null || procedures === null ? null : scoreAdvisor(procedures, advisories);
+    const map: AdvisorMap | null = scored === undefined ? null : scoreAdvisor(scored.procedures, scored.advisories);
 
     // Either read failing is a "cannot score" state, not a healthy one — say so
     // rather than showing 100, or spinning forever waiting on a read that failed.
