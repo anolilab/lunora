@@ -651,8 +651,8 @@ const composeReadPredicate = async (
     const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
     // `typeof`, not truthiness, as in `paginateStage` and `findManyPage`: an empty string is a
     // malformed cursor to refuse, not an absent one to read past.
-    const bounded = typeof args.endCursor === "string";
-    const end = bounded ? buildSeekBeforeWhere(orderKeys, decodeCursor(args.endCursor as string)) : undefined;
+    const end = typeof args.endCursor === "string" ? buildSeekBeforeWhere(orderKeys, decodeCursor(args.endCursor)) : undefined;
+    const bounded = end !== undefined;
 
     let predicate: WhereInput | undefined = mergeWhere(args.baseWhere, args.where);
     predicate = mergeWhere(predicate, softDeleteScope(definition.softDeleteMode, args.includeDeleted));
