@@ -1,7 +1,7 @@
 /**
  * The Cloudflare `version_metadata` binding, read in one place. It is an object
- * (`{ id, tag, timestamp }`), not a string var, so every consumer used to hand-roll
- * the same `typeof … === "object"` walk over a hard-coded binding name.
+ * (`{ id, tag, timestamp }`), not a string var, so reading it needs a
+ * `typeof … === "object"` walk rather than a plain env lookup.
  *
  * Bundler-inlined by relative path (see AGENTS.md "Top-level shared/"); keep it
  * zero-dependency.
