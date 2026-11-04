@@ -83,17 +83,19 @@ const projectIdOf = (rawServiceAccount: string): string | undefined => {
 const fcmFromEnv = (env: NotifyEnv, overrides?: Partial<FcmConfig>): FcmConfig | undefined => {
     const envProjectId = readString(env, FCM_ENV_KEYS.projectId); // secret-scanner:allow -- `projectId` is a config field name, not a credential
     const rawServiceAccount = readString(env, FCM_ENV_KEYS.serviceAccount);
-    const projectId = overrides?.projectId ?? envProjectId ?? (rawServiceAccount === undefined ? undefined : projectIdOf(rawServiceAccount));
+    // An empty override would reach `createFcmProvider`, which throws on it and fails every channel of the engine.
+    const overrideProjectId = overrides?.projectId === "" ? undefined : overrides?.projectId;
+    const projectId = overrideProjectId ?? envProjectId ?? (rawServiceAccount === undefined ? undefined : projectIdOf(rawServiceAccount));
 
     if (projectId === undefined) {
         return undefined;
     }
 
     if (rawServiceAccount !== undefined) {
-        return { getAccessToken: fcmServiceAccountTokenSource(rawServiceAccount), projectId, ...overrides };
+        return { getAccessToken: fcmServiceAccountTokenSource(rawServiceAccount), ...overrides, projectId };
     }
 
-    return { accessToken: readString(env, FCM_ENV_KEYS.accessToken), projectId, ...overrides };
+    return { accessToken: readString(env, FCM_ENV_KEYS.accessToken), ...overrides, projectId };
 };
 
 export { FCM_ENV_KEYS, fcmFromEnv, WEB_PUSH_ENV_KEYS, webPushFromEnv };

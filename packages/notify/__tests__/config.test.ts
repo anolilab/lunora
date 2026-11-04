@@ -90,6 +90,12 @@ describe("fcmFromEnv with a service account", () => {
         await expect(config?.getAccessToken?.()).rejects.toThrow("neither valid JSON nor base64-encoded JSON");
     });
 
+    it("ignores an empty overrides.projectId and falls back to the env", () => {
+        expect.hasAssertions();
+
+        expect(fcmFromEnv({ FCM_PROJECT_ID: "proj", FCM_SERVICE_ACCOUNT: keyFile }, { projectId: "" })?.projectId).toBe("proj");
+    });
+
     it("treats an empty project_id in the key file as missing", () => {
         expect.hasAssertions();
 
