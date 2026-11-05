@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import createMailer from "../src/create-mailer";
 import type { SentMailStore } from "../src/queue";
@@ -311,6 +311,57 @@ describe("consumeQueuedSend with a sent-mail store", () => {
 
         await expect(consumeQueuedSend(mailer, body, { sent: store })).resolves.toStrictEqual({ deduplicated: false, id: "queued-send" });
         expect(mailer.send).toHaveBeenCalledTimes(1);
+    });
+
+    describe("recording a sent key", () => {
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        it("gives up on a store write that never answers, logs it and still returns the id", async () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const store: SentMailStore = {
+                get: async () => null,
+                put: async () =>
+                    new Promise<void>(() => {
+                        // never settles, as a stalled store looks
+                    }),
+            };
+            let result: unknown = "pending";
+
+            const settled = consumeQueuedSend(noopMailer(), body, { sent: store }).then((value) => {
+                result = value;
+
+                return value;
+            });
+
+            await vi.advanceTimersByTimeAsync(10_000);
+
+            // Checked before awaiting, so an unbounded write fails here instead of hanging the test.
+            expect(result).toStrictEqual({ deduplicated: false, id: "queued-send" });
+            expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("could not record the idempotency key"), expect.any(Error));
+            expect(vi.getTimerCount()).toBe(0);
+
+            await settled;
+            consoleError.mockRestore();
+        });
+
+        it("leaves no timer behind once the store write answers", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            const { puts, store } = memoryStore();
+
+            await consumeQueuedSend(noopMailer(), body, { sent: store });
+
+            expect(puts).toHaveLength(1);
+            expect(vi.getTimerCount()).toBe(0);
+        });
     });
 
     it("refuses a body without an idempotency key, which it could not dedupe", async () => {

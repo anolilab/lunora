@@ -68,6 +68,9 @@ interface ConsumeQueuedSendOptions {
 
 const DEFAULT_SENT_TTL_SECONDS = 86_400;
 
+/** How long the store write after a send may take before it is given up on and logged. */
+const SENT_RECORD_TIMEOUT_MS = 10_000;
+
 /** Workers KV's floor for `expirationTtl`. */
 const MIN_SENT_TTL_SECONDS = 60;
 
@@ -174,6 +177,31 @@ const toSendOptions = (payload: unknown): SendOptions => {
 };
 
 /**
+ * Record a sent key, bounded: a stalled store would hold the message unacked
+ * until it is redelivered and, without the record, sent again. A failure here is
+ * logged rather than thrown, because the provider already accepted the send.
+ */
+const recordSent = async (sent: SentMailStore, key: string, id: string, expirationTtl: number): Promise<void> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+        await Promise.race([
+            sent.put(key, id, { expirationTtl }),
+            new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(() => {
+                    reject(new Error(`the sent-mail store did not answer within ${String(SENT_RECORD_TIMEOUT_MS)}ms`));
+                }, SENT_RECORD_TIMEOUT_MS);
+            }),
+        ]);
+    } catch (error) {
+        // eslint-disable-next-line no-console -- the send succeeded; failing it now would redeliver a message the provider accepted
+        console.error("@lunora/mail: sent, but could not record the idempotency key; a redelivery may send again —", error);
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
+/**
  * Helper used by Queue consumers: validate a `QueuedSend` body and send it
  * through `mailer.send()`. Use it inside your Worker's `queue()` handler, and
  * `ack()` each message it settles.
@@ -184,8 +212,9 @@ const toSendOptions = (payload: unknown): SendOptions => {
  * successful send records its key. Only a success is recorded, so a retryable
  * or outcome-unknown failure never blocks a later attempt. A store that cannot
  * be read fails the send as retryable, since nothing has gone out; a store that
- * cannot be written after the send is logged and the id still returned, because
- * throwing then would redeliver a message the provider already accepted.
+ * cannot be written after the send, or does not answer within 10 seconds, is
+ * logged and the id still returned, because throwing then would redeliver a
+ * message the provider already accepted.
  *
  * This NARROWS the duplicate window; it does not close it, and nothing on this
  * path can. The mark is written after the provider accepted the message, so a
@@ -274,12 +303,7 @@ const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: Cons
 
     const { id } = await mailer.send(sendOptions);
 
-    try {
-        await sent.put(key, id, { expirationTtl: sentTtlSeconds });
-    } catch (error) {
-        // eslint-disable-next-line no-console -- the send succeeded; failing it now would redeliver a message the provider accepted
-        console.error("@lunora/mail: sent, but could not record the idempotency key; a redelivery may send again —", error);
-    }
+    await recordSent(sent, key, id, sentTtlSeconds);
 
     return { deduplicated: false, id };
 };
