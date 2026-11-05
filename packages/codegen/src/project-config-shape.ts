@@ -13,7 +13,7 @@
  * getter or setter computes its value, so only its name is.
  */
 import type { ObjectLiteralExpression, SourceFile } from "ts-morph";
-import { Node as TsNode, VariableDeclarationKind } from "ts-morph";
+import { Node as TsNode, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import type { SecurityHeadersOptions } from "../../../shared/security-headers";
 import { HSTS_KEYS, SECURITY_HEADER_KEYS } from "../../../shared/security-headers";
@@ -21,7 +21,7 @@ import { closestMatch } from "../../../shared/suggest";
 import { staticPropertyName } from "./discover/property-name";
 
 /** What a literal value can be, as far as a parse can tell. */
-type LiteralKind = "array" | "boolean" | "function" | "null" | "number" | "object" | "string";
+type LiteralKind = "array" | "bigint" | "boolean" | "function" | "null" | "number" | "object" | "string";
 
 interface FieldShape {
     /** The kinds the value may be. */
@@ -104,6 +104,15 @@ const resolveValue = (node: TsNode | undefined, sourceFile: SourceFile): TsNode 
     return value !== undefined && TsNode.isIdentifier(value) ? unwrapLiteral(constInitializer(sourceFile, value.getText())) : value;
 };
 
+/** The boolean `!0` / `!1` (a minifier's `true` / `false`) evaluates to, or `undefined` for anything else. */
+const negatedNumber = (value: TsNode): boolean | undefined =>
+    TsNode.isPrefixUnaryExpression(value) && value.getOperatorToken() === SyntaxKind.ExclamationToken && TsNode.isNumericLiteral(value.getOperand())
+        ? Number(value.getOperand().getText()) === 0
+        : undefined;
+
+/** The boolean a boolean-kind literal evaluates to. */
+const booleanValue = (value: TsNode): boolean => negatedNumber(value) ?? TsNode.isTrueLiteral(value);
+
 /** The literal kind of a resolved value; `undefined` when a parse cannot tell. */
 const literalKind = (value: TsNode | undefined): LiteralKind | undefined => {
     if (value === undefined) {
@@ -114,8 +123,12 @@ const literalKind = (value: TsNode | undefined): LiteralKind | undefined => {
         return "string";
     }
 
-    if (TsNode.isTrueLiteral(value) || TsNode.isFalseLiteral(value)) {
+    if (TsNode.isTrueLiteral(value) || TsNode.isFalseLiteral(value) || negatedNumber(value) !== undefined) {
         return "boolean";
+    }
+
+    if (TsNode.isBigIntLiteral(value) || (TsNode.isPrefixUnaryExpression(value) && TsNode.isBigIntLiteral(value.getOperand()))) {
+        return "bigint";
     }
 
     if (TsNode.isNumericLiteral(value) || (TsNode.isPrefixUnaryExpression(value) && TsNode.isNumericLiteral(value.getOperand()))) {
@@ -139,6 +152,7 @@ const literalKind = (value: TsNode | undefined): LiteralKind | undefined => {
 
 const KIND_ARTICLE: Readonly<Record<LiteralKind, string>> = {
     array: "an array",
+    bigint: "a bigint",
     boolean: "a boolean",
     function: "a function",
     null: "null",
@@ -186,7 +200,7 @@ const fieldProblems = (node: TsNode | undefined, field: FieldShape, label: strin
         return [`\`${label}\` must be ${field.expected}, got ${KIND_ARTICLE[kind]} (${shown}).`];
     }
 
-    if (field.literal !== undefined && kind === "boolean" && text !== String(field.literal)) {
+    if (field.literal !== undefined && kind === "boolean" && booleanValue(value) !== field.literal) {
         return [`\`${label}\` must be ${field.expected}, got \`${text}\`.${field.hint === undefined ? "" : ` ${field.hint}`}`];
     }
 
@@ -207,14 +221,18 @@ const fieldProblems = (node: TsNode | undefined, field: FieldShape, label: strin
         : [];
 };
 
-/** The problems in `object` checked against `keys` (fixed keys) or `entries` (user-chosen keys, each checked against one shape). */
-const objectProblems = (object: ObjectLiteralExpression, shape: FieldShape, path: string, sourceFile: SourceFile): string[] => {
+/**
+ * The problems in `object` checked against `keys` (fixed keys) or `entries` (user-chosen keys, each checked against one
+ * shape). `namesOnly` is set below a member whose value may be shadowed: its nested names are still checked, its values not.
+ */
+const objectProblems = (object: ObjectLiteralExpression, shape: FieldShape, path: string, sourceFile: SourceFile, namesOnly = false): string[] => {
     const members = object.getProperties();
-    // See the module header: a spread may shadow any member, so the values are not the ones that win.
-    const valuesReadable = !members.some((member) => TsNode.isSpreadAssignment(member));
-    const problems: string[] = [];
     const keyOf = (member: (typeof members)[number]): string | undefined =>
         TsNode.isSpreadAssignment(member) ? undefined : staticPropertyName(member.getNameNode());
+    // See the module header: a spread, or a computed key the parse cannot name, may shadow any member, so the values
+    // are not the ones that win.
+    const valuesReadable = !namesOnly && members.every((member) => keyOf(member) !== undefined);
+    const problems: string[] = [];
     // `{ target: 1, target: "cloudflare" }` evaluates to its last `target`, which is the one the readers use.
     const effective = new Map(members.map((member) => [keyOf(member), member]));
 
@@ -230,12 +248,33 @@ const objectProblems = (object: ObjectLiteralExpression, shape: FieldShape, path
 
         if (field === undefined) {
             problems.push(unknownKeyProblem(key, path, Object.keys(shape.keys ?? {})));
-        } else if (valuesReadable && effective.get(key) === member && !TsNode.isGetAccessorDeclaration(member) && !TsNode.isSetAccessorDeclaration(member)) {
-            problems.push(...fieldProblems(memberValue(member), field, path === "" ? key : `${path}.${key}`, sourceFile));
+        } else {
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a nested object re-enters `objectProblems`
+            problems.push(...memberProblems(member, field, path === "" ? key : `${path}.${key}`, sourceFile, valuesReadable && effective.get(key) === member));
         }
     }
 
     return problems;
+};
+
+/**
+ * A known member's problems: its value checked against `field` when that value is the one that wins, else only the
+ * names nested in it. A getter or setter computes its value, so it has neither.
+ */
+const memberProblems = (member: TsNode, field: FieldShape, label: string, sourceFile: SourceFile, valueWins: boolean): string[] => {
+    if (TsNode.isGetAccessorDeclaration(member) || TsNode.isSetAccessorDeclaration(member)) {
+        return [];
+    }
+
+    if (valueWins) {
+        return fieldProblems(memberValue(member), field, label, sourceFile);
+    }
+
+    const value = resolveValue(memberValue(member), sourceFile);
+
+    return value !== undefined && TsNode.isObjectLiteralExpression(value) && (field.keys !== undefined || field.entries !== undefined)
+        ? objectProblems(value, field, label, sourceFile, true)
+        : [];
 };
 
 export type { FieldShape };

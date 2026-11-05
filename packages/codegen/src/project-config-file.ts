@@ -165,14 +165,21 @@ interface LoadedProjectConfig {
  * The expression the default export resolves to, or `undefined` when there is none.
  *
  * A `satisfies` / `as` / parenthesised wrapper is unwrapped, because that is the
- * documented shape. An identifier is followed to a `const` in the same file,
+ * documented shape. An identifier, or an `export { name as default }`, is followed to a `const` in the same file,
  * because `const config = { … }; export default config;` is the commonest config
  * idiom there is and reading it as "no keys" was indistinguishable from an empty
  * config.
  */
 const defaultExportExpression = (sourceFile: SourceFile): TsNode | undefined => {
     const assignment = sourceFile.getExportAssignments().find((candidate) => !candidate.isExportEquals());
-    const expression: TsNode | undefined = unwrapLiteral(assignment?.getExpression());
+    // `export { config as default }` names its local binding the way `export default config` does.
+    const specifier = sourceFile
+        .getExportDeclarations()
+        .filter((declaration) => !declaration.hasModuleSpecifier() && !declaration.isTypeOnly())
+        .flatMap((declaration) => declaration.getNamedExports())
+        .find((named) => (named.getAliasNode()?.getText() ?? named.getName()) === "default");
+    const expression: TsNode | undefined =
+        assignment === undefined && specifier !== undefined ? specifier.getNameNode() : unwrapLiteral(assignment?.getExpression());
 
     // `export default config` names a `const`; its initializer unwraps the same way, parentheses included.
     return expression !== undefined && TsNode.isIdentifier(expression) ? unwrapLiteral(constInitializer(sourceFile, expression.getText())) : expression;

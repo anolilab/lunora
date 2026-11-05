@@ -60,6 +60,10 @@ describe("lunora.config validation", () => {
         "export default { target: 1, target: 'cloudflare' };\n",
         // A computed default may still evaluate to an object: the readers report it, not this check.
         "export default makeConfig();\n",
+        // A minifier's `!0` / `!1` are the booleans `true` / `false`.
+        "export default { codegen: { lazyFunctions: !0 }, remote: !1, security: { headers: { csp: !1 } } };\n",
+        // A computed key the parse cannot name may overwrite `app` at runtime, so its value is not judged.
+        "const key = 'app';\nexport default { app: false, [key]: (builder) => builder };\n",
         "export default { security: { headers: { frameOptions: 'DENY', hsts: false } } };\n",
         // `null` is "no preference", as the evaluated config reads it.
         "export default { remote: null };\n",
@@ -107,6 +111,8 @@ describe("lunora.config validation", () => {
         ["security: { headers: { csp: true } }", "`security.headers.csp` must be a string or `false`, got `true`."],
         ["codegen: { exclude: ['seed/**', 1] }", "`codegen.exclude[1]` must be a string, got a number (1)."],
         ["advisor: { accept: ['rule'] }", "`advisor.accept[0]` must be an object, got a string ('rule')."],
+        ["remote: 1n", "`remote` must be a boolean, got a bigint (1n)."],
+        ["security: { headers: { csp: !0 } }", "`security.headers.csp` must be a string or `false`, got `!0`."],
     ])("refuses %s", (member, problem) => {
         expect.assertions(1);
 
@@ -168,6 +174,40 @@ describe("lunora.config validation", () => {
 
         expect(projectConfigProblems(configPath)).toStrictEqual([
             "unknown key `traget`. Did you mean `target`? Valid keys: advisor, app, codegen, durableObjects, remote, security, services, studio, target.",
+        ]);
+    });
+
+    it("still checks the names nested under a spread, though not their values", () => {
+        expect.assertions(1);
+
+        writeConfig("const defaults = {};\nexport default { ...defaults, codegen: { lazyFuntions: 'yes' } };\n");
+
+        expect(projectConfigProblems(configPath)).toStrictEqual([
+            "unknown key `codegen.lazyFuntions`. Did you mean `codegen.lazyFunctions`? Valid keys of `codegen`: exclude, lazyFunctions.",
+        ]);
+    });
+
+    it("checks a config exported with `export { config as default }`", () => {
+        expect.assertions(2);
+
+        writeConfig("const config = { traget: 'cloudflare' };\nexport { config as default };\n");
+
+        expect(projectConfigProblems(configPath)).toStrictEqual([
+            "unknown key `traget`. Did you mean `target`? Valid keys: advisor, app, codegen, durableObjects, remote, security, services, studio, target.",
+        ]);
+
+        writeConfig("const config = { target: 'celld' };\nexport { config as default };\n");
+
+        expect(readProjectConfigLiterals(projectRoot).target).toBe("celld");
+    });
+
+    it("reports a config whose only exports are `export *` re-exports, which never forward a default", () => {
+        expect.assertions(1);
+
+        writeConfig('export * from "./settings";\n');
+
+        expect(projectConfigProblems(configPath)).toStrictEqual([
+            'lunora.config.ts has no default export, so none of its settings are read (it only re-exports `./settings` with `export *`, which never forwards a default). Lunora reads only the default export: `export { default } from "./settings"`, or `export default { … } satisfies LunoraConfig`.',
         ]);
     });
 

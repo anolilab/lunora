@@ -15,22 +15,16 @@ const isTypeOnly = (declaration: TsNode): boolean =>
     TsNode.isTypeAliasDeclaration(declaration) ||
     (TsNode.isExportSpecifier(declaration) && (declaration.isTypeOnly() || declaration.getExportDeclaration().isTypeOnly()));
 
-/** The names a file exports as values (a type-only export configures nothing); empty when it has a default export. */
-const namedValueExports = (sourceFile: SourceFile): string[] => {
-    const symbols = sourceFile.getExportSymbols();
-
-    if (symbols.some((symbol) => symbol.getName() === "default")) {
-        return [];
-    }
-
-    return symbols
+/** The names a file exports as values; a type-only export configures nothing. */
+const namedValueExports = (sourceFile: SourceFile): string[] =>
+    sourceFile
+        .getExportSymbols()
         .filter((symbol) => {
             const declarations = symbol.getDeclarations();
 
             return declarations.length === 0 || !declarations.every((declaration) => isTypeOnly(declaration));
         })
         .map((symbol) => symbol.getName());
-};
 
 /**
  * Why a config that exports only named bindings is not read, or `undefined` when
@@ -43,10 +37,24 @@ const namedOnlyExportsProblem = (
     sourceFile: SourceFile,
     configKeys: ReadonlyMap<string, unknown> | ReadonlySet<string>,
 ): string | undefined => {
+    if (sourceFile.getExportSymbols().some((symbol) => symbol.getName() === "default")) {
+        return undefined;
+    }
+
     const named = namedValueExports(sourceFile);
+    // `export * from "./settings"` forwards names this parse cannot see (it resolves no imports), and never a default.
+    const forwarded = sourceFile
+        .getExportDeclarations()
+        .filter((declaration) => declaration.isNamespaceExport() && declaration.getNamespaceExport() === undefined && !declaration.isTypeOnly())
+        .map((declaration) => declaration.getModuleSpecifierValue())
+        .filter((module): module is string => module !== undefined);
+
+    if (named.length === 0 && forwarded.length === 0) {
+        return undefined;
+    }
 
     if (named.length === 0) {
-        return undefined;
+        return `${fileName} has no default export, so none of its settings are read (it only re-exports ${forwarded.map((module) => `\`${module}\``).join(", ")} with \`export *\`, which never forwards a default). Lunora reads only the default export: \`export { default } from "${String(forwarded[0])}"\`, or \`export default { … } satisfies LunoraConfig\`.`;
     }
 
     const keys = named.filter((name) => configKeys.has(name));
