@@ -23,7 +23,6 @@ import {
     validateContainers,
     validateD1Databases,
     validateDurableObjectMigrations,
-    validateEnvironmentQueueNames,
     validateGlobalBackendBindings,
     validateHintBinding,
     validateQueues,
@@ -34,6 +33,7 @@ import {
     validateWorkflowSettings,
     WORKFLOWS_RULE,
 } from "./validate-bindings";
+import validateEnvironmentQueueNames from "./validate-environment-queues";
 import validateJurisdiction from "./validate-jurisdiction";
 import {
     validateAssets,

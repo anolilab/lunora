@@ -560,65 +560,6 @@ const validateQueues = (wrangler: WranglerConfig, errors: string[]): void => {
     validateRequiredFieldEntries(wrangler.queues.consumers, "queues.consumers", QUEUE_CONSUMERS_RULE, errors);
 };
 
-/** Every queue name a `queues` block touches — producer targets, consumed queues and dead-letter queues. */
-const queueNamesIn = (queues: unknown): Set<string> => {
-    if (!isPlainObject(queues)) {
-        return new Set();
-    }
-
-    const entries = (list: unknown): Record<string, unknown>[] => (Array.isArray(list) ? list.filter((entry) => isPlainObject(entry)) : []);
-
-    return new Set(
-        [
-            ...entries(queues.producers).map((entry) => entry.queue),
-            ...entries(queues.consumers).flatMap((entry) => [entry.queue, entry.dead_letter_queue]),
-        ].filter((name) => isNonEmptyString(name)),
-    );
-};
-
-/**
- * Warn when the `env.<environment>` block being deployed names a queue the top
- * level or another environment also names.
- *
- * Queue names are unique per Cloudflare account, so two environments deployed
- * to one account that name the same queue share it: staging's producers write
- * into production's queue and the two Workers contend for its one consumer.
- * Lunora never writes queue names into an environment block (see
- * `reconcileEnvQueues`), so the names are the user's, and renaming one here
- * would strand the backlog on the old queue — hence a warning, not a rewrite.
- *
- * Reads the ORIGINAL config: the `--env` view replaces `queues` with the
- * block's own, so the names the block could collide with are gone from it.
- */
-const validateEnvironmentQueueNames = (wrangler: WranglerConfig, environment: string | undefined, warnings: string[]): void => {
-    if (environment === undefined || !isPlainObject(wrangler.env)) {
-        return;
-    }
-
-    const own = queueNamesIn(wrangler.env[environment]?.queues);
-
-    if (own.size === 0) {
-        return;
-    }
-
-    const scopes: [string, Set<string>][] = [
-        ["the top level", queueNamesIn(wrangler.queues)],
-        ...Object.entries(wrangler.env)
-            .filter(([name]) => name !== environment)
-            .map(([name, block]): [string, Set<string>] => [`env.${name}`, queueNamesIn(isPlainObject(block) ? block.queues : undefined)]),
-    ];
-
-    for (const name of own) {
-        const sharedWith = scopes.filter(([, names]) => names.has(name)).map(([scope]) => scope);
-
-        if (sharedWith.length > 0) {
-            warnings.push(
-                `env.${environment}.queues names queue "${name}", which ${sharedWith.join(" and ")} also ${sharedWith.length === 1 ? "names" : "name"}. Queue names are unique per Cloudflare account, so deployed to one account the environments share that queue: messages produced in one are consumed by the other. Give env.${environment} its own name (e.g. "${name}-${environment}") unless the sharing is intended — the renamed queue starts empty, and messages already in "${name}" stay there.`,
-            );
-        }
-    }
-};
-
 /**
  * Each `secrets_store_secrets[]` entry references a remote store + secret by
  * name (both created out-of-band), so only the `{ binding, store_id,
@@ -997,7 +938,6 @@ export {
     validateContainers,
     validateD1Databases,
     validateDurableObjectMigrations,
-    validateEnvironmentQueueNames,
     validateGlobalBackendBindings,
     validateHintBinding,
     validateQueues,

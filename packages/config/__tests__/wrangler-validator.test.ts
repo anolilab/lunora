@@ -852,6 +852,31 @@ describe("wrangler-validator", () => {
                 ]);
             });
 
+            it("does not compare environments deployed to different accounts", () => {
+                expect.assertions(2);
+
+                const wrangler = topLevel();
+
+                wrangler.account_id = "account-production";
+                wrangler.env = {
+                    preview: { queues: { producers: [{ binding: "EMAILS", queue: "emails" }] } },
+                    staging: {
+                        account_id: "account-staging",
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        queues: { producers: [{ binding: "EMAILS", queue: "emails" }] },
+                    },
+                };
+
+                // The top level and env.preview (which inherits its account_id) are on another account.
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([]);
+
+                wrangler.env.preview = { account_id: "account-staging", queues: { producers: [{ binding: "EMAILS", queue: "emails" }] } };
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([
+                    expect.stringContaining(`"emails", which env.preview also names`),
+                ]);
+            });
+
             it("says nothing when the environment names its own queues, or for a top-level deploy", () => {
                 expect.assertions(2);
 
