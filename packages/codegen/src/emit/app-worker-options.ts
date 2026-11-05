@@ -582,9 +582,12 @@ const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
     // Cloudflare data-residency region. Emitted only when declared, so apps
     // without it keep the un-pinned global namespace (and unchanged output).
     ...(options.jurisdiction ? [`            jurisdiction: ${JSON.stringify(options.jurisdiction)},`] : []),
-    ...(options.wantsArchitecture ? [`            architecture: deferred.architecture,`] : []),
-    ...(options.wantsOpenApi ? [`            openApiSpec: deferred.openApiSpec,`] : []),
-    ...(options.wantsOpenRpc ? [`            openRpcSpec: deferred.openRpcSpec,`] : []),
+    // Loaders, not documents: only Studio's admin routes read them, and they grow with
+    // the app. The `import()` keeps each in its own chunk, evaluated on that route's
+    // first request rather than on the isolate's first event.
+    ...(options.wantsArchitecture ? [`            architecture: () => import("./architecture.js").then((module) => module.architecture),`] : []),
+    ...(options.wantsOpenApi ? [`            openApiSpec: () => import("./openapi.js").then((module) => module.openApiSpec),`] : []),
+    ...(options.wantsOpenRpc ? [`            openRpcSpec: () => import("./openrpc.js").then((module) => module.openRpcSpec),`] : []),
     ...buildQueueConsumerLines(options),
     // Spread so an unset `.httpRouter()` leaves the key absent rather than
     // explicitly `undefined` — `createWorker` treats the two the same, but the

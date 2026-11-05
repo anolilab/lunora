@@ -2381,7 +2381,7 @@ interface WorkerOptions {
     aiOptInLevel?: AiOptInLevel;
     allowUnauthenticatedShardAccess?: boolean;
     applyGlobals?: GlobalCdcApplyFunction;
-    architecture?: unknown;
+    architecture?: () => Promise<unknown>;
     authAdmin?: AuthAdmin;
     authAuditReader?: AuthAuditReader;
     authBasePath?: string;
@@ -2418,8 +2418,8 @@ interface WorkerOptions {
     logArchive?: LogArchiveConfig;
     notifySubscriptionStore?: NotifySubscriptionStoreLike;
     observability?: ObservabilitySink;
-    openApiSpec?: unknown;
-    openRpcSpec?: unknown;
+    openApiSpec?: () => Promise<unknown>;
+    openRpcSpec?: () => Promise<unknown>;
     passThroughOnException?: boolean;
     queryCoordinator?: QueryCoordinator;
     queue?: QueueConsumerHandler;

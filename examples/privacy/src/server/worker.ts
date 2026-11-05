@@ -2,9 +2,11 @@ import type { ShardNamespaceLike } from "lunorash/runtime";
 import { createWorker } from "lunorash/runtime";
 
 import { LUNORA_CRONS } from "../../lunora/_generated/crons.js";
-import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { app } from "../../lunora/http";
 import { authFor } from "./auth";
+
+// A loader, not the document: only Studio's API route reads it, so no ordinary request evaluates it.
+const openApiSpec = (): Promise<unknown> => import("../../lunora/_generated/openapi.js").then((module) => module.openApiSpec);
 
 /** The bindings the Worker reads. The workflows and the tombstone store are reached from their own code. */
 interface WorkerEnv {

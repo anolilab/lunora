@@ -2,9 +2,11 @@ import { createStripeAdapter } from "@lunora/payment/stripe";
 import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
 import { createWorker } from "lunorash/runtime";
 
-import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";
 import { app } from "../../lunora/http.js";
+
+// A loader, not the document: only Studio's API route reads it, so no ordinary request evaluates it.
+const openApiSpec = (): Promise<unknown> => import("../../lunora/_generated/openapi.js").then((module) => module.openApiSpec);
 
 interface Env {
     ADMIN_REVOCATIONS: ShardNamespaceLike;
