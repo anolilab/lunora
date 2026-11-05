@@ -25,7 +25,7 @@ scaffolded config enables the compatibility flag:
 ```jsonc
 // wrangler.jsonc
 {
-    "compatibility_date": "2026-06-10",
+    "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
 }
 ```
@@ -51,12 +51,12 @@ polyfill.
 
 ## Where the constraints bite
 
-| Constraint      | Value               | What it means                                       |
-| --------------- | ------------------- | --------------------------------------------------- |
-| Bundle size     | 64 MiB uncompressed | The whole worker, dependencies included             |
-| CPU per request | 30 s                | Long work belongs in an action plus the scheduler   |
-| Subrequests     | 50 free / 1000 paid | Caps outbound `fetch` and fan-out reads per request |
-| Env var size    | 5 KB total          | Larger config belongs in D1 or KV                   |
+| Constraint      | Value                                                | What it means                                              |
+| --------------- | ---------------------------------------------------- | ---------------------------------------------------------- |
+| Bundle size     | 64 MiB uncompressed                                  | The whole worker, dependencies included                    |
+| CPU per request | 30 s                                                 | Long work belongs in an action plus the scheduler          |
+| Subrequests     | 50 external / 1,000 internal on Free; 10,000 on Paid | Caps outbound `fetch` and the per-shard reads of a fan-out |
+| Env var size    | 5 KB total                                           | Larger config belongs in D1 or KV                          |
 
 The full table is in [Limits](/docs/limits).
 

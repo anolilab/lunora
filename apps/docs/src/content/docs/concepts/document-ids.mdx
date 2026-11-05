@@ -86,9 +86,9 @@ const message = await ctx.db.get("messages", messageId);
 const author = message ? await ctx.db.get("users", message.authorId) : null;
 ```
 
-The write side is unchanged: `patch`, `replace`, and `delete` take an id and no
-table name. `get` and `insert` name the table, because `get` needs it to read and
-`insert` has no id yet.
+On the structural `ctx.db` used above, `get`, `patch`, `replace`, and `delete` each
+take the table name before the id, and `insert` takes the table and no id yet. The
+typed `ctx.db.<table>` accessor takes the id alone, as in `ctx.db.messages.get(messageId)`.
 
 For loading many related rows at once, and for declaring the relationship so the
 studio and the advisors understand it, see [Relations](/docs/concepts/relations).
@@ -105,6 +105,6 @@ exist. Confirm existence with a `get` when it matters.
 ## Ids in exports and imports
 
 `_id` and `_creationTime` travel with the document in an
-[NDJSON export](/docs/concepts/backups), which is what makes a restore preserve
+[newline-delimited JSON (NDJSON) export](/docs/concepts/backups), which is what makes a restore preserve
 identity: references between tables still resolve after a round trip. Import a
 referenced table before the table that points at it.

@@ -10,7 +10,7 @@ related:
 ---
 
 Lunora gives you several places to look when something misbehaves. They are
-listed from the cheapest outward, roughly in the order you should try them.
+listed from the cheapest outward, roughly in the order to try them.
 
 ## Start with `lunora doctor`
 
@@ -105,7 +105,7 @@ lunora insights --format json  # pipe into CI or a script
 
 Error hot-spots include the most recent error message, which is usually enough to
 identify the bug without reproducing it. Write-conflict hot-spots point at
-[OCC contention](/docs/concepts/occ).
+contention under [optimistic concurrency control (OCC)](/docs/concepts/occ).
 
 ## Watch production
 
@@ -135,7 +135,7 @@ function runs. Work through it in this order:
    token. `AUTH_HEADERS_MISSING` means auth is not wired up correctly.
 3. **Is it an authorization failure instead?** `FORBIDDEN` means the identity
    resolved and was rejected. `RLS_REQUIRED` means the table is secure by default
-   and no policy resolved for this caller; see [RLS](/docs/concepts/rls).
+   and no policy resolved for this caller; see [row-level security (RLS)](/docs/concepts/rls).
 4. **Does it work with auth off?** Temporarily calling the function through an
    internal path isolates whether the bug is in the policy or the query.
 

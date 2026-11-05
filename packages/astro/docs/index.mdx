@@ -6,7 +6,7 @@ description: "Astro integration: single-worker composition plus reactive-loader 
 `@lunora/astro` owns two server-side seams for running Lunora inside an Astro app on Cloudflare. Astro is multi-framework at the UI layer, so this package is not a reactive runtime; reactivity comes from whichever island adapter you hydrate with (`@lunora/react`, `@lunora/solid`, `@lunora/svelte`, `@lunora/vue`).
 
 - **Single-worker composition**: `withLunora` wraps the Worker `@astrojs/cloudflare` emits so Lunora realtime (`/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*`) is mounted inside it. One worker, one deploy.
-- **Reactive-loader server helpers**: `@lunora/astro/server` re-exports the framework-neutral SSR contract (`createServerClient`, `preloadQuery`, `serializePreloaded`, `getServerSession`) for use in `.astro` frontmatter and server endpoints.
+- **Reactive-loader server helpers**: `@lunora/astro/server` re-exports the framework-neutral server-side rendering (SSR) contract (`createServerClient`, `preloadQuery`, `serializePreloaded`, `getServerSession`) for use in `.astro` frontmatter and server endpoints.
 
 ## Install
 
@@ -82,6 +82,8 @@ withLunora(host, optionsInput);
     `withLunora` is the Astro-named alias for the shared `withFrameworkWorker` from `@lunora/runtime`, the same composer codegen's `buildFrameworkWorker` uses
     for SvelteKit.
 </Callout>
+
+The package also exports these types: `LunoraOptions` (the `optionsInput` type of `withLunora`), `ComposedWorker` (its return type), `AstroWorkerHandler` (the `host` type), `LunoraIntegrationOptions` (the options object of `lunora()`), and `AstroIntegrationLike` (the object `lunora()` returns).
 
 ### `lunora(options)`
 

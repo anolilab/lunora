@@ -11,7 +11,7 @@ related:
 
 Every Lunora `query` doubles as a subscription. Calling `useQuery(api.x.y, args)`
 in React opens a multiplexed WebSocket to your Worker, registers the query
-with the resolving Durable Object, and re-renders the component whenever a
+with the resolving Durable Object (DO), and re-renders the component whenever a
 mutation writes to a table the query reads.
 
 ```tsx
@@ -59,7 +59,7 @@ Two consequences worth knowing:
 
 - **Row-level filtering is the query's job, not the router's.** A write to
   `messages` refreshes every subscription that reads `messages`; each one then
-  returns only what its own handler (and its RLS policies) selects for that
+  returns only what its own handler (and its row-level security (RLS) policies) selects for that
   subscriber. Nothing tries to match a mutation's row against a subscription's
   args.
 - **Re-execution is not free.** A query that reads a hot table re-runs on every
@@ -108,7 +108,7 @@ It is a **degradation, not a second transport**, and the gap matters:
   (`@lunora/db` collections), durable streams and whispers are socket-only
   surfaces with no request/response form to re-run — they stay dark until a
   socket opens.
-- Freshness is bounded by the interval, not by the write. There is no CDC cursor
+- Freshness is bounded by the interval, not by the write. There is no change data capture (CDC) cursor
   on this path: every tick is a full snapshot, so a poll costs what the query
   costs, repeatedly.
 - It does not make an app offline-capable. A poll is an HTTP request; when nothing
@@ -253,8 +253,8 @@ mutation with [RLS](/docs/concepts/rls) — not on a topic.
 Real-time fan-out in Lunora is entirely Durable-Object-based: hibernated
 WebSocket subscriptions on `ShardDO`, type-safe and integrated end-to-end with
 your queries, with no external broker to run. Cloudflare **Pub/Sub** (an MQTT
-broker) is therefore a non-goal. It is in beta with gated onboarding and no
-Worker binding, and the only capability it adds over the DO path is native-MQTT
-device ingest (IoT clients speaking MQTT directly), a narrow niche. We'll
-revisit only if Pub/Sub reaches GA and a concrete need to ingest from
-native-MQTT devices appears; until then there is nothing to configure.
+broker) is therefore a non-goal. It launched as a gated beta, never shipped a
+Worker binding, and no longer has a page in Cloudflare's docs. The only
+capability it would add over the DO path is native-MQTT device ingest (IoT
+clients speaking MQTT directly), a narrow niche, so there is nothing to
+configure.

@@ -4,11 +4,12 @@
  *
  * Lunora errors carry no stack frames on the wire: an observability event's
  * error is `{ code, message, status }` and the durable request log
- * (`__lunora_reqlog__`) persists only `outcome` plus `error_message` — there is
- * no stored error code. So unlike the stack-aware `fingerprint`, the canonical
+ * (`__lunora_reqlog__`) stores `outcome`, `error_message` and the
+ * `error_fingerprint` computed from the raw message at write time — there is no
+ * stored error code. So unlike the stack-aware `fingerprint`, the canonical
  * grouping key here is over the function path plus the normalized message only.
  * That is the one thing both an in-flight sink event and a persisted reqlog row
- * can always agree on, so a live Issue and one recomputed from history collapse
+ * can always agree on, so a live Issue and one read back from history collapse
  * onto the same hash. The code and status ride along as display metadata, never
  * folded into the group.
  *

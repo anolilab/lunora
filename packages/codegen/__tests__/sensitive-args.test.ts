@@ -181,6 +181,25 @@ describe("emitted artifacts for a sensitive function", () => {
         expect(plain).toContain("const ctx = this.buildCtx({ functionPath: `__shape__:${name}`, identity });");
     });
 
+    it("scopes a subscription run to its raw args and masks its error only when a sensitive argument exists", () => {
+        expect.assertions(5);
+
+        const schema = { tables: [], vectorIndexes: [] };
+        const marked = emitShard({ hasSensitiveArgs: true, schema });
+        const plain = emitShard({ schema });
+
+        // The seed path logs the error the run throws, so it has to be scrubbed before the scope clears.
+        expect(marked).toContain("const sensitive = this.openSensitiveScope(functionPath, args);\n            let result: unknown;");
+        expect(marked).toContain(
+            "const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange, sensitive });",
+        );
+        expect(marked.split("throw this.maskSensitiveError(error, sensitive);").length).toBeGreaterThan(1);
+        expect(plain).not.toContain("onReadRange: footprint.onReadRange, sensitive });");
+        expect(plain).toContain(
+            "const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange });",
+        );
+    });
+
     it("imports SensitiveScope once when a shape declares a marked argument", () => {
         expect.assertions(1);
 

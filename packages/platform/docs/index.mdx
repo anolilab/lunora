@@ -56,7 +56,7 @@ compiles fine and fails in production:
 `take`. A host never stores the plaintext: the raw layer (`SecretValueStore`)
 mints the ref and asks `seal(ref)` for the bytes to write, and
 `encryptingSecretValueHost(store, { key, previousKey })` supplies those bytes as
-AES-256-GCM ciphertext. The ref and the scope are bound as additional
+AES-256-GCM (Advanced Encryption Standard in Galois/Counter Mode) ciphertext. The ref and the scope are bound as additional
 authenticated data, so a record moved to another ref, or read under another
 scope, does not open. The stored record is `{ keyId, iv, ciphertext }`. The
 `keyId` is the first 8 bytes of SHA-256 over the key, and the IV is fresh for
@@ -79,8 +79,8 @@ every `put`.
   (`SECRET_VALUE_MAX_TTL_MS`). Then unset `LUNORA_SECRET_VALUE_KEY_PREVIOUS` and
   deploy.
 
-**What point-in-time recovery does.** On Cloudflare Durable Objects, PITR
-restores SQL data and key-value `put()` data to any point in the past 30 days.
+**What point-in-time recovery does.** On Cloudflare Durable Objects, point-in-time
+recovery (PITR) restores SQL data and key-value `put()` data to any point in the past 30 days.
 The sealed secret records are key-value data, so they are included. The
 documented way to start a restore is the object's own code: call
 `onNextSessionRestoreBookmark` with a bookmark, then `ctx.abort()`. The docs
@@ -113,8 +113,8 @@ import { CLOUDFLARE_CAPABILITIES } from "@lunora/platform";
 
 ## Conformance
 
-A host is only correct if it passes the conformance TCK, which is the executable
-form of these contracts and ships as a subpath of this package so it can never
+A host is only correct if it passes the conformance technology compatibility kit
+(TCK), which is the executable form of these contracts and ships as a subpath of this package so it can never
 version apart from what it asserts:
 
 ```ts
@@ -135,8 +135,8 @@ unsupported host that offers them. The reference harness omits `capabilities`
 and must provide every surface.
 
 The TCK covers host primitives. It does **not** yet cover the engine-level
-guarantees (OCC-409, poke ordering, RLS under a live subscription, scheduler
-at-least-once). Those are implemented by code still being extracted from
+guarantees (optimistic concurrency control (OCC-409), poke ordering,
+row-level security (RLS) under a live subscription, scheduler at-least-once). Those are implemented by code still being extracted from
 `@lunora/do`, and they move into the suite as that completes. A passing host
 means "the primitives are right", not "the engine will behave".
 
@@ -152,3 +152,219 @@ detect usage of — a row in `CAPABILITY_ROWS` mapped to the feature key in
 `CAPABILITY_TO_FEATURE` — and only for the `unsupported` and undeclared states
 (`native` and `emulated` emit identically). The full gate-bearing list, and the
 keys that are parity reporting only, are in `capabilities/types.ts`'s module header.
+
+## API
+
+Reference for the public exports of `@lunora/platform`. Binding shapes such as
+`D1DatabaseLike`, `R2BucketLike` and `QueueBindingLike` are listed in
+`api-snapshots/platform.api.md`.
+
+### `ShardHost`
+
+**Type:** interface
+
+One shard's execution slot. It has `runSerialized`, `transaction`, `sql`,
+`alarms`, and the optional `waitUntil` and `shardKey`.
+
+### `SocketHost`
+
+**Type:** interface
+
+Hibernatable sockets. It has `accept`, `getSockets(tag?)`, `handleFor`, `idFor`,
+`newPair` and `upgradeResponse`. `setTag` and `removeTag` are optional. A host
+that cannot retag omits both, so callers re-accept the socket instead.
+
+### `SocketHandle`
+
+**Type:** interface
+
+The handle a host returns for an accepted socket. The transport socket is the
+handle on hosts that return it unchanged.
+
+### `SOCKET_TAG_BUDGET`
+
+**Type:** `{ readonly maxTagLength: 256; readonly usableTags: 9 }`
+
+The tag limits every host enforces. `usableTags` is Cloudflare's 10-tag
+`acceptWebSocket` cap minus the identity slot the Cloudflare adapter reserves.
+
+### `findSocketTagBudgetViolation`
+
+**Type:** `(tags?: ReadonlyArray<string>) => string | undefined`
+
+Checks `tags` against `SOCKET_TAG_BUDGET`. It returns a message when a tag is
+over budget, and `undefined` when the tags fit. Hosts call it first in `accept`.
+
+### `ShardDirectory`
+
+**Type:** type
+
+Resolves a shard name to a `ShardStub`, with optional jurisdiction pinning.
+
+### `DirectShardDirectory`
+
+**Type:** interface
+
+The directory shape a host implements directly. `getByName` is required, and
+`get`, `idForName` and `jurisdiction` are optional.
+
+### `resolveShard`
+
+**Type:** `(directory: ShardDirectory, name: string, locationHint?: ShardRegionHint) => ShardStub`
+
+Resolves a shard by name through a directory. It refuses any name that starts
+with `LUNORA_ROLE_PREFIX`. The `locationHint` is advisory on every host.
+
+### `LUNORA_ROLE_PREFIX`
+
+**Type:** `"__lunora_do__:"`
+
+The instance-name prefix reserved for framework roles that share a shard
+directory, such as the scheduler. An app shard key cannot use it.
+
+### `ShardKvStore`
+
+**Type:** interface
+
+An ordered key-value store with prefix scan. `ShardHost` does not include one.
+`list` takes `ShardKvListOptions`, which has an optional `prefix`.
+
+### `SchedulerHost`
+
+**Type:** interface
+
+Schedules jobs with at-least-once delivery. It has `schedule`, `cancel`, and the
+optional `list`, `deadLetter` and `cron`. `cron` is absent on hosts whose crons
+are declared rather than registered at runtime.
+
+### `ScheduleOptions`
+
+**Type:** interface
+
+The options for `SchedulerHost.schedule`, including the retry settings.
+
+### `SecretValueHost`
+
+**Type:** interface
+
+Holds a human-supplied value for one `take`. It has `put`, `take` and `discard`,
+and has no `get`, `list` or `has`.
+
+### `SecretValueStore`
+
+**Type:** interface
+
+The raw record layer that a `SecretValueHost` wraps. It mints the ref and seals
+the record bytes.
+
+### `encryptingSecretValueHost`
+
+**Type:** `(raw: SecretValueStore, options: SecretValueKeyOptions) => SecretValueHost`
+
+Wraps a `SecretValueStore` in AES-256-GCM. `options.key` is required, and
+`options.previousKey` is accepted during rotation. The key is validated on first
+use, so an app that never uses secret values can boot without a key.
+
+### `SecretValueKeyOptions`
+
+**Type:** `{ key: string | undefined; previousKey?: string }`
+
+The base64 keys for `encryptingSecretValueHost`. Each key must decode to exactly
+32 bytes.
+
+### `SecretValueKeyError`
+
+**Type:** class, with `code` set to `"SECRET_VALUE_KEY_UNAVAILABLE"`
+
+Thrown by `put` and `take` when the key is missing or malformed. The constructor
+takes `reason: "missing" | "malformed"`.
+
+### `SECRET_VALUE_MAX_BYTES`
+
+**Type:** `number`
+
+**Default:** `8192`
+
+The largest value `put` accepts, counted in UTF-8 bytes.
+
+### `SecretValueTooLargeError`
+
+**Type:** class
+
+Thrown by `SecretValueHost.put` when the value is larger than
+`SECRET_VALUE_MAX_BYTES`. `assertSecretValueSize` throws it.
+
+### `assertSecretValueSize`
+
+**Type:** `(value: string) => void`
+
+Throws `SecretValueTooLargeError` when `value` is over `SECRET_VALUE_MAX_BYTES`.
+
+### `SECRET_VALUE_MAX_TTL_MS`
+
+**Type:** `number`
+
+**Default:** `86400000` (24 hours)
+
+The longest lifetime `put` grants, whatever `ttlMs` is requested.
+
+### `clampSecretValueTtl`
+
+**Type:** `(ttlMs: number) => number`
+
+Clamps a requested lifetime to `[1, SECRET_VALUE_MAX_TTL_MS]`. It throws a
+`RangeError` when `ttlMs` is `NaN` or infinite.
+
+### `PlatformCapabilities`
+
+**Type:** interface
+
+The capability matrix for one target. Each entry is a `Capability` whose level is
+`CapabilityLevel`, one of `"native"`, `"emulated"` or `"unsupported"`.
+
+### `CLOUDFLARE_CAPABILITIES`
+
+**Type:** `PlatformCapabilities`
+
+The matrix for the Cloudflare host.
+
+### `NODE_CAPABILITIES`
+
+**Type:** `PlatformCapabilities`
+
+The matrix for the Node host, reproduced in the `@lunora/platform-node` package
+page.
+
+### `CELLD_CAPABILITIES`
+
+**Type:** `PlatformCapabilities`
+
+The matrix for the celld host.
+
+### `NOOP_EXECUTION_CONTEXT`
+
+**Type:** `ExecutionContextLike`
+
+An execution context whose `waitUntil` and `passThroughOnException` do nothing.
+
+### `ConformanceHost`
+
+**Type:** interface
+
+Imported from `@lunora/platform/conformance`. A host factory that
+`defineHostContractSuite` runs. The optional members are the hooks described under
+[Conformance](#conformance).
+
+### `defineHostContractSuite`
+
+**Type:** `(name: string, factory: ConformanceHostFactory, vitest: VitestApi) => void`
+
+Imported from `@lunora/platform/conformance/suite`. Registers the host contract
+suite under `name`. `ConformanceHostFactory` is `() => ConformanceHost | Promise<ConformanceHost>`.
+
+### `createReferenceHost`
+
+**Type:** `() => ReferenceHost`
+
+Imported from `@lunora/platform/conformance`. Builds the `node:sqlite` reference
+host for the suite.

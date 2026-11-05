@@ -324,7 +324,7 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
    `<LunoraProvider client={new LunoraClient({ url })}>`. URL is your
    Worker's `*.workers.dev` hostname.
 7. **Deploy**: `lunora deploy` builds and calls `wrangler deploy` (data
-   migrations are opt-in: `--migrate`, plus `--migrate-yes` in production). Your data plane is now in your own Cloudflare account.
+   migrations are opt-in: `--migrate`, which also requires `--migrate-url` and `--migrate-yes`). Your data plane is now in your own Cloudflare account.
 
 ## Caveats
 

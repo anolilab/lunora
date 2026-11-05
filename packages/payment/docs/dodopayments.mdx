@@ -6,7 +6,7 @@ description: Merchant-of-Record payments on Lunora with Dodo Payments — checko
 [Dodo Payments](https://dodopayments.com) is a **Merchant-of-Record (MoR)** for
 software, SaaS, and digital products. Unlike a raw payment processor, Dodo is the
 **legal seller** of your product: it runs hosted checkout, calculates, collects,
-and remits sales tax / VAT / GST across 190+ jurisdictions, issues compliant
+and remits sales tax / VAT / GST across 190+ countries, issues compliant
 invoices, and owns chargebacks and disputes. Your app never touches card data or
 a tax engine: you sell to Dodo's checkout, Dodo sells to the customer.
 
@@ -30,9 +30,9 @@ The adapter advertises these capabilities:
 
 <Callout type="info">
     Choose **Dodo Payments** (or another MoR: Polar, Creem) when you want tax/VAT/GST handled for you and don't want to register for sales tax in every
-    jurisdiction you sell into. Choose **Stripe** (a PSP) when you need direct control over the money movement, manual authorize/capture, or you already run
-    your own tax and invoicing. Because the provider is a stateless translator and the store owns all state, switching later is a configuration change, not a
-    rewrite.
+    jurisdiction you sell into. Choose **Stripe** (a payment service provider, PSP) when you need direct control over the money movement, manual
+    authorize/capture, or you already run your own tax and invoicing. Because the provider is a stateless translator and the store owns all state, switching
+    later is a configuration change, not a rewrite.
 </Callout>
 
 Practical consequences of the MoR model in this adapter:
@@ -236,6 +236,8 @@ browser to the returned `url`; Dodo hosts the checkout.
 
 ### Manage subscriptions
 
+The facade cancels immediately by default, or at the end of the period with `atPeriodEnd`:
+
 ```ts
 // Cancel now, or at period end.
 await ctx.payments.cancelSubscription(subscriptionId, { atPeriodEnd: true });
@@ -373,6 +375,8 @@ app.post(
 );
 ```
 
+The following internal action runs in the shard and passes the raw body and headers to `handleWebhook`:
+
 ```ts title="lunora/billing.ts"
 import { internalAction, v } from "./_generated/server";
 
@@ -399,7 +403,7 @@ export const processDodoWebhook = internalAction
 `WebhookAction`, and applies it through the state machine. Once verified it
 returns `200` once applied or deduplicated, so Dodo stops retrying; a duplicate is
 acknowledged, not re-applied. An **orphaned** event — one whose subscription or
-customer row has not been created yet, i.e. an out-of-order delivery — returns
+payment row has not been created yet, i.e. an out-of-order delivery — returns
 `500` instead, so Dodo redelivers it after the parent row lands. Standard Webhooks
 carries no body id, so the adapter uses the `webhook-id` header as the
 idempotency key backing the append-only `events` log.
@@ -471,13 +475,12 @@ const { url } = await ctx.payments.createPortalSession(ctx.auth.userId, "https:/
 ```
 
 The customer is derived from the store, never a caller-supplied id, so there is
-no IDOR. Dodo's portal is a session URL, so the `returnUrl` argument is accepted
-for interface parity but Dodo controls the in-portal navigation.
+no insecure direct object reference (IDOR). The `returnUrl` argument is sent to Dodo as the portal session's `return_url`, and Dodo controls the in-portal navigation after that.
 
 ## Tax, invoices & the MoR model
 
 Because `merchantOfRecord` is `true`, Dodo is the seller of record, not you: it
-calculates and remits VAT / sales tax / GST across 190+ jurisdictions,
+calculates and remits VAT / sales tax / GST across 190+ countries,
 generates compliant invoices, and absorbs chargebacks and disputes. Your Lunora
 app only records the normalized payment/subscription state; it never stores tax
 lines or card data. The stored `Money` is Dodo's `total_amount` (tax-inclusive)
@@ -486,15 +489,14 @@ in integer minor units.
 ## Limitations
 
 <Callout type="info">
-    - **No manual capture/authorize.** `capturePayment` / `cancelPayment` throw `PROVIDER_ERROR`; an MoR captures at checkout. - **Product-based.** The
-    cross-provider `priceId` carries a Dodo **product** id, not a separate price id. - **Single `return_url`.** Dodo checkout uses `successUrl` only;
-    `cancelUrl` is accepted for interface parity but unused. - **No pause/resume API.** Dodo's status enum has no `paused` member, so a pause is recognized from
-    the `subscription.paused` event alone and there is nothing to pause with; `resumeSubscription` un-schedules a period-end cancellation
-    (`cancel_at_next_billing_date: false`), it does not un-pause. - **`paused` does not survive `reconcile`.** The same missing enum member means
-    `getSubscriptionStatus` re-reports a paused subscription as `past_due`, and reconcile — which trusts the adapter for subscriptions — writes that back (as
-    `reconcile.drift`, not a new dunning alert). Both states are non-entitling, so nothing is over-granted; the practical effect is that the `paused` label is
-    transient and a resume must arrive as a webhook. - **Refunds are async.** A pending refund leaves the row unchanged; the store reflects the refund once
-    `refund.succeeded` arrives.
+
+- **No manual capture/authorize.** `capturePayment` / `cancelPayment` throw `PROVIDER_ERROR`; an MoR captures at checkout.
+- **Product-based.** The cross-provider `priceId` carries a Dodo **product** id, not a separate price id.
+- **Single `return_url`.** Dodo checkout uses `successUrl` only; `cancelUrl` is accepted for interface parity but unused.
+- **No pause/resume API.** Dodo's status enum has no `paused` member, so a pause is recognized from the `subscription.paused` event alone and there is nothing to pause with; `resumeSubscription` un-schedules a period-end cancellation (`cancel_at_next_billing_date: false`), it does not un-pause.
+- **`paused` does not survive `reconcile`.** The same missing enum member means `getSubscriptionStatus` re-reports a paused subscription as `past_due`, and reconcile — which trusts the adapter for subscriptions — writes that back (as `reconcile.drift`, not a new dunning alert). Both states are non-entitling, so nothing is over-granted; the practical effect is that the `paused` label is transient and a resume must arrive as a webhook.
+- **Refunds are async.** A pending refund leaves the row unchanged; the store reflects the refund once `refund.succeeded` arrives.
+
 </Callout>
 
 ## Troubleshooting

@@ -126,11 +126,15 @@ export const ERROR_CATALOG = {
     SHARD_DRY_RUN_UNSUPPORTED: { status: 501, title: "Shard cannot dry-run an import" },
     /** The shard could not write a subscription's attachment to storage, so the subscription was refused. */
     SUBSCRIPTION_PERSIST_FAILED: { status: 500, title: "Subscription persist failed" },
+    /** A subscription's first run threw something other than a deliberate `LunoraError`; the message is redacted. */
+    SUBSCRIPTION_SEED_FAILED: { status: 500, title: "Subscription seed failed" },
     /** A connection asked for more concurrent subscriptions than the shard allows. */
     TOO_MANY_SUBSCRIPTIONS: { status: 429, title: "Too many subscriptions" },
     /** A live control call arrived after a later one for the same key had already applied. */
     LIVE_CONTROL_SUPERSEDED: { status: 409, title: "A later live control call already applied" },
     OFFLINE_IDENTITY_CHANGED: { status: 409, title: "Offline identity changed" },
+    /** The offline queue reached `offlineQueue.maxItems`, so its oldest write was dropped. Client-side only. */
+    OFFLINE_QUEUE_OVERFLOW: { status: 503, title: "Offline queue full, oldest write dropped" },
 
     /**
      * A mutation sent with `onlineOnly: true` found its connection not live, so it

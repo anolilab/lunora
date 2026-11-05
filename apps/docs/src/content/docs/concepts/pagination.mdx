@@ -147,8 +147,9 @@ page is the fixed range `(cursor, endCursor]` under the call's `orderBy`:
 ## Load more / infinite lists on the client
 
 On the client a paginated list is the same query re-run with the next
-cursor. The framework adapter hooks (`useQuery` in `@lunora/react`,
-`@lunora/vue`, `@lunora/solid`, `@lunora/svelte`) wrap this for you: you hold the
+cursor. The framework adapters wrap this for you (`usePaginatedQuery` in
+`@lunora/react` and `@lunora/vue`, `createPaginatedQuery` in `@lunora/solid`,
+`paginatedQuery` in `@lunora/svelte`): you hold the
 accumulated `page` arrays, track the latest `continueCursor`, and call "load
 more" to re-run the query with `cursor` set to it. When `isDone` is `true`, hide
 the button.
@@ -183,7 +184,7 @@ for the total with a separate query and subscribe to it like any other:
 
 ```ts
 // lunora/messages.ts
-export const total = query.input({ channelId: v.id("channels") }).query(async (ctx, { channelId }) => ctx.db.messages.count({ channelId }));
+export const total = query.input({ channelId: v.id("channels") }).query(async ({ ctx, args: { channelId } }) => ctx.db.messages.count({ channelId }));
 ```
 
 ```tsx

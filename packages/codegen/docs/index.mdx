@@ -60,7 +60,7 @@ const rows = await drizzle(env.DB).select().from(users).where(eq(users.email, em
 ```
 
 `searchIndexes` are not emitted — Drizzle has no `sqliteTable` abstraction for
-FTS5 virtual tables, and the runtime handles that plumbing outside Drizzle.
+SQLite full-text search (FTS5) virtual tables, and the runtime handles that plumbing outside Drizzle.
 Nothing you write has to import these files; ignore them if you never reach for
 Drizzle directly.
 
@@ -168,6 +168,32 @@ Common options:
   `false` keeps the eager registry unless `codegen.lazyFunctions` in
   `lunora.config.ts` enables it.
 - `lunoraDirectory`: override the `lunora` subdirectory name.
+- `target`: the deploy target that tailors the emitted `ctx.*` surface. **Default:**
+  the `target` string in `lunora.config.ts`, then `"cloudflare"`. The registered
+  targets are `"cloudflare"`, `"node"` and `"celld"`; each gates the surface by
+  its capability matrix from `@lunora/platform`. Any other name emits the full
+  Cloudflare surface un-gated and a `platform_unknown_target` diagnostic.
+
+## API reference
+
+### `CodegenResult`
+
+**Type:** `interface`. The value `runCodegen` returns. Its `generated` field holds
+the generated file contents, keyed by name. `advisories` holds the static
+advisor findings, and `cronTriggers` lists the Cron trigger expressions.
+
+### `lintSchema(options)`
+
+**Type:** `(options: LintSchemaOptions) => Finding[]`. Runs the static schema advisor
+and returns its findings. Use it when you need the advisories without a full
+codegen run. Surfacing them (console, error overlay, Studio) is up to the caller.
+
+### `generateSdk(document, target)`
+
+**Type:** `(document: OpenRpcDocument, target: SdkTarget) => Promise<SdkResult>`.
+Generates a client SDK in the target's language from an OpenRPC document. Import it
+from `@lunora/codegen/sdk`. The `lunora sdk generate` command calls it. See the
+[`lunora sdk`](/docs/packages/cli#lunora-sdk) section for the command.
 
 ## Trimming advisories (`advisor.minSeverity`)
 

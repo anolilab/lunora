@@ -242,7 +242,7 @@ field as required, so rows written before it need a value:
   `v.null()`) needs nothing.
 
 Root and `.shardBy()` tables store each row as a JSON document, so a field
-added later is simply absent from older rows.
+added later is absent from older rows.
 
 So a deploy that only adds tables, optional fields or non-unique indexes needs
 nothing beyond the deploy itself. Two things still need a person before it:
@@ -487,7 +487,7 @@ versioned and re-runnable. It is the wrong tool for _"mark these 800 rows
 The Studio's data browser has **Set column on N matching** beside **Delete N
 matching**. Filter the table to the rows you mean, pick a column, give it a
 JSON value, and every matching row is patched through the same schema-aware
-writer a mutation uses: validators run, indexes and FTS/aggregate/rank shadow
+writer a mutation uses: validators run, indexes and full-text search (FTS), aggregate and rank shadow
 tables stay in sync, and live subscribers are poked.
 
 The Studio is always local: `lunora view` opens the studio the running dev

@@ -114,7 +114,7 @@ middleware, and check it with `auth.can(...)`:
 ```ts
 import { definePermission, defineRole, definePolicy, definePolicies, rls } from "lunorash/server";
 
-import { mutation } from "./_generated/server";
+import { mutation, v } from "./_generated/server";
 
 const deletePosts = definePermission("posts:delete");
 const admin = defineRole("admin", { permissions: [deletePosts] });
@@ -125,7 +125,10 @@ const canDelete = definePolicy({
     when: ({ auth }) => auth.can(deletePosts),
 });
 
-export const removePost = mutation.use(rls(definePolicies([canDelete]), { roles: [admin] })).mutation(async ({ ctx, args }) => ctx.db.delete("posts", args.id));
+export const removePost = mutation
+    .use(rls(definePolicies([canDelete]), { roles: [admin] }))
+    .input({ id: v.id("posts") })
+    .mutation(async ({ ctx, args }) => ctx.db.delete("posts", args.id));
 ```
 
 The middleware unions the permissions of every role in `auth.roles` at request

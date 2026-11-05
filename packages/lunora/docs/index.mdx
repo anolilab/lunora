@@ -58,6 +58,7 @@ and the sources together.
 | `lunorash/client/ssr`          | `@lunora/client/ssr`               | SSR preload / hydration                                    |
 | `lunorash/client/upload`       | `@lunora/client/upload`            | direct-to-storage uploads                                  |
 | `lunorash/client/service`      | `@lunora/client/service`           | the service (server-to-server) client                      |
+| `lunorash/client/admin`        | `@lunora/client/admin`             | `LunoraAdminClient`, the admin client                      |
 
 The default entry (`lunorash`) mirrors `lunorash/server`, so
 `import { defineSchema } from "lunorash"` works out of the box.
@@ -79,10 +80,11 @@ export default defineSchema({
 
 ## Procedure builders come from codegen, not the package
 
-The `query`, `mutation`, `action`, `internalQuery`, `internalMutation`,
-`internalAction`, and `definePolicy` builders are emitted into your app's
-`_generated/server` module by `lunora codegen`: they are typed against your
-schema, so they are not exported from `lunorash/server`.
+The `query`, `mutation`, `action`, `internalQuery`, `internalMutation`, and
+`internalAction` builders are emitted into your app's `_generated/server` module
+by `lunora codegen`: they are typed against your schema, so they are not exported
+from `lunorash/server`. `definePolicy` is exported from `lunorash/server` too, but
+the copy in `_generated/server` is bound to your schema's types.
 
 ```ts
 // lunora/messages.ts
@@ -108,13 +110,23 @@ unchanged.
 
 ## Worker entry
 
+The worker entry builds the worker on the first request, using the `SHARD`
+Durable Object binding from `env`:
+
 ```ts
 // src/worker.ts
-import { createWorker } from "lunorash/runtime";
+import { createWorker, type ExecutionContextLike, type LunoraWorker } from "lunorash/runtime";
 
 export { ShardDO } from "lunorash/do";
 
-export default createWorker({ shardDO: (env) => env.SHARD });
+let worker: LunoraWorker | undefined;
+
+export default {
+    async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
+        worker ??= createWorker({ shardDO: env.SHARD });
+        return worker.fetch(request, env, ctx);
+    },
+};
 ```
 
 ## CLI

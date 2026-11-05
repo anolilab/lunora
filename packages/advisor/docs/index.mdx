@@ -46,7 +46,7 @@ Every finding carries a `level` (`ERROR`, `WARN`, or `INFO`) and a `category` of
 
 <Step>`lunora dev` / `lunora codegen` runs the static lints through `@lunora/codegen`. Findings print in the terminal.</Step>
 
-<Step>The Studio **Advisors** view renders the same findings, grouped by category and level, with the remediation text for each.</Step>
+<Step>The Studio **Advisors** view renders the same findings in tabs for each level (`ERROR`, `WARN`, `INFO`), with the remediation text for each.</Step>
 
 </Steps>
 
@@ -57,7 +57,7 @@ counters; it appears in the same Advisors view once a deployment has traffic.
 
 ### Security
 
-Secrets, injection & SSRF:
+Secrets, injection & server-side request forgery (SSRF):
 
 | Lint                                 | Level   | Flags                                                                        |
 | ------------------------------------ | ------- | ---------------------------------------------------------------------------- |
@@ -68,12 +68,12 @@ Secrets, injection & SSRF:
 | `browser_allow_private_targets`      | `ERROR` | Browser rendering with the private-target SSRF guard disabled                |
 | `browser_user_url_without_allowlist` | `WARN`  | Browser navigation to an arg-derived URL with no allowlist                   |
 
-IDOR & unscoped access (a user-derived key/id reaches a resource without a server-scoped check):
+Insecure direct object reference (IDOR) and unscoped access (a user-derived key/id reaches a resource without a server-scoped check):
 
 | Lint                                     | Level   | Flags                                                                                                     |
 | ---------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------- |
 | `owner_field_from_args_not_auth`         | `ERROR` | An ownership column written from `args` instead of the server identity                                    |
-| `storage_key_from_user_args`             | `ERROR` | An R2 object key taken directly from user args                                                            |
+| `storage_key_from_user_args`             | `ERROR` | A Cloudflare R2 object key taken directly from user args                                                  |
 | `kv_unscoped_user_key_idor`              | `ERROR` | A KV key derived from unscoped user args                                                                  |
 | `container_instance_key_from_user_input` | `WARN`  | A container instance key from arg-derived unscoped input (cross-tenant IDOR)                              |
 | `images_url_source_from_user_input`      | `WARN`  | An image-delivery URL built from unscoped user input                                                      |
@@ -81,11 +81,11 @@ IDOR & unscoped access (a user-derived key/id reaches a resource without a serve
 | `vectors_namespace_from_user_input`      | `WARN`  | A Vectorize namespace derived from unscoped user input                                                    |
 | `normalize_id_used_as_authorization`     | `INFO`  | A `normalizeId()` result gates access with no ownership/RLS check; it validates id _shape_, not ownership |
 
-RLS, masking & output shape:
+Row-level security (RLS), masking & output shape:
 
 | Lint                                         | Level   | Flags                                                                                                                            |
 | -------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `external_source_unscoped`                   | `ERROR` | A `.source()` + `.shardBy()` table with no `tenantBy`; every tenant DO replicates the whole multitenant table                    |
+| `external_source_unscoped`                   | `ERROR` | A `.source()` + `.shardBy()` table with no `tenantBy`; every tenant Durable Object (DO) replicates the whole multitenant table   |
 | `unrestricted_where_branch`                  | `ERROR` | A shape/policy predicate arm returning `{}` or `undefined` — a filter matching EVERY row, where a deny was meant                 |
 | `rls_uncovered_table`                        | `WARN`  | An RLS-gated table read without the `rls()` middleware                                                                           |
 | `policy_references_unknown_table`            | `WARN`  | An RLS policy bound to a table that doesn't exist                                                                                |
@@ -100,16 +100,16 @@ RLS, masking & output shape:
 
 Auth configuration (`createAuth`):
 
-| Lint                                | Level   | Flags                                                                                |
-| ----------------------------------- | ------- | ------------------------------------------------------------------------------------ |
-| `auth_csrf_check_disabled`          | `ERROR` | `createAuth` with the CSRF check disabled                                            |
-| `auth_secure_cookies_disabled`      | `ERROR` | `createAuth` with secure cookies disabled                                            |
-| `auth_trusted_origins_wildcard`     | `ERROR` | `createAuth` `trustedOrigins` set to a wildcard                                      |
-| `auth_scim_without_transactions`    | `ERROR` | `scim()` on a database adapter with no native transactions; every SCIM request fails |
-| `auth_email_verification_disabled`  | `WARN`  | `createAuth` with email verification disabled                                        |
-| `auth_session_freshage_zero`        | `WARN`  | `createAuth` session `freshAge` of zero                                              |
-| `auth_api_call_without_headers`     | `WARN`  | A privileged `ctx.authApi` call missing request headers                              |
-| `identity_undeclared_claim_trusted` | `WARN`  | Authorization trusts an undeclared (forgeable) identity claim                        |
+| Lint                                | Level   | Flags                                                                                                                         |
+| ----------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `auth_csrf_check_disabled`          | `ERROR` | `createAuth` with the CSRF check disabled                                                                                     |
+| `auth_secure_cookies_disabled`      | `ERROR` | `createAuth` with secure cookies disabled                                                                                     |
+| `auth_trusted_origins_wildcard`     | `ERROR` | `createAuth` `trustedOrigins` set to a wildcard                                                                               |
+| `auth_scim_without_transactions`    | `ERROR` | `scim()` (System for Cross-domain Identity Management) on a database adapter with no native transactions; every request fails |
+| `auth_email_verification_disabled`  | `WARN`  | `createAuth` with email verification disabled                                                                                 |
+| `auth_session_freshage_zero`        | `WARN`  | `createAuth` session `freshAge` of zero                                                                                       |
+| `auth_api_call_without_headers`     | `WARN`  | A privileged `ctx.authApi` call missing request headers                                                                       |
+| `identity_undeclared_claim_trusted` | `WARN`  | Authorization trusts an undeclared (forgeable) identity claim                                                                 |
 
 HTTP handlers, procedures & rate limits:
 
@@ -175,41 +175,41 @@ Storage, AI, containers & payments:
 
 ### Schema
 
-| Lint                                         | Level   | Flags                                                                                                          |
-| -------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------- |
-| `index_references_unknown_field`             | `ERROR` | An index naming a field the table doesn't have                                                                 |
-| `relation_references_unknown_field`          | `ERROR` | A relation pointing at a field that doesn't exist                                                              |
-| `relation_references_unknown_table`          | `ERROR` | A relation pointing at a table that doesn't exist                                                              |
-| `through_relation_missing_unique_index`      | `ERROR` | A many-to-many join table with no unique index over its two keys (a repeated connect stores the link twice)    |
-| `shape_unknown_table`                        | `ERROR` | A shape bound to a table that doesn't exist                                                                    |
-| `workflow_unknown_target`                    | `ERROR` | A workflow call naming a workflow that doesn't exist                                                           |
-| `workflow_duplicate_step_name`               | `ERROR` | A durable step name reused across two call sites in one workflow (which cache each gets becomes positional)    |
-| `external_source_on_global`                  | `ERROR` | A table that is both `.source()` and `.global()` (contradictory tiers)                                         |
-| `external_source_incremental_no_delete_path` | `ERROR` | An `incremental` `.source()` table with no `reconcileEveryMs`/`softDeleteColumn`; upstream deletes never apply |
-| `export_sink_misconfigured`                  | `ERROR` | A CDC export sink missing a required config field, so the tap silently drains nothing                          |
-| `geo_index_field_not_geopoint`               | `ERROR` | A `.geoIndex(name, { field })` whose field is not a `v.geoPoint()`                                             |
-| `ttl_field_not_timestamp`                    | `ERROR` | A `.ttl(field)` pointing at a column that is not an epoch-millisecond timestamp                                |
-| `circular_fk`                                | `WARN`  | A circular foreign-key dependency between tables                                                               |
-| `cross_module_table_write`                   | `WARN`  | A function writes to a table another module declares it owns, directly or through a helper                     |
-| `empty_index`                                | `WARN`  | An index declared with no fields                                                                               |
-| `nondeterministic_query_mutation`            | `WARN`  | `fetch` / `Date.now` / `Math.random` in a query or mutation                                                    |
-| `hyperdrive_outside_action`                  | `WARN`  | `ctx.sql` used outside an action                                                                               |
-| `r2sql_outside_action`                       | `WARN`  | `ctx.r2sql` used outside an action                                                                             |
-| `flag_read_in_subscription`                  | `WARN`  | `ctx.flags` read in a query; a flag flip re-runs no subscription, so the branch goes stale                     |
-| `mutator_full_row_replace`                   | `WARN`  | A mutator `server` impl overwriting a whole row with `replace`                                                 |
-| `mutator_without_owner_scope`                | `WARN`  | A `defineMutator` with no `owner`; a client-callable write endpoint that ties no write to its caller           |
-| `queue_without_dlq`                          | `WARN`  | A `defineQueue` with no `deadLetterQueue`; exhausted messages are dropped, not captured                        |
-| `global_table_near_column_limit`             | `WARN`  | A `.global()` table approaching D1's 100-column ceiling, past which it cannot be created                       |
-| `error_without_catalog`                      | `WARN`  | A bare `new Error(...)` thrown from a procedure; opaque to the caller and unfingerprintable                    |
-| `commit_ordered_hard_delete`                 | `WARN`  | A `.commitOrdered()` table with no `.softDelete()`; a hard delete emits no event a consumer sees               |
-| `action_without_error_handling`              | `WARN`  | An `action` doing outbound I/O (fetch, mail, queues, storage, sql, ai) with no `try`/`catch`                   |
-| `notify_send_outside_action`                 | `WARN`  | `ctx.notify`/`ctx.push` used in a query or mutation — external I/O on a re-runnable path                       |
-| `notify_missing_push_config`                 | `WARN`  | `ctx.push` with neither a Web Push nor an FCM channel configured, so every send fails                          |
-| `migration_stale_import`                     | `WARN`  | A migrated-away platform's SDK still imported from `lunora/` source                                            |
-| `table_without_insert`                       | `INFO`  | A table no function inserts into                                                                               |
-| `workflow_unused`                            | `INFO`  | A workflow that is never started                                                                               |
-| `geo_index_unused`                           | `INFO`  | A `.geoIndex(...)` no handler reads via `withGeoIndex(...)` — a companion column written for nothing           |
-| `procedure_without_structured_event`         | `INFO`  | A public write that emits no structured event, so a failure is visible but not searchable                      |
+| Lint                                         | Level   | Flags                                                                                                           |
+| -------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------- |
+| `index_references_unknown_field`             | `ERROR` | An index naming a field the table doesn't have                                                                  |
+| `relation_references_unknown_field`          | `ERROR` | A relation pointing at a field that doesn't exist                                                               |
+| `relation_references_unknown_table`          | `ERROR` | A relation pointing at a table that doesn't exist                                                               |
+| `through_relation_missing_unique_index`      | `ERROR` | A many-to-many join table with no unique index over its two keys (a repeated connect stores the link twice)     |
+| `shape_unknown_table`                        | `ERROR` | A shape bound to a table that doesn't exist                                                                     |
+| `workflow_unknown_target`                    | `ERROR` | A workflow call naming a workflow that doesn't exist                                                            |
+| `workflow_duplicate_step_name`               | `ERROR` | A durable step name reused across two call sites in one workflow (which cache each gets becomes positional)     |
+| `external_source_on_global`                  | `ERROR` | A table that is both `.source()` and `.global()` (contradictory tiers)                                          |
+| `external_source_incremental_no_delete_path` | `ERROR` | An `incremental` `.source()` table with no `reconcileEveryMs`/`softDeleteColumn`; upstream deletes never apply  |
+| `export_sink_misconfigured`                  | `ERROR` | A change data capture (CDC) export sink missing a required config field, so the tap silently drains nothing     |
+| `geo_index_field_not_geopoint`               | `ERROR` | A `.geoIndex(name, { field })` whose field is not a `v.geoPoint()`                                              |
+| `ttl_field_not_timestamp`                    | `ERROR` | A `.ttl(field)` pointing at a column that is not an epoch-millisecond timestamp                                 |
+| `circular_fk`                                | `WARN`  | A circular foreign-key dependency between tables                                                                |
+| `cross_module_table_write`                   | `WARN`  | A function writes to a table another module declares it owns, directly or through a helper                      |
+| `empty_index`                                | `WARN`  | An index declared with no fields                                                                                |
+| `nondeterministic_query_mutation`            | `WARN`  | `fetch` / `Date.now` / `Math.random` in a query or mutation                                                     |
+| `hyperdrive_outside_action`                  | `WARN`  | `ctx.sql` used outside an action                                                                                |
+| `r2sql_outside_action`                       | `WARN`  | `ctx.r2sql` used outside an action                                                                              |
+| `flag_read_in_subscription`                  | `WARN`  | `ctx.flags` read in a query; a flag flip re-runs no subscription, so the branch goes stale                      |
+| `mutator_full_row_replace`                   | `WARN`  | A mutator `server` impl overwriting a whole row with `replace`                                                  |
+| `mutator_without_owner_scope`                | `WARN`  | A `defineMutator` with no `owner`; a client-callable write endpoint that ties no write to its caller            |
+| `queue_without_dlq`                          | `WARN`  | A `defineQueue` with no `deadLetterQueue`; exhausted messages are dropped, not captured                         |
+| `global_table_near_column_limit`             | `WARN`  | A `.global()` table approaching D1's 100-column ceiling, past which it cannot be created                        |
+| `error_without_catalog`                      | `WARN`  | A bare `new Error(...)` thrown from a procedure; opaque to the caller and unfingerprintable                     |
+| `commit_ordered_hard_delete`                 | `WARN`  | A `.commitOrdered()` table with no `.softDelete()`; a hard delete emits no event a consumer sees                |
+| `action_without_error_handling`              | `WARN`  | An `action` doing outbound I/O (fetch, mail, queues, storage, sql, ai) with no `try`/`catch`                    |
+| `notify_send_outside_action`                 | `WARN`  | `ctx.notify`/`ctx.push` used in a query or mutation — external I/O on a re-runnable path                        |
+| `notify_missing_push_config`                 | `WARN`  | `ctx.push` with neither a Web Push nor a Firebase Cloud Messaging (FCM) channel configured, so every send fails |
+| `migration_stale_import`                     | `WARN`  | A migrated-away platform's SDK still imported from `lunora/` source                                             |
+| `table_without_insert`                       | `INFO`  | A table no function inserts into                                                                                |
+| `workflow_unused`                            | `INFO`  | A workflow that is never started                                                                                |
+| `geo_index_unused`                           | `INFO`  | A `.geoIndex(...)` no handler reads via `withGeoIndex(...)` — a companion column written for nothing            |
+| `procedure_without_structured_event`         | `INFO`  | A public write that emits no structured event, so a failure is visible but not searchable                       |
 
 ## Runtime lints
 
@@ -228,7 +228,7 @@ Adapt your schema with `fromServerSchema` and pass it to `runAdvisor`. The
 `source` option restricts to one tier: pass `"static"` to skip the runtime
 lints, which need a live deployment:
 
-```ts
+```ts title="advisor-static.ts"
 import { fromServerSchema, runAdvisor } from "@lunora/advisor";
 
 import schema from "./lunora/schema";
@@ -265,18 +265,21 @@ the full read contract.
 
 ## Health map — score, verdicts, baseline
 
-The lints above answer _"what is wrong?"_. `scoreAdvisor()` answers _"how are we
+The lints above answer _"what is wrong?"_. `scoreAdvisor()` answers _"how is the app
 doing, and did it get worse?"_ by rolling a lint run up into a weighted score, a
 grade, and a per-procedure verdict you can commit and diff in CI.
 
 It is a pure function over findings you already have, so it never re-runs a lint:
 
-```ts
+The following script prints the score and grade of the app:
+
+```ts title="advisor-score.ts"
 import { fromServerSchema, runAdvisor, scoreAdvisor } from "@lunora/advisor";
+import type { LintContext } from "@lunora/advisor";
 
 import schema from "./lunora/schema";
 
-const context = { schema: fromServerSchema(schema) };
+const context: LintContext = { schema: fromServerSchema(schema) };
 const map = scoreAdvisor(context.procedureProtections ?? [], runAdvisor(context, { source: "static" }));
 
 console.log(map.score, map.grade); // e.g. 84 "good"
@@ -334,7 +337,7 @@ Grades band the global score: `excellent` (≥ 90), `good` (≥ 70), `needs-work
 ```sh
 lunora advisor                    # score, print a summary, write the artifact
 lunora advisor --all              # every procedure, grouped by file
-lunora advisor --entry m#send     # one procedure and the rules that fired
+lunora advisor --entry messages#sendMessage  # one procedure and the rules that fired
 lunora advisor --min-score 80     # exit 1 below 80
 lunora advisor --baseline         # exit 1 on any regression vs the committed map
 lunora advisor --no-write         # score without touching the artifact
@@ -351,7 +354,11 @@ global score fell, an existing procedure got worse, a procedure started failing,
 a procedure's findings grew without its score moving, or the project bucket
 gained findings.
 
-```ts
+The following fragment compares the current map with the committed baseline. It reuses `map` from the previous example:
+
+```ts title="advisor-gate.ts"
+import { readFile } from "node:fs/promises";
+
 import { compareToBaseline, parseAdvisorMap } from "@lunora/advisor";
 
 const baseline = parseAdvisorMap(JSON.parse(await readFile("lunora.advisor.map.json", "utf8")));
@@ -386,3 +393,73 @@ context straight from the feeder.
     Some procedure-local lints (`filter_without_index` among them) currently report a file without an export name, so they land in the project bucket rather
     than their procedure's row. Closing that gap is tracked work on the codegen feeder.
 </Callout>
+
+## API
+
+Each lint is also exported under its camelCase name (for example `unindexedForeignKey`). The tables above list them by rule name.
+
+### `runAdvisor(context, options?)`
+
+**Type:** `(context: LintContext, options?: RunAdvisorOptions) => Finding[]`
+
+Runs `options.lints` (default `ALL_LINTS`) against the context and returns the findings in lint-declaration order. Pass `{ source: "static" }` to skip the runtime lints.
+
+### `scoreAdvisor(procedures, findings, options?)`
+
+**Type:** `(procedures: ReadonlyArray<AdvisorProcedureProtection>, findings: ReadonlyArray<Finding>, options?: ScoreAdvisorOptions) => AdvisorMap`
+
+Rolls a set of findings up into the health map. It does not run lints. Each finding attaches to the procedure named by its `metadata.file` and `metadata.exportName`, and unattributed findings go to the project bucket.
+
+### `ScoreAdvisorOptions`
+
+**Type:** `{ exempt?: ReadonlyArray<string>; generatedAt?: string }`
+
+`exempt` lists `file#exportName` ids to opt out of scoring. Procedures listed there get the `exempt` verdict and carry no weight. `generatedAt` sets the artifact timestamp; pass it to make the output byte-stable.
+
+### `compareToBaseline(current, baseline)`
+
+**Type:** `(current: AdvisorMap, baseline: AdvisorMap) => BaselineComparison`
+
+Returns `{ comparable: false, reason: "version-mismatch" }` when the two maps have different `version` values. Otherwise it returns `regressed`, `scoreDelta`, `dropped`, `newFailing`, `worsened` and `projectRegressed`.
+
+### `parseAdvisorMap(value)`
+
+**Type:** `(value: unknown) => AdvisorMap | undefined`
+
+Narrows a parsed `lunora.advisor.map.json` to an `AdvisorMap`. Returns `undefined` when the value has a shape this build cannot read.
+
+### `fromServerSchema(schema)`
+
+**Type:** `(schema: Schema) => AdvisorSchema`
+
+Adapts a `defineSchema` result into the `schema` field that `LintContext` requires.
+
+### `ALL_LINTS`, `STATIC_LINTS`, `RUNTIME_LINTS`
+
+**Type:** `ReadonlyArray<Lint>`
+
+The lint sets that `runAdvisor` runs by default. `ALL_LINTS` is `STATIC_LINTS` followed by `RUNTIME_LINTS`.
+
+### `MAP_VERSION`
+
+**Type:** `number` (currently `1`)
+
+The version of the `AdvisorMap` shape. `compareToBaseline` refuses a baseline written with a different version.
+
+### `Lint`
+
+**Type:** `interface`
+
+A lint is a pure rule: `name`, `title`, `description`, `remediation`, `level`, `categories`, `facing`, `source` and `run(context)`. Pass your own lints in `options.lints` to `runAdvisor`.
+
+### `LintContext`
+
+**Type:** `interface`
+
+The input to every lint. `schema` is required. Every other field is optional evidence, such as `procedureProtections`, `shardTraffic`, `tableScans` and `indexHits`. The runtime lints read only the evidence that a live deployment supplies.
+
+### `AdvisorMap`
+
+**Type:** `interface`
+
+The health map that `scoreAdvisor` returns and `lunora advisor` writes to `lunora.advisor.map.json`. It holds `generatedAt`, `grade`, `score`, `procedures`, `project`, `summary` and `version`.

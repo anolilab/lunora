@@ -10,9 +10,9 @@ when a later step throws, only that step retries; the completed ones don't run
 again.
 
 It wraps [Cloudflare Workflows](https://developers.cloudflare.com/workflows/)
-(a first-party, GA durable-execution engine) with type-safe authoring: you
+(Cloudflare's durable-execution engine) with type-safe authoring: you
 write a `defineWorkflow` and codegen emits the `WorkflowEntrypoint` class, wires
-a typed `ctx.workflows` handle, and reconciles the `[[workflows]]` binding in
+a typed `ctx.workflows` handle, and declares each workflow in the `exports` map of
 `wrangler.jsonc` for you.
 
 Use it for sagas, multi-stage AI pipelines, human-in-the-loop approvals, and any
@@ -310,7 +310,7 @@ still need an explicit `dedupId`.
 
 ### Fan-out with child-DO isolation (`ctx.parallel` / `ctx.spawn`)
 
-A workflow instance is one Durable Object: ~128 MB memory and a 5-minute CPU
+A workflow instance is one Durable Object (DO) with a single memory and CPU
 budget, shared across everything it runs. Fanning out heavy work with
 `Promise.all(branches.map((b) => ctx.runStep(b, …)))` therefore crowds every
 branch onto that **one** budget: one OOM or timeout takes the whole batch down.
@@ -377,7 +377,7 @@ step rollback: it runs when a later step in the same instance fails, so you can
 undo a committed side effect (refund a charge, delete an uploaded object).
 The rollback context carries the original `args`, the `error` that triggered it,
 the step's `output` (if it completed), and `env` / `run` / `log`. Cloudflare
-owns rollback ordering and execution; `defineStep` just wires the handler and an
+owns rollback ordering and execution; `defineStep` only wires the handler and an
 optional `rollbackConfig`.
 
 That native rollback is **intra-instance**: it undoes steps _within one_
@@ -636,6 +636,38 @@ reserved `lunora:` types are refused too. The form suggests the declared types.
 <Callout type="warn">
     Cloudflare bills for workflow instance-state storage. Keep step payloads small and set a `retention` policy when you don't need long-lived instance history.
 </Callout>
+
+## Other exports
+
+### `WorkflowHandle`
+
+**Type:** `WorkflowHandle<Params>`
+
+The handle `ctx.workflows.get("<exportName>")` returns. It has `create`, `createBatch`,
+`deleteBatch`, `get` and `sendEvent`, as described in
+[Start and manage instances](#start-and-manage-instances).
+
+### `isNonRetryableError(value)`
+
+Returns `true` when `value` is a Lunora `NonRetryableError`. Use it in a `catch` block to
+rethrow without retrying.
+
+### `isDuplicateInstanceError(error)`
+
+Returns `true` for the rejection a Workflows binding raises when an instance id already exists.
+The predicate lives in this package as public API, so callers can treat a repeated start as
+success.
+
+### `validateStepArgs(validators, source)`
+
+Validates `source` against a step's `args` validators and returns the parsed record. `defineStep` runs this check before the
+step body, so a bad payload fails early. See [Reusable steps](#reusable-steps-definestep).
+
+### `WorkflowsRestError`
+
+The error class the REST client throws. Its message is capped in length, so raw Cloudflare
+auth or gateway pages do not reach the browser. See
+[Listing instances and step timelines](#listing-instances-and-step-timelines).
 
 ## See also
 

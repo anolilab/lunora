@@ -6,7 +6,7 @@ description: Set Cloudflare usage alerts well above normal with `lunora cloudfla
 A self-hosted Lunora app runs on your own Cloudflare account, and Workers and
 Durable Objects bill by usage. A retry loop, a Durable Object that never goes
 idle, or a crawler hammering an endpoint can run for weeks before the invoice
-shows it. This page sets up the alerts that tell you within a day instead.
+shows it. This page sets up the alerts that tell you before the invoice does.
 
 You need a Cloudflare API token with two permissions:
 
@@ -61,8 +61,8 @@ lunora cloudflare alerts setup --email you@example.com --threshold do-duration=5
 
 Durable Objects duration and storage reads/writes are billed in units that
 cannot be matched to the usage `status` shows, so `setup` will not guess one.
-Cloudflare has **no usage alert at all for D1 or for Workers CPU time**; the
-budget alert in the next step is what guards them.
+Cloudflare's documented usage-alert products include **neither D1 nor Workers
+CPU time**; the budget alert in the next step is what guards them.
 
 Cloudflare does not document the unit of a usage alert's limit either. After
 writing, `setup` reads every alert back and prints the limit Cloudflare stored.
@@ -93,15 +93,14 @@ alert is disabled.
 
 Usage alerts watch one product each. A **budget alert** watches the whole
 account's spend in dollars, and Cloudflare offers it only in the dashboard. It
-has no API, so `lunora cloudflare alerts` can neither create one nor tell you whether you
+has no documented API, so `lunora cloudflare alerts` can neither create one nor tell you whether you
 have one:
 
 1. In the Cloudflare dashboard, go to **Manage Account > Billing > Billable Usage**.
 2. Select **Create budget alert**.
 3. Set a USD threshold comfortably above a normal month, and add the recipients.
 
-Usage is processed daily, so a budget alert fires the day after its threshold
-is crossed.
+Budget alerts are available to Pay-as-you-go accounts only.
 
 ## 4. Check delivery
 
@@ -109,8 +108,8 @@ is crossed.
 lunora cloudflare alerts test
 ```
 
-Cloudflare's API cannot send a test notification, either to email or to a
-webhook, so this command does not pretend to. Instead it shows what the API
+Cloudflare documents no API for sending a test notification, either to email or
+to a webhook, so this command does not pretend to. Instead it shows what the API
 does know:
 
 - when each webhook destination last received a notification and when one last
