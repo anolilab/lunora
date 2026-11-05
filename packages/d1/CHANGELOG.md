@@ -1,3 +1,7 @@
+## @lunora/d1 [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.234...@lunora/d1@1.0.0-alpha.235) (2026-11-05)
+
+- fix(deps): raise the @lunora/errors floor where new codes are thrown (#1502)
+
 ## @lunora/d1 [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.233...@lunora/d1@1.0.0-alpha.234) (2026-11-05)
 
 - feat(d1): refuse unconfirmed destructive migration sql; fix the add-column race (#1489)
