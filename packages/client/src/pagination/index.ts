@@ -37,6 +37,12 @@ interface PaginationResult<T = unknown> {
      * adjacent ranges. Absent on legacy (open-ended) pages.
      */
     splitCursor?: null | string;
+
+    /**
+     * Reactive-pagination only: the server's read cut this bounded page short, so it holds only the
+     * first rows of its range. Split at `splitCursor` whatever the page's size.
+     */
+    splitRequired?: boolean;
 }
 
 /**
@@ -90,9 +96,11 @@ const rebalance = (pages: Page[], results: (PaginationResult | undefined)[]): Pa
 
         const size = result.page.length;
 
-        // SPLIT: the range outgrew its target. Cut at the server's midpoint
-        // cursor into `(lower, splitCursor]` and `(splitCursor, upper]`.
-        if (size > SPLIT_FACTOR * page.numItems && result.splitCursor) {
+        // SPLIT: the range outgrew its target, or the server's read cut it short
+        // (`splitRequired`) and the rows past the cut are reachable no other way.
+        // Cut at the server's midpoint cursor into `(lower, splitCursor]` and
+        // `(splitCursor, upper]`.
+        if ((size > SPLIT_FACTOR * page.numItems || result.splitRequired === true) && result.splitCursor) {
             const split = result.splitCursor;
             const next = [...pages];
 
@@ -103,8 +111,10 @@ const rebalance = (pages: Page[], results: (PaginationResult | undefined)[]): Pa
 
         // JOIN: the range shrank below its target and has a following neighbour;
         // merge by dropping the shared boundary (this page's upper). The merged
-        // page keeps this page's lower and the neighbour's upper.
-        if (size < JOIN_FACTOR * page.numItems && index + 1 < pages.length) {
+        // page keeps this page's lower and the neighbour's upper. Never into a
+        // neighbour the server cut short: the merge would be cut again and split
+        // back, and the pages would flip between the two layouts.
+        if (size < JOIN_FACTOR * page.numItems && index + 1 < pages.length && results[index + 1]?.splitRequired !== true) {
             const neighbour = pages[index + 1];
 
             if (!neighbour) {

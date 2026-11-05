@@ -108,6 +108,42 @@ measure a hot read before relying on it:
 - **MySQL** has no `NULLS FIRST/LAST`, so a non-default placement adds an `IS NULL` sort key that an
   index on the column alone cannot serve.
 
+## Paging a `findMany`
+
+`ctx.db.<table>.findMany` takes the same cursors, so a `where`/`orderBy` read can serve
+`usePaginatedQuery` without the fluent builder:
+
+```ts
+export const list = query
+    .input({ channelId: v.id("channels"), paginationOpts: v.object({ cursor, endCursor: cursor, numItems: v.number() }) })
+    .query(async ({ ctx, args: { channelId, paginationOpts } }) => {
+        const { endCursor, numItems } = paginationOpts;
+
+        return ctx.db.messages.findMany({
+            where: { channelId },
+            orderBy: [{ _creationTime: "desc" }],
+            cursor: paginationOpts.cursor,
+            endCursor,
+            // An open page is `numItems` long. A pinned page may grow past that before the client splits it.
+            limit: endCursor ? numItems * 4 : numItems,
+        });
+    });
+```
+
+Without `endCursor`, `findMany` returns up to `limit` rows after `cursor`, and `continueCursor` is
+`null` once `isDone`. With `endCursor` (a cursor an earlier page returned as `continueCursor`), the
+page is the fixed range `(cursor, endCursor]` under the call's `orderBy`:
+
+- `isDone` is `true` and `continueCursor` is `endCursor` unchanged, so the next page still starts
+  where this one ends. A row inserted inside the range grows this page and leaves the next one alone.
+- `splitCursor` is the cursor of the range's midpoint row (`null` under two rows). The client splits a
+  page holding more than twice its `numItems` into `(cursor, splitCursor]` and `(splitCursor, endCursor]`.
+- `limit` still caps the read. A range it cuts short answers `splitRequired: true`, and the client
+  splits it at `splitCursor` whatever its size, so the rows past the cap come back in the second half.
+- On a `.global()` table, a pinned page with no `limit` is capped at 4096 rows the same way.
+- A pinned page binds a second cursor seek, so an `orderBy` too wide for both to fit in one statement
+  is refused with `BAD_REQUEST`; order by fewer fields.
+
 ## Load more / infinite lists on the client
 
 On the client a paginated list is the same query re-run with the next

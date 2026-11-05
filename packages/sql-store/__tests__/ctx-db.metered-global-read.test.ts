@@ -45,4 +45,50 @@ describe("an unlimited global findMany under the read meter", () => {
         expect(selects()).toBe(2);
         expect(fetchedRows()).toBeLessThan(ROW_COUNT);
     });
+
+    // Every page of a fixed range answers `isDone: true`, so walked like an unlimited read it stopped
+    // at the walk's first 256 rows and dropped its `continueCursor` and `splitCursor`.
+    it("reads a bounded (endCursor) range in one statement, whole, with its cursors", async () => {
+        expect.assertions(4);
+
+        const { selects, store, writer } = await open();
+        const orderBy = [{ bucket: "asc" as const }];
+        const head = await store.findMany("items", { limit: 600, orderBy });
+        const bounded = await writer.findMany("items", { endCursor: head.continueCursor, orderBy, select: ["label"] });
+
+        expect(bounded.page.map((row) => row["_id"])).toStrictEqual(head.page.map((row) => row["_id"]));
+        expect(bounded).toMatchObject({ continueCursor: head.continueCursor, isDone: true });
+        expect(typeof bounded.splitCursor).toBe("string");
+        expect(selects()).toBe(1);
+    });
+
+    // Without a `limit` a bounded range is capped at one page (4096 rows) rather than read whole
+    // before the meter sees it; the capped page's splitCursor lets the client recover the rest.
+    it("caps a bounded range with no limit at one page, split inside what it returned", async () => {
+        expect.assertions(4);
+
+        const { selects, store, writer } = await open();
+        const orderBy = [{ bucket: "asc" as const }];
+        const head = await store.findMany("items", { limit: 5000, orderBy });
+        const ids = head.page.map((row) => row["_id"]);
+        const capped = await writer.findMany("items", { endCursor: head.continueCursor, orderBy });
+
+        expect(capped.page.map((row) => row["_id"])).toStrictEqual(ids.slice(0, 4096));
+        expect(capped).toMatchObject({ continueCursor: head.continueCursor, isDone: true, splitRequired: true });
+
+        const rest = await writer.findMany("items", { cursor: capped.splitCursor, endCursor: head.continueCursor, orderBy });
+
+        expect(rest.page.map((row) => row["_id"])).toStrictEqual(ids.slice(2048));
+        expect(selects()).toBe(2);
+    });
+
+    it("charges a bounded range against the read cap", async () => {
+        expect.assertions(1);
+
+        const { store, writer } = await open(300);
+        const orderBy = [{ bucket: "asc" as const }];
+        const head = await store.findMany("items", { limit: 600, orderBy });
+
+        await expect(writer.findMany("items", { endCursor: head.continueCursor, orderBy })).rejects.toMatchObject({ code: "TRANSACTION_LIMIT_EXCEEDED" });
+    });
 });

@@ -1734,6 +1734,7 @@ interface QueryArgs {
     baseWhere?: WhereInput;
     consistency?: "primary";
     cursor?: null | string;
+    endCursor?: null | string;
     includeDeleted?: boolean;
     limit?: number;
     omitContinueCursor?: boolean;
@@ -1755,6 +1756,7 @@ interface QueryPage {
     isDone: boolean;
     page: Record<string, unknown>[];
     splitCursor?: null | string;
+    splitRequired?: boolean;
 }
 ```
 
@@ -4391,6 +4393,17 @@ const facetColumn: (sql: SqlExec, options: FacetColumnOptions) => FacetColumnRes
 
 ```ts
 const fanOutScalarCounts: (counter: (tableName: string, where?: WhereInput) => Promise<number>, tableName: string, whereField: string, values: unknown[], policyWhere: WhereInput | undefined) => Promise<Map<unknown, number>>;
+```
+
+### `findManyPage` (const)
+
+```ts
+const findManyPage: (documents: Record<string, unknown>[], read: {
+    endCursor?: null | string;
+    limit: number | undefined;
+    omitContinueCursor?: boolean;
+    orderKeys: OrderKey[];
+}) => QueryPage;
 ```
 
 ### `findRelated` (const)

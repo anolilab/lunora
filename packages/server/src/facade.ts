@@ -249,7 +249,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
     const patch = (id: string, values: Record<string, unknown>): Promise<void> => patchWithRelations(writer, tableName, relationInfos, id, values);
 
     // "Exactly one row" — the assertion `findFirst` drops. The typed surface refuses
-    // `limit`/`cursor` (see `TableReaderFacade.findUnique`), so the over-fetch below
+    // `limit`/`cursor`/`endCursor` (see `TableReaderFacade.findUnique`), so the over-fetch below
     // is always the whole request.
     const findUnique = async (args?: unknown): Promise<unknown> => {
         const query = (args ?? {}) as Record<string, unknown>;
