@@ -7,6 +7,8 @@
  * second copy of a routine that WRITES `wrangler.jsonc` is a bug that has to be
  * fixed twice.
  */
+import { basename } from "node:path";
+
 import type { DiscoveryCache } from "../discovery-cache";
 import { inferLunoraBindings } from "../infer-bindings";
 import { LUNORA_TAG } from "../log-line";
@@ -97,7 +99,7 @@ const reconcileBindingsSafely = async (
 
 /**
  * The bindings a {@link reconcileBindingsSafely} pass would add or retune right
- * now, as its log labels, dev sidecar included — from the same plan, written
+ * now, as its log labels (a dev sidecar's prefixed with its file) — from the same plan, written
  * nowhere. For a dev server that provisions only at startup: a save that
  * declares a queue, reads `ctx.kv` or exports a workflow leaves the running
  * worker without that binding until the server restarts, and this is how the
@@ -110,8 +112,10 @@ const reconcileBindingsSafely = async (
 const pendingBindingChanges = async (options: ReconcileProject & { cache: DiscoveryCache }): Promise<string[]> => {
     try {
         const { added, devConfig, updated } = await planProjectBindings(options);
+        // A sidecar label names its file: the binding goes there, not into wrangler.jsonc.
+        const sidecar = devConfig === undefined ? [] : [...devConfig.added, ...devConfig.updated].map((label) => `${basename(devConfig.path)} ${label}`);
 
-        return [...new Set([...added, ...updated, ...(devConfig?.added ?? []), ...(devConfig?.updated ?? [])])];
+        return [...new Set([...added, ...updated, ...sidecar])];
     } catch {
         return [];
     }

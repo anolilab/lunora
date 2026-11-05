@@ -90,7 +90,7 @@ const createBindingDriftNotifier = (options: BindingDriftNotifierOptions): Bindi
         }
 
         options.warn(
-            `${LUNORA_TAG} ${changes.join(", ")} — not in the running worker yet. Restart the dev server to write ${changes.length === 1 ? "it" : "them"} to wrangler.jsonc.`,
+            `${LUNORA_TAG} ${changes.join(", ")} — not in the running worker yet. Restart the dev server to write ${changes.length === 1 ? "it" : "them"} to the wrangler config.`,
         );
     };
 

@@ -93,7 +93,7 @@ describe("pendingBindingChanges", () => {
 
         const pending = await pendingBindingChanges(project());
 
-        expect(pending.filter((label) => label.includes("SERVICE_PARSER"))).toHaveLength(1);
+        expect(pending.filter((label) => label.includes("SERVICE_PARSER"))).toStrictEqual(["wrangler.dev.jsonc services/SERVICE_PARSER → parser"]);
         expect(readFileSync(join(root, "wrangler.dev.jsonc"), "utf8")).toBe(sidecar);
     });
 });
