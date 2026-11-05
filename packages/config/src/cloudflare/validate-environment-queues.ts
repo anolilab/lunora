@@ -15,8 +15,15 @@ const queueNamesIn = (queues: unknown): Set<string> => {
     );
 };
 
-/** The account a scope deploys to: its own `account_id`, else the top level's (wrangler inherits it), else unknown. */
-const accountOf = (block: unknown, topLevel: WranglerConfig): string | undefined => {
+/**
+ * The account a scope deploys to: `CLOUDFLARE_ACCOUNT_ID` when set (wrangler lets it override every `account_id`),
+ * else its own `account_id`, else the top level's (wrangler inherits it), else unknown.
+ */
+const accountOf = (block: unknown, topLevel: WranglerConfig, override: string | undefined): string | undefined => {
+    if (isNonEmptyString(override)) {
+        return override;
+    }
+
     const own = isPlainObject(block) ? block.account_id : undefined;
 
     if (isNonEmptyString(own)) {
@@ -34,8 +41,9 @@ const accountOf = (block: unknown, topLevel: WranglerConfig): string | undefined
  * to one account that name the same queue share it: staging's producers write
  * into production's queue and the two Workers contend for its one consumer.
  * Two scopes whose `account_id`s are both known and differ cannot share a
- * queue, so they are not compared; an unknown account (set by
- * `CLOUDFLARE_ACCOUNT_ID` or the login) may be the same one, so it is.
+ * queue, so they are not compared, unless `CLOUDFLARE_ACCOUNT_ID` deploys them
+ * all to one account; an unknown account (set by the login) may be the same
+ * one, so it is.
  * Lunora never writes queue names into an environment block (see
  * `reconcileEnvQueues`), so the names are the user's, and renaming one here
  * would strand the backlog on the old queue — hence a warning, not a rewrite.
@@ -43,7 +51,12 @@ const accountOf = (block: unknown, topLevel: WranglerConfig): string | undefined
  * Reads the ORIGINAL config: the `--env` view replaces `queues` with the
  * block's own, so the names the block could collide with are gone from it.
  */
-const validateEnvironmentQueueNames = (wrangler: WranglerConfig, environment: string | undefined, warnings: string[]): void => {
+const validateEnvironmentQueueNames = (
+    wrangler: WranglerConfig,
+    environment: string | undefined,
+    warnings: string[],
+    accountOverride: string | undefined = process.env["CLOUDFLARE_ACCOUNT_ID"],
+): void => {
     if (environment === undefined || !isPlainObject(wrangler.env)) {
         return;
     }
@@ -55,13 +68,17 @@ const validateEnvironmentQueueNames = (wrangler: WranglerConfig, environment: st
         return;
     }
 
-    const account = accountOf(block, wrangler);
+    const account = accountOf(block, wrangler, accountOverride);
     const scopes = [
-        { account: accountOf(undefined, wrangler), names: queueNamesIn(wrangler.queues), scope: "the top level" },
+        { account: accountOf(undefined, wrangler, accountOverride), names: queueNamesIn(wrangler.queues), scope: "the top level" },
         ...Object.entries(wrangler.env)
             .filter(([name]) => name !== environment)
             .map(([name, other]) => {
-                return { account: accountOf(other, wrangler), names: queueNamesIn(isPlainObject(other) ? other.queues : undefined), scope: `env.${name}` };
+                return {
+                    account: accountOf(other, wrangler, accountOverride),
+                    names: queueNamesIn(isPlainObject(other) ? other.queues : undefined),
+                    scope: `env.${name}`,
+                };
             }),
     ].filter((candidate) => account === undefined || candidate.account === undefined || candidate.account === account);
 

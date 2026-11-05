@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { withTailConsumer } from "../src/cloudflare/validate-settings";
 import type { WranglerConfig, WranglerValidationReport } from "../src/cloudflare/wrangler-config";
@@ -815,6 +815,10 @@ describe("wrangler-validator", () => {
             const sharedQueueWarnings = (report: WranglerValidationReport): string[] =>
                 report.warnings.filter((line) => line.includes("unique per Cloudflare account"));
 
+            afterEach(() => {
+                vi.unstubAllEnvs();
+            });
+
             it("warns when env.staging produces into the top level's queue", () => {
                 expect.assertions(2);
 
@@ -855,6 +859,8 @@ describe("wrangler-validator", () => {
             it("does not compare environments deployed to different accounts", () => {
                 expect.assertions(2);
 
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
+
                 const wrangler = topLevel();
 
                 wrangler.account_id = "account-production";
@@ -874,6 +880,28 @@ describe("wrangler-validator", () => {
 
                 expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([
                     expect.stringContaining(`"emails", which env.preview also names`),
+                ]);
+            });
+
+            it("compares every environment when CLOUDFLARE_ACCOUNT_ID deploys them all to one account", () => {
+                expect.assertions(1);
+
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account-shared");
+
+                const wrangler = topLevel();
+
+                wrangler.account_id = "account-production";
+                wrangler.env = {
+                    preview: { queues: { producers: [{ binding: "EMAILS", queue: "emails" }] } },
+                    staging: {
+                        account_id: "account-staging",
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        queues: { producers: [{ binding: "EMAILS", queue: "emails" }] },
+                    },
+                };
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([
+                    expect.stringContaining(`"emails", which the top level and env.preview also name`),
                 ]);
             });
 
