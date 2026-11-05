@@ -1,6 +1,6 @@
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { aggregateTableName } from "@lunora/shard-engine";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { columnNamesOfCreateTable, runSqlGlobalTableMigrations } from "../src/ctx-db-global-provisioning";
 import { runSqlAggregateMigrations } from "../src/ctx-db-migrations";
@@ -716,10 +716,11 @@ describe("backfilling a required column the drift repair finds", () => {
         base.close();
     });
 
-    it("adds a column whose default factory throws and leaves its old rows NULL instead of failing", async () => {
-        expect.assertions(1);
+    it("adds a column whose default factory throws, leaves its old rows NULL and reports it as an error", async () => {
+        expect.assertions(2);
 
         const base = createSqliteHarness();
+        const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
         await notesWithSlug(base);
 
@@ -750,7 +751,9 @@ describe("backfilling a required column the drift repair finds", () => {
                 return { ...row };
             }),
         ).toStrictEqual([{ tag: null }]);
+        expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('"notes.tag"'), expect.objectContaining({ column: "tag", table: "notes" }));
 
+        errorLog.mockRestore();
         base.close();
     });
 });

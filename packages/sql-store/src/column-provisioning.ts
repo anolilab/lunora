@@ -45,6 +45,22 @@ const warnOnce = (key: string, message: string): void => {
     console.warn(`[@lunora/sql-store] ${message}`);
 };
 
+/**
+ * Report a failed backfill once per isolate for `key`, at error level and with the table, column and cause as fields,
+ * so monitoring that filters on errors sees a column left unfilled.
+ */
+const reportBackfillFailure = (tableName: string, column: string, message: string, error: unknown): void => {
+    const key = `backfill:${tableName}.${column}`;
+
+    if (reportedRelaxations.has(key)) {
+        return;
+    }
+
+    reportedRelaxations.add(key);
+    // eslint-disable-next-line no-console -- the only channel a provisioning pass has; deduplicated per isolate above.
+    console.error(`[@lunora/sql-store] ${message}`, { column, error, table: tableName });
+};
+
 /** The value a row gets when none is supplied: `.$defaultFn` evaluated once, else `.default(v)`; `undefined` when neither is declared. */
 const declaredDefaultOf = (validator: ValidatorLike): unknown => {
     const meta = validator._meta?.column;
@@ -108,9 +124,11 @@ const columnBackfill = (
 
             return sql`UPDATE ${sql.identifier(tableName)} SET ${sql.identifier(column)} = ${serializeDocumentColumn(definition, column, value)} WHERE ${sql.identifier(column)} IS NULL`;
         } catch (error) {
-            warnOnce(
-                `backfill:${tableName}.${column}`,
+            reportBackfillFailure(
+                tableName,
+                column,
                 `could not compute the default of "${tableName}.${column}" (${error instanceof Error ? error.message : String(error)}); rows written before it read NULL. Run UPDATE "${tableName}" SET "${column}" = … WHERE "${column}" IS NULL.`,
+                error,
             );
 
             return undefined;
@@ -136,9 +154,11 @@ const runBackfill = async (exec: SqlCtxExec, dialect: SqlDialect, tableName: str
     try {
         await queryRun(exec, dialect, query);
     } catch (error) {
-        warnOnce(
-            `backfill:${tableName}.${column}`,
+        reportBackfillFailure(
+            tableName,
+            column,
             `could not backfill "${tableName}.${column}" from its default (${error instanceof Error ? error.message : String(error)}); rows written before it read NULL. Run UPDATE "${tableName}" SET "${column}" = … WHERE "${column}" IS NULL.`,
+            error,
         );
     }
 };
