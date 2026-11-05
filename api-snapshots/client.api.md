@@ -2243,6 +2243,12 @@ interface Page {
 }
 ```
 
+### `PageFailure` (type)
+
+```ts
+type PageFailure = "ignore" | "restart" | "surface";
+```
+
 ### `PaginatedCoreResult` (interface)
 
 ```ts
@@ -2281,6 +2287,14 @@ const SPLIT_FACTOR = 2;
 
 ```ts
 const applyLoadMore: (pages: Page[], cursor: null | string | undefined, numberItems: number) => Page[] | undefined;
+```
+
+### `classifyPageFailure` (const)
+
+```ts
+const classifyPageFailure: (pages: Page[], isFailedPage: (page: Page) => boolean, error: {
+    code?: string;
+}) => PageFailure;
 ```
 
 ### `derivePaginationStatus` (const)

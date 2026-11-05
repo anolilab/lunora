@@ -176,6 +176,13 @@ Because queries are reactive, each loaded page stays live. A mutation that
 touches a row already on screen re-runs the query and pushes the delta to the
 client without re-fetching the whole list.
 
+A cursor is only valid against the build that minted it. After a deploy that
+changes a query's order, or how the engine encodes cursors, a page a client
+still holds is refused with `INVALID_CURSOR`. The adapters restart the feed from
+its first page on that code, without reporting it through `onError`. A
+hand-written loop like the one above should do the same: reset `pages` and
+`cursor` and load again, rather than retrying the cursor.
+
 ## Total count ("42 of 1,203")
 
 A page knows how to fetch the next page, not how many rows exist — `paginate()`

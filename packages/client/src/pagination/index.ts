@@ -185,5 +185,34 @@ const applyLoadMore = (pages: Page[], cursor: null | string | undefined, numberI
     return next;
 };
 
-export type { Page, PaginatedCoreResult, PaginationResult, PaginationStatus };
-export { applyLoadMore, derivePaginationStatus, initialPages, JOIN_FACTOR, rebalance, SPLIT_FACTOR };
+/**
+ * What a feed does with one page's failure.
+ *
+ * - `surface` — report it (the `error` value and `onError`), as before.
+ * - `restart` — reload the feed from its first page, silently: the page's cursor no longer decodes.
+ * - `ignore` — drop it: a page the feed no longer holds, still reporting from before a restart.
+ */
+type PageFailure = "ignore" | "restart" | "surface";
+
+/**
+ * Classify a page failure. Only `INVALID_CURSOR` changes the answer: the server refuses a cursor
+ * minted by an older build (a deploy changed the query's order or the engine's cursor encoding), and
+ * every bounded page the feed holds carries one, so the only way forward is page one. The head page
+ * has no cursor to be stale, so its failure is surfaced, which is also what stops a restart looping.
+ */
+const classifyPageFailure = (pages: Page[], isFailedPage: (page: Page) => boolean, error: { code?: string }): PageFailure => {
+    if (error.code !== "INVALID_CURSOR") {
+        return "surface";
+    }
+
+    const page = pages.find((candidate) => isFailedPage(candidate));
+
+    if (page === undefined) {
+        return "ignore";
+    }
+
+    return page.lower === null && page.upper === null ? "surface" : "restart";
+};
+
+export type { Page, PageFailure, PaginatedCoreResult, PaginationResult, PaginationStatus };
+export { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, JOIN_FACTOR, rebalance, SPLIT_FACTOR };

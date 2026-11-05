@@ -2,7 +2,7 @@
 
 import type { FunctionReference, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import type { Page, PaginatedCoreResult, PaginationResult } from "@lunora/client/pagination";
-import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 import type { QueryKey } from "@tanstack/react-query";
 import { CancelledError, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
@@ -150,15 +150,22 @@ const usePaginatedCore = function <T>(
 
     // Read latest desired entries from a ref so the attach effect's dep list can
     // stay keyed on `pageKeysHash` alone — args/fn changes already move the hash.
-    const desiredRef = useRef<{ baseArgs: Record<string, unknown>; entries: typeof pageEntries; fn: FunctionReference; shardKey: string | undefined }>({
+    const desiredRef = useRef<{
+        baseArgs: Record<string, unknown>;
+        entries: typeof pageEntries;
+        fn: FunctionReference;
+        pages: Page[];
+        shardKey: string | undefined;
+    }>({
         baseArgs,
         entries: [],
         fn: function_,
+        pages,
         shardKey,
     });
 
     useEffect(() => {
-        desiredRef.current = { baseArgs, entries: pageEntries, fn: function_, shardKey };
+        desiredRef.current = { baseArgs, entries: pageEntries, fn: function_, pages, shardKey };
     });
 
     /**
@@ -168,19 +175,36 @@ const usePaginatedCore = function <T>(
      * computed from the same fn/args the subscription was opened with.
      */
     const failPage = (hash: string, queryKey: QueryKey, pageError: SubscriptionError): void => {
+        const desired = desiredRef.current;
+        const hashOf = (page: Page): string =>
+            serializeQueryKey(
+                lunoraQueryKey(
+                    desired.fn,
+                    { ...desired.baseArgs, paginationOpts: { cursor: page.lower, endCursor: page.upper, numItems: page.numItems } },
+                    desired.shardKey,
+                ),
+            );
+        const failure = classifyPageFailure(desired.pages, (page) => hashOf(page) === hash, pageError);
+
+        if (failure === "restart") {
+            setPages(initialPages(initialNumItems));
+            setError(undefined);
+        }
+
+        if (failure !== "surface") {
+            return;
+        }
+
         setError(pageError);
 
         setPages((current) => {
-            const desired = desiredRef.current;
             const tail = current.at(-1);
 
             if (current.length <= 1 || !tail || queryClient.getQueryData(queryKey) !== undefined) {
                 return current;
             }
 
-            const tailArgs = { ...desired.baseArgs, paginationOpts: { cursor: tail.lower, endCursor: tail.upper, numItems: tail.numItems } };
-
-            return serializeQueryKey(lunoraQueryKey(desired.fn, tailArgs, desired.shardKey)) === hash ? current.slice(0, -1) : current;
+            return hashOf(tail) === hash ? current.slice(0, -1) : current;
         });
 
         onErrorRef.current?.(pageError);

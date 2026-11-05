@@ -216,6 +216,58 @@ describe("usePaginatedQuery (Vue)", () => {
         scope.stop();
     });
 
+    it("restarts from the first page when a loaded page's cursor no longer decodes, without reporting it", async () => {
+        const fake = createFakeClient();
+        const errors: SubscriptionError[] = [];
+        const scope = effectScope();
+        const result = scope.run(() => fake.provide(() => usePaginatedQuery(fn, {}, { initialNumItems: NUM_ITEMS, onError: (error) => errors.push(error) })))!;
+        const head = { cursor: null, endCursor: null, numItems: NUM_ITEMS };
+        const opts = (call: (typeof fake.subscribeCalls)[number]): string => JSON.stringify(call.args["paginationOpts"]);
+
+        fake.push("messages:list", { paginationOpts: head }, { continueCursor: "cur-1", isDone: false, page: firstPageItems });
+        await flushAsync();
+        result.loadMore(NUM_ITEMS);
+        await flushAsync();
+        fake.push(
+            "messages:list",
+            { paginationOpts: { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS } },
+            { continueCursor: "cur-2", isDone: false, page: secondPageItems },
+        );
+        await flushAsync();
+
+        expect(result.results.value).toStrictEqual([...firstPageItems, ...secondPageItems]);
+
+        // A deploy changed the cursor format: the re-read of the bounded first page is refused.
+        const bounded = fake.subscribeCalls.find((call) => opts(call) === JSON.stringify({ cursor: null, endCursor: "cur-1", numItems: NUM_ITEMS }));
+        const before = fake.subscribeCalls.length;
+
+        bounded?.options.onError?.({ code: "INVALID_CURSOR", message: "invalid cursor" });
+        await flushAsync();
+
+        expect(errors).toStrictEqual([]);
+        expect(result.error.value).toBeUndefined();
+        expect(result.status.value).toBe("LoadingFirstPage");
+        expect(fake.subscribeCalls.slice(before).map((call) => call.args["paginationOpts"])).toStrictEqual([head]);
+
+        // The dropped tail reporting the same refusal late changes nothing.
+        const tail = fake.subscribeCalls.find((call) => opts(call) === JSON.stringify({ cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS }));
+
+        tail?.options.onError?.({ code: "INVALID_CURSOR", message: "invalid cursor" });
+        await flushAsync();
+
+        expect(errors).toStrictEqual([]);
+        expect(fake.subscribeCalls).toHaveLength(before + 1);
+
+        // The head page carries no cursor to be stale, so its refusal is reported, not retried.
+        fake.subscribeCalls.at(-1)?.options.onError?.({ code: "INVALID_CURSOR", message: "invalid cursor" });
+        await flushAsync();
+
+        expect(errors).toStrictEqual([{ code: "INVALID_CURSOR", message: "invalid cursor" }]);
+        expect(fake.subscribeCalls).toHaveLength(before + 1);
+
+        scope.stop();
+    });
+
     it("skip short-circuits and sets status to LoadingFirstPage", async () => {
         const fake = createFakeClient();
 

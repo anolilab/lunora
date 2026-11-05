@@ -2,7 +2,7 @@ import type { Injector, Signal } from "@angular/core";
 import { computed, DestroyRef, inject, signal } from "@angular/core";
 import type { FunctionReference, LunoraClient, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
-import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 import { stableWireKey } from "@lunora/wire";
 
 import { resolveLunoraClient } from "./client";
@@ -210,6 +210,18 @@ const usePaginatedCore = <F extends FunctionReference>(
                 {
                     onError: (subscriptionError) => {
                         pendingPageKeys.delete(key);
+
+                        const failure = classifyPageFailure(pages(), (candidate) => pageKeyOf(candidate) === key, subscriptionError);
+
+                        if (failure === "restart") {
+                            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after restart is defined
+                            restart();
+                        }
+
+                        if (failure !== "surface") {
+                            return;
+                        }
+
                         error.set(subscriptionError);
 
                         // A tail that fails before its first frame is dropped so
@@ -290,6 +302,16 @@ const usePaginatedCore = <F extends FunctionReference>(
 
         activeSubs.clear();
         resultsByKey.clear();
+    };
+
+    /** Drop every page and subscribe to the first page again. */
+    const restart = (): void => {
+        teardown();
+        pendingPageKeys.clear();
+        pages.set(initialPages(initialNumItems));
+        error.set(undefined);
+        syncSubscriptions(pages());
+        doRebuildPageResults();
     };
 
     // A reactive generation registers with its own collector so the wrapper can

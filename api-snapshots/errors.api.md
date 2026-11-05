@@ -37,6 +37,10 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Bad request";
     };
+    readonly INVALID_CURSOR: {
+        readonly status: 400;
+        readonly title: "Invalid cursor";
+    };
     readonly UNAUTHORIZED: {
         readonly status: 401;
         readonly title: "Unauthorized";

@@ -1,6 +1,6 @@
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
-import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 import { stableWireKey } from "@lunora/wire";
 import type { Readable } from "svelte/store";
 import { derived, get, readable, writable } from "svelte/store";
@@ -287,6 +287,18 @@ const createPaginatedEngine = <T>(
                 {
                     onError: (subscriptionError) => {
                         pendingPageKeys.delete(key);
+
+                        const failure = classifyPageFailure(get(pagesStore), (candidate) => pageKeyOf(candidate, baseArgsRecord) === key, subscriptionError);
+
+                        if (failure === "restart") {
+                            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after restart is defined
+                            restart();
+                        }
+
+                        if (failure !== "surface") {
+                            return;
+                        }
+
                         errorStore.set(subscriptionError);
 
                         // A tail that fails before its first frame is dropped so
@@ -356,6 +368,15 @@ const createPaginatedEngine = <T>(
         resultsByKey.clear();
         pendingPageKeys.clear();
         pageKeys = new WeakMap();
+    };
+
+    /** Drop every page and subscribe to the first page again. */
+    const restart = (): void => {
+        teardownAll();
+        pagesStore.set(initialPages(initialNumItems));
+        errorStore.set(undefined);
+        syncSubscriptions();
+        rebuildPageResults();
     };
 
     // pageResults is a lazy Svelte readable: subscriptions open on the first

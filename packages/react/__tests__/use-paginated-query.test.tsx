@@ -123,6 +123,81 @@ describe("usePaginatedQuery", () => {
         expect(screen.getByTestId("status").textContent).toBe("CanLoadMore");
     });
 
+    it("restarts from the first page when a loaded page's cursor no longer decodes, without reporting it", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
+        const onError = vi.fn<SubscriptionErrorCallback>();
+        const stale = { code: "INVALID_CURSOR", message: "invalid cursor" };
+        const opts = (args: unknown): { cursor: null | string; endCursor: null | string } =>
+            (args as { paginationOpts: { cursor: null | string; endCursor: null | string } }).paginationOpts;
+        const sinkFor = (cursor: null | string, endCursor: null | string): SubscriptionErrorCallback | undefined =>
+            (mock.subscribe.mock.calls as [unknown, unknown, unknown, { onError?: SubscriptionErrorCallback } | undefined][]).findLast(
+                ([, args]) => opts(args).cursor === cursor && opts(args).endCursor === endCursor,
+            )?.[3]?.onError;
+
+        let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Harness
+                    onError={onError}
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback used once to capture the hook's `loadMore`.
+                    onLoadMore={(next) => {
+                        loadMore = next;
+                    }}
+                />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("results").textContent).toBe("a,b");
+        });
+
+        act(() => {
+            loadMore(2);
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("results").textContent).toBe("a,b,c,d");
+        });
+
+        const tailSink = sinkFor("2", null);
+
+        expect(tailSink).toBeDefined();
+
+        // A deploy changed the cursor format: the re-read of the bounded first page is refused.
+        act(() => {
+            mock.emitError("items:list", stale, (args) => opts(args).cursor === null && opts(args).endCursor === "2");
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("results").textContent).toBe("a,b");
+        });
+
+        expect(screen.getByTestId("status").textContent).toBe("CanLoadMore");
+        expect(screen.getByTestId("error").textContent).toBe("");
+
+        // The dropped tail reporting the same refusal late changes nothing.
+        act(() => {
+            tailSink?.(stale);
+        });
+
+        expect(screen.getByTestId("results").textContent).toBe("a,b");
+        expect(onError).not.toHaveBeenCalled();
+
+        // The head page carries no cursor to be stale, so its refusal is reported, not retried.
+        act(() => {
+            mock.emitError("items:list", stale, (args) => opts(args).cursor === null && opts(args).endCursor === null);
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("error").textContent).toBe("invalid cursor");
+        });
+
+        expect(onError).toHaveBeenCalledExactlyOnceWith(stale);
+    });
+
     it("loads the first page and reports CanLoadMore when more remain", async () => {
         expect.hasAssertions();
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Page, PaginationResult } from "../src/pagination/index";
-import { applyLoadMore, derivePaginationStatus, initialPages, JOIN_FACTOR, rebalance, SPLIT_FACTOR } from "../src/pagination/index";
+import { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, JOIN_FACTOR, rebalance, SPLIT_FACTOR } from "../src/pagination/index";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -384,5 +384,39 @@ describe("applyLoadMore", () => {
         expect(next?.[0]).toEqual({ lower: null, numItems: 2, upper: "b" }); // unchanged
         expect(next?.[1]).toEqual({ lower: "b", numItems: 2, upper: "cursor-x" }); // pinned
         expect(next?.[2]).toEqual({ lower: "cursor-x", numItems: 5, upper: null }); // new
+    });
+});
+
+describe(classifyPageFailure, () => {
+    const pages: Page[] = [
+        { lower: null, numItems: 2, upper: "b" },
+        { lower: "b", numItems: 2, upper: null },
+    ];
+    const stale = { code: "INVALID_CURSOR" };
+
+    it("restarts the feed when a page that carries a cursor fails with INVALID_CURSOR", () => {
+        expect.assertions(2);
+
+        expect(classifyPageFailure(pages, (page) => page.upper === "b", stale)).toBe("restart");
+        expect(classifyPageFailure(pages, (page) => page.lower === "b", stale)).toBe("restart");
+    });
+
+    it("ignores INVALID_CURSOR from a page the feed no longer holds", () => {
+        expect.assertions(1);
+
+        expect(classifyPageFailure(pages, () => false, stale)).toBe("ignore");
+    });
+
+    it("surfaces INVALID_CURSOR from the head page, which has no cursor to restart past", () => {
+        expect.assertions(1);
+
+        expect(classifyPageFailure(initialPages(2), () => true, stale)).toBe("surface");
+    });
+
+    it("surfaces every other failure, held page or not", () => {
+        expect.assertions(2);
+
+        expect(classifyPageFailure(pages, () => true, { code: "BAD_REQUEST" })).toBe("surface");
+        expect(classifyPageFailure(pages, () => false, {})).toBe("surface");
     });
 });

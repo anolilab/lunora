@@ -1,6 +1,6 @@
 import type { FunctionReference, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
-import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 import { stableWireKey } from "@lunora/wire";
 import type { MaybeRefOrGetter, ShallowRef } from "vue";
 import { onScopeDispose, shallowRef, toValue, watch } from "vue";
@@ -201,6 +201,18 @@ const usePaginatedCore = <T>(
                 {
                     onError: (subscriptionError) => {
                         pendingPageKeys.delete(key);
+
+                        const failure = classifyPageFailure(pages.value, (candidate) => pageKeyOf(candidate, baseArgs) === key, subscriptionError);
+
+                        if (failure === "restart") {
+                            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after restart is defined
+                            restart();
+                        }
+
+                        if (failure !== "surface") {
+                            return;
+                        }
+
                         error.value = subscriptionError;
 
                         // A tail that fails before its first frame is dropped so
@@ -237,6 +249,22 @@ const usePaginatedCore = <T>(
         pageKeys = new WeakMap();
     };
 
+    /** Drop every page and subscribe to the first page again. */
+    const restart = (): void => {
+        const current = toValue(args);
+
+        teardownAll();
+        pages.value = initialPages(initialNumItems);
+        pageResults.value = [];
+        error.value = undefined;
+        lastLoadMoreCursor = undefined;
+
+        if (current !== "skip") {
+            syncSubscriptions(pages.value, current);
+            rebuildPageResults(pages.value, current);
+        }
+    };
+
     // Re-subscribe whenever the base args (or skip) change. Key the watch on a
     // stable string (not object identity) so an equal-but-new args object — e.g.
     // a `computed(() => ({ ids: [...store.selected] }))` recomputed with equal
@@ -254,18 +282,7 @@ const usePaginatedCore = <T>(
                 return;
             }
 
-            const current = toValue(args);
-
-            teardownAll();
-            pages.value = initialPages(initialNumItems);
-            pageResults.value = [];
-            error.value = undefined;
-            lastLoadMoreCursor = undefined;
-
-            if (current !== "skip") {
-                syncSubscriptions(pages.value, current);
-                rebuildPageResults(pages.value, current);
-            }
+            restart();
         },
         { immediate: true },
     );

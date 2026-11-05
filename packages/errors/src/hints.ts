@@ -45,6 +45,8 @@ const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> = {
     DELIVERY_RECEIPT_FENCED:
         "The operation committed, but its stored result belongs to an older authority epoch. Do not automatically retry with a new transport ID. Recover through the application's durable operation key under current authorization.",
     CONFLICT: CONFLICT_HINT,
+    INVALID_CURSOR:
+        "The page cursor did not decode. A cursor is only valid against the build that minted it: a deploy that changes how a query orders its rows, or how the engine encodes cursors, makes every cursor a client still holds unreadable. `usePaginatedQuery` restarts the feed from its first page when a page fails with this code; a hand-written pager should do the same rather than retry the cursor.",
     GLOBAL_TRANSACTION_UNSUPPORTED:
         "A `.global()` write commits its row and companion rows in one transaction. Pass a postgres.js client that has `begin()`, or a mysql2 pool (`createPool`) rather than a single connection.",
     NOT_UNIQUE: [
