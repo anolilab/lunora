@@ -1,3 +1,7 @@
+## @lunora/angular [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.268...@lunora/angular@1.0.0-alpha.269) (2026-11-05)
+
+- fix(client): restart a paginated feed when the server refuses its cursor (#1496)
+
 ## @lunora/angular [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.267...@lunora/angular@1.0.0-alpha.268) (2026-11-04)
 
 - Release 1.0.0-alpha.268. Commit a2f1851 set this version and it was never published, so it is released from HEAD.

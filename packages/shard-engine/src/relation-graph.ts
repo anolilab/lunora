@@ -207,7 +207,7 @@ const decodeRelatedCursor = (cursor: string): number => {
     const [offset] = decodeCursor(cursor);
 
     if (typeof offset !== "number" || !Number.isInteger(offset) || offset < 0) {
-        throw new LunoraError("BAD_REQUEST", "invalid cursor");
+        throw new LunoraError("INVALID_CURSOR", "invalid cursor");
     }
 
     if (offset > RELATED_MAX_OFFSET) {

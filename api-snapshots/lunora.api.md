@@ -2441,6 +2441,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `PageFailure` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `PaginatedCoreResult` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -2461,11 +2465,23 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `classifyPageFailure` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `derivePaginationStatus` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `headPage` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `initialPages` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `isHeadPage` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 

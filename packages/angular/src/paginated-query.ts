@@ -2,7 +2,7 @@ import type { Injector, Signal } from "@angular/core";
 import { computed, DestroyRef, inject, signal } from "@angular/core";
 import type { FunctionReference, LunoraClient, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
-import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { applyLoadMore, classifyPageFailure, derivePaginationStatus, headPage, initialPages, isHeadPage, rebalance } from "@lunora/client/pagination";
 import { stableWireKey } from "@lunora/wire";
 
 import { resolveLunoraClient } from "./client";
@@ -77,6 +77,9 @@ const usePaginatedCore = <F extends FunctionReference>(
     const pageResults = signal<(PaginationResult<PageItemOf<F>> | undefined)[]>([]);
     const status = signal<PaginationStatus>("LoadingFirstPage");
     const error = signal<SubscriptionError | undefined>(undefined);
+
+    /** Set by a silent `INVALID_CURSOR` restart, cleared by the next frame for a page past the head. */
+    let restartedSinceLoad = false;
 
     /**
      * Each active subscription entry, keyed in `activeSubs` by the page key it
@@ -188,6 +191,11 @@ const usePaginatedCore = <F extends FunctionReference>(
                 pageArgs as never,
                 (value) => {
                     resultsByKey.set(entry.currentKey, value as PaginationResult<PageItemOf<F>>);
+
+                    if (restartedSinceLoad && pages().some((candidate) => !isHeadPage(candidate) && pageKeyOf(candidate) === entry.currentKey)) {
+                        restartedSinceLoad = false;
+                    }
+
                     pendingPageKeys.delete(entry.currentKey);
                     error.set(undefined);
 
@@ -210,6 +218,22 @@ const usePaginatedCore = <F extends FunctionReference>(
                 {
                     onError: (subscriptionError) => {
                         pendingPageKeys.delete(key);
+
+                        const failure = classifyPageFailure(pages(), (candidate) => pageKeyOf(candidate) === key, subscriptionError, restartedSinceLoad);
+
+                        if (failure === "restart") {
+                            // A sibling feed's head page still carries the refused build's `continueCursor`:
+                            // ask for a fresh snapshot of it before this feed subscribes to it again.
+                            client.resnapshot(reference, buildPageArgs(headPage(initialNumItems), narrowedArgs) as never, { shardKey });
+                            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after restart is defined
+                            restart();
+                            restartedSinceLoad = true;
+                        }
+
+                        if (failure !== "surface") {
+                            return;
+                        }
+
                         error.set(subscriptionError);
 
                         // A tail that fails before its first frame is dropped so
@@ -290,6 +314,16 @@ const usePaginatedCore = <F extends FunctionReference>(
 
         activeSubs.clear();
         resultsByKey.clear();
+    };
+
+    /** Drop every page and subscribe to the first page again. */
+    const restart = (): void => {
+        teardown();
+        pendingPageKeys.clear();
+        pages.set(initialPages(initialNumItems));
+        error.set(undefined);
+        syncSubscriptions(pages());
+        doRebuildPageResults();
     };
 
     // A reactive generation registers with its own collector so the wrapper can

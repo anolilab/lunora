@@ -1,5 +1,5 @@
 import type { InboundEmail } from "@lunora/mail/inbound";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { dispatchAgentEmail } from "../src/inbound";
 import type { AgentEmailMapper, AgentEmailShardInput } from "../src/types";
@@ -50,16 +50,37 @@ const fakeBinding = (): {
 };
 
 /** A mock `ForwardableEmailMessage` whose `raw` is the RFC 822 string above; records `setReject`. */
-const fakeMessage = (raw = RAW_EMAIL): { message: { raw: string; setReject: (reason: string) => void }; rejects: string[] } => {
+const fakeMessage = (raw = RAW_EMAIL): { message: { raw: string; rawSize: number; setReject: (reason: string) => void }; rejects: string[] } => {
     const rejects: string[] = [];
 
     return {
-        message: { raw, setReject: (reason: string) => rejects.push(reason) },
+        message: { raw, rawSize: new TextEncoder().encode(raw).byteLength, setReject: (reason: string) => rejects.push(reason) },
         rejects,
     };
 };
 
 describe(dispatchAgentEmail, () => {
+    it("bounces a message over its maxRawBytes before any agent sees it", async () => {
+        expect.assertions(3);
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const support = fakeBinding();
+        const onEmail = vi.fn<AgentEmailMapper>(() => {
+            return { input: "hi", owner: "acct-1", threadKey: "thread-1", title: "Support" };
+        });
+
+        const handler = dispatchAgentEmail([{ agent: { onEmail }, className: "SupportAgentWorkflow" }], { maxRawBytes: 64 });
+        const { message, rejects } = fakeMessage();
+
+        await handler(message, { SupportAgentWorkflow: support.binding }, {});
+
+        consoleError.mockRestore();
+
+        expect(onEmail).not.toHaveBeenCalled();
+        expect(support.calls).toHaveLength(0);
+        expect(rejects).toStrictEqual(["message could not be processed"]);
+    });
+
     it("starts a durable run for the agent whose onEmail returns a run", async () => {
         expect.assertions(3);
 

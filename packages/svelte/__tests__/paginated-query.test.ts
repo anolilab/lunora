@@ -238,6 +238,120 @@ describe("paginatedQuery page errors", () => {
             stop();
         }
     });
+
+    it("restarts from the first page when a loaded page's cursor no longer decodes, without reporting it", async () => {
+        const subscribeCalls: { args: Record<string, unknown>; callback: (data: unknown) => void; onError?: (error: SubscriptionError) => void }[] = [];
+
+        const resnapshotCalls: Record<string, unknown>[] = [];
+        const client = {
+            subscribe: (
+                _fn: FunctionReference,
+                args: Record<string, unknown>,
+                callback: (data: unknown) => void,
+                options?: { onError?: (error: SubscriptionError) => void },
+            ) => {
+                subscribeCalls.push({ args, callback, onError: options?.onError });
+
+                return () => undefined;
+            },
+            resnapshot: (_fn: FunctionReference, args: Record<string, unknown>) => {
+                resnapshotCalls.push(args);
+            },
+        } as unknown as LunoraClient;
+
+        const errors: SubscriptionError[] = [];
+        const { error, loadMore, results, status } = paginatedQuery(client, fn, {}, { initialNumItems: NUM_ITEMS, onError: (e) => errors.push(e) });
+        const stops = [results.subscribe(() => {}), status.subscribe(() => {}), error.subscribe(() => {})];
+        const head = { cursor: null, endCursor: null, numItems: NUM_ITEMS };
+        const find = (opts: Record<string, unknown>) => subscribeCalls.find((c) => JSON.stringify(c.args) === JSON.stringify({ paginationOpts: opts }));
+
+        find(head)?.callback({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+        await flushAsync();
+        loadMore(NUM_ITEMS);
+        await flushAsync();
+        find({ cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS })?.callback({ continueCursor: "cur-2", isDone: false, page: secondPageItems });
+        await flushAsync();
+
+        expect(get(results)).toStrictEqual([...firstPageItems, ...secondPageItems]);
+
+        // A deploy changed the cursor format: the re-read of the bounded first page is refused.
+        const before = subscribeCalls.length;
+
+        find({ cursor: null, endCursor: "cur-1", numItems: NUM_ITEMS })?.onError?.({ code: "INVALID_CURSOR", message: "invalid cursor" });
+        await flushAsync();
+
+        expect(errors).toStrictEqual([]);
+        // The head page is resnapshotted, so a sibling feed holding it cannot hand back the refused build's cursor.
+        expect(resnapshotCalls).toStrictEqual([{ paginationOpts: head }]);
+        expect(get(error)).toBeUndefined();
+        expect(get(status)).toBe("LoadingFirstPage");
+        expect(subscribeCalls.slice(before).map((c) => c.args["paginationOpts"])).toStrictEqual([head]);
+
+        // The dropped tail reporting the same refusal late changes nothing.
+        find({ cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS })?.onError?.({ code: "INVALID_CURSOR", message: "invalid cursor" });
+        await flushAsync();
+
+        expect(errors).toStrictEqual([]);
+        expect(subscribeCalls).toHaveLength(before + 1);
+
+        // The head page carries no cursor to be stale, so its refusal is reported, not retried.
+        subscribeCalls.at(-1)?.onError?.({ code: "INVALID_CURSOR", message: "invalid cursor" });
+        await flushAsync();
+
+        expect(errors).toStrictEqual([{ code: "INVALID_CURSOR", message: "invalid cursor" }]);
+        expect(subscribeCalls).toHaveLength(before + 1);
+
+        for (const stop of stops) {
+            stop();
+        }
+    });
+
+    it("reports a second cursor refusal instead of restarting again, when nothing past the head loaded in between", async () => {
+        const subscribeCalls: { args: Record<string, unknown>; callback: (data: unknown) => void; onError?: (error: SubscriptionError) => void }[] = [];
+
+        const client = {
+            subscribe: (
+                _fn: FunctionReference,
+                args: Record<string, unknown>,
+                callback: (data: unknown) => void,
+                options?: { onError?: (error: SubscriptionError) => void },
+            ) => {
+                subscribeCalls.push({ args, callback, onError: options?.onError });
+
+                return () => undefined;
+            },
+            resnapshot: () => undefined,
+        } as unknown as LunoraClient;
+
+        const errors: SubscriptionError[] = [];
+        const { error, loadMore, results, status } = paginatedQuery(client, fn, {}, { initialNumItems: NUM_ITEMS, onError: (e) => errors.push(e) });
+        const stops = [results.subscribe(() => {}), status.subscribe(() => {}), error.subscribe(() => {})];
+        const loadTailThenRefuse = async (): Promise<void> => {
+            subscribeCalls.at(-1)?.callback({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+            await flushAsync();
+            loadMore(NUM_ITEMS);
+            await flushAsync();
+            // The server refuses the cursor it has just minted.
+            subscribeCalls
+                .findLast((c) => (c.args["paginationOpts"] as { cursor: unknown }).cursor === "cur-1")
+                ?.onError?.({ code: "INVALID_CURSOR", message: "invalid cursor" });
+            await flushAsync();
+        };
+
+        await loadTailThenRefuse();
+
+        expect(errors).toStrictEqual([]);
+        expect(get(status)).toBe("LoadingFirstPage");
+
+        await loadTailThenRefuse();
+
+        expect(errors).toStrictEqual([{ code: "INVALID_CURSOR", message: "invalid cursor" }]);
+        expect(get(error)).toStrictEqual({ code: "INVALID_CURSOR", message: "invalid cursor" });
+
+        for (const stop of stops) {
+            stop();
+        }
+    });
 });
 
 describe("paginatedQuery teardown (BUG 1 regression)", () => {
