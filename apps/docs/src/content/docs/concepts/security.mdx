@@ -26,9 +26,10 @@ security advisor catalog with remediation.
 
 ## The HTTP edge
 
-The worker's top-level `fetch` is the single choke point every response passes
-through: RPC, auth, admin, `httpRoute` handlers, and the SSR fallback alike.
-Three layers are applied there, all on by default and configured through the
+The worker's top-level `fetch` is the choke point every response the Worker
+produces passes through: RPC, auth, admin, `httpRoute` handlers, and the SSR
+fallback alike. Static assets are the exception, covered
+[below](#static-assets). Three layers are applied there, all on by default and configured through the
 `security` option on `createWorker`. None ever overwrites a header or decision an
 inner handler already made; defaults _fill in_, they never clobber.
 
@@ -36,34 +37,214 @@ inner handler already made; defaults _fill in_, they never clobber.
 
 Added to every response when the inner handler didn't set them:
 
-| Header                       | Default                                                                                                                                                                  |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Strict-Transport-Security`  | `max-age=31536000; includeSubDomains` (HTTPS responses only)                                                                                                             |
-| `X-Content-Type-Options`     | `nosniff`                                                                                                                                                                |
-| `X-Frame-Options`            | `SAMEORIGIN`                                                                                                                                                             |
-| `Referrer-Policy`            | `strict-origin-when-cross-origin`                                                                                                                                        |
-| `Permissions-Policy`         | a minimal deny list (camera, microphone, geolocation, payment, …)                                                                                                        |
-| `Cross-Origin-Opener-Policy` | `same-origin`                                                                                                                                                            |
-| `Content-Security-Policy`    | `default-src 'none'; frame-ancestors 'none'; …` on **non-HTML** responses; a hardening policy (`base-uri 'none'; object-src 'none'`, plus framing) on **HTML** responses |
+| Header                       | Default                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------- |
+| `Strict-Transport-Security`  | `max-age=31536000; includeSubDomains` (HTTPS responses only)              |
+| `X-Content-Type-Options`     | `nosniff`                                                                 |
+| `X-Frame-Options`            | `SAMEORIGIN`                                                              |
+| `Referrer-Policy`            | `strict-origin-when-cross-origin`                                         |
+| `Permissions-Policy`         | a minimal deny list (camera, microphone, geolocation, payment, …)         |
+| `Cross-Origin-Opener-Policy` | `same-origin-allow-popups` ([why](#oauth-and-payment-popups))             |
+| `Content-Security-Policy`    | strict on **non-HTML** responses, a hardening-only policy on HTML (below) |
 
-The HTML policy sets no `default-src` or `script-src`, so an SSR page's own
-scripts, styles and fetches are never blocked. The restrictive `default-src 'none'`
-policy applies only to non-HTML (API/JSON) responses. Pass a `csp` string to apply your
-own policy to HTML too:
+Non-HTML (API/JSON) responses get the strict `default-src 'none';
+frame-ancestors 'none'; base-uri 'none'; form-action 'none'`. HTML responses get
+the HTML policy, `base-uri 'none'; object-src 'none'; frame-ancestors 'self'`
+(`'none'` when `frameOptions` is `DENY`). It sets no `default-src` or
+`script-src`, so an SSR page is never broken by a policy it didn't opt into.
+
+### Configuring the headers
+
+Set them in `lunora.config.ts`. That one value reaches both places headers are
+sent: codegen hands it to the Worker, and the build writes the same values into
+the static assets' `_headers` (see [Static assets](#static-assets) below).
 
 ```ts
-createWorker({
+// lunora.config.ts
+import type { LunoraConfig } from "./lunora/_generated/app";
+
+export default {
     security: {
         headers: {
-            csp: "default-src 'self'; script-src 'self' 'unsafe-inline'",
+            // Let listed origins embed your pages in a frame (drops X-Frame-Options,
+            // which cannot express a list; frame-ancestors carries it instead).
+            frameAncestors: ["https://partner.example"],
+            crossOriginOpenerPolicy: "same-origin-allow-popups",
             hsts: { maxAge: 63072000, preload: true },
+            permissionsPolicy: false, // omit one header
         },
     },
-});
+} satisfies LunoraConfig;
 ```
 
-Set `headers: false` to disable the layer entirely, or any individual field to
-`false` to omit that header.
+| Option                    | Values                                                                            |
+| ------------------------- | --------------------------------------------------------------------------------- |
+| `crossOriginOpenerPolicy` | `"same-origin-allow-popups"` (default), `"same-origin"`, `"unsafe-none"`, `false` |
+| `frameAncestors`          | origins allowed to frame your HTML pages, e.g. `["https://a.example"]`            |
+| `frameOptions`            | `"SAMEORIGIN"` (default), `"DENY"`, `false`                                       |
+| `csp`                     | one policy string for every response, or `false`                                  |
+| `hsts`                    | `true`, `false`, or `{ maxAge, includeSubDomains, preload }`                      |
+| `permissionsPolicy`       | a policy string, or `false`                                                       |
+| `referrerPolicy`          | a policy string, or `false`                                                       |
+
+`headers: false` turns the whole layer off. A `csp` string replaces both default
+policies, so it cannot be combined with `frameAncestors`; put the
+`frame-ancestors` directive in it instead.
+
+The values must be literals, because codegen and the build read the file without
+running it. Codegen, the build and `createWorker` check them the same way: an
+unknown key (a typo such as `frameOption`), a value of the wrong type or outside
+the header's values (`frameOptions: "ALLOW"`, `hsts: { maxAge: "1y" }`), a value
+that would break a header line, or a `frameAncestors` entry that is not an origin.
+In `lunora.config`, an unknown key or a value of the wrong kind (`csp: true`,
+`hsts: { maxAge: "1y" }`, `frameAncestors: "https://partner.example"`) stops
+codegen with `PROJECT_CONFIG_INVALID`. Any other such value, or one codegen
+cannot read, is reported and the defaults apply. Passed to `createWorker` in
+code, it throws when the Worker is built.
+
+**Precedence.** A `security.headers` passed in code (to `createWorker`, or through
+`.extend()`) wins over `lunora.config`, which wins over
+`LUNORA_SECURITY_HEADERS=off` in wrangler `vars`. The build can only see the last
+two, so code-level headers do not reach the static assets. Keep them in
+`lunora.config` unless you need to compute them.
+
+An app built with the generated `defineApp()` gets the config value with no
+wiring. An app that calls `createWorker` itself passes it on. `_generated/app`
+exports `LUNORA_SECURITY_HEADERS` only while `lunora.config` sets `security.headers`:
+
+```ts
+import { LUNORA_SECURITY_HEADERS } from "../lunora/_generated/app";
+
+createWorker({ /* … */ security: { headers: LUNORA_SECURITY_HEADERS } });
+```
+
+### OAuth and payment popups
+
+`Cross-Origin-Opener-Policy` decides whether a popup can talk back to the page
+that opened it. Lunora defaults to `same-origin-allow-popups`:
+
+- A cross-origin page that opens your app gets no handle on it.
+- A popup your page opens (an OAuth provider, a payment sheet) keeps
+  `window.opener`, so the provider's SDK can post its result back.
+
+`same-origin` would sever that link and break those SDKs. Lunora sends no
+`Cross-Origin-Embedder-Policy`, so `same-origin` would not buy cross-origin
+isolation either.
+
+:::note[Changed default]
+Up to `@lunora/runtime` 1.0.0-alpha.277 the default was `same-origin`. An app
+that relied on it, for example to keep a page it opens from reaching back through
+`window.opener`, sets `crossOriginOpenerPolicy: "same-origin"` in `lunora.config`.
+:::
+
+If the popup ends on a callback page **you** serve, which then calls
+`window.opener.postMessage(...)`, that page needs `unsafe-none`. When the popup
+navigates from the provider to your callback, any other value on the callback
+response moves the popup into a new browsing context group, and `window.opener`
+becomes `null`. (Checked in Chromium for both `same-origin-allow-popups` and
+`same-origin`.) Set it on that one response, not globally:
+
+- **A Worker route:** set the header in the handler. Inner handlers win over the
+  defaults.
+
+    ```ts
+    return new Response(html, {
+        headers: { "content-type": "text/html", "cross-origin-opener-policy": "unsafe-none" },
+    });
+    ```
+
+- **A static page:** detach the default and set your own in `public/_headers`:
+
+    ```text
+    /auth/popup-callback
+      ! Cross-Origin-Opener-Policy
+      Cross-Origin-Opener-Policy: unsafe-none
+    ```
+
+A page that is itself opened by another site's popup flow, or that must keep
+working with a third-party opener, can set `crossOriginOpenerPolicy:
+"unsafe-none"` in `lunora.config`, at the cost of the protection above.
+
+### Static assets
+
+Cloudflare serves a file from the [static assets](/docs/deployment#static-assets)
+directory without running the Worker. That covers your JS and CSS chunks, the SPA
+shell, and prerendered pages. The `fetch` above never sees those responses, so
+on its own it cannot add headers to them.
+
+Instead, the production build writes the same headers into the assets'
+`_headers` file, which Cloudflare applies to asset responses only. With the defaults:
+
+```text
+# BEGIN lunora-managed: rewritten on every build. Put your own rules outside this block.
+/*
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: accelerometer=(), autoplay=(), camera=(), …
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+  Content-Security-Policy: base-uri 'none'; object-src 'none'; frame-ancestors 'self'
+# END lunora-managed
+```
+
+A few things differ from the Worker's layer:
+
+- **The CSP is the HTML policy for every file.** `_headers` matches paths, not
+  content types, and the strict non-HTML policy would stop a static page from
+  loading its own scripts.
+- **HSTS is sent on every response.** Browsers ignore it over plain HTTP, so
+  local development is not pinned to HTTPS.
+- **No CORS headers.** Static files are served to your own origin.
+- **Only `lunora.config` and wrangler `vars` reach it.** See the precedence
+  above.
+
+Your own rules in `public/_headers` are kept as written. The managed block goes
+at the top of the file, and Lunora rewrites only what sits between its two
+markers. Cloudflare sends both values when two matching rules set the same
+header (for example `DENY` and `SAMEORIGIN`), and browsers reject that. So:
+
+- A header one of your rules for `/*` sets is left out of the block. Your value
+  applies everywhere. When that header is `X-Frame-Options`, the block's CSP
+  also drops its `frame-ancestors` directive, which browsers would apply instead
+  of your value.
+- For narrower paths, detach the default first, then set yours, as in the
+  popup-callback example above. A detach only removes a header an earlier rule
+  added, which is why the block comes first. A narrower rule that sets a managed
+  header without detaching it is reported at build time.
+
+```text
+/embed/*
+  ! X-Frame-Options
+```
+
+A detach alone does not hold on a [single-page app](/docs/deployment#single-page-apps)
+whose Worker serves its files, because the Worker adds a missing security header
+back. There, detach and set the value you want in the same rule.
+
+Cloudflare applies at most 100 rules from `_headers` and ignores a line longer
+than 2,000 characters. Your rules come first in that count: when the file
+already holds your 100, the block is left out (with a warning) instead of
+pushing one of yours past the cap. A managed header line that would be too long,
+such as a CSP from a long `frameAncestors` list, fails the build, since the
+static pages would otherwise ship without it.
+
+The block is written on a production build for the Cloudflare target, by
+whichever integration produced the output:
+
+| Build                                                      | Where                                              | Immutable caching                           |
+| ---------------------------------------------------------- | -------------------------------------------------- | ------------------------------------------- |
+| `@lunora/vite` with `@cloudflare/vite-plugin` in the build | the client environment's `outDir`                  | `build.assetsDir` (`assets/`)               |
+| `@lunora/rspack/rsbuild`                                   | each environment output that is `assets.directory` | `static/`, when `output.filenameHash` is on |
+| `@lunora/nuxt`                                             | Nitro's public output, after Nitro's own rules     | none: Nitro manages `_nuxt/` caching        |
+| `@lunora/astro`                                            | the client output (`astro:build:done`)             | `build.assets` (`_astro/`)                  |
+
+Apart from the Vite path, whose client `outDir` is by definition what
+`@cloudflare/vite-plugin` uploads, the block is only written when the output is
+the `assets.directory` your wrangler config deploys (or the `CLOUDFLARE_ENV`
+block's own); anywhere else `_headers` would be published as a file. The plain
+Rspack/webpack plugin (`lunoraRspack()`) and Analog write none: their output
+layout is the project's own. Add the headers to their `_headers` yourself.
 
 ### CORS: deny cross-origin by default
 

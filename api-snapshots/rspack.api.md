@@ -63,6 +63,26 @@ const lunoraRspack: (options?: LunoraRspackOptions) => LunoraRspackPlugin;
 
 ## `@lunora/rspack/rsbuild`
 
+### `BuildEnvironmentLike` (interface)
+
+```ts
+interface BuildEnvironmentLike {
+    config: {
+        mode?: string;
+        output: {
+            distPath: Record<string, unknown>;
+            filename?: Record<string, unknown>;
+            filenameHash?: unknown;
+            target?: unknown;
+        };
+        server?: {
+            publicDir?: unknown;
+        };
+    };
+    distPath: string;
+}
+```
+
 ### `DevServerLike` (interface)
 
 ```ts
@@ -109,6 +129,10 @@ interface RsbuildApiLike {
     getRsbuildConfig: () => Readonly<RsbuildConfigLike>;
     modifyRsbuildConfig: (callback: (config: RsbuildConfigLike) => RsbuildConfigLike) => void;
     modifyRspackConfig: (callback: (config: RspackConfigLike) => RspackConfigLike) => void;
+    onAfterBuild: (callback: (params: {
+        environments: Record<string, BuildEnvironmentLike>;
+        isWatch: boolean;
+    }) => Promise<void> | void) => void;
     onAfterStartDevServer: (callback: (params: {
         port: number;
     }) => Promise<void> | void) => void;

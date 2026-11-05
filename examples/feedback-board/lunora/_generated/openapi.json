@@ -29,7 +29,8 @@
                         "UNAUTHORIZED",
                         "UNPROCESSABLE",
                         "VALIDATION_ERROR",
-                        "UNIQUE_INDEX_DUPLICATES"
+                        "UNIQUE_INDEX_DUPLICATES",
+                        "INVALID_CURSOR"
                       ],
                       "type": "string"
                     },

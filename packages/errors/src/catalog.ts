@@ -34,6 +34,14 @@ export interface ErrorCatalogEntry {
  */
 export const ERROR_CATALOG = {
     BAD_REQUEST: { status: 400, title: "Bad request" },
+
+    /**
+     * A page cursor that does not decode: minted by an older build's order (the
+     * engine bumps its cursor prefix whenever a payload would otherwise be read
+     * as the wrong column), or not minted by the server at all. Its own code so a
+     * paginated feed can tell it from any other refusal and restart from page one.
+     */
+    INVALID_CURSOR: { status: 400, title: "Invalid cursor" },
     UNAUTHORIZED: { status: 401, title: "Unauthorized" },
     FORBIDDEN: { status: 403, title: "Forbidden" },
     NOT_FOUND: { status: 404, title: "Not found" },
@@ -153,6 +161,8 @@ export const ERROR_CATALOG = {
 
     /** Package-specific codes. Build-time-only — never cross the RPC wire, so deliberately not `internal`. */
     CODEGEN_DIAGNOSTIC: { status: 500, title: "Codegen diagnostic" },
+    /** Build-time-only (codegen): `lunora.config` would be read as something other than what it says. */
+    PROJECT_CONFIG_INVALID: { status: 500, title: "lunora.config has an unknown key, a mistyped value or no default export" },
     /** Build-time-only (codegen): `.jurisdiction()` would move DO-backed auth to a new, empty object without `{ pinAuth: true }`. */
     JURISDICTION_MOVE: {
         status: 422,

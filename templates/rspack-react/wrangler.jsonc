@@ -5,12 +5,16 @@
     "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     // The SPA `rsbuild build` writes. Unknown paths fall back to `index.html` so
-    // client-side routes deep-link; `/_lunora/*` always reaches the Worker first,
-    // or a navigation there would get the SPA shell instead of Lunora.
+    // client-side routes deep-link. `lunora dev` / `lunora deploy` rewrite
+    // `run_worker_first` to run the Worker first for every path but the static
+    // output, and the Worker serves the shell and the remaining files through
+    // `ASSETS`, so a route Lunora cannot see (a webhook on a Hono router) still
+    // reaches it. Edit the list and Lunora leaves it as you wrote it.
     "assets": {
+        "binding": "ASSETS",
         "directory": "./dist",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/_lunora/*"],
+        "run_worker_first": ["/_lunora/*", "/__lunora/*"],
     },
     "durable_objects": {
         "bindings": [

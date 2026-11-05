@@ -57,6 +57,20 @@ interface AgentEmailTarget {
 }
 
 /**
+ * Options for {@link dispatchAgentEmail}.
+ * @experimental
+ */
+interface DispatchAgentEmailOptions {
+    /**
+     * Largest message, in bytes, that is parsed and offered to the agents; a bigger
+     * one bounces before it is read. Default 10 MiB (see `@lunora/mail/inbound`'s
+     * `createInboundEmailHandler`), since parsing holds the raw message, its decoded
+     * parts and every attachment in the isolate's memory at once.
+     */
+    maxRawBytes?: number;
+}
+
+/**
  * The worker `email(message, env, ctx)` callback. Typed with `unknown`
  * parameters so it drops straight onto the generated `composed.email` slot
  * without a cast.
@@ -103,7 +117,7 @@ const rejectPermanently = (context: { message: { setReject: (reason: string) => 
  * {@link rejectPermanently}.
  * @experimental
  */
-const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAgentEmailHandler => {
+const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>, options: DispatchAgentEmailOptions = {}): InboundAgentEmailHandler => {
     const handler = createInboundEmailHandler({
         dispatch: async (email, context) => {
             for (const target of targets) {
@@ -165,6 +179,7 @@ const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAg
                 return;
             }
         },
+        maxRawBytes: options.maxRawBytes,
         parse: parseInboundEmail,
         // SECURITY: fails closed BEFORE any mapper sees the message, because a
         // claimed message starts a durable run whose tools execute RLS-bypassed.
@@ -193,4 +208,4 @@ const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAg
 };
 
 export { dispatchAgentEmail };
-export type { AgentEmailTarget, InboundAgentEmailHandler };
+export type { AgentEmailTarget, DispatchAgentEmailOptions, InboundAgentEmailHandler };

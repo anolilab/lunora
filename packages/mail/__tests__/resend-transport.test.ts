@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import createMailer from "../src/create-mailer";
-import { isRetryableMailError, MailSendError } from "../src/send-error";
+import { consumeQueuedSend } from "../src/queue";
+import { isOutcomeUnknownMailError, isRetryableMailError, MailSendError } from "../src/send-error";
 
 // Drive the private Resend transport's error-mapping branches by faking the
 // underlying @visulima/email provider. Each test swaps `sendEmail`'s result.
@@ -41,6 +42,56 @@ describe("resend transport error mapping", () => {
 
         expect(result).toEqual({ id: "abc-123" });
         expect(initialize).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends the idempotency key as Resend's idempotency key, so Resend drops a repeat of the same send", async () => {
+        expect.assertions(2);
+
+        sendEmail.mockResolvedValue({ data: { messageId: "abc-123" }, success: true });
+
+        await mailer().send({ idempotencyKey: "order-42-receipt", subject: "Hi", to: "a@x.test" });
+
+        const [email] = sendEmail.mock.calls[0] as [{ headers?: Record<string, string>; idempotencyKey?: string }];
+
+        expect(email.idempotencyKey).toBe("order-42-receipt");
+        // A request header for Resend, never a header of the message itself.
+        expect(email.headers).toBeUndefined();
+    });
+
+    it("forwards the key minted at enqueue time when a queued send is consumed", async () => {
+        expect.assertions(1);
+
+        sendEmail.mockResolvedValue({ data: { messageId: "abc-123" }, success: true });
+
+        const bodies: unknown[] = [];
+        const producer = createMailer({
+            from: "noreply@x.test",
+            queue: {
+                send: async (body: unknown) => {
+                    bodies.push(body);
+                },
+            },
+        });
+
+        await producer.queue({ subject: "Hi", to: "a@x.test" });
+        await consumeQueuedSend(mailer(), bodies[0]);
+
+        const [email] = sendEmail.mock.calls[0] as [{ idempotencyKey?: string }];
+
+        expect(email.idempotencyKey).toBe((bodies[0] as { idempotencyKey: string }).idempotencyKey);
+    });
+
+    it("rejects an idempotency key Resend would refuse before any send or enqueue, as a refusal", async () => {
+        expect.assertions(4);
+
+        const error = await mailer()
+            .send({ idempotencyKey: "has a space", subject: "Hi", to: "a@x.test" })
+            .catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(MailSendError);
+        expect((error as Error).message).toMatch(/idempotencyKey/u);
+        expect(isRetryableMailError(error)).toBe(false);
+        expect(sendEmail).not.toHaveBeenCalled();
     });
 
     it("throws a stable generic message and logs an Error reason", async () => {
@@ -120,13 +171,16 @@ describe("resend transport error mapping", () => {
     });
 
     describe("send failure classification", () => {
-        const failure = (error: unknown) => {
+        const failure = (error: unknown, idempotencyKey?: string) => {
             sendEmail.mockResolvedValue({ error, success: false });
 
             return mailer()
-                .send({ subject: "Hi", to: "a@x.test" })
+                .send({ idempotencyKey, subject: "Hi", to: "a@x.test" })
                 .catch((error_: unknown) => error_);
         };
+
+        /** The shape `@visulima/email`'s HTTP client returns when it aborts a request at its timeout. */
+        const requestTimeout = (): Error => Object.assign(new Error("Request timed out after 30000ms"), { code: "ETIMEDOUT" });
 
         it("refuses a 422 from the API: retrying the same message cannot succeed", async () => {
             expect.assertions(2);
@@ -159,6 +213,80 @@ describe("resend transport error mapping", () => {
             expect.assertions(1);
 
             expect(isRetryableMailError(await failure(new Error("Request failed: fetch failed", { cause: new TypeError("fetch failed") })))).toBe(true);
+        });
+
+        it("does not retry a keyless request timeout: the API may have accepted the send and nothing would drop the repeat", async () => {
+            expect.assertions(3);
+
+            const error = await failure(requestTimeout());
+
+            expect(error).toBeInstanceOf(MailSendError);
+            expect(isOutcomeUnknownMailError(error)).toBe(true);
+            expect(isRetryableMailError(error)).toBe(false);
+        });
+
+        it("retries a request timeout that carried an idempotency key: Resend drops the repeat if the first one landed", async () => {
+            expect.assertions(2);
+
+            const error = await failure(requestTimeout(), "order-42-receipt");
+
+            expect(isOutcomeUnknownMailError(error)).toBe(true);
+            expect(isRetryableMailError(error)).toBe(true);
+        });
+
+        /** What `@visulima/email` returns for a 409: the status only, Resend's response body is dropped. */
+        const idempotencyConflict = (): Error => Object.assign(new Error("Request failed with status 409"), { code: "409" });
+
+        it("retries a 409 for a forwarded key: the first send under it may still land, and Resend drops the repeat", async () => {
+            expect.assertions(2);
+
+            const error = await failure(idempotencyConflict(), "order-42-receipt");
+
+            expect(isOutcomeUnknownMailError(error)).toBe(true);
+            expect(isRetryableMailError(error)).toBe(true);
+        });
+
+        it("acks a 409 on a keyless send as outcome-unknown rather than retrying it", async () => {
+            expect.assertions(2);
+
+            const error = await failure(idempotencyConflict());
+
+            expect(isOutcomeUnknownMailError(error)).toBe(true);
+            expect(isRetryableMailError(error)).toBe(false);
+        });
+
+        it("still refuses any other 4xx sent with a key", async () => {
+            expect.assertions(2);
+
+            const error = await failure(Object.assign(new Error("Request failed with status 422"), { code: "422" }), "order-42-receipt");
+
+            expect(isOutcomeUnknownMailError(error)).toBe(false);
+            expect(isRetryableMailError(error)).toBe(false);
+        });
+
+        it("retries a send that outran the mailer's deadline when it carried an idempotency key", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            sendEmail.mockReturnValue(
+                new Promise(() => {
+                    // never settles
+                }),
+            );
+
+            const settled = createMailer({ apiKey: "test-key", from: "noreply@x.test", sendTimeoutMs: 1000 })
+                .send({ idempotencyKey: "order-42-receipt", subject: "Hi", to: "a@x.test" })
+                .catch((error_: unknown) => error_);
+
+            await vi.advanceTimersByTimeAsync(1000);
+
+            const error = await settled;
+
+            vi.useRealTimers();
+
+            expect(isOutcomeUnknownMailError(error)).toBe(true);
+            expect(isRetryableMailError(error)).toBe(true);
         });
     });
 });

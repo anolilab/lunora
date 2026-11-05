@@ -177,7 +177,7 @@ export { applyRestCache, requestCarriesCredentials, restCacheHeaders } from "./r
 export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, RestRegistryLike, RestRoute, RestRouteDeps } from "./rest-routes";
 export { argsFromQuery, buildRestRoutes, createRestRateLimit, restSurfaceFromRegistry } from "./rest-routes";
 export type { BackupRetentionPreview, PrunedBackups } from "./scheduled-backup";
-export type { CorsOptions, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions } from "./security-headers";
+export type { CorsOptions, CrossOriginOpenerPolicy, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions } from "./security-headers";
 export { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 export type {
     ShardCallArgs,
@@ -189,6 +189,7 @@ export type {
     ShardFunctionReference,
 } from "./shard-client";
 export { createShardClient } from "./shard-client";
+export type { AssetsFetcherLike } from "./spa-assets";
 export { STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
 export type { TraceTrustSignal, TrustInboundTraceContext } from "./trace-trust";
 

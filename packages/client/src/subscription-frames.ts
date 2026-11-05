@@ -42,6 +42,7 @@ export const commitDataFrame = (state: SubscriptionState, payload: unknown, posi
     /* eslint-disable no-param-reassign -- commit the shared subscription state in place */
     state.serverBase = payload;
     state.serverBaseCommitted = true;
+    state.awaitingSnapshot = false;
     state.serverClaims = position.claims;
 
     if (position.cursor !== undefined) {
@@ -53,6 +54,12 @@ export const commitDataFrame = (state: SubscriptionState, payload: unknown, posi
     }
     /* eslint-enable no-param-reassign */
 };
+
+/**
+ * The value to replay to a subscriber that joins `state`: its last value, unless a
+ * `resnapshot` marked that stale and the snapshot replacing it has not landed yet.
+ */
+export const replayableValue = (state: SubscriptionState): unknown => (state.awaitingSnapshot === true ? undefined : state.lastValue);
 
 /**
  * Whether a full data frame is an older snapshot than the one already applied. A re-sent

@@ -1,3 +1,7 @@
+## @lunora/rspack [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.149...@lunora/rspack@1.0.0-alpha.150) (2026-11-05)
+
+- feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)
+
 ## @lunora/rspack [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.148...@lunora/rspack@1.0.0-alpha.149) (2026-11-04)
 
 - Release 1.0.0-alpha.149. Commit a2f1851 set this version and it was never published, so it is released from HEAD.

@@ -1,7 +1,7 @@
 /**
- * "Did you mean …?" suggestions for mistyped command / subcommand names, via
+ * "Did you mean …?" suggestions for a mistyped name (a CLI command, a config key), via
  * Levenshtein edit distance. Kept pure and dependency-free so it's trivial to
- * unit-test and reuse anywhere a command takes a constrained name.
+ * unit-test and reuse anywhere input names one of a fixed set.
  */
 
 /** Levenshtein edit distance between two strings (classic DP, single rolling row). */

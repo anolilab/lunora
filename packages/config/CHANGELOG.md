@@ -1,3 +1,7 @@
+## @lunora/config [1.0.0-alpha.458](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.457...@lunora/config@1.0.0-alpha.458) (2026-11-05)
+
+- feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)
+
 ## @lunora/config [1.0.0-alpha.457](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.456...@lunora/config@1.0.0-alpha.457) (2026-11-04)
 
 - feat(config): ask an fcm channel with its own token only for FCM_PROJECT_ID (#1479)

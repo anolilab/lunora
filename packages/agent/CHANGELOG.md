@@ -1,3 +1,7 @@
+## @lunora/agent [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.281...@lunora/agent@1.0.0-alpha.282) (2026-11-05)
+
+- fix(mail): bound sends, dedupe on idempotency keys, guard inbound size (#1483)
+
 ## @lunora/agent [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.280...@lunora/agent@1.0.0-alpha.281) (2026-11-03)
 
 - fix: resolve open review defects across agent, client, codegen and SDKs (#1460)

@@ -2669,7 +2669,7 @@ export const backfillNames = defineMigration({
                 const { spawner } = deployingSpawner();
                 const { logger } = silentLogger();
                 const healthFetch = vi.fn<HealthFetch>(async () => {
-                    return { ok: true, status: 200 };
+                    return { headers: new Headers(), ok: true, status: 200 };
                 });
 
                 const result = await runDeployCommand({ cwd: workdir, healthCheck: true, healthFetch, secretLister: noRemoteSecrets, logger, spawner });
@@ -2677,7 +2677,10 @@ export const backfillNames = defineMigration({
                 expect(result.code).toBe(0);
                 expect(result.healthCheck?.ok).toBe(true);
                 // Probed at the URL THIS run published to, readiness gate first.
-                expect(healthFetch).toHaveBeenCalledWith("https://lunora-app.acme.workers.dev/_lunora/health/ready");
+                expect(healthFetch).toHaveBeenCalledWith(
+                    "https://lunora-app.acme.workers.dev/_lunora/health/ready",
+                    expect.objectContaining({ redirect: "manual" }),
+                );
                 expect(result.healthCheck?.error).toBeUndefined();
             });
 
@@ -2689,7 +2692,7 @@ export const backfillNames = defineMigration({
                 const { spawner } = deployingSpawner();
                 const { errors, logger } = silentLogger();
                 const healthFetch = vi.fn<HealthFetch>(async () => {
-                    return { ok: false, status: 503 };
+                    return { headers: new Headers(), ok: false, status: 503 };
                 });
 
                 const result = await runDeployCommand({
@@ -2718,7 +2721,7 @@ export const backfillNames = defineMigration({
                 const { spawner } = deployingSpawner();
                 const { logger, warns } = silentLogger();
                 const healthFetch = vi.fn<HealthFetch>(async () => {
-                    return { ok: true, status: 200 };
+                    return { headers: new Headers(), ok: true, status: 200 };
                 });
 
                 const result = await runDeployCommand({
@@ -2746,7 +2749,7 @@ export const backfillNames = defineMigration({
                 const { spawner } = deployingSpawner("Total Upload: 1 KiB\nDeployed lunora-app triggers\n");
                 const { errors, logger } = silentLogger();
                 const healthFetch = vi.fn<HealthFetch>(async () => {
-                    return { ok: true, status: 200 };
+                    return { headers: new Headers(), ok: true, status: 200 };
                 });
 
                 const result = await runDeployCommand({ cwd: workdir, healthCheck: true, healthFetch, secretLister: noRemoteSecrets, logger, spawner });

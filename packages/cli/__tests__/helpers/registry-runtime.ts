@@ -40,6 +40,33 @@ const compare = (left: unknown, right: unknown): number => {
     return a < b ? -1 : 1;
 };
 
+/**
+ * The engine's keyset over `orderBy`: its keys plus a creation-time, then row-id tie-break in
+ * the last key's direction, so no two rows share a position.
+ */
+const keyset = (orderBy: Record<string, "asc" | "desc">[]): { order: (left: unknown[], right: unknown[]) => number; tuple: (row: Row) => unknown[] } => {
+    const keys: [string, "asc" | "desc"][] = orderBy.map((entry) => Object.entries(entry)[0]!);
+
+    const tiebreak = keys.at(-1)?.[1] ?? "asc";
+
+    keys.push(["_creationTime", tiebreak], ["_id", tiebreak]);
+
+    return {
+        order: (left, right) => {
+            for (const [index, [, direction]] of keys.entries()) {
+                const step = compare(left[index], right[index]);
+
+                if (step !== 0) {
+                    return direction === "asc" ? step : -step;
+                }
+            }
+
+            return 0;
+        },
+        tuple: (row) => keys.map(([field]) => row[field]),
+    };
+};
+
 /** The fake: `db` is handed to an item as its `ctx.db`; `rows` reads a table back for an assertion. */
 interface FakeDatabase {
     db: Record<string, unknown>;
@@ -143,25 +170,43 @@ const createDatabase = (unique: Record<string, string[][]>): FakeDatabase => {
                 });
             },
             findFirst: async ({ where }: { where: Row }) => rows(table).find((row) => match(row, where)) ?? null,
-            findMany: async ({ limit, orderBy = [], where = {} }: { limit?: number; orderBy?: Record<string, "asc" | "desc">[]; where?: Row }) => {
-                const sorted = matching(where).toSorted((a, b) => {
-                    for (const entry of orderBy) {
-                        const [field, direction] = Object.entries(entry)[0]!;
-                        const order = compare(a[field], b[field]);
+            // Paged the way the engine's `findMany` pages: `cursor` exclusive, `endCursor` inclusive, and a
+            // bounded page's `splitCursor` / `splitRequired`. A cursor is the JSON of the row's key tuple.
+            findMany: async ({
+                cursor,
+                endCursor,
+                limit,
+                orderBy = [],
+                where = {},
+            }: {
+                cursor?: string | null;
+                endCursor?: string | null;
+                limit?: number;
+                orderBy?: Record<string, "asc" | "desc">[];
+                where?: Row;
+            }) => {
+                const { order, tuple } = keyset(orderBy);
+                const lower = typeof cursor === "string" ? (JSON.parse(cursor) as unknown[]) : undefined;
+                const upper = typeof endCursor === "string" ? (JSON.parse(endCursor) as unknown[]) : undefined;
+                const ranged = matching(where)
+                    .filter((row) => (lower === undefined || order(tuple(row), lower) > 0) && (upper === undefined || order(tuple(row), upper) <= 0))
+                    .toSorted((a, b) => order(tuple(a), tuple(b)));
+                const over = limit !== undefined && ranged.length > limit;
+                const page = over ? ranged.slice(0, limit) : ranged;
+                const encode = (row: Row | undefined): string | null => (row === undefined ? null : JSON.stringify(tuple(row)));
 
-                        if (order !== 0) {
-                            return direction === "asc" ? order : -order;
-                        }
+                if (typeof endCursor === "string") {
+                    // Under two rows there is no midpoint; a capped one-row page still splits after its row.
+                    let middle = over ? page[0] : undefined;
+
+                    if (page.length >= 2) {
+                        middle = page[Math.floor(page.length / 2) - 1];
                     }
 
-                    return 0;
-                });
-
-                if (limit === undefined) {
-                    return { continueCursor: null, isDone: true, page: sorted };
+                    return { continueCursor: endCursor, isDone: true, page, splitCursor: encode(middle), ...(over ? { splitRequired: true } : {}) };
                 }
 
-                return { isDone: sorted.length <= limit, page: sorted.slice(0, limit) };
+                return { continueCursor: over ? encode(page.at(-1)) : null, isDone: !over, page };
             },
         };
     };
@@ -182,7 +227,7 @@ const createDatabase = (unique: Record<string, string[][]>): FakeDatabase => {
             insert: async (table: string, document: Row) => {
                 counter += 1;
 
-                const row = { ...document, _id: `${table}:${String(counter)}` };
+                const row = { ...document, _creationTime: counter, _id: `${table}:${String(counter)}` };
 
                 assertUnique(table, row);
                 rows(table).push(row);

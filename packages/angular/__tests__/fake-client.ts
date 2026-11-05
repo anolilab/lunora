@@ -57,6 +57,8 @@ export interface FakeClient {
     push: (functionPath: string, args: Record<string, unknown>, value: unknown) => void;
     /** Push a chunk to every open stream matching `(functionPath, args)`. */
     pushStream: (functionPath: string, args: Record<string, unknown>, value: unknown) => void;
+    /** Every `resnapshot` call made against the fake, in order. */
+    resnapshotCalls: { args: Record<string, unknown>; functionPath: string; shardKey?: string }[];
     /** Resolve the next `action()` with this value (default: echoes args). */
     setActionResult: (value: unknown) => void;
     /** Reject the next `action()` with this error. */
@@ -78,6 +80,7 @@ export interface FakeClient {
 export const createFakeClient = (initialStatus: ConnectionStatus = "idle"): FakeClient => {
     const subscriptions: FakeSubscription[] = [];
     const streamCalls: FakeStreamCall[] = [];
+    const resnapshotCalls: { args: Record<string, unknown>; functionPath: string; shardKey?: string }[] = [];
     const mutationCalls: { args: unknown; functionPath: string; options: unknown }[] = [];
     const actionCalls: { args: unknown; functionPath: string; options: unknown }[] = [];
     const statusListeners: ((status: ConnectionStatus) => void)[] = [];
@@ -100,6 +103,9 @@ export const createFakeClient = (initialStatus: ConnectionStatus = "idle"): Fake
     let currentUser: User | null = null;
 
     const client = {
+        resnapshot: (function_: FunctionReference, args: Record<string, unknown>, options: { shardKey?: string } = {}): void => {
+            resnapshotCalls.push({ args, functionPath: function_.__lunoraRef, shardKey: options.shardKey });
+        },
         action: (function_: FunctionReference, args: unknown, options: unknown) => {
             actionCalls.push({ args, functionPath: function_.__lunoraRef, options });
 
@@ -273,6 +279,7 @@ export const createFakeClient = (initialStatus: ConnectionStatus = "idle"): Fake
             mutationThrow = error;
         },
         statusListeners,
+        resnapshotCalls,
         streamCalls,
         subscriptions,
         tokenListeners,

@@ -29,6 +29,8 @@ interface MockClientHooks {
     onAuthTokenChange: ReturnType<typeof vi.fn>;
     onConnectionStatus: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
+    /** Records `resnapshot` calls; the mock has no server, so a test delivers the fresh value with `emit`. */
+    resnapshot: ReturnType<typeof vi.fn>;
     setAuthToken: ReturnType<typeof vi.fn>;
     setConnectionContext: ReturnType<typeof vi.fn>;
     /** Transition the aggregate connection status and notify every `onConnectionStatus` listener. */
@@ -62,6 +64,7 @@ const createMockClient = (
         queryImpl ? queryImpl(reference.__lunoraRef, args) : undefined,
     );
     const mutationFunction = vi.fn<() => Promise<unknown>>(async () => undefined);
+    const resnapshotFunction = vi.fn<(reference: FunctionReference, args: unknown, options?: { shardKey?: string }) => void>();
     const actionFunction = vi.fn<() => Promise<unknown>>(async () => undefined);
     const subscribeFunction = vi.fn<
         (reference: FunctionReference, args: unknown, callback: (value: unknown) => void, options?: { onError?: SubscriptionErrorCallback }) => Unsubscribe
@@ -191,6 +194,7 @@ const createMockClient = (
         peekHydratedQuery: () => undefined,
         peekHydratedQueryByKey: () => undefined,
         query: queryFunction,
+        resnapshot: resnapshotFunction,
         setAuthToken: setAuthTokenFunction,
         setConnectionContext: setConnectionContextFunction,
         subscribe: subscribeFunction,
@@ -212,6 +216,7 @@ const createMockClient = (
         onAuthTokenChange: onAuthTokenChangeFunction,
         onConnectionStatus: onConnectionStatusFunction,
         query: queryFunction,
+        resnapshot: resnapshotFunction,
         setAuthToken: setAuthTokenFunction,
         setConnectionContext: setConnectionContextFunction,
         setConnectionStatus,

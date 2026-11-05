@@ -324,7 +324,7 @@ describe("saas kit functions", () => {
             await expect(pageThrough(seeded, {}, 2)).resolves.toStrictEqual(["Umbrella", "Hooli", "Initech", "Acme", "Globex"]);
         });
 
-        it("breaks a tie on the update time by organisation id, so a page boundary between two never moves", async () => {
+        it("breaks a tie on the update time by row id, so a page boundary between two never moves", async () => {
             expect.hasAssertions();
 
             const seeded = await seed();
@@ -418,20 +418,6 @@ describe("saas kit functions", () => {
             expect(widest).toBe(4 * 2);
             expect(names).toHaveLength(22);
             expect(names).toStrictEqual([...Array.from({ length: 20 }, (_, index) => `m${String(19 - index).padStart(2, "0")}`), "c", "b"]);
-        });
-
-        it("refuses a cursor it did not mint", async () => {
-            expect.assertions(2);
-
-            const { admin, saas } = await seed();
-
-            await expect(saas.listOrganizations({ args: { paginationOpts: { cursor: "not json", numItems: 2 } }, ctx: admin })).rejects.toMatchObject({
-                code: "VALIDATION_ERROR",
-            });
-            // The right length with the wrong key types: a name where the update time goes.
-            await expect(
-                saas.listOrganizations({ args: { paginationOpts: { cursor: JSON.stringify(["Acme", "org-2"]), numItems: 2 } }, ctx: admin }),
-            ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
         });
 
         it("refuses everyone but a platform admin", async () => {

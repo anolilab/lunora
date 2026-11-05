@@ -119,6 +119,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "messages:list",
@@ -273,6 +280,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "messages:send",

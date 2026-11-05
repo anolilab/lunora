@@ -2445,6 +2445,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `PageFailure` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `PaginatedCoreResult` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -2465,11 +2469,23 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `classifyPageFailure` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `derivePaginationStatus` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `headPage` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `initialPages` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `isHeadPage` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -4583,6 +4599,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `AssetsFetcherLike` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `AuthAdmin` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4668,6 +4688,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `CronJobInfo` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `CrossOriginOpenerPolicy` (type)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 

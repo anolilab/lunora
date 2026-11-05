@@ -177,7 +177,13 @@ interface WranglerConfig {
     artifacts?: ReadonlyArray<{ binding?: string; namespace?: string; remote?: boolean } | null | undefined>;
     // Workers Static Assets (serves the client build alongside the worker). NOT
     // Cloudflare Pages (an explicit non-goal). See `validateAssets`.
-    assets?: { binding?: string; directory?: string; html_handling?: string; not_found_handling?: string };
+    assets?: {
+        binding?: string;
+        directory?: string;
+        html_handling?: string;
+        not_found_handling?: string;
+        run_worker_first?: boolean | ReadonlyArray<string>;
+    };
     // Browser Rendering binding (`env.BROWSER`). Self-describing { binding }.
     browser?: { binding?: string };
     // Workers Cache toggle (`"cache": { "enabled": true }`). Parsed from

@@ -1,6 +1,6 @@
 {
     "name": "@lunora/cli",
-    "version": "1.0.0-alpha.485",
+    "version": "1.0.0-alpha.486",
     "description": "The Lunora CLI: init, dev, deploy, codegen, migrate, seed, doctor, insights, logs, registry, and the rest of the project commands",
     "keywords": [
         "agent-skills",
@@ -102,7 +102,7 @@
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/payment": "^1.0.0-alpha.270",
-        "@lunora/testing": "^1.0.0-alpha.334",
+        "@lunora/testing": "^1.0.0-alpha.335",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/semver": "catalog:types",

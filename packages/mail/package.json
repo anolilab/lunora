@@ -1,6 +1,6 @@
 {
     "name": "@lunora/mail",
-    "version": "1.0.0-alpha.138",
+    "version": "1.0.0-alpha.139",
     "description": "Email for Lunora: Resend adapter, TSX templates, and queue-backed sends",
     "keywords": [
         "cloudflare",
@@ -81,6 +81,7 @@
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
+        "fast-check": "catalog:test",
         "react": "catalog:frontend",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"

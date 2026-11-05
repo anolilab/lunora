@@ -1,3 +1,11 @@
+## @lunora/codegen [1.0.0-alpha.402](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.401...@lunora/codegen@1.0.0-alpha.402) (2026-11-05)
+
+- feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)
+
+## @lunora/codegen [1.0.0-alpha.401](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.400...@lunora/codegen@1.0.0-alpha.401) (2026-11-05)
+
+- fix(client): restart a paginated feed when the server refuses its cursor (#1496)
+
 ## @lunora/codegen [1.0.0-alpha.400](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.399...@lunora/codegen@1.0.0-alpha.400) (2026-11-04)
 
 - feat(config): ask an fcm channel with its own token only for FCM_PROJECT_ID (#1479)

@@ -1,3 +1,7 @@
+## @lunora/solid [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.289...@lunora/solid@1.0.0-alpha.290) (2026-11-05)
+
+- fix(client): restart a paginated feed when the server refuses its cursor (#1496)
+
 ## @lunora/solid [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.288...@lunora/solid@1.0.0-alpha.289) (2026-11-04)
 
 - Release 1.0.0-alpha.289. Commit a2f1851 set this version and it was never published, so it is released from HEAD.

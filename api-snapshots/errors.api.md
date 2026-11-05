@@ -37,6 +37,10 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Bad request";
     };
+    readonly INVALID_CURSOR: {
+        readonly status: 400;
+        readonly title: "Invalid cursor";
+    };
     readonly UNAUTHORIZED: {
         readonly status: 401;
         readonly title: "Unauthorized";
@@ -212,6 +216,10 @@ const ERROR_CATALOG: {
     readonly CODEGEN_DIAGNOSTIC: {
         readonly status: 500;
         readonly title: "Codegen diagnostic";
+    };
+    readonly PROJECT_CONFIG_INVALID: {
+        readonly status: 500;
+        readonly title: "lunora.config has an unknown key, a mistyped value or no default export";
     };
     readonly JURISDICTION_MOVE: {
         readonly status: 422;

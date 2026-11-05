@@ -231,17 +231,17 @@ const BOUNDED_FIND_MANY_CASES: ReadonlyArray<BoundedCase> = [
 
             await seed(target);
 
-            await expect(target.findMany({ cursor: "not-a-cursor", orderBy })).rejects.toMatchObject({ code: "BAD_REQUEST" });
-            await expect(target.findMany({ endCursor: "not-a-cursor", orderBy })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+            await expect(target.findMany({ cursor: "not-a-cursor", orderBy })).rejects.toMatchObject({ code: "INVALID_CURSOR" });
+            await expect(target.findMany({ endCursor: "not-a-cursor", orderBy })).rejects.toMatchObject({ code: "INVALID_CURSOR" });
             // An empty string is a malformed cursor, not an absent one.
-            await expect(target.findMany({ endCursor: "", orderBy })).rejects.toMatchObject({ code: "BAD_REQUEST" });
-            await expect(target.findMany({ endCursor: "not-a-cursor", limit: 2, orderBy })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+            await expect(target.findMany({ endCursor: "", orderBy })).rejects.toMatchObject({ code: "INVALID_CURSOR" });
+            await expect(target.findMany({ endCursor: "not-a-cursor", limit: 2, orderBy })).rejects.toMatchObject({ code: "INVALID_CURSOR" });
 
             // The lower cursor is held to the same rule: empty is malformed, not "from the start".
             const { cursors } = await walk(target, orderBy, PAGE_SIZE);
 
-            await expect(target.findMany({ cursor: "", endCursor: cursors[1], orderBy })).rejects.toMatchObject({ code: "BAD_REQUEST" });
-            await expect(target.findMany({ cursor: "", limit: 2, orderBy })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+            await expect(target.findMany({ cursor: "", endCursor: cursors[1], orderBy })).rejects.toMatchObject({ code: "INVALID_CURSOR" });
+            await expect(target.findMany({ cursor: "", limit: 2, orderBy })).rejects.toMatchObject({ code: "INVALID_CURSOR" });
         },
     ],
 ];
