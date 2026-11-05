@@ -89,6 +89,11 @@ const credentialHeadersFor = (policy: RestCachePolicy): string[] => [
     ...(policy.credentialHeaders ?? []).map((name) => name.toLowerCase()),
 ];
 
+/** An RFC 9110 header name (`token`). `Headers.has` throws on anything else, so a name is checked before it is asked about. */
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u;
+
+const isHeaderName = (name: string): boolean => HEADER_NAME.test(name);
+
 /**
  * True when a request presented a credential, so its response must be treated as
  * caller-specific: one of {@link CREDENTIAL_HEADERS}, one of the app's
@@ -100,11 +105,6 @@ const credentialHeadersFor = (policy: RestCachePolicy): string[] => [
  * and `httpRoute(...).cacheControl()` (`@lunora/server`). A second copy could
  * miss a credential source this one has and label a per-caller body `public`.
  */
-/** An RFC 9110 header name (`token`). `Headers.has` throws on anything else, so a name is checked before it is asked about. */
-const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u;
-
-const isHeaderName = (name: string): boolean => HEADER_NAME.test(name);
-
 const carriesCredential = (headers: Headers, context: { readonly access?: unknown } | undefined, extraHeaders: ReadonlyArray<string> = []): boolean =>
     context?.access !== undefined ||
     CREDENTIAL_HEADERS.some((name) => headers.has(name)) ||
