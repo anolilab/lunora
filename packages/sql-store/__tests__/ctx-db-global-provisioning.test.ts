@@ -478,9 +478,7 @@ const holdingWinnerBackfill = (): { held: (exec: SqlCtxExec) => SqlCtxExec; rele
 
             return wrapped;
         },
-        releaseWinner: () => {
-            releaseWinner();
-        },
+        releaseWinner,
     };
 };
 
@@ -521,7 +519,7 @@ describe("two isolates provisioning one database at once", () => {
     });
 
     it("does not let the isolate that lost the ALTER finish before the old rows hold the default", async () => {
-        expect.assertions(3);
+        expect.assertions(2);
 
         const base = createSqliteHarness();
 
@@ -541,7 +539,7 @@ describe("two isolates provisioning one database at once", () => {
 
         const first = runSqlGlobalTableMigrations(held(isolate()), schema, dialect);
         const second = runSqlGlobalTableMigrations(held(isolate()), schema, dialect);
-        const loser = await Promise.race([first.then(() => "first"), second.then(() => "second")]);
+        await Promise.race([first, second]);
         const rows = await base.exec.all(`SELECT "slug" FROM "notes"`, []);
         const rowsWhenLoserFinished = rows.map((row) => {
             return { ...row };
@@ -550,7 +548,6 @@ describe("two isolates provisioning one database at once", () => {
         releaseWinner();
 
         await expect(Promise.all([first, second])).resolves.toBeDefined();
-        expect(loser).toMatch(/^(?:first|second)$/u);
         expect(rowsWhenLoserFinished).toStrictEqual([{ slug: "untitled" }]);
 
         base.close();
