@@ -138,7 +138,8 @@ lunora.config.ts is invalid:
 A computed value (`remote: process.env.REMOTE === "1"`) is not checked, because
 codegen reads the file without running it, and neither is a value in an object
 that also has a spread (`{ ...base, remote: true }`), which the spread may
-override; the key names around it still are. `remote: null` means no
+override; the key names around it still are. `LunoraConfig` types `remote` as
+a boolean, but a `remote: null` in a file that is not type-checked is read as no
 preference, the same as leaving `remote` out.
 
 Every template that declares a tsconfig `include` lists `lunora.config.ts` in it,
