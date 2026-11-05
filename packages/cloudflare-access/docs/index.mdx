@@ -32,7 +32,7 @@ export default defineApp<Env>()
     .build();
 ```
 
-Nothing is verified on this path because nothing can be forged: the platform authenticated the caller before your code ran, and the identity is absent unless it did. No JWKS round-trip and no audience to get wrong.
+Nothing is verified on this path because nothing can be forged: the platform authenticated the caller before your code ran, and the identity is absent unless it did. No JSON Web Key Set (JWKS) round-trip and no audience to get wrong.
 
 ### A hostname-scoped Access application — verify the JWT
 
@@ -52,11 +52,7 @@ export default defineApp<Env>()
 
 Either way the resolver is **fail-closed → anonymous**: no identity, or a token that fails verification, resolves to `null`, the request proceeds unauthenticated, and RLS denies. The one exception is a correctly signed JWT whose only fault is a past `exp`: it resolves to its identity with that `exp`, and the runtime refuses the request with `401 TOKEN_EXPIRED` (a socket closes with `4001`), so a client refreshes and re-sends instead of running anonymous.
 
-> **Socket expiry differs between the two.** An Access JWT always carries `exp`, which is forwarded so a live WebSocket subscription is dropped when the credential lapses. The platform-supplied identity may not, and a socket opened without one stays authenticated for as long as it stays connected — past the Access session expiring, past the user leaving the policy. If you hold long-lived subscriptions under a Worker-scoped policy, mint a bound yourself:
->
-> ```ts
-> createAccessResolver({ mapClaims: () => ({ exp: Math.floor(Date.now() / 1000) + 3600 }) });
-> ```
+> **Socket expiry differs between the two.** An Access JWT always carries `exp`, which is forwarded so a live WebSocket subscription is dropped when the credential lapses. The platform-supplied identity may not, and a socket opened without one stays authenticated for as long as it stays connected, past the Access session expiring and past the user leaving the policy. `mapClaims` cannot add a bound: the resolver drops `exp` and `expiresAtMs` from its output, so only a verified token's own `exp` sets one. For long-lived subscriptions that must end with the Access session, move from a Worker-scoped policy to a hostname-scoped application and pass `teamDomain` and `aud`. Adding those options while a Worker-scoped policy is attached does not help: the platform identity is preferred (`resolver.ts:120-128`) and carries no `exp`.
 
 Both paths produce the same claim shape, so nothing downstream — `ctx.auth`, `ctx.access`, the mapped RLS roles, your RLS policies — branches on how the caller was authenticated. The one wire difference is group membership, which the platform may emit as `{ id, name }` objects; those are normalized to their names to match the JWT's `string[]`.
 
@@ -137,7 +133,7 @@ options.resolveIdentity = createAccessResolver({
 
 A group with no mapping contributes no role (fail-closed), and omitting `roles` entirely mints no `roles` claim at all — granting every group name as a role by default would hand a deployment permissions its policies never intended. Pass `(group) => group` to opt into group names as role names verbatim. An anonymous request has no identity and therefore no roles, so RLS still fails closed.
 
-**Roles belong on the identity, not on a middleware.** A middleware that writes `ctx.auth.roles` reaches queries, mutations and actions, but **not live shapes**: a shape runs no procedure, so no middleware fires and the role set is simply absent there. A policy written as `!auth.roles.includes("restricted")` would then never take its restricting branch on the shape path, and rows would replicate over a subscription that the equivalent query withholds. The `roles` claim is read identically by both paths, which is why the mapping lives at the resolver.
+**Roles belong on the identity, not on a middleware.** A middleware that writes `ctx.auth.roles` reaches queries, mutations and actions, but **not live shapes**: a shape runs no procedure, so no middleware fires and the role set is absent there. A policy written as `!auth.roles.includes("restricted")` would then never take its restricting branch on the shape path, and rows would replicate over a subscription that the equivalent query withholds. The `roles` claim is read identically by both paths, which is why the mapping lives at the resolver.
 
 Only a **verified Access identity** ever carries roles: they are minted from the claims Access itself verified, before any application code sees the request. Under `composeResolvers` an identity minted by another adapter (better-auth, a custom SSO mapping) goes through its own resolver, so a `groups` field on such an envelope — app data Access never verified, a profile field a user might edit — can never become an RLS role.
 
@@ -149,7 +145,7 @@ There are two ways to get it; pick one.
 
 ### Global (codegen-wired) — recommended
 
-Just read `ctx.access` in a handler. Codegen detects the use and wires the facade onto **every** ctx (query, mutation, and action), with no import and no middleware:
+Read `ctx.access` in a handler. Codegen detects the use and wires the facade onto **every** ctx (query, mutation, and action), with no import and no middleware:
 
 ```ts
 export const whoAmI = query.query(async ({ ctx }) => ({
@@ -217,4 +213,15 @@ export default defineApp()
 - `ctx.access` _(codegen-wired)_: read it in a handler and codegen attaches a typed, synchronous facade over the verified identity to every ctx.
 - `accessContext()` _(`@lunora/cloudflare-access/context`)_: the explicit per-procedure middleware form of the same `ctx.access` facade.
 - `accessFacade(identity, userId)` _(`@lunora/cloudflare-access/context`)_: the pure factory both forms build on; returns the anonymous facade when no identity is present.
+- `lazyAccessFacade(readIdentity, readUserId)` _(`@lunora/cloudflare-access/context`)_: the same facade, with the identity and user id read on first access; codegen uses it for the global `ctx.access`.
+- `AccessClaims` _(type)_: the verified claim set, exposed as `ctx.access.claims` and under `access` on the identity.
+- `CreateAccessResolverOptions` _(type)_: the options for `createAccessResolver`, including `mapClaims` and `roles`.
+- `onError(error, request)` _(option on `createAccessResolver` and `accessAdminGate`)_: called for a token that is present but fails verification. It never fires when no token is sent.
+- `headerName` _(option)_: the request header read for the JWT. Defaults to `cf-access-jwt-assertion`.
+- `cookieName` _(option)_: the cookie read when the header is absent. Defaults to `CF_Authorization`.
+- `clockToleranceSec` _(option)_: seconds of clock skew allowed when the token's times are checked. Unset means no tolerance.
+- `keySet` _(option)_: a fixed key set that replaces the remote JWKS fetch from the team domain.
+- `AccessFacade` _(type)_: the shape of `ctx.access`: `authenticated`, `email`, `commonName`, `groups`, `claims`, `userId` and `hasGroup(group)`.
+- `AccessRoleMap` _(type)_: the `roles` option, either a record from group to role or a function returning the role or roles for a group.
+- `AccessAdminGateOptions` _(type)_: the options for `accessAdminGate`, which adds the required `isAdmin` predicate to the JWT options.
 - `accessAdminGate(options)` _(`@lunora/cloudflare-access/admin`)_: a `WorkerOptions.adminGate` that authorizes the admin HTTP plane (`/_lunora/admin/*`, `/_lunora/migrate`) from a verified Access identity — not `/_lunora/ws`. `isAdmin` is required and enforced at wiring time (a missing one throws, rather than denying every request silently); supplying the JWT config makes the JWT the only accepted proof, omitting it accepts the Worker's Access identity.

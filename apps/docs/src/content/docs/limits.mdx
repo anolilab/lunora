@@ -13,16 +13,17 @@ or `.global()`.
 
 ## Durable Objects
 
-| Limit                | Value         | Implication                                          |
-| -------------------- | ------------- | ---------------------------------------------------- |
-| SQLite size / DO     | **10 GB**     | Plan to shard before you cross 1 GB                  |
-| Sustained req/s / DO | **~1 000**    | Hot DO = sharding signal                             |
-| CPU per request      | **30 s**      | Long tasks → action + scheduler, not mutation        |
-| Alarm handler        | **15 min**    | Wall-clock, per invocation                           |
-| WebSockets / DO      | **~32 000**   | Hibernated, this is generous; pre-hibernate, less so |
-| WS message size      | **32 MiB**    | Received messages                                    |
-| Outgoing connections | **6**         | Simultaneous, per request                            |
-| DOs / account        | **Unlimited** | Sharding is free of administrative overhead          |
+| Limit                | Value                              | Implication                                                       |
+| -------------------- | ---------------------------------- | ----------------------------------------------------------------- |
+| SQLite size / DO     | **10 GB** (Paid) / **1 GB** (Free) | Plan to shard before you cross 1 GB; on Free, 1 GB is the ceiling |
+| Storage / account    | Unlimited (Paid) / **5 GB** (Free) | Every shard counts toward it on Free                              |
+| Sustained req/s / DO | **~1 000**                         | Hot DO = sharding signal                                          |
+| CPU per request      | **30 s**                           | Long tasks → action + scheduler, not mutation                     |
+| Alarm handler        | **15 min**                         | Wall-clock, per invocation                                        |
+| WebSockets / DO      | **~32 000**                        | Hibernated, this is generous; pre-hibernate, less so              |
+| WS message size      | **32 MiB**                         | Received messages                                                 |
+| Outgoing connections | **6**                              | Simultaneous, per request                                         |
+| DOs / account        | **Unlimited**                      | Sharding is free of administrative overhead                       |
 
 ## Statement limits (Durable Objects **and** D1)
 
@@ -89,20 +90,19 @@ Raise them by overriding `transactionLimits()` on the generated shard class.
 
 ## D1
 
-| Limit                         | Value                        | Implication                               |
-| ----------------------------- | ---------------------------- | ----------------------------------------- |
-| Database size                 | **10 GB**                    | Use for global indexes, not bulk data     |
-| Databases / account           | **50 000** (1 TB total Paid) | Each app gets its own                     |
-| Queries per Worker invocation | **1 000**                    | Watch your query fan-out in fan-out reads |
-| Bookmark window               | **~24 h**                    | Sessions API consistency window           |
+| Limit                         | Value                                                                          | Implication                               |
+| ----------------------------- | ------------------------------------------------------------------------------ | ----------------------------------------- |
+| Database size                 | **10 GB** (Paid) / **500 MB** (Free)                                           | Use for global indexes, not bulk data     |
+| Databases / account           | **1 000 000** (Paid; 100 000 included, 1 TB total) / **10** (Free; 5 GB total) | Each app gets its own                     |
+| Queries per Worker invocation | **1 000** (Paid) / **50** (Free)                                               | Watch your query fan-out in fan-out reads |
 
 ## R2
 
-| Limit       | Value    | Implication                              |
-| ----------- | -------- | ---------------------------------------- |
-| Object size | **5 TB** | Practically unlimited                    |
-| Egress      | **Free** | Critical: design around direct downloads |
-| Class A ops | metered  | Bulk-list judiciously                    |
+| Limit       | Value     | Implication                              |
+| ----------- | --------- | ---------------------------------------- |
+| Object size | **5 TiB** | Practically unlimited                    |
+| Egress      | **Free**  | Critical: design around direct downloads |
+| Class A ops | metered   | Bulk-list judiciously                    |
 
 ## Workers
 
@@ -127,23 +127,23 @@ keep heavy imports off the startup path.
 
 ## Queues
 
-| Limit               | Value                 | Implication                                             |
-| ------------------- | --------------------- | ------------------------------------------------------- |
-| Message size        | **128 KB**            | ~100 bytes of that is internal metadata                 |
-| `sendBatch`         | **100 msgs / 256 KB** | Whichever comes first; `ctx.queues` enforces the count  |
-| Consumer batch      | **100 messages**      | Per consumer invocation                                 |
-| Consumer wall-clock | **15 min**            | CPU configurable up to 5 min                            |
-| Retries             | **100**               | Then the message goes to the DLQ                        |
-| Throughput / queue  | **5 000 msgs/s**      | Past it, sends get `Too Many Requests`                  |
-| Backlog / queue     | **25 GB**             | Then `Storage Limit Exceeded`                           |
-| `delaySeconds`      | **12 h**              | `ctx.queues` refuses more; longer → `@lunora/scheduler` |
+| Limit               | Value                 | Implication                                            |
+| ------------------- | --------------------- | ------------------------------------------------------ |
+| Message size        | **128 KB**            | ~100 bytes of that is internal metadata                |
+| `sendBatch`         | **100 msgs / 256 KB** | Whichever comes first; `ctx.queues` enforces the count |
+| Consumer batch      | **100 messages**      | Per consumer invocation                                |
+| Consumer wall-clock | **15 min**            | CPU configurable up to 5 min                           |
+| Retries             | **100**               | Then the message goes to the dead-letter queue (DLQ)   |
+| Throughput / queue  | **5 000 msgs/s**      | Past it, sends get `Too Many Requests`                 |
+| Backlog / queue     | **25 GB**             | Then `Storage Limit Exceeded`                          |
+| `delaySeconds`      | **24 h**              | Longer delays → `@lunora/scheduler`                    |
 
 ## Pipelines
 
 | Limit                 | Value      | Implication                                                       |
 | --------------------- | ---------- | ----------------------------------------------------------------- |
 | Payload / ingest call | **5 MB**   | `ctx.pipelines.send(records)` sends one call; chunk a large batch |
-| Ingest rate / stream  | **5 MB/s** | Sustained; past it the stream throttles                           |
+| Ingest rate / stream  | **1 GB/s** | Sustained; past it the stream throttles                           |
 | Streams / account     | **20**     | Open-beta ceiling, raisable by request                            |
 | Pipelines / account   | **20**     | Open-beta ceiling, raisable by request                            |
 | Sinks / account       | **20**     | Open-beta ceiling, raisable by request                            |

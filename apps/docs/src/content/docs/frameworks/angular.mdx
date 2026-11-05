@@ -15,7 +15,7 @@ related:
 `@lunora/angular` is the Angular adapter, a thin, idiomatic layer over
 [`@lunora/client`](/docs/packages/client), which owns the WebSocket transport,
 subscription registry, offline queue, and delta-merge. Angular signals map
-directly onto Lunora's per-subscription deltas, so a live query is just a
+directly onto Lunora's per-subscription deltas, so a live query is a
 `signal` the WebSocket writes to.
 
 This page is the task-oriented guide; for the full reference see
@@ -82,7 +82,7 @@ a `Signal`. It reads `undefined` until the first frame lands, and tears down
 automatically when the owning component is destroyed (`DestroyRef.onDestroy`).
 Call it from an injection context: a field initializer or constructor.
 
-```ts
+```ts title="src/app/messages.component.ts"
 import { Component } from "@angular/core";
 import { liveQuery } from "@lunora/angular";
 
@@ -117,7 +117,7 @@ Vue/Solid adapters.
 result. Capture the client in a field first: mutations usually fire from event
 handlers, which run _outside_ an injection context.
 
-```ts
+```ts title="src/app/composer.ts"
 import { Component } from "@angular/core";
 import { injectLunoraClient, mutate } from "@lunora/angular";
 
@@ -138,10 +138,16 @@ pass straight through to `client.mutation`.
 
 ## Connection status
 
-```ts
+The following component reads the aggregate socket status as a signal:
+
+```ts title="src/app/header.component.ts"
+import { Component } from "@angular/core";
 import { connectionStatus } from "@lunora/angular";
 
-readonly status = connectionStatus(); // Signal<"idle" | "connecting" | "connected" | "offline">
+@Component({/* … */})
+export class Header {
+    readonly status = connectionStatus(); // Signal<"connected" | "connecting" | "idle" | "offline" | "polling">
+}
 ```
 
 The aggregate live-socket status across all shard connections. Render it in a
@@ -150,7 +156,7 @@ header badge or gate a "reconnecting…" banner.
 ## Reactive loaders
 
 Run the query on the server with the socket-free `@lunora/angular/server` entry
-inside an Analog server route (or any Angular SSR loader), hand the serializable
+inside an Analog server route (or any Angular server-side rendering (SSR) loader), hand the serializable
 `Preloaded` token to the client, and `hydratePreloaded` seeds the signal
 **synchronously**. The first read returns the server value with no loading
 flash, then the live subscription attaches after mount.

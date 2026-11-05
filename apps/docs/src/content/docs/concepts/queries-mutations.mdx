@@ -66,7 +66,7 @@ await ctx.db.accounts.patch(id, { balance: { decrement: 25 }, frozen: { toggle: 
 must already hold a number: patching a `null` field, dividing by zero, or a result
 that is not finite is rejected with a `VALIDATION_ERROR` and the row is left alone.
 Operators work in `patch`, `patchIf`, `patchMany` and the `update` side of `upsert`.
-Your RLS update policy is checked against the row the store actually writes, with
+Your row-level security (RLS) update policy is checked against the row the store actually writes, with
 the operator already applied, not against the operator.
 
 A column takes arithmetic operators when it is a `v.number()`, `v.timestamp()` or
@@ -112,7 +112,7 @@ the value at the end of the path, so someone else editing a different key of the
 
 `insertMany` / `deleteMany` / `patchMany` apply many rows in **one** call. That
 saves the network round-trips of a per-row loop and still runs the full single-row
-pipeline for each row (defaults, validators, triggers, RLS, companion/CDC/broadcast).
+pipeline for each row (defaults, validators, triggers, RLS, companion/change data capture (CDC)/broadcast).
 Each is available both flat and per-table:
 
 ```ts
@@ -125,7 +125,7 @@ await ctx.db.deleteMany("messages", [ids[1]]);
 await ctx.db.messages.deleteMany([ids[0]]);
 ```
 
-- **Atomic within a mutation.** The DO runs each mutation in a `BEGIN`/`COMMIT`
+- **Atomic within a mutation.** The Durable Object (DO) runs each mutation in a `BEGIN`/`COMMIT`
   span, so if any row in a batch throws (a validator, an RLS denial, a conflict),
   the whole mutation rolls back. The `lunoraTest` harness mirrors this, so your
   tests see the same all-or-nothing behavior. (Actions have no transaction span,

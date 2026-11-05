@@ -74,8 +74,8 @@ import { createShardDO } from "./_generated/shard";
 export const ShardDO = createShardDO({
     payment: (env) => ({
         adapter: createStripeAdapter({
-            // A real `Stripe` instance satisfies the loaded client's type, so no cast — the fetch
-            // HTTP client is required on workerd.
+            // A real `Stripe` instance satisfies the loaded client's type, so no cast. The fetch
+            // HTTP client is already the default in the workerd build; passing it is explicit.
             client: async () => {
                 const { default: Stripe } = await import("stripe");
 
@@ -131,7 +131,7 @@ const creem = createCreemAdapter({ client, webhookSecret });
 | `webhookSecret`           |   ✓    |   ✓   |   ✓    |  ✓   |   ✓   | Signing secret for inbound webhook verification.                         |
 | `webhookToleranceSeconds` |   ✓    |   ✓   |   ✓    |  ✓   |       | Optional clock-skew tolerance (schemes that sign a timestamp).           |
 
-Stripe is a PSP (manual authorize/capture available). Polar, Dodo Payments, and
+Stripe is a payment service provider (PSP) with manual authorize/capture available. Polar, Dodo Payments, and
 Creem are Merchants-of-Record: `merchantOfRecord` is `true` and they own
 tax/invoices, so manual capture isn't part of their flow. Stripe webhooks use
 Stripe's signature scheme; Polar, Autumn, and Dodo Payments use Standard Webhooks
@@ -150,14 +150,13 @@ the Creem dashboard (no SDK endpoint), so `refundPayment` throws. Webhooks are
 verified with the `creem-signature` HMAC-SHA256 header.
 
 ```ts
-import type { CreemClientLike } from "@lunora/payment/creem";
 import { createCreemAdapter } from "@lunora/payment/creem";
 
 const creem = createCreemAdapter({
     client: async () => {
         const { Creem } = await import("creem");
 
-        return new Creem({ apiKey: env.CREEM_API_KEY }) as unknown as CreemClientLike;
+        return new Creem({ apiKey: env.CREEM_API_KEY });
     },
     webhookSecret: env.CREEM_WEBHOOK_SECRET,
 });
@@ -165,7 +164,7 @@ const creem = createCreemAdapter({
 
 ### Autumn
 
-[Autumn](https://useautumn.com) is an entitlement-first billing layer that runs
+[Autumn](https://useautumn.com) is an open-source billing layer that runs
 on **your own** Stripe account, so it is _not_ a Merchant-of-Record, but, like
 Polar, it abstracts the money movement, so manual authorize/capture/refund
 throw. It keys a subscription on the `(customerId, planId)` pair, which the
@@ -228,7 +227,7 @@ const { url } = await autumnFeatures.checkout(userId, { planId: "pro" });
 
 [Dodo Payments](https://dodopayments.com) is a **Merchant-of-Record**: like
 Polar, it is the legal seller of record and calculates, collects, and remits tax
-across 190+ jurisdictions, and owns chargebacks and disputes. So `merchantOfRecord`
+across 190+ countries, and owns chargebacks and disputes. So `merchantOfRecord`
 is `true` and manual authorize/capture throw, but **refunds are first-class**
 (`refunds.create`). The flow is checkout-session → subscription/payment, synced
 from Standard Webhooks (the `dodopayments` SDK exposes the full, verified event
@@ -257,23 +256,23 @@ const dodo = createDodoPaymentsAdapter({
 Call the facade from an action. Every method authorizes the caller against the
 `referenceId` first.
 
-| Method                                         | Returns            | What it does                                                                       |
-| ---------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------- |
-| `createCheckout(input)`                        | `CheckoutResult`   | Start a hosted checkout (`mode: "payment" \| "subscription"`); returns a `url`.    |
-| `attach(input)`                                | `CheckoutResult`   | Plan alias of `createCheckout` with `mode` defaulting to `"subscription"`.         |
-| `createPortalSession(referenceId, returnUrl)`  | `{ url }`          | Open the provider billing portal; customer derived from the store (no IDOR).       |
-| `cancelSubscription(subscriptionId, options?)` | `Subscription`     | Cancel now or `atPeriodEnd`; persists the result.                                  |
-| `refundPayment(input)`                         | `PaymentSession`   | Refund the caller's own captured payment, in full or in part; persists the result. |
-| `capturePayment(input)`                        | `PaymentSession`   | Capture the caller's own authorized payment; persists the result.                  |
-| `cancelPayment(sessionId, options?)`           | `PaymentSession`   | Cancel the caller's own uncaptured payment; persists the result.                   |
-| `listSubscriptions(referenceId)`               | `Subscription[]`   | Synced subscriptions for a reference.                                              |
-| `check(input)`                                 | `CheckResult`      | Is a reference allowed something now? Pass `featureId` or `priceId`.               |
-| `listBalances(referenceId)`                    | `FeatureBalance[]` | Resolve every configured feature's allowance in one call.                          |
-| `track(input)`                                 | `TrackResult`      | Record metered usage (exactly-once by idempotency key).                            |
-| `handleWebhook(request)`                       | `Response`         | Verify + normalize + apply a provider webhook.                                     |
+| Method                                         | Returns            | What it does                                                                                                    |
+| ---------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `createCheckout(input)`                        | `CheckoutResult`   | Start a hosted checkout (`mode: "payment" \| "subscription"`); returns a `url`.                                 |
+| `attach(input)`                                | `CheckoutResult`   | Plan alias of `createCheckout` with `mode` defaulting to `"subscription"`.                                      |
+| `createPortalSession(referenceId, returnUrl)`  | `{ url }`          | Open the provider billing portal; customer derived from the store (no insecure direct object reference (IDOR)). |
+| `cancelSubscription(subscriptionId, options?)` | `Subscription`     | Cancel now or `atPeriodEnd`; persists the result.                                                               |
+| `refundPayment(input)`                         | `PaymentSession`   | Refund the caller's own captured payment, in full or in part; persists the result.                              |
+| `capturePayment(input)`                        | `PaymentSession`   | Capture the caller's own authorized payment; persists the result.                                               |
+| `cancelPayment(sessionId, options?)`           | `PaymentSession`   | Cancel the caller's own uncaptured payment; persists the result.                                                |
+| `listSubscriptions(referenceId)`               | `Subscription[]`   | Synced subscriptions for a reference.                                                                           |
+| `check(input)`                                 | `CheckResult`      | Is a reference allowed something now? Pass `featureId` or `priceId`.                                            |
+| `listBalances(referenceId)`                    | `FeatureBalance[]` | Resolve every configured feature's allowance in one call.                                                       |
+| `track(input)`                                 | `TrackResult`      | Record metered usage (exactly-once by idempotency key).                                                         |
+| `handleWebhook(request)`                       | `Response`         | Verify + normalize + apply a provider webhook.                                                                  |
 
 <Callout type="warn">
-    `ctx.payments.adapter` is the raw provider client, exposed for the surfaces the facade does not wrap (`updateSubscription`, `resumeSubscription`,
+    `ctx.payments.adapter` is the provider adapter, exposed for the surfaces the facade does not wrap (`updateSubscription`, `resumeSubscription`,
     provider-specific extras). **Do not move money through it.** `adapter.refundPayment` / `capturePayment` / `cancelPayment` skip everything the facade methods
     above do first: the caller authorization, the over-refund guard, the local refund ledger (the only thing stopping a retry from issuing a second real refund
     on a provider whose API takes no idempotency key), the derived idempotency key, and the store write. The facade ends in the same provider call.
@@ -326,6 +325,8 @@ active plans cap the same limit, the most-generous value wins.
   tracked this period and returns `{ allowed, balance, limit, used }`. "This
   period" is the billing period of the subscription whose plan grants that
   limit, so an unrelated subscription renewing never resets it.
+
+The following actions record one call and read the remaining allowance:
 
 ```ts
 export const recordApiCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
@@ -385,6 +386,7 @@ app.post(
     "/payment/webhook",
     httpAction(async (ctx, request) => {
         const body = await request.text();
+        // Stripe's header. Polar, Dodo Payments, Autumn, and Creem each read their own (see the provider pages).
         const signature = request.headers.get("stripe-signature") ?? "";
 
         // `webhookResponse`, not `Response.json(...)`: only the JSON payload crosses the
@@ -394,6 +396,8 @@ app.post(
     }),
 );
 ```
+
+The following internal action runs in the shard and passes the request to `handleWebhook`:
 
 ```ts
 // lunora/billing.ts
@@ -491,9 +495,80 @@ available, so the per-table D1 opt-in an inline table had does not carry over.
   key, so it is not deduplicated against the attempt made before it — avoid
   retrying a payment operation across the deploy.
 
+## API reference
+
+These public exports are not covered by the sections above. Import them from `@lunora/payment`.
+
+### `reconcile(input)`
+
+**Type:** `(input: ReconcileInput) => Promise<ReconcileResult>`
+
+Re-fetches the provider's current state for the given `paymentSessionIds` and `subscriptionIds`, and overwrites any store row that has drifted. It also re-sends usage events the provider never accepted. The usage retry is skipped for an adapter that does not meter usage and for one whose forward is not idempotent (Autumn). `ReconcileResult` reports `checked*`, `updated*` and `failed*` counts for payments, subscriptions and usage.
+
+**Default:** `usageReportLimit` is `100`.
+
+### `LunoraPaymentError`
+
+**Type:** `class LunoraPaymentError extends LunoraError`, with `code: PaymentErrorCode`
+
+Every failure the package throws. The `status` is the HTTP status the code maps to:
+
+| Code                        | Status |
+| --------------------------- | ------ |
+| `CONFIG_INVALID`            | 500    |
+| `CURRENCY_MISMATCH`         | 400    |
+| `FORBIDDEN`                 | 403    |
+| `INVALID_TRANSITION`        | 409    |
+| `NOT_FOUND`                 | 404    |
+| `PROVIDER_ERROR`            | 502    |
+| `VALIDATION_ERROR`          | 400    |
+| `WEBHOOK_EVENT_ID_MISSING`  | 400    |
+| `WEBHOOK_SIGNATURE_INVALID` | 400    |
+| `WEBHOOK_TIMESTAMP_INVALID` | 400    |
+
+Inside `handleWebhook`, a `WEBHOOK_EVENT_ID_MISSING` surfaces as a `5xx` rather than the `400` above, so every provider retries the delivery. See [Errors](/docs/errors) for the full catalog.
+
+### `PAYMENT_TERMINAL_STATES` and `SUBSCRIPTION_TERMINAL_STATES`
+
+**Type:** `ReadonlySet<PaymentState>` and `ReadonlySet<SubscriptionState>`
+
+The states the state machine treats as terminal. `PAYMENT_TERMINAL_STATES` holds `canceled` and `refunded`. `SUBSCRIPTION_TERMINAL_STATES` holds `canceled`. Use them to select the non-terminal rows that a `reconcile` sweep should check.
+
+### `money(minorUnits, currency)`
+
+**Type:** `(minorUnits: bigint | number, currency: CurrencyCode) => Money`
+
+Builds a `Money` value, `{ currency, minorUnits: bigint }`, from integer minor units. The other money helpers (`addMoney`, `subtractMoney`, `compareMoney`, `allocateMoney`, `formatMoney`, `zeroMoney`, `isZeroMoney`, `moneyFromMinor`, `toMoneyJSON`, `fromMoneyJSON`) operate on the same type. Pass a `Money` as `amount` to `refundPayment` for a partial refund.
+
+### `PaymentObserver`
+
+**Type:** `(event: PaymentEvent) => void`
+
+The type of the `observability` option. `PaymentEvent.type` is one of `webhook.applied`, `webhook.duplicate`, `payment.failed`, `subscription.past_due`, `usage.report_failed`, `reconcile.drift`, `reconcile.completed` or `reconcile.error`.
+
+### `PaymentAdapter`
+
+**Type:** `interface PaymentAdapter`
+
+The contract every provider implements, and what a custom adapter must provide. The required members are `identifier`, `capabilities`, `createCheckout`, `createPortalSession`, `getOrCreateCustomer`, `parseWebhook`, `refundPayment`, `capturePayment`, `cancelPayment`, `getPaymentStatus`, `getSubscriptionStatus`, `cancelSubscription`, `updateSubscription` and `resumeSubscription`. The optional hooks `checkEntitlement`, `getBalances` and `reportUsage` let the facade delegate `check`, `listBalances` and `track` to the provider.
+
+### `PaymentStore`
+
+**Type:** `interface PaymentStore`
+
+The persistence port the state machine writes through. `createDatabasePaymentStore` implements it on `ctx.db`. `MemoryPaymentStore` implements it in memory.
+
+### `verifyStandardWebhook(input)` and `verifyCreemSignature(input)`
+
+**Type:** `(input) => Promise<void>`
+
+Verify a webhook signature for a custom adapter. They throw a `LunoraPaymentError`: `CONFIG_INVALID` when the secret is empty, `WEBHOOK_SIGNATURE_INVALID` for a missing or non-matching signature, and `WEBHOOK_TIMESTAMP_INVALID` for a timestamp outside the window.
+
+**Default:** `verifyStandardWebhook` uses a `toleranceSeconds` of `300`. `verifyCreemSignature` checks no timestamp, because Creem signs the body alone.
+
 ## Studio
 
 The [Studio](/docs/packages/studio) Payments panel (under
-[**Operations**](/docs/packages/studio#operations)) shows synced customers,
+[**Operations**](/docs/packages/studio#how-the-console-is-laid-out)) shows synced customers,
 subscriptions, and webhook events for the app. The panel only appears once
 codegen detects payments in use.

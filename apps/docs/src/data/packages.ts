@@ -146,6 +146,7 @@ export const packages: PackageInfo[] = [
         accentColor: categoryColors["Core Runtime"]!,
         category: "Core Runtime",
         description: "Wire codec and stable keys shared by every Lunora tier",
+        docsPath: "/docs/packages/wire",
         features: [],
         name: "Wire",
         npmName: "@lunora/wire",
@@ -176,6 +177,7 @@ export const packages: PackageInfo[] = [
         category: "Platform Hosts",
         description:
             "celld implementation of the Lunora platform contracts: the Cloudflare host adapters recomposed for celld (self-hosted distributed Durable Objects) under an honest capability matrix",
+        docsPath: "/docs/packages/platform-celld",
         features: [],
         name: "Platform Celld",
         npmName: "@lunora/platform-celld",

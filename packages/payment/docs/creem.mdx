@@ -5,8 +5,8 @@ description: Accept payments and subscriptions through Creem — an EU-friendly,
 
 [Creem](https://creem.io) is a **Merchant-of-Record (MoR)** for software. Like
 Polar and Dodo Payments, Creem is the _legal seller_ of your product: it prices,
-collects, and remits sales tax / EU VAT across 190+ jurisdictions, issues the
-invoice under its own entity, and owns chargebacks and disputes. You never touch
+collects, and remits sales tax / EU VAT across 190+ countries, issues the
+invoices, and owns chargebacks and disputes. You never touch
 a tax table. This page covers wiring Creem into a Lunora app through
 `@lunora/payment`; for the provider itself, see Creem's
 [official docs](https://docs.creem.io).
@@ -16,7 +16,7 @@ a tax table. This page covers wiring Creem into a Lunora app through
 Creem is **product-based**: you create real products (with prices) in the Creem
 dashboard and reference them by product id at checkout, which is exactly the
 shape `@lunora/payment`'s `priceId` interface expects, so Creem slots in like
-Polar and Dodo rather than like a raw PSP. Checkout is a hosted, Creem-branded page;
+Polar and Dodo rather than like a raw payment service provider (PSP). Checkout is a hosted, Creem-branded page;
 subscriptions are first-class objects (cancel, pause/resume, upgrade with
 proration); and there is a genuine hosted **billing portal** customers can open
 to manage their own payment methods and subscriptions.
@@ -210,7 +210,7 @@ export const subscribe = action.input({ productId: v.string() }).action(async ({
 
 <Callout type="info">
     Creem checkout only has a **success URL** (there is no separate cancel URL in Creem's checkout model), so the adapter forwards `successUrl` and drops
-    `cancelUrl`. `cancelUrl` is optional; pass it for cross-provider portability, it's simply unused here. The framework-controlled `referenceId` is pinned into
+    `cancelUrl`. `cancelUrl` is optional; pass it for cross-provider portability, it is unused here. The framework-controlled `referenceId` is pinned into
     checkout metadata and can never be overridden by caller-supplied metadata.
 </Callout>
 
@@ -220,6 +220,8 @@ All subscription methods return the provider's reported truth, which the facade
 persists to the store.
 
 ### Cancel: immediate vs. at period end
+
+Cancellation is immediate by default. Pass `atPeriodEnd: true` to keep access until the current period ends:
 
 ```ts
 // Cancel immediately (default): access ends now.
@@ -264,6 +266,8 @@ for both, so apply them as two updates.
 
 ### Resume
 
+Resume a paused subscription through the adapter:
+
 ```ts
 await ctx.payments.adapter.resumeSubscription(subscriptionId); // → subscriptions.resume(id)
 ```
@@ -272,7 +276,7 @@ await ctx.payments.adapter.resumeSubscription(subscriptionId); // → subscripti
 
 Give a customer a self-service portal to manage payment methods and subscriptions.
 The facade derives the customer from the store (never a caller-supplied id, so no
-IDOR) and calls Creem's `generateBillingLinks`:
+insecure direct object reference (IDOR)) and calls Creem's `generateBillingLinks`:
 
 ```ts
 export const portal = action.action(async ({ ctx }): Promise<{ url: string }> => {
@@ -333,6 +337,8 @@ app.post(
 );
 ```
 
+The following internal action runs in the shard and passes the raw body and signature to `handleWebhook`:
+
 ```ts title="lunora/billing.ts"
 import { internalAction, v } from "./_generated/server";
 
@@ -357,7 +363,7 @@ export const processWebhook = internalAction
 Once verified, `handleWebhook` normalizes the event through Lunora's state machine
 and returns `200` once applied or deduplicated, so Creem stops retrying; a
 duplicate is safe by construction (the event `id` keys an append-only log). The
-one exception is an **orphaned** event — one whose subscription or customer row
+one exception is an **orphaned** event — one whose subscription or payment row
 has not been created yet, i.e. an out-of-order delivery — which returns `500` so
 Creem redelivers it after the parent row lands.
 
@@ -405,8 +411,8 @@ operations therefore throw a `PROVIDER_ERROR` rather than silently no-op:
     **Customer creation errors.** `customers.create` returns `400` when a customer with that email already exists, so it is not idempotent by email. The adapter
     recovers by retrieving the existing customer by email and adopting it only when its `referenceId` metadata matches. On a mismatch (one person paying under a
     personal and an org reference) it binds no customer: the checkout starts unbound and is not prefilled, and that reference has no portal of its own. Creem
-    groups customers by email, so a buyer who enters the same address at checkout lands on the existing Creem customer; that customer's portal is then refused
-    (see Billing portal). If you see the create rejected for another reason, check the API key's store and mode (test vs. live).
+    rejects a second customer with an existing email, so the existing Creem customer is the one tied to that address; its portal is refused for a reference that
+    does not own it (see Billing portal). If you see the create rejected for another reason, check the API key's store and mode (test vs. live).
 </Callout>
 
 <Callout type="warn">

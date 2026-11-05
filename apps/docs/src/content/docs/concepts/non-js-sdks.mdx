@@ -53,6 +53,9 @@ If the exact tag has no transport for that language, the CLI falls back to the
 release branch, says so loudly, and records `versionMatched: false`, so a copy is
 never silently a different vintage than the surface next to it.
 
+The stamp also records the vendored `files` and the `language`, with a `note` on
+what the match means. The example above shows only the fields that identify the source.
+
 | Flag            | For                                                                |
 | --------------- | ------------------------------------------------------------------ |
 | `--out <dir>`   | Output directory (default `./sdk/<lang>`)                          |

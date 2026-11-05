@@ -85,7 +85,7 @@ const onDisconnect = (handler: LifecycleHandler): RegisteredLifecycleHook<"disco
  *
  * export const warm = onShardInit(async (ctx, event) => {
  *     // Rebuild ephemeral state from the durable tables that outlived us.
- *     for await (const member of ctx.db.roomMembers.iterate({ where: { roomId: event.shardKey } })) {
+ *     for await (const member of ctx.db.query("roomMembers").filter((m) => m.roomId === event.shardKey)) {
  *         await ctx.db.presence.insert({ userId: member.userId, status: "away" });
  *     }
  * });

@@ -58,7 +58,7 @@ pnpm dev   # starts wrangler + the Vite dev server (default http://localhost:517
 ```
 
 For class-A frameworks this is one Vite/Miniflare dev server running both the SSR
-handler and Lunora realtime. For class-B frameworks (SvelteKit / Nuxt / Astro)
+handler and Lunora realtime. For class-B frameworks (SvelteKit / Astro)
 this is the framework's own dev server with Lunora realtime composed in; verify
 that the `/_lunora/ws` endpoint responds under it.
 
@@ -67,6 +67,10 @@ that the `/_lunora/ws` endpoint responds under it.
 The decisive test: the preloaded value must be in the HTML **the server sends**,
 not injected by client JS. `curl` runs no JavaScript, so whatever it sees is the
 raw SSR output.
+
+The `tanstack-start-react` scaffold has no messages route, so add the live loader
+from [Reactive loaders](/docs/frameworks/reactive-loaders) on a `/` or `/channels/$channelId`
+route first. Then run:
 
 ```bash
 curl -s http://localhost:5173/ | grep -i "channelId\|messages"
@@ -93,8 +97,9 @@ never refetched. The WebSocket is the only freshness signal.
 ## 5. Prove live update (two tabs)
 
 1. Open the same URL in **two** browser tabs (A and B).
-2. In tab **A**, submit a message (the sample template has a send form wired to
-   `useMutation(api.messages.send)`).
+2. In tab **A**, submit a message through a form that calls
+   `useMutation(api.messages.send)`. The scaffold does not include this form, so
+   add it with the route from step 3.
 3. In tab **B**, the message list updates **without a page reload**.
 
 The path being proven: mutation in A → `/_lunora/rpc` → `ShardDO` writes and

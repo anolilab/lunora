@@ -1,6 +1,6 @@
 ---
 title: "@lunora/auth plugins"
-description: Org, admin, and other better-auth plugins surfaced as first-class Lunora middleware.
+description: Covers the better-auth plugins that `@lunora/auth/plugins` re-exports, and how invite-only sign-up, Turnstile checks, and the admin dashboard work with them.
 ---
 
 `@lunora/auth` is a thin wrapper around [better-auth](https://better-auth.com).
@@ -14,8 +14,8 @@ The Lunora-specific surface is small on purpose:
 - `withAuthPlugins(auth)`: middleware that mounts the plugin endpoint API
   onto `ctx.authApi`.
 
-The actual plugin behaviour (organizations, admin, OAuth, MFA, …) is
-better-auth's. Lunora just re-exports the factories under
+The actual plugin behaviour (organizations, admin, OAuth, multi-factor authentication (MFA), …) is
+better-auth's. Lunora re-exports the factories under
 `@lunora/auth/plugins` so you don't have to know the deep import paths.
 
 ## Supported plugins
@@ -62,35 +62,38 @@ behaviour and the full option reference are better-auth's, linked per row.
 
 ### Sign-in methods
 
-| Export            | What it adds                                                                                    | Reference                                                                                    |
-| ----------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `passkey`         | WebAuthn passkeys (Face ID, fingerprint, security keys) for passwordless login or a 2nd factor. | [better-auth: passkey](https://www.better-auth.com/docs/plugins/passkey)                     |
-| `twoFactor`       | TOTP authenticator apps plus backup codes for two-factor auth.                                  | [better-auth: 2FA](https://www.better-auth.com/docs/plugins/2fa)                             |
-| `magicLink`       | Passwordless sign-in by emailing a one-time login link. See the 1.7 cleanup note below.         | [better-auth: magic link](https://www.better-auth.com/docs/plugins/magic-link)               |
-| `emailOTP`        | Email a one-time numeric code to verify an address or sign in. See the 1.7 cleanup note below.  | [better-auth: email OTP](https://www.better-auth.com/docs/plugins/email-otp)                 |
-| `phoneNumber`     | Phone-number sign-in and verification over SMS OTP.                                             | [better-auth: phone number](https://www.better-auth.com/docs/plugins/phone-number)           |
-| `username`        | A unique username as a login identifier alongside email.                                        | [better-auth: username](https://www.better-auth.com/docs/plugins/username)                   |
-| `anonymous`       | Throwaway guest sessions you can upgrade to a real account later.                               | [better-auth: anonymous](https://www.better-auth.com/docs/plugins/anonymous)                 |
-| `siwe`            | Sign-In with Ethereum (wallet-based auth).                                                      | [better-auth: SIWE](https://www.better-auth.com/docs/plugins/siwe)                           |
-| `oneTap`          | Google One Tap — the in-page account chooser, no redirect.                                      | [better-auth: One Tap](https://www.better-auth.com/docs/plugins/one-tap)                     |
-| `lastLoginMethod` | Record which method a user last signed in with, so the UI can highlight it next visit.          | [better-auth: last login method](https://www.better-auth.com/docs/plugins/last-login-method) |
+| Export            | What it adds                                                                                                         | Reference                                                                                    |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `passkey`         | Web Authentication (WebAuthn) passkeys (Face ID, fingerprint, security keys) for passwordless login or a 2nd factor. | [better-auth: passkey](https://www.better-auth.com/docs/plugins/passkey)                     |
+| `twoFactor`       | Time-based one-time password (TOTP) authenticator apps plus backup codes for two-factor auth.                        | [better-auth: 2FA](https://www.better-auth.com/docs/plugins/2fa)                             |
+| `magicLink`       | Passwordless sign-in by emailing a one-time login link. See the 1.7 cleanup note below.                              | [better-auth: magic link](https://www.better-auth.com/docs/plugins/magic-link)               |
+| `emailOTP`        | Email a one-time numeric code to verify an address or sign in. See the 1.7 cleanup note below.                       | [better-auth: email OTP](https://www.better-auth.com/docs/plugins/email-otp)                 |
+| `phoneNumber`     | Phone-number sign-in and verification with a one-time password (OTP) sent by SMS.                                    | [better-auth: phone number](https://www.better-auth.com/docs/plugins/phone-number)           |
+| `username`        | A unique username as a login identifier alongside email.                                                             | [better-auth: username](https://www.better-auth.com/docs/plugins/username)                   |
+| `anonymous`       | Throwaway guest sessions you can upgrade to a real account later.                                                    | [better-auth: anonymous](https://www.better-auth.com/docs/plugins/anonymous)                 |
+| `siwe`            | Sign-In with Ethereum (wallet-based auth).                                                                           | [better-auth: SIWE](https://www.better-auth.com/docs/plugins/siwe)                           |
+| `oneTap`          | Google One Tap — the in-page account chooser, no redirect.                                                           | [better-auth: One Tap](https://www.better-auth.com/docs/plugins/one-tap)                     |
+| `lastLoginMethod` | Record which method a user last signed in with, so the UI can highlight it next visit.                               | [better-auth: last login method](https://www.better-auth.com/docs/plugins/last-login-method) |
 
 ### Accounts, orgs, and access
 
-| Export                | What it adds                                                                          | Reference                                                                                    |
-| --------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `admin`               | Admin APIs: list and ban users, set roles, impersonate, revoke sessions.              | [better-auth: admin](https://www.better-auth.com/docs/plugins/admin)                         |
-| `organization`        | Multi-tenant orgs with members, invitations, and roles.                               | [better-auth: organization](https://www.better-auth.com/docs/plugins/organization)           |
-| `createAccessControl` | Builder for custom roles and permissions (RBAC) passed into `admin` / `organization`. | [better-auth: access control](https://www.better-auth.com/docs/plugins/admin#access-control) |
-| `multiSession`        | Hold several signed-in accounts at once and switch between them.                      | [better-auth: multi session](https://www.better-auth.com/docs/plugins/multi-session)         |
-| `customSession`       | Add custom fields to the session object returned to the client.                       | [better-auth: session](https://www.better-auth.com/docs/concepts/session-management)         |
+| Export                | What it adds                                                                                                     | Reference                                                                                    |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `admin`               | Admin APIs: list and ban users, set roles, impersonate, revoke sessions.                                         | [better-auth: admin](https://www.better-auth.com/docs/plugins/admin)                         |
+| `organization`        | Multi-tenant orgs with members, invitations, and roles.                                                          | [better-auth: organization](https://www.better-auth.com/docs/plugins/organization)           |
+| `createAccessControl` | Builder for role-based access control (RBAC): custom roles and permissions passed into `admin` / `organization`. | [better-auth: access control](https://www.better-auth.com/docs/plugins/admin#access-control) |
+| `multiSession`        | Hold several signed-in accounts at once and switch between them.                                                 | [better-auth: multi session](https://www.better-auth.com/docs/plugins/multi-session)         |
+| `customSession`       | Add custom fields to the session object returned to the client.                                                  | [better-auth: session](https://www.better-auth.com/docs/concepts/session-management)         |
 
 ### Tokens and machine clients
 
 | Export                                                        | What it adds                                                                                                                                                                                                                                                                                                                                                                                                      | Reference                                                                                          |
 | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `bearer`                                                      | Accept the session token as an `Authorization: Bearer` header instead of a cookie (native / CLI clients).                                                                                                                                                                                                                                                                                                         | [better-auth: bearer](https://www.better-auth.com/docs/plugins/bearer)                             |
-| `jwt`                                                         | Issue verifiable JWTs with a JWKS endpoint for services that expect a token.                                                                                                                                                                                                                                                                                                                                      | [better-auth: JWT](https://www.better-auth.com/docs/plugins/jwt)                                   |
+| `apiKey`                                                      | Programmatic API keys for scripts, CI, and machine clients, with their own expiry, rate limits, and permissions.                                                                                                                                                                                                                                                                                                  | [better-auth: API key](https://www.better-auth.com/docs/plugins/api-key)                           |
+| `cimd`                                                        | Client ID Metadata Documents: a client uses an HTTPS URL as its `client_id`, and the server fetches the client's metadata from it. Opt-in. On Cloudflare Workers, pass the default export of `@lunora/auth/cimd/workers` (`workersCimdFetch()`) as its fetch transport.                                                                                                                                           | —                                                                                                  |
+| `createInsufficientScopeError`                                | Builds the RFC 6750 insufficient-scope error a protected MCP handler throws, so `requireMcpAuth` answers 403 with a `WWW-Authenticate` challenge naming the missing scopes.                                                                                                                                                                                                                                       | —                                                                                                  |
+| `jwt`                                                         | Issue verifiable JSON Web Tokens (JWTs) with a JSON Web Key Set (JWKS) endpoint for services that expect a token.                                                                                                                                                                                                                                                                                                 | [better-auth: JWT](https://www.better-auth.com/docs/plugins/jwt)                                   |
 | `oauthProvider`                                               | Turn your app into an OAuth/OpenID Connect provider other apps sign in with. Replaces `oidcProvider`, removed in better-auth 1.7.                                                                                                                                                                                                                                                                                 | [better-auth: OAuth provider](https://www.better-auth.com/docs/plugins/oauth-provider)             |
 | `genericOAuth`                                                | Add any OAuth2 / OIDC provider beyond the built-in social ones.                                                                                                                                                                                                                                                                                                                                                   | [better-auth: generic OAuth](https://www.better-auth.com/docs/plugins/generic-oauth)               |
 | `oAuthProxy`                                                  | Route OAuth callbacks through one stable URL (useful for preview / branch deploys).                                                                                                                                                                                                                                                                                                                               | [better-auth: OAuth proxy](https://www.better-auth.com/docs/plugins/oauth-proxy)                   |
@@ -128,6 +131,66 @@ coincidence, so `lunora dev` may not reproduce a mismatch that appears once
 deployed. When verifying with a library such as `jose`, log the error's `code`
 (for example `ERR_JWT_CLAIM_VALIDATION_FAILED`) on failure, never the token.
 
+#### Refresh-token rotation and reuse with `oauthProvider`
+
+When your app is the OAuth provider, every `refresh_token` grant rotates the
+refresh token: the client gets a new one and the old one is marked used.
+Presenting a used refresh token again is treated as theft, as RFC 9700 §4.14.2
+recommends. The request fails with `invalid_grant`, and every refresh token
+that **user** holds for that **client** is revoked, including the newer token
+it was rotated into, together with every opaque access token issued alongside
+one of them. An access token from a grant without `offline_access` has no
+refresh token, so it is not revoked and lives until it expires. The user has
+to authorize the client again. better-auth implements this; Lunora pins it with a test
+against its own SQL store.
+
+Four details decide how it behaves in practice:
+
+- **The family is the client and user, not one authorization.** A replay from
+  one device also signs that user's other devices out of the same client. Other
+  users' grants, and the user's grants to other clients, are left alone.
+- **JWT access tokens survive.** When a grant carries a `resource`, the
+  provider issues JWT access tokens (unless you set `disableJwtPlugin`), and a
+  JWT cannot be revoked. It stays
+  valid until it expires, so keep access-token lifetimes short when resources
+  are in play. Opaque access tokens, issued when no `resource` is requested,
+  are revoked immediately.
+- **Expiry slides.** Each rotation gives the new refresh token a fresh
+  `refreshTokenExpiresIn`, 30 days by default. A client that keeps refreshing
+  never hits it, and a refresh token family has no absolute lifetime. An expired
+  token fails with `invalid_grant` but does not revoke the family.
+- **Retries are refused by default.** `refreshTokenReuseInterval` is `0`, so a
+  client that retries a refresh after losing the response (a timeout, two tabs
+  racing) trips the reuse detection and loses its grant. Setting it to a few
+  seconds makes a retry inside that window, with the same scopes, resources
+  and DPoP key, get the response of that rotation back instead. The window
+  cannot tell a retry from a stolen token: a replay inside it also receives
+  the tokens that rotation issued, and nothing is revoked. Keep it short. A
+  replay after the window still revokes the family.
+
+`mcp()` is `oauthProvider` underneath, with two differences that weaken this
+protection. It defaults `refreshTokenReuseInterval` to 30 seconds, so a replay
+within 30 seconds of a rotation is answered, not detected. And MCP clients send
+its `resource` when they authorize, as the MCP authorization spec requires, and
+the refresh token keeps it, so the access tokens are JWTs that outlive the
+revocation. Give `mcp()` a short
+`accessTokenExpiresIn` (seconds, one hour by default), and lower
+`refreshTokenReuseInterval` unless your clients need the retry window. These
+options go on `oauthProvider({ … })` or `mcp({ … })`:
+
+```ts
+oauthProvider({
+    consentPage: "/consent",
+    loginPage: "/login",
+    refreshTokenExpiresIn: 60 * 60 * 24 * 14, // seconds
+    refreshTokenReuseInterval: 5, // seconds
+});
+```
+
+The revocation happens in two separate deletes, not one transaction. A
+rotation that runs on another isolate between them can leave one fresh token
+alive. better-auth tracks this upstream.
+
 ### Abuse protection
 
 | Export           | What it adds                                                                                                                      | Reference                                                                       |
@@ -148,6 +211,14 @@ deployed. When verifying with a library such as `jose`, log the error's `code`
 `better-auth/plugins/<name>` subpath. They ship via the `better-auth/plugins`
 barrel, and `@lunora/auth/plugins` re-exports them from there.
 </Callout>
+
+Two entries are Lunora's own rather than better-auth re-exports. `uiConfig(options?)`
+publishes which plugins and social providers the deployment enabled, at
+`GET {basePath}/ui-config`, so an auth UI can configure itself. Enterprise SSO
+(`sso`) is not in the `@lunora/auth/plugins` barrel: it lives in
+`@lunora/auth/plugins/enterprise`, an optional peer dependency that you install
+first with `pnpm add "@better-auth/sso"`. Installing `sso()` without
+`domainVerification: { enabled: true }` logs a warning at construction.
 
 Anything else better-auth ships, or a community plugin like Polar, keeps
 working too: `createAuth(...)` passes `plugins:` through unchanged. For setup
@@ -230,11 +301,11 @@ first account uninvited, at the cost described under
 
 Leave `emailAndPassword.disableSignUp` **off**. The invitee still uses the
 ordinary sign-up form; closing it would leave them nothing to submit. The sign-up
-cards in [`@lunora/auth-ui`](/docs/packages/auth-ui) prefill the address from
+cards in [`@lunora/auth-ui`](/docs/concepts/auth-ui) prefill the address from
 `?email=`, so an invitation link can be
 `https://app.example/sign-up?email=ada%40example.com`.
 
-An uninvited attempt is refused with `SIGN_UP_INVITE_REQUIRED` and HTTP **400**.
+An uninvited attempt is refused with HTTP **400** and the better-auth error code `SIGN_UP_INVITE_REQUIRED`. Like every better-auth plugin code, it arrives in the auth endpoint's JSON body, not as a `LunoraError`, so it has no entry on the [error reference](/docs/errors).
 That status is deliberate and not a typo: better-auth's sign-up route treats a
 `403` from a create hook as a duplicate-account signal and answers it with a
 fabricated success — a user object it never persisted — whenever
@@ -267,7 +338,7 @@ await sendInviteEmail(invite.email, link);
 keeps a SHA-256 of it. A link that was never delivered is reissued (call
 `createSignUpInvitation` again), not looked up, and reissuing invalidates the
 previous one. `@lunora/auth-ui` reads both parameters off the URL and submits the
-token with the form, so an invitee just follows the link.
+token with the form, so an invitee follows the link.
 
 These are trusted server-side calls with **no authorization of their own** — the
 same trust model as [`createAuthAdmin`](#studio-user-dashboard).
@@ -276,7 +347,7 @@ a mutation you already gate. Delivering the invitation is yours too: nothing her
 sends mail, so the returned row is the whole handoff.
 
 The invitations live in a `signUpInvitation` table the plugin declares, so
-`authTables()`, `compileMigrationsSql`, and the Durable-Object DDL all pick it up
+`authTables()`, `compileMigrationsSql`, and the Durable Object schema statements all pick it up
 with nothing further to write. Nothing prunes it either — a spent or expired row
 stays until you revoke it, which is also what keeps it a record of who was let in.
 `listSignUpInvitations` is capped rather than paged; past 500 rows, query the
@@ -294,7 +365,7 @@ The same three operations sit on the trusted admin plane
 (`AuthAdmin.createSignUpInvitation` / `listSignUpInvitations` /
 `revokeSignUpInvitation`) behind the worker's admin-token gate, and on the client
 as `listAuthSignUpInvitations` / `createAuthSignUpInvitation` /
-`revokeAuthSignUpInvitation`. `@lunora/react` exposes `useSignUpInvitations()`
+`revokeAuthSignUpInvitation`. [`@lunora/react`](/docs/packages/react) exposes `useSignUpInvitations()`
 for the read. Those hand back timestamps as epoch-ms, like every other admin row;
 the module-level helpers above hand back `Date`s.
 
@@ -312,14 +383,14 @@ cron if you invite at any volume.
 ### Two checks, because the paths differ
 
 <Callout type="info">
-    An invitation carries a **secret token** — 256 CSPRNG bits, stored only as a SHA-256 — and the sign-up link carries it back as `?invite=`.
+An invitation carries a **secret token** — 256 bits from a cryptographically secure random number generator (CSPRNG), stored only as a SHA-256 — and the sign-up link carries it back as `?invite=`.
 
-    The token is checked on `/sign-up/email` and nowhere else, which is the design rather than an oversight. Every other path that mints an account has already
-    proved the person controls the address before the row is written: an OAuth callback carries a provider-verified email, and magic-link and email-OTP only
-    fire for whoever is holding the mailbox. Password sign-up is the one place where anyone may claim any address.
+The token is checked on `/sign-up/email` and nowhere else, which is the design rather than an oversight. Every other path that mints an account has already
+proved the person controls the address before the row is written: an OAuth callback carries a provider-verified email, and magic-link and email-OTP only
+fire for whoever is holding the mailbox. Password sign-up is the one place where anyone may claim any address.
 
-    So there are two layers. `databaseHooks.user.create.before` is the universal backstop — an unspent, unexpired invitation must exist for the address,
-    whatever created the row. The route hook on `/sign-up/email` additionally requires the token.
+So there are two layers. `databaseHooks.user.create.before` is the universal backstop — an unspent, unexpired invitation must exist for the address,
+whatever created the row. The route hook on `/sign-up/email` additionally requires the token.
 
 </Callout>
 
@@ -388,7 +459,7 @@ landing between the two lets that one account through. Read
 
 `allowFirstUser` is **off** by default. Turning it on admits the first account
 uninvited so a fresh deployment can be bootstrapped without seeding a row, but
-the check is "the `user` table is empty" — two concurrent sign-ups can both
+the check is that no account exists (anonymous users do not count) — two concurrent sign-ups can both
 observe that, and the window it opens is the gap between deploying and the owner
 signing up. On a deployment whose whole point is that strangers do not get
 accounts, seeding the first invitation is the better trade.
@@ -403,7 +474,7 @@ they cover different layers.
 For the **auth flow**, prefer the `captcha` plugin. It hooks better-auth's
 request pipeline directly and protects the sensitive endpoints
 (`/sign-up/email`, `/sign-in/email`, `/request-password-reset` by default in
-better-auth 1.6.18). It reads the token from the `x-captcha-response` request
+better-auth 1.7). It reads the token from the `x-captcha-response` request
 header:
 
 ```ts
@@ -598,22 +669,41 @@ transport that has them:
 - **Server-to-server** (cron job, queue consumer): there is no caller session,
   so use the explicit escape hatch — `ctx.authApi.withoutHeaders().<method>(…)`
   — and authenticate via a bearer token or service-key plugin instead. The
-  runtime guard throws `LunoraAuthHeadersError` on a header-less call otherwise.
+  runtime guard throws `LunoraAuthHeadersError` (code `AUTH_HEADERS_MISSING`, see [errors](/docs/errors)) on a header-less call otherwise.
 
 ## Migrations
 
 `ensureMigrated` does a schema diff and applies missing DDL, which is fine for
 dev and small deployments. It drives better-auth's own migrator, which speaks
 **only** Kysely — so it takes the raw D1 binding as `database` and throws
-(`AUTH_MIGRATOR_UNSUPPORTED`) on `lunoraD1Adapter`. Build a second,
-migration-only instance for it; the adapter stays on the one serving requests:
+(`AUTH_MIGRATOR_UNSUPPORTED`, see [errors](/docs/errors)) on `lunoraD1Adapter`. Build a second,
+migration-only instance for it; the adapter stays on the one serving requests.
+Build both from one options function, so the plugins and every other
+schema-affecting option match. Only `database` may differ: a migration schema
+built from a different plugin list omits the tables and columns those plugins
+need.
 
-```ts
-// src/server/index.ts
+```ts title="lunora/auth.ts"
+import { createAuth, lunoraD1Adapter, type LunoraAuthOptions } from "@lunora/auth";
+import { admin, organization } from "@lunora/auth/plugins";
+
+// Everything except `database`, shared by the serving and the migration instance.
+export const authOptions = (env: Env): Omit<LunoraAuthOptions, "database"> => ({
+    emailAndPassword: { enabled: true },
+    plugins: [organization({ allowUserToCreateOrganization: true }), admin({ defaultRole: "user" })],
+    secret: env.AUTH_SECRET,
+});
+
+export const buildAuth = (env: Env) => createAuth({ ...authOptions(env), database: lunoraD1Adapter(env.DB) });
+```
+
+The worker entry then runs the migration from the same options:
+
+```ts title="src/server/index.ts"
 import { handleAuthRequest } from "@lunora/auth";
 import { createMigrationAuth, ensureMigrated } from "@lunora/auth/migrate";
 
-import { buildAuth } from "../../lunora/auth.js";
+import { authOptions, buildAuth } from "../../lunora/auth";
 
 // Per isolate, not per request: better-auth's migrator emits a bare
 // `CREATE TABLE`, so two concurrent runs against a fresh database leave the
@@ -626,7 +716,8 @@ export default {
     async fetch(request, env, ctx) {
         const auth = buildAuth(env);
 
-        migrated ??= ensureMigrated(createMigrationAuth({ ...authOptions, database: env.DB, secret: env.AUTH_SECRET })).catch((error) => {
+        // Raw D1 for the migrator; every other option is the serving instance's.
+        migrated ??= ensureMigrated(createMigrationAuth({ ...authOptions(env), database: env.DB })).catch((error) => {
             migrated = null;
             throw error;
         });

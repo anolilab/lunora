@@ -42,7 +42,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "Metrics",
             "Scoped ingest keys",
             "Bring your own OpenTelemetry",
-            "Retention & scale",
+            "Retention and redaction",
         ],
         id: "cloud/monitoring",
         summary: "The Lunora cloud is a managed OpenTelemetry backend + control plane — deploy to it and your traces, logs, metrics, and AI generations flow…",
@@ -274,7 +274,7 @@ export const DOC_TOPICS: ReadonlyArray<{
     },
     {
         headings: [
-            "External provider or @lunora/auth?",
+            "External provider or @lunora/auth",
             "The resolver",
             "Client: hand over the token, refresh it",
             "WebSockets and live queries",
@@ -905,7 +905,7 @@ export const DOC_TOPICS: ReadonlyArray<{
     {
         headings: ["Install", "Provide the client", "Live queries", "Mutations", "Reactive loaders", "Worker composition"],
         id: "frameworks/vue",
-        summary: "Use Lunora with Vue 3 — a client plugin, live useQuery/useMutation composables, and the SSR-seed → live reactive-loader handoff.",
+        summary: "Use Lunora with Vue 3 — a client plugin, live useQuery/useMutation composables, and the server-side rendering (SSR) seed to live…",
         title: "Vue",
     },
     {
@@ -998,7 +998,7 @@ export const DOC_TOPICS: ReadonlyArray<{
         title: "Design boundaries",
     },
     {
-        headings: ["Why Lunora", "Own it, or let us run it", "How Lunora compares", "Where it's rough", "What ships in v1.0.0-alpha.1", "Start building"],
+        headings: ["Why Lunora", "Self-host, or use Lunora Cloud", "How Lunora compares", "Where it's rough", "What ships in the alpha", "Start building"],
         id: "overview",
         summary: "The Convex-style real-time backend that runs on your own Cloudflare account — typed end to end, live by default, ~$0 at idle.",
         title: "Overview",

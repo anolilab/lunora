@@ -1,3 +1,7 @@
+## @lunora/shard-engine [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.190...@lunora/shard-engine@1.0.0-alpha.191) (2026-11-05)
+
+- feat(shard-engine): accept endCursor on findMany for reactive pages (#1485)
+
 ## @lunora/shard-engine [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.189...@lunora/shard-engine@1.0.0-alpha.190) (2026-11-05)
 
 - fix(runtime): scope the rest edge cache by worker version (#1484)

@@ -30,9 +30,9 @@ The adapter advertises these capabilities:
 
 <Callout type="info">
     Choose **Polar** (or another MoR such as Dodo Payments or Creem) when you want tax/VAT handled for you and don't want to register for sales tax in every
-    jurisdiction you sell into. Choose **Stripe** (a PSP) when you need direct control over the money movement, manual authorize/capture, or you already run
-    your own tax and invoicing. Because the provider is a stateless translator and the store owns all state, switching later is a configuration change, not a
-    rewrite.
+    jurisdiction you sell into. Choose **Stripe** (a payment service provider, PSP) when you need direct control over the money movement, manual
+    authorize/capture, or you already run your own tax and invoicing. Because the provider is a stateless translator and the store owns all state, switching
+    later is a configuration change, not a rewrite.
 </Callout>
 
 Practical consequences of the MoR model in this adapter:
@@ -227,6 +227,8 @@ owner. Redirect the browser to the returned `url`; Polar hosts the checkout.
 
 ### Manage subscriptions
 
+The facade cancels immediately by default, or at the end of the period with `atPeriodEnd`:
+
 ```ts
 // Cancel now, or at period end.
 await ctx.payments.cancelSubscription(subscriptionId, { atPeriodEnd: true });
@@ -345,6 +347,8 @@ app.post(
 );
 ```
 
+The following internal action runs in the shard and passes the raw body and headers to `handleWebhook`:
+
 ```ts title="lunora/billing.ts"
 import { internalAction, v } from "./_generated/server";
 
@@ -371,7 +375,7 @@ export const processPolarWebhook = internalAction
 `WebhookAction`, and applies it through the state machine. Once verified it
 returns `200` once applied or deduplicated, so Polar stops retrying; a duplicate is
 acknowledged, not re-applied. An **orphaned** event — one whose subscription or
-customer row has not been created yet, i.e. an out-of-order delivery — returns
+payment row has not been created yet, i.e. an out-of-order delivery — returns
 `500` instead, so Polar redelivers it after the parent row lands. Standard Webhooks
 carries no body id, so the adapter uses the `webhook-id` header as the
 idempotency key backing the append-only `events` log.
@@ -434,7 +438,7 @@ customer session and returns its `customerPortalUrl`:
 const { url } = await ctx.payments.createPortalSession(ctx.auth.userId, "https://app.test/account");
 ```
 
-The customer is derived from the store (never a caller-supplied id, so no IDOR).
+The customer is derived from the store (never a caller-supplied id, so no insecure direct object reference (IDOR)).
 Polar's portal is a session URL, so the `returnUrl` argument is accepted for
 interface parity but Polar controls the in-portal navigation.
 
@@ -450,9 +454,12 @@ tax) in integer minor units.
 ## Limitations
 
 <Callout type="info">
-    - **No manual capture/authorize.** `capturePayment` / `cancelPayment` throw; MoR captures at checkout. - **Product-based.** The cross-provider `priceId`
-    carries a Polar **product** id, not a separate price id. - **Refunds are dashboard/API-initiated in Polar**, synced back via `refund.created`; the facade
-    also exposes `refundPayment` (see [Refunds](#refunds)). - **Portal `returnUrl` is advisory**: Polar controls the hosted portal's navigation.
+
+- **No manual capture/authorize.** `capturePayment` / `cancelPayment` throw; MoR captures at checkout.
+- **Product-based.** The cross-provider `priceId` carries a Polar **product** id, not a separate price id.
+- **Refunds are dashboard/API-initiated in Polar**, synced back via `refund.created`; the facade also exposes `refundPayment` (see [Refunds](#refunds)).
+- **Portal `returnUrl` is advisory**: Polar controls the hosted portal's navigation.
+
 </Callout>
 
 ## Troubleshooting

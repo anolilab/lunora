@@ -14984,7 +14984,12 @@ abstract class ShardDO {
             // this file: a deliberate `LunoraError` keeps its code and message
             // (`UNAUTHORIZED`, `NOT_FOUND`, a validator's `BAD_REQUEST`), an
             // internal or bare throw is redacted.
-            const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_SEED_FAILED", redactedMessage: "subscription seed failed" });
+            const { body, redacted } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_SEED_FAILED", redactedMessage: "subscription seed failed" });
+
+            if (redacted) {
+                // eslint-disable-next-line no-console -- server-side diagnostic: the client and the user log only see the redacted body
+                console.error(`[@lunora/do] subscription seed failed for ${functionPath}:`, error);
+            }
 
             this.sendSubscriptionError(ws, subId, body.code, body.message, body);
         }

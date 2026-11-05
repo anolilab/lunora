@@ -19,7 +19,7 @@ invariants the rest of Lunora relies on do **not** hold for it:
    `query`/`mutation`** and available only on `ActionCtx`. The
    `hyperdrive_outside_action` advisor lint flags any `ctx.sql` reached from a
    query or mutation.
-2. **Non-reactive.** Live queries track writes to the DO's SQLite / D1. An
+2. **Non-reactive.** Live queries track writes to the Durable Object (DO)'s SQLite / D1. An
    `UPDATE` issued over Hyperdrive produces **no** Lunora change event, so
    **subscriptions will not re-run** when external rows change.
 
@@ -384,8 +384,8 @@ bridge above, on your own schedule).
 
 **Delete detection: `mode`.** The default `mode: "full-pull"` reads the whole tenant
 slice each tick and diffs it, so upstream deletes are observed for free, but it
-costs a full read per tick (bench ceiling ~10k rows). For a large, low-churn slice
-past that cap, `mode: "incremental"` pulls **only rows changed since a durable
+costs a full read per tick. For a large, low-churn slice,
+`mode: "incremental"` pulls **only rows changed since a durable
 watermark**:
 
 ```ts

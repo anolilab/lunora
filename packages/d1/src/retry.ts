@@ -33,12 +33,11 @@
  *
  * ## Retrying without a timeout makes a stall worse
  *
- * D1's reported failure mode is not only a fast error — it is a **stall**.
- * Operators report the storage object hanging for 30+ seconds before it resets,
- * several times a day, on databases holding tens of megabytes.
+ * A D1 failure is not always a fast error — it can be a **stall**, where the
+ * storage object hangs before it resets.
  *
- * A retry loop wrapped around a stall *amplifies* it: three attempts at 30
- * seconds each is a 90-second request instead of a 30-second one. Set
+ * A retry loop wrapped around a stall *amplifies* it: three attempts that each
+ * hang for 30 seconds make a 90-second request instead of a 30-second one. Set
  * {@link D1RetryOptions.timeoutMs} to abandon an attempt that has clearly hung,
  * and {@link D1RetryOptions.deadlineMs} to bound the whole operation. With
  * neither configured this layer refuses to retry a *slow* failure at all (see

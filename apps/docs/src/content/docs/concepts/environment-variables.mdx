@@ -43,9 +43,11 @@ STORAGE_SECRET="replace-with-openssl-rand-hex-32"
 
 When you run `lunora dev` (or start Vite) without a `.dev.vars`,
 [`@lunora/config`](/docs/packages/config) offers to generate one from the
-example: secret-looking placeholders (`*_SECRET`, `*_TOKEN`, …) are filled with
-fresh random values, everything else is copied verbatim. If `.dev.vars` exists
-but is missing keys the example lists (say, you just enabled an addon), it
+example: placeholders for keys Lunora can generate, such as `AUTH_SECRET`,
+`LUNORA_ADMIN_TOKEN`, and `STORAGE_SIGNING_SECRET`, are filled with fresh random
+values. Provider-issued keys, such as `OPENAI_API_KEY` or `GITHUB_CLIENT_SECRET`,
+stay as placeholders for you to fill in, and everything else is copied verbatim. If `.dev.vars` exists
+but is missing keys the example lists (say, you recently enabled an addon), it
 offers to append just those. Non-interactive runs (CI) skip the prompt.
 
 You can also manage keys by hand:
