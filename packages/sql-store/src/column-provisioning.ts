@@ -3,17 +3,19 @@
  * missing, and the `NOT NULL` an existing column should no longer carry.
  *
  * `ctx-db-migrations.ts` imports from here, never the other way. Several isolates can provision one database at once,
- * so adding a column tolerates losing that race ({@link addColumnIfMissing}).
+ * so adding a column tolerates losing that race ({@link addColumnIfMissing}), and no isolate finishes provisioning a
+ * defaulted column before its old rows hold the default ({@link alterGlobalTableDrift}).
  */
 
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
+import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 import { validatorAcceptsNull } from "../../../shared/accepts-null";
 import type { SqlDialect } from "./dialect";
 // eslint-disable-next-line unicorn/prevent-abbreviations -- `SqlCtxExec` is this package's established exec type name.
 import type { SqlCtxExec } from "./sql-exec";
-import { OCC_VERSION_COLUMN, qualifiedColumnRefSql, queryAll, queryRun, serializeDocumentColumn } from "./sql-exec";
+import { OCC_VERSION_COLUMN, qualifiedColumnRefSql, queryAll, queryRun, runInOrder, serializeDocumentColumn } from "./sql-exec";
 import { effectiveColumnKind } from "./value-codec";
 
 /**
@@ -59,54 +61,51 @@ const isUniqueColumn = (definition: SchemaLike["tables"][string], column: string
     validator._meta?.column?.unique === true || definition.indexes.some((index) => index.unique === true && index.fields.includes(column));
 
 /**
- * Give the rows that predate a newly added REQUIRED column the value its declaration says a row gets when none is
- * supplied. A column that may hold null (`v.optional`, `.nullable()`, `v.any()`, a union with `v.null()`) needs
- * nothing: NULL is a valid value there. A required column with no default is left NULL and reported once, and so is
- * one under a UNIQUE constraint: one default written to every old row would collide the moment the index is built
- * (NULLs are distinct, so leaving them builds it), and that would fail provisioning of the whole plane on every pass.
+ * How the rows that predate a REQUIRED column get a value once it is added: the `UPDATE` that writes the value its
+ * declaration says a row gets when none is supplied, or why there is none to write. A column that may hold null
+ * (`v.optional`, `.nullable()`, `v.any()`, a union with `v.null()`) needs nothing: NULL is a valid value there. A
+ * required column with no default has no value to invent, and one under a UNIQUE constraint cannot take one: one
+ * default written to every old row would collide the moment the index is built (NULLs are distinct, so leaving them
+ * builds it), and that would fail provisioning of the whole plane on every pass.
  *
- * Best-effort, like {@link relaxNullAcceptingColumns}: a statement that fails is reported with the `UPDATE` to run,
- * not thrown. Throwing would leave the column in place, so the next pass would skip the backfill anyway; undoing the
- * column instead would loop a persistent failure on every pass and could discard what a concurrent request has since
- * written to it.
+ * The `UPDATE` touches only rows that read NULL, which a required column never holds once written through the
+ * validator, so running it again, from any isolate, overwrites nothing a request has written.
  */
-const backfillAddedColumn = async (
-    exec: SqlCtxExec,
+const columnBackfill = (
     tableName: string,
     definition: SchemaLike["tables"][string],
-    dialect: SqlDialect,
     column: string,
     validator: ValidatorLike,
-): Promise<void> => {
+): undefined | { query: SQL } | { reason: string } => {
     if (validator.kind === "optional" || validatorAcceptsNull(validator)) {
-        return;
+        return undefined;
     }
 
     const unique = isUniqueColumn(definition, column, validator);
     const value = unique ? undefined : declaredDefaultOf(validator);
-    const manual = `UPDATE "${tableName}" SET "${column}" = … WHERE "${column}" IS NULL`;
 
     if (value === undefined) {
-        const reason = unique ? "is unique, so one default cannot be written to every row" : "has no default";
-
-        warnOnce(
-            `backfill:${tableName}.${column}`,
-            `"${tableName}.${column}" was added as a required field that ${reason}, so rows written before it read NULL. Backfill it with a migration (${manual}).`,
-        );
-
-        return;
+        return { reason: unique ? "is unique, so one default cannot be written to every row" : "has no default" };
     }
 
+    return {
+        query: sql`UPDATE ${sql.identifier(tableName)} SET ${sql.identifier(column)} = ${serializeDocumentColumn(definition, column, value)} WHERE ${sql.identifier(column)} IS NULL`,
+    };
+};
+
+/**
+ * Run a column's backfill on its own. Best-effort, like {@link relaxNullAcceptingColumns}: a statement that fails is
+ * reported with the `UPDATE` to run, not thrown. Throwing would leave the column in place, and undoing the column
+ * instead would loop a persistent failure on every pass and could discard what a concurrent request has since written
+ * to it.
+ */
+const runBackfill = async (exec: SqlCtxExec, dialect: SqlDialect, tableName: string, column: string, query: SQL): Promise<void> => {
     try {
-        await queryRun(
-            exec,
-            dialect,
-            sql`UPDATE ${sql.identifier(tableName)} SET ${sql.identifier(column)} = ${serializeDocumentColumn(definition, column, value)} WHERE ${sql.identifier(column)} IS NULL`,
-        );
+        await queryRun(exec, dialect, query);
     } catch (error) {
         warnOnce(
             `backfill:${tableName}.${column}`,
-            `could not backfill "${tableName}.${column}" from its default (${error instanceof Error ? error.message : String(error)}); rows written before it read NULL. Run ${manual}.`,
+            `could not backfill "${tableName}.${column}" from its default (${error instanceof Error ? error.message : String(error)}); rows written before it read NULL. Run UPDATE "${tableName}" SET "${column}" = … WHERE "${column}" IS NULL.`,
         );
     }
 };
@@ -155,30 +154,47 @@ const hasColumns = async (exec: SqlCtxExec, dialect: SqlDialect, tableName: stri
 };
 
 /**
- * Add `column` to `tableName` unless it is there, reporting whether this call added it so only the caller that did
- * backfills it.
+ * Add `column` to `tableName` unless it is there, reporting whether this call added it: `"filled"` when it also ran
+ * `backfill` in the same unit, `"added"` when it did not, and `"present"` when the column was already there.
+ *
+ * With a `backfill`, the `ALTER` and the `UPDATE` go through {@link runInOrder}: one atomic batch on D1, so no other
+ * isolate can see the column before its old rows hold the default. Should that unit fail for the backfill's sake, the
+ * `ALTER` is retried alone and the column reported `"added"`, leaving the caller to report the backfill.
  *
  * Two isolates cold-starting on one database both probe, both miss, and the slower `ALTER` fails with a
  * duplicate-column error. A failed `ALTER` is accepted when a re-probe finds the column, which keeps this dialect-blind
  * (drivers disagree on errno vs code); any other failure leaves the column missing, so the `ALTER`'s own error
  * surfaces.
  */
-const addColumnIfMissing = async (exec: SqlCtxExec, dialect: SqlDialect, tableName: string, column: string, type: string): Promise<"added" | "present"> => {
+const addColumnIfMissing = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    tableName: string,
+    column: string,
+    type: string,
+    backfill?: SQL,
+): Promise<"added" | "filled" | "present"> => {
     if (await hasColumns(exec, dialect, tableName, [column])) {
         return "present";
     }
 
+    const alter = sql`ALTER TABLE ${sql.identifier(tableName)} ADD COLUMN ${sql.identifier(column)} ${sql.raw(type)}`;
+
     try {
-        await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(tableName)} ADD COLUMN ${sql.identifier(column)} ${sql.raw(type)}`);
+        await runInOrder(exec, dialect, backfill === undefined ? [alter] : [alter, backfill]);
+
+        return backfill === undefined ? "added" : "filled";
     } catch (error) {
         if (await hasColumns(exec, dialect, tableName, [column])) {
             return "present";
         }
 
-        throw error;
+        if (backfill === undefined) {
+            throw error;
+        }
     }
 
-    return "added";
+    return addColumnIfMissing(exec, dialect, tableName, column, type);
 };
 
 /**
@@ -199,12 +215,18 @@ const addColumnIfMissing = async (exec: SqlCtxExec, dialect: SqlDialect, tableNa
  * table by all three engines. The declared `notNull` is still enforced on write
  * by the validator, so existing rows are then made to satisfy it: a REQUIRED
  * field that declares a default (`.default(v)`, `.defaultNow()`, `.$defaultFn`)
- * has that default written to every row that has none, evaluated once, by the
- * isolate that added the column. A
- * required field with no default has no value to invent, so its existing rows
+ * has that default written to every row that has none, evaluated once. The
+ * isolate that adds the column writes it in the same unit as the `ALTER` (atomic
+ * on D1); every other isolate that reaches this column-by-column path writes it
+ * again before it finishes, touching only rows that still read NULL, so none
+ * serves a request against unfilled rows while the adding isolate is mid-way,
+ * and one that failed is repaired by the next. Without a D1 batch the `ALTER`
+ * and `UPDATE` are two statements, so an isolate whose one-probe check lands between them
+ * sees no drift; it reads NULL from old rows until the adder's `UPDATE` lands.
+ * A required field with no default has no value to invent, so its existing rows
  * keep reading NULL and a warning names the column; backfill it with an
  * explicit migration before relying on it. The same goes for a column under a UNIQUE constraint, whatever its
- * default, and for a backfill statement that fails (see {@link backfillAddedColumn}). Additive only, like the `CREATE` it
+ * default (see {@link columnBackfill}), and for a backfill statement that fails ({@link runBackfill}). Additive only, like the `CREATE` it
  * follows — a retype or a drop still needs an explicit migration.
  */
 const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
@@ -225,12 +247,22 @@ const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, defini
     }
 
     for (const [column, type, validator] of wanted) {
+        const backfill = validator === undefined ? undefined : columnBackfill(tableName, definition, column, validator);
+        const query = backfill !== undefined && "query" in backfill ? backfill.query : undefined;
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared connection.
-        const outcome = await addColumnIfMissing(exec, dialect, tableName, column, type);
+        const outcome = await addColumnIfMissing(exec, dialect, tableName, column, type, query);
 
-        if (outcome === "added" && validator !== undefined) {
-            // eslint-disable-next-line no-await-in-loop -- one UPDATE per added column, on the same connection.
-            await backfillAddedColumn(exec, tableName, definition, dialect, column, validator);
+        if (backfill !== undefined && "reason" in backfill) {
+            if (outcome === "added") {
+                warnOnce(
+                    `backfill:${tableName}.${column}`,
+                    `"${tableName}.${column}" was added as a required field that ${backfill.reason}, so rows written before it read NULL. Backfill it with a migration (UPDATE "${tableName}" SET "${column}" = … WHERE "${column}" IS NULL).`,
+                );
+            }
+        } else if (query !== undefined && outcome !== "filled") {
+            // Also for a column another isolate added: its UPDATE may not have landed yet, or may have failed.
+            // eslint-disable-next-line no-await-in-loop -- one UPDATE per column, on the same connection.
+            await runBackfill(exec, dialect, tableName, column, query);
         }
     }
 };

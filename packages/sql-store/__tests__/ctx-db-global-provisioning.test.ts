@@ -448,6 +448,42 @@ const racingIsolates = (base: SqlCtxExec): { isolate: () => SqlCtxExec; statemen
     };
 };
 
+/**
+ * Wraps isolate execs so the backfill of whichever one's `ADD COLUMN` succeeds waits for `releaseWinner`: the
+ * interleaving where the isolate that lost the race finishes provisioning before the winner's `UPDATE` lands.
+ */
+const holdingWinnerBackfill = (): { held: (exec: SqlCtxExec) => SqlCtxExec; releaseWinner: () => void } => {
+    let releaseWinner: () => void = () => {};
+    const winnerMayBackfill = new Promise<void>((resolve) => {
+        releaseWinner = resolve;
+    });
+    let winner: SqlCtxExec | undefined;
+
+    return {
+        held: (exec) => {
+            const wrapped: SqlCtxExec = {
+                all: (query, parameters) => exec.all(query, parameters),
+                run: async (query, parameters) => {
+                    await (BACKFILL_RE.test(query) && winner === wrapped ? winnerMayBackfill : undefined);
+
+                    const result = await exec.run(query, parameters);
+
+                    if (ADD_COLUMN_RE.test(query)) {
+                        winner = wrapped;
+                    }
+
+                    return result;
+                },
+            };
+
+            return wrapped;
+        },
+        releaseWinner: () => {
+            releaseWinner();
+        },
+    };
+};
+
 describe("two isolates provisioning one database at once", () => {
     it("adds a missing column once and fails neither, though both probed before either altered", async () => {
         expect.assertions(4);
@@ -478,10 +514,91 @@ describe("two isolates provisioning one database at once", () => {
         expect(statements.filter((statement) => ADD_COLUMN_RE.test(statement))).toHaveLength(2);
         expect(results.map((result) => result.status)).toStrictEqual(["fulfilled", "fulfilled"]);
         expect(columns).toHaveLength(1);
-        // Only the isolate whose ALTER added the column backfills it.
-        expect(statements.filter((statement) => BACKFILL_RE.test(statement))).toHaveLength(1);
+        // The isolate that lost the ALTER fills the rows too, rather than finishing before the winner's UPDATE lands.
+        expect(statements.filter((statement) => BACKFILL_RE.test(statement))).toHaveLength(2);
 
         base.close();
+    });
+
+    it("does not let the isolate that lost the ALTER finish before the old rows hold the default", async () => {
+        expect.assertions(3);
+
+        const base = createSqliteHarness();
+
+        await base.exec.run(
+            `CREATE TABLE "notes" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "${OCC_VERSION_COLUMN}" INTEGER, "body" TEXT NOT NULL)`,
+            [],
+        );
+        await base.exec.run(`INSERT INTO "notes" ("id", "_creationTime", "body") VALUES ('n1', 1, 'hello')`, []);
+
+        const { isolate } = racingIsolates(base.exec);
+        const { held, releaseWinner } = holdingWinnerBackfill();
+        const schema = {
+            tables: {
+                notes: { indexes: [], shape: { body: column("string"), slug: column("string", { defaultValue: "untitled" }) }, shardMode: { kind: "global" } },
+            },
+        } as unknown as SchemaLike;
+
+        const first = runSqlGlobalTableMigrations(held(isolate()), schema, dialect);
+        const second = runSqlGlobalTableMigrations(held(isolate()), schema, dialect);
+        const loser = await Promise.race([first.then(() => "first"), second.then(() => "second")]);
+        const rows = await base.exec.all(`SELECT "slug" FROM "notes"`, []);
+        const rowsWhenLoserFinished = rows.map((row) => {
+            return { ...row };
+        });
+
+        releaseWinner();
+
+        await expect(Promise.all([first, second])).resolves.toBeDefined();
+        expect(loser).toMatch(/^(?:first|second)$/u);
+        expect(rowsWhenLoserFinished).toStrictEqual([{ slug: "untitled" }]);
+
+        base.close();
+    });
+
+    it("adds a defaulted column and fills its old rows in one batch where the exec has one", async () => {
+        expect.assertions(2);
+
+        const harness = createSqliteBatchHarness();
+
+        await harness.exec.run(
+            `CREATE TABLE "notes" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "${OCC_VERSION_COLUMN}" INTEGER, "body" TEXT NOT NULL)`,
+            [],
+        );
+        await harness.exec.run(`INSERT INTO "notes" ("id", "_creationTime", "body") VALUES ('n1', 1, 'hello')`, []);
+
+        const batches: string[][] = [];
+        const { batch } = harness.exec;
+        const exec: SqlCtxExec = {
+            ...harness.exec,
+            batch: async (statements) => {
+                batches.push(statements.map((statement) => statement.sql));
+
+                return batch?.(statements);
+            },
+        };
+        const schema = {
+            tables: {
+                notes: { indexes: [], shape: { body: column("string"), slug: column("string", { defaultValue: "untitled" }) }, shardMode: { kind: "global" } },
+            },
+        } as unknown as SchemaLike;
+
+        await runSqlGlobalTableMigrations(exec, schema, dialect);
+
+        expect(batches.find((statements) => statements.some((statement) => ADD_COLUMN_RE.test(statement)))).toStrictEqual([
+            expect.stringMatching(ADD_COLUMN_RE),
+            expect.stringMatching(BACKFILL_RE),
+        ]);
+        expect(
+            harness.database
+                .prepare(`SELECT "slug" FROM "notes"`)
+                .all()
+                .map((row) => {
+                    return { ...row };
+                }),
+        ).toStrictEqual([{ slug: "untitled" }]);
+
+        harness.close();
     });
 
     it("adds `__count__` to a legacy aggregate companion once and fails neither", async () => {

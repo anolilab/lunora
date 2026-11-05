@@ -206,6 +206,47 @@ describe("global table drift on D1 in workerd", () => {
         await expect(tableDdl(table)).resolves.toContain(`"slug"`);
     });
 
+    it("adds a defaulted column and fills its old rows in one D1 batch", async () => {
+        expect.assertions(2);
+
+        const table = "defaulted_notes";
+
+        await env.DB.prepare(
+            `CREATE TABLE "${table}" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "${OCC_VERSION_COLUMN}" INTEGER, "body" TEXT NOT NULL)`,
+        ).run();
+        await env.DB.prepare(`INSERT INTO "${table}" ("id", "_creationTime", "body") VALUES ('n1', 1, 'hello')`).run();
+
+        const { exec } = recordingExec();
+        const batches: string[][] = [];
+        const schema = {
+            tables: {
+                [table]: {
+                    indexes: [],
+                    shape: { body: col("string"), slug: { _meta: { column: { defaultValue: "untitled", notNull: true } }, kind: "string" } },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never;
+
+        await runSqlGlobalTableMigrations(
+            {
+                ...exec,
+                batch: async (statements) => {
+                    batches.push(statements.map((statement) => statement.sql));
+                    await env.DB.batch(statements.map((statement) => env.DB.prepare(statement.sql).bind(...statement.params)));
+                },
+            },
+            schema,
+            sqliteDialect,
+        );
+
+        // The UPDATE names a column only the ALTER before it in the same batch creates.
+        expect(batches.some((statements) => statements.length === 2 && /add column/iu.test(statements[0] ?? "") && /^update/iu.test(statements[1] ?? ""))).toBe(
+            true,
+        );
+        await expect(env.DB.prepare(`SELECT "slug" FROM "${table}"`).first<{ slug: string }>()).resolves.toStrictEqual({ slug: "untitled" });
+    });
+
     it("refuses a unique index over duplicate rows with the code that names the fix", async () => {
         expect.assertions(1);
 
