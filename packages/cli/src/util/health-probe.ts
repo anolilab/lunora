@@ -214,13 +214,6 @@ const accessLoginMessage = (state: AccessState, url: string): string => {
     }
 };
 
-/**
- * Whether `text` carries the service token sent with the request. A redirect's origin is all the probe reports, but a
- * host that reflects what it receives could still put the token in a subdomain; hostnames are lowercase, so is the check.
- */
-const echoesToken = (text: string, access: AccessState): boolean =>
-    access.kind === "sent" && Object.values(access.headers).some((value) => text.toLowerCase().includes(value.toLowerCase()));
-
 interface ProbeRequest {
     /** The `http:` URL whose same-host `https:` redirect this request follows. */
     from?: string;
@@ -246,7 +239,9 @@ const failureMessage = (request: ProbeRequest, response: HealthResponse, outcome
         // A second upgrade after the one followed is a loop, not a hop.
         case "https-upgrade":
         case "redirect": {
-            const shown = echoesToken(outcome.location, access) ? "" : outcome.location;
+            // A request that carried the service token names no destination: a host that reflects what it receives could put
+            // the token anywhere in it, a subdomain included. Without the token, the origin is all that is reported.
+            const shown = access.kind === "sent" ? "" : outcome.location;
 
             return `${status}${shown === "" ? "" : ` redirecting to ${shown}`} — the health route does not redirect, so something in front of the Worker answered.`;
         }

@@ -248,8 +248,8 @@ describe("probeHealth", () => {
             expect(result.error).toContain("returned HTTP 301 redirecting to https://app.example.com — the health route does not redirect");
         });
 
-        it("reports only a redirect's origin, whose path or query may echo the service token", async () => {
-            expect.assertions(2);
+        it("names no redirect destination when the request carried the service token, which the destination could echo", async () => {
+            expect.assertions(3);
 
             const result = await probeHealth({
                 baseUrl: "https://app.example.com",
@@ -259,23 +259,23 @@ describe("probeHealth", () => {
                 },
             });
 
-            expect(result.error).toContain("redirecting to https://echo.example.com —");
+            expect(result.error).toContain("returned HTTP 302 — the health route does not redirect");
+            expect(result.error).not.toContain("echo.example.com");
             expect(result.error).not.toContain("secret");
         });
 
-        it("leaves out a redirect's origin when it echoes the service token, as a reflecting host could", async () => {
-            expect.assertions(2);
+        it("reports only a redirect's origin when no token was sent", async () => {
+            expect.assertions(1);
 
             const result = await probeHealth({
                 baseUrl: "https://app.example.com",
-                env: accessEnv,
+                env: {},
                 fetchImpl: async () => {
-                    return { headers: new Headers({ location: "https://secret.echo.example.com/" }), ok: false, status: 302 };
+                    return { headers: new Headers({ location: "https://echo.example.com/x?state=abc" }), ok: false, status: 302 };
                 },
             });
 
-            expect(result.error).toContain("returned HTTP 302 — the health route does not redirect");
-            expect(result.error).not.toContain("secret.echo");
+            expect(result.error).toContain("redirecting to https://echo.example.com — the health route does not redirect");
         });
 
         it("does not follow an http → https redirect to another port, which would receive the token", async () => {
