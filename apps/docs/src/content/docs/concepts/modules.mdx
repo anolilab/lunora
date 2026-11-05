@@ -57,7 +57,8 @@ second one. A `queues.ts` in a folder that is not a module is not read.
 
 Once the app declares a module, codegen writes `_generated/architecture.json`
 (and an inlined `architecture.ts` the generated app hands the worker as a loader,
-so only the architecture route ever evaluates it). The
+so only the architecture route ever evaluates it; a Worker wrangler bundles reads
+it from [static assets](/docs/deployment#studios-documents) instead). The
 manifest lists every function, HTTP route, table, queue, topic, workflow, cron and
 service,
 the module each belongs to, and the edges between them:

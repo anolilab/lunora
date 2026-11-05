@@ -484,6 +484,9 @@ A large bundle can also add to startup time, so if yours is growing:
   dependency tree into the deployed bundle.
 - **Look at what is actually heavy.** `lunora analyze` bundles the Worker and
   prints the largest modules, which is usually enough to name the culprit.
+- **Studio's documents are not in it** when wrangler bundles the Worker: they
+  ship as static assets, which do not count toward the limit (see
+  [Studio's documents](#studios-documents)).
 
 Size is not the only upload check. A Worker whose global scope takes more than
 1 second to evaluate is rejected with error 10021 however small it is; see
@@ -656,8 +659,10 @@ wrangler accepts, and a `run_worker_first` that is a boolean or a list wrangler
 accepts: path rules starting with `/` or `!/`, at least one of them `/`, at most
 100 rules (duplicates included) of 100 characters, none repeated, and none
 already covered by another rule ending in `*`.
-Lunora does **not** auto-inject this block; the output directory is
-framework-adapter-specific, so you declare it.
+Lunora does **not** auto-inject this block for your client build; the output
+directory is framework-adapter-specific, so you declare it. (A Worker with no
+`assets` block of its own gets one for [Studio's documents](#studios-documents),
+which serves nothing publicly.)
 
 Once the block exists, Lunora adds one key to it. Cloudflare answers from the
 assets directory before the Worker whenever a file matches, so a request meant
@@ -795,6 +800,45 @@ It is also left out when one of your own `_headers` rules sets `Cache-Control`
 on a path that reaches that directory (`/*`, `/assets/*`, `/:dir/*`, …). A
 `Cache-Control` rule for another path, such as `/img/*`, does not affect it.
 `LUNORA_SECURITY_HEADERS=off` does not affect it either.
+
+### Studio's documents
+
+Studio's API tab and Architecture view read three generated documents: the
+OpenAPI and OpenRPC specs and the architecture manifest. They grow with the app
+(hundreds of KiB in a large one) and only the admin routes
+`/_lunora/admin/openapi`, `/openrpc` and `/architecture` read them, so the Worker
+never loads one before that route's first request. Where they live depends on
+how the Worker is built:
+
+| Build                                                                                                                              | Where the documents live                                                                           |
+| ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| wrangler bundles the Worker (no `@lunora/vite` / `@lunora/rspack`, no framework), Cloudflare target, no `assets` block of your own | Workers Static Assets, outside the Worker script                                                   |
+| Vite or Rsbuild                                                                                                                    | their own chunks of the Worker, loaded with `import()`                                             |
+| a project with its own `assets` block                                                                                              | in the Worker bundle, loaded with `import()` (your assets directory is your client build's output) |
+| `--target node` / `celld`                                                                                                          | in the Worker bundle, loaded with `import()` (no Workers Static Assets)                            |
+
+In the first case codegen writes each document to
+`.lunora/studio-assets/_lunora/studio/<name>.json`, and the dev server and
+`lunora deploy` add this block to `wrangler.jsonc`:
+
+```jsonc
+{
+    "assets": { "binding": "ASSETS", "directory": ".lunora/studio-assets", "run_worker_first": true },
+}
+```
+
+`run_worker_first: true` sends every request to the Worker first, exactly as
+with no `assets` block, so the files are reachable only through the `ASSETS`
+binding. The Worker answers a direct request for `/_lunora/studio/*` with a 404,
+an encoded spelling of that path gets a redirect to it, and the admin route
+reads the file through the binding after checking the admin token. Its response
+carries `Cache-Control: no-store`. A deploy replaces the files, and each isolate
+reads a document at most once.
+
+The block is removed again when the project moves to a bundler plugin or a
+framework. Lunora recognises it by its exact shape, so a block you edit is left
+alone. Run `lunora build` or `lunora deploy` (or `lunora codegen` before a plain
+`wrangler deploy`): wrangler refuses an `assets.directory` that does not exist.
 
 ## Non-goals
 

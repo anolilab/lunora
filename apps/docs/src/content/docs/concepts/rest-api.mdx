@@ -281,7 +281,9 @@ export default createWorker({
 
 That exposes the admin-gated `GET /_lunora/admin/openapi`. The worker calls the
 loader on that route's first request and keeps the document. The generated
-`defineApp()` wires this for you.
+`defineApp()` wires this for you; in a Worker wrangler bundles it reads the
+document from Workers Static Assets instead, so the spec is not in the script at
+all (see [Studio's documents](/docs/deployment#studios-documents)).
 
 The spec and the live router derive the path/method mapping from the **same**
 helper, so "the published OpenAPI matches what is actually routable" is a
