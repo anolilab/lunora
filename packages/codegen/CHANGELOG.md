@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.404](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.403...@lunora/codegen@1.0.0-alpha.404) (2026-11-05)
+
+- feat(vite): dev-loop hints, binding-drift notice and env.ts check (#1494)
+
 ## @lunora/codegen [1.0.0-alpha.403](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.402...@lunora/codegen@1.0.0-alpha.403) (2026-11-05)
 
 - fix(codegen): read the lunora.config booleans the validator accepts (#1500)

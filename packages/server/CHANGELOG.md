@@ -1,3 +1,7 @@
+## @lunora/server [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.272...@lunora/server@1.0.0-alpha.273) (2026-11-05)
+
+- feat(vite): dev-loop hints, binding-drift notice and env.ts check (#1494)
+
 ## @lunora/server [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.271...@lunora/server@1.0.0-alpha.272) (2026-11-05)
 
 - fix(server): guard httpRoute cache headers and keep error causes in logs (#1488)

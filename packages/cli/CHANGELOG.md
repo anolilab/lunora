@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.489](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.488...@lunora/cli@1.0.0-alpha.489) (2026-11-05)
+
+- feat(vite): dev-loop hints, binding-drift notice and env.ts check (#1494)
+
 ## @lunora/cli [1.0.0-alpha.488](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.487...@lunora/cli@1.0.0-alpha.488) (2026-11-05)
 
 - feat(d1): refuse unconfirmed destructive migration sql; fix the add-column race (#1489)
