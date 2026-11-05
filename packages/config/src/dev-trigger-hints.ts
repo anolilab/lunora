@@ -75,7 +75,7 @@ const devTriggerHints = (options: DevTriggerHintOptions): DevTriggerHint[] => {
     }
 
     const crons = [...new Set(stringsOf(parsed.triggers?.crons))];
-    // `Array.isArray`, not `?? []`: spreading a hand-written `producers: {}` threw out of the banner.
+    // A hand-edited section may be an object or hold primitives; only array entries name a queue, and the banner never throws.
     const queueEntries = [parsed.queues?.producers, parsed.queues?.consumers].flatMap((section): unknown[] => (Array.isArray(section) ? section : []));
     const queues = [...new Set(stringsOf(queueEntries.map((entry) => (entry as { queue?: unknown } | null | undefined)?.queue)))];
     const [firstCron] = crons;
