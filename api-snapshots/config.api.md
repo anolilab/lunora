@@ -584,6 +584,7 @@ interface DevTriggerHint {
 
 ```ts
 interface DevTriggerHintOptions {
+    environment?: string;
     projectRoot: string;
     scheduledUrl?: string;
     schemaDirectory: string;

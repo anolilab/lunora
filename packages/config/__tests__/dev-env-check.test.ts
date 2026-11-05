@@ -257,6 +257,27 @@ describe(checkDevEnv, () => {
         expect(result).toMatchObject({ failures: [{ key: "AUTH_SECRET", message: "too short: [redacted]" }], kind: "invalid" });
     });
 
+    it("reaches the contract past an export whose brand getter throws", async () => {
+        expect.assertions(1);
+
+        const hostile = Object.defineProperty(() => {}, Symbol.for("lunora.env"), {
+            get: () => {
+                throw new Error("not readable");
+            },
+        });
+
+        await expect(
+            checkDevEnv({
+                load: async () => {
+                    return { a: hostile, env: requireKeys("API_URL") };
+                },
+                processEnv: {},
+                projectRoot,
+                schemaDirectory: "lunora",
+            }),
+        ).resolves.toMatchObject({ kind: "invalid" });
+    });
+
     it("ignores an export that only looks like an accessor", async () => {
         expect.assertions(1);
 
@@ -326,12 +347,12 @@ describe(checkDevEnv, () => {
         await expect(envSeen({ vars: { WORKER_ENV: "development" } })).resolves.toMatchObject({ WORKER_ENV: "development" });
     });
 
-    it("lets a var the env files set win over a started-with var, as wrangler does", async () => {
+    it("lets a started-with var win over the env files too, as wrangler applies its input bindings last", async () => {
         expect.assertions(1);
 
-        writeFileSync(join(projectRoot, ".dev.vars"), "WORKER_ENV=staging\n");
+        writeFileSync(join(projectRoot, ".dev.vars"), "WORKER_ENV=production\n");
 
-        await expect(envSeen({ vars: { WORKER_ENV: "development" } })).resolves.toMatchObject({ WORKER_ENV: "staging" });
+        await expect(envSeen({ vars: { WORKER_ENV: "development" } })).resolves.toMatchObject({ WORKER_ENV: "development" });
     });
 
     it("answers unloadable, never throws, when the contract cannot be imported on the host", async () => {

@@ -5,7 +5,6 @@
  *
  * First, the wrangler `vars` of the active environment. `vars` is not
  * inherited, so an `env.<name>` block contributes its own `vars` or none.
- * `--var` values the worker is started with go over them.
  *
  * Then `.dev.vars.<env>`, else `.dev.vars`. When neither exists, and
  * `CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV` is not `false`, the `.env` files
@@ -49,7 +48,7 @@ interface LocalWorkerEnvOptions {
     /** Where to look when there is no wrangler config. */
     projectRoot: string;
 
-    /** `--var` values the worker is started with: over the config's `vars`, under `.dev.vars` / `.env`. */
+    /** `--var` values the worker is started with: applied last, over `.dev.vars` / `.env`, as wrangler applies its input bindings. */
     vars?: Readonly<Record<string, string>>;
 }
 
@@ -147,7 +146,7 @@ const resolveLocalWorkerEnv = (options: LocalWorkerEnvOptions): LocalWorkerEnv =
     const processEnv = options.processEnv ?? process.env;
     const directory = options.configPath === undefined ? options.projectRoot : dirname(options.configPath);
     const scope = activeScope(options.config, options.environment);
-    const env: Record<string, unknown> = { ...scope.vars, ...options.vars };
+    const env: Record<string, unknown> = { ...scope.vars };
     const sources = options.config === undefined ? [] : ["wrangler vars"];
     const secrets = scope.secrets ?? undefined;
     let loaded: Record<string, string> | undefined;
@@ -173,7 +172,9 @@ const resolveLocalWorkerEnv = (options: LocalWorkerEnvOptions): LocalWorkerEnv =
         }
     }
 
-    return { env, sources };
+    // Wrangler 4.156's `getBindings` returns `{ ...fromConfigAndFiles, ...inputBindings }`:
+    // a `--var` wins over the files, and does not count as declaring a key for the filter above.
+    return { env: { ...env, ...options.vars }, sources };
 };
 
 export type { LocalWorkerEnv, LocalWorkerEnvOptions, WorkerEnvScope };

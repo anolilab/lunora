@@ -29,7 +29,14 @@ const envContractOf = (value: unknown): EnvContractCheck | undefined => {
         return undefined;
     }
 
-    const check: unknown = Reflect.get(value, ENV_CONTRACT);
+    let check: unknown;
+
+    // An unrelated export can carry a throwing getter or Proxy trap; it is not the contract, and must not hide the one that is.
+    try {
+        check = Reflect.get(value, ENV_CONTRACT);
+    } catch {
+        return undefined;
+    }
 
     return typeof check === "function" ? (check as EnvContractCheck) : undefined;
 };

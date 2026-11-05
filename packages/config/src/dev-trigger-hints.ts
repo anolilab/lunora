@@ -18,6 +18,9 @@ import { discoverQueueInfo } from "./queue-info";
 const LISTED_QUEUES = 3;
 
 interface DevTriggerHintOptions {
+    /** The wrangler environment the dev worker runs; defaults to `CLOUDFLARE_ENV`, which wrangler reads too. */
+    environment?: string;
+
     projectRoot: string;
 
     /**
@@ -40,7 +43,8 @@ interface DevTriggerHint {
     text: string;
 }
 
-type TriggerShape = Pick<WranglerConfig, "queues"> & { triggers?: { crons?: unknown } | null };
+type TriggerScope = Pick<WranglerConfig, "queues"> & { triggers?: { crons?: unknown } | null };
+type TriggerShape = TriggerScope & { env?: Record<string, TriggerScope | null | undefined> | null };
 
 const stringsOf = (values: unknown): string[] =>
     Array.isArray(values) ? values.filter((value): value is string => typeof value === "string" && value !== "") : [];
@@ -80,9 +84,16 @@ const devTriggerHints = (options: DevTriggerHintOptions): DevTriggerHint[] => {
         return [];
     }
 
-    const crons = [...new Set(stringsOf(parsed.triggers?.crons))];
+    const fromProcess = process.env["CLOUDFLARE_ENV"];
+    const environment = options.environment ?? (fromProcess === "" ? undefined : fromProcess);
+    const scope = environment === undefined ? undefined : (parsed.env?.[environment] ?? undefined);
+    // As wrangler resolves them: `triggers` is inherited unless the environment sets
+    // its own, `queues` is a binding, which an environment declares for itself.
+    const triggers = scope?.triggers === undefined ? parsed.triggers : scope.triggers;
+    const queueSection = scope === undefined ? parsed.queues : scope.queues;
+    const crons = [...new Set(stringsOf(triggers?.crons))];
     // A hand-edited section may be an object or hold primitives; the banner never throws.
-    const producers = Array.isArray(parsed.queues?.producers) ? (parsed.queues.producers as unknown[]) : [];
+    const producers = Array.isArray(queueSection?.producers) ? (queueSection.producers as unknown[]) : [];
     const bindings = new Set(stringsOf(producers.map((entry) => (entry as { binding?: unknown } | null | undefined)?.binding)));
     // Discovery parses the queue files, so a worker with no producer skips it.
     const declared = bindings.size === 0 ? [] : discoverQueueInfo(options.projectRoot, options.schemaDirectory).queues;

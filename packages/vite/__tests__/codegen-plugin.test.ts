@@ -913,6 +913,32 @@ export const schema = defineSchema({
             expect(warn).toHaveBeenCalledWith(expect.stringContaining("DB (D1 database) — not in the running worker yet"));
         });
 
+        it("gives a non-.ts schema source, which codegen does not regenerate from, the restart hint", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValueOnce(["DB (D1 database)"]);
+
+            wireServer(plugin, server);
+
+            for (const [event, listener] of (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls as [string, (file: string) => void][]) {
+                if (event === "change") {
+                    listener(join(workdir, "lunora", "helpers.js"));
+                }
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(clientSend).not.toHaveBeenCalled();
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining("DB (D1 database) — not in the running worker yet"));
+        });
+
         it("says nothing about binding drift for a worker that runs a custom configPath", async () => {
             expect.assertions(1);
 

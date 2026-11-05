@@ -41,7 +41,7 @@ describe(devTriggerHints, () => {
     };
 
     /** The hints for the project, pointed at the Studio unless `urls` says otherwise. */
-    const hints = (urls?: { scheduledUrl?: string; studioUrl?: string }) =>
+    const hints = (urls?: { environment?: string; scheduledUrl?: string; studioUrl?: string }) =>
         devTriggerHints({ projectRoot, schemaDirectory: "lunora", ...(urls ?? { studioUrl: STUDIO }) });
 
     it("points crons at the schedule page and a curl that fires the first one", () => {
@@ -54,6 +54,25 @@ describe(devTriggerHints, () => {
                 label: "Crons",
                 text: `2 scheduled → run one now in ${STUDIO}/schedule, or curl "${SCHEDULED}?cron=*%2F5+*+*+*+*"`,
             },
+        ]);
+    });
+
+    it("reads the active environment's crons and queues, inheriting the top-level crons only", () => {
+        expect.assertions(2);
+
+        declareQueues("emails");
+        writeWrangler({
+            env: { staging: { queues: { producers: [producer("emails")] }, triggers: { crons: ["0 0 * * *"] } }, qa: {} },
+            queues: { producers: [] },
+            triggers: { crons: ["*/5 * * * *"] },
+        });
+
+        expect(hints({ environment: "staging", scheduledUrl: SCHEDULED, studioUrl: STUDIO })).toStrictEqual([
+            { label: "Crons", text: `1 scheduled → run one now in ${STUDIO}/schedule, or curl "${SCHEDULED}?cron=0+0+*+*+*"` },
+            { label: "Queues", text: `emails → send a test message in ${STUDIO}/queues` },
+        ]);
+        expect(hints({ environment: "qa", scheduledUrl: SCHEDULED, studioUrl: STUDIO })).toStrictEqual([
+            { label: "Crons", text: `1 scheduled → run one now in ${STUDIO}/schedule, or curl "${SCHEDULED}?cron=*%2F5+*+*+*+*"` },
         ]);
     });
 

@@ -57,7 +57,7 @@ interface DevEnvCheckOptions {
     projectRoot: string;
     schemaDirectory: string;
 
-    /** `--var` values the dev worker is started with: they win over the config's `vars`, and `.dev.vars` / `.env` win over them. */
+    /** `--var` values the dev worker is started with; they win over the config's `vars` and over `.dev.vars` / `.env`, as in wrangler. */
     vars?: Readonly<Record<string, string>>;
 
     /** Binding names the dev session leaves out of the worker (a logged-out `ai` / `artifacts`), so they are not exempt. */

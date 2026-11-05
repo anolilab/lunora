@@ -1013,8 +1013,9 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
 
             // Binding inference scans `src/` as well as the schema directory, and
             // `regenerate` schedules the scan only for a codegen input it ran on. So
-            // this covers `src/` always, and the schema directory when codegen watch
-            // is off and nothing regenerates.
+            // this covers `src/` always, and in the schema directory every source
+            // codegen does not regenerate from: all of them with codegen watch off,
+            // and the non-`.ts` ones (`.js`, `.tsx`, …) with it on.
             const sourceDirectory = resolve(options.projectRoot, "src");
             const isUnder = (file: string, directory: string): boolean => file.startsWith(`${directory}${sep}`);
             const onDriftSource = (file: string): void => {
@@ -1024,7 +1025,9 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                     return;
                 }
 
-                if (isUnder(normalized, sourceDirectory) || (codegenDisabled && isUnder(normalized, absoluteSchemaDirectory))) {
+                const regenerates = !codegenDisabled && normalized.endsWith(".ts");
+
+                if (isUnder(normalized, sourceDirectory) || (!regenerates && isUnder(normalized, absoluteSchemaDirectory))) {
                     bindingDrift.noteSave();
                 }
             };
