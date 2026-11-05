@@ -162,7 +162,11 @@ interface LivePublisher {
  * `c.var.lunora` so handlers can read it as a typed variable.
  */
 interface LunoraHttpEnv {
-    Bindings: Record<string, unknown> & { __lunoraCtx?: HttpActionCtx };
+    /**
+     * `__lunoraUnrouted` is how the runtime learns that no route matched (rather than a handler answering 404 on
+     * purpose): only the router's own not-found handler calls it.
+     */
+    Bindings: Record<string, unknown> & { __lunoraCtx?: HttpActionCtx; __lunoraUnrouted?: () => void };
     Variables: { lunora: HttpActionCtx };
 }
 
@@ -260,6 +264,17 @@ const httpRouter = (): LunoraHttpApp => {
         c.set("lunora", injected);
 
         await next();
+    });
+
+    // Hono's own not-found answer, plus the signal that no route matched. The runtime serves a single-page app's
+    // shell only on that signal, never on a status: a 404 a handler returns stays a 404. An app that sets its own
+    // `notFound` replaces this, and its misses are then its own.
+    app.notFound((c) => {
+        const { __lunoraUnrouted: markUnrouted } = c.env;
+
+        markUnrouted?.();
+
+        return c.text("404 Not Found", 404);
     });
 
     return app;

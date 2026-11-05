@@ -153,3 +153,34 @@ describe("httpRouter", () => {
         expect(response.status).toBe(500);
     });
 });
+
+describe("httpRouter's not-found handler", () => {
+    it("tells the runtime when no route matched, and not when a handler answers 404 itself", async () => {
+        expect.assertions(4);
+
+        const app = httpRouter();
+        let unrouted = 0;
+        const env = {
+            __lunoraCtx: context,
+            __lunoraUnrouted: () => {
+                unrouted += 1;
+            },
+        };
+
+        app.get(
+            "/missing-row",
+            httpAction(() => Response.json({ error: "NOT_FOUND" }, { status: 404 })),
+        );
+
+        const handled = await app.fetch(new Request("https://x/missing-row"), env);
+
+        expect(handled.status).toBe(404);
+        expect(unrouted).toBe(0);
+
+        const missed = await app.fetch(new Request("https://x/nowhere"), env);
+
+        // Hono's own not-found answer, unchanged.
+        await expect(missed.text()).resolves.toBe("404 Not Found");
+        expect(unrouted).toBe(1);
+    });
+});

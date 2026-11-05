@@ -189,6 +189,7 @@ export type {
     ShardFunctionReference,
 } from "./shard-client";
 export { createShardClient } from "./shard-client";
+export type { AssetsFetcherLike } from "./spa-assets";
 export { STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
 export type { TraceTrustSignal, TrustInboundTraceContext } from "./trace-trust";
 

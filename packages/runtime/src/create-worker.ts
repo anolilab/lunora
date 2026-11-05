@@ -99,6 +99,8 @@ import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
 import { runScheduledBackup } from "./scheduled-backup";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
+import type { AssetsFetcherLike } from "./spa-assets";
+import { serveSpaAsset } from "./spa-assets";
 import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
 import { buildTenantFanoutRoutes, QUEUE_DISPATCH_MAX_BODY_BYTES, QUEUE_DISPATCH_PATH } from "./tenant-fanout-routes";
 import type { TrustInboundTraceContext } from "./trace-trust";
@@ -1717,6 +1719,22 @@ interface WorkerOptions {
      * hinted region rather than exactly in it.
      */
     shardRegion?: (shardKey: string) => RegionHint | undefined;
+
+    /**
+     * The Workers Static Assets binding of a single-page app
+     * (`not_found_handling: "single-page-application"`), whose `run_worker_first`
+     * sends every path to the Worker first. Codegen wires it from wrangler's
+     * `assets.binding` when the fallback is the SPA one.
+     *
+     * A `GET` / `HEAD` no route answered is passed to it unchanged: a real
+     * static file comes back as is, a page navigation gets the app shell, and
+     * anything else (a `fetch` to a path nothing serves) keeps the 404, since the
+     * binding answers a miss with the shell too. "No route answered" means no
+     * `httpRouter` at all, or its own not-found handler ran (see `httpRouter()`
+     * in `@lunora/server`), never a handler's 404 or 403. `undefined` keeps every
+     * miss a 404.
+     */
+    spaAssets?: AssetsFetcherLike;
 
     /**
      * Resolve the app-facing storage capability from the worker `env` — the same
@@ -4946,10 +4964,37 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         };
     };
 
-    const dispatchHttpRoute = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response | undefined> => {
-        if (!options.httpRouter) {
-            return undefined;
+    /**
+     * The 404 for a request nothing answered, unless a single-page app's assets
+     * serve it (see {@link WorkerOptions.spaAssets}). Only when no route matched:
+     * a 404 a handler returned stays its own.
+     */
+    const answerMiss = async (request: Request, notFound: Response, unrouted: boolean): Promise<Response> => {
+        const assetResponse = options.spaAssets === undefined || !unrouted ? undefined : await serveSpaAsset(options.spaAssets, request);
+
+        if (assetResponse === undefined) {
+            return notFound;
         }
+
+        await notFound.body?.cancel();
+
+        return assetResponse;
+    };
+
+    /** The router's answer, and whether no route matched: no router at all, or its own not-found handler ran. */
+    const dispatchHttpRoute = async (
+        request: Request,
+        env: unknown,
+        context: ExecutionContextLike,
+    ): Promise<{ response: Response | undefined; unrouted: boolean }> => {
+        if (!options.httpRouter) {
+            return { response: undefined, unrouted: true };
+        }
+
+        let unrouted = false;
+        const markUnrouted = (): void => {
+            unrouted = true;
+        };
 
         // Build the action context up front and inject it on a private env
         // binding; the router's middleware lifts it into the handler's context.
@@ -4980,12 +5025,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // leaves queries / mutations / subscriptions (`/_lunora/rpc`, `/_lunora/ws`)
         // fully serviceable.
         try {
-            return await options.httpRouter.fetch(request, { ...(env as object), __lunoraCtx: httpContext }, context);
+            const response = await options.httpRouter.fetch(request, { ...(env as object), __lunoraCtx: httpContext, __lunoraUnrouted: markUnrouted }, context);
+
+            return { response, unrouted };
         } catch (error: unknown) {
             // eslint-disable-next-line no-console -- surface the SSR render fault server-side; the client gets a generic 500, never the raw message
             console.error("[lunora] httpRouter (SSR) handler threw:", error);
 
-            return new Response("Internal Server Error", { status: 500 });
+            return { response: new Response("Internal Server Error", { status: 500 }), unrouted: false };
         }
     };
 
@@ -6737,7 +6784,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // HTTP actions are the lowest-priority app matcher: explicit routes and the
         // internal `/_lunora/*` endpoints above always win. Once the request
         // reaches the router, hono owns routing.
-        const httpRouteResponse = await dispatchHttpRoute(request, env, context);
+        const { response: httpRouteResponse, unrouted } = await dispatchHttpRoute(request, env, context);
 
         if (httpRouteResponse && httpRouteResponse.status !== 404) {
             return httpRouteResponse;
@@ -6753,7 +6800,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return discoveryResponse;
         }
 
-        return httpRouteResponse ?? new Response("Not found", { status: 404 });
+        return answerMiss(request, httpRouteResponse ?? new Response("Not found", { status: 404 }), unrouted);
     };
 
     return {
