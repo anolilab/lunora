@@ -101,3 +101,14 @@ describe("emitApp — security.headers", () => {
         expect(output).toContain("export { AppBuilder, defineApp, LUNORA_SECURITY_HEADERS };");
     });
 });
+
+describe("emitApp — spaAssets", () => {
+    it("passes a single-page app's assets binding to the worker, and nothing for any other app", () => {
+        expect.assertions(2);
+
+        expect(emitApp(baseOptions)).not.toContain("spaAssets");
+        expect(emitApp({ ...baseOptions, spaAssetsBinding: "ASSETS" })).toContain(
+            '            spaAssets: (env as Record<string, unknown>)["ASSETS"] as WorkerOptions["spaAssets"],',
+        );
+    });
+});

@@ -881,6 +881,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         }),
         // `lunora.config`'s `security.headers`, validated; the build's `_headers` writer reads the same value.
         securityHeaders: readProjectSecurityHeaders(lunoraDirectory),
+        spaAssetsBinding: options.spaAssetsBinding,
         useUmbrella,
         // The app's own declaration, which `emitApp` AND's with `hasVectors`.
         // `emitApp` takes no schema (only the table list), so the count it

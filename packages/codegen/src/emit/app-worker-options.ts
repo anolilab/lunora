@@ -594,6 +594,11 @@ const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
     `            routes: this.routeMap,`,
     ...(options.liveStreamsWithheld ? [`            liveStreams: false,`] : []),
     `            shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),`,
+    // A single-page app routes every path to the Worker first; what no route serves goes to its assets binding.
+    // Emitted only for such an app, so every other app keeps unchanged output.
+    ...(options.spaAssetsBinding === undefined
+        ? []
+        : [`            spaAssets: (env as Record<string, unknown>)[${JSON.stringify(options.spaAssetsBinding)}] as WorkerOptions["spaAssets"],`]),
 ];
 
 export { buildBaseWorkerOptions, buildFrameworkHostLine, buildWorkerOptionLines };

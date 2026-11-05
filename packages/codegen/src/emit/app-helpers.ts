@@ -151,6 +151,9 @@ interface EmitAppOptions {
      */
     securityHeaders?: boolean | SecurityHeadersOptions;
 
+    /** Wrangler's assets binding for a single-page app → `spaAssets`; `undefined` emits nothing. See `RunCodegenOptions.spaAssetsBinding`. */
+    spaAssetsBinding?: string;
+
     /**
      * Every table the schema declares, with its shard mode. Emitted as a literal
      * table map backing `listSchemaTables` and `resolveTableSharding`: export
