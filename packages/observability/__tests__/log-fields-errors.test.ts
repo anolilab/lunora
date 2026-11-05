@@ -265,6 +265,27 @@ describe("an Error in ctx.log fields", () => {
         expect(parseLoggedError(field)?.message).toBe("request failed");
     });
 
+    it("keeps an Error's own `__proto__` field as a field, not as the record's prototype", () => {
+        expect.assertions(1);
+
+        const error = new Error("proto");
+
+        Object.defineProperty(error, "__proto__", { enumerable: true, value: { tenant: "acme" } });
+
+        expect(Object.getOwnPropertyDescriptor(parsed(error), "__proto__")?.value).toStrictEqual({ tenant: "acme" });
+    });
+
+    it("lists an Error nested inside a field under its path, beside the field's text", () => {
+        expect.assertions(3);
+
+        const { fields } = parseLogArgs(["retrying", { attempt: { err: new TypeError("timeout"), number: 2 } }]);
+        const read = readLogFields(fields);
+
+        expect(read.errors.map(([path]) => path)).toStrictEqual(["attempt.err"]);
+        expect(read.errors[0]?.[1].message).toBe("timeout");
+        expect(read.text).toContain('attempt={"err":');
+    });
+
     it("does not read a plain { name, message } object as an Error", () => {
         expect.assertions(1);
 

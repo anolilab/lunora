@@ -210,6 +210,14 @@ const once = (value: object, encoding: Encoding, encode: () => unknown): unknown
 };
 
 /**
+ * Set an own, enumerable field. Assignment would treat a `__proto__` key as the prototype and
+ * drop the field, so the field is defined instead.
+ */
+const setField = (target: LogFields, key: string, value: unknown): void => {
+    Object.defineProperty(target, key, { configurable: true, enumerable: true, value, writable: true });
+};
+
+/**
  * One {@link LoggedError} level. An Error on its own path (a `cause` cycle) or
  * deeper than {@link MAX_ERROR_DEPTH} keeps only its name and message, so the walk
  * always ends; the same Error met again elsewhere (twice in an `AggregateError`)
@@ -233,7 +241,7 @@ const loggedErrorAt = (error: Error, encoding: Encoding, depth: number): unknown
         if (!minimal) {
             for (const [key, value] of Object.entries(error)) {
                 if (key !== "message" && key !== "name") {
-                    record[key] = nested(value);
+                    setField(record, key, nested(value));
                 }
             }
         }
@@ -486,14 +494,6 @@ export const formatLoggedErrorFields = (errors: ReadonlyArray<readonly [string, 
     errors.map(([key, error]) => `${indent}${key}: ${errorChain(error, `${indent}  `).join("\n")}`).join("\n");
 
 /**
- * Set an own, enumerable field. Assignment would treat a `__proto__` key as the prototype and
- * drop the field, so the field is defined instead.
- */
-const setField = (target: LogFields, key: string, value: unknown): void => {
-    Object.defineProperty(target, key, { configurable: true, enumerable: true, value, writable: true });
-};
-
-/**
  * Normalize a (possibly merged) fields bag into the canonical shape every log
  * surface stores and ships: a **fresh** object (so a caller mutating the logged
  * object afterwards can't alter a buffered/queued copy), every value coerced to
@@ -530,12 +530,63 @@ export const normalizeLogFields = (
     return Object.keys(merged).length === 0 ? undefined : merged;
 };
 
+/** Logged Errors listed from inside one field, at most; the rest of the field still shows as its text. */
+const MAX_NESTED_LOGGED_ERRORS = 10;
+
+/** A field value as JSON when it is a serialized object or array, else `undefined`. */
+const parsedJson = (value: unknown): unknown => {
+    if (typeof value !== "string") {
+        return value;
+    }
+
+    if (!(value.startsWith("{") && value.endsWith("}")) && !(value.startsWith("[") && value.endsWith("]"))) {
+        return undefined;
+    }
+
+    try {
+        return JSON.parse(value);
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * Collect the logged Errors inside a field's parsed value (`{ attempt: { err } }`, an array of them), each under its
+ * path below the field. Bounded like the encoding: {@link MAX_ERROR_SCAN_DEPTH} levels, {@link MAX_NESTED_LOGGED_ERRORS} Errors.
+ */
+const collectNestedErrors = (value: unknown, path: string, depth: number, found: [string, LoggedError][]): void => {
+    if (found.length >= MAX_NESTED_LOGGED_ERRORS || depth >= MAX_ERROR_SCAN_DEPTH || typeof value !== "object" || value === null) {
+        return;
+    }
+
+    const error = parseLoggedError(value);
+
+    if (error !== undefined) {
+        found.push([path, error]);
+
+        return;
+    }
+
+    if (Array.isArray(value)) {
+        value.forEach((item, index) => {
+            collectNestedErrors(item, `${path}[${String(index)}]`, depth + 1, found);
+        });
+
+        return;
+    }
+
+    for (const [key, child] of Object.entries(value)) {
+        collectNestedErrors(child, `${path}.${key}`, depth + 1, found);
+    }
+};
+
 /**
  * Read a fields bag for display, parsing each value once: `text` is the compact,
  * space-joined `key=value` pairs for a terminal or log row (`""` when there are
  * none, or the value isn't a plain object), with a logged Error shown as its
  * `Name: message` headline; `errors` holds those logged Errors, keyed by field
- * name, for {@link formatLoggedErrorFields}.
+ * name (or by their path below it, `attempt.err`, for one nested inside a field),
+ * for {@link formatLoggedErrorFields}.
  */
 export const readLogFields = (fields: unknown): { errors: [string, LoggedError][]; text: string } => {
     if (!isRecord(fields)) {
@@ -550,6 +601,12 @@ export const readLogFields = (fields: unknown): { errors: [string, LoggedError][
 
         if (error === undefined) {
             pairs.push(`${key}=${stringifyFieldValue(value)}`);
+
+            // An Error inside the field (`{ attempt: { err } }`) gets its detail too, under its path; the field reads as its JSON.
+            const nested: [string, LoggedError][] = [];
+
+            collectNestedErrors(parsedJson(value), key, 0, nested);
+            errors.push(...nested);
         } else {
             errors.push([key, error]);
             pairs.push(`${key}=${errorHeadline(error)}`);
