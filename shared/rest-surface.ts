@@ -108,8 +108,10 @@ const isHeaderName = (name: string): boolean => HEADER_NAME.test(name);
 const carriesCredential = (headers: Headers, context: { readonly access?: unknown } | undefined, extraHeaders: ReadonlyArray<string> = []): boolean =>
     context?.access !== undefined ||
     CREDENTIAL_HEADERS.some((name) => headers.has(name)) ||
-    // A name no header can have is never on the request; asking `Headers.has` about it would throw on every request.
-    extraHeaders.some((name) => isHeaderName(name) && headers.has(name));
+    // A name no header can have (`"X Api Key"`) is a misspelling of the header the app does authenticate on, which this
+    // check cannot see, so it fails closed: every request counts as credentialed and is answered `private`. Asking
+    // `Headers.has` about it would throw on every request instead.
+    extraHeaders.some((name) => !isHeaderName(name) || headers.has(name));
 
 /**
  * Split a `Cache-Control` value into its directives. Commas inside a quoted
