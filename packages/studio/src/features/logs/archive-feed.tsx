@@ -30,6 +30,13 @@ interface ArchiveState {
     cursor: PipelineLogCursor | undefined;
     /** A genuine read failure to surface inline; `null` when none. */
     error: null | string;
+
+    /**
+     * Bumped each time a fresh result set replaces the rows. An archived record has no id, so a row is keyed by its
+     * time and place in the list, which a new result set reuses for another record; the generation in the key gives
+     * the new set fresh rows, so an opened error detail does not carry over. "Load more" appends and keeps it.
+     */
+    generation: number;
     /** A read is in flight. */
     loading: boolean;
     /** The operator hasn't wired the archive — renders the "not configured" empty state, not an error. */
@@ -51,7 +58,7 @@ type ArchiveAction =
     | { type: "loading" }
     | { type: "notConfigured" };
 
-const INITIAL_STATE: ArchiveState = { cursor: undefined, error: null, loading: false, notConfigured: false, rows: null };
+const INITIAL_STATE: ArchiveState = { cursor: undefined, error: null, generation: 0, loading: false, notConfigured: false, rows: null };
 
 /** Fold one {@link ArchiveAction} into the {@link ArchiveState}; every transition is a single dispatched action. */
 const archiveReducer = (state: ArchiveState, action: ArchiveAction): ArchiveState => {
@@ -60,10 +67,10 @@ const archiveReducer = (state: ArchiveState, action: ArchiveAction): ArchiveStat
             return { ...state, cursor: action.cursor, error: null, loading: false, rows: [...(state.rows ?? []), ...action.rows] };
         }
         case "failed": {
-            return { cursor: undefined, error: action.message, loading: false, notConfigured: false, rows: null };
+            return { ...state, cursor: undefined, error: action.message, loading: false, notConfigured: false, rows: null };
         }
         case "loaded": {
-            return { cursor: action.cursor, error: null, loading: false, notConfigured: false, rows: action.rows };
+            return { cursor: action.cursor, error: null, generation: state.generation + 1, loading: false, notConfigured: false, rows: action.rows };
         }
         case "loading": {
             // Clear a prior error/not-configured on a fresh fetch (matches the kv
@@ -73,7 +80,7 @@ const archiveReducer = (state: ArchiveState, action: ArchiveAction): ArchiveStat
             return { ...state, error: null, loading: true, notConfigured: false };
         }
         case "notConfigured": {
-            return { cursor: undefined, error: null, loading: false, notConfigured: true, rows: null };
+            return { ...state, cursor: undefined, error: null, loading: false, notConfigured: true, rows: null };
         }
         case "pageFailed": {
             return { ...state, error: action.message, loading: false };
@@ -137,7 +144,7 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
 
     // The page + loading/error status move together, so they're one reducer rather
     // than five `useState`s kept in sync by hand (each fetch is a single dispatch).
-    const [{ cursor, error, loading, notConfigured, rows }, dispatch] = useReducer(archiveReducer, INITIAL_STATE);
+    const [{ cursor, error, generation, loading, notConfigured, rows }, dispatch] = useReducer(archiveReducer, INITIAL_STATE);
 
     const debouncedPathPrefix = useDebounced(pathPrefix.trim(), 400);
     const debouncedUserId = useDebounced(userIdFilter.trim(), 400);
@@ -327,7 +334,7 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
                         </TableHeader>
                         <TableBody>
                             {rows.map((row, index) => (
-                                <ArchiveRow key={`${String(row.ts)}-${String(index)}`} row={row} />
+                                <ArchiveRow key={`${String(generation)}:${String(row.ts)}-${String(index)}`} row={row} />
                             ))}
                         </TableBody>
                     </Table>

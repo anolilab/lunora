@@ -97,6 +97,33 @@ describe("archiveFeed", () => {
         expect(detail.textContent).toContain("caused by: Error: disk full");
     });
 
+    it("closes an opened Error details when a filter change brings another record into the same row", async () => {
+        expect.assertions(2);
+
+        const err = (message: string): string => JSON.stringify({ message, name: "Error", stack: `Error: ${message}\n    at save (orders.ts:4:11)` });
+        // Same time and place in the list, different record: the archive has no id to tell them apart.
+        const pages: PipelineLogPage[] = [
+            { rows: [ROW({ fields: { err: err("first") }, ts: 7 })] },
+            { rows: [ROW({ fields: { err: err("second") }, ts: 7 })] },
+        ];
+        const mock = createMockClient({
+            queryLogArchive: (): PipelineLogPage => pages.shift() ?? { rows: [] },
+        });
+
+        render(renderFeed(mock));
+
+        fireEvent.click(await screen.findByTestId("lg-error-toggle"));
+
+        const opened = await screen.findByTestId("lg-error-detail");
+
+        expect(opened.textContent).toContain("Error: first");
+
+        fireEvent.change(screen.getByTestId("lg-archive-min-level"), { target: { value: "error" } });
+        await screen.findByText(/err=Error: second/u);
+
+        expect(screen.queryByTestId("lg-error-detail")).toBeNull();
+    });
+
     it("renders the empty state when the archive returns no rows", async () => {
         expect.assertions(1);
 
