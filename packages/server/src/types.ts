@@ -575,11 +575,14 @@ interface X402ProcedureConfig {
  * identity, or a declared `credentialHeaders` name) is ALWAYS answered
  * `private`, even under `scope: "public"` — see
  * {@link https://developer.mozilla.org/docs/Web/HTTP/Headers/Cache-Control MDN}
- * for what `private` forbids. So a per-user response can never be stored in a
- * shared/edge cache, and the worst a mis-declared `scope` can cost is a missed
- * cache hit. `scope: "public"` additionally lists those credential headers in
- * `Vary`, so an intermediary can't hand a stored anonymous variant to a
- * signed-in caller.
+ * for what `private` forbids. So a per-user response is never stored by a
+ * shared cache that honours `Cache-Control` (the runtime's own edge cache skips
+ * credentialed requests outright), and the worst a mis-declared `scope` costs
+ * there is a missed hit; a browser's private cache may still keep it, which is
+ * what `private` allows. `scope: "public"` additionally lists those credential
+ * headers in `Vary`, so an intermediary that honours `Vary` won't hand a stored
+ * anonymous variant to a signed-in caller. A cache that ignores `Vary` or
+ * `Cache-Control` is outside what response headers can govern.
  *
  * Only ever applied to a cacheable exchange: a `GET` (so `query` procedures — a
  * `mutation` / `action` is `POST`-only) that produced a 2xx.
