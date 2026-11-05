@@ -18,6 +18,7 @@ import join from "../path";
 import { resolveProjectTarget } from "../project-config";
 import type { AssetHeadersResult } from "./asset-headers";
 import { writeAssetHeaders } from "./asset-headers";
+import filesCarryHash from "./hashed-file-names";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 interface ProjectAssetHeadersInput {
@@ -27,6 +28,13 @@ interface ProjectAssetHeadersInput {
      * the integration can vouch that every file it writes there carries a content hash.
      */
     hashedDirectory?: string;
+
+    /**
+     * The file-name patterns (relative to `outputDirectory`, Rollup placeholders) the build names its hashed files
+     * with. Given, every file the build left in `hashedDirectory` must have such a name, or the directory is not
+     * cached for good: a plugin can emit a fixed name there that the patterns never see.
+     */
+    hashedNamePatterns?: ReadonlyArray<string>;
     /** Absolute directory the build wrote its client output to. */
     outputDirectory: string;
     projectRoot: string;
@@ -107,16 +115,21 @@ const projectSecurityHeaders = (lunoraDirectory: string, wrangler: unknown, envi
 
 /**
  * The hashed directory, or `undefined` when caching it for good could cache the
- * wrong thing: a `public/` subfolder of the same name is copied in unhashed, and
+ * wrong thing: a `public/` subfolder of the same name is copied in unhashed, a
+ * file there lacks the hashed name `hashedNamePatterns` promise, and
  * under a `not_found_handling` fallback (`single-page-application`, `404-page`)
  * a request for a chunk a later deploy removed gets `index.html` or `404.html`
  * through the same path rule. Unset or `"none"`, a miss goes to the Worker, which
  * `_headers` never touches.
  */
 const cacheableDirectory = (input: ProjectAssetHeadersInput, notFoundHandling: unknown): string | undefined => {
-    const { hashedDirectory, publicDirectory } = input;
+    const { hashedDirectory, hashedNamePatterns, outputDirectory, publicDirectory } = input;
 
     if (hashedDirectory === undefined || hashedDirectory === "" || (notFoundHandling !== undefined && notFoundHandling !== "none")) {
+        return undefined;
+    }
+
+    if (hashedNamePatterns !== undefined && !filesCarryHash(outputDirectory, hashedDirectory, hashedNamePatterns)) {
         return undefined;
     }
 

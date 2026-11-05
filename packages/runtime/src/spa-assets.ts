@@ -90,8 +90,11 @@ const serveSpaAsset = async (assets: AssetsFetcherLike, request: Request): Promi
 
     try {
         return await readSpaAsset(assets, request);
-    } catch {
-        // A binding that fails keeps the Worker's 404 rather than turning the miss into a 500.
+    } catch (error: unknown) {
+        // A binding that fails keeps the Worker's 404 rather than turning the miss into a 500, and says so.
+        // eslint-disable-next-line no-console -- the runtime's server-side fault log, as for an httpRouter that throws
+        console.error(`[lunora] spaAssets binding failed for ${request.method} ${new URL(request.url).pathname}:`, error);
+
         return undefined;
     }
 };
@@ -118,8 +121,10 @@ const serveSpaShell = async (assets: AssetsFetcherLike, request: Request): Promi
         }
 
         await response.body?.cancel();
-    } catch {
+    } catch (error: unknown) {
         // A binding that fails must not stop the router answering the page.
+        // eslint-disable-next-line no-console -- the runtime's server-side fault log, as for an httpRouter that throws
+        console.error(`[lunora] spaAssets binding failed reading the shell for ${new URL(request.url).pathname}:`, error);
     }
 
     return undefined;

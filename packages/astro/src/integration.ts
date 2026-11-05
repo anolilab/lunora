@@ -71,19 +71,31 @@ interface BuildDoneContext {
 
 const FILE_NAME_OPTIONS = ["assetFileNames", "chunkFileNames", "entryFileNames"] as const;
 
+/** `vite.build.rollupOptions.output` as a list of option objects. */
+const outputEntries = (output: unknown): Record<string, unknown>[] =>
+    (output === undefined ? [] : [output].flat()).map((entry: unknown) =>
+        typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>) : {},
+    );
+
 /**
  * Whether every output file name `vite.build.rollupOptions.output` sets carries `[hash]`, as Astro's own defaults do.
  * A function can name a file anything, so only a pattern string can promise a hash.
  */
-const namesCarryHash = (output: unknown): boolean => {
-    const entries: unknown[] = output === undefined ? [] : [output].flat();
+const namesCarryHash = (output: unknown): boolean =>
+    outputEntries(output).every((names) =>
+        FILE_NAME_OPTIONS.every((key) => names[key] === undefined || (typeof names[key] === "string" && names[key].includes("[hash]"))),
+    );
 
-    return entries.every((entry) => {
-        const names = typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>) : {};
-
-        return FILE_NAME_OPTIONS.every((key) => names[key] === undefined || (typeof names[key] === "string" && names[key].includes("[hash]")));
-    });
-};
+/**
+ * The names Astro gives files under `build.assets`: the configured patterns, Astro's defaults for every option left
+ * unset, and an optimized image's `<name>.<hash>_<options><ext>`.
+ */
+const hashedNamePatterns = (output: unknown, assets: string): string[] => [
+    ...outputEntries(output).flatMap((names) => FILE_NAME_OPTIONS.map((key) => names[key]).filter((name) => typeof name === "string")),
+    `${assets}/[name].[hash][extname]`,
+    `${assets}/[name].[hash].js`,
+    `${assets}/[name].[hash]_[name][extname]`,
+];
 
 /**
  * Write the Lunora-managed `_headers` block into the client output after
@@ -91,7 +103,8 @@ const namesCarryHash = (output: unknown): boolean => {
  * asset Cloudflare serves without running the Worker carries the security
  * headers. Astro names every file under `build.assets` (`_astro/`) with a
  * content hash, so that directory is offered for immutable caching, unless
- * `vite.build.rollupOptions.output` renames those files without `[hash]`.
+ * `vite.build.rollupOptions.output` renames those files without `[hash]` or a
+ * file the build left there (a plugin's fixed name) has none.
  * `@lunora/config` is imported here, at build time, so the integration stays cheap to load.
  */
 const writeAstroAssetHeaders = async (context: BuildDoneContext, config: ConfigDoneContext["config"]): Promise<void> => {
@@ -102,11 +115,14 @@ const writeAstroAssetHeaders = async (context: BuildDoneContext, config: ConfigD
     }
 
     const { emitProjectAssetHeaders } = await import("@lunora/config/cloudflare");
+    const output = config?.vite?.build?.rollupOptions?.output;
+    const assets = config?.build?.assets ?? "_astro";
 
     // Closures, not detached methods: Astro's logger reads `this`.
     emitProjectAssetHeaders(
         {
-            hashedDirectory: namesCarryHash(config?.vite?.build?.rollupOptions?.output) ? (config?.build?.assets ?? "_astro") : undefined,
+            hashedDirectory: namesCarryHash(output) ? assets : undefined,
+            hashedNamePatterns: hashedNamePatterns(output, assets),
             outputDirectory: fileURLToPath(context.dir),
             projectRoot: fileURLToPath(root),
             publicDirectory: config?.publicDir === undefined ? undefined : fileURLToPath(config.publicDir),

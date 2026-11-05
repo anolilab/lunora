@@ -16,7 +16,6 @@ const build = async (
     plugin: ReturnType<typeof assetHeadersPlugin>,
     pluginNames: string[],
     buildConfig: Record<string, unknown> = {},
-    bundle: Record<string, unknown> = {},
 ): Promise<{ info: ReturnType<typeof vi.fn<(message: string) => void>> }> => {
     const info = vi.fn<(message: string) => void>();
     const logger = { info, warn: vi.fn<(message: string) => void>() };
@@ -26,20 +25,16 @@ const build = async (
             return { name };
         }),
     });
-    await (plugin.writeBundle as (this: unknown, outputOptions: unknown, outputBundle: unknown) => Promise<void>).call(
-        {
-            environment: {
-                config: {
-                    build: { assetsDir: "assets", outDir: "dist/client", rolldownOptions: {}, ...buildConfig },
-                    logger,
-                    publicDir: join(projectRoot, "public"),
-                    root: projectRoot,
-                },
+    await (plugin.writeBundle as (this: unknown) => Promise<void>).call({
+        environment: {
+            config: {
+                build: { assetsDir: "assets", outDir: "dist/client", rolldownOptions: {}, ...buildConfig },
+                logger,
+                publicDir: join(projectRoot, "public"),
+                root: projectRoot,
             },
         },
-        {},
-        bundle,
-    );
+    });
 
     return { info };
 };
@@ -152,21 +147,20 @@ describe(assetHeadersPlugin, () => {
         expect(text).toContain("X-Content-Type-Options: nosniff");
     });
 
-    it("caches the assets directory when every file the bundle wrote there has a hashed name, source maps included", async () => {
+    /** Write `files` (paths under the client outDir) as the build left them. */
+    const emitted = (files: string[]): void => {
+        for (const file of files) {
+            mkdirSync(join(projectRoot, "dist", "client", file, ".."), { recursive: true });
+            writeFileSync(join(projectRoot, "dist", "client", file), "", "utf8");
+        }
+    };
+
+    it("caches the assets directory when every file the build wrote there has a hashed name, source maps included", async () => {
         expect.assertions(1);
 
-        await build(
-            assetHeadersPlugin(options()),
-            ["vite-plugin-cloudflare"],
-            {},
-            {
-                "assets/index-Ab12_d-Z.js": {},
-                "assets/index-Ab12_d-Z.js.map": {},
-                "assets/logo-0aB1cD2e.svg": {},
-                "index.html": {},
-                "sw.js": {},
-            },
-        );
+        emitted(["assets/index-Ab12_d-Z.js", "assets/index-Ab12_d-Z.js.map", "assets/img/logo-0aB1cD2e.svg", "index.html", "sw.js"]);
+
+        await build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
 
         expect(readFileSync(headersFile(), "utf8")).toContain("/assets/*\n  Cache-Control: public, max-age=31536000, immutable");
     });
@@ -174,7 +168,9 @@ describe(assetHeadersPlugin, () => {
     it("writes no immutable rule when a plugin emitted a fixed file name into the assets directory", async () => {
         expect.assertions(1);
 
-        await build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"], {}, { "assets/index-Ab12Cd34.js": {}, "assets/worker.js": {} });
+        emitted(["assets/index-Ab12Cd34.js", "assets/worker.js"]);
+
+        await build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"]);
 
         expect(readFileSync(headersFile(), "utf8")).not.toContain("Cache-Control");
     });

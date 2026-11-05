@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ExecutionContextLike, HttpRouterLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
@@ -192,8 +192,10 @@ describe("createWorker — a single-page app's assets behind `/*`", () => {
         expect([...(shell?.headers.keys() ?? [])]).toStrictEqual([]);
     });
 
-    it("lets the router answer, and keeps a miss a 404, when the assets binding fails", async () => {
-        expect.assertions(2);
+    it("lets the router answer, and keeps a miss a 404, when the assets binding fails, logging the failure", async () => {
+        expect.assertions(3);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
         const broken: AssetsFetcherLike = {
             fetch: async () => {
@@ -206,6 +208,9 @@ describe("createWorker — a single-page app's assets behind `/*`", () => {
 
         expect(routed.status).toBe(403);
         expect(missed.status).toBe(404);
+        expect(logged).toHaveBeenCalledWith(expect.stringContaining("spaAssets binding failed"), expect.any(Error));
+
+        logged.mockRestore();
     });
 
     it("keeps every miss a 404 without an assets binding", async () => {

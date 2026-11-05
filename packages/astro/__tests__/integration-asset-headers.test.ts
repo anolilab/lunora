@@ -60,6 +60,25 @@ describe("lunora() Astro integration — managed _headers", () => {
         expect(text).not.toContain("Cache-Control");
     });
 
+    it("writes no immutable rule for _astro/ when the build left a fixed-name file there", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "wrangler.jsonc"), '{ "name": "app", "assets": { "directory": "./dist/client" } }\n', "utf8");
+        mkdirSync(join(root, "dist", "client", "_astro"), { recursive: true });
+        writeFileSync(join(root, "dist", "client", "_astro", "index.Ab12Cd34.js"), "", "utf8");
+        writeFileSync(join(root, "dist", "client", "_astro", "logo.Ab12Cd34_opts.webp"), "", "utf8");
+
+        await build(root);
+
+        expect(readFileSync(join(root, "dist", "client", "_headers"), "utf8")).toContain("/_astro/*\n  Cache-Control");
+
+        writeFileSync(join(root, "dist", "client", "_astro", "partytown.js"), "", "utf8");
+
+        await build(root);
+
+        expect(readFileSync(join(root, "dist", "client", "_headers"), "utf8")).not.toContain("Cache-Control");
+    });
+
     it("writes nothing when wrangler deploys another directory", async () => {
         expect.assertions(1);
 

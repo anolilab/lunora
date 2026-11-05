@@ -2376,6 +2376,7 @@ interface ObservabilitySignalSampling {
 ```ts
 interface ProjectAssetHeadersInput {
     hashedDirectory?: string;
+    hashedNamePatterns?: ReadonlyArray<string>;
     outputDirectory: string;
     projectRoot: string;
     publicDirectory?: string;
