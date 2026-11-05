@@ -162,8 +162,7 @@ interface LoadedProjectConfig {
 }
 
 /**
- * The object literal the default export resolves to, or `undefined` when it does
- * not resolve to one.
+ * The expression the default export resolves to, or `undefined` when there is none.
  *
  * A `satisfies` / `as` / parenthesised wrapper is unwrapped, because that is the
  * documented shape. An identifier is followed to a `const` in the same file,
@@ -171,16 +170,51 @@ interface LoadedProjectConfig {
  * idiom there is and reading it as "no keys" was indistinguishable from an empty
  * config.
  */
-const defaultExportObject = (sourceFile: SourceFile): ObjectLiteralExpression | undefined => {
+const defaultExportExpression = (sourceFile: SourceFile): TsNode | undefined => {
     const assignment = sourceFile.getExportAssignments().find((candidate) => !candidate.isExportEquals());
-    let expression: TsNode | undefined = unwrapLiteral(assignment?.getExpression());
+    const expression: TsNode | undefined = unwrapLiteral(assignment?.getExpression());
 
     // `export default config` names a `const`; its initializer unwraps the same way, parentheses included.
-    if (expression !== undefined && TsNode.isIdentifier(expression)) {
-        expression = unwrapLiteral(sourceFile.getVariableDeclaration(expression.getText())?.getInitializer());
-    }
+    return expression !== undefined && TsNode.isIdentifier(expression)
+        ? unwrapLiteral(sourceFile.getVariableDeclaration(expression.getText())?.getInitializer())
+        : expression;
+};
+
+/** The object literal the default export resolves to, or `undefined` when it does not resolve to one. */
+const defaultExportObject = (sourceFile: SourceFile): ObjectLiteralExpression | undefined => {
+    const expression = defaultExportExpression(sourceFile);
 
     return expression !== undefined && TsNode.isObjectLiteralExpression(expression) ? expression : undefined;
+};
+
+/**
+ * What a default export is when the parser can see it is a literal other than an object (`"an array"`, `"a string"`),
+ * else `undefined`: a computed value may still evaluate to a config object, so it is only unreadable.
+ */
+const nonObjectLiteralKind = (sourceFile: SourceFile): string | undefined => {
+    const expression = defaultExportExpression(sourceFile);
+
+    if (expression === undefined) {
+        return undefined;
+    }
+
+    if (TsNode.isArrayLiteralExpression(expression)) {
+        return "an array";
+    }
+
+    if (TsNode.isStringLiteral(expression) || TsNode.isNoSubstitutionTemplateLiteral(expression) || TsNode.isTemplateExpression(expression)) {
+        return "a string";
+    }
+
+    if (TsNode.isNumericLiteral(expression)) {
+        return "a number";
+    }
+
+    if (TsNode.isTrueLiteral(expression) || TsNode.isFalseLiteral(expression)) {
+        return "a boolean";
+    }
+
+    return TsNode.isNullLiteral(expression) ? "null" : undefined;
 };
 
 /** The literal a property is assigned, following a shorthand to its `const` in the same file. */
@@ -657,15 +691,7 @@ const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile
 };
 
 /** The config file parsed into a standalone in-memory program, or `undefined` when it cannot be read. */
-const parseConfigSource = (configPath: string): SourceFile | undefined => {
-    let source: string;
-
-    try {
-        source = readFileSync(configPath, "utf8");
-    } catch {
-        return undefined;
-    }
-
+const parseConfigSource = (configPath: string, source: string): SourceFile => {
     const project = new Project({
         compilerOptions: { allowJs: true },
         skipFileDependencyResolution: true,
@@ -713,22 +739,28 @@ interface ConfigFileAnalysis {
     literals: ProjectConfigLiterals;
     /** Set when the file has no default export but named value exports, which is also one of the `problems`. */
     namedOnly?: string;
+    /** Set when the default export is a literal other than an object (an array, a string), which is also one of the `problems`. */
+    notObject?: string;
     problems: string[];
 }
 
-const analyze = (configPath: string): ConfigFileAnalysis => {
-    const sourceFile = parseConfigSource(configPath);
-
-    if (sourceFile === undefined) {
-        return { literals: { unreadable: true }, problems: [] };
-    }
+const analyze = (configPath: string, source: string): ConfigFileAnalysis => {
+    const sourceFile = parseConfigSource(configPath, source);
 
     const object = defaultExportObject(sourceFile);
 
     if (object === undefined) {
-        const namedOnly = namedOnlyExportsProblem(basename(configPath), sourceFile, SECTIONS);
+        const kind = nonObjectLiteralKind(sourceFile);
+        const problem =
+            kind === undefined
+                ? namedOnlyExportsProblem(basename(configPath), sourceFile, SECTIONS)
+                : `${basename(configPath)} exports ${kind} as its default, so none of its settings are read. Lunora reads an object: \`export default { … } satisfies LunoraConfig\`.`;
 
-        return { literals: { unreadable: true }, namedOnly, problems: namedOnly === undefined ? [] : [namedOnly] };
+        return {
+            literals: { unreadable: true },
+            ...(kind === undefined ? { namedOnly: problem } : { notObject: problem }),
+            problems: problem === undefined ? [] : [problem],
+        };
     }
 
     const shape = objectOf(Object.fromEntries([...SECTIONS].map(([key, section]) => [key, section.shape])));
@@ -737,23 +769,30 @@ const analyze = (configPath: string): ConfigFileAnalysis => {
 };
 
 /**
- * One analysis per file version, keyed on mtime + size like {@link loadProjectConfig}: a codegen run asks the
- * validator and several readers about the same file, and one parse answers them all.
+ * One analysis per file content: a codegen run asks the validator and several readers about the same file, and one
+ * parse answers them all. Keyed on the text itself, not mtime + size, since a same-size rewrite can keep its
+ * timestamp and would otherwise keep a stale verdict; reading the file is cheap next to parsing it.
  */
-const analysisCache = new Map<string, { key: string; value: ConfigFileAnalysis }>();
+const analysisCache = new Map<string, { source: string; value: ConfigFileAnalysis }>();
 
 const analyzeConfigFile = (configPath: string): ConfigFileAnalysis => {
-    const stats = statSync(configPath, { throwIfNoEntry: false });
-    const key = stats === undefined ? "" : `${String(stats.mtimeMs)}:${String(stats.size)}`;
+    let source: string;
+
+    try {
+        source = readFileSync(configPath, "utf8");
+    } catch {
+        return { literals: { unreadable: true }, problems: [] };
+    }
+
     const cached = analysisCache.get(configPath);
 
-    if (cached?.key === key && key !== "") {
+    if (cached?.source === source) {
         return cached.value;
     }
 
-    const value = analyze(configPath);
+    const value = analyze(configPath, source);
 
-    analysisCache.set(configPath, { key, value });
+    analysisCache.set(configPath, { source, value });
 
     return value;
 };
@@ -814,7 +853,16 @@ const loadProjectConfig = async (projectRoot: string): Promise<LoadedProjectConf
                 return { error: namedOnly };
             }
 
-            return { config: value !== null && typeof value === "object" ? value : undefined };
+            // An array is an object too, but no config: say so, as codegen does, rather than read its indexes as keys.
+            if (value !== undefined && (value === null || typeof value !== "object" || Array.isArray(value))) {
+                return {
+                    error:
+                        analyzeConfigFile(configPath).notObject ??
+                        `${basename(configPath)}'s default export is not an object, so none of its settings are read. Lunora reads an object: \`export default { … } satisfies LunoraConfig\`.`,
+                };
+            }
+
+            return { config: value };
         } catch (error: unknown) {
             return { error: error instanceof Error ? error.message : String(error) };
         }

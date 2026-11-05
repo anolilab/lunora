@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -38,7 +38,6 @@ describe("lunora.config validation", () => {
     security: {
         headers: {
             crossOriginOpenerPolicy: "same-origin-allow-popups",
-            csp: false,
             frameAncestors: ["https://partner.example"],
             hsts: { includeSubDomains: true, maxAge: 63072000, preload: false },
             permissionsPolicy: "camera=()",
@@ -54,6 +53,13 @@ describe("lunora.config validation", () => {
         "export default { remote: process.env.REMOTE === '1', target: process.env.TARGET };\n",
         "export type Env = { DB: string };\nexport interface Extra { a: string }\n",
         "export default { security: { headers: false } };\n",
+        "export default { security: { headers: { csp: false } } };\n",
+        // A type-only re-export configures nothing, so a file of nothing else has no named settings to report.
+        'export type { Env } from "./env";\n',
+        // Only the last of a repeated key is the value that wins, and the one the readers use.
+        "export default { target: 1, target: 'cloudflare' };\n",
+        // A computed default may still evaluate to an object: the readers report it, not this check.
+        "export default makeConfig();\n",
         "export default { security: { headers: { frameOptions: 'DENY', hsts: false } } };\n",
         // `null` is "no preference", as the evaluated config reads it.
         "export default { remote: null };\n",
@@ -161,6 +167,48 @@ describe("lunora.config validation", () => {
         writeConfig("export default { remote: null };\n");
 
         expect(readProjectConfigLiterals(projectRoot)).toStrictEqual({});
+    });
+
+    it.each([
+        ["[]", "an array"],
+        ["'cloudflare'", "a string"],
+        ["true", "a boolean"],
+        ["null", "null"],
+    ])("refuses `export default %s`, a literal that is not an object", (value, kind) => {
+        expect.assertions(1);
+
+        writeConfig(`export default ${value};\n`);
+
+        expect(projectConfigProblems(configPath)).toStrictEqual([
+            `lunora.config.ts exports ${kind} as its default, so none of its settings are read. Lunora reads an object: \`export default { … } satisfies LunoraConfig\`.`,
+        ]);
+    });
+
+    it("makes the evaluating loader refuse a default export that is an array, rather than read its indexes as settings", async () => {
+        expect.assertions(1);
+
+        writeConfig("export default [];\n");
+
+        await expect(loadProjectConfig(projectRoot)).resolves.toStrictEqual({
+            error: "lunora.config.ts exports an array as its default, so none of its settings are read. Lunora reads an object: `export default { … } satisfies LunoraConfig`.",
+        });
+    });
+
+    it("sees a same-size edit that kept the file's timestamp", () => {
+        expect.assertions(2);
+
+        // Whole seconds, so the rewrite's mtime + size match the first version's exactly.
+        const stamp = new Date("2026-01-01T00:00:00Z");
+
+        writeConfig("export default { remote: true };\n");
+        utimesSync(configPath, stamp, stamp);
+
+        expect(projectConfigProblems(configPath)).toStrictEqual([]);
+
+        writeConfig("export default { remote: 1234 };\n");
+        utimesSync(configPath, stamp, stamp);
+
+        expect(projectConfigProblems(configPath)).toStrictEqual(["`remote` must be a boolean, got a number (1234)."]);
     });
 
     it("sees an edit to the file it has already checked", () => {

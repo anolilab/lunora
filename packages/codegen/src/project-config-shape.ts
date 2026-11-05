@@ -203,9 +203,13 @@ const objectProblems = (object: ObjectLiteralExpression, shape: FieldShape, path
     // See the module header: a spread may shadow any member, so the values are not the ones that win.
     const valuesReadable = !members.some((member) => TsNode.isSpreadAssignment(member));
     const problems: string[] = [];
+    const keyOf = (member: (typeof members)[number]): string | undefined =>
+        TsNode.isSpreadAssignment(member) ? undefined : staticPropertyName(member.getNameNode());
+    // `{ target: 1, target: "cloudflare" }` evaluates to its last `target`, which is the one the readers use.
+    const effective = new Map(members.map((member) => [keyOf(member), member]));
 
     for (const member of members) {
-        const key = TsNode.isSpreadAssignment(member) ? undefined : staticPropertyName(member.getNameNode());
+        const key = keyOf(member);
 
         if (key === undefined) {
             continue;
@@ -216,7 +220,7 @@ const objectProblems = (object: ObjectLiteralExpression, shape: FieldShape, path
 
         if (field === undefined) {
             problems.push(unknownKeyProblem(key, path, Object.keys(shape.keys ?? {})));
-        } else if (valuesReadable && !TsNode.isGetAccessorDeclaration(member) && !TsNode.isSetAccessorDeclaration(member)) {
+        } else if (valuesReadable && effective.get(key) === member && !TsNode.isGetAccessorDeclaration(member) && !TsNode.isSetAccessorDeclaration(member)) {
             problems.push(...fieldProblems(memberValue(member), field, path === "" ? key : `${path}.${key}`, sourceFile));
         }
     }

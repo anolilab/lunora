@@ -9,6 +9,12 @@ import { Node as TsNode } from "ts-morph";
 
 import { unwrapLiteral } from "./project-config-shape";
 
+/** Whether `declaration` declares only a type: an interface, a type alias, or an `export type { … }` specifier. */
+const isTypeOnly = (declaration: TsNode): boolean =>
+    TsNode.isInterfaceDeclaration(declaration) ||
+    TsNode.isTypeAliasDeclaration(declaration) ||
+    (TsNode.isExportSpecifier(declaration) && (declaration.isTypeOnly() || declaration.getExportDeclaration().isTypeOnly()));
+
 /** The names a file exports as values (a type-only export configures nothing); empty when it has a default export. */
 const namedValueExports = (sourceFile: SourceFile): string[] => {
     const symbols = sourceFile.getExportSymbols();
@@ -21,10 +27,7 @@ const namedValueExports = (sourceFile: SourceFile): string[] => {
         .filter((symbol) => {
             const declarations = symbol.getDeclarations();
 
-            return (
-                declarations.length === 0 ||
-                !declarations.every((declaration) => TsNode.isInterfaceDeclaration(declaration) || TsNode.isTypeAliasDeclaration(declaration))
-            );
+            return declarations.length === 0 || !declarations.every((declaration) => isTypeOnly(declaration));
         })
         .map((symbol) => symbol.getName());
 };
