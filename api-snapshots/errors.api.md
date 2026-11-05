@@ -217,6 +217,10 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Codegen diagnostic";
     };
+    readonly PROJECT_CONFIG_INVALID: {
+        readonly status: 500;
+        readonly title: "lunora.config has an unknown key, a mistyped value or no default export";
+    };
     readonly JURISDICTION_MOVE: {
         readonly status: 422;
         readonly title: "Unacknowledged jurisdiction move";
@@ -590,10 +594,6 @@ const ERROR_CATALOG: {
     readonly SOCKET_PATH_NOT_LITERAL: {
         readonly status: 500;
         readonly title: "Socket route path is not a string literal";
-    };
-    readonly PROJECT_CONFIG_INVALID: {
-        readonly status: 500;
-        readonly title: "lunora.config has an unknown key or a value of the wrong type";
     };
     readonly LIVE_STREAM_DUPLICATE: {
         readonly status: 500;

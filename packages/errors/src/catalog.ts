@@ -161,6 +161,8 @@ export const ERROR_CATALOG = {
 
     /** Package-specific codes. Build-time-only — never cross the RPC wire, so deliberately not `internal`. */
     CODEGEN_DIAGNOSTIC: { status: 500, title: "Codegen diagnostic" },
+    /** Build-time-only (codegen): `lunora.config` would be read as something other than what it says. */
+    PROJECT_CONFIG_INVALID: { status: 500, title: "lunora.config has an unknown key, a mistyped value or no default export" },
     /** Build-time-only (codegen): `.jurisdiction()` would move DO-backed auth to a new, empty object without `{ pinAuth: true }`. */
     JURISDICTION_MOVE: {
         status: 422,
@@ -450,7 +452,6 @@ export const ERROR_CATALOG = {
     SOCKET_AUTH_NOT_LITERAL: { status: 500, title: "Socket route auth is not a literal boolean" },
     SOCKET_PATH_INVALID: { status: 500, title: "Socket route path is not a plain URL path" },
     SOCKET_PATH_NOT_LITERAL: { status: 500, title: "Socket route path is not a string literal" },
-    PROJECT_CONFIG_INVALID: { status: 500, title: "lunora.config has an unknown key or a value of the wrong type" },
     LIVE_STREAM_DUPLICATE: { status: 500, title: "Duplicate live stream id or export name" },
     LIVE_STREAM_NOT_EXPORTED: { status: 500, title: "Live stream is not a named export" },
     LIVE_STREAM_NOT_LITERAL: { status: 500, title: "Live stream declaration is not a literal" },
