@@ -225,6 +225,36 @@ describe(checkDevEnv, () => {
         await expect(check(requireKeys("CACHE"))).resolves.toStrictEqual({ kind: "valid" });
     });
 
+    it("counts a binding the dev session withholds from the worker as missing", async () => {
+        expect.assertions(1);
+
+        // A logged-out session leaves `ai` out of the worker, so `env.AI` is undefined at runtime.
+        writeFileSync(join(projectRoot, "wrangler.jsonc"), `{ "name": "app", "ai": { "binding": "AI" } }`);
+
+        await expect(check(requireKeys("AI"), { withheld: ["AI"] })).resolves.toMatchObject({ failures: [{ key: "AI" }], kind: "invalid" });
+    });
+
+    it("reads the config the dev worker runs, with the vars it is started with, instead of the project's", async () => {
+        expect.assertions(2);
+
+        // The SvelteKit / Nuxt sidecar: `wrangler dev -c wrangler.dev.jsonc --var WORKER_ENV:development`.
+        writeFileSync(join(projectRoot, "wrangler.jsonc"), `{ "name": "app", "vars": { "DEPLOY_ONLY": "x" } }`);
+        writeFileSync(join(projectRoot, "wrangler.dev.jsonc"), `{ "name": "app-dev", "vars": { "SIDECAR_ONLY": "y" } }`);
+
+        const options = { configPath: join(projectRoot, "wrangler.dev.jsonc"), vars: { WORKER_ENV: "development" } };
+
+        await expect(check(requireKeys("SIDECAR_ONLY", "WORKER_ENV"), options)).resolves.toStrictEqual({ kind: "valid" });
+        await expect(check(requireKeys("DEPLOY_ONLY"), options)).resolves.toMatchObject({ failures: [{ key: "DEPLOY_ONLY" }], kind: "invalid" });
+    });
+
+    it("lets a var the env files set win over a started-with var, as wrangler does", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(projectRoot, ".dev.vars"), "WORKER_ENV=staging\n");
+
+        await expect(envSeen({ vars: { WORKER_ENV: "development" } })).resolves.toMatchObject({ WORKER_ENV: "staging" });
+    });
+
     it("answers unloadable, never throws, when the contract cannot be imported on the host", async () => {
         expect.assertions(1);
 
@@ -292,6 +322,13 @@ describe(describeDevEnvCheck, () => {
 
         expect(describeDevEnvCheck({ kind: "valid" }, "lunora")).toBeUndefined();
         expect(describeDevEnvCheck({ kind: "absent" }, "lunora")).toBeUndefined();
+    });
+
+    it("retracts the last warning when the contract it came from is gone", () => {
+        expect.assertions(2);
+
+        expect(describeDevEnvCheck({ kind: "absent" }, "lunora", { wasInvalid: true })).toMatchObject({ level: "info" });
+        expect(describeDevEnvCheck({ kind: "absent" }, "lunora", { wasInvalid: true })?.message).toMatch(/no env contract is loaded any more/u);
     });
 
     it("says so when a contract the last check failed passes again", () => {

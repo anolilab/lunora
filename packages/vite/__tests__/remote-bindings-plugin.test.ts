@@ -1,3 +1,4 @@
+import type { RemotePlan } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -223,6 +224,24 @@ describe("remoteBindingsPlugin", () => {
         callConfig(plugin, "serve");
 
         expect(materializations).toBe(1);
+    });
+
+    it("hands each plan to onPlan, so the env check knows which bindings this session withholds", () => {
+        expect.assertions(1);
+
+        const onPlan = vi.fn<(plan: RemotePlan) => void>();
+        const plugin = remoteBindingsPlugin(
+            {},
+            remoteOnOptions(() => {
+                return { cleanup: (): void => {}, remoteBindings: [], withheld: [{ binding: "AI", kind: "ai" }] };
+            }),
+            onPlan,
+        );
+
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        callConfig(plugin, "serve");
+
+        expect(onPlan).toHaveBeenCalledWith(expect.objectContaining({ withheld: [{ binding: "AI", kind: "ai" }] }));
     });
 
     it("injects configPath into the shared options object during serve (deferred to hook time)", () => {

@@ -88,9 +88,17 @@ If the app declares a `defineEnv` contract in `lunora/env.ts`, `lunora dev` and
 the Vite plugin check every key in it against that env when the dev server
 starts. `defineEnv` normally validates a key on its first read, so a missing
 key would otherwise show up as a 500 from whichever request reads it first. The
-check prints a warning instead and never stops the server. The Vite plugin runs
-the check again each time you save `env.ts`. A `.dev.vars`, `.env` or
-`wrangler.jsonc` edit restarts the dev server, and the restart runs it too.
+check prints a warning instead and never stops the server.
+
+With the Vite plugin, the check runs again each time you save or delete
+`env.ts`. A `.dev.vars`, `.env` or `wrangler.jsonc` edit restarts the Vite dev
+server, and the restart runs the check too. Without Vite, `lunora dev` checks
+once at startup. Wrangler reloads the worker on those edits without running the
+check again, so restart `lunora dev` to see an updated result.
+
+On SvelteKit and Nuxt the check reads `wrangler.dev.jsonc`, the config the dev
+worker runs. A binding the dev session leaves out because you are not logged in
+to Cloudflare (Workers AI, Artifacts) counts as missing.
 
 `env.ts` runs **in Node**, through [jiti](https://github.com/unjs/jiti), on
 every check, and so do the modules it imports. Keep it to `defineEnv` and the

@@ -158,7 +158,12 @@ const announceUnwired = (plan: RemotePlan): void => {
  * inject into: the materialized path is printed with what to do with it, rather
  * than leaving `LUNORA_REMOTE` looking like it took effect.
  */
-const remoteBindingsPlugin = (options: CloudflarePluginOptions | undefined, planOptions: PlanViteRemoteOptions): Plugin => {
+const remoteBindingsPlugin = (
+    options: CloudflarePluginOptions | undefined,
+    planOptions: PlanViteRemoteOptions,
+    /** Told each plan as it is made, for a plugin that must know what this session withholds. */
+    onPlan?: (plan: RemotePlan) => void,
+): Plugin => {
     let plan: RemotePlan = { bindings: [], cleanup: noopCleanup, enabled: false, withheld: [] };
     /** The path THIS plugin injected, so a re-entrant `config` can tell it from a user-supplied one. */
     let injected: string | undefined;
@@ -180,6 +185,7 @@ const remoteBindingsPlugin = (options: CloudflarePluginOptions | undefined, plan
             // plan without disposing would orphan the previous temp file.
             plan.cleanup();
             plan = planViteRemoteBindings(planOptions);
+            onPlan?.(plan);
 
             for (const binding of plan.withheld) {
                 // eslint-disable-next-line no-console -- surface the withholding; the dev server's logger isn't available in the `config` hook.

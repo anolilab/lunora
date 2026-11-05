@@ -171,6 +171,9 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     // binding provisioning, the wrangler validator, container logs and
     // `buildStart`'s reconcile instead of each parsing the project again.
     const discovery = createDiscoveryCache();
+    // What `remoteBindingsPlugin` left out of this session, read by the env check.
+    // Its `config` hook runs before any `configResolved`, so the check sees it.
+    let withheld: ReadonlyArray<string> = [];
     // `devVariablesPlugin` is `enforce: "pre"` + `apply: "serve"`: it offers to
     // scaffold `.dev.vars` before `@cloudflare/vite-plugin` boots the worker.
     // The framework-detect plugin runs early (its `config` hook) so the
@@ -187,7 +190,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // vinext template's wrangler `main` points at it), because who adds the
         // Cloudflare plugin says nothing about who composes the worker.
         frameworkComposePlugin(resolved, context),
-        devVariablesPlugin(resolved),
+        devVariablesPlugin(resolved, { withheld: () => withheld }),
         // Writes the bindings the code implies into `wrangler.jsonc` from its
         // `config` hook — before `@cloudflare/vite-plugin` parses that file and
         // before `remoteBindingsPlugin` copies it. Unconditional: provisioning is
@@ -249,7 +252,11 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     // config is a copy of that file. Materializing any earlier copies it a
     // binding short. That is also why the provisioning plugin cannot be gated on
     // `validateWrangler`: this copy would go a binding short whenever it was off.
-    plugins.push(remoteBindingsPlugin(cloudflareOptions, { projectRoot: resolved.projectRoot }));
+    plugins.push(
+        remoteBindingsPlugin(cloudflareOptions, { projectRoot: resolved.projectRoot }, (plan) => {
+            withheld = plan.withheld.map((entry) => entry.binding);
+        }),
+    );
 
     // A project that brings its own `cloudflare()` plugin (`cloudflare: false`) still needs the local Hyperdrive
     // database before that plugin resolves its bindings; Lunora's own branch below registers it with its plugin.

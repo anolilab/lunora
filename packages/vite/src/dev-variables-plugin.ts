@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
+import type { DevEnvCheck, DevEnvCheckOptions } from "@lunora/config";
 import {
     checkDevEnv,
     createConfirm,
@@ -35,23 +37,35 @@ const secretSourcesOrUndefined = async (
 };
 
 /**
- * Run the project's `defineEnv` contract against the dev env and log what it
- * found through `log`. Answers whether the env failed the contract, which the
- * next run passes back so an edit that fixes it says so.
+ * The dev sidecar config the SvelteKit / Nuxt worker runs (`wrangler dev -c
+ * wrangler.dev.jsonc --var WORKER_ENV:development`); it, not the deploy config,
+ * holds what that worker reads.
  */
-const reportDevEnv = async (
-    options: ResolvedLunoraPluginOptions,
-    log: Record<"info" | "warn", (message: string) => void>,
-    wasInvalid: boolean,
-): Promise<boolean> => {
-    const check = await checkDevEnv({ projectRoot: options.projectRoot, schemaDirectory: options.schemaDir });
-    const report = describeDevEnvCheck(check, options.schemaDir, { wasInvalid });
+const DEV_SIDECAR_CONFIG = "wrangler.dev.jsonc";
+
+/** What the env contract is checked against: the sidecar's config when the project has one. */
+const devEnvCheckOptions = (options: ResolvedLunoraPluginOptions, withheld: ReadonlyArray<string>): DevEnvCheckOptions => {
+    const sidecar = resolve(options.projectRoot, DEV_SIDECAR_CONFIG);
+    const base = { projectRoot: options.projectRoot, schemaDirectory: options.schemaDir };
+
+    // The sidecar runs its committed config as is: no temp copy, so nothing withheld.
+    return existsSync(sidecar) ? { ...base, configPath: sidecar, vars: { WORKER_ENV: "development" } } : { ...base, withheld };
+};
+
+/**
+ * Log what a check found through `log`, and answer whether the env is still
+ * known to fail the contract, which the next run passes back so an edit that
+ * fixes it says so. A contract that could not be loaded says nothing about the
+ * env, so the previous answer stands.
+ */
+const reportDevEnv = (check: DevEnvCheck, schemaDirectory: string, log: Record<"info" | "warn", (message: string) => void>, wasInvalid: boolean): boolean => {
+    const report = describeDevEnvCheck(check, schemaDirectory, { wasInvalid });
 
     if (report !== undefined) {
         log[report.level](lunoraLine(report.message));
     }
 
-    return check.kind === "invalid";
+    return check.kind === "invalid" || (check.kind === "unloadable" && wasInvalid);
 };
 
 /**
@@ -78,14 +92,29 @@ const reportDevEnv = async (
  * as a 500 from the first request that reads one. A `.dev.vars`, `.env` or
  * wrangler.jsonc edit restarts the dev server (`@cloudflare/vite-plugin` and the
  * codegen plugin do that), which re-runs this hook; an `env.ts` edit does not,
- * so the plugin watches that file itself.
+ * so the plugin watches that file itself. `withheld` names the bindings the
+ * remote-bindings plugin left out of this session, which the check must not
+ * treat as present.
  * Skipped under `vite preview`, which resolves with `command: "serve"` and so
  * runs `apply: "serve"` plugins too — previewing a built app must not prompt to
  * scaffold, or write, a dev secrets file.
  */
-const devVariablesPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
+const devVariablesPlugin = (options: ResolvedLunoraPluginOptions, { withheld = () => [] }: { withheld?: () => ReadonlyArray<string> } = {}): Plugin => {
     let isPreview = false;
     let envInvalid = false;
+    // Bumped per check, so a check an `env.ts` save overtook neither logs nor sets `envInvalid`.
+    let generation = 0;
+
+    const runCheck = async (log: Record<"info" | "warn", (message: string) => void>): Promise<void> => {
+        generation += 1;
+
+        const started = generation;
+        const check = await checkDevEnv(devEnvCheckOptions(options, withheld()));
+
+        if (started === generation) {
+            envInvalid = reportDevEnv(check, options.schemaDir, log, envInvalid);
+        }
+    };
 
     return {
         apply: "serve",
@@ -115,7 +144,7 @@ const devVariablesPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             ensureDevWorkerEnv(options.projectRoot, info);
 
             // `console`: a startup notice, before Vite's logger is wired up.
-            envInvalid = await reportDevEnv(options, console, envInvalid);
+            await runCheck(console);
         },
         configureServer(server: ViteDevServer) {
             if (isPreview) {
@@ -124,21 +153,19 @@ const devVariablesPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
 
             const envPath = resolve(options.projectRoot, options.schemaDir, ENV_FILENAME);
 
-            const recheck = async (): Promise<void> => {
-                envInvalid = await reportDevEnv(options, server.config.logger, envInvalid);
-            };
-
             // The watcher closes with the server, and a restart builds a new one, so the listeners need no teardown.
             const onChange = (file: string): void => {
                 if (resolve(file) === envPath) {
                     // eslint-disable-next-line @typescript-eslint/no-floating-promises -- resolve-only by construction: `checkDevEnv` never rejects
-                    recheck();
+                    runCheck(server.config.logger);
                 }
             };
 
             server.watcher.add(envPath);
             server.watcher.on("add", onChange);
             server.watcher.on("change", onChange);
+            // A deleted contract checks as absent, which retracts a warning it left.
+            server.watcher.on("unlink", onChange);
         },
         enforce: "pre",
         name: "lunora:dev-vars",

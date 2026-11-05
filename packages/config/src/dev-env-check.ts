@@ -21,7 +21,7 @@ import { envContractOf } from "../../../shared/env-contract";
 import { redactSecrets } from "../../../shared/redact-secrets";
 import type { ManifestConfigShape } from "./cloudflare/binding-manifest";
 import { buildBindingManifest } from "./cloudflare/binding-manifest";
-import { readProjectWrangler } from "./cloudflare/wrangler-path";
+import { readProjectWrangler, readWranglerJsonc } from "./cloudflare/wrangler-path";
 import type { LocalWorkerEnvOptions } from "./local-worker-env";
 import { activeScope, resolveLocalWorkerEnv } from "./local-worker-env";
 import join from "./path";
@@ -34,6 +34,13 @@ type DevEnvCheck =
     | { kind: "valid" };
 
 interface DevEnvCheckOptions {
+    /**
+     * The wrangler config the dev worker runs, when it is not the project's
+     * `wrangler.jsonc` — the SvelteKit / Nuxt sidecar runs `wrangler.dev.jsonc`.
+     * Its vars, its bindings, and the `.dev.vars` / `.env` beside it are read.
+     */
+    configPath?: string;
+
     /** The wrangler environment the dev worker runs; defaults to `CLOUDFLARE_ENV`, which wrangler reads too. */
     environment?: string;
 
@@ -48,7 +55,32 @@ interface DevEnvCheckOptions {
 
     projectRoot: string;
     schemaDirectory: string;
+
+    /** `--var` values the dev worker is started with. A key the config or env files set keeps their value, as wrangler keeps it. */
+    vars?: Readonly<Record<string, string>>;
+
+    /** Binding names the dev session leaves out of the worker (a logged-out `ai` / `artifacts`), so they are not exempt. */
+    withheld?: ReadonlyArray<string>;
 }
+
+type WranglerConfig = LocalWorkerEnvOptions["config"] & ManifestConfigShape;
+
+/** The given config, or the project's — `undefined` when there is none, `parsed: undefined` when it cannot be read. */
+const readDevWrangler = (options: DevEnvCheckOptions): { parsed: WranglerConfig | undefined; path: string } | undefined => {
+    if (options.configPath === undefined) {
+        return readProjectWrangler<WranglerConfig>(options.projectRoot);
+    }
+
+    if (!existsSync(options.configPath)) {
+        return undefined;
+    }
+
+    try {
+        return { parsed: readWranglerJsonc<WranglerConfig>(options.configPath).parsed, path: options.configPath };
+    } catch {
+        return { parsed: undefined, path: options.configPath };
+    }
+};
 
 const defaultLoad = async (path: string): Promise<unknown> => {
     const { createJiti } = await import("jiti");
@@ -77,25 +109,34 @@ const runCheck = async (options: DevEnvCheckOptions): Promise<DevEnvCheck> => {
     const processEnv = options.processEnv ?? process.env;
     const fromProcess = processEnv["CLOUDFLARE_ENV"];
     const environment = options.environment ?? (fromProcess === "" ? undefined : fromProcess);
-    const wrangler = readProjectWrangler<LocalWorkerEnvOptions["config"] & ManifestConfigShape>(options.projectRoot);
+    const wrangler = readDevWrangler(options);
 
     if (wrangler !== undefined && wrangler.parsed === undefined) {
         return { error: `${wrangler.path} could not be read as JSONC`, kind: "unloadable" };
     }
 
-    const { env, sources } = resolveLocalWorkerEnv({
+    const resolved = resolveLocalWorkerEnv({
         config: wrangler?.parsed,
         configPath: wrangler?.path,
         environment,
         processEnv,
         projectRoot: options.projectRoot,
     });
+    const env = { ...options.vars, ...resolved.env };
     const scope = activeScope(wrangler?.parsed, environment) as ManifestConfigShape;
-    // A key the worker gets as a binding is not a var, so its absence here is not news.
-    const bindingNames = new Set(wrangler === undefined ? [] : buildBindingManifest(scope).bindings.map((requirement) => requirement.binding));
+    const withheld = new Set(options.withheld);
+    // A key the worker gets as a binding is not a var, so its absence here is not
+    // news — unless this session withholds that binding from the worker.
+    const bindingNames = new Set(
+        wrangler === undefined
+            ? []
+            : buildBindingManifest(scope)
+                  .bindings.map((requirement) => requirement.binding)
+                  .filter((binding) => !withheld.has(binding)),
+    );
     const failures = check(env).filter((failure) => !bindingNames.has(failure.key));
 
-    return failures.length === 0 ? { kind: "valid" } : { failures, kind: "invalid", sources };
+    return failures.length === 0 ? { kind: "valid" } : { failures, kind: "invalid", sources: resolved.sources };
 };
 
 /**
@@ -131,6 +172,10 @@ const describeDevEnvCheck = (
 
     if (check.kind === "valid" && wasInvalid) {
         return { level: "info", message: `${file}: the dev env satisfies the contract again` };
+    }
+
+    if (check.kind === "absent" && wasInvalid) {
+        return { level: "info", message: `${file}: no env contract is loaded any more, so the warning above no longer applies` };
     }
 
     if (check.kind !== "invalid") {

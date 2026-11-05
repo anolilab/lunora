@@ -482,11 +482,14 @@ type DevEnvCheck = {
 
 ```ts
 interface DevEnvCheckOptions {
+    configPath?: string;
     environment?: string;
     load?: (path: string) => Promise<unknown>;
     processEnv?: Record<string, string | undefined>;
     projectRoot: string;
     schemaDirectory: string;
+    vars?: Readonly<Record<string, string>>;
+    withheld?: ReadonlyArray<string>;
 }
 ```
 

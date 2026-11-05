@@ -137,7 +137,14 @@ const reportDevEnv = async (logger: Logger, cwd: string, plan: DevCommandPlan): 
 
     try {
         const schemaDirectory = resolveSchemaDirectory(cwd);
-        const report = describeDevEnvCheck(await checkDevEnv({ projectRoot: cwd, schemaDirectory }), schemaDirectory);
+        // As the worker runs: `--var WORKER_ENV:development`, and without the bindings a logged-out session withholds.
+        const check = await checkDevEnv({
+            projectRoot: cwd,
+            schemaDirectory,
+            vars: { WORKER_ENV: "development" },
+            withheld: plan.remote.withheld.map((entry) => entry.binding),
+        });
+        const report = describeDevEnvCheck(check, schemaDirectory);
 
         if (report !== undefined) {
             logger[report.level](report.message);

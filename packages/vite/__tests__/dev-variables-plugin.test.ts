@@ -2,11 +2,20 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { DevEnvCheck } from "@lunora/config";
+import { checkDevEnv } from "@lunora/config";
 import type { Plugin, ViteDevServer } from "vite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import devVariablesPlugin from "../src/dev-variables-plugin";
 import { lunora } from "../src/index";
+
+// A test that needs a check to finish out of order replaces one run; every other run is the real check.
+vi.mock(import("@lunora/config"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, checkDevEnv: vi.fn<typeof actual.checkDevEnv>(actual.checkDevEnv) };
+});
 
 const RESOLVED = (projectRoot: string) => {
     return {
@@ -189,6 +198,155 @@ export const env = Object.defineProperty((value: unknown) => value, Symbol.for("
         listener?.(join(dir, "lunora", "env.ts"));
 
         await expect(fixed).resolves.toMatch(/lunora\/env\.ts: the dev env satisfies the contract again/u);
+    });
+
+    /** Wire the plugin's watcher onto a stub server, answering the env.ts listener per event and the logger's lines. */
+    const watchEnv = (plugin: Plugin): { lines: string[]; save: (event?: string) => void } => {
+        const listeners = new Map<string, (file: string) => void>();
+        const lines: string[] = [];
+        const push = (line: string): void => {
+            lines.push(line);
+        };
+        const server = {
+            config: { logger: { info: push, warn: push } },
+            watcher: {
+                add: (): void => {},
+                on: (event: string, handler: (file: string) => void): void => {
+                    listeners.set(event, handler);
+                },
+            },
+        } as unknown as ViteDevServer;
+
+        (plugin.configureServer as (s: ViteDevServer) => void)(server);
+
+        return {
+            lines,
+            save: (event = "change") => {
+                listeners.get(event)?.(join(dir, "lunora", "env.ts"));
+            },
+        };
+    };
+
+    /** Resolves once the plugin has logged `count` lines — the milestone a fire-and-forget recheck reaches. */
+    const logged = async (lines: string[], count: number): Promise<void> => {
+        await vi.waitFor(() => {
+            if (lines.length < count) {
+                throw new Error(`waiting for line ${String(count)}`);
+            }
+        });
+    };
+
+    /** A check whose answer the test hands over when it chooses. */
+    const deferredCheck = (): ((check: DevEnvCheck) => void) => {
+        let answer: ((check: DevEnvCheck) => void) | undefined;
+
+        vi.mocked(checkDevEnv).mockImplementationOnce(
+            async () =>
+                await new Promise<DevEnvCheck>((resolve) => {
+                    answer = resolve;
+                }),
+        );
+
+        return (check) => answer?.(check);
+    };
+
+    const missing: DevEnvCheck = { failures: [{ key: "STRIPE_KEY", message: "Expected string" }], kind: "invalid", sources: [".dev.vars"] };
+
+    it("drops a check that a later env.ts save overtook", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(dir, ".dev.vars"), "API_URL=https://api.test\n", "utf8");
+        writeEnvContract(["API_URL", "STRIPE_KEY"]);
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const plugin = devVariablesPlugin(RESOLVED(dir));
+
+        await runHooks(plugin);
+
+        const { lines, save } = watchEnv(plugin);
+        const answerFirst = deferredCheck();
+        const answerSecond = deferredCheck();
+
+        save();
+        save();
+        answerSecond({ kind: "valid" });
+        await logged(lines, 1);
+
+        expect(lines).toStrictEqual([expect.stringContaining("satisfies the contract again")]);
+
+        // The older check reads the contract the second save replaced: it says nothing.
+        const { results } = vi.mocked(checkDevEnv).mock;
+
+        answerFirst(missing);
+        // Awaited after the plugin's own continuation was queued on it, so that one has run.
+        await results.at(-2)?.value;
+
+        expect(lines).toHaveLength(1);
+    });
+
+    it("keeps an invalid env invalid across a contract that fails to load, so the fix still says so", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(dir, ".dev.vars"), "API_URL=https://api.test\n", "utf8");
+        writeEnvContract(["API_URL", "STRIPE_KEY"]);
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const plugin = devVariablesPlugin(RESOLVED(dir));
+
+        await runHooks(plugin);
+
+        const { lines, save } = watchEnv(plugin);
+
+        // Half-typed: the import fails.
+        vi.mocked(checkDevEnv).mockResolvedValueOnce({ error: "Unexpected token", kind: "unloadable" });
+        save();
+        await logged(lines, 1);
+
+        expect(lines[0]).toMatch(/could not be checked/u);
+
+        writeEnvContract(["API_URL"]);
+        save();
+        await logged(lines, 2);
+
+        expect(lines[1]).toMatch(/satisfies the contract again/u);
+    });
+
+    it("retracts its warning when the contract is deleted", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(dir, ".dev.vars"), "API_URL=https://api.test\n", "utf8");
+        writeEnvContract(["API_URL", "STRIPE_KEY"]);
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const plugin = devVariablesPlugin(RESOLVED(dir));
+
+        await runHooks(plugin);
+
+        const { lines, save } = watchEnv(plugin);
+
+        rmSync(join(dir, "lunora", "env.ts"));
+        save("unlink");
+        await logged(lines, 1);
+
+        expect(lines).toStrictEqual([expect.stringMatching(/no env contract is loaded any more/u)]);
+    });
+
+    it("checks the SvelteKit / Nuxt sidecar's config, and the bindings this session withholds", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        writeEnvContract(["API_URL"]);
+
+        await runHooks(devVariablesPlugin(RESOLVED(dir), { withheld: () => ["AI"] }));
+
+        expect(vi.mocked(checkDevEnv)).toHaveBeenLastCalledWith(expect.objectContaining({ withheld: ["AI"] }));
+
+        writeFileSync(join(dir, "wrangler.dev.jsonc"), `{ "name": "app-dev" }`, "utf8");
+        await runHooks(devVariablesPlugin(RESOLVED(dir)));
+
+        expect(vi.mocked(checkDevEnv)).toHaveBeenLastCalledWith(
+            expect.objectContaining({ configPath: join(dir, "wrangler.dev.jsonc"), vars: { WORKER_ENV: "development" } }),
+        );
     });
 
     it("writes nothing under `vite preview`, which resolves as a `serve` command", async () => {

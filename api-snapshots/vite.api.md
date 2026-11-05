@@ -236,7 +236,9 @@ const devStatePlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
 ### `devVariablesPlugin` (const)
 
 ```ts
-const devVariablesPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
+const devVariablesPlugin: (options: ResolvedLunoraPluginOptions, { withheld }?: {
+    withheld?: () => ReadonlyArray<string>;
+}) => Plugin;
 ```
 
 ### `frameworkComposePlugin` (const)
@@ -300,7 +302,7 @@ Re-exported from `@lunora/config` — signature tracked at its source.
 ### `remoteBindingsPlugin` (const)
 
 ```ts
-const remoteBindingsPlugin: (options: CloudflarePluginOptions | undefined, planOptions: PlanViteRemoteOptions) => Plugin;
+const remoteBindingsPlugin: (options: CloudflarePluginOptions | undefined, planOptions: PlanViteRemoteOptions, onPlan?: (plan: RemotePlan) => void) => Plugin;
 ```
 
 ### `resolveOverlayOption` (const)
