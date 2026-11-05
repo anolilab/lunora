@@ -16,7 +16,7 @@
 import { redactArgs, redactCredentials } from "@lunora/observability";
 
 import type { ErrorEncoding, LogFields } from "../../../shared/log-fields";
-import { normalizeLogFields, toLoggedError } from "../../../shared/log-fields";
+import { errorHeadlineOf, normalizeLogFields, toLoggedError } from "../../../shared/log-fields";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext, SpanEvent } from "./observability";
 import { SINK_CONFIG_FIELDS } from "./observability-sinks";
 
@@ -182,7 +182,8 @@ const copyObject = (value: object, copyChild: (child: unknown) => unknown, error
         // normalizing after redaction sees a plain record, not an Error. Own fields and a
         // non-Error `cause` are copied like any child; redaction then walks the stack
         // string, which repeats the message.
-        return errors === "full" ? toLoggedError(value, copyChild) : String(value);
+        // A headline is built from `name` and `message`: the Error's own `toString()` can be overridden to add its stack.
+        return errors === "full" ? toLoggedError(value, copyChild) : errorHeadlineOf(value);
     }
 
     const toJson: unknown = Reflect.get(value, "toJSON");

@@ -313,6 +313,25 @@ describe("enrichSink", () => {
         expect(logged?.cause).toStrictEqual({ used: "10" });
     });
 
+    it("writes an enriched Error on a metric as Name: message even when its toString adds the stack", () => {
+        expect.assertions(1);
+
+        class Verbose extends Error {
+            public override toString(): string {
+                return `${this.name}: ${this.message}\n${String(this.stack)}`;
+            }
+        }
+
+        const { received, sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => {
+            return { failure: new Verbose("quota") };
+        });
+
+        wrapped.onMetric?.(metric);
+
+        expect(received.metrics[0]?.attributes?.failure).toBe("Error: quota");
+    });
+
     it("keeps the inner errors of an enriched AggregateError", () => {
         expect.assertions(1);
 

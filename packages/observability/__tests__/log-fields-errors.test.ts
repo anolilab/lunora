@@ -286,6 +286,47 @@ describe("an Error in ctx.log fields", () => {
         expect(read.text).toContain('attempt={"err":');
     });
 
+    it("builds a headline from name and message, not from an Error's own toString", () => {
+        expect.assertions(2);
+
+        class Verbose extends Error {
+            public override toString(): string {
+                return `${this.name}: ${this.message}\n${String(this.stack)}`;
+            }
+        }
+
+        const error = new Verbose("leak");
+
+        expect(coerceFieldValue(error, "headline")).toBe("Error: leak");
+        expect(coerceFieldValue({ err: error }, "headline")).toBe('{"err":"Error: leak"}');
+    });
+
+    it("cuts a large non-Error cause in the last mode, so the field still fits and parses", () => {
+        expect.assertions(3);
+
+        const field = loggedField(new Error("upstream", { cause: { body: "x".repeat(10_000) } })) as string;
+        const logged = parseLoggedError(field);
+
+        expect(field.length).toBeLessThanOrEqual(3584);
+        expect(logged?.message).toBe("upstream");
+        expect(String(logged?.cause).length).toBeLessThan(600);
+    });
+
+    it("encodes a field twice, not once per mode, when what is too large sits outside its Errors", () => {
+        expect.assertions(1);
+
+        let records = 0;
+
+        coerceFieldValue({ err: new Error("x"), payload: "p".repeat(10_000) }, "full", (record) => {
+            records += 1;
+
+            return record;
+        });
+
+        // The full form, then the smallest: neither fits, and no stack cut between them could.
+        expect(records).toBe(2);
+    });
+
     it("does not read a plain { name, message } object as an Error", () => {
         expect.assertions(1);
 

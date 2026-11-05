@@ -19,6 +19,19 @@ export type LogFields = Record<string, unknown>;
  * `JSON.stringify` rejects — a `bigint`, a circular object, a function — still
  * yields a string instead of throwing.
  */
+/**
+ * An `Error` as `Name: message` (or `Name` alone for an empty message), the way
+ * `Error.prototype.toString` writes it, built from `name` and `message` rather than
+ * by calling the Error's own `toString()`: a subclass can override that to include
+ * its stack, which must not reach a span or metric attribute.
+ */
+export const errorHeadlineOf = (error: Error): string => {
+    const name = String(error.name);
+    const message = String(error.message);
+
+    return message === "" ? name : `${name}: ${message}`;
+};
+
 export const stringifyFieldValue = (value: unknown): string => {
     if (typeof value === "string") {
         return value;
@@ -28,7 +41,7 @@ export const stringifyFieldValue = (value: unknown): string => {
     // enumerable properties — so render it the way `console` does. This is the
     // display form; a log line's fields keep the whole Error (see `coerceFieldValue`).
     if (value instanceof Error) {
-        return String(value);
+        return errorHeadlineOf(value);
     }
 
     try {
@@ -235,7 +248,11 @@ const loggedErrorAt = (error: Error, encoding: Encoding, depth: number): unknown
                 ? loggedErrorAt(value, encoding, depth + 1)
                 : (encoding.child ?? ((plain: unknown) => encodeTree(plain, encoding, 0, depth + 1)))(value);
         const minimal = encoding.mode === "minimal";
-        const message = minimal && error.message.length > MINIMAL_MESSAGE_LENGTH ? `${error.message.slice(0, MINIMAL_MESSAGE_LENGTH)}…` : error.message;
+        const cut = (text: string): string => (text.length > MINIMAL_MESSAGE_LENGTH ? `${text.slice(0, MINIMAL_MESSAGE_LENGTH)}…` : text);
+        // In the last mode a non-Error cause or `errors` member is cut like a message: left whole, a large one would keep
+        // the field over budget, and redaction would cut it into JSON that no longer parses.
+        const member = (value: unknown): unknown => (minimal && !(value instanceof Error) ? cut(stringifyFieldValue(value)) : nested(value));
+        const message = minimal ? cut(error.message) : error.message;
         const record: LoggedError = { message, name: error.name };
 
         if (!minimal) {
@@ -253,11 +270,11 @@ const loggedErrorAt = (error: Error, encoding: Encoding, depth: number): unknown
         }
 
         if (error.cause !== undefined) {
-            record.cause = nested(error.cause);
+            record.cause = member(error.cause);
         }
 
         if (error instanceof AggregateError && Array.isArray(error.errors)) {
-            record.errors = error.errors.slice(0, MAX_AGGREGATE_ERRORS).map((member) => nested(member));
+            record.errors = error.errors.slice(0, MAX_AGGREGATE_ERRORS).map((value) => member(value));
         }
 
         return encoding.mask(record);
@@ -272,7 +289,7 @@ const loggedErrorAt = (error: Error, encoding: Encoding, depth: number): unknown
  */
 const encodeTree = (value: unknown, encoding: Encoding, depth: number, errorDepth: number): unknown => {
     if (value instanceof Error) {
-        return encoding.errors === "full" ? loggedErrorAt(value, encoding, errorDepth) : String(value);
+        return encoding.errors === "full" ? loggedErrorAt(value, encoding, errorDepth) : errorHeadlineOf(value);
     }
 
     if (typeof value !== "object" || value === null || depth >= MAX_ERROR_SCAN_DEPTH || !(Array.isArray(value) || isPlainRecord(value))) {
@@ -331,24 +348,34 @@ export const toLoggedError = (error: Error, child: (value: unknown) => unknown =
  * A field value holding an Error, as JSON. `"headline"` writes each Error as its
  * `Name: message`. `"full"` writes each as a {@link LoggedError}, stepping through
  * {@link STACK_MODES} until the whole field (every Error in it, and what sits
- * beside them) fits {@link MAX_ERROR_JSON_LENGTH}.
+ * beside them) fits {@link MAX_ERROR_JSON_LENGTH}. The smallest form (`"minimal"`)
+ * is measured second: when even it is over budget, what is too large sits outside
+ * the Errors, and it is returned at once rather than after every other mode.
  */
 const encodeErrorField = (value: unknown, errors: ErrorEncoding, mask: (record: LoggedError) => unknown): string | undefined => {
-    if (errors === "headline") {
-        return JSON.stringify(encodeTree(value, newEncoding("headline", "none", mask), 0, 0)) as string | undefined;
+    const encode = (mode: StackMode): string | undefined => JSON.stringify(encodeTree(value, newEncoding(errors, mode, mask), 0, 0)) as string | undefined;
+    const fits = (json: string | undefined): boolean => json === undefined || json.length <= MAX_ERROR_JSON_LENGTH;
+    const full = encode("all");
+
+    if (errors === "headline" || fits(full)) {
+        return full;
     }
 
-    let json: string | undefined;
+    const smallest = encode("minimal");
 
-    for (const mode of STACK_MODES) {
-        json = JSON.stringify(encodeTree(value, newEncoding("full", mode, mask), 0, 0)) as string | undefined;
+    if (!fits(smallest)) {
+        return smallest;
+    }
 
-        if (json === undefined || json.length <= MAX_ERROR_JSON_LENGTH) {
-            break;
+    for (const mode of ["root", "short", "none"] as const) {
+        const json = encode(mode);
+
+        if (fits(json)) {
+            return json;
         }
     }
 
-    return json;
+    return smallest;
 };
 
 /**
