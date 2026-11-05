@@ -405,6 +405,10 @@ catalogs:
     # `packages/config/__tests__/dev-variables-format.test.ts` are the tripwire)
     # rather than floated in on a range.
     dotenv: 18.0.5
+    # Exact-pinned for the same reason as dotenv: the expansion wrangler's
+    # `loadDotEnv` applies to `.env` values in dev (4.156 bundles 12.0.2), which
+    # `@lunora/config`'s dev env check repeats to see the values the worker sees.
+    dotenv-expand: 12.0.2
     fast-glob: ^3.3.3
     rimraf: 6.1.3
     semver: ^7.8.5

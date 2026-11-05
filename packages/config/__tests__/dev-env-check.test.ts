@@ -4,26 +4,35 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { ENV_CONTRACT } from "../../../shared/env-contract";
+import type { DevEnvCheckOptions } from "../src/dev-env-check";
 import { checkDevEnv, describeDevEnvCheck } from "../src/dev-env-check";
 
+/** A branded stand-in for a `defineEnv` accessor whose contract answers `check`. */
+const accessorWith = (check: (env: Record<string, unknown>) => unknown) => Object.defineProperty((env: unknown) => env, ENV_CONTRACT, { value: check });
+
 /** A stand-in for a `defineEnv` accessor: each listed key must be a non-empty string. */
-const requireKeys = (...keys: string[]) => {
-    const parse = (env: unknown): unknown => {
-        const record = env as Record<string, unknown>;
-        const failures = keys
-            .filter((key) => typeof record[key] !== "string" || record[key] === "")
+const requireKeys = (...keys: string[]) =>
+    accessorWith((env) =>
+        keys
+            .filter((key) => typeof env[key] !== "string" || env[key] === "")
             .map((key) => {
-                return { key, message: `Expected string at <root>, received ${typeof record[key]}` };
-            });
+                return { key, message: `Expected string at <root>, received ${typeof env[key]}` };
+            }),
+    );
 
-        if (failures.length > 0) {
-            throw Object.assign(new Error("Invalid environment"), { failures });
-        }
+/** A contract that records the env it was checked against and passes it. */
+const capture = (): { accessor: unknown; seen: () => Record<string, unknown> | undefined } => {
+    let seen: Record<string, unknown> | undefined;
 
-        return record;
+    return {
+        accessor: accessorWith((env) => {
+            seen = env;
+
+            return [];
+        }),
+        seen: () => seen,
     };
-
-    return Object.assign((env: unknown) => env, { parse });
 };
 
 describe(checkDevEnv, () => {
@@ -39,14 +48,25 @@ describe(checkDevEnv, () => {
         rmSync(projectRoot, { force: true, recursive: true });
     });
 
-    const check = async (accessor: unknown) =>
+    const check = async (accessor: unknown, options: Partial<DevEnvCheckOptions> = {}) =>
         checkDevEnv({
             load: async () => {
                 return { env: accessor };
             },
+            processEnv: {},
             projectRoot,
             schemaDirectory: "lunora",
+            ...options,
         });
+
+    /** The env the worker would see, as the contract receives it. */
+    const envSeen = async (options: Partial<DevEnvCheckOptions> = {}): Promise<Record<string, unknown> | undefined> => {
+        const { accessor, seen } = capture();
+
+        await check(accessor, options);
+
+        return seen();
+    };
 
     it("reports nothing for a project without lunora/env.ts", async () => {
         expect.assertions(1);
@@ -89,13 +109,106 @@ describe(checkDevEnv, () => {
     it("does not merge the shell environment the worker never sees", async () => {
         expect.assertions(1);
 
-        process.env["LUNORA_DEV_ENV_CHECK_PROBE"] = "from-shell";
+        await expect(check(requireKeys("PROBE"), { processEnv: { PROBE: "from-shell" } })).resolves.toMatchObject({ kind: "invalid" });
+    });
 
-        try {
-            await expect(check(requireKeys("LUNORA_DEV_ENV_CHECK_PROBE"))).resolves.toMatchObject({ kind: "invalid" });
-        } finally {
-            delete process.env["LUNORA_DEV_ENV_CHECK_PROBE"];
-        }
+    it("skips .env when CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV is false, as wrangler does", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(projectRoot, ".env"), "STRIPE_KEY=sk_test\n");
+
+        await expect(envSeen({ processEnv: { CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false" } })).resolves.toStrictEqual({});
+    });
+
+    it("merges the shell environment under .env when CLOUDFLARE_INCLUDE_PROCESS_ENV is true, and expands references", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(projectRoot, ".env"), "API_URL=https://$HOST/v1\n");
+        writeFileSync(join(projectRoot, ".env.local"), "REGION=eu\n");
+
+        await expect(envSeen({ processEnv: { CLOUDFLARE_INCLUDE_PROCESS_ENV: "true", HOST: "api.test" } })).resolves.toMatchObject({
+            API_URL: "https://api.test/v1",
+            HOST: "api.test",
+            REGION: "eu",
+        });
+    });
+
+    it("keeps only vars and secrets.required from the loaded values when wrangler declares secrets", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(projectRoot, "wrangler.jsonc"), `{ "name": "app", "vars": { "MODE": "dev" }, "secrets": { "required": ["STRIPE_KEY"] } }`);
+        writeFileSync(join(projectRoot, ".env"), ["STRIPE_KEY=sk_test", "MODE=local", "STRAY=1", ""].join("\n"));
+
+        await expect(envSeen({ processEnv: { SHELL_ONLY: "1" } })).resolves.toStrictEqual({ MODE: "local", STRIPE_KEY: "sk_test" });
+    });
+
+    it("takes a required secret from the shell environment when wrangler declares secrets and there is no .dev.vars", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(projectRoot, "wrangler.jsonc"), `{ "name": "app", "secrets": { "required": ["STRIPE_KEY"] } }`);
+
+        await expect(envSeen({ processEnv: { STRIPE_KEY: "sk_test", UNRELATED: "1" } })).resolves.toStrictEqual({ STRIPE_KEY: "sk_test" });
+    });
+
+    it("reads the CLOUDFLARE_ENV environment's own vars and its .dev.vars file", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(projectRoot, "wrangler.jsonc"), `{ "name": "app", "vars": { "TOP": "1" }, "env": { "staging": { "vars": { "STAGE": "1" } } } }`);
+        writeFileSync(join(projectRoot, ".dev.vars"), "PLAIN=1\n");
+        writeFileSync(join(projectRoot, ".dev.vars.staging"), "STAGED=1\n");
+
+        await expect(envSeen({ processEnv: { CLOUDFLARE_ENV: "staging" } })).resolves.toStrictEqual({ STAGE: "1", STAGED: "1" });
+    });
+
+    it("answers unloadable where wrangler would refuse to start: a flag that is not true or false", async () => {
+        expect.assertions(1);
+
+        await expect(check(requireKeys("API_URL"), { processEnv: { CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "nope" } })).resolves.toMatchObject({
+            kind: "unloadable",
+        });
+    });
+
+    it("answers unloadable, never throws, on bindings it cannot read", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(projectRoot, "wrangler.jsonc"), `{ "name": "app", "kv_namespaces": {} }`);
+
+        await expect(check(requireKeys("API_URL"))).resolves.toMatchObject({ kind: "unloadable" });
+    });
+
+    it("answers unloadable, never throws, on a .dev.vars it cannot read", async () => {
+        expect.assertions(1);
+
+        mkdirSync(join(projectRoot, ".dev.vars"));
+
+        await expect(check(requireKeys("API_URL"))).resolves.toMatchObject({ kind: "unloadable" });
+    });
+
+    it("redacts a credential out of the reason it could not check", async () => {
+        expect.assertions(2);
+
+        // Assembled so the literal is not a secret-scanner hit in this file.
+        const secret = ["sk", "live", "x".repeat(24)].join("_");
+        const result = await check(
+            accessorWith(() => {
+                throw new Error(`bad key ${secret}`);
+            }),
+        );
+
+        expect(result).toMatchObject({ kind: "unloadable" });
+        expect(JSON.stringify(result)).not.toContain(secret);
+    });
+
+    it("ignores an export that only looks like an accessor", async () => {
+        expect.assertions(1);
+
+        const duck = Object.assign((env: unknown) => env, {
+            parse: () => {
+                throw Object.assign(new Error("Invalid environment"), { failures: [{ key: "API_URL", message: "missing" }] });
+            },
+        });
+
+        await expect(check(duck)).resolves.toStrictEqual({ kind: "absent" });
     });
 
     it("does not count a key the worker gets as a binding", async () => {
@@ -120,24 +233,35 @@ describe(checkDevEnv, () => {
         ).resolves.toStrictEqual({ error: 'Cannot find module "cloudflare:workers"', kind: "unloadable" });
     });
 
+    it("redacts a credential out of an import failure", async () => {
+        expect.assertions(1);
+
+        const result = await checkDevEnv({
+            load: async () => {
+                throw new Error("connect failed: postgres://app:hunter2@db.local/app");
+            },
+            projectRoot,
+            schemaDirectory: "lunora",
+        });
+
+        expect(JSON.stringify(result)).not.toContain("hunter2");
+    });
+
     it("loads a real lunora/env.ts by default", async () => {
         expect.assertions(1);
 
         writeFileSync(
             join(projectRoot, "lunora", "env.ts"),
-            `const parse = (env: Record<string, unknown>): unknown => {
-    if (env["API_URL"] === undefined) {
-        throw Object.assign(new Error("Invalid environment"), { failures: [{ key: "API_URL", message: "missing" }] });
-    }
+            `const check = (env: Record<string, unknown>) => (env["API_URL"] === undefined ? [{ key: "API_URL", message: "missing" }] : []);
 
-    return env;
-};
-
-export const env = Object.assign((value: unknown) => value, { parse });
+export const env = Object.defineProperty((value: unknown) => value, Symbol.for("lunora.env"), { value: check });
 `,
         );
 
-        await expect(checkDevEnv({ projectRoot, schemaDirectory: "lunora" })).resolves.toMatchObject({ failures: [{ key: "API_URL" }], kind: "invalid" });
+        await expect(checkDevEnv({ processEnv: {}, projectRoot, schemaDirectory: "lunora" })).resolves.toMatchObject({
+            failures: [{ key: "API_URL" }],
+            kind: "invalid",
+        });
     });
 });
 
@@ -162,5 +286,14 @@ describe(describeDevEnvCheck, () => {
 
         expect(describeDevEnvCheck({ kind: "valid" }, "lunora")).toBeUndefined();
         expect(describeDevEnvCheck({ kind: "absent" }, "lunora")).toBeUndefined();
+    });
+
+    it("says so when a contract the last check failed passes again", () => {
+        expect.assertions(1);
+
+        expect(describeDevEnvCheck({ kind: "valid" }, "lunora", { wasInvalid: true })).toStrictEqual({
+            level: "info",
+            message: "lunora/env.ts: the dev env satisfies the contract again",
+        });
     });
 });

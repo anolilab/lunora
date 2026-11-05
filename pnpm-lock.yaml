@@ -487,6 +487,9 @@ catalogs:
     dotenv:
       specifier: 18.0.5
       version: 18.0.5
+    dotenv-expand:
+      specifier: 12.0.2
+      version: 12.0.2
     rimraf:
       specifier: 6.1.3
       version: 6.1.3
@@ -3575,6 +3578,9 @@ importers:
       dotenv:
         specifier: catalog:node
         version: 18.0.5
+      dotenv-expand:
+        specifier: catalog:node
+        version: 12.0.2
       es-module-lexer:
         specifier: catalog:vite
         version: 2.3.2
@@ -18808,6 +18814,10 @@ packages:
   dot-prop@9.0.0:
     resolution: {integrity: sha512-1gxPBJpI/pcjQhKgIU91II6Wkay+dLcN3M6rf2uwP8hRur3HtQXjVrdAK3sjC0piaEuxzMwjXChcETiJl47lAQ==}
     engines: {node: '>=18'}
+
+  dotenv-expand@12.0.2:
+    resolution: {integrity: sha512-lXpXz2ZE1cea1gL4sz2Ipj8y4PiVjytYr3Ij0SWoms1PGxIv7m2CRKuRuCRtHdVuvM/hNJPMxt5PbhboNC4dPQ==}
+    engines: {node: '>=12'}
 
   dotenv@16.6.1:
     resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
@@ -41896,6 +41906,10 @@ snapshots:
   dot-prop@9.0.0:
     dependencies:
       type-fest: 4.41.0
+
+  dotenv-expand@12.0.2:
+    dependencies:
+      dotenv: 16.6.1
 
   dotenv@16.6.1: {}
 

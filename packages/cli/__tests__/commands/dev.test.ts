@@ -1969,18 +1969,12 @@ describe("lunora dev", () => {
 
             writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ compatibility_date: "2026-01-01", main: "src/index.ts", name: "app" }), "utf8");
             mkdirSync(join(workdir, "lunora"), { recursive: true });
-            // Self-contained: a temp dir cannot resolve `@lunora/server`, and the contract is only ever read by shape.
+            // Self-contained: a temp dir cannot resolve `@lunora/server`, so the fixture carries the brand `defineEnv` sets.
             writeFileSync(
                 join(workdir, "lunora", "env.ts"),
-                `export const env = Object.assign((value: unknown) => value, {
-    parse: (value: Record<string, unknown>): unknown => {
-        if (value["STRIPE_KEY"] === undefined) {
-            throw Object.assign(new Error("Invalid environment"), { failures: [{ key: "STRIPE_KEY", message: "Expected string" }] });
-        }
+                `const check = (value: Record<string, unknown>) => (value["STRIPE_KEY"] === undefined ? [{ key: "STRIPE_KEY", message: "Expected string" }] : []);
 
-        return value;
-    },
-});
+export const env = Object.defineProperty((value: unknown) => value, Symbol.for("lunora.env"), { value: check });
 `,
                 "utf8",
             );
@@ -1997,6 +1991,37 @@ describe("lunora dev", () => {
             });
 
             expect(warnings.join("\n")).toContain("lunora/env.ts: 1 key(s) missing or invalid in the dev env (wrangler vars + .dev.vars)");
+        });
+
+        it("still starts when the env check meets a .env it cannot read, which wrangler skips too", async () => {
+            expect.assertions(2);
+
+            const warnings: string[] = [];
+
+            // An unreadable `.env` (read when there is no `.dev.vars`) used to throw out of the check and abort the start.
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ compatibility_date: "2026-01-01", main: "src/index.ts", name: "app" }), "utf8");
+            mkdirSync(join(workdir, ".env"));
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "env.ts"),
+                `export const env = Object.defineProperty((value: unknown) => value, Symbol.for("lunora.env"), { value: () => [{ key: "API_URL", message: "missing" }] });\n`,
+                "utf8",
+            );
+
+            const result = await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
+                probeReady: async () => true,
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(result.code).toBe(0);
+            expect(warnings.join("\n")).toContain("lunora/env.ts: 1 key(s) missing or invalid in the dev env");
         });
 
         it("does not fail a project that has no wrangler config when nobody asked", async () => {

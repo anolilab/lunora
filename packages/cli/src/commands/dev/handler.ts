@@ -134,11 +134,15 @@ const reportDevEnv = async (logger: Logger, cwd: string, plan: DevCommandPlan): 
         return;
     }
 
-    const schemaDirectory = resolveSchemaDirectory(cwd);
-    const report = describeDevEnvCheck(await checkDevEnv({ projectRoot: cwd, schemaDirectory }), schemaDirectory);
+    try {
+        const schemaDirectory = resolveSchemaDirectory(cwd);
+        const report = describeDevEnvCheck(await checkDevEnv({ projectRoot: cwd, schemaDirectory }), schemaDirectory);
 
-    if (report !== undefined) {
-        logger[report.level](report.message);
+        if (report !== undefined) {
+            logger[report.level](report.message);
+        }
+    } catch {
+        /* never fatal: the check only advises, like the scaffold offer before it */
     }
 };
 

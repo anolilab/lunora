@@ -6,6 +6,7 @@ import {
     describeDevEnvCheck,
     ensureDevVariables,
     ensureDevWorkerEnv,
+    ENV_FILENAME,
     fillDevSecrets,
     inferLunoraBindings,
     lunoraLine,
@@ -35,21 +36,19 @@ const secretSourcesOrUndefined = async (
 
 /**
  * Run the project's `defineEnv` contract against the dev env and log what it
- * found. Answers whether the env failed the contract, so an edit that fixes it
- * can say so.
+ * found through `log`. Answers whether the env failed the contract, which the
+ * next run passes back so an edit that fixes it says so.
  */
 const reportDevEnv = async (
     options: ResolvedLunoraPluginOptions,
-    log: { info: (message: string) => void; warn: (message: string) => void },
+    log: Record<"info" | "warn", (message: string) => void>,
     wasInvalid: boolean,
 ): Promise<boolean> => {
     const check = await checkDevEnv({ projectRoot: options.projectRoot, schemaDirectory: options.schemaDir });
-    const report = describeDevEnvCheck(check, options.schemaDir);
+    const report = describeDevEnvCheck(check, options.schemaDir, { wasInvalid });
 
     if (report !== undefined) {
         log[report.level](lunoraLine(report.message));
-    } else if (wasInvalid && check.kind === "valid") {
-        log.info(lunoraLine(`${options.schemaDir}/env.ts: the dev env satisfies the contract again`));
     }
 
     return check.kind === "invalid";
@@ -110,26 +109,18 @@ const devVariablesPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             fillDevSecrets({ cwd: options.projectRoot, info, secretSources });
             ensureDevWorkerEnv(options.projectRoot, info);
 
-            // eslint-disable-next-line no-console -- dev-server startup notice, before Vite's logger is wired up
-            envInvalid = await reportDevEnv(options, { info: console.info, warn: console.warn }, envInvalid);
+            // `console`: a startup notice, before Vite's logger is wired up.
+            envInvalid = await reportDevEnv(options, console, envInvalid);
         },
         configureServer(server: ViteDevServer) {
             if (isPreview) {
                 return;
             }
 
-            const envPath = resolve(options.projectRoot, options.schemaDir, "env.ts");
-            const log = {
-                info: (message: string): void => {
-                    server.config.logger.info(message);
-                },
-                warn: (message: string): void => {
-                    server.config.logger.warn(message);
-                },
-            };
+            const envPath = resolve(options.projectRoot, options.schemaDir, ENV_FILENAME);
 
             const recheck = async (): Promise<void> => {
-                envInvalid = await reportDevEnv(options, log, envInvalid);
+                envInvalid = await reportDevEnv(options, server.config.logger, envInvalid);
             };
 
             // The watcher closes with the server, and a restart builds a new one, so the listeners need no teardown.

@@ -124,24 +124,17 @@ describe("devVariablesPlugin", () => {
         expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toMatch(/WORKER_ENV="staging"/u);
     });
 
-    /** A self-contained stand-in for a `defineEnv` contract requiring `keys` (no `@lunora/server` import to resolve from a temp dir). */
+    /** A self-contained stand-in for a `defineEnv` contract requiring `keys`, carrying its brand (no `@lunora/server` import to resolve from a temp dir). */
     const writeEnvContract = (keys: string[]): void => {
         mkdirSync(join(dir, "lunora"), { recursive: true });
         writeFileSync(
             join(dir, "lunora", "env.ts"),
             `const keys = ${JSON.stringify(keys)};
 
-const parse = (env: Record<string, unknown>): unknown => {
-    const failures = keys.filter((key) => env[key] === undefined).map((key) => ({ key, message: "Expected string at <root>, received undefined" }));
+const check = (env: Record<string, unknown>) =>
+    keys.filter((key) => env[key] === undefined).map((key) => ({ key, message: "Expected string at <root>, received undefined" }));
 
-    if (failures.length > 0) {
-        throw Object.assign(new Error("Invalid environment"), { failures });
-    }
-
-    return env;
-};
-
-export const env = Object.assign((value: unknown) => value, { parse });
+export const env = Object.defineProperty((value: unknown) => value, Symbol.for("lunora.env"), { value: check });
 `,
             "utf8",
         );

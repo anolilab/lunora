@@ -80,6 +80,7 @@
         "@visulima/package": "catalog:cli",
         "dockerode": "catalog:tooling",
         "dotenv": "catalog:node",
+        "dotenv-expand": "catalog:node",
         "es-module-lexer": "catalog:vite",
         "jiti": "catalog:tooling",
         "jsonc-parser": "catalog:vite",

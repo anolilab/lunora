@@ -51,5 +51,25 @@ const readWranglerJsonc = <T = unknown>(wranglerPath: string): ReadWranglerResul
     return { parsed: value as T, text };
 };
 
+/**
+ * The project's wrangler config, found and parsed — `undefined` when there is
+ * none, `parsed: undefined` when it cannot be read or parsed. Never throws: for
+ * the dev-start helpers that only decorate or advise, where a broken config is
+ * the validator's to report.
+ */
+const readProjectWrangler = <T = unknown>(projectRoot: string): (Pick<ReadWranglerResult<T>, "parsed"> & { path: string }) | undefined => {
+    const path = findWranglerFile(projectRoot);
+
+    if (path === undefined) {
+        return undefined;
+    }
+
+    try {
+        return { parsed: readWranglerJsonc<T>(path).parsed, path };
+    } catch {
+        return { parsed: undefined, path };
+    }
+};
+
 export type { ReadWranglerResult };
-export { findWranglerFile, readWranglerJsonc, WRANGLER_FILES };
+export { findWranglerFile, readProjectWrangler, readWranglerJsonc, WRANGLER_FILES };
