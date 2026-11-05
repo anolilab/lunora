@@ -337,13 +337,13 @@ describe("logsPanel — errors view", () => {
         const failed: LogEntry = {
             fields: { err },
             functionPath: "orders:place",
+            id: "buffer:7",
             level: "error",
             message: "charge failed",
-            seq: 7,
             timestamp: 1_700_000_005_000,
         };
-        // Same timestamp, level, path, message and fields: a retry loop logging twice in one millisecond. Only `seq` differs.
-        const later: LogEntry = { ...failed, seq: 8 };
+        // Same timestamp, level, path, message and fields: a retry loop logging twice in one millisecond. Only `id` differs.
+        const later: LogEntry = { ...failed, id: "buffer:8" };
         const mock = createClient([failed]);
 
         render(renderPanel(mock));

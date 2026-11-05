@@ -49,15 +49,15 @@ const TraceLogs = ({ entries }: TraceLogsProps): ReactElement => {
             <p className="mb-1 font-mono text-xs text-muted-foreground">{t("Logs ({count})", { count: entries.length })}</p>
             <div role="grid">
                 {/*
-                 * Keyed by the line's `seq`: content would collide (two identical messages in one millisecond are
+                 * Keyed by the line's `id`: content would collide (two identical messages in one millisecond are
                  * ordinary, a retry loop), and a position shifts when the ring evicts the oldest line, which would
-                 * remount the rows and close an opened error detail. A worker predating `seq` keys by position.
+                 * remount the rows and close an opened error detail. A worker predating `id` keys by position.
                  */}
                 {entries.map((entry, index) => (
                     <div
                         className="flex items-center border-b border-border py-1 font-mono text-xs last:border-b-0"
                         data-testid="tr-log-row"
-                        key={entry.seq ?? `${String(index)}:${String(entry.timestamp)}`}
+                        key={entry.id ?? `${String(index)}:${String(entry.timestamp)}`}
                         role="row"
                     >
                         <LogLine entry={entry} />

@@ -22,16 +22,17 @@ interface LogEntry {
     /** Structured fields from a `ctx.log.<level>(message, fields)` / `ctx.log.with(fields)` call, when present. */
     fields?: Record<string, unknown>;
     functionPath?: string;
+
+    /**
+     * The line's identity, set by {@link LogBuffer.push}: the buffer's own random id and the line's number in it, so
+     * it is never reused, not across a clear, a Durable Object restart or another shard's buffer. What a reader keys a
+     * line by: two lines can share every other field (a retry loop), and a live reader's list shifts as lines are
+     * prepended and evicted.
+     */
+    id?: string;
     instance?: string;
     level: LogLevel;
     message: string;
-
-    /**
-     * The line's place in this buffer, set by {@link LogBuffer.push}: one higher for each line, never reused. What a
-     * reader keys a line by: two lines can share every other field (a retry loop), and a live reader's list shifts as
-     * lines are prepended and evicted.
-     */
-    seq?: number;
     timestamp: number;
 
     /** Trace the line was emitted under; absent outside a dispatch (container lifecycle, hibernation-path errors). What the Studio joins a log line to its waterfall on. */
@@ -80,8 +81,11 @@ class LogBuffer {
     /** How many entries the ring has evicted since it was last cleared. */
     private droppedCount = 0;
 
-    /** The next {@link LogEntry.seq}. Not reset by {@link LogBuffer.clear}, so a line pushed after a clear never takes a cleared line's key. */
-    private nextSeq = 0;
+    /** This buffer's part of each {@link LogEntry.id}: a restarted Durable Object, or another shard, numbers from 0 again. */
+    private readonly incarnation = crypto.randomUUID();
+
+    /** The next line's number. Not reset by {@link LogBuffer.clear}, so a line pushed after a clear never takes a cleared line's id. */
+    private nextNumber = 0;
 
     public constructor(capacity: number = DEFAULT_CAPACITY) {
         this.capacity = normalizeCapacity(capacity);
@@ -124,8 +128,8 @@ class LogBuffer {
      * grows past its bound.
      */
     public push(entry: LogEntry): void {
-        this.buffer.push({ ...entry, seq: this.nextSeq });
-        this.nextSeq += 1;
+        this.buffer.push({ ...entry, id: `${this.incarnation}:${String(this.nextNumber)}` });
+        this.nextNumber += 1;
 
         if (this.buffer.length > this.capacity) {
             this.buffer.shift();
