@@ -3,12 +3,13 @@
  * that writes `_generated/` spreads this into its options, so the CLI, the Vite
  * and Rspack plugins and the studio all emit the same files.
  */
-import { relative } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 
 import type { WranglerQueueProducerIR, WranglerVariableIR } from "@lunora/codegen";
 
 import { isPlainObject } from "./guards";
 import { spaAssetsBinding as spaAssetsBindingOf } from "./spa-assets";
+import { studioAssetsPlan } from "./studio-assets";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 import { scanWranglerVariablesForSecrets } from "./wrangler-secret-variables";
 import type { QueuesShape } from "./wrangler-shape";
@@ -17,6 +18,7 @@ import type { QueuesShape } from "./wrangler-shape";
 interface WranglerCodegenShape {
     assets?: unknown;
     env?: Record<string, { assets?: unknown; queues?: QueuesShape | null } | null> | null;
+    main?: unknown;
     queues?: QueuesShape | null;
     vars?: Record<string, unknown> | null;
 }
@@ -27,6 +29,12 @@ interface WranglerCodegenInputs {
      * app, each name once. An environment's block replaces the top-level one whole, so each may name its own binding.
      */
     spaAssetsBindings?: string[];
+
+    /**
+     * Where Studio's documents ship as Workers Static Assets: the binding, and the assets directory relative to the
+     * project root. Absent keeps them in the Worker bundle (see `studio-assets.ts`).
+     */
+    studioAssets?: { binding: string; directory: string };
     /** Every well-formed `queues.producers[]` entry of the top level and each `env.<name>` block. */
     wranglerQueueProducers: WranglerQueueProducerIR[];
     /** Top-level `vars` entries that look like plaintext secrets. */
@@ -58,8 +66,13 @@ const wranglerCodegenInputs = (projectRoot: string): WranglerCodegenInputs => {
         ...new Set([parsed.assets, ...Object.values(parsed.env ?? {}).map((block) => block?.assets)].flatMap((assets) => spaAssetsBindingOf(assets) ?? [])),
     ];
 
+    const studioAssets = studioAssetsPlan(projectRoot, parsed);
+
     return {
         ...(spaAssetsBindings.length === 0 ? {} : { spaAssetsBindings }),
+        ...(studioAssets === undefined
+            ? {}
+            : { studioAssets: { binding: studioAssets.binding, directory: relative(projectRoot, resolve(dirname(wranglerPath), studioAssets.directory)) } }),
         wranglerQueueProducers: [...producersOf(parsed.queues), ...Object.entries(parsed.env ?? {}).flatMap(([env, block]) => producersOf(block?.queues, env))],
         wranglerVariables: scanWranglerVariablesForSecrets(isPlainObject(parsed.vars) ? parsed.vars : undefined, relative(projectRoot, wranglerPath)),
     };

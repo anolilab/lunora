@@ -556,6 +556,35 @@ const buildQueueConsumerLines = (options: ResolvedAppOptions): string[] =>
           ]
         : [];
 
+/**
+ * Studio's documents, as loaders: only its admin routes read them, and they grow
+ * with the app. Shipped as assets, each is read through the binding on that
+ * route's first request, and the Worker script never contains it. Otherwise the
+ * `import()` keeps each in its own chunk (or, under wrangler's single-file
+ * bundle, behind a lazy initializer), evaluated on that route's first request
+ * rather than on the isolate's first event.
+ */
+const buildStudioDocumentLines = (options: ResolvedAppOptions): string[] => {
+    const documents = [
+        [options.wantsArchitecture, "architecture", "architecture", "architecture"],
+        [options.wantsOpenApi, "openApiSpec", "openapi", "openApiSpec"],
+        [options.wantsOpenRpc, "openRpcSpec", "openrpc", "openRpcSpec"],
+    ] as const;
+    const { studioAssetsBinding } = options;
+
+    return documents.flatMap(([wanted, option, file, exportName]) => {
+        if (!wanted) {
+            return [];
+        }
+
+        return studioAssetsBinding === undefined
+            ? [`            ${option}: () => import("./${file}.js").then((module) => module.${exportName}),`]
+            : [
+                  `            ${option}: () => loadStudioDocument((env as Record<string, unknown>)[${JSON.stringify(studioAssetsBinding)}], ${JSON.stringify(file)}),`,
+              ];
+    });
+};
+
 /** The `shardDO` + spec fields the worker always (or conditionally) carries. */
 const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
     // The `env` object's `AI` binding, for the studio's chat assistant
@@ -582,12 +611,7 @@ const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
     // Cloudflare data-residency region. Emitted only when declared, so apps
     // without it keep the un-pinned global namespace (and unchanged output).
     ...(options.jurisdiction ? [`            jurisdiction: ${JSON.stringify(options.jurisdiction)},`] : []),
-    // Loaders, not documents: only Studio's admin routes read them, and they grow with
-    // the app. The `import()` keeps each in its own chunk, evaluated on that route's
-    // first request rather than on the isolate's first event.
-    ...(options.wantsArchitecture ? [`            architecture: () => import("./architecture.js").then((module) => module.architecture),`] : []),
-    ...(options.wantsOpenApi ? [`            openApiSpec: () => import("./openapi.js").then((module) => module.openApiSpec),`] : []),
-    ...(options.wantsOpenRpc ? [`            openRpcSpec: () => import("./openrpc.js").then((module) => module.openRpcSpec),`] : []),
+    ...buildStudioDocumentLines(options),
     ...buildQueueConsumerLines(options),
     // Spread so an unset `.httpRouter()` leaves the key absent rather than
     // explicitly `undefined` — `createWorker` treats the two the same, but the

@@ -81,7 +81,7 @@ import type { AgentIR, FunctionIR, HttpRouteIR, MaskMetadataIR, MigrationIR, Mut
 import { setStandardTypeResolver } from "./parse-validator";
 import { gateAdminTokenRevocation, platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
 import { readMergeDurableObjects, readProjectLazyFunctions, readProjectSecurityHeaders, readProjectStudioCompanion } from "./project-config-file";
-import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged } from "./run-codegen-files";
+import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged, writeStudioAssets } from "./run-codegen-files";
 import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
 import { buildSchemaSnapshot, indexReferencesOf } from "./schema-drift";
 import { buildSpecArtifacts } from "./spec-artifacts";
@@ -654,6 +654,8 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // Judged on the matrix, not the usage: the builder method is emitted whether
     // or not the app calls it, so a host that cannot back it withholds it anyway.
     const deliveryAuthorizationSupported = platformFeatureAvailable(resolveCodegenTarget(options.projectRoot, options.target), "deliveryAuthorization");
+    // Workers Static Assets exist on Cloudflare only; Node and celld keep the documents as modules.
+    const studioAssets = resolveCodegenTarget(options.projectRoot, options.target) === "cloudflare" ? options.studioAssets : undefined;
 
     // Which optional features the studio should show a nav page for.
     // `buildStudioFeatures` OR's the code-usage flags with the schema/project
@@ -882,6 +884,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         // `lunora.config`'s `security.headers`, validated; the build's `_headers` writer reads the same value.
         securityHeaders: readProjectSecurityHeaders(lunoraDirectory),
         spaAssetsBindings: options.spaAssetsBindings,
+        studioAssetsBinding: studioAssets?.binding,
         useUmbrella,
         // The app's own declaration, which `emitApp` AND's with `hasVectors`.
         // `emitApp` takes no schema (only the table list), so the count it
@@ -1007,6 +1010,14 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
                   name: "architecture.ts",
               },
           ]);
+
+    if (!options.dryRun && studioAssets !== undefined) {
+        writeStudioAssets(join(options.projectRoot, studioAssets.directory), {
+            architecture: architectureDocument === undefined ? "" : JSON.stringify(architectureDocument),
+            openapi: wantsOpenApi ? openApiContent : "",
+            openrpc: wantsOpenRpc ? openRpcContent : "",
+        });
+    }
 
     // Bless the schema baseline on first capture, so a project gets a committed snapshot the
     // moment it runs codegen. The CLI gate reads the existing baseline BEFORE calling codegen.

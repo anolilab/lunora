@@ -3,6 +3,8 @@ import { applyModify } from "../jsonc-edit";
 import type { Manifest } from "./lunora-manifest";
 import { recordManifestKey } from "./lunora-manifest";
 import { spaAssetsBinding } from "./spa-assets";
+import type { StudioAssetsPlan } from "./studio-assets";
+import { isOwnedStudioAssets, ownedStudioAssetsBlock } from "./studio-assets";
 import type { ReconcileStep, WranglerShape } from "./wrangler-shape";
 
 /**
@@ -318,6 +320,28 @@ const assetScopes = (parsed: WranglerShape): { assets: unknown; path: string[] }
 ];
 
 /**
+ * Write the `assets` block that serves Studio's documents (see `studio-assets.ts`)
+ * when `studioAssets` asks for one and the config has none, and remove the block
+ * Lunora wrote once it no longer does (the project moved to a bundler plugin, its
+ * own `assets` block, or another target).
+ */
+const reconcileStudioAssetsBlock = (
+    text: string,
+    parsed: WranglerShape,
+    studioAssets: StudioAssetsPlan | undefined,
+): { added: string[]; text: string; updated: string[] } => {
+    if (studioAssets !== undefined && parsed.assets === undefined) {
+        return { added: ["assets (Studio documents, run_worker_first: true)"], text: applyModify(text, ["assets"], ownedStudioAssetsBlock()), updated: [] };
+    }
+
+    if (studioAssets === undefined && isOwnedStudioAssets(parsed.assets)) {
+        return { added: [], text: applyModify(text, ["assets"], undefined), updated: ["assets (Studio documents block removed)"] };
+    }
+
+    return { added: [], text, updated: [] };
+};
+
+/**
  * Route the paths the Worker serves to it ahead of the assets: Lunora's reserved
  * paths plus the app's own routes (`workerRoutes`), or, for a single-page app
  * with an assets binding, every path but the static output (`staticPaths`, see
@@ -327,6 +351,9 @@ const assetScopes = (parsed: WranglerShape): { assets: unknown; path: string[] }
  * wrote) when the routes change. A value the user wrote or edited is never
  * rewritten; when it leaves a path to the assets the step warns instead. The
  * step's `record` stores which values Lunora now owns, once the config is on disk.
+ *
+ * It also owns the `assets` block of Studio's documents (`studioAssets`), which
+ * runs the Worker first for every path and so takes no part in the routing above.
  */
 const reconcileAssetRouting = (
     text: string,
@@ -334,13 +361,14 @@ const reconcileAssetRouting = (
     workerRoutes: ReadonlyArray<string>,
     manifest: Manifest | undefined,
     staticPaths: ReadonlyArray<string>,
+    studioAssets?: StudioAssetsPlan,
 ): ReconcileStep => {
-    const scopes = assetScopes(parsed);
+    const scopes = assetScopes(parsed).filter((scope) => !isOwnedStudioAssets(scope.assets));
     const plan = planRunWorkerFirst(workerRoutes);
     const spaPlan = planSpaRunWorkerFirst(plan.rules, staticPaths);
     const recorded = readOwnedRunWorkerFirst(manifest);
     const owned: OwnedRunWorkerFirst = {};
-    const step: Required<Omit<ReconcileStep, "record">> = { added: [], text, updated: [], warnings: [] };
+    const step: Required<Omit<ReconcileStep, "record">> = { ...reconcileStudioAssetsBlock(text, parsed, studioAssets), warnings: [] };
 
     for (const { assets, path } of scopes.filter((scope) => isPlainObject(scope.assets))) {
         const scope = path.join(".");

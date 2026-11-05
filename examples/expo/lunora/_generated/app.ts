@@ -4,7 +4,7 @@
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import type * as LunoraAuthModule from "./authModule.js";
 import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, SecurityOptions, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
-import { createWorker, resolveLogArchiveFromEnv, memoizeIdentity } from "lunorash/runtime";
+import { createWorker, resolveLogArchiveFromEnv, loadStudioDocument, memoizeIdentity } from "lunorash/runtime";
 
 import { LUNORA_CRONS } from "./crons.js";
 import { LUNORA_FUNCTIONS } from "./functions.js";
@@ -343,7 +343,7 @@ class AppBuilder<Env extends object> {
             aiOptInLevel: (env as Record<string, unknown>)["LUNORA_AI_OPT_IN"] as WorkerOptions["aiOptInLevel"],
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
-            openApiSpec: () => import("./openapi.js").then((module) => module.openApiSpec),
+            openApiSpec: () => loadStudioDocument((env as Record<string, unknown>)["ASSETS"], "openapi"),
             ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),
             routes: this.routeMap,
             shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),

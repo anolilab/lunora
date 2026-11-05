@@ -76,6 +76,18 @@ export interface CodegenOptions {
     spaAssetsBindings?: ReadonlyArray<string>;
 
     /**
+     * Ship Studio's documents (the OpenAPI / OpenRPC specs and the architecture
+     * manifest) as Workers Static Assets: codegen writes each one to
+     * `<directory>/_lunora/studio/<name>.json` (relative to the project root) and
+     * the generated worker reads it through `env[binding]` on its admin route,
+     * so the Worker script no longer carries it. Produced by `@lunora/config`,
+     * which sets it only for a Cloudflare Worker wrangler bundles, with no
+     * `assets` block of its own; absent keeps the documents in the bundle as
+     * modules the admin routes `import()`. Ignored for any target but `"cloudflare"`.
+     */
+    studioAssets?: { binding: string; directory: string };
+
+    /**
      * The deploy target codegen tailors the emitted `ctx.*` surface to.
      * Defaults to `"cloudflare"` — whose capability matrix marks every feature
      * native or emulated, so the default output is unchanged (byte-identical
