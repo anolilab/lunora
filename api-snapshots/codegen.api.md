@@ -303,6 +303,12 @@ interface DurableObjectScheduledContainerIR extends ContainerIRBase {
 }
 ```
 
+### `ENV_FILENAME` (const)
+
+```ts
+const ENV_FILENAME = "env.ts";
+```
+
 ### `EmitAppOptions` (interface)
 
 ```ts

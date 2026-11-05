@@ -468,7 +468,7 @@ type DevEnvCheck = {
     error: string;
     kind: "unloadable";
 } | {
-    failures: DevEnvFailure[];
+    failures: EnvKeyFailure[];
     kind: "invalid";
     sources: string[];
 } | {
@@ -482,18 +482,11 @@ type DevEnvCheck = {
 
 ```ts
 interface DevEnvCheckOptions {
+    environment?: string;
     load?: (path: string) => Promise<unknown>;
+    processEnv?: Record<string, string | undefined>;
     projectRoot: string;
     schemaDirectory: string;
-}
-```
-
-### `DevEnvFailure` (interface)
-
-```ts
-interface DevEnvFailure {
-    key: string;
-    message: string;
 }
 ```
 
@@ -683,6 +676,10 @@ interface DriverToolchain {
 }
 ```
 
+### `ENV_FILENAME` (const)
+
+Re-exported from `@lunora/codegen` — signature tracked at its source.
+
 ### `EnsureDevVariablesDeps` (interface)
 
 ```ts
@@ -709,6 +706,15 @@ interface EnsureDevVariablesResult {
 
 ```ts
 type EnsureDevVariablesStatus = "augmented" | "declined" | "exists" | "generated" | "no-example" | "skipped-exists";
+```
+
+### `EnvKeyFailure` (interface)
+
+```ts
+interface EnvKeyFailure {
+    key: string;
+    message: string;
+}
 ```
 
 ### `FillDevSecretsResult` (interface)
@@ -1462,7 +1468,9 @@ const deployTargetIds: () => ReadonlyArray<string>;
 ### `describeDevEnvCheck` (const)
 
 ```ts
-const describeDevEnvCheck: (check: DevEnvCheck, schemaDirectory: string) => undefined | {
+const describeDevEnvCheck: (check: DevEnvCheck, schemaDirectory: string, { wasInvalid }?: {
+    wasInvalid?: boolean;
+}) => undefined | {
     level: "info" | "warn";
     message: string;
 };
@@ -1582,6 +1590,15 @@ const fillDevSecrets: (deps: {
     randomHex?: (bytes: number) => string;
     secretSources?: ReadonlyArray<string>;
 }) => FillDevSecretsResult;
+```
+
+### `formatDevBannerRow` (const)
+
+```ts
+const formatDevBannerRow: (label: string, value: string, width: number, style?: {
+    arrow?: (text: string) => string;
+    label?: (text: string) => string;
+}) => string;
 ```
 
 ### `formatLunoraEvent` (const)
@@ -1820,6 +1837,12 @@ const readApiSpecMarker: (projectRoot: string) => MarkedApiSpec | undefined;
 const readDevServerState: (projectRoot: string) => DevServerState | undefined;
 ```
 
+### `readDevVariablesRecord` (const)
+
+```ts
+const readDevVariablesRecord: (path: string) => Record<string, string> | undefined;
+```
+
 ### `readLinkedProject` (const)
 
 ```ts
@@ -2017,6 +2040,12 @@ const upsertDevVariableLine: (content: string, key: string, value: string) => st
 
 ```ts
 const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit, serverModule: string) => WireResult;
+```
+
+### `wranglerDotenvFiles` (const)
+
+```ts
+const wranglerDotenvFiles: (environment?: string) => string[];
 ```
 
 ### `writeApiSpecMarker` (const)
@@ -2617,6 +2646,19 @@ interface RemoteEnableInputs {
 }
 ```
 
+### `RemotePlan` (interface)
+
+```ts
+interface RemotePlan {
+    bindings: string[];
+    cleanup: () => void;
+    configPath?: string;
+    enabled: boolean;
+    reason?: string;
+    withheld: WithheldBinding[];
+}
+```
+
 ### `RemoteWranglerShape` (interface)
 
 ```ts
@@ -3146,7 +3188,9 @@ const mergeWranglerEnvironment: (wrangler: WranglerConfig, environment: string |
 ### `pendingBindingChanges` (const)
 
 ```ts
-const pendingBindingChanges: (options: ReconcileProject) => Promise<string[]>;
+const pendingBindingChanges: (options: ReconcileProject & {
+    cache: DiscoveryCache;
+}) => Promise<string[]>;
 ```
 
 ### `planRemoteBindings` (const)
@@ -3176,8 +3220,7 @@ const reconcileBindingsSafely: (options: ReconcileProject, logger: ReconcileLogg
 ### `reconcileWranglerBindings` (const)
 
 ```ts
-const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings, { dryRun, environment, target }?: {
-    dryRun?: boolean;
+const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings, options?: {
     environment?: string;
     target?: string;
 }) => ReconcileBindingsResult;
@@ -3232,6 +3275,12 @@ const scanWranglerVariablesForSecrets: (variables: Record<string, unknown> | und
 
 ```ts
 const startLocalHyperdrive: (options: StartLocalHyperdriveOptions) => Promise<LocalHyperdrive | undefined>;
+```
+
+### `toRemotePlan` (const)
+
+```ts
+const toRemotePlan: (result: MaterializeDevResult, enabled: boolean) => RemotePlan;
 ```
 
 ### `validateWrangler` (const)

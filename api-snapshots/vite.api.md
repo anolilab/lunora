@@ -120,6 +120,10 @@ interface PlanViteRemoteOptions {
 
 Re-exported from `@lunora/config` — signature tracked at its source.
 
+### `RemotePlan` (interface)
+
+Re-exported from `@lunora/config` — signature tracked at its source.
+
 ### `ResolvedLunoraPluginOptions` (interface)
 
 ```ts
@@ -159,19 +163,6 @@ type SolutionFinder = NonNullable<OverlayPluginOptions["solutionFinders"]>[numbe
 
 ```ts
 const VERSION: string;
-```
-
-### `ViteRemotePlan` (interface)
-
-```ts
-interface ViteRemotePlan {
-    bindings: string[];
-    cleanup: () => void;
-    configPath?: string;
-    enabled: boolean;
-    reason?: string;
-    withheld: WithheldBinding[];
-}
 ```
 
 ### `WORKER_STARTUP_HINT` (const)
@@ -293,7 +284,7 @@ const lunoraSolutionFinders: ReadonlyArray<SolutionFinder>;
 ### `planViteRemoteBindings` (const)
 
 ```ts
-const planViteRemoteBindings: (options: PlanViteRemoteOptions) => ViteRemotePlan;
+const planViteRemoteBindings: (options: PlanViteRemoteOptions) => RemotePlan;
 ```
 
 ### `proxyCheckPlugin` (const)
@@ -327,7 +318,7 @@ const studioPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
 ### `withRemoteBindings` (const)
 
 ```ts
-const withRemoteBindings: (options: CloudflarePluginOptions, plan: ViteRemotePlan) => CloudflarePluginOptions;
+const withRemoteBindings: (options: CloudflarePluginOptions, plan: RemotePlan) => CloudflarePluginOptions;
 ```
 
 ### `withWorkerStartupHint` (const)

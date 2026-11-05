@@ -245,7 +245,7 @@ interface DevCommandPlan {
     flavor: DevFlavor;
     frameworkHint?: string;
     ipv4LoopbackForced: boolean;
-    remote: DevRemotePlan;
+    remote: RemotePlan;
     runsCodegenWatch: boolean;
     serviceConfigCleanup?: () => void;
     sidecar?: SpawnDescriptor & {
@@ -1059,18 +1059,6 @@ interface CommandResult<TData> {
 
 ```ts
 type DevFlavor = "framework-worker" | "vite" | "wrangler";
-```
-
-### `DevRemotePlan` (interface)
-
-```ts
-interface DevRemotePlan {
-    bindings: string[];
-    cleanup: () => void;
-    enabled: boolean;
-    reason?: string;
-    withheld: WithheldBinding[];
-}
 ```
 
 ### `DevTunnelRequest` (interface)
