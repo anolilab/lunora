@@ -104,6 +104,14 @@ interface AnalyticsEngineSinkOptions extends OnlyErrorsOption {
 }
 ```
 
+### `AssetsFetcherLike` (interface)
+
+```ts
+interface AssetsFetcherLike {
+    fetch: (request: Request) => Promise<Response>;
+}
+```
+
 ### `AuthAdmin` (interface)
 
 ```ts
@@ -2429,6 +2437,7 @@ interface WorkerOptions {
     security?: SecurityOptions;
     shardDO: ShardNamespaceLike;
     shardRegion?: (shardKey: string) => RegionHint | undefined;
+    spaAssets?: AssetsFetcherLike;
     storage?: (env: unknown, origin?: string) => unknown;
     storageBuckets?: string[];
     storageDelete?: StorageDeleteFunction;

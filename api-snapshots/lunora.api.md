@@ -4579,6 +4579,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `AssetsFetcherLike` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `AuthAdmin` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.

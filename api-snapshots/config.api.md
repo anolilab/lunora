@@ -2627,6 +2627,7 @@ interface WranglerCacheShape {
 
 ```ts
 interface WranglerCodegenInputs {
+    spaAssetsBinding?: string;
     wranglerQueueProducers: WranglerQueueProducerIR[];
     wranglerVariables: WranglerVariableIR[];
 }

@@ -121,6 +121,7 @@ interface CodegenOptions {
     lunoraDirectory?: string;
     project?: Project;
     projectRoot: string;
+    spaAssetsBinding?: string;
     target?: string;
     wranglerQueueProducers: ReadonlyArray<WranglerQueueProducerIR>;
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
@@ -335,6 +336,7 @@ interface EmitAppOptions {
     liveStreams?: boolean;
     liveStreamsWithheld?: boolean;
     securityHeaders?: boolean | SecurityHeadersOptions;
+    spaAssetsBinding?: string;
     tables: ReadonlyArray<Pick<TableIR, "name" | "shardMode">>;
     useUmbrella: boolean;
     vectorIndexCount?: number;
