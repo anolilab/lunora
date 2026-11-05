@@ -1,3 +1,7 @@
+## @lunora/auth [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.257...@lunora/auth@1.0.0-alpha.258) (2026-11-05)
+
+- feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)
+
 ## @lunora/auth [1.0.0-alpha.257](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.256...@lunora/auth@1.0.0-alpha.257) (2026-11-04)
 
 - Release 1.0.0-alpha.257. Commit a2f1851 set this version and it was never published, so it is released from HEAD.

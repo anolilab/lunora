@@ -1,3 +1,7 @@
+## @lunora/astro [1.0.0-alpha.312](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.311...@lunora/astro@1.0.0-alpha.312) (2026-11-05)
+
+- feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)
+
 ## @lunora/astro [1.0.0-alpha.311](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.310...@lunora/astro@1.0.0-alpha.311) (2026-11-04)
 
 - Release 1.0.0-alpha.311. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
