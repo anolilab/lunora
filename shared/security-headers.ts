@@ -194,7 +194,9 @@ const parseFrameAncestors = (value: unknown, problems: string[]): string[] | und
     }
 
     for (const origin of value as unknown[]) {
-        if (typeof origin !== "string" || !ORIGIN_SOURCE.test(origin)) {
+        // `isHeaderSafe` too: the `iu` flags case-fold U+212A (KELVIN SIGN) and U+017F (LONG S) into `[a-z]`, and
+        // neither fits in a header value.
+        if (typeof origin !== "string" || !ORIGIN_SOURCE.test(origin) || !isHeaderSafe(origin)) {
             problems.push(`security.headers.frameAncestors entry ${JSON.stringify(origin)} is not an origin like "https://partner.example"`);
         }
     }

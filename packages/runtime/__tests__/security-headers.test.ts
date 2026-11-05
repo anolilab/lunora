@@ -186,6 +186,10 @@ describe("decorateResponse", () => {
 
         expect(() => resolveSecurity({ headers: { permissionsPolicy: "camera=()\r\nX-Evil: 1" } })).toThrow("line break");
         expect(() => resolveSecurity({ headers: { frameAncestors: ["https://a.example; script-src *"] } })).toThrow("is not an origin");
+        // The origin pattern's `iu` flags fold U+212A (KELVIN SIGN) into `k`, which no header value may hold.
+        expect(() => resolveSecurity({ headers: { frameAncestors: ["https://\u212Aiosk.example"] } })).toThrow("is not an origin");
+        // JavaScript's `$` (no `m` flag) does not match before a trailing newline, so this was never accepted; pinned.
+        expect(() => resolveSecurity({ headers: { frameAncestors: ["https://a.example\n"] } })).toThrow("is not an origin");
         expect(() => resolveSecurity({ headers: { csp: "default-src 'self'", frameAncestors: ["https://a.example"] } })).toThrow("csp string");
         expect(() => resolveSecurity({ headers: { frameAncestors: ["https://a.example"], frameOptions: "DENY" } })).toThrow('frameOptions: "DENY"');
     });
