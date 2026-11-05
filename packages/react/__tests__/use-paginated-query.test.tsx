@@ -299,6 +299,61 @@ describe("usePaginatedQuery", () => {
         expect(onError).toHaveBeenCalledExactlyOnceWith(stale);
     });
 
+    it("reports a second refusal when the refused fetch itself is all that updated the cache", async () => {
+        expect.hasAssertions();
+
+        const serve = makePaginator(["a", "b", "c", "d", "e"]);
+        // Every page that carries a cursor comes back refused from its HTTP fetch, with no socket frame.
+        const mock = createMockClient((ref: string, args: unknown) => {
+            const { cursor, endCursor } = (args as { paginationOpts: { cursor: null | string; endCursor: null | string } }).paginationOpts;
+
+            if (cursor !== null || endCursor !== null) {
+                throw Object.assign(new Error("invalid cursor"), { code: "INVALID_CURSOR" });
+            }
+
+            return serve(ref, args);
+        });
+        const onError = vi.fn<SubscriptionErrorCallback>();
+
+        let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Harness
+                    onError={onError}
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback used once to capture the hook's `loadMore`.
+                    onLoadMore={(next) => {
+                        loadMore = next;
+                    }}
+                />
+            </LunoraProvider>,
+        );
+
+        const loadMoreAndSettle = async (): Promise<void> => {
+            await waitFor(() => {
+                expect(screen.getByTestId("status").textContent).toBe("CanLoadMore");
+            });
+
+            act(() => {
+                loadMore(2);
+            });
+
+            await waitFor(() => {
+                expect(screen.getByTestId("status").textContent).not.toBe("LoadingMore");
+            });
+        };
+
+        // The first refusal restarts the feed; the second, with nothing past the head loaded since, is reported.
+        await loadMoreAndSettle();
+        await loadMoreAndSettle();
+
+        await waitFor(() => {
+            expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: "INVALID_CURSOR" }));
+        });
+
+        expect(screen.getByTestId("error").textContent).toBe("invalid cursor");
+    });
+
     it("lets a page from before a page-size change fail without restarting the new feed", async () => {
         expect.hasAssertions();
 

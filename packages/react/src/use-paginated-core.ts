@@ -438,12 +438,17 @@ const usePaginatedCore = function <T>(
             const hash = serializeQueryKey(eventKey);
 
             if (pageHashes.has(hash)) {
-                // A frame for one of our pages landed — the feed is healthy again.
-                if (pastHeadHashes.has(hash)) {
-                    restartedSinceLoadRef.current = false;
+                // Only a `success` action (a frame, or a fetch that resolved) means a page loaded and the
+                // feed is healthy again. A fetch starting or rejecting updates the same query, and must not
+                // clear the error, nor the restart guard ahead of the `failPage` that rejection is about to run.
+                if (event.action.type === "success") {
+                    if (pastHeadHashes.has(hash)) {
+                        restartedSinceLoadRef.current = false;
+                    }
+
+                    setError(undefined);
                 }
 
-                setError(undefined);
                 forceRender();
             }
         });
