@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import { sql } from "drizzle-orm";
 
+import { ALLOW_DESTRUCTIVE_MARKER } from "../../../shared/allow-destructive-marker";
 import type { D1DatabaseLike } from "./d1-client";
 import { D1Client } from "./d1-client";
 
@@ -108,13 +109,6 @@ const DESTRUCTIVE_STATEMENTS: ReadonlyArray<readonly [label: string, pattern: Re
     ["INSERT OR REPLACE", /(?<![$\w])INSERT\s+OR\s+REPLACE\b/iu],
     ["REPLACE INTO", /(?<![$\w])REPLACE\s+INTO\b/iu],
 ];
-
-/**
- * The line comment that confirms a migration's destructive statement is intended, matched exactly. It covers the whole
- * migration it is in; `lunora migrate generate` writes it on its own line before each statement it confirms, so it
- * stays with that statement when a generated file is split into one `Migration` per statement.
- */
-const ALLOW_DESTRUCTIVE_MARKER = "-- lunora:allow-destructive";
 
 /**
  * Transaction control at the head of a statement. Each migration already commits atomically with its tracking row in
@@ -654,5 +648,7 @@ class MigrationRunner {
     }
 }
 
-export { ALLOW_DESTRUCTIVE_MARKER, MigrationRunner, TRACKING_TABLE_NAME };
+export { MigrationRunner, TRACKING_TABLE_NAME };
 export type { Migration, MigrationRunnerResult };
+
+export {ALLOW_DESTRUCTIVE_MARKER} from "../../../shared/allow-destructive-marker";

@@ -28,7 +28,6 @@
  * auto-provision.
  */
 import type { FieldSnapshot } from "@lunora/codegen";
-import { ALLOW_DESTRUCTIVE_MARKER } from "@lunora/d1";
 import {
     columnRef,
     frameworkColumnDdl,
@@ -39,6 +38,8 @@ import {
     sqlAffinityForKind,
 } from "@lunora/d1/dialect";
 import { LunoraError } from "@lunora/errors";
+
+import { ALLOW_DESTRUCTIVE_MARKER } from "../../../../shared/allow-destructive-marker";
 
 /** Compact snapshot of a single global table — what we persist + diff. */
 interface TableSnapshot {
