@@ -259,9 +259,10 @@ describe("codegen-plugin", () => {
             (plugin.configureServer as (this: unknown, s: unknown) => void).call(undefined, server);
 
             // The config-drift watcher (wrangler.jsonc / lunora.json → restart) is a
-            // separate registration further down `configureServer` and must survive:
-            // only the codegen handlers go. Enabled, "change" is registered twice.
-            expect(handlers.filter((event) => event === "change")).toHaveLength(1);
+            // separate registration further down `configureServer` and must survive,
+            // beside the binding-drift listener that replaces codegen's. Only the
+            // codegen handlers go: enabled, "unlink" also carries the tsconfig one.
+            expect(handlers.filter((event) => event === "unlink")).toHaveLength(2);
             expect(logged.join(" ")).toContain("codegen watch disabled");
 
             // Positive control: with codegen on, the same call registers the codegen
@@ -280,7 +281,7 @@ describe("codegen-plugin", () => {
                 },
             });
 
-            expect(enabledHandlers.filter((event) => event === "change")).toHaveLength(2);
+            expect(enabledHandlers.filter((event) => event === "unlink")).toHaveLength(3);
         });
 
         it("build: LUNORA_CODEGEN=0 is ignored, so the ERROR-advisory gate still fails the build", async () => {
@@ -852,6 +853,35 @@ export const schema = defineSchema({
 
             expect(restartHints()).toHaveLength(2);
             expect(restartHints()[1]).toMatch(/KV \(KV namespace\) — not in the running worker yet/u);
+        });
+
+        it("with codegen watch off, a save that needs a new binding still says so, without regenerating", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+            vi.stubEnv("LUNORA_CODEGEN", "0");
+
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValueOnce(["QUEUE_EMAILS (Queue)"]);
+
+            wireServer(plugin, server);
+
+            for (const [event, listener] of (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls as [string, (file: string) => void][]) {
+                if (event === "change") {
+                    listener(schemaPath);
+                }
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(clientSend).not.toHaveBeenCalled();
+            expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining("QUEUE_EMAILS (Queue) — not in the running worker yet"));
         });
 
         it("failure then success → recovery reloads the client once (clears overlay), still evicts the worker", async () => {

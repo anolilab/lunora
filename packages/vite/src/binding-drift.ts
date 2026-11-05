@@ -66,6 +66,9 @@ const createBindingDriftNotifier = (options: BindingDriftNotifierOptions): Bindi
     const schedule = options.schedule ?? defaultSchedule;
     let announced = new Set<string>();
     let cancel: (() => void) | undefined;
+    // Bumped by every save and by dispose, so a scan that a later save overtook
+    // cannot publish what it read from the sources that save replaced.
+    let generation = 0;
 
     const check = async (): Promise<void> => {
         cancel = undefined;
@@ -74,10 +77,11 @@ const createBindingDriftNotifier = (options: BindingDriftNotifierOptions): Bindi
             return;
         }
 
+        const started = generation;
         const changes = await pending({ ...options.project, cache: options.cache });
 
         // The scan takes long enough for a restart to start, or the server to close, under it.
-        if (options.isSuppressed()) {
+        if (generation !== started || options.isSuppressed()) {
             return;
         }
 
@@ -97,10 +101,12 @@ const createBindingDriftNotifier = (options: BindingDriftNotifierOptions): Bindi
     return {
         check,
         dispose: () => {
+            generation += 1;
             cancel?.();
             cancel = undefined;
         },
         noteSave: () => {
+            generation += 1;
             options.cache.clear();
             cancel?.();
             // `check` never rejects: `pendingBindingChanges` answers `[]` on any failure.

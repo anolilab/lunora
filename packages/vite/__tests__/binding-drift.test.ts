@@ -53,6 +53,33 @@ const setup = (scan: NonNullable<BindingDriftNotifierOptions["pending"]>, isSupp
 };
 
 describe(createBindingDriftNotifier, () => {
+    it("drops a scan that a later save overtook, so a removed binding is never announced", async () => {
+        expect.assertions(2);
+
+        const answers: ((labels: string[]) => void)[] = [];
+        const { notifier, settle, warn } = setup(
+            async () =>
+                await new Promise<string[]>((resolve) => {
+                    answers.push(resolve);
+                }),
+        );
+
+        notifier.noteSave();
+        const first = settle();
+
+        // The developer removes the queue while the first scan is still reading.
+        notifier.noteSave();
+        const second = settle();
+
+        answers[1]?.([]);
+        await second;
+        answers[0]?.(["QUEUE_ORDERS (Queue)"]);
+        await first;
+
+        expect(answers).toHaveLength(2);
+        expect(warn).not.toHaveBeenCalled();
+    });
+
     it("scans once per settled burst of saves, not once per save", async () => {
         expect.assertions(3);
 

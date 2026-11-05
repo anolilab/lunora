@@ -982,6 +982,14 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 scheduler.onSave(normalized);
             };
 
+            // With codegen watch off, nothing regenerates, but a save that implies a
+            // new binding still needs the restart hint `regenerate` would have given.
+            const onDriftSource = (file: string): void => {
+                if (isCodegenInput(resolve(file))) {
+                    bindingDrift.noteSave();
+                }
+            };
+
             // A tsconfig DELETION can't be caught by the `normalized === findTsconfig(...)`
             // check inside `onChange` above: `findTsconfig` re-walks the tree at
             // call time, and by the time this fires the file is already gone, so
@@ -1012,6 +1020,9 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 server.config.logger.info(
                     `${LUNORA_TAG} codegen watch disabled (${CODEGEN_ENV}) — _generated/ is written only by an explicit \`lunora codegen\``,
                 );
+                server.watcher.on("add", onDriftSource);
+                server.watcher.on("change", onDriftSource);
+                server.watcher.on("unlink", onDriftSource);
             } else {
                 server.watcher.on("add", onChange);
                 server.watcher.on("change", onChange);
@@ -1128,10 +1139,16 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 scheduler.dispose();
                 bindingDrift.dispose();
 
-                server.watcher.off("add", onChange);
-                server.watcher.off("change", onChange);
-                server.watcher.off("unlink", onChange);
-                server.watcher.off("unlink", onConfigFileRemoved);
+                if (codegenDisabled) {
+                    server.watcher.off("add", onDriftSource);
+                    server.watcher.off("change", onDriftSource);
+                    server.watcher.off("unlink", onDriftSource);
+                } else {
+                    server.watcher.off("add", onChange);
+                    server.watcher.off("change", onChange);
+                    server.watcher.off("unlink", onChange);
+                    server.watcher.off("unlink", onConfigFileRemoved);
+                }
                 server.watcher.off("add", onConfigChange);
                 server.watcher.off("change", onConfigChange);
                 server.watcher.off("unlink", onConfigChange);
