@@ -126,7 +126,7 @@ const maskOwnValue = (failure: EnvKeyFailure, env: Record<string, unknown>): Env
         message = message.replaceAll(part, REDACTED);
     }
 
-    return message === failure.message ? failure : { ...failure, message };
+    return { ...failure, message };
 };
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
