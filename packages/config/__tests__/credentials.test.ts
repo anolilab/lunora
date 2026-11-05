@@ -120,6 +120,14 @@ describe("hasCloudflareCredentials", () => {
             expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(false);
         });
 
+        it("reads a token line the way wrangler's dotenv does: a trailing comment is not its value", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(project, ".env"), `${TOKEN_KEY}= # set me\n`, "utf8");
+
+            expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(false);
+        });
+
         it("pairs a global key in the environment with an email in .env", () => {
             expect.assertions(1);
 
