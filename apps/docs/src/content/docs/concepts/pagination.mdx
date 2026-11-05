@@ -176,9 +176,10 @@ Because queries are reactive, each loaded page stays live. A mutation that
 touches a row already on screen re-runs the query and pushes the delta to the
 client without re-fetching the whole list.
 
-A cursor is only valid against the build that minted it. After a deploy that
-changes a query's order, or how the engine encodes cursors, a page a client
-still holds is refused with `INVALID_CURSOR`. The adapters restart the feed from
+A cursor a client still holds can be refused with `INVALID_CURSOR` after a
+deploy: the engine bumps its cursor format whenever a change would otherwise
+read old cursors as the wrong rows, and a query that now orders by more keys
+than the cursor carries refuses it too. The adapters restart the feed from
 its first page on that code, without reporting it through `onError`. A second
 refusal before any page past the first has loaded is reported, because then the
 server is refusing the cursors it has just minted. A hand-written loop like the

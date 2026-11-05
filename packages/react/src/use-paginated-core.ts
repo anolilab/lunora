@@ -199,8 +199,14 @@ const usePaginatedCore = function <T>(
         const failure = classifyPageFailure(desired.pages, (page) => hashOf(page) === hash, pageError, restartedSinceLoadRef.current);
 
         if (failure === "restart") {
+            const restarted = initialPages(initialNumItems);
+
+            // Ahead of the effect that would refresh it: the other pages of the dropped feed can fail in
+            // the same burst, and must find no page of theirs here (`ignore`), not the feed this restart
+            // replaced, where the restart flag would surface them.
+            desiredRef.current = { ...desired, pages: restarted };
             restartedSinceLoadRef.current = true;
-            setPages(initialPages(initialNumItems));
+            setPages(restarted);
             setError(undefined);
         }
 
@@ -398,8 +404,16 @@ const usePaginatedCore = function <T>(
     // triggers a re-render here.
     useEffect(() => {
         const cache = queryClient.getQueryCache();
-        const pageHashes = new Set(pageEntries.map(({ hash }) => hash));
-        const pastHeadHashes = new Set(pageEntries.filter((_, index) => pages[index] !== undefined && !isHeadPage(pages[index])).map(({ hash }) => hash));
+        const pageHashes = new Set<string>();
+        const pastHeadHashes = new Set<string>();
+
+        for (const [index, { hash }] of pageEntries.entries()) {
+            pageHashes.add(hash);
+
+            if (pages[index] !== undefined && !isHeadPage(pages[index])) {
+                pastHeadHashes.add(hash);
+            }
+        }
         const pageFunctionRef = function_.__lunoraRef;
         const unsubscribe = cache.subscribe((event) => {
             // The registry pushes page data via `setQueryData`, which emits an

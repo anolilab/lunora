@@ -198,6 +198,57 @@ describe("usePaginatedQuery", () => {
         expect(onError).toHaveBeenCalledExactlyOnceWith(stale);
     });
 
+    it("restarts once, silently, when every loaded page refuses its cursor in the same burst", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
+        const onError = vi.fn<SubscriptionErrorCallback>();
+        const stale = { code: "INVALID_CURSOR", message: "invalid cursor" };
+
+        let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Harness
+                    onError={onError}
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback used once to capture the hook's `loadMore`.
+                    onLoadMore={(next) => {
+                        loadMore = next;
+                    }}
+                />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("results").textContent).toBe("a,b");
+        });
+
+        act(() => {
+            loadMore(2);
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("results").textContent).toBe("a,b,c,d");
+        });
+
+        // After a deploy both pages re-read with cursors the server no longer accepts, and both
+        // refusals land before React re-renders: the second must not count as a refusal after the restart.
+        act(() => {
+            mock.emitError("items:list", stale, (args) => {
+                const opts = (args as { paginationOpts: { cursor: null | string; endCursor: null | string } }).paginationOpts;
+
+                return opts.cursor !== null || opts.endCursor !== null;
+            });
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("results").textContent).toBe("a,b");
+        });
+
+        expect(onError).not.toHaveBeenCalled();
+        expect(screen.getByTestId("error").textContent).toBe("");
+    });
+
     it("reports a second cursor refusal instead of restarting again, when nothing past the head loaded in between", async () => {
         expect.hasAssertions();
 
