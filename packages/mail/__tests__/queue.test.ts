@@ -300,6 +300,19 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         consoleError.mockRestore();
     });
 
+    it("sends when the store answers a missing key with undefined, as Durable Object storage does", async () => {
+        expect.assertions(2);
+
+        const mailer = noopMailer();
+        const store: SentMailStore = {
+            get: async () => undefined,
+            put: async () => undefined,
+        };
+
+        await expect(consumeQueuedSend(mailer, body, { sent: store })).resolves.toStrictEqual({ deduplicated: false, id: "queued-send" });
+        expect(mailer.send).toHaveBeenCalledTimes(1);
+    });
+
     it("refuses a body without an idempotency key, which it could not dedupe", async () => {
         expect.assertions(3);
 

@@ -39,10 +39,12 @@ const toQueuedPayload = (options: SendOptions): QueuedSend => {
  * Where {@link consumeQueuedSend} records the idempotency keys it has already
  * sent, mapped to the provider's message id. Shaped after Workers KV's
  * `get` / `put`, so a `KVNamespace` binding passes as-is; a Durable Object or
- * D1-backed adapter works too.
+ * D1-backed adapter works too. Only a string from `get` counts as sent, so an
+ * adapter may answer a missing key with `null` (KV) or `undefined` (Durable
+ * Object storage).
  */
 interface SentMailStore {
-    get: (key: string) => Promise<string | null>;
+    get: (key: string) => Promise<string | null | undefined>;
     put: (key: string, value: string, options: { expirationTtl: number }) => Promise<void>;
 }
 
@@ -255,7 +257,7 @@ const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: Cons
         throw malformed("queue message has no `idempotencyKey` to dedupe on");
     }
 
-    let recorded: string | null;
+    let recorded: string | null | undefined;
 
     try {
         recorded = await sent.get(key);
@@ -264,7 +266,9 @@ const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: Cons
         throw new MailSendError({ cause: error, message: "@lunora/mail: could not read the sent-mail store", retryable: true });
     }
 
-    if (recorded !== null) {
+    // Only a recorded id counts as a hit: an adapter over Durable Object storage resolves `undefined`
+    // for a missing key, and treating that as sent would ack every message unsent.
+    if (typeof recorded === "string") {
         return { deduplicated: true, id: recorded };
     }
 
