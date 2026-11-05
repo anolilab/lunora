@@ -113,7 +113,7 @@ describe("inferLunoraBindings", () => {
         expect(result.signals.some((signal) => signal.includes("pass `namespace` to .auth()"))).toBe(true);
     });
 
-    it("lists the paths the Worker serves: each httpRoute path, and auth's default base path", async () => {
+    it("lists the paths the Worker serves: each httpRoute path, auth's default base path and its OAuth discovery documents", async () => {
         expect.assertions(2);
 
         write("wrangler.jsonc", WRANGLER);
@@ -132,7 +132,34 @@ describe("inferLunoraBindings", () => {
 
         const withAuth = await inferLunoraBindings({ projectRoot: root });
 
-        expect(withAuth.workerRoutes).toStrictEqual(["/api/todos/:id", "/api/auth/*"]);
+        expect(withAuth.workerRoutes).toStrictEqual([
+            "/api/todos/:id",
+            "/api/auth/*",
+            "/.well-known/oauth-protected-resource/*",
+            "/.well-known/oauth-authorization-server/*",
+        ]);
+    });
+
+    it("routes a literal auth basePath instead of the default, and ignores one in a comment or an unrelated file", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("lunora/schema.ts", SCHEMA_NO_GLOBAL);
+        write(
+            "src/server/index.ts",
+            `${ENTRY_SHARD_ONLY}\nimport { createAuth } from "@lunora/auth";\n// basePath: "/commented-out"\nexport const auth = createAuth({ basePath: "/auth/" });`,
+        );
+        write("src/router.ts", 'export const router = { basePath: "/not-auth" };\n');
+
+        const custom = await inferLunoraBindings({ projectRoot: root });
+
+        expect(custom.workerRoutes).toStrictEqual(["/auth/*", "/.well-known/oauth-protected-resource/*", "/.well-known/oauth-authorization-server/*"]);
+
+        write("src/worker-options.ts", 'export const workerOptions = { authBasePath: "/identity" };\n');
+
+        const withWorkerOption = await inferLunoraBindings({ projectRoot: root });
+
+        expect(withWorkerOption.workerRoutes?.slice(0, 2)).toStrictEqual(["/auth/*", "/identity/*"]);
     });
 
     it("infers D1 from a .global() table even with no env.DB access", async () => {

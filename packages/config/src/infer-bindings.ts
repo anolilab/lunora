@@ -43,7 +43,8 @@ import { init as initLexer } from "es-module-lexer";
 import type { SourceFile } from "ts-morph";
 import { Project } from "ts-morph";
 
-import { DEFAULT_AUTH_BASE_PATH } from "../../../shared/auth-base-path";
+import { AUTHORIZATION_SERVER_PREFIX, DEFAULT_AUTH_BASE_PATH, PROTECTED_RESOURCE_PREFIX } from "../../../shared/auth-base-path";
+import { withoutComments } from "../../../shared/code-only";
 import type { AgentIR } from "./agent-info";
 import { discoverAgentInfo } from "./agent-info";
 import type { ContainerIR } from "./container-info";
@@ -397,30 +398,74 @@ interface InferredBindings {
 
     /**
      * Paths the Worker serves outside its reserved `/_lunora/*` plane, as written:
-     * each `httpRoute.<verb>(path)` route under `lunora/`, plus `@lunora/auth`'s
-     * default base path (`/api/auth/*`) when auth is imported. Reconcile widens them
-     * into `assets.run_worker_first` rules. A custom auth `basePath` and routes
-     * added to a Hono `httpRouter` directly are not visible here. `undefined` when
-     * the files under `lunora/` could not be parsed.
+     * each `httpRoute.<verb>(path)` route under `lunora/`, plus, when auth is
+     * imported, its base path (a literal `basePath` / `authBasePath` option, else
+     * `/api/auth`) and the two OAuth discovery prefixes under `/.well-known/`.
+     * Reconcile widens them into `assets.run_worker_first` rules. A computed
+     * `basePath` and routes added to a Hono `httpRouter` directly are not visible
+     * here. `undefined` when the files under `lunora/` could not be parsed.
      */
     workerRoutes: string[] | undefined;
     /** Workflows declared in `lunora/workflows.ts` (exported or not — see {@link InferredWorkflow.exported}). */
     workflows: InferredWorkflow[];
 }
 
+/** A `basePath:` or `authBasePath:` option written as a string literal holding an absolute path. */
+const AUTH_BASE_PATH_OPTION = /\b(authBasePath|basePath):\s*(["'`])(\/[^"'`$\s]*)\2/gu;
+
+/** A value import of `@lunora/auth` or one of its subpaths. */
+const AUTH_IMPORT = /["']@lunora\/auth(?:\/[^"']*)?["']/u;
+
+/** Cheap pre-filter for {@link AUTH_BASE_PATH_OPTION}: `basePath` or `authBasePath` anywhere in the file. */
+const BASE_PATH_KEY = /[Bb]asePath/u;
+
+/**
+ * Where the app mounts its auth routes: each literal `authBasePath` (the Worker
+ * option) in a scanned file, and each literal `basePath` in a file that imports
+ * `@lunora/auth` (the `createAuth` option), else the default. A computed value is
+ * not seen, so the default stands for it.
+ */
+const authBasePaths = (scannedFiles: ReadonlySet<string>): string[] => {
+    const found = new Set<string>();
+
+    for (const file of scannedFiles) {
+        const code = readFileSync(file, "utf8");
+
+        if (!BASE_PATH_KEY.test(code)) {
+            continue;
+        }
+
+        const source = withoutComments(code);
+        const importsAuth = AUTH_IMPORT.test(source);
+
+        for (const [, key, , path] of source.matchAll(AUTH_BASE_PATH_OPTION)) {
+            // Trimmed the way the runtime trims `authBasePath`.
+            const base = path?.endsWith("/") === true ? path.slice(0, -1) : (path ?? "");
+
+            if (base !== "" && (key === "authBasePath" || importsAuth)) {
+                found.add(base);
+            }
+        }
+    }
+
+    return found.size === 0 ? [DEFAULT_AUTH_BASE_PATH] : [...found].toSorted((a, b) => a.localeCompare(b));
+};
+
 /**
  * See {@link InferredBindings.workerRoutes}: `undefined` when `lunora/` cannot be
  * parsed, so reconcile leaves `run_worker_first` alone rather than narrowing it
  * to the reserved paths. Codegen reports the same file.
  */
-const discoverWorkerRoutes = (projectRoot: string, schemaDirectory: string, usesAuth: boolean): string[] | undefined => {
+const discoverWorkerRoutes = (projectRoot: string, schemaDirectory: string, usesAuth: boolean, scannedFiles: ReadonlySet<string>): string[] | undefined => {
     const { error, value } = discoverIr(projectRoot, schemaDirectory, undefined, discoverHttpRoutes);
 
     if (error !== undefined) {
         return undefined;
     }
 
-    return [...(value ?? []).map((route) => route.path), ...(usesAuth ? [`${DEFAULT_AUTH_BASE_PATH}/*`] : [])];
+    const authRoutes = usesAuth ? [...authBasePaths(scannedFiles), PROTECTED_RESOURCE_PREFIX, AUTHORIZATION_SERVER_PREFIX].map((path) => `${path}/*`) : [];
+
+    return [...(value ?? []).map((route) => route.path), ...authRoutes];
 };
 
 /**
@@ -919,7 +964,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         ),
     );
 
-    const workerRoutes = discoverWorkerRoutes(options.projectRoot, schemaDirectory, capabilities.usesAuth);
+    const workerRoutes = discoverWorkerRoutes(options.projectRoot, schemaDirectory, capabilities.usesAuth, scannedFiles);
 
     return {
         // The scanned flags first: `needsD1` below replaces the raw `env.DB` flag
