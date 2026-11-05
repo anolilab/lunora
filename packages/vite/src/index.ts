@@ -200,7 +200,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         bundleMetaPlugin(resolved.projectRoot),
         // Build-only: Lunora's default security headers for the static assets
         // Cloudflare serves without running the Worker, via the client build's `_headers`.
-        assetHeadersPlugin(resolved),
+        assetHeadersPlugin(resolved, resolved.cloudflare === false ? undefined : cloudflareConfigPath(resolved.cloudflare, resolved.projectRoot)),
         logStreamPlugin(),
         // Registers the running dev server in `.lunora/dev.json` so
         // `lunora dev --background|stop|status|logs` manage Vite projects too.

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { join, resolve } from "node:path";
+import { join, posix, resolve } from "node:path";
 
 import type { CelldDevSession } from "@lunora/config";
 import { lunoraLine, startCelldDevSession, targetRunsOwnDevServer } from "@lunora/config";
@@ -218,8 +218,23 @@ const isInsideHashedDirectory = (path: string): boolean => {
 };
 
 /**
+ * The directory a kind's files land in: its `distPath` joined with the directory part of its custom `filename`, which
+ * Rsbuild resolves against it, so `distPath.js: "."` with `filename.js: "static/[name].js"` writes into `static/`.
+ */
+const outputDirectoryOf = (distPath: Record<string, unknown>, filename: Record<string, unknown>, kind: string): string => {
+    const directory = distPath[kind];
+    const custom = filename[kind.replace(ASYNC_SUFFIX, "")];
+
+    return posix.join(
+        typeof directory === "string" ? directory.replaceAll("\\", "/") : ".",
+        typeof custom === "string" ? posix.dirname(custom.replaceAll("\\", "/")) : ".",
+    );
+};
+
+/**
  * `static/` when every file Rsbuild writes there is content-hashed, as Rsbuild's
- * own `getFilename` decides it: every kind placed inside `static/` is one Rsbuild
+ * own `getFilename` decides it: every kind whose files land inside `static/`
+ * (by its `distPath`, or by a directory in its custom `filename`) is one Rsbuild
  * hashes, hashing is on for it (JS and CSS only in a production client build, or
  * with `enable: "always"`), a custom `filename` for it carries a hash, and no
  * public folder copies unhashed files into `static/`.
@@ -229,8 +244,9 @@ const hashedDirectoryOf = (environment: BuildEnvironmentLike, root: string): str
     const { distPath, filename = {}, filenameHash, target } = output;
     const enable = hashEnabled(filenameHash);
     const jsCssHashed = enable === "always" || (enable === true && mode === "production" && target !== "node");
-    const placed = Object.entries(distPath).filter(([key, value]) => key !== "root" && typeof value === "string" && isInsideHashedDirectory(value));
-    const hashed = placed.every(([kind]) => {
+    const kinds = [...new Set([...Object.keys(distPath), ...Object.keys(filename)])].filter((kind) => kind !== "root");
+    const placed = kinds.filter((kind) => isInsideHashedDirectory(outputDirectoryOf(distPath, filename, kind)));
+    const hashed = placed.every((kind) => {
         const custom = filename[kind.replace(ASYNC_SUFFIX, "")];
 
         if (custom !== undefined) {

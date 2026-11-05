@@ -505,6 +505,10 @@ describe(startWorker, () => {
             ["filenameHash is { enable: false }", { output: { filenameHash: { enable: false } } }],
             ["the build is not production, where JS and CSS go unhashed", { mode: "development" }],
             ["a custom JS file name has no hash", { output: { filename: { js: "[name].js" } } }],
+            [
+                "a custom file name writes an unhashed file into static/ from outside it",
+                { output: { distPath: { js: "." }, filename: { js: "static/[name].js" } } },
+            ],
         ])("writes no immutable rule when %s", async (reason, rsbuildConfig) => {
             expect.assertions(1);
 

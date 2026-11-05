@@ -43,6 +43,8 @@ interface ProjectAssetHeadersInput {
     schemaDir?: string;
     /** The deploy target an integration was configured with; resolved from `lunora.config` when omitted. Only `"cloudflare"` serves `_headers`. */
     target?: string;
+    /** Absolute path of the wrangler config the build deploys (`@cloudflare/vite-plugin`'s `configPath`). Defaults to the project's own. */
+    wranglerPath?: string;
 }
 
 /** Where an integration's build log goes. */
@@ -129,7 +131,7 @@ const writeProjectAssetHeaders = (input: ProjectAssetHeadersInput): ProjectAsset
         return { reason: `target "${target}" does not serve _headers`, written: false };
     }
 
-    const wranglerPath = findWranglerFile(input.projectRoot);
+    const wranglerPath = input.wranglerPath ?? findWranglerFile(input.projectRoot);
     const wrangler = wranglerPath === undefined ? undefined : readWranglerJsonc(wranglerPath).parsed;
     const environment = cloudflareEnvironment();
     const assets = scopedBlock(wrangler, environment, "assets", { inherit: true });
@@ -160,7 +162,7 @@ const writeProjectAssetHeaders = (input: ProjectAssetHeadersInput): ProjectAsset
     if (!configRead && input.hashedDirectory !== undefined && input.hashedDirectory !== "") {
         result.warnings.push(
             `_headers: no long-term caching for ${input.hashedDirectory}/, because ${
-                wranglerPath === undefined ? "no wrangler.jsonc or wrangler.json was found" : `${wranglerPath} could not be parsed`
+                wranglerPath === undefined ? "no wrangler.jsonc or wrangler.json was found" : `${wranglerPath} could not be read or parsed`
             } and assets.not_found_handling decides whether that is safe`,
         );
     }

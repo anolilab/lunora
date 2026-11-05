@@ -53,6 +53,7 @@ interface ConfigDoneContext {
         readonly build?: { readonly assets?: string };
         readonly publicDir?: URL;
         readonly root?: URL;
+        readonly vite?: { readonly build?: { readonly rollupOptions?: { readonly output?: unknown } } };
     };
     readonly logger?: {
         readonly warn: (message: string) => void;
@@ -68,12 +69,29 @@ interface BuildDoneContext {
     };
 }
 
+const FILE_NAME_OPTIONS = ["assetFileNames", "chunkFileNames", "entryFileNames"] as const;
+
+/**
+ * Whether every output file name `vite.build.rollupOptions.output` sets carries `[hash]`, as Astro's own defaults do.
+ * A function can name a file anything, so only a pattern string can promise a hash.
+ */
+const namesCarryHash = (output: unknown): boolean => {
+    const entries: unknown[] = output === undefined ? [] : [output].flat();
+
+    return entries.every((entry) => {
+        const names = typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>) : {};
+
+        return FILE_NAME_OPTIONS.every((key) => names[key] === undefined || (typeof names[key] === "string" && names[key].includes("[hash]")));
+    });
+};
+
 /**
  * Write the Lunora-managed `_headers` block into the client output after
  * `astro build`, when that output is wrangler's `assets.directory`, so a static
  * asset Cloudflare serves without running the Worker carries the security
  * headers. Astro names every file under `build.assets` (`_astro/`) with a
- * content hash, so that directory is offered for immutable caching.
+ * content hash, so that directory is offered for immutable caching, unless
+ * `vite.build.rollupOptions.output` renames those files without `[hash]`.
  * `@lunora/config` is imported here, at build time, so the integration stays cheap to load.
  */
 const writeAstroAssetHeaders = async (context: BuildDoneContext, config: ConfigDoneContext["config"]): Promise<void> => {
@@ -88,7 +106,7 @@ const writeAstroAssetHeaders = async (context: BuildDoneContext, config: ConfigD
     // Closures, not detached methods: Astro's logger reads `this`.
     emitProjectAssetHeaders(
         {
-            hashedDirectory: config?.build?.assets ?? "_astro",
+            hashedDirectory: namesCarryHash(config?.vite?.build?.rollupOptions?.output) ? (config?.build?.assets ?? "_astro") : undefined,
             outputDirectory: fileURLToPath(context.dir),
             projectRoot: fileURLToPath(root),
             publicDirectory: config?.publicDir === undefined ? undefined : fileURLToPath(config.publicDir),

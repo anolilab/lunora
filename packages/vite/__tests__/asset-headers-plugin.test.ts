@@ -16,6 +16,7 @@ const build = async (
     plugin: ReturnType<typeof assetHeadersPlugin>,
     pluginNames: string[],
     buildConfig: Record<string, unknown> = {},
+    bundle: Record<string, unknown> = {},
 ): Promise<{ info: ReturnType<typeof vi.fn<(message: string) => void>> }> => {
     const info = vi.fn<(message: string) => void>();
     const logger = { info, warn: vi.fn<(message: string) => void>() };
@@ -25,16 +26,20 @@ const build = async (
             return { name };
         }),
     });
-    await (plugin.writeBundle as (this: unknown) => Promise<void>).call({
-        environment: {
-            config: {
-                build: { assetsDir: "assets", outDir: "dist/client", rolldownOptions: {}, ...buildConfig },
-                logger,
-                publicDir: join(projectRoot, "public"),
-                root: projectRoot,
+    await (plugin.writeBundle as (this: unknown, outputOptions: unknown, outputBundle: unknown) => Promise<void>).call(
+        {
+            environment: {
+                config: {
+                    build: { assetsDir: "assets", outDir: "dist/client", rolldownOptions: {}, ...buildConfig },
+                    logger,
+                    publicDir: join(projectRoot, "public"),
+                    root: projectRoot,
+                },
             },
         },
-    });
+        {},
+        bundle,
+    );
 
     return { info };
 };
@@ -145,6 +150,45 @@ describe(assetHeadersPlugin, () => {
         expect(text).not.toContain("Cache-Control");
         // The security headers still go out.
         expect(text).toContain("X-Content-Type-Options: nosniff");
+    });
+
+    it("caches the assets directory when every file the bundle wrote there has a hashed name, source maps included", async () => {
+        expect.assertions(1);
+
+        await build(
+            assetHeadersPlugin(options()),
+            ["vite-plugin-cloudflare"],
+            {},
+            {
+                "assets/index-Ab12_d-Z.js": {},
+                "assets/index-Ab12_d-Z.js.map": {},
+                "assets/logo-0aB1cD2e.svg": {},
+                "index.html": {},
+                "sw.js": {},
+            },
+        );
+
+        expect(readFileSync(headersFile(), "utf8")).toContain("/assets/*\n  Cache-Control: public, max-age=31536000, immutable");
+    });
+
+    it("writes no immutable rule when a plugin emitted a fixed file name into the assets directory", async () => {
+        expect.assertions(1);
+
+        await build(assetHeadersPlugin(options()), ["vite-plugin-cloudflare"], {}, { "assets/index-Ab12Cd34.js": {}, "assets/worker.js": {} });
+
+        expect(readFileSync(headersFile(), "utf8")).not.toContain("Cache-Control");
+    });
+
+    it("reads the wrangler config @cloudflare/vite-plugin was pointed at, not the project's own", async () => {
+        expect.assertions(1);
+
+        const custom = join(projectRoot, "wrangler.spa.jsonc");
+
+        writeFileSync(custom, '{ "name": "app", "assets": { "directory": "./dist/client", "not_found_handling": "single-page-application" } }\n', "utf8");
+
+        await build(assetHeadersPlugin(options(), custom), ["vite-plugin-cloudflare"]);
+
+        expect(readFileSync(headersFile(), "utf8")).not.toContain("Cache-Control");
     });
 
     it("writes no immutable rule when a publicDir subfolder of the same name copies unhashed files into it", async () => {

@@ -8,13 +8,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { lunora } from "../src/integration";
 
 /** `astro:config:done`, then `astro:build:done` for the client output at `dist/client`, as `astro build` runs them. */
-const build = async (root: string): Promise<void> => {
+const build = async (root: string, vite?: unknown): Promise<void> => {
     const integration = lunora();
     const configDone = integration.hooks["astro:config:done"] as (context: unknown) => void;
     const buildDone = integration.hooks["astro:build:done"] as (context: unknown) => Promise<void>;
     const logger = { info: vi.fn<(message: string) => void>(), warn: vi.fn<(message: string) => void>() };
 
-    configDone({ config: { build: { assets: "_astro" }, publicDir: pathToFileURL(join(root, "public/")), root: pathToFileURL(`${root}/`) }, logger });
+    configDone({ config: { build: { assets: "_astro" }, publicDir: pathToFileURL(join(root, "public/")), root: pathToFileURL(`${root}/`), vite }, logger });
     await buildDone({ dir: pathToFileURL(join(root, "dist", "client/")), logger });
 };
 
@@ -42,6 +42,22 @@ describe("lunora() Astro integration — managed _headers", () => {
 
         expect(text).toContain("  X-Content-Type-Options: nosniff");
         expect(text).toContain("/_astro/*\n  Cache-Control: public, max-age=31536000, immutable");
+    });
+
+    it.each([
+        ["a file-name pattern without [hash]", { assetFileNames: "_astro/[name][extname]" }],
+        ["a file-name function", { chunkFileNames: () => "_astro/[name].js" }],
+    ])("writes no immutable rule for _astro/ when vite.build.rollupOptions.output sets %s", async (_reason, output) => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "wrangler.jsonc"), '{ "name": "app", "assets": { "directory": "./dist/client" } }\n', "utf8");
+
+        await build(root, { build: { rollupOptions: { output } } });
+
+        const text = readFileSync(join(root, "dist", "client", "_headers"), "utf8");
+
+        expect(text).toContain("  X-Content-Type-Options: nosniff");
+        expect(text).not.toContain("Cache-Control");
     });
 
     it("writes nothing when wrangler deploys another directory", async () => {
