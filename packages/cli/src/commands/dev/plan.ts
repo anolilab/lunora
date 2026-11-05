@@ -16,8 +16,8 @@ import {
     resolveSchemaDirectory,
     targetRunsOwnDevServer,
 } from "@lunora/config";
-import type { WithheldBinding } from "@lunora/config/cloudflare";
-import { findWranglerFile, materializeDevWranglerConfig, materializeServiceDevConfigs, readWranglerJsonc } from "@lunora/config/cloudflare";
+import type { RemotePlan, WithheldBinding } from "@lunora/config/cloudflare";
+import { findWranglerFile, materializeDevWranglerConfig, materializeServiceDevConfigs, readWranglerJsonc, toRemotePlan } from "@lunora/config/cloudflare";
 
 import { detectPackageManager, execArgsFor, runScriptCommand, toolchainExecArgs } from "../../util/detect-package-manager";
 import { findAvailablePort } from "../../util/free-port";
@@ -25,7 +25,7 @@ import { hasIpv6Loopback } from "../../util/loopback";
 import type { SpawnDescriptor } from "../../util/spawn";
 import { codegenRequested, detectDevFlavor, viteDevCommand, withViteChildEnv } from "./lifecycle";
 import { planOwnDevServer } from "./own-dev-server";
-import type { DevCommandOptions, DevCommandPlan, DevRemotePlan } from "./types";
+import type { DevCommandOptions, DevCommandPlan } from "./types";
 
 /**
  * The dev-only wrangler config the `framework-worker` sidecar runs (`wrangler dev
@@ -59,7 +59,7 @@ const noopCleanup = (): void => {};
  * wrangler has no Cloudflare login, since that binding's remote proxy session
  * would otherwise stop `wrangler dev` from booting.
  */
-const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: string[]; plan: DevRemotePlan } => {
+const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: string[]; plan: RemotePlan } => {
     // `--local` starts wrangler with no remote proxy session, so the `ai` binding
     // can't take the session down and no temp config is needed.
     if (!options.remote && options.local === true) {
@@ -67,17 +67,9 @@ const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: str
     }
 
     const materialize = options.materializeDev ?? materializeDevWranglerConfig;
-    const result = materialize({ projectRoot: cwd, remote: options.remote === true });
-    const bindings = result.remoteBindings.map((binding) => `${binding.binding} (${binding.kind})`);
-    const plan: DevRemotePlan = {
-        bindings,
-        cleanup: result.cleanup,
-        enabled: options.remote === true,
-        reason: result.reason,
-        withheld: result.withheld,
-    };
+    const plan = toRemotePlan(materialize({ projectRoot: cwd, remote: options.remote === true }), options.remote === true);
 
-    return { args: result.configPath === undefined ? [] : ["--config", result.configPath], plan };
+    return { args: plan.configPath === undefined ? [] : ["--config", plan.configPath], plan };
 };
 
 /**

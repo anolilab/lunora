@@ -324,7 +324,7 @@ export { default as LUNORA_API_UPDATED_EVENT } from "./hmr-events";
 // composition) justifies a public surface. Only `detectFramework` (above) is public.
 export { default as logStreamPlugin } from "./log-stream-plugin";
 export { checkLunoraProxy, proxyCheckPlugin } from "./proxy-check-plugin";
-export type { PlanViteRemoteOptions, ViteRemotePlan } from "./remote-bindings-plugin";
+export type { PlanViteRemoteOptions } from "./remote-bindings-plugin";
 export { planViteRemoteBindings, remoteBindingsPlugin, withRemoteBindings } from "./remote-bindings-plugin";
 // The error→solution rule table itself lives in `@lunora/codegen` (shared with
 // the standalone `lunora dev` CLI); `@lunora/vite` only wraps it as an overlay
@@ -352,4 +352,5 @@ export { wranglerValidatorPlugin } from "./wrangler-validator-plugin";
 // list); re-exported here so this package's surface is unchanged.
 export type { GeneratedClassModule } from "@lunora/config";
 export { GENERATED_CLASS_MODULES } from "@lunora/config";
+export type { RemotePlan } from "@lunora/config/cloudflare";
 export { lunora, resolveOverlayOption, VERSION };
