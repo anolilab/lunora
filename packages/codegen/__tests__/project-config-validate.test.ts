@@ -263,7 +263,7 @@ describe("lunora.config validation", () => {
             expect(validKeys("export default { zzz: 1 };\n")).toStrictEqual(memberNames(lunoraConfig));
         });
 
-        it.each(["codegen", "durableObjects", "studio"])("and inside `%s`", (section) => {
+        it.each(["codegen", "durableObjects", "security", "studio"])("and inside `%s`", (section) => {
             expect.assertions(1);
 
             expect(validKeys(`export default { ${section}: { zzz: 1 } };\n`)).toStrictEqual(memberNames(memberType(section)));

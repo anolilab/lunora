@@ -225,17 +225,4 @@ const objectProblems = (object: ObjectLiteralExpression, shape: FieldShape, path
 };
 
 export type { FieldShape };
-export {
-    BOOLEAN,
-    fieldProblems,
-    FUNCTION,
-    literalKind,
-    memberValue,
-    objectOf,
-    objectProblems,
-    SECURITY_HEADERS,
-    STRING,
-    STRING_ARRAY,
-    unknownKeyProblem,
-    unwrapLiteral,
-};
+export { BOOLEAN, FUNCTION, objectOf, objectProblems, SECURITY_HEADERS, STRING, STRING_ARRAY, unwrapLiteral };
