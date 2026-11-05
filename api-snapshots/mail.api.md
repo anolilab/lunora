@@ -37,6 +37,7 @@ interface CloudflareTransportOptions {
 
 ```ts
 interface ConsumeQueuedSendOptions {
+    enqueuedAt?: Date;
     sent?: SentMailStore;
     sentTtlSeconds?: number;
 }
@@ -77,6 +78,7 @@ type MailEnv = Record<string, unknown>;
 
 ```ts
 class MailSendError extends LunoraError {
+    static override [Symbol.hasInstance](value: unknown): boolean;
     readonly outcomeUnknown: boolean;
     readonly retryable: boolean;
     constructor(options: {
@@ -196,7 +198,7 @@ interface SendPayload {
 
 ```ts
 interface SentMailStore {
-    get: (key: string) => Promise<string | null>;
+    get: (key: string) => Promise<string | null | undefined>;
     put: (key: string, value: string, options: {
         expirationTtl: number;
     }) => Promise<void>;
