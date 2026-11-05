@@ -665,6 +665,96 @@ describe("two isolates provisioning one database at once", () => {
     });
 });
 
+describe("backfilling a required column the drift repair finds", () => {
+    const notesWithSlug = async (base: ReturnType<typeof createSqliteHarness>): Promise<void> => {
+        await base.exec.run(
+            `CREATE TABLE "notes" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "${OCC_VERSION_COLUMN}" INTEGER, "body" TEXT NOT NULL, "slug" TEXT)`,
+            [],
+        );
+        await base.exec.run(`INSERT INTO "notes" ("id", "_creationTime", "body") VALUES ('n1', 1, 'hello')`, []);
+    };
+
+    it("leaves an existing column alone, factory and NULLs, when an unrelated column is missing", async () => {
+        expect.assertions(2);
+
+        const base = createSqliteHarness();
+        let factoryCalls = 0;
+
+        await notesWithSlug(base);
+
+        const schema = {
+            tables: {
+                notes: {
+                    indexes: [],
+                    shape: {
+                        body: column("string"),
+                        slug: column("string", {
+                            defaultFn: () => {
+                                factoryCalls += 1;
+
+                                throw new Error("factory failed");
+                            },
+                        }),
+                        tag: column("string", { defaultValue: "none" }),
+                    },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as unknown as SchemaLike;
+
+        await runSqlGlobalTableMigrations(base.exec, schema, dialect);
+
+        const rows = await base.exec.all(`SELECT "slug", "tag" FROM "notes"`, []);
+
+        expect(factoryCalls).toBe(0);
+        expect(
+            rows.map((row) => {
+                return { ...row };
+            }),
+        ).toStrictEqual([{ slug: null, tag: "none" }]);
+
+        base.close();
+    });
+
+    it("adds a column whose default factory throws and leaves its old rows NULL instead of failing", async () => {
+        expect.assertions(1);
+
+        const base = createSqliteHarness();
+
+        await notesWithSlug(base);
+
+        const schema = {
+            tables: {
+                notes: {
+                    indexes: [],
+                    shape: {
+                        body: column("string"),
+                        slug: column("string"),
+                        tag: column("string", {
+                            defaultFn: () => {
+                                throw new Error("factory failed");
+                            },
+                        }),
+                    },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as unknown as SchemaLike;
+
+        await runSqlGlobalTableMigrations(base.exec, schema, dialect);
+
+        const rows = await base.exec.all(`SELECT "tag" FROM "notes"`, []);
+
+        expect(
+            rows.map((row) => {
+                return { ...row };
+            }),
+        ).toStrictEqual([{ tag: null }]);
+
+        base.close();
+    });
+});
+
 describe("columnNamesOfCreateTable", () => {
     it("reads the columns a Lunora table is created with", () => {
         expect.assertions(1);
