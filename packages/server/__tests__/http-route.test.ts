@@ -465,6 +465,14 @@ describe("httpRoute composition", () => {
         expect(credentialed.headers.get("cache-control")).toBe("private, max-age=300");
     });
 
+    it("refuses a credentialHeaders entry that is not a header name when the route is defined", () => {
+        expect.assertions(1);
+
+        expect(() => httpRoute.get("/api/me").cacheControl("public, max-age=300", { credentialHeaders: ["X Api Key"] })).toThrow(
+            'credentialHeaders entry "X Api Key" is not a header name',
+        );
+    });
+
     it.each(["private, max-age=60", "no-store", "public, no-store"])("sends %s unchanged to a credentialed request", async (declared) => {
         expect.assertions(1);
 

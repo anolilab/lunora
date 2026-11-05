@@ -100,8 +100,16 @@ const credentialHeadersFor = (policy: RestCachePolicy): string[] => [
  * and `httpRoute(...).cacheControl()` (`@lunora/server`). A second copy could
  * miss a credential source this one has and label a per-caller body `public`.
  */
+/** An RFC 9110 header name (`token`). `Headers.has` throws on anything else, so a name is checked before it is asked about. */
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u;
+
+const isHeaderName = (name: string): boolean => HEADER_NAME.test(name);
+
 const carriesCredential = (headers: Headers, context: { readonly access?: unknown } | undefined, extraHeaders: ReadonlyArray<string> = []): boolean =>
-    context?.access !== undefined || CREDENTIAL_HEADERS.some((name) => headers.has(name)) || extraHeaders.some((name) => headers.has(name));
+    context?.access !== undefined ||
+    CREDENTIAL_HEADERS.some((name) => headers.has(name)) ||
+    // A name no header can have is never on the request; asking `Headers.has` about it would throw on every request.
+    extraHeaders.some((name) => isHeaderName(name) && headers.has(name));
 
 /**
  * Split a `Cache-Control` value into its directives. Commas inside a quoted
@@ -333,6 +341,7 @@ export {
     credentialHeadersFor,
     DATA_SELECTING_HEADERS,
     describeRestSurface,
+    isHeaderName,
     mergeVary,
     privateCacheControl,
     REST_PATH_PREFIX,

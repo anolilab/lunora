@@ -6,6 +6,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 
 import type { LiveTopicRef } from "../../../shared/live-stream";
+import { isHeaderName } from "../../../shared/rest-surface";
 import { isSafeHeaderValue, SSE_HEADERS, sseFrame } from "../../../shared/sse";
 import applyOutput from "./apply-output";
 import type { EmptyArgs } from "./builder/index";
@@ -982,11 +983,27 @@ const buildStreamHandler =
         return new Response(stream, { headers: SSE_HEADERS });
     };
 
+/**
+ * `credentialHeaders` as given, refused when a name is not a header name: a typo
+ * would otherwise mean the app's credential header is never seen, and its callers
+ * share a cached response. Said when the route is defined, not on a request.
+ * @throws LunoraError `INTERNAL` naming the entry that is not a header name.
+ */
+const checkedCredentialHeaders = (names: ReadonlyArray<string> | undefined): ReadonlyArray<string> | undefined => {
+    const invalid = names?.find((name) => !isHeaderName(name));
+
+    if (invalid !== undefined) {
+        throw new LunoraError("INTERNAL", `httpRoute .cacheControl(): credentialHeaders entry ${JSON.stringify(invalid)} is not a header name`);
+    }
+
+    return names;
+};
+
 const makeRouteBuilder = (state: RouteState): Record<string, unknown> => {
     return {
         body: (validators: ArgsValidator) => makeRouteBuilder({ ...state, body: { ...state.body, ...validators } }),
         cacheControl: (value: string, options?: HttpRouteCacheOptions) =>
-            makeRouteBuilder({ ...state, cacheControl: value, credentialHeaders: options?.credentialHeaders }),
+            makeRouteBuilder({ ...state, cacheControl: value, credentialHeaders: checkedCredentialHeaders(options?.credentialHeaders) }),
         cacheTag: (value: string) => makeRouteBuilder({ ...state, cacheTag: value }),
         handler: (userHandler: LooseHandler): LunoraRouteHandler => buildRouteHandler(state, userHandler),
         output: (validator: Validator) => makeRouteBuilder({ ...state, output: validator }),
