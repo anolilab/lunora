@@ -342,11 +342,27 @@ export const env = Object.defineProperty((value: unknown) => value, Symbol.for("
         expect(vi.mocked(checkDevEnv)).toHaveBeenLastCalledWith(expect.objectContaining({ withheld: ["AI"] }));
 
         writeFileSync(join(dir, "wrangler.dev.jsonc"), `{ "name": "app-dev" }`, "utf8");
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ devDependencies: { "@sveltejs/kit": "^2.0.0" } }), "utf8");
         await runHooks(devVariablesPlugin(RESOLVED(dir)));
 
         expect(vi.mocked(checkDevEnv)).toHaveBeenLastCalledWith(
             expect.objectContaining({ configPath: join(dir, "wrangler.dev.jsonc"), vars: { WORKER_ENV: "development" } }),
         );
+    });
+
+    it("checks the Cloudflare plugin's config, not a sidecar file a non-sidecar project kept", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        writeEnvContract(["API_URL"]);
+        writeFileSync(join(dir, "wrangler.dev.jsonc"), `{ "name": "stale-dev" }`, "utf8");
+
+        await runHooks(devVariablesPlugin(RESOLVED(dir), { configPath: join(dir, "wrangler.custom.jsonc") }));
+
+        const [options] = vi.mocked(checkDevEnv).mock.lastCall ?? [];
+
+        expect(options?.configPath).toBe(join(dir, "wrangler.custom.jsonc"));
+        expect(options?.vars).toBeUndefined();
     });
 
     it("writes nothing under `vite preview`, which resolves as a `serve` command", async () => {

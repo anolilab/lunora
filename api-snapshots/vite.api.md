@@ -236,7 +236,8 @@ const devStatePlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
 ### `devVariablesPlugin` (const)
 
 ```ts
-const devVariablesPlugin: (options: ResolvedLunoraPluginOptions, { withheld }?: {
+const devVariablesPlugin: (options: ResolvedLunoraPluginOptions, { configPath, withheld }?: {
+    configPath?: string;
     withheld?: () => ReadonlyArray<string>;
 }) => Plugin;
 ```

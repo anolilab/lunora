@@ -190,7 +190,10 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // vinext template's wrangler `main` points at it), because who adds the
         // Cloudflare plugin says nothing about who composes the worker.
         frameworkComposePlugin(resolved, context),
-        devVariablesPlugin(resolved, { withheld: () => withheld }),
+        devVariablesPlugin(resolved, {
+            configPath: resolved.cloudflare === false ? undefined : cloudflareConfigPath(resolved.cloudflare, resolved.projectRoot),
+            withheld: () => withheld,
+        }),
         // Writes the bindings the code implies into `wrangler.jsonc` from its
         // `config` hook — before `@cloudflare/vite-plugin` parses that file and
         // before `remoteBindingsPlugin` copies it. Unconditional: provisioning is

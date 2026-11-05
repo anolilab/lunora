@@ -6,6 +6,7 @@ import {
     checkDevEnv,
     createConfirm,
     describeDevEnvCheck,
+    detectFramework,
     ensureDevVariables,
     ensureDevWorkerEnv,
     ENV_FILENAME,
@@ -43,13 +44,32 @@ const secretSourcesOrUndefined = async (
  */
 const DEV_SIDECAR_CONFIG = "wrangler.dev.jsonc";
 
-/** What the env contract is checked against: the sidecar's config when the project has one. */
-const devEnvCheckOptions = (options: ResolvedLunoraPluginOptions, withheld: ReadonlyArray<string>): DevEnvCheckOptions => {
+/** The frameworks whose worker `lunora dev` runs in that sidecar, beside the framework's own dev server. */
+const SIDECAR_FRAMEWORKS = new Set(["nuxt", "sveltekit"]);
+
+interface DevWorkerConfig {
+    /** The wrangler config the Cloudflare plugin runs, when it is not the project's own. */
+    configPath?: string;
+
+    /** The bindings the remote-bindings plugin left out of this session. */
+    withheld: ReadonlyArray<string>;
+}
+
+/**
+ * What the env contract is checked against: the config the dev worker runs. That
+ * is the sidecar's only on a framework that runs one — a `wrangler.dev.jsonc`
+ * left in any other project is not what its worker boots with.
+ */
+const devEnvCheckOptions = (options: ResolvedLunoraPluginOptions, worker: DevWorkerConfig): DevEnvCheckOptions => {
     const sidecar = resolve(options.projectRoot, DEV_SIDECAR_CONFIG);
     const base = { projectRoot: options.projectRoot, schemaDirectory: options.schemaDir };
 
-    // The sidecar runs its committed config as is: no temp copy, so nothing withheld.
-    return existsSync(sidecar) ? { ...base, configPath: sidecar, vars: { WORKER_ENV: "development" } } : { ...base, withheld };
+    if (SIDECAR_FRAMEWORKS.has(detectFramework(options.projectRoot).framework) && existsSync(sidecar)) {
+        // The sidecar runs its committed config as is: no temp copy, so nothing withheld.
+        return { ...base, configPath: sidecar, vars: { WORKER_ENV: "development" } };
+    }
+
+    return { ...base, configPath: worker.configPath, withheld: worker.withheld };
 };
 
 /**
@@ -92,14 +112,18 @@ const reportDevEnv = (check: DevEnvCheck, schemaDirectory: string, log: Record<"
  * as a 500 from the first request that reads one. A `.dev.vars`, `.env` or
  * wrangler.jsonc edit restarts the dev server (`@cloudflare/vite-plugin` and the
  * codegen plugin do that), which re-runs this hook; an `env.ts` edit does not,
- * so the plugin watches that file itself. `withheld` names the bindings the
- * remote-bindings plugin left out of this session, which the check must not
- * treat as present.
+ * so the plugin watches that file itself. `configPath` is the wrangler config
+ * the Cloudflare plugin runs, when it is not the project's own; `withheld` names
+ * the bindings the remote-bindings plugin left out of this session, which the
+ * check must not treat as present.
  * Skipped under `vite preview`, which resolves with `command: "serve"` and so
  * runs `apply: "serve"` plugins too — previewing a built app must not prompt to
  * scaffold, or write, a dev secrets file.
  */
-const devVariablesPlugin = (options: ResolvedLunoraPluginOptions, { withheld = () => [] }: { withheld?: () => ReadonlyArray<string> } = {}): Plugin => {
+const devVariablesPlugin = (
+    options: ResolvedLunoraPluginOptions,
+    { configPath, withheld = () => [] }: { configPath?: string; withheld?: () => ReadonlyArray<string> } = {},
+): Plugin => {
     let isPreview = false;
     let envInvalid = false;
     // Bumped per check, so a check an `env.ts` save overtook neither logs nor sets `envInvalid`.
@@ -109,7 +133,7 @@ const devVariablesPlugin = (options: ResolvedLunoraPluginOptions, { withheld = (
         generation += 1;
 
         const started = generation;
-        const check = await checkDevEnv(devEnvCheckOptions(options, withheld()));
+        const check = await checkDevEnv(devEnvCheckOptions(options, { configPath, withheld: withheld() }));
 
         if (started === generation) {
             envInvalid = reportDevEnv(check, options.schemaDir, log, envInvalid);
