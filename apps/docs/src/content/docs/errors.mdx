@@ -83,7 +83,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 213 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 214 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -543,6 +543,12 @@ Only shard tables raise it. A `.global()` table names its table on every by-id c
 
 Indexes cover top-level columns only. Denormalise the nested value into its own column, index that, and keep it in sync with a table `.triggers()` beforeInsert/beforeUpdate.
 
+### `INVALID_CURSOR`
+
+`400` — Invalid cursor
+
+The page cursor was refused: its format prefix is one the engine no longer reads, its payload is not one the server minted, or it carries fewer sort keys than the query orders by now. The engine bumps the prefix whenever a format change would otherwise read old cursors as the wrong rows, so this usually follows a deploy. `usePaginatedQuery` restarts the feed from its first page when a page fails with this code; a hand-written pager should do the same rather than retry the cursor.
+
 ### `INVALID_INPUT`
 
 `400` — Invalid input
@@ -947,7 +953,7 @@ Without it a bucket-backed `lunora backup restore --bucket` cannot read the snap
 
 `500` — Subscription seed failed
 
-The query behind a subscription threw on its first run, and the error was not a `LunoraError` with a non-internal code, so its message was redacted before it reached the client. The shard logs the real error with `console.error`, prefixed `[@lunora/do] subscription seed failed for <function path>`: read it with `lunora logs` (or `wrangler tail`) in production, or in the `lunora dev` terminal locally. Studio's Logs tab shows only the redacted entry. A query that throws a `LunoraError` with a non-internal code keeps its own code and message instead; an internal-coded one arrives under its own code (`SQL_UNAVAILABLE`, for example) rather than this one, with its message redacted and the real error logged the same way.
+The query behind a subscription threw on its first run, and the error was not a `LunoraError` with a non-internal code, so its message was redacted before it reached the client. The shard logs the real error with `console.error`, prefixed `[@lunora/do] subscription seed failed for <function path>`: read it with `lunora logs` (or `wrangler tail`) in production, or in the `lunora dev` terminal locally. Studio's Logs tab shows only the redacted entry. A query that throws a `LunoraError` with a non-internal code keeps its own code and message instead; an internal-coded one arrives under its own code rather than this one, with its message redacted and the real error logged the same way.
 
 ### `TOKEN_EXPIRED`
 

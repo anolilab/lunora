@@ -197,8 +197,12 @@
     {
       "at": "2026-11-05T00:15:35.681Z",
       "key": "@lunora/sql-store@1.0.0-alpha.235"
+    },
+    {
+      "at": "2026-11-05T07:07:19.340Z",
+      "key": "@lunora/errors@1.0.0-alpha.86"
     }
   ],
-  "updatedAt": "2026-11-05T00:15:35.681Z",
+  "updatedAt": "2026-11-05T07:07:19.340Z",
   "version": 1
 }

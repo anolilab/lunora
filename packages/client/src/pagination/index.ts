@@ -63,11 +63,14 @@ interface PaginatedCoreResult<T> {
     status: PaginationStatus;
 }
 
-/** First-page seed: a single open-ended range starting at the feed head. */
-const initialPages = (numberItems: number): Page[] => [
+/** The feed's head page: one open-ended range from the start of the feed. */
+const headPage = (numberItems: number): Page => {
     // eslint-disable-next-line unicorn/no-null -- `lower: null` is the feed head, `upper: null` the open-ended tail — both are wire-shape cursors.
-    { lower: null, numItems: numberItems, upper: null },
-];
+    return { lower: null, numItems: numberItems, upper: null };
+};
+
+/** First-page seed: a single open-ended range starting at the feed head. */
+const initialPages = (numberItems: number): Page[] => [headPage(numberItems)];
 
 /**
  * Run the SPLIT/JOIN maintenance pass over the current page list given freshly
@@ -185,5 +188,40 @@ const applyLoadMore = (pages: Page[], cursor: null | string | undefined, numberI
     return next;
 };
 
-export type { Page, PaginatedCoreResult, PaginationResult, PaginationStatus };
-export { applyLoadMore, derivePaginationStatus, initialPages, JOIN_FACTOR, rebalance, SPLIT_FACTOR };
+/**
+ * What a feed does with one page's failure.
+ *
+ * - `surface` — report it (the `error` value and `onError`), as before.
+ * - `restart` — reload the feed from its first page, silently: the page's cursor no longer decodes.
+ * - `ignore` — drop it: a page the feed no longer holds, still reporting from before a restart.
+ */
+type PageFailure = "ignore" | "restart" | "surface";
+
+/** The feed's first page before any `loadMore`: `(null, null]`, the one page that carries no cursor. */
+const isHeadPage = (page: Page): boolean => page.lower === null && page.upper === null;
+
+/**
+ * Classify a page failure. Only `INVALID_CURSOR` changes the answer: the server refuses a cursor
+ * minted by an older build (a deploy changed the query's order or the engine's cursor encoding), and
+ * every bounded page the feed holds carries one, so the only way forward is page one.
+ *
+ * Two cases surface it instead. The head page has no cursor to be stale. And `restartedSinceLoad`
+ * (the feed restarted, and no page past the head has had a frame since) means the server is refusing
+ * the cursors it mints now, which a second restart would only repeat on every `loadMore`.
+ */
+const classifyPageFailure = (pages: Page[], isFailedPage: (page: Page) => boolean, error: { code?: string }, restartedSinceLoad: boolean): PageFailure => {
+    if (error.code !== "INVALID_CURSOR") {
+        return "surface";
+    }
+
+    const page = pages.find((candidate) => isFailedPage(candidate));
+
+    if (page === undefined) {
+        return "ignore";
+    }
+
+    return isHeadPage(page) || restartedSinceLoad ? "surface" : "restart";
+};
+
+export type { Page, PageFailure, PaginatedCoreResult, PaginationResult, PaginationStatus };
+export { applyLoadMore, classifyPageFailure, derivePaginationStatus, headPage, initialPages, isHeadPage, JOIN_FACTOR, rebalance, SPLIT_FACTOR };

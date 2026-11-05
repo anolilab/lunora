@@ -119,6 +119,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "items:clear",
@@ -262,6 +269,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "items:count",
@@ -405,6 +419,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "items:create",
@@ -559,6 +580,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "items:detail",
@@ -721,6 +749,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "items:find",
@@ -890,6 +925,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "items:labels",
@@ -1036,6 +1078,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "items:match",
@@ -1185,6 +1234,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "items:page",
@@ -1352,6 +1408,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "items:pick",
@@ -1541,6 +1604,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "items:self",
@@ -1684,6 +1754,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "items:stats",
@@ -1833,6 +1910,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "items:summary",
@@ -1988,6 +2072,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "items:tags",
@@ -2134,6 +2225,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "items:totals",
@@ -2283,6 +2381,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "items:type",
@@ -2426,6 +2531,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "ledger:balances",
@@ -2615,6 +2727,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "ledger:charge",
