@@ -58,6 +58,10 @@ wrapper composes Nitro's handler with the Lunora app's `queue`, `email` and
 entrypoints silently, so a cron or queue consumer never runs:
 
 ```ts title="worker.ts"
+// `@ts-ignore`, not `@ts-expect-error`: before the first `nuxt build` the file
+// does not exist (TS2307), after one it is untyped emitted JS (TS7016), so only
+// `@ts-ignore` is correct in both states.
+// @ts-ignore -- emitted by Nitro's `cloudflare_module` preset at build time
 import nitro from "./.output/server/index.mjs";
 import type { ExecutionContextLike, ScheduledControllerLike } from "lunorash/runtime";
 
