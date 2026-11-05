@@ -281,7 +281,7 @@ describe("codegen-plugin", () => {
                 },
             });
 
-            expect(enabledHandlers.filter((event) => event === "unlink")).toHaveLength(3);
+            expect(enabledHandlers.filter((event) => event === "unlink")).toHaveLength(4);
         });
 
         it("build: LUNORA_CODEGEN=0 is ignored, so the ERROR-advisory gate still fails the build", async () => {
@@ -557,7 +557,8 @@ describe("codegen-plugin", () => {
     const getConfigChangeListener = (server: import("vite").ViteDevServer): ((file: string) => void) => {
         const changeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.filter((args) => args[0] === "change");
 
-        return changeCalls[1]?.[1] as (file: string) => void;
+        // Registered last, after codegen's and the binding-drift one.
+        return changeCalls.at(-1)?.[1] as (file: string) => void;
     };
 
     /**
@@ -882,6 +883,32 @@ export const schema = defineSchema({
             expect(clientSend).not.toHaveBeenCalled();
             expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
             expect(warn).toHaveBeenCalledWith(expect.stringContaining("QUEUE_EMAILS (Queue) — not in the running worker yet"));
+        });
+
+        it("a src/ save that needs a new binding says so, without regenerating", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValueOnce(["DB (D1 database)"]);
+
+            wireServer(plugin, server);
+
+            for (const [event, listener] of (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls as [string, (file: string) => void][]) {
+                if (event === "change") {
+                    listener(join(workdir, "src", "worker.ts"));
+                }
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(clientSend).not.toHaveBeenCalled();
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining("DB (D1 database) — not in the running worker yet"));
         });
 
         it("failure then success → recovery reloads the client once (clears overlay), still evicts the worker", async () => {

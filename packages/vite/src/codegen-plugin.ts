@@ -46,6 +46,9 @@ import type { ResolvedLunoraPluginOptions } from "./types";
 /** Matches a project-variant tsconfig filename (`tsconfig.build.json`, …). */
 const TSCONFIG_VARIANT_RE = /[/\\]tsconfig\..+\.json$/u;
 
+/** A source binding inference scans: it reads `.ts`, `.tsx`, `.js` and their module variants. */
+const BINDING_SOURCE_RE = /\.[cm]?[jt]sx?$/u;
+
 /** An input of an RPC service's declaration snapshot: a source (`.js` too, under `allowJs`) or a tsconfig. */
 const SERVICE_SOURCE_RE = /(?:\.[cm]?[jt]sx?|(?:^|[/\\])tsconfig(?:\..+)?\.json)$/u;
 
@@ -982,10 +985,20 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 scheduler.onSave(normalized);
             };
 
-            // With codegen watch off, nothing regenerates, but a save that implies a
-            // new binding still needs the restart hint `regenerate` would have given.
+            // Binding inference scans `src/` as well as the schema directory, and
+            // `regenerate` schedules the scan only for a codegen input it ran on. So
+            // this covers `src/` always, and the schema directory when codegen watch
+            // is off and nothing regenerates.
+            const sourceDirectory = resolve(options.projectRoot, "src");
+            const isUnder = (file: string, directory: string): boolean => file.startsWith(`${directory}${sep}`);
             const onDriftSource = (file: string): void => {
-                if (isCodegenInput(resolve(file))) {
+                const normalized = resolve(file);
+
+                if (!BINDING_SOURCE_RE.test(normalized) || isUnder(normalized, absoluteGeneratedDirectory)) {
+                    return;
+                }
+
+                if (isUnder(normalized, sourceDirectory) || (codegenDisabled && isUnder(normalized, absoluteSchemaDirectory))) {
                     bindingDrift.noteSave();
                 }
             };
@@ -1020,15 +1033,18 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 server.config.logger.info(
                     `${LUNORA_TAG} codegen watch disabled (${CODEGEN_ENV}) — _generated/ is written only by an explicit \`lunora codegen\``,
                 );
-                server.watcher.on("add", onDriftSource);
-                server.watcher.on("change", onDriftSource);
-                server.watcher.on("unlink", onDriftSource);
             } else {
                 server.watcher.on("add", onChange);
                 server.watcher.on("change", onChange);
                 server.watcher.on("unlink", onChange);
                 server.watcher.on("unlink", onConfigFileRemoved);
             }
+
+            // Like the schema directory, `src/` may sit outside the Vite root.
+            server.watcher.add(sourceDirectory);
+            server.watcher.on("add", onDriftSource);
+            server.watcher.on("change", onDriftSource);
+            server.watcher.on("unlink", onDriftSource);
 
             // The config files whose binding-relevant drift restarts the dev server
             // in place. Both wrangler candidate names are watched (even if absent
