@@ -18,6 +18,9 @@ import { createSqliteBatchHarness, createSqliteHarness, makeSqliteDialect } from
 
 const dialect = makeSqliteDialect();
 
+const ADD_COLUMN_RE = /add column/iu;
+const BACKFILL_RE = /^update "notes" set "slug"/iu;
+
 const column = (kind: string, extra: Record<string, unknown> = {}): ValidatorLike => {
     return { _meta: { column: { notNull: true, ...extra } }, kind };
 };
@@ -410,9 +413,9 @@ describe("batched .global() provisioning", () => {
  * Execs for two isolates over one database whose first `ADD COLUMN`s each wait until both have asked for one, so both
  * are past their probe: the interleaving two cold isolates hit, made deterministic instead of left to microtask order.
  */
-const racingIsolates = (base: SqlCtxExec): { alters: () => number; isolate: () => SqlCtxExec } => {
+const racingIsolates = (base: SqlCtxExec): { isolate: () => SqlCtxExec; statements: string[] } => {
     const waiting: (() => void)[] = [];
-    let alters = 0;
+    const statements: string[] = [];
     const arrive = async (): Promise<void> =>
         new Promise<void>((resolve) => {
             waiting.push(resolve);
@@ -425,26 +428,29 @@ const racingIsolates = (base: SqlCtxExec): { alters: () => number; isolate: () =
         });
 
     return {
-        alters: () => alters,
         isolate: () => {
             return {
                 all: (query, parameters) => base.all(query, parameters),
                 run: async (query, parameters) => {
-                    const isAlter = /add column/iu.test(query);
+                    statements.push(query);
 
-                    alters += isAlter ? 1 : 0;
-                    await (isAlter && waiting.length < 2 ? arrive() : undefined);
+                    const isFirstAlter = ADD_COLUMN_RE.test(query) && waiting.length < 2;
+
+                    if (isFirstAlter) {
+                        await arrive();
+                    }
 
                     return base.run(query, parameters);
                 },
             };
         },
+        statements,
     };
 };
 
 describe("two isolates provisioning one database at once", () => {
     it("adds a missing column once and fails neither, though both probed before either altered", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const base = createSqliteHarness();
 
@@ -453,10 +459,14 @@ describe("two isolates provisioning one database at once", () => {
             [],
         );
 
-        const { alters, isolate } = racingIsolates(base.exec);
+        await base.exec.run(`INSERT INTO "notes" ("id", "_creationTime", "body") VALUES ('n1', 1, 'hello')`, []);
+
+        const { isolate, statements } = racingIsolates(base.exec);
 
         const schema = {
-            tables: { notes: { indexes: [], shape: { body: column("string"), slug: column("string") }, shardMode: { kind: "global" } } },
+            tables: {
+                notes: { indexes: [], shape: { body: column("string"), slug: column("string", { defaultValue: "untitled" }) }, shardMode: { kind: "global" } },
+            },
         } as unknown as SchemaLike;
 
         const results = await Promise.allSettled([
@@ -465,9 +475,11 @@ describe("two isolates provisioning one database at once", () => {
         ]);
         const columns = await base.exec.all(`SELECT name FROM pragma_table_info('notes') WHERE name = 'slug'`, []);
 
-        expect(alters()).toBe(2);
+        expect(statements.filter((statement) => ADD_COLUMN_RE.test(statement))).toHaveLength(2);
         expect(results.map((result) => result.status)).toStrictEqual(["fulfilled", "fulfilled"]);
         expect(columns).toHaveLength(1);
+        // Only the isolate whose ALTER added the column backfills it.
+        expect(statements.filter((statement) => BACKFILL_RE.test(statement))).toHaveLength(1);
 
         base.close();
     });
@@ -501,6 +513,39 @@ describe("two isolates provisioning one database at once", () => {
 
         expect(results.map((result) => result.status)).toStrictEqual(["fulfilled", "fulfilled"]);
         expect(columns).toHaveLength(1);
+
+        base.close();
+    });
+
+    it("surfaces the ALTER's own error when the column cannot be found after it either", async () => {
+        expect.assertions(1);
+
+        const base = createSqliteHarness();
+        const alterError = new Error("disk I/O error");
+        const exec: SqlCtxExec = {
+            all: async () => {
+                throw new Error("probe failed");
+            },
+            run: async (query, parameters) => {
+                if (ADD_COLUMN_RE.test(query)) {
+                    throw alterError;
+                }
+
+                return base.exec.run(query, parameters);
+            },
+        };
+        const schema = {
+            tables: {
+                notes: {
+                    aggregateIndexes: [{ by: ["body"], name: "byBody", on: "notes", op: "count" }],
+                    indexes: [],
+                    shape: { body: column("string") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as unknown as SchemaLike;
+
+        await expect(runSqlAggregateMigrations(exec, schema, dialect)).rejects.toBe(alterError);
 
         base.close();
     });

@@ -128,7 +128,12 @@ const racingIsolates = (): (() => SqlCtxExec) => {
         return {
             all: exec.all,
             run: async (query, parameters) => {
-                await (/add column/iu.test(query) && waiting.length < 2 ? arrive() : undefined);
+                const isFirstAlter = /add column/iu.test(query) && waiting.length < 2;
+
+                if (isFirstAlter) {
+                    await arrive();
+                }
+
                 await exec.run(query, parameters);
             },
         };

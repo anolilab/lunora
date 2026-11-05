@@ -1074,7 +1074,8 @@ describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
 
         await writer.groupBy("events", { agg: { op: "count" }, by: ["tenant", "status"] });
 
-        const enumerated = statements.find((statement) => /^select .*__agg_bytenantstatus/iu.test(statement));
+        // Past provisioning's `SELECT "t"."__count__" … LIMIT 0` column probe on the same companion.
+        const enumerated = statements.find((statement) => /^select .*__agg_bytenantstatus/iu.test(statement) && !/ limit 0$/iu.test(statement));
 
         expect(enumerated).toBeDefined();
         expect(enumerated).toMatch(engine === "mysql" ? /as `key`/iu : /as "key"/iu);
