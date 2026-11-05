@@ -947,7 +947,7 @@ Without it a bucket-backed `lunora backup restore --bucket` cannot read the snap
 
 `500` — Subscription seed failed
 
-The query behind a subscription threw on its first run, and the error was not a `LunoraError` with a non-internal code, so its message was redacted before it reached the client. The shard logs the real error with `console.error`, prefixed `[@lunora/do] subscription seed failed for <function path>`: read it with `lunora logs` (or `wrangler tail`) in production, or in the `lunora dev` terminal locally. Studio's Logs tab shows only the redacted entry. A query that throws a `LunoraError` with a non-internal code keeps its own code and message instead; an internal-coded one arrives under its own code (`SQL_UNAVAILABLE`, for example) rather than this one, with its message redacted and the real error logged the same way.
+The query behind a subscription threw on its first run, and the error was not a `LunoraError` with a non-internal code, so its message was redacted before it reached the client. The shard logs the real error with `console.error`, prefixed `[@lunora/do] subscription seed failed for <function path>`: read it with `lunora logs` (or `wrangler tail`) in production, or in the `lunora dev` terminal locally. Studio's Logs tab shows only the redacted entry. A query that throws a `LunoraError` with a non-internal code keeps its own code and message instead; an internal-coded one arrives under its own code rather than this one, with its message redacted and the real error logged the same way.
 
 ### `TOKEN_EXPIRED`
 
