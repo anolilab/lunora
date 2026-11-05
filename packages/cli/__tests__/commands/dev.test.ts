@@ -2007,9 +2007,15 @@ describe("lunora dev", () => {
                     compatibility_date: "2026-01-01",
                     main: "src/index.ts",
                     name: "app",
-                    queues: { producers: [{ binding: "EMAILS", queue: "emails" }] },
+                    queues: { producers: [{ binding: "QUEUE_EMAILS", queue: "emails" }] },
                     triggers: { crons: ["0 * * * *"] },
                 }),
+                "utf8",
+            );
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "queues.ts"),
+                `import { defineQueue } from "@lunora/queue";\n\nexport const emails = defineQueue({ handler: async () => {} });\n`,
                 "utf8",
             );
             await runDevCommand({

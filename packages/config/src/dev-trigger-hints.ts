@@ -4,12 +4,15 @@
  * Neither fires on its own in a dev session — a cron waits for its schedule and a
  * queue consumer for a message — so a project that declares them has nothing to
  * look at until it finds the Studio's "Run now" and "send test message" controls.
- * Read off `wrangler.jsonc` rather than the codegen IR because that is what the
- * dev worker actually booted with: codegen syncs `triggers.crons` and the queue
- * reconcile writes `queues.*` before the worker starts.
+ * Read off `wrangler.jsonc` because that is what the dev worker actually booted
+ * with: codegen syncs `triggers.crons` and the queue reconcile writes `queues.*`
+ * before the worker starts. A queue also has to be declared with `defineQueue`:
+ * the Studio sends through a declared queue's producer binding and knows no
+ * other, so a queue only `wrangler.jsonc` names has nothing to send from.
  */
 import type { WranglerConfig } from "./cloudflare/wrangler-config";
 import { readProjectWrangler } from "./cloudflare/wrangler-path";
+import { discoverQueueInfo } from "./queue-info";
 
 /** How many queue names a hint lists before it summarizes the rest. */
 const LISTED_QUEUES = 3;
@@ -23,6 +26,9 @@ interface DevTriggerHintOptions {
      * the Studio page.
      */
     scheduledUrl?: string;
+
+    /** The schema directory the project declares its queues under. */
+    schemaDirectory: string;
 
     /** The Studio's root URL (`…/__lunora`), or `undefined` when it is not served. */
     studioUrl?: string;
@@ -75,9 +81,16 @@ const devTriggerHints = (options: DevTriggerHintOptions): DevTriggerHint[] => {
     }
 
     const crons = [...new Set(stringsOf(parsed.triggers?.crons))];
-    // A hand-edited section may be an object or hold primitives; only array entries name a queue, and the banner never throws.
-    const queueEntries = [parsed.queues?.producers, parsed.queues?.consumers].flatMap((section): unknown[] => (Array.isArray(section) ? section : []));
-    const queues = [...new Set(stringsOf(queueEntries.map((entry) => (entry as { queue?: unknown } | null | undefined)?.queue)))];
+    // A hand-edited section may be an object or hold primitives; the banner never throws.
+    const producers = Array.isArray(parsed.queues?.producers) ? (parsed.queues.producers as unknown[]) : [];
+    const bindings = new Set(stringsOf(producers.map((entry) => (entry as { binding?: unknown } | null | undefined)?.binding)));
+    const queues = [
+        ...new Set(
+            discoverQueueInfo(options.projectRoot, options.schemaDirectory)
+                .queues.filter((queue) => bindings.has(queue.bindingName))
+                .map((queue) => queue.name),
+        ),
+    ];
     const [firstCron] = crons;
 
     return [

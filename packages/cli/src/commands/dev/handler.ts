@@ -76,7 +76,7 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, cwd: string, studioUr
 
     // Studio pointers only: `wrangler dev` already prints the `curl` for its
     // `/cdn-cgi/local/scheduled` route when the config declares crons.
-    for (const { label, text } of devTriggerHints({ projectRoot: cwd, studioUrl })) {
+    for (const { label, text } of devTriggerHints({ projectRoot: cwd, schemaDirectory: resolveSchemaDirectory(cwd), studioUrl })) {
         logger.info(formatDevBannerRow(label, text, 12));
     }
 

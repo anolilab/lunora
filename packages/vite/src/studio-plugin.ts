@@ -55,7 +55,7 @@ const triggerHintLines = (options: ResolvedLunoraPluginOptions, studioUrl: strin
     const servesScheduled = options.cloudflare !== false && !targetRunsOwnDevServer(options.target);
     const scheduledUrl = servesScheduled ? `${new URL(studioUrl).origin}/cdn-cgi/local/scheduled` : undefined;
 
-    return devTriggerHints({ projectRoot: options.projectRoot, scheduledUrl, studioUrl }).map(({ label, text }) =>
+    return devTriggerHints({ projectRoot: options.projectRoot, scheduledUrl, schemaDirectory: options.schemaDir, studioUrl }).map(({ label, text }) =>
         formatDevBannerRow(label, text, VITE_LABEL_WIDTH, VITE_ROW_STYLE),
     );
 };

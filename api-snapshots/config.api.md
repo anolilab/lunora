@@ -586,6 +586,7 @@ interface DevTriggerHint {
 interface DevTriggerHintOptions {
     projectRoot: string;
     scheduledUrl?: string;
+    schemaDirectory: string;
     studioUrl?: string;
 }
 ```

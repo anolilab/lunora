@@ -164,7 +164,12 @@ describe("studioPlugin", () => {
 
         writeFileSync(
             join(projectRoot, "wrangler.jsonc"),
-            JSON.stringify({ name: "app", queues: { producers: [{ binding: "EMAILS", queue: "emails" }] }, triggers: { crons: ["0 * * * *"] } }),
+            JSON.stringify({ name: "app", queues: { producers: [{ binding: "QUEUE_EMAILS", queue: "emails" }] }, triggers: { crons: ["0 * * * *"] } }),
+        );
+        mkdirSync(join(projectRoot, "lunora"));
+        writeFileSync(
+            join(projectRoot, "lunora", "queues.ts"),
+            `import { defineQueue } from "@lunora/queue";\n\nexport const emails = defineQueue({ handler: async () => {} });\n`,
         );
 
         const lines = announcedLines(projectRoot);

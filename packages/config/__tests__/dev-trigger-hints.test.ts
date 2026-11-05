@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,12 +25,31 @@ describe(devTriggerHints, () => {
         writeFileSync(join(projectRoot, "wrangler.jsonc"), `// comment\n${JSON.stringify({ name: "app", ...config })}`);
     };
 
+    /** `defineQueue` exports under `lunora/`; an export `orders` is the queue `orders` on the binding `QUEUE_ORDERS`. */
+    const declareQueues = (...names: string[]): void => {
+        mkdirSync(join(projectRoot, "lunora"), { recursive: true });
+        writeFileSync(
+            join(projectRoot, "lunora", "queues.ts"),
+            [`import { defineQueue } from "@lunora/queue";`, ...names.map((name) => `export const ${name} = defineQueue({ handler: async () => {} });`)].join(
+                "\n",
+            ),
+        );
+    };
+
+    const producer = (queue: string): { binding: string; queue: string } => {
+        return { binding: `QUEUE_${queue.toUpperCase()}`, queue };
+    };
+
+    /** The hints for the project, pointed at the Studio unless `urls` says otherwise. */
+    const hints = (urls?: { scheduledUrl?: string; studioUrl?: string }) =>
+        devTriggerHints({ projectRoot, schemaDirectory: "lunora", ...(urls ?? { studioUrl: STUDIO }) });
+
     it("points crons at the schedule page and a curl that fires the first one", () => {
         expect.assertions(1);
 
         writeWrangler({ triggers: { crons: ["*/5 * * * *", "0 0 * * *"] } });
 
-        expect(devTriggerHints({ projectRoot, scheduledUrl: SCHEDULED, studioUrl: STUDIO })).toStrictEqual([
+        expect(hints({ scheduledUrl: SCHEDULED, studioUrl: STUDIO })).toStrictEqual([
             {
                 label: "Crons",
                 text: `2 scheduled → run one now in ${STUDIO}/schedule, or curl "${SCHEDULED}?cron=*%2F5+*+*+*+*"`,
@@ -38,43 +57,64 @@ describe(devTriggerHints, () => {
         ]);
     });
 
-    it("names each queue once across producers and consumers", () => {
+    it("names each declared queue the worker has a producer for, once", () => {
         expect.assertions(1);
 
+        declareQueues("emails", "receipts");
         writeWrangler({
             queues: {
-                consumers: [{ queue: "emails" }, { queue: "jobs" }],
-                producers: [{ binding: "EMAILS", queue: "emails" }, { binding: "RECEIPTS", queue: "receipts" }, null],
+                consumers: [{ queue: "emails" }],
+                producers: [producer("emails"), producer("receipts"), producer("receipts"), null],
             },
         });
 
-        expect(devTriggerHints({ projectRoot, studioUrl: STUDIO })).toStrictEqual([
-            { label: "Queues", text: `emails, receipts, jobs → send a test message in ${STUDIO}/queues` },
-        ]);
+        expect(hints()).toStrictEqual([{ label: "Queues", text: `emails, receipts → send a test message in ${STUDIO}/queues` }]);
+    });
+
+    it("leaves out a queue only wrangler.jsonc names, which the Studio has nothing to send from", () => {
+        expect.assertions(2);
+
+        declareQueues("emails");
+        writeWrangler({ queues: { consumers: [{ queue: "jobs" }], producers: [producer("emails"), producer("audit")] } });
+
+        expect(hints()).toStrictEqual([{ label: "Queues", text: `emails → send a test message in ${STUDIO}/queues` }]);
+
+        writeWrangler({ queues: { producers: [producer("audit")] } });
+
+        expect(hints()).toStrictEqual([]);
+    });
+
+    it("leaves out a declared queue the worker was not started with", () => {
+        expect.assertions(1);
+
+        declareQueues("emails");
+        writeWrangler({ queues: { consumers: [{ queue: "emails" }] } });
+
+        expect(hints()).toStrictEqual([]);
     });
 
     it("reads past a queue section of the wrong shape instead of throwing", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
+        declareQueues("jobs");
         writeWrangler({ queues: { consumers: [{ queue: "jobs" }, 7], producers: {} } });
 
-        expect(devTriggerHints({ projectRoot, studioUrl: STUDIO })).toStrictEqual([
-            { label: "Queues", text: `jobs → send a test message in ${STUDIO}/queues` },
-        ]);
+        expect(hints()).toStrictEqual([]);
+
+        writeWrangler({ queues: { producers: [7, producer("jobs")] } });
+
+        expect(hints()).toStrictEqual([{ label: "Queues", text: `jobs → send a test message in ${STUDIO}/queues` }]);
     });
 
     it("summarizes queues past the third", () => {
         expect.assertions(1);
 
-        writeWrangler({
-            queues: {
-                producers: ["a", "b", "c", "d", "e"].map((queue) => {
-                    return { binding: queue.toUpperCase(), queue };
-                }),
-            },
-        });
+        const names = ["a", "b", "c", "d", "e"];
 
-        expect(devTriggerHints({ projectRoot, studioUrl: STUDIO })[0]?.text).toBe(`a, b, c +2 more → send a test message in ${STUDIO}/queues`);
+        declareQueues(...names);
+        writeWrangler({ queues: { producers: names.map((name) => producer(name)) } });
+
+        expect(hints()[0]?.text).toBe(`a, b, c +2 more → send a test message in ${STUDIO}/queues`);
     });
 
     it("prints nothing for a project with no crons or queues", () => {
@@ -82,25 +122,26 @@ describe(devTriggerHints, () => {
 
         writeWrangler({ triggers: { crons: [] } });
 
-        expect(devTriggerHints({ projectRoot, studioUrl: STUDIO })).toStrictEqual([]);
+        expect(hints()).toStrictEqual([]);
     });
 
     it("prints nothing without a surface to point at", () => {
         expect.assertions(1);
 
-        writeWrangler({ queues: { producers: [{ binding: "Q", queue: "q" }] }, triggers: { crons: ["* * * * *"] } });
+        declareQueues("q");
+        writeWrangler({ queues: { producers: [producer("q")] }, triggers: { crons: ["* * * * *"] } });
 
-        expect(devTriggerHints({ projectRoot })).toStrictEqual([]);
+        expect(hints({})).toStrictEqual([]);
     });
 
     it("prints nothing when wrangler.jsonc is missing or unparseable", () => {
         expect.assertions(2);
 
-        expect(devTriggerHints({ projectRoot, studioUrl: STUDIO })).toStrictEqual([]);
+        expect(hints()).toStrictEqual([]);
 
         writeFileSync(join(projectRoot, "wrangler.jsonc"), "{ not json");
 
-        expect(devTriggerHints({ projectRoot, studioUrl: STUDIO })).toStrictEqual([]);
+        expect(hints()).toStrictEqual([]);
     });
 });
 
