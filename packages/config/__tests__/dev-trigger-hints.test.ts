@@ -53,6 +53,16 @@ describe(devTriggerHints, () => {
         ]);
     });
 
+    it("reads past a queue section of the wrong shape instead of throwing", () => {
+        expect.assertions(1);
+
+        writeWrangler({ queues: { consumers: [{ queue: "jobs" }, 7], producers: {} } });
+
+        expect(devTriggerHints({ projectRoot, studioUrl: STUDIO })).toStrictEqual([
+            { label: "Queues", text: `jobs → send a test message in ${STUDIO}/queues` },
+        ]);
+    });
+
     it("summarizes queues past the third", () => {
         expect.assertions(1);
 

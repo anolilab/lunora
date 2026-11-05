@@ -75,8 +75,9 @@ const devTriggerHints = (options: DevTriggerHintOptions): DevTriggerHint[] => {
     }
 
     const crons = [...new Set(stringsOf(parsed.triggers?.crons))];
-    const queueEntries = [...(parsed.queues?.producers ?? []), ...(parsed.queues?.consumers ?? [])];
-    const queues = [...new Set(stringsOf(queueEntries.map((entry) => entry?.queue)))];
+    // `Array.isArray`, not `?? []`: spreading a hand-written `producers: {}` threw out of the banner.
+    const queueEntries = [parsed.queues?.producers, parsed.queues?.consumers].flatMap((section): unknown[] => (Array.isArray(section) ? section : []));
+    const queues = [...new Set(stringsOf(queueEntries.map((entry) => (entry as { queue?: unknown } | null | undefined)?.queue)))];
     const [firstCron] = crons;
 
     return [
