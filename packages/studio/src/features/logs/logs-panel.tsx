@@ -109,7 +109,7 @@ const LogRow = ({ entry, index, measureRef, onOpenTrace, start }: LogRowProps): 
 
     return (
         <div
-            className="flex flex-wrap items-center border-b border-border px-3 py-1.5 font-mono text-xs hover:bg-muted/50"
+            className="flex items-center border-b border-border px-3 py-1.5 font-mono text-xs hover:bg-muted/50"
             data-index={index}
             data-testid="lg-row"
             ref={measureRef}
@@ -254,6 +254,25 @@ interface LogFilterCriteria {
     /** Case-insensitive substring over `message`. */
     readonly search: string;
 }
+
+/**
+ * A key per entry that survives a live push, which replaces every entry object:
+ * the line's identity (time, level, path, message, trace), plus its occurrence
+ * number among lines sharing it, since two identical messages in the same
+ * millisecond are ordinary (a retry loop).
+ */
+const logEntryKeys = (entries: ReadonlyArray<LogEntry>): string[] => {
+    const seen = new Map<string, number>();
+
+    return entries.map((entry) => {
+        const content = JSON.stringify([entry.timestamp, entry.level, entry.functionPath, entry.message, entry.traceId]);
+        const occurrence = seen.get(content) ?? 0;
+
+        seen.set(content, occurrence + 1);
+
+        return `${content}#${String(occurrence)}`;
+    });
+};
 
 /**
  * Pure, AND-composed filter over the loaded log entries. Lunora's `getLogs` is
@@ -449,9 +468,15 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     const scrollRef = useRef<HTMLDivElement>(null);
 
     // react-doctor-disable-next-line react-hooks-js/incompatible-library -- TanStack Virtual returns functions the compiler refuses to memoize; the alternative is not using the library
+    // An Errors-view row is keyed on its entry, not its position: a live push that
+    // prepends lines shifts every index, and a row's state (an opened "Error
+    // details") must stay with the line it was opened on.
+    const entryKeys = logEntryKeys(filtered);
+
     const virtualizer = useVirtualizer({
         count: activeCount,
         estimateSize: () => ROW_HEIGHT,
+        getItemKey: (index) => (view === "errors" ? (entryKeys[index] ?? index) : index),
         getScrollElement: () => scrollRef.current,
         initialRect: { height: SCROLL_HEIGHT, width: 800 },
         observeElementRect: (instance, callback) => flooredRectObserver(instance, callback, SCROLL_HEIGHT),

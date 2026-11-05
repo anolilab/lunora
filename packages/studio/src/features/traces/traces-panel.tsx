@@ -56,7 +56,7 @@ const TraceLogs = ({ entries }: TraceLogsProps): ReactElement => {
                  */}
                 {entries.map((entry, index) => (
                     <div
-                        className="flex flex-wrap items-center border-b border-border py-1 font-mono text-xs last:border-b-0"
+                        className="flex items-center border-b border-border py-1 font-mono text-xs last:border-b-0"
                         data-testid="tr-log-row"
                         key={`${String(index)}:${String(entry.timestamp)}`}
                         role="row"
