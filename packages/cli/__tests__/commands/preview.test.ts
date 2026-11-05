@@ -17,6 +17,7 @@ import type { PreviewConfig, PreviewPlan } from "../../src/commands/preview/plan
 import { environmentConfig, planPreview, previewEnvironmentBlock, previewNames, productionCollisions, resourceKey } from "../../src/commands/preview/plan";
 import { keepLease, lockDatabase, releaseLease, takeLease } from "../../src/commands/preview/registry";
 import { EXIT_CODE } from "../../src/util/exit-code";
+import type { HealthFetch } from "../../src/util/health-probe";
 import type { Logger } from "../../src/util/logger";
 import type { Spawner } from "../../src/util/spawn";
 
@@ -620,8 +621,8 @@ const planOf = (config: PreviewConfig, name: string): PreviewPlan => {
     return planned.plan;
 };
 
-const healthy = async (): Promise<{ ok: boolean; status: number }> => {
-    return { ok: true, status: 200 };
+const healthy: HealthFetch = async () => {
+    return { headers: new Headers(), ok: true, status: 200 };
 };
 
 // Every deploy here runs the real pre-deploy pipeline (config load through Vite included), about a second

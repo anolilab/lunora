@@ -1137,9 +1137,9 @@ type FeatureItem = "auth" | "auth-auth0" | "auth-clerk" | AuthUiItem | "mail";
 ```ts
 type HealthFetch = (url: string, init: {
     headers: Record<string, string>;
-    redirect: "manual";
+    redirect: RequestRedirect;
 }) => Promise<{
-    headers?: {
+    headers: {
         get: (name: string) => string | null;
     };
     ok: boolean;
