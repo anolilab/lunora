@@ -4,6 +4,7 @@ import { createCerebro } from "@visulima/cerebro";
 import completionCommand from "@visulima/cerebro/command/completion";
 import versionCommand from "@visulima/cerebro/command/version";
 
+import { closestMatch } from "../../../shared/suggest";
 import { addCommand } from "./commands/add";
 import { adminTokenCommand } from "./commands/admin-token";
 import { advisorCommand } from "./commands/advisor";
@@ -48,7 +49,6 @@ import { EXIT_CODE, exitCodeForError } from "./util/exit-code";
 import type { Logger } from "./util/logger";
 import { createLogger, setCommandLogger } from "./util/logger";
 import { renderLunoraError } from "./util/render-lunora-error";
-import { closestMatch } from "./util/suggest";
 import { maybeNotifyUpdate } from "./util/update-notifier";
 
 /** Every command name the CLI registers (drives the `CommandName` type + tests). */

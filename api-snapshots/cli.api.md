@@ -1135,7 +1135,13 @@ type FeatureItem = "auth" | "auth-auth0" | "auth-clerk" | AuthUiItem | "mail";
 ### `HealthFetch` (type)
 
 ```ts
-type HealthFetch = (url: string) => Promise<{
+type HealthFetch = (url: string, init: {
+    headers: Record<string, string>;
+    redirect: RequestRedirect;
+}) => Promise<{
+    headers: {
+        get: (name: string) => string | null;
+    };
     ok: boolean;
     status: number;
 }>;

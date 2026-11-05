@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { withTailConsumer } from "../src/cloudflare/validate-settings";
 import type { WranglerConfig, WranglerValidationReport } from "../src/cloudflare/wrangler-config";
@@ -809,6 +809,132 @@ describe("wrangler-validator", () => {
             expect(report.warnings.some((line) => line.includes("pipelines") && line.includes("TOP-LEVEL value only"))).toBe(true);
             // Exactly one such warning, not one per unverified key.
             expect(report.warnings.filter((line) => line.includes("TOP-LEVEL value only"))).toHaveLength(1);
+        });
+
+        describe("queue names shared across environments", () => {
+            const sharedQueueWarnings = (report: WranglerValidationReport): string[] =>
+                report.warnings.filter((line) => line.includes("unique per Cloudflare account"));
+
+            afterEach(() => {
+                vi.unstubAllEnvs();
+            });
+
+            it("warns when env.staging produces into the top level's queue", () => {
+                expect.assertions(2);
+
+                const wrangler = topLevel();
+
+                wrangler.env = {
+                    staging: {
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        queues: { consumers: [{ queue: "emails" }], producers: [{ binding: "EMAILS", queue: "emails" }] },
+                    },
+                };
+
+                const warnings = sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"));
+
+                // One per name, though the block names "emails" twice.
+                expect(warnings).toHaveLength(1);
+                expect(warnings[0]).toContain(`env.staging.queues names queue "emails", which the top level also names`);
+            });
+
+            it("warns about a dead-letter queue another environment names", () => {
+                expect.assertions(1);
+
+                const wrangler = topLevel();
+
+                wrangler.env = {
+                    production: { queues: { producers: [{ binding: "EMAILS", queue: "emails-dlq" }] } },
+                    staging: {
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        queues: { consumers: [{ dead_letter_queue: "emails-dlq", queue: "emails-staging" }] },
+                    },
+                };
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([
+                    expect.stringContaining(`"emails-dlq", which env.production also names`),
+                ]);
+            });
+
+            it("does not compare environments deployed to different accounts", () => {
+                expect.assertions(2);
+
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
+
+                const wrangler = topLevel();
+
+                wrangler.account_id = "account-production";
+                wrangler.env = {
+                    preview: { queues: { producers: [{ binding: "EMAILS", queue: "emails" }] } },
+                    staging: {
+                        account_id: "account-staging",
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        queues: { producers: [{ binding: "EMAILS", queue: "emails" }] },
+                    },
+                };
+
+                // The top level and env.preview (which inherits its account_id) are on another account.
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([]);
+
+                wrangler.env.preview = { account_id: "account-staging", queues: { producers: [{ binding: "EMAILS", queue: "emails" }] } };
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([
+                    expect.stringContaining(`"emails", which env.preview also names`),
+                ]);
+            });
+
+            it("reads CLOUDFLARE_ACCOUNT_ID only for a scope that names no account, as wrangler does", () => {
+                expect.assertions(3);
+
+                const wrangler = topLevel();
+
+                wrangler.env = {
+                    preview: { account_id: "account-preview", queues: { producers: [{ binding: "EMAILS", queue: "emails" }] } },
+                    staging: {
+                        account_id: "account-staging",
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        queues: { producers: [{ binding: "EMAILS", queue: "emails" }] },
+                    },
+                };
+
+                // The top level names no account, so the variable is its account: the same as staging's.
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account-staging");
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([
+                    expect.stringContaining(`"emails", which the top level also names`),
+                ]);
+
+                // Another account for the top level; env.preview's own account_id is never overridden.
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account-production");
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([]);
+
+                // Unset, the top level's account is unknown and may be staging's.
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([
+                    expect.stringContaining(`"emails", which the top level also names`),
+                ]);
+            });
+
+            it("says nothing when the environment names its own queues, or for a top-level deploy", () => {
+                expect.assertions(2);
+
+                const wrangler = topLevel();
+
+                wrangler.env = {
+                    staging: {
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        queues: { producers: [{ binding: "EMAILS", queue: "emails-staging" }] },
+                    },
+                };
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([]);
+
+                wrangler.env.staging = { queues: { producers: [{ binding: "EMAILS", queue: "emails" }] } };
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler))).toStrictEqual([]);
+            });
         });
     });
 

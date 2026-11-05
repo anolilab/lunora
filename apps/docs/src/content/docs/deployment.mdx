@@ -121,6 +121,27 @@ not forced into TypeScript for one file. `.cts` / `.cjs` are deliberately not:
 Vite's default `resolve.extensions` does not cover them, so the specifier the
 generated worker entry imports for the `app` hook would not resolve.
 
+Codegen checks the file before it reads it, on every `lunora dev`, `codegen`,
+`build` and `deploy` run and in the Vite and Rspack plugins. A key that is not
+one of `advisor`, `app`, `codegen`, `durableObjects`, `remote`, `security`,
+`services`, `studio` and `target` (or not one of a section's keys, down to an
+`advisor.accept` entry), a literal of the wrong type such as `remote: "true"`
+or `rpc: true`, and a file with only named exports and no `export default` each
+stop the run with a `PROJECT_CONFIG_INVALID` error that names the key and the
+closest valid spelling:
+
+```text
+lunora.config.ts is invalid:
+  - unknown key `remot`. Did you mean `remote`? Valid keys: advisor, app, codegen, durableObjects, remote, security, services, studio, target.
+```
+
+A computed value (`remote: process.env.REMOTE === "1"`) is not checked, because
+codegen reads the file without running it, and neither is a value in an object
+that also has a spread (`{ ...base, remote: true }`), which the spread may
+override; the key names around it still are. `LunoraConfig` types `remote` as
+a boolean, but a `remote: null` in a file that is not type-checked is read as no
+preference, the same as leaving `remote` out.
+
 Every template that declares a tsconfig `include` lists `lunora.config.ts` in it,
 which is what gets the file type-checked (nuxt declares none — it extends the
 config Nitro generates, which already covers the project root).

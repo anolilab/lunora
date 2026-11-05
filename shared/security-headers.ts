@@ -129,9 +129,11 @@ const isHeaderSafe = (value: string): boolean =>
 
 const COOP_VALUES: ReadonlyArray<CrossOriginOpenerPolicy> = ["same-origin", "same-origin-allow-popups", "unsafe-none"];
 const FRAME_OPTIONS_VALUES: ReadonlyArray<string> = ["DENY", "SAMEORIGIN"];
-const HSTS_KEYS: ReadonlyArray<string> = ["includeSubDomains", "maxAge", "preload"];
+/** The `hsts` object's keys. Typed against the option, so codegen's config check can map each one to a shape. */
+const HSTS_KEYS: ReadonlyArray<keyof Exclude<SecurityHeadersOptions["hsts"], boolean | undefined>> = ["includeSubDomains", "maxAge", "preload"];
 const STRING_KEYS = ["csp", "permissionsPolicy", "referrerPolicy"] as const;
-const OPTION_KEYS: ReadonlyArray<string> = [...STRING_KEYS, "crossOriginOpenerPolicy", "frameAncestors", "frameOptions", "hsts"];
+/** Every `security.headers` key. Codegen's config check derives its key list from this, so the two cannot disagree. */
+const SECURITY_HEADER_KEYS: ReadonlyArray<keyof SecurityHeadersOptions> = [...STRING_KEYS, "crossOriginOpenerPolicy", "frameAncestors", "frameOptions", "hsts"];
 
 const quoted = (values: ReadonlyArray<string>): string => values.map((value) => JSON.stringify(value)).join(", ");
 
@@ -146,7 +148,7 @@ const parseHsts = (value: unknown, problems: string[]): SecurityHeadersOptions["
         return undefined;
     }
 
-    for (const key of Object.keys(value).filter((name) => !HSTS_KEYS.includes(name))) {
+    for (const key of Object.keys(value).filter((name) => !(HSTS_KEYS as ReadonlyArray<string>).includes(name))) {
         problems.push(`security.headers.hsts.${key} is not an option (expected ${quoted(HSTS_KEYS)})`);
     }
 
@@ -224,8 +226,8 @@ const parseSecurityHeaders = (input: unknown): ParsedSecurityHeaders => {
     }
 
     const problems = Object.keys(input)
-        .filter((key) => !OPTION_KEYS.includes(key))
-        .map((key) => `security.headers.${key} is not an option (expected ${quoted(OPTION_KEYS)})`);
+        .filter((key) => !(SECURITY_HEADER_KEYS as ReadonlyArray<string>).includes(key))
+        .map((key) => `security.headers.${key} is not an option (expected ${quoted(SECURITY_HEADER_KEYS)})`);
     const options: SecurityHeadersOptions = {};
 
     for (const key of STRING_KEYS) {
@@ -309,4 +311,4 @@ const resolveSecurityHeaders = (input: boolean | SecurityHeadersOptions | undefi
 };
 
 export type { CrossOriginOpenerPolicy, ParsedSecurityHeaders, ResolvedSecurityHeaders, SecurityHeadersOptions };
-export { effectiveSecurityHeaders, parseSecurityHeaders, resolveSecurityHeaders };
+export { effectiveSecurityHeaders, HSTS_KEYS, parseSecurityHeaders, resolveSecurityHeaders, SECURITY_HEADER_KEYS };
