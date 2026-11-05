@@ -219,7 +219,32 @@ describe(checkDevEnv, () => {
         const message = result.kind === "invalid" ? (result.failures[0]?.message ?? "") : "";
 
         expect(message).not.toContain("p@ss!");
-        expect(message).toContain("[redacted]");
+        expect(message).toContain("postgres://app:[redacted]@db.local/app");
+    });
+
+    it("keeps a plain value, and the options an enum lists, readable", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(projectRoot, ".dev.vars"), "WORKER_ENV=prod\n");
+
+        const result = await check(
+            accessorWith((env) => [{ key: "WORKER_ENV", message: `expected one of "production" | "development", received "${String(env["WORKER_ENV"])}"` }]),
+        );
+
+        expect(result).toMatchObject({
+            failures: [{ key: "WORKER_ENV", message: 'expected one of "production" | "development", received "prod"' }],
+            kind: "invalid",
+        });
+    });
+
+    it("masks the whole value of a secret-named key", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(projectRoot, ".dev.vars"), "AUTH_SECRET=hunter2\n");
+
+        const result = await check(accessorWith(() => [{ key: "AUTH_SECRET", message: "too short: hunter2" }]));
+
+        expect(result).toMatchObject({ failures: [{ key: "AUTH_SECRET", message: "too short: [redacted]" }], kind: "invalid" });
     });
 
     it("ignores an export that only looks like an accessor", async () => {

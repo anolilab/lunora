@@ -345,8 +345,14 @@ const oncePerRun = async <T>(run: CodegenSafelyResult, step: string, perform: ()
 const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: DiscoveryCache): Plugin => {
     const absoluteSchemaDirectory = resolve(options.projectRoot, options.schemaDir);
     // Read at construction, before the remote-bindings plugin can inject its temp
-    // copy of the project's config into the same options object.
-    const customWorkerConfig = options.cloudflare !== false && typeof (options.cloudflare as { configPath?: unknown }).configPath === "string";
+    // copy of the project's config into the same options object. Resolved against
+    // the project as the Cloudflare plugin resolves it, so a `configPath` that
+    // names the project's own `wrangler.jsonc` is not counted as custom.
+    const workerConfigPath = options.cloudflare === false ? undefined : (options.cloudflare as { configPath?: unknown }).configPath;
+    const customWorkerConfig =
+        typeof workerConfigPath === "string" &&
+        workerConfigPath !== "" &&
+        !WRANGLER_FILES.some((file) => resolve(options.projectRoot, file) === resolve(options.projectRoot, workerConfigPath));
 
     // Read once, at construction: the env cannot change under a running server,
     // and both consumers below (the dev-only `buildStart` skip and the watcher

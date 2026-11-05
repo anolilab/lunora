@@ -938,6 +938,31 @@ export const schema = defineSchema({
             expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("not in the running worker yet"));
         });
 
+        it("still gives the drift hint when configPath names the project's own wrangler.jsonc", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin({ ...makeOptions(workdir), cloudflare: { configPath: "./wrangler.jsonc" } });
+            const { server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValue(["DB (D1 database)"]);
+
+            wireServer(plugin, server);
+
+            for (const [event, listener] of (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls as [string, (file: string) => void][]) {
+                if (event === "change") {
+                    listener(join(workdir, "src", "worker.ts"));
+                }
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining("DB (D1 database) — not in the running worker yet"));
+        });
+
         it("checks a save the restart window suppressed once the restart ends", async () => {
             expect.assertions(3);
 

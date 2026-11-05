@@ -19,6 +19,7 @@ import { ENV_FILENAME } from "@lunora/codegen";
 import type { EnvKeyFailure } from "../../../shared/env-contract";
 import { envContractOf } from "../../../shared/env-contract";
 import { REDACTED, redactSecrets } from "../../../shared/redact-secrets";
+import { isSecretKeyName } from "../../../shared/secret-key";
 import type { ManifestConfigShape } from "./cloudflare/binding-manifest";
 import { buildBindingManifest } from "./cloudflare/binding-manifest";
 import { readProjectWrangler, readWranglerJsonc } from "./cloudflare/wrangler-path";
@@ -92,38 +93,56 @@ const defaultLoad = async (path: string): Promise<unknown> => {
 const MIN_MASKED_LENGTH = 3;
 
 /**
- * The parts of `value` a validator message could quote: the value itself and,
- * for a URL, its password. `redactSecrets` keys off secret-looking names and
- * shapes, so a short password in a `DATABASE_URL` slips past it.
+ * What to mask in a message about `key`, as `[text, replacement]` pairs, longest
+ * first. The whole value only when it is a secret, by name or by shape: a plain
+ * `WORKER_ENV=prod` stays readable, and so do the `production` an enum lists.
+ * For a URL, its password wherever it appears — `redactSecrets` keys off
+ * secret-looking names and shapes, so a short one in a `DATABASE_URL` slips past
+ * it — with the rest of the URL kept.
  */
-const quotablePartsOf = (value: unknown): string[] => {
+const maskingOf = (key: string, value: unknown): [string, string][] => {
     if (typeof value !== "string") {
         return [];
     }
 
-    const parts = [value];
+    const passwords: string[] = [];
 
     if (URL.canParse(value)) {
         const { password } = new URL(value);
 
-        parts.push(password);
+        passwords.push(password);
 
         try {
-            parts.push(decodeURIComponent(password));
+            passwords.push(decodeURIComponent(password));
         } catch {
             // A stray `%` the URL parser kept as is: the encoded form above is all there is.
         }
     }
 
-    return parts.filter((part) => part.length >= MIN_MASKED_LENGTH).toSorted((a, b) => b.length - a.length);
+    // The raw value may carry the password encoded or not, so the URL is masked by whichever form it holds.
+    let masked = value;
+
+    for (const part of passwords) {
+        masked = masked.replace(`:${part}@`, `:${REDACTED}@`);
+    }
+
+    // Judged with the password already out, so a URL that holds one keeps its host readable.
+    const secret = isSecretKeyName(key) || redactSecrets(masked) !== masked;
+    const pairs: [string, string][] = passwords.map((part) => [part, REDACTED]);
+
+    if (secret || masked !== value) {
+        pairs.push([value, secret ? REDACTED : masked]);
+    }
+
+    return pairs.filter(([text]) => text.length >= MIN_MASKED_LENGTH).toSorted(([a], [b]) => b.length - a.length);
 };
 
-/** A failure's message with the key's own value masked, whatever the key is named. */
+/** A failure's message with the key's own value masked where it is a secret or holds one. */
 const maskOwnValue = (failure: EnvKeyFailure, env: Record<string, unknown>): EnvKeyFailure => {
     let { message } = failure;
 
-    for (const part of quotablePartsOf(env[failure.key])) {
-        message = message.replaceAll(part, REDACTED);
+    for (const [text, replacement] of maskingOf(failure.key, env[failure.key])) {
+        message = message.replaceAll(text, replacement);
     }
 
     return { ...failure, message };
