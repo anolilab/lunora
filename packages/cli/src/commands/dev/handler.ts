@@ -339,10 +339,11 @@ const emitDevBindingManifest = (options: {
             ...(plan.flavor === "wrangler" ? { origin: plan.workerOrigin } : {}),
             statusFile: DEV_STATE_FILE,
         },
+        logger,
+        projectRoot: cwd,
         // The default write must not announce itself on every `lunora dev`; the
         // requested one should say where it put the file.
-        logger: requested ? logger : { ...logger, success: () => {}, warn: () => {} },
-        projectRoot: cwd,
+        quiet: !requested,
     });
 
     if (result.error !== undefined) {

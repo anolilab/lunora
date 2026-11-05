@@ -1878,6 +1878,48 @@ describe("lunora dev", () => {
             expect(manifest.dev?.origin).toBe("http://localhost:8787");
         });
 
+        it("keeps starting past a binding section of the wrong shape, and names it once", async () => {
+            expect.assertions(4);
+
+            // `kv_namespaces` as an object used to throw out of the manifest
+            // builder and abort `lunora dev` before wrangler could name the key.
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-01-01",
+                    d1_databases: [{ binding: "DB", database_name: "app" }],
+                    kv_namespaces: {},
+                    main: "src/index.ts",
+                    name: "app",
+                    queues: { producers: [null] },
+                }),
+                "utf8",
+            );
+
+            const warnings: string[] = [];
+            const result = await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
+                probeReady: async () => true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            const manifest = JSON.parse(readFileSync(join(workdir, ".lunora", "dev-bindings.json"), "utf8")) as { bindings: { binding: string }[] };
+            const shapeWarnings = warnings.filter((line) => line.includes("not the shape wrangler expects"));
+
+            expect(result.code).toBe(0);
+            expect(manifest.bindings.map((binding) => binding.binding)).toStrictEqual(["DB"]);
+            expect(shapeWarnings).toHaveLength(1);
+            expect(shapeWarnings[0]).toContain("kv_namespaces, queues.producers");
+        });
+
         it("advertises the manifest in the banner only when one was written", async () => {
             expect.assertions(2);
 
