@@ -95,6 +95,12 @@ const ATTEMPT_SENDING = "sending";
 
 const ATTEMPT_FAILED = "failed";
 
+/**
+ * The attempt mark outlives the provider's 24-hour dedupe window whatever `sentTtlSeconds` is: a mark that lapsed
+ * inside it would read as "never sent" and let a late redelivery repeat a send that may have landed.
+ */
+const attemptMarkTtl = (sentTtlSeconds: number): number => Math.max(sentTtlSeconds, 86_400);
+
 /** How long a read of, or a write to, the sent-mail store may take before it is given up on. */
 const SENT_STORE_TIMEOUT_MS = 10_000;
 
@@ -308,8 +314,9 @@ const recordSent = async (sent: SentMailStore, key: string, id: string, expirati
  * returns its recorded id with `deduplicated: true` and sends nothing, and a
  * successful send records its key. Only a success is recorded, so a retryable
  * or outcome-unknown failure never blocks a later attempt. Beside the key it
- * keeps an attempt mark (`<key>#attempt`): `sending` from just before the
- * provider call, `failed` once a send is known not to have gone out. A
+ * keeps an attempt mark (`<key>#attempt`, kept at least 24 hours): `sending`
+ * from just before the provider call, `failed` once a send is known not to have
+ * gone out. A
  * redelivery past the provider's dedupe window is refused only while the mark
  * says `sending`, so a message whose earlier delivery never reached the provider
  * is still sent; a mark that cannot be written fails the send as retryable. A store that cannot
@@ -419,7 +426,7 @@ const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: Cons
     // Marked before the provider is asked, so a later redelivery can tell a send that may have landed from one that
     // never went out (a store read that failed, say). Unmarked, nothing is sent: a redelivery is safe.
     try {
-        await withinStoreDeadline(sent.put(attemptKey(key), ATTEMPT_SENDING, { expirationTtl: sentTtlSeconds }));
+        await withinStoreDeadline(sent.put(attemptKey(key), ATTEMPT_SENDING, { expirationTtl: attemptMarkTtl(sentTtlSeconds) }));
     } catch (error) {
         throw new MailSendError({ cause: error, message: "@lunora/mail: could not mark the send in the sent-mail store", retryable: true });
     }
@@ -431,9 +438,16 @@ const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: Cons
     } catch (error) {
         // Known not to have gone out: a late redelivery may send it after all.
         if (isRetryableMailError(error) && !isOutcomeUnknownMailError(error)) {
-            await withinStoreDeadline(sent.put(attemptKey(key), ATTEMPT_FAILED, { expirationTtl: sentTtlSeconds })).catch((markError: unknown) => {
-                logEvent("warn", "lunora.mail.attempt_mark_failed", "@lunora/mail: could not mark a failed send; a late redelivery will be refused", markError);
-            });
+            await withinStoreDeadline(sent.put(attemptKey(key), ATTEMPT_FAILED, { expirationTtl: attemptMarkTtl(sentTtlSeconds) })).catch(
+                (markError: unknown) => {
+                    logEvent(
+                        "warn",
+                        "lunora.mail.attempt_mark_failed",
+                        "@lunora/mail: could not mark a failed send; a late redelivery will be refused",
+                        markError,
+                    );
+                },
+            );
         }
 
         throw error;

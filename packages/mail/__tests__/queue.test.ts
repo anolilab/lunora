@@ -183,6 +183,16 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         ]);
     });
 
+    it("keeps the attempt mark for the provider's whole dedupe window, even with a shorter TTL", async () => {
+        expect.assertions(1);
+
+        const { puts, store } = memoryStore();
+
+        await consumeQueuedSend(noopMailer(), body, { sent: store, sentTtlSeconds: 60 });
+
+        expect(puts.find((put) => put.key === "order-42#attempt")?.ttl).toBe(86_400);
+    });
+
     it("remembers a key for the configured TTL", async () => {
         expect.assertions(1);
 
@@ -190,7 +200,7 @@ describe("consumeQueuedSend with a sent-mail store", () => {
 
         await consumeQueuedSend(noopMailer(), body, { sent: store, sentTtlSeconds: 3600 });
 
-        expect(puts[0]?.ttl).toBe(3600);
+        expect(recordsOf(puts)[0]?.ttl).toBe(3600);
     });
 
     it.each([30, 0, -1, 90.5, Number.NaN, Number.POSITIVE_INFINITY])(
