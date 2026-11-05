@@ -660,16 +660,19 @@ Lunora does **not** auto-inject this block; the output directory is
 framework-adapter-specific, so you declare it.
 
 Once the block exists, Lunora adds one key to it. Cloudflare answers from the
-assets directory before the Worker whenever a file matches, and with
-`not_found_handling: "single-page-application"` it answers every unmatched
-browser navigation with `index.html`. Either way a request meant for the Worker
-could get a static file instead. So the dev server and `lunora deploy` write
-`run_worker_first` (for the top-level block and for each `env.<name>.assets`
-block) with every path the Worker serves that they can see:
+assets directory before the Worker whenever a file matches, so a request meant
+for the Worker could get a static file instead. So the dev server and `lunora
+deploy` write `run_worker_first` (for the top-level block and for each
+`env.<name>.assets` block) with every path the Worker serves that they can see,
+unless that block uses the [single-page-app fallback](#single-page-apps):
 
 - Lunora's reserved paths, `/_lunora/*` and `/__lunora/*`;
 - each [`httpRoute`](/docs/concepts/http-endpoints) path under `lunora/`;
-- `/api/auth/*`, `@lunora/auth`'s default base path, when the app imports it.
+- when the app imports `@lunora/auth`: its base path (a string-literal
+  `basePath` passed to `createAuth`, or a literal `authBasePath` Worker option,
+  else the default `/api/auth`), and the OAuth discovery documents under
+  `/.well-known/oauth-protected-resource` and
+  `/.well-known/oauth-authorization-server`.
 
 ```jsonc
 {
@@ -697,17 +700,30 @@ list an earlier version wrote (the reserved pair, or the old `rspack-react`
 template's `["/_lunora/*"]`). When the files under `lunora/` cannot be parsed,
 the list is left as it is until they can. A `run_worker_first`
 you wrote, or edited after Lunora wrote it, is never changed. If it leaves out
-one of the paths above, Lunora warns and names it. Two kinds of route are
-invisible at config time, so add them yourself: a custom auth `basePath`, and
-routes you add to a Hono `httpRouter()` directly rather than with `httpRoute`.
+one of the paths above, or a `!/…` rule takes part of one back, Lunora warns and
+names it. Two kinds of route are invisible at config time, so add them yourself:
+an auth `basePath` that is not a string literal, and routes you add to a Hono
+`httpRouter()` directly rather than with `httpRoute`.
 
-:::caution[A single-page app answers every unlisted path]
-Once `run_worker_first` is a list, Cloudflare applies `not_found_handling:
-"single-page-application"` to every request no rule names, not only to browser
-navigations. A Worker path missing from the list, including a `fetch` to it or
-to a mistyped API path, gets `index.html` with a `200` instead of the Worker's
-response. Add every such path to the list.
-:::
+### Single-page apps
+
+With `not_found_handling: "single-page-application"` and no `run_worker_first`,
+Cloudflare (compatibility date 2025-04-01 or later) answers an unmatched
+browser navigation with `index.html` and sends every other unmatched request, a
+`fetch` or a WebSocket upgrade, to the Worker. A list turns that navigation
+check off: every request no rule names gets `index.html` with a `200`, a `fetch`
+to a Worker path the list missed included.
+
+Lunora cannot see every Worker path, so it does not write a list for such a
+block. It warns instead, and prints the list it would have written. Without a
+list, the app's RPC, WebSocket and API calls reach the Worker, but a browser
+navigation to a Worker path does not: an OAuth callback, a link in an email, a
+redirect back from a payment provider. If your app has any, set
+`run_worker_first` yourself, starting from the printed list and adding every
+Worker path Lunora cannot see. Lunora then treats it as yours: it keeps it as
+written and warns about the paths it misses. A list an earlier Lunora version or
+template wrote (such as `rspack-react`'s) is still Lunora's and is kept up to
+date.
 
 Because an asset hit never runs the Worker, it also skips the Worker's security
 headers. The production build writes them into the assets' `_headers` file

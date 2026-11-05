@@ -250,17 +250,37 @@ const readOwnedRunWorkerFirst = (manifest: Manifest | undefined): OwnedRunWorker
 };
 
 /**
+ * Why an SPA's absent `run_worker_first` stays absent, and how to opt in. Without
+ * a list Cloudflare sends only an unmatched browser navigation to `index.html`
+ * (compatibility date 2025-04-01 or later) and every other miss to the Worker; a
+ * list turns that detection off, so every path it leaves out, a `fetch` included,
+ * gets `index.html`. Lunora cannot see every Worker path (a computed auth
+ * `basePath`, a route mounted on a Hono `httpRouter` directly), so it does not
+ * trade the first failure for the second on the user's behalf.
+ */
+const spaWarning = (label: string, rules: ReadonlyArray<string>): string =>
+    `${label} is not set, and Lunora does not write it under not_found_handling "single-page-application": a list would send every path it leaves out, fetches included, to index.html. ` +
+    `Without one, a browser navigation to a Worker path (an OAuth callback, a link in an email) gets index.html instead of the Worker. ` +
+    `To route those, set it yourself to ${JSON.stringify(rules)} plus any Worker path Lunora cannot see; Lunora then keeps your list and warns about paths it misses`;
+
+/**
  * What reconcile does with one `assets` block: write or rewrite a
  * `run_worker_first` Lunora owns (absent, the list it recorded, or a value an
  * earlier version or template wrote), or warn about the paths an authored one
- * leaves to the assets.
+ * leaves to the assets. An absent one under the SPA fallback is left absent,
+ * with a warning (see {@link spaWarning}).
  */
 const reconcileScope = (
     current: unknown,
+    notFoundHandling: unknown,
     label: string,
     rules: string[],
     recorded: string[] | undefined,
 ): { change: "added" | "updated" | undefined; owned: boolean; warning: string | undefined } => {
+    if (current === undefined && notFoundHandling === "single-page-application") {
+        return { change: undefined, owned: false, warning: spaWarning(label, rules) };
+    }
+
     const lunoraWrote = current === undefined || sameRules(current, recorded) || LEGACY_WORKER_FIRST_VALUES.some((value) => sameRules(current, value));
 
     if (!lunoraWrote) {
@@ -278,7 +298,8 @@ const reconcileScope = (
  * Route the paths the Worker serves to it ahead of the assets: Lunora's reserved
  * paths plus the app's own routes (`workerRoutes`). Writes
  * `assets.run_worker_first` on every `assets` block (top level and
- * `env.<name>`) that does not set it, and rewrites a value Lunora wrote itself
+ * `env.<name>`) that does not set it, unless that block falls back to a single-page
+ * app (see {@link spaWarning}), and rewrites a value Lunora wrote itself
  * (recorded in the manifest, or one an earlier version or template wrote) when
  * the routes change. A value the user wrote or edited is never rewritten; when it
  * leaves a path to the assets the step warns instead. The step's `record` stores
@@ -300,7 +321,9 @@ const reconcileAssetRouting = (text: string, parsed: WranglerShape, workerRoutes
 
     for (const { assets, path } of scopes.filter((scope) => isPlainObject(scope.assets))) {
         const scope = path.join(".");
-        const outcome = reconcileScope((assets as Record<string, unknown>)["run_worker_first"], `${scope}.run_worker_first`, plan.rules, recorded[scope]);
+        const block = assets as Record<string, unknown>;
+        // An env's own `assets` block replaces the top-level one whole, so its fallback is read from the same block.
+        const outcome = reconcileScope(block["run_worker_first"], block["not_found_handling"], `${scope}.run_worker_first`, plan.rules, recorded[scope]);
 
         if (outcome.owned) {
             owned[scope] = plan.rules;

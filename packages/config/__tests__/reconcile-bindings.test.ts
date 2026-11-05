@@ -247,24 +247,44 @@ describe("reconcileWranglerBindings", () => {
         it("routes the reserved Lunora paths to the Worker first when the key is absent, keeping comments", () => {
             expect.assertions(4);
 
-            writeFileSync(
-                join(root, "wrangler.jsonc"),
-                withAssets('{ "directory": "./dist/client", "not_found_handling": "single-page-application" }'),
-                "utf8",
-            );
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client", "not_found_handling": "none" }'), "utf8");
 
             const result = reconcileWranglerBindings(root, baseInferred());
 
             expect(result.added).toContain("assets.run_worker_first");
             expect(readConfig().assets).toEqual({
                 directory: "./dist/client",
-                not_found_handling: "single-page-application",
+                not_found_handling: "none",
                 run_worker_first: ["/_lunora/*", "/__lunora/*"],
             });
             expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toContain("// the client build");
 
             // Idempotent: the second pass finds the key and writes nothing.
             expect(reconcileWranglerBindings(root, baseInferred()).changed).toBe(false);
+        });
+
+        it("writes no list for a single-page app, and says how to opt in", () => {
+            expect.assertions(4);
+
+            writeFileSync(join(root, "package.json"), '{ "name": "app" }\n', "utf8");
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets(
+                    '{ "directory": "./dist/client", "not_found_handling": "single-page-application" }',
+                    '\n    "env": { "staging": { "assets": { "directory": "./dist/staging" } } },',
+                ),
+                "utf8",
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe"] }));
+
+            expect((readConfig().assets as { run_worker_first?: unknown }).run_worker_first).toBeUndefined();
+            expect(result.warnings.join(" ")).toContain(
+                'assets.run_worker_first is not set, and Lunora does not write it under not_found_handling "single-page-application"',
+            );
+            expect(result.warnings.join(" ")).toContain('["/_lunora/*","/__lunora/*","/webhooks/stripe"]');
+            // The env block has its own assets without the fallback, so it still gets a list.
+            expect(readConfig().env.staging.assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/webhooks/stripe"]);
         });
 
         it("writes an env block's own assets too", () => {
