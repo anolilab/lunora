@@ -19,6 +19,7 @@ import type { SecurityHeadersOptions } from "../../../shared/security-headers";
 import { HSTS_KEYS, SECURITY_HEADER_KEYS } from "../../../shared/security-headers";
 import { closestMatch } from "../../../shared/suggest";
 import { staticPropertyName } from "./discover/property-name";
+import { staticBooleanOf } from "./static-literal";
 
 /** What a literal value can be, as far as a parse can tell. */
 type LiteralKind = "array" | "bigint" | "boolean" | "function" | "null" | "number" | "object" | "string";
@@ -130,15 +131,6 @@ const resolveValue = (node: TsNode | undefined, sourceFile: SourceFile): TsNode 
     return value !== undefined && TsNode.isIdentifier(value) ? unwrapLiteral(unchangedInitializer(sourceFile, value.getText())) : value;
 };
 
-/** The boolean `!0` / `!1` (a minifier's `true` / `false`) evaluates to, or `undefined` for anything else. */
-const negatedNumber = (value: TsNode): boolean | undefined =>
-    TsNode.isPrefixUnaryExpression(value) && value.getOperatorToken() === SyntaxKind.ExclamationToken && TsNode.isNumericLiteral(value.getOperand())
-        ? Number(value.getOperand().getText()) === 0
-        : undefined;
-
-/** The boolean a boolean-kind literal evaluates to. */
-const booleanValue = (value: TsNode): boolean => negatedNumber(value) ?? TsNode.isTrueLiteral(value);
-
 /** The literal kind of a resolved value; `undefined` when a parse cannot tell. */
 const literalKind = (value: TsNode | undefined): LiteralKind | undefined => {
     if (value === undefined) {
@@ -149,7 +141,7 @@ const literalKind = (value: TsNode | undefined): LiteralKind | undefined => {
         return "string";
     }
 
-    if (TsNode.isTrueLiteral(value) || TsNode.isFalseLiteral(value) || negatedNumber(value) !== undefined) {
+    if (staticBooleanOf(value) !== undefined) {
         return "boolean";
     }
 
@@ -226,7 +218,7 @@ const fieldProblems = (node: TsNode | undefined, field: FieldShape, label: strin
         return [`\`${label}\` must be ${field.expected}, got ${KIND_ARTICLE[kind]} (${shown}).`];
     }
 
-    if (field.literal !== undefined && kind === "boolean" && booleanValue(value) !== field.literal) {
+    if (field.literal !== undefined && kind === "boolean" && staticBooleanOf(value) !== field.literal) {
         return [`\`${label}\` must be ${field.expected}, got \`${text}\`.${field.hint === undefined ? "" : ` ${field.hint}`}`];
     }
 

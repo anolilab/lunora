@@ -66,7 +66,7 @@ import {
     unchangedInitializer,
     unwrapLiteral,
 } from "./project-config-shape";
-import { literalOf, NOT_LITERAL } from "./static-literal";
+import { literalOf, NOT_LITERAL, staticBooleanOf } from "./static-literal";
 
 /**
  * The literals {@link readProjectConfigLiterals} proves by parsing — narrowed,
@@ -226,7 +226,7 @@ const nonObjectLiteralKind = (sourceFile: SourceFile): string | undefined => {
         return "a number";
     }
 
-    if (TsNode.isTrueLiteral(expression) || TsNode.isFalseLiteral(expression)) {
+    if (staticBooleanOf(expression) !== undefined) {
         return "a boolean";
     }
 
@@ -421,10 +421,9 @@ const readLazyFunctions = (
     }
 
     const value = "literal" in member ? unwrapLiteral(member.literal) : undefined;
+    const lazyFunctions = value === undefined ? undefined : staticBooleanOf(value);
 
-    return value !== undefined && (TsNode.isTrueLiteral(value) || TsNode.isFalseLiteral(value))
-        ? { lazyFunctions: value.getLiteralValue() }
-        : { lazyFunctionsUnreadable: true };
+    return lazyFunctions === undefined ? { lazyFunctionsUnreadable: true } : { lazyFunctions };
 };
 
 /** `codegen.exclude` and `codegen.lazyFunctions` from the `codegen` object literal, each read on its own. */
@@ -452,9 +451,9 @@ const readDurableObjects = (declared: TsNode | undefined, sourceFile: SourceFile
         return { durableObjects: {} };
     }
 
-    return "literal" in member && (TsNode.isTrueLiteral(member.literal) || TsNode.isFalseLiteral(member.literal))
-        ? { durableObjects: { merge: member.literal.getLiteralValue() } }
-        : { durableObjects: { unreadable: true } };
+    const merge = "literal" in member ? staticBooleanOf(member.literal) : undefined;
+
+    return merge === undefined ? { durableObjects: { unreadable: true } } : { durableObjects: { merge } };
 };
 
 /** `studio.companion` from the `studio` object literal: a boolean literal, or `unreadable`. */
@@ -465,9 +464,9 @@ const readStudio = (declared: TsNode | undefined, sourceFile: SourceFile): Proje
         return { studio: {} };
     }
 
-    return "literal" in member && (TsNode.isTrueLiteral(member.literal) || TsNode.isFalseLiteral(member.literal))
-        ? { studio: { companion: member.literal.getLiteralValue() } }
-        : { studio: { unreadable: true } };
+    const companion = "literal" in member ? staticBooleanOf(member.literal) : undefined;
+
+    return companion === undefined ? { studio: { unreadable: true } } : { studio: { companion } };
 };
 
 /**
@@ -522,7 +521,7 @@ const rpcMember = (object: ObjectLiteralExpression): false | "unreadable" | unde
         return undefined;
     }
 
-    return value !== "unreadable" && TsNode.isFalseLiteral(value) ? false : "unreadable";
+    return value !== "unreadable" && staticBooleanOf(value) === false ? false : "unreadable";
 };
 
 /** `services: { key: { dir: "…", entrypoint?: "…", rpc?: false } }`, all literals, or `unreadable`. */
@@ -593,8 +592,10 @@ const readTarget = (property: ConfigProperty, sourceFile: SourceFile): ProjectCo
 const readRemote = (property: ConfigProperty, sourceFile: SourceFile): ProjectConfigLiterals => {
     const value = unwrapLiteral(propertyLiteral(property, sourceFile));
 
-    if (value !== undefined && (TsNode.isTrueLiteral(value) || TsNode.isFalseLiteral(value))) {
-        return { remote: value.getLiteralValue() };
+    const remote = value === undefined ? undefined : staticBooleanOf(value);
+
+    if (remote !== undefined) {
+        return { remote };
     }
 
     // `interpretRemote` reads an evaluated `null` as "no preference", so the parse does too rather than doubt the target.
