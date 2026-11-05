@@ -694,6 +694,26 @@ describe("migrationRunner destructive statements", () => {
         }
     });
 
+    // The runner cannot tell whether such a migration already ran, so it must not tell the author to edit it.
+    it("reports drift from unversioned tracking rows before refusing a pending destructive migration", async () => {
+        expect.assertions(1);
+
+        const sqlite = new DatabaseSync(":memory:");
+
+        try {
+            sqlite.exec(
+                "CREATE TABLE __drizzle_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL UNIQUE, created_at NUMERIC, version INTEGER)",
+            );
+            sqlite.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, 1)").run(await sha256Hex("CREATE TABLE gone (id INTEGER)"));
+
+            await expect(new MigrationRunner(createSqliteDatabase(sqlite), [{ name: "drop", sql: "DROP TABLE a", version: 1 }]).run()).rejects.toMatchObject({
+                code: "MIGRATION_DRIFT",
+            });
+        } finally {
+            sqlite.close();
+        }
+    });
+
     it("refuses with a message that names the marker and warns against adding it to an applied migration", async () => {
         expect.assertions(1);
 

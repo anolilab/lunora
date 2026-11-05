@@ -432,22 +432,16 @@ class MigrationRunner {
         const hashes = await Promise.all(this.migrations.map(async (migration) => hashMigration(migration.sql)));
         const recorded = await this.readTrackingRows(hashes);
         const recordedHashByVersion = new Map(recorded.filter((row) => row.version !== null).map((row) => [row.version as number, row.hash]));
-        // Keyed by version, in version order. Every refusal below is decided before the first migration is applied, so
-        // one late in the list cannot leave the earlier ones applied and the run half-done. Only pending SQL is
-        // scanned: an applied migration cannot be confirmed by editing it (that is drift), and it already ran, so
-        // refusing it would block every later migration for nothing.
-        const pending = new Map<number, PendingMigration>();
+        // Every refusal below is decided before the first migration is applied, so one late in the list cannot leave the
+        // earlier ones applied and the run half-done.
+        const unrecorded: { hash: string; migration: Migration }[] = [];
 
         for (const [index, migration] of this.migrations.entries()) {
             const recordedHash = recordedHashByVersion.get(migration.version);
             const hash = String(hashes[index]?.normalized);
 
             if (recordedHash === undefined) {
-                const label = describeMigration(migration);
-                const scan = scanStatement(migration.sql, label);
-
-                assertAllowedStatement(label, scan);
-                pending.set(migration.version, { hash, migration, statementText: scan.statementText });
+                unrecorded.push({ hash, migration });
             } else if (!recognises(recordedHash, hashes[index])) {
                 throw new LunoraError(
                     "MIGRATION_DRIFT",
@@ -458,8 +452,8 @@ class MigrationRunner {
 
         const unresolved = recorded.filter((row) => row.version === null);
 
-        if (pending.size > 0 && unresolved.length > 0) {
-            const versions = [...pending.keys()];
+        if (unrecorded.length > 0 && unresolved.length > 0) {
+            const versions = unrecorded.map(({ migration }) => migration.version);
 
             throw new LunoraError(
                 "MIGRATION_DRIFT",
@@ -467,6 +461,19 @@ class MigrationRunner {
             );
         }
 
+        // Scanned only once drift is ruled out, since only then is it known what has not run. Only pending SQL is scanned:
+        // an applied migration cannot be confirmed by editing it (that is drift), and it already ran, so refusing it
+        // would block every later migration for nothing. Keyed by version, in version order.
+        const pending = new Map<number, PendingMigration>(
+            unrecorded.map(({ hash, migration }) => {
+                const label = describeMigration(migration);
+                const scan = scanStatement(migration.sql, label);
+
+                assertAllowedStatement(label, scan);
+
+                return [migration.version, { hash, migration, statementText: scan.statementText }];
+            }),
+        );
         const applied: { name: string; version: number }[] = [];
         const skipped: { name: string; version: number }[] = [];
 
