@@ -126,8 +126,11 @@ const accessState = (env: Readonly<Record<string, string | undefined>>): AccessS
     return { headers: { "CF-Access-Client-Id": clientId, "CF-Access-Client-Secret": clientSecret }, kind: "sent" };
 };
 
+/** Whether `url` parses as `https:`; the parsed protocol is lowercase, so `HTTPS://` counts. */
+const isHttps = (url: string): boolean => URL.canParse(url) && new URL(url).protocol === "https:";
+
 /** The state for a request to `url`: a token is never sent over plain `http:`, where anyone on the path could read it. */
-const accessFor = (state: AccessState, url: string): AccessState => (state.kind === "sent" && !url.startsWith("https:") ? { kind: "insecure" } : state);
+const accessFor = (state: AccessState, url: string): AccessState => (state.kind === "sent" && !isHttps(url) ? { kind: "insecure" } : state);
 
 const headersOf = (state: AccessState): Record<string, string> => (state.kind === "sent" ? state.headers : {});
 
@@ -165,24 +168,27 @@ const classify = (url: string, response: HealthResponse): Outcome => {
     try {
         target = new URL(location, url);
     } catch {
-        return { kind: "redirect", location };
+        return { kind: "redirect", location: "" };
     }
 
     if (target.hostname.endsWith(".cloudflareaccess.com") || target.pathname.startsWith("/cdn-cgi/access/")) {
         return { kind: "access-login" };
     }
 
-    // "Always Use HTTPS" answers an `http:` probe with the same URL over `https:`. Anything else (another host, or the same
-    // host's `/`, whose 200 would read as healthy) is not the health route answering.
+    // "Always Use HTTPS" answers an `http:` probe with the same URL over `https:` on its default port. Anything else
+    // (another host or port, which would receive the Access token, or the same host's `/`, whose 200 would read as
+    // healthy) is not the health route answering.
     const source = new URL(url);
 
+    // Only the redirect's origin is reported: its path or query may echo the Access secret the probe sent.
     return source.protocol === "http:" &&
         target.protocol === "https:" &&
         target.hostname === source.hostname &&
+        target.port === "" &&
         target.pathname === source.pathname &&
         target.search === source.search
         ? { kind: "https-upgrade", location: target.href }
-        : { kind: "redirect", location };
+        : { kind: "redirect", location: target.origin === "null" ? "" : target.origin };
 };
 
 const BOTH = `${ACCESS_CLIENT_ID_ENV} and ${ACCESS_CLIENT_SECRET_ENV}`;

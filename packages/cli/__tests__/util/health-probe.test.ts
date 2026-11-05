@@ -186,7 +186,7 @@ describe("probeHealth", () => {
                 },
             });
 
-            expect(result.error).toContain("returned HTTP 301 redirecting to https://elsewhere.example.com/ — the health route does not redirect");
+            expect(result.error).toContain("returned HTTP 301 redirecting to https://elsewhere.example.com — the health route does not redirect");
         });
 
         it("follows a same-host http → https redirect once, sending the token only on the https hop", async () => {
@@ -230,7 +230,7 @@ describe("probeHealth", () => {
             const elsewhere = await probeHealth({ baseUrl: "http://app.example.com", env: accessEnv, fetchImpl });
 
             expect(fetchImpl).toHaveBeenCalledTimes(1);
-            expect(elsewhere.error).toContain("redirecting to https://other.example.com/_lunora/health — the health route does not redirect");
+            expect(elsewhere.error).toContain("redirecting to https://other.example.com — the health route does not redirect");
         });
 
         it("does not follow an https redirect to another path on the same host, whose page would answer 200", async () => {
@@ -245,7 +245,52 @@ describe("probeHealth", () => {
             const result = await probeHealth({ baseUrl: "http://app.example.com", env: {}, fetchImpl });
 
             expect(fetchImpl).toHaveBeenCalledTimes(1);
-            expect(result.error).toContain("returned HTTP 301 redirecting to https://app.example.com/ — the health route does not redirect");
+            expect(result.error).toContain("returned HTTP 301 redirecting to https://app.example.com — the health route does not redirect");
+        });
+
+        it("reports only a redirect's origin, whose path or query may echo the service token", async () => {
+            expect.assertions(2);
+
+            const result = await probeHealth({
+                baseUrl: "https://app.example.com",
+                env: accessEnv,
+                fetchImpl: async () => {
+                    return { headers: new Headers({ location: "https://echo.example.com/x?token=secret" }), ok: false, status: 302 };
+                },
+            });
+
+            expect(result.error).toContain("redirecting to https://echo.example.com —");
+            expect(result.error).not.toContain("secret");
+        });
+
+        it("does not follow an http → https redirect to another port, which would receive the token", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = vi.fn<HealthFetch>(async (url) =>
+                url.startsWith("http:")
+                    ? { headers: new Headers({ location: "https://app.example.com:8443/_lunora/health" }), ok: false, status: 301 }
+                    : { headers: new Headers(), ok: true, status: 200 },
+            );
+
+            const result = await probeHealth({ baseUrl: "http://app.example.com", env: accessEnv, fetchImpl });
+
+            expect(fetchImpl).toHaveBeenCalledTimes(1);
+            expect(result.error).toContain("redirecting to https://app.example.com:8443 —");
+        });
+
+        it("sends the token to an https URL whatever the scheme's case", async () => {
+            expect.assertions(1);
+
+            const fetchImpl = vi.fn<HealthFetch>(async () => {
+                return { headers: new Headers(), ok: true, status: 200 };
+            });
+
+            await probeHealth({ baseUrl: "HTTPS://app.example.com", env: accessEnv, fetchImpl });
+
+            expect(fetchImpl.mock.calls[0]?.[1]).toStrictEqual({
+                headers: { "CF-Access-Client-Id": "id.access", "CF-Access-Client-Secret": "secret" },
+                redirect: "manual",
+            });
         });
 
         it("never sends the token over http, and says so when Access asks for it", async () => {
