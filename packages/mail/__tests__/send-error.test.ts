@@ -269,6 +269,19 @@ describe("send deadline", () => {
         expect(() => createMailer({ from: "noreply@x.test", sendTimeoutMs: Number.POSITIVE_INFINITY, transport })).toThrow(/sendTimeoutMs/u);
     });
 
+    it("rejects a deadline above setTimeout's limit, which would fire at once, and names the limit", () => {
+        expect.assertions(2);
+
+        const transport = {
+            send: async () => {
+                return { id: "x" };
+            },
+        };
+
+        expect(() => createMailer({ from: "noreply@x.test", sendTimeoutMs: 2_147_483_648, transport })).toThrow(/at most 2147483647/u);
+        expect(() => createMailer({ from: "noreply@x.test", sendTimeoutMs: 2_147_483_647, transport })).not.toThrow();
+    });
+
     it("keeps an ordinary failure retryable and not outcome-unknown", () => {
         expect.assertions(2);
 

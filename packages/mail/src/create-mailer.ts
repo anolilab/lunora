@@ -12,6 +12,9 @@ import type { LunoraMailOptions, Mailer, MailTransport, SendOptions, SendPayload
 
 const DEFAULT_SEND_TIMEOUT_MS = 60_000;
 
+/** `setTimeout`'s largest delay: anything above it fires at once, failing every send as outcome-unknown. */
+const MAX_SEND_TIMEOUT_MS = 2_147_483_647;
+
 /**
  * Settle with the transport's answer, or fail as outcome-unknown once the
  * deadline passes — a hung provider call must not hold a queue message until
@@ -105,8 +108,8 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
 
     const sendTimeoutMs = options.sendTimeoutMs ?? DEFAULT_SEND_TIMEOUT_MS;
 
-    if (!Number.isFinite(sendTimeoutMs) || sendTimeoutMs <= 0) {
-        throw new LunoraError("INTERNAL", "@lunora/mail: `sendTimeoutMs` must be a positive, finite number of milliseconds");
+    if (!Number.isFinite(sendTimeoutMs) || sendTimeoutMs <= 0 || sendTimeoutMs > MAX_SEND_TIMEOUT_MS) {
+        throw new LunoraError("INTERNAL", `@lunora/mail: \`sendTimeoutMs\` must be a positive number of milliseconds, at most ${String(MAX_SEND_TIMEOUT_MS)}`);
     }
 
     const transport = options.transport ?? buildDefaultTransport(options);

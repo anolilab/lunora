@@ -98,7 +98,7 @@ export interface LunoraMailOptions {
 
     /**
      * How long `send()` waits for the transport before giving up, in milliseconds
-     * (default 60 000). A send cut off here may still have been delivered, so it
+     * (default 60 000, at most 2 147 483 647, `setTimeout`'s limit). A send cut off here may still have been delivered, so it
      * fails with an `outcomeUnknown` `MailSendError`. It is retryable only when the
      * send carried an `idempotencyKey` and the transport's provider dedupes on it
      * (Resend); otherwise a queue consumer acks and reports it instead of
