@@ -37,6 +37,7 @@ interface CloudflareTransportOptions {
 
 ```ts
 interface ConsumeQueuedSendOptions {
+    attempts?: number;
     enqueuedAt?: Date;
     sent?: SentMailStore;
     sentTtlSeconds?: number;

@@ -214,7 +214,10 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         await consumeQueuedSend(noopMailer(), body);
 
         expect(warn).toHaveBeenCalledTimes(1);
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("not deduplicated"));
+        expect(JSON.parse(String(warn.mock.calls[0]?.[0]))).toMatchObject({
+            event: "lunora.mail.sent_store_unbound",
+            message: expect.stringContaining("not deduplicated"),
+        });
 
         warn.mockRestore();
     });
@@ -295,7 +298,11 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         const result = await consumeQueuedSend(noopMailer(), body, { sent: store });
 
         expect(result).toStrictEqual({ deduplicated: false, id: "queued-send" });
-        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("could not record the idempotency key"), expect.any(Error));
+        expect(JSON.parse(String(consoleError.mock.calls[0]?.[0]))).toMatchObject({
+            error: { message: expect.any(String) },
+            event: "lunora.mail.sent_record_failed",
+            message: expect.stringContaining("could not record the idempotency key"),
+        });
 
         consoleError.mockRestore();
     });
@@ -343,11 +350,40 @@ describe("consumeQueuedSend with a sent-mail store", () => {
 
             // Checked before awaiting, so an unbounded write fails here instead of hanging the test.
             expect(result).toStrictEqual({ deduplicated: false, id: "queued-send" });
-            expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("could not record the idempotency key"), expect.any(Error));
+            expect(JSON.parse(String(consoleError.mock.calls[0]?.[0]))).toMatchObject({
+                error: { message: expect.any(String) },
+                event: "lunora.mail.sent_record_failed",
+                message: expect.stringContaining("could not record the idempotency key"),
+            });
             expect(vi.getTimerCount()).toBe(0);
 
             await settled;
             consoleError.mockRestore();
+        });
+
+        it("fails a read that never settles as retryable, before anything is sent", async () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            const mailer = noopMailer();
+            const store: SentMailStore = {
+                get: async () =>
+                    await new Promise<null>(() => {
+                        // never settles, as a stalled store looks
+                    }),
+                put: async () => undefined,
+            };
+
+            const settled = consumeQueuedSend(mailer, body, { sent: store }).catch((error: unknown) => error);
+
+            await vi.advanceTimersByTimeAsync(10_000);
+
+            const error = await settled;
+
+            expect(isRetryableMailError(error)).toBe(true);
+            expect(mailer.send).not.toHaveBeenCalled();
+            expect(vi.getTimerCount()).toBe(0);
         });
 
         it("leaves no timer behind once the store write answers", async () => {
@@ -413,6 +449,28 @@ describe("consumeQueuedSend with a sent-mail store", () => {
 
             await expect(consumeQueuedSend(failingMailer(original), body, { enqueuedAt: recent })).rejects.toBe(original);
             await expect(consumeQueuedSend(failingMailer(original), body)).rejects.toBe(original);
+        });
+
+        it("refuses a redelivery past the window before asking the provider: an earlier attempt may have landed", async () => {
+            expect.assertions(3);
+
+            const mailer = noopMailer();
+            const enqueuedAt = new Date(Date.now() - 23 * HOUR_MS);
+
+            const error = await consumeQueuedSend(mailer, body, { attempts: 2, enqueuedAt }).catch((error_: unknown) => error_);
+
+            expect(isOutcomeUnknownMailError(error)).toBe(true);
+            expect(isRetryableMailError(error)).toBe(false);
+            expect(mailer.send).not.toHaveBeenCalled();
+        });
+
+        it("sends a first delivery at any age, and a redelivery inside the window", async () => {
+            expect.assertions(2);
+
+            await expect(consumeQueuedSend(noopMailer(), body, { attempts: 1, enqueuedAt: new Date(0) })).resolves.toMatchObject({ id: "queued-send" });
+            await expect(consumeQueuedSend(noopMailer(), body, { attempts: 3, enqueuedAt: new Date(Date.now() - 22 * HOUR_MS) })).resolves.toMatchObject({
+                id: "queued-send",
+            });
         });
 
         it("leaves an ordinary retryable failure retryable however old the message is", async () => {

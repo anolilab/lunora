@@ -105,12 +105,13 @@ For the auth flows, `lunora add auth-emails` adds ready-made templates.
 throws `` `queue` binding is required for mailer.queue() ``, except under
 capture, where it sends straight to the capture inbox so dev flows keep working.
 A consumer builds its mailer with `createMailerFromEnv` too, drains the queue
-with `consumeQueuedSend(mailer, message.body, { enqueuedAt: message.timestamp, sent: env.SENT })` and then calls
+with `consumeQueuedSend(mailer, message.body, { attempts: message.attempts, enqueuedAt: message.timestamp, sent: env.SENT })` and then calls
 `message.ack()` for each message; `sent` (a KV namespace) lets a redelivered message whose key it
 already recorded ack without a second send. That narrows duplicates rather than preventing them: KV
 is eventually consistent, and a crash between the provider accepting the send and the record being
 written resends it. `enqueuedAt` makes a send that may have landed non-retryable once the message is
-23 hours old, since Resend drops a repeated key for only 24 hours. On a throw, branch on `isRetryableMailError(error)`: retry with
+23 hours old, since Resend drops a repeated key for only 24 hours, and with `attempts` a redelivery
+that old is refused before it reaches the provider. On a throw, branch on `isRetryableMailError(error)`: retry with
 `message.retry()` when it is true, and ack and log when it is false, since a refused
 address or malformed body never sends and a retry only dead-letters it. A send
 that timed out or hit Resend's 409 for a key still in flight (`isOutcomeUnknownMailError(error)`)

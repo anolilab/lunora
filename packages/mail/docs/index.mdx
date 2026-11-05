@@ -148,7 +148,7 @@ export default {
             try {
                 // `env.SENT` is a KV namespace: a redelivered key already recorded there is acked without
                 // a second send. KV is eventually consistent, so this narrows duplicates, not prevents them.
-                await consumeQueuedSend(mailer, message.body, { enqueuedAt: message.timestamp, sent: env.SENT });
+                await consumeQueuedSend(mailer, message.body, { attempts: message.attempts, enqueuedAt: message.timestamp, sent: env.SENT });
             } catch (error) {
                 // Transient, or a send that may have landed with a provider that dedupes on the key (Resend).
                 if (isRetryableMailError(error)) {
@@ -182,18 +182,21 @@ and returns `{ id, deduplicated: true }` for a key it has seen. `env.SENT` exist
 only once a `kv_namespaces` entry binds it as `SENT` in `wrangler.jsonc`; an unbound
 one is `undefined`, which turns dedupe off, so `consumeQueuedSend` logs a warning
 when `sent` is passed as `undefined`. Only a success is
-recorded, so a failed attempt never blocks the retry. A store it cannot read fails
-the send as retryable, because nothing has gone out; a store it cannot write after
+recorded, so a failed attempt never blocks the retry. A store it cannot read, or
+that does not answer a read within 10 seconds, fails the send as retryable,
+because nothing has gone out; a store it cannot write after
 the send, or that does not answer within 10 seconds, is logged and the send still
 counts as done. With a `sent` store a body
 without an `idempotencyKey` is refused as malformed. Resend also receives the key
 as its `Idempotency-Key` request header and drops a repeat within its own 24-hour
 window; the Cloudflare binding has no such hook. Past that window Resend would
-deliver the repeat, so pass `enqueuedAt: message.timestamp` as above: an
-outcome-unknown failure of a message enqueued 23 or more hours ago is then not
-retryable, and the consumer acks and reports it. Without `enqueuedAt` nothing
-tracks the message's age, and a send retried for more than a day can be delivered
-twice.
+deliver the repeat, so pass `enqueuedAt: message.timestamp` and
+`attempts: message.attempts` as above: an outcome-unknown failure of a message
+enqueued 23 or more hours ago is then not retryable, and a redelivery that old is
+refused before any request, since an earlier attempt may have landed (a first
+delivery is sent at any age); the consumer acks and reports either. Without
+`enqueuedAt` nothing tracks the message's age, and a send retried for more than a
+day can be delivered twice.
 
 **Upgrading.** `send()` and `queue()` now validate the key and forward it to
 Resend. A key must be a string of 1-256 visible ASCII characters (no spaces), and
@@ -379,7 +382,7 @@ rules; that lifecycle stays in Cloudflare.
 | `shouldCaptureMail(env)`                    | Whether the current env should capture (`LUNORA_MAIL_CAPTURE`, else dev detection)                                                                                                                                                                                          |
 | `renderEmail(element)`                      | Render a React Email element to `{ html, text }`                                                                                                                                                                                                                            |
 | `toQueuedPayload(options)`                  | Narrow `SendOptions` to its serializable `QueuedSend` (drops `react`)                                                                                                                                                                                                       |
-| `consumeQueuedSend(mailer, body, options?)` | Validate a queued payload and `mailer.send(...)` it, skipping a key already in `options.sent` (`options.enqueuedAt` takes `message.timestamp`); returns `{ id, deduplicated }`                                                                                              |
+| `consumeQueuedSend(mailer, body, options?)` | Validate a queued payload and `mailer.send(...)` it, skipping a key already in `options.sent` (`options.enqueuedAt` takes `message.timestamp`, `options.attempts` takes `message.attempts`); returns `{ id, deduplicated }`                                                 |
 | `isRetryableMailError(error)`               | Whether a failed send is worth a redelivery: `false` for a refusal carrying an explicit permanent HTTP status, for a timed-out send the provider cannot dedupe, and for one `consumeQueuedSend` was told (`enqueuedAt`) is 23 or more hours old; `true` for everything else |
 | `isOutcomeUnknownMailError(error)`          | Whether a failed send timed out (or hit Resend's 409 for a key in flight) and may have been delivered; retry it with a delay when it is also retryable, else ack and report it                                                                                              |
 | `MailSendError`                             | The error a failed send throws; `retryable` / `outcomeUnknown` (also on `data`) carry the decision                                                                                                                                                                          |

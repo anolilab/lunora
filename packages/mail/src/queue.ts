@@ -50,6 +50,13 @@ interface SentMailStore {
 
 interface ConsumeQueuedSendOptions {
     /**
+     * Which delivery of the message this is: pass the Cloudflare Queues `message.attempts` (1 for the first). A
+     * redelivery may follow an attempt that reached the provider, so one older than the provider's dedupe window
+     * (`enqueuedAt`) is refused before any request; a first delivery is sent at any age, since nothing went out yet.
+     */
+    attempts?: number;
+
+    /**
      * When the message was first enqueued: pass the Cloudflare Queues
      * `message.timestamp`. Resend drops a repeated key for only 24 hours, so an
      * outcome-unknown failure of a message older than 23 hours is not retryable,
@@ -77,8 +84,8 @@ interface ConsumeQueuedSendOptions {
 
 const DEFAULT_SENT_TTL_SECONDS = 86_400;
 
-/** How long the store write after a send may take before it is given up on and logged. */
-const SENT_RECORD_TIMEOUT_MS = 10_000;
+/** How long a read of, or a write to, the sent-mail store may take before it is given up on. */
+const SENT_STORE_TIMEOUT_MS = 10_000;
 
 /** Resend keeps an idempotency key for 24 hours; the hour short of that covers the redelivery delay. */
 const PROVIDER_DEDUPE_WINDOW_MS = 23 * 60 * 60 * 1000;
@@ -189,18 +196,37 @@ const toSendOptions = (payload: unknown): SendOptions => {
 };
 
 /**
- * Send, and refuse to retry a send that may have landed once the provider can
- * no longer drop the repeat. The age is measured from enqueue, which is never
- * later than the provider's first sight of the key, so the check errs toward
- * acking; an invalid date counts as too old for the same reason.
+ * Whether a message is past the provider's dedupe window. The age is measured from enqueue, which is never later than
+ * the provider's first sight of the key, so the check errs toward acking; an invalid date counts as too old too.
  */
-const sendInsideDedupeWindow = async (mailer: Mailer, sendOptions: SendOptions, enqueuedAt: Date | undefined): Promise<{ id: string }> => {
+const pastDedupeWindow = (enqueuedAt: Date | undefined): boolean => {
+    const ageMs = enqueuedAt === undefined ? 0 : Date.now() - enqueuedAt.getTime();
+
+    return Number.isNaN(ageMs) || ageMs >= PROVIDER_DEDUPE_WINDOW_MS;
+};
+
+/**
+ * Send, and never send a repeat the provider can no longer drop: a redelivery past the window is refused before any
+ * request (an earlier attempt may have landed), and a failed send that may have landed is not retried past it.
+ */
+const sendInsideDedupeWindow = async (
+    mailer: Mailer,
+    sendOptions: SendOptions,
+    enqueuedAt: Date | undefined,
+    attempts: number | undefined,
+): Promise<{ id: string }> => {
+    if (attempts !== undefined && attempts > 1 && pastDedupeWindow(enqueuedAt)) {
+        throw new MailSendError({
+            message: "@lunora/mail: an earlier delivery of this message may have been sent, and the provider no longer dedupes a key this old",
+            outcomeUnknown: true,
+            retryable: false,
+        });
+    }
+
     try {
         return await mailer.send(sendOptions);
     } catch (error) {
-        const ageMs = enqueuedAt === undefined ? 0 : Date.now() - enqueuedAt.getTime();
-
-        if (isOutcomeUnknownMailError(error) && isRetryableMailError(error) && (Number.isNaN(ageMs) || ageMs >= PROVIDER_DEDUPE_WINDOW_MS)) {
+        if (isOutcomeUnknownMailError(error) && isRetryableMailError(error) && pastDedupeWindow(enqueuedAt)) {
             throw new MailSendError({
                 cause: error,
                 message: "@lunora/mail: the send may have been delivered, and the provider no longer dedupes a key this old",
@@ -213,28 +239,52 @@ const sendInsideDedupeWindow = async (mailer: Mailer, sendOptions: SendOptions, 
     }
 };
 
+/** `work`, or a rejection once the sent-mail store has not answered within {@link SENT_STORE_TIMEOUT_MS}. */
+const withinStoreDeadline = async <T>(work: Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+        return await Promise.race([
+            work,
+            new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(() => {
+                    reject(new Error(`the sent-mail store did not answer within ${String(SENT_STORE_TIMEOUT_MS)}ms`));
+                }, SENT_STORE_TIMEOUT_MS);
+            }),
+        ]);
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
+/** A Workers Logs line: JSON, so the event and its fields can be filtered on. */
+const logEvent = (level: "error" | "warn", event: string, message: string, error?: unknown): void => {
+    const line = JSON.stringify({
+        event,
+        message,
+        ...(error !== undefined && {
+            error:
+                error instanceof Error
+                    ? { message: error.message, name: error.name, stack: error.stack }
+                    : { message: typeof error === "string" ? error : typeof error },
+        }),
+    });
+
+    // eslint-disable-next-line no-console -- the package has no logger; Workers Logs reads the console
+    console[level](line);
+};
+
 /**
  * Record a sent key, bounded: a stalled store would hold the message unacked
  * until it is redelivered and, without the record, sent again. A failure here is
  * logged rather than thrown, because the provider already accepted the send.
  */
 const recordSent = async (sent: SentMailStore, key: string, id: string, expirationTtl: number): Promise<void> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
     try {
-        await Promise.race([
-            sent.put(key, id, { expirationTtl }),
-            new Promise<never>((_resolve, reject) => {
-                timer = setTimeout(() => {
-                    reject(new Error(`the sent-mail store did not answer within ${String(SENT_RECORD_TIMEOUT_MS)}ms`));
-                }, SENT_RECORD_TIMEOUT_MS);
-            }),
-        ]);
+        await withinStoreDeadline(sent.put(key, id, { expirationTtl }));
     } catch (error) {
-        // eslint-disable-next-line no-console -- the send succeeded; failing it now would redeliver a message the provider accepted
-        console.error("@lunora/mail: sent, but could not record the idempotency key; a redelivery may send again —", error);
-    } finally {
-        clearTimeout(timer);
+        // The send succeeded; failing it now would redeliver a message the provider accepted.
+        logEvent("error", "lunora.mail.sent_record_failed", "@lunora/mail: sent, but could not record the idempotency key; a redelivery may send again", error);
     }
 };
 
@@ -248,9 +298,9 @@ const recordSent = async (sent: SentMailStore, key: string, id: string, expirati
  * returns its recorded id with `deduplicated: true` and sends nothing, and a
  * successful send records its key. Only a success is recorded, so a retryable
  * or outcome-unknown failure never blocks a later attempt. A store that cannot
- * be read fails the send as retryable, since nothing has gone out; a store that
- * cannot be written after the send, or does not answer within 10 seconds, is
- * logged and the id still returned, because throwing then would redeliver a
+ * be read, or does not answer within 10 seconds, fails the send as retryable,
+ * since nothing has gone out; a store that cannot be written after the send, or
+ * does not answer within 10 seconds, is logged and the id still returned, because throwing then would redeliver a
  * message the provider already accepted.
  *
  * This NARROWS the duplicate window; it does not close it, and nothing on this
@@ -262,8 +312,9 @@ const recordSent = async (sent: SentMailStore, key: string, id: string, expirati
  * claimed by this key, released on failure), and even then the send-then-crash
  * window is only ever traded for a send-that-may-not-have-happened one. With
  * Resend the key also travels as the `Idempotency-Key` request header, so Resend
- * itself drops a repeat inside its own 24-hour window; pass `enqueuedAt` so a
- * send that may have landed is not retried once that window is nearly over.
+ * itself drops a repeat inside its own 24-hour window; pass `enqueuedAt` and
+ * `attempts` so a send that may have landed is not repeated once that window is
+ * nearly over.
  *
  * ```ts
  * export default {
@@ -272,7 +323,7 @@ const recordSent = async (sent: SentMailStore, key: string, id: string, expirati
  *     const mailer = createMailerFromEnv(env);
  *     for (const message of batch.messages) {
  *       try {
- *         await consumeQueuedSend(mailer, message.body, { enqueuedAt: message.timestamp, sent: env.SENT });
+ *         await consumeQueuedSend(mailer, message.body, { attempts: message.attempts, enqueuedAt: message.timestamp, sent: env.SENT });
  *       } catch (error) {
  *         // Transient, or a send that may have landed with a provider that dedupes on the key (Resend).
  *         if (isRetryableMailError(error)) {
@@ -296,7 +347,7 @@ const recordSent = async (sent: SentMailStore, key: string, id: string, expirati
  * ```
  */
 const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: ConsumeQueuedSendOptions = {}): Promise<{ deduplicated: boolean; id: string }> => {
-    const { enqueuedAt, sent, sentTtlSeconds = DEFAULT_SENT_TTL_SECONDS } = options;
+    const { attempts, enqueuedAt, sent, sentTtlSeconds = DEFAULT_SENT_TTL_SECONDS } = options;
 
     // Every put would throw and be swallowed below, turning dedupe off without a word. It is the
     // deploy's fault, not the message's, so it is retryable: an ack would drop every queued mail.
@@ -311,11 +362,15 @@ const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: Cons
 
     if (!sent) {
         if ("sent" in options) {
-            // eslint-disable-next-line no-console -- an unbound KV namespace arrives as `undefined`; the caller meant to dedupe
-            console.warn("@lunora/mail: consumeQueuedSend got `sent: undefined` (is the KV namespace bound?), so redeliveries are not deduplicated");
+            // An unbound KV namespace arrives as `undefined`; the caller meant to dedupe.
+            logEvent(
+                "warn",
+                "lunora.mail.sent_store_unbound",
+                "@lunora/mail: consumeQueuedSend got `sent: undefined` (is the KV namespace bound?), so redeliveries are not deduplicated",
+            );
         }
 
-        return { deduplicated: false, ...(await sendInsideDedupeWindow(mailer, sendOptions, enqueuedAt)) };
+        return { deduplicated: false, ...(await sendInsideDedupeWindow(mailer, sendOptions, enqueuedAt, attempts)) };
     }
 
     const key = sendOptions.idempotencyKey;
@@ -327,9 +382,10 @@ const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: Cons
     let recorded: string | null | undefined;
 
     try {
-        recorded = await sent.get(key);
+        recorded = await withinStoreDeadline(sent.get(key));
     } catch (error) {
-        // Nothing has been sent yet, so a redelivery is safe and an ack would drop the mail.
+        // Nothing has been sent yet, so a redelivery is safe and an ack would drop the mail. A read that never
+        // settles fails the same way, rather than holding the invocation.
         throw new MailSendError({ cause: error, message: "@lunora/mail: could not read the sent-mail store", retryable: true });
     }
 
@@ -339,7 +395,7 @@ const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: Cons
         return { deduplicated: true, id: recorded };
     }
 
-    const { id } = await sendInsideDedupeWindow(mailer, sendOptions, enqueuedAt);
+    const { id } = await sendInsideDedupeWindow(mailer, sendOptions, enqueuedAt, attempts);
 
     await recordSent(sent, key, id, sentTtlSeconds);
 
