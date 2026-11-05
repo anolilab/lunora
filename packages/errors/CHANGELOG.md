@@ -1,3 +1,7 @@
+## @lunora/errors [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.85...@lunora/errors@1.0.0-alpha.86) (2026-11-05)
+
+- fix(errors): keep the internal SQL_UNAVAILABLE code out of a published hint (#1495)
+
 ## @lunora/errors [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.84...@lunora/errors@1.0.0-alpha.85) (2026-11-02)
 
 ### Features
