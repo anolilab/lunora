@@ -2261,6 +2261,7 @@ interface PaginationResult<T = unknown> {
     isDone: boolean;
     page: T[];
     splitCursor?: null | string;
+    splitRequired?: boolean;
 }
 ```
 

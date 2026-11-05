@@ -84,3 +84,4 @@ export type {
 // pass the gate silently on the webhook signature-verification path.
 export type { VerifyCreemSignatureInput, VerifyStandardWebhookInput } from "./webhook";
 export { constantTimeEqual, hmacSha256Hex, verifyCreemSignature, verifyStandardWebhook } from "./webhook";
+export { MAX_WEBHOOK_BODY_BYTES, readWebhookBody } from "./webhook-body";

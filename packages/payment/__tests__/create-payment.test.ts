@@ -9,6 +9,7 @@ import { money } from "../src/money";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
 import type { CheckoutRequest, PaymentSession, Subscription, WebhookAction } from "../src/types";
+import { MAX_WEBHOOK_BODY_BYTES } from "../src/webhook-body";
 
 const subscription = (referenceId: string, state: Subscription["state"]): Subscription => {
     return {
@@ -1167,6 +1168,53 @@ describe("createPayment", () => {
 
         expect(session?.state).toBe("captured");
         expect(session?.capturedAmount.minorUnits).toBe(1000n);
+    });
+
+    it("names the reference a subscription event concerns, from the stored subscription, on a redelivery too", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("org_1", "active"));
+
+        const handle = async (action: WebhookAction) => {
+            const payment = createPayment({ adapter: fakeAdapter({ parseWebhook: async () => action }), authorize: () => true, store });
+            const response = await payment.handleWebhook(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }));
+
+            return response.json();
+        };
+
+        // A later event for an existing subscription carries only its id.
+        await expect(handle({ eventId: "evt_cancel", provider: "stripe", subscriptionId: "sub_1", type: "subscription.canceled" })).resolves.toMatchObject({
+            referenceId: "org_1",
+        });
+        // The provider's retry of the same event is a duplicate, and still names it, so a refresh that failed can finish.
+        await expect(handle({ eventId: "evt_cancel", provider: "stripe", subscriptionId: "sub_1", type: "subscription.canceled" })).resolves.toMatchObject({
+            applied: false,
+            referenceId: "org_1",
+        });
+        // An event naming another owner reports the owner the stored row kept, not the one it named.
+        await expect(
+            handle({ eventId: "evt_other", provider: "stripe", referenceId: "org_2", subscriptionId: "sub_1", type: "subscription.active" }),
+        ).resolves.toMatchObject({ referenceId: "org_1" });
+        // A payment event changes no plan, so it names no reference.
+        await expect(
+            handle({ amount: money(1000, "USD"), eventId: "evt_pay", provider: "stripe", referenceId: "org_1", sessionId: "pi_1", type: "payment.captured" }),
+        ).resolves.not.toHaveProperty("referenceId");
+    });
+
+    it("refuses an oversized webhook body with 413 before the adapter parses it", async () => {
+        expect.assertions(2);
+
+        const parseWebhook = vi.fn<PaymentAdapter["parseWebhook"]>();
+        const payment = createPayment({ adapter: fakeAdapter({ parseWebhook }), authorize: () => true, store: new MemoryPaymentStore() });
+
+        const response = await payment.handleWebhook(
+            new Request("https://app.test/payment/webhook", { body: "x".repeat(MAX_WEBHOOK_BODY_BYTES + 1), method: "POST" }),
+        );
+
+        expect(response.status).toBe(413);
+        expect(parseWebhook).not.toHaveBeenCalled();
     });
 
     it("returns non-2xx for an orphaned subscription.updated so the provider retries", async () => {

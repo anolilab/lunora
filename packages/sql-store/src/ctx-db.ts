@@ -79,9 +79,9 @@ import {
     cursorBelowRetainedFloor,
     describeRelationWrites,
     encodeAggregateKey,
-    encodeCursor,
     encodePartitionKey,
     fanOutScalarCounts,
+    findManyPage,
     foldAggregateTally,
     hasTrigger,
     isPushableWhere,
@@ -3956,32 +3956,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const rows = await queryAll(exec, dialect, query);
             const documents = decodeRows(definition, rows);
 
-            if (limit === undefined) {
-                if (args.with) {
-                    await resolveWith({
-                        fetcher: relationPredicateFetcher,
-                        groupedCounter: relationGroupedCounter,
-                        parents: documents,
-                        ...relationHooks(args),
-                        schema,
-                        tableName,
-                        with: args.with,
-                    });
-                }
-
-                // eslint-disable-next-line unicorn/no-null -- findMany's public return uses `continueCursor: string | null`; an unpaged result has no cursor.
-                return { continueCursor: null, isDone: true, page: applySelect(documents, args.select, args.with) };
-            }
-
-            const hasMore = documents.length > limit;
-            const page = hasMore ? documents.slice(0, limit) : documents;
-            const last = page.at(-1);
+            const result = findManyPage(documents, { endCursor: args.endCursor, limit, omitContinueCursor: args.omitContinueCursor, orderKeys });
 
             if (args.with) {
                 await resolveWith({
                     fetcher: relationPredicateFetcher,
                     groupedCounter: relationGroupedCounter,
-                    parents: page,
+                    parents: result.page,
                     ...relationHooks(args),
                     schema,
                     tableName,
@@ -3989,14 +3970,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 });
             }
 
-            return {
-                // The cursor is encoded from `last` (the full, unprojected row), so
-                // `applySelect` only trims the returned payload — paging is intact.
-                // eslint-disable-next-line unicorn/no-null -- public return shape: `continueCursor` is `string | null`; `null` marks the final page.
-                continueCursor: hasMore && last ? encodeCursor(last, orderKeys) : null,
-                isDone: !hasMore,
-                page: applySelect(page, args.select, args.with),
-            };
+            // The cursors were encoded from the full, unprojected rows, so `applySelect` only trims the payload.
+            return { ...result, page: applySelect(result.page, args.select, args.with) };
         },
 
         async explain(tableName, args = {}) {

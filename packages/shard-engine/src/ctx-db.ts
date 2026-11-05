@@ -93,7 +93,7 @@ import { estimateUtf8Bytes, utf8ByteLength } from "./estimate-bytes";
 import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
 import { NotFoundError } from "./not-found-error";
 import { assertPatchAllowed, operatorFields, readPatchField, resolvePatch } from "./patch-operators";
-import { applySelect, encodeCursor, softDeleteScope } from "./query-args";
+import { applySelect, softDeleteScope } from "./query-args";
 import { encodePartitionKey, RANK_TIEBREAK, rankPivotConditionSql, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { ReactiveCache } from "./reactive-cache";
 import { UNVOUCHABLE_DEP } from "./read-footprint";
@@ -104,7 +104,7 @@ import { compileOrderByText, doWhereTextStrategy, paginateStage, scanKeyset, sel
 import { isPushableWhere, whereOfFilter } from "./reader-where-filter";
 import { deriveRelationEdges, findRelated } from "./relation-graph";
 import type { RelationExistsMarker } from "./relation-predicates";
-import { assertFlatPredicate as assertFlatRelationPredicate, composeReadPredicate, resolveRelationPredicates } from "./relation-predicates";
+import { assertFlatPredicate as assertFlatRelationPredicate, composeReadPredicate, findManyPage, resolveRelationPredicates } from "./relation-predicates";
 import { describeRelationWrites } from "./relation-writes";
 import { applyInsertDefaults, applyOnDelete, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators, transformOnlyDefinition } from "./relations";
 import { guardWriter } from "./rls-guard";
@@ -2383,9 +2383,20 @@ const meterGlobalDatabase = (global: DatabaseWriterLike | undefined, headroom: T
 
             return async (...args: unknown[]): Promise<unknown> => {
                 const unprojected = PROJECTED_GLOBAL_READS.has(property) ? withoutSelect(args) : undefined;
-                const callArgs = unprojected?.args ?? args;
+                let callArgs = unprojected?.args ?? args;
                 const table = String(args[0]);
-                const unlimitedMany = property === "findMany" && typeof (callArgs[1] as { limit?: unknown } | undefined)?.limit !== "number";
+                const manyArgs = callArgs[1] as { endCursor?: unknown; limit?: unknown } | undefined;
+                const bounded = property === "findMany" && typeof manyArgs?.endCursor === "string";
+                const unlimitedMany = property === "findMany" && typeof manyArgs?.limit !== "number" && !bounded;
+
+                // A bounded (`endCursor`) read cannot be walked like an unlimited one: every page of a
+                // fixed range answers `isDone: true`, so the walk would stop at its first page. Without
+                // a `limit` it would instead load the whole range before the meter saw a row, so cap it
+                // at one page. The capped page's `splitCursor` falls among the rows returned, and the
+                // client's split re-reads the half past it, which recovers the rows the cap held back.
+                if (bounded && typeof manyArgs.limit !== "number") {
+                    callArgs = [callArgs[0], { ...manyArgs, limit: GLOBAL_READ_MAX_PAGE }, ...callArgs.slice(2)];
+                }
 
                 if (unlimitedMany) {
                     const paged = await readGlobalPages((pageArgs) => Reflect.apply(member, target, pageArgs) as Promise<unknown>, callArgs, table, headroom);
@@ -3983,32 +3994,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 }
             }
 
-            if (limit === undefined) {
-                if (args.with) {
-                    await resolveWith({
-                        groupedCounter: relationGroupedCounter,
-                        fetcher: relationFetcher,
-                        parents: docs,
-                        ...relationHooks(args),
-                        schema,
-                        tableName,
-                        with: args.with,
-                    });
-                }
-
-                // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
-                return { continueCursor: null, isDone: true, page: applySelect(docs, args.select, args.with) };
-            }
-
-            const hasMore = docs.length > limit;
-            const page = hasMore ? docs.slice(0, limit) : docs;
-            const last = page.at(-1);
+            const result = findManyPage(docs, { endCursor: args.endCursor, limit, omitContinueCursor: args.omitContinueCursor, orderKeys });
 
             if (args.with) {
                 await resolveWith({
                     fetcher: relationFetcher,
                     groupedCounter: relationGroupedCounter,
-                    parents: page,
+                    parents: result.page,
                     ...relationHooks(args),
                     schema,
                     tableName,
@@ -4016,14 +4008,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 });
             }
 
-            return {
-                // The cursor is encoded from `last` (the full, unprojected row) above,
-                // so `applySelect` only trims the returned payload — paging is intact.
-                // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
-                continueCursor: hasMore && last && args.omitContinueCursor !== true ? encodeCursor(last, orderKeys) : null,
-                isDone: !hasMore,
-                page: applySelect(page, args.select, args.with),
-            };
+            // The cursors were encoded from the full, unprojected rows, so `applySelect` only trims the payload.
+            return { ...result, page: applySelect(result.page, args.select, args.with) };
         },
 
         async explain(tableName, args = {}) {

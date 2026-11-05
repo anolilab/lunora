@@ -123,6 +123,27 @@ describe("rebalance — SPLIT", () => {
         expect(rebalance(pages, results)).toBeUndefined();
     });
 
+    it("splits a page the server cut short (splitRequired) even within the size threshold", () => {
+        expect.assertions(1);
+
+        // numItems=4 would wait for >8 rows; a capped read that kept 3 must split anyway, or the
+        // rows past the cap never come back.
+        const pages: Page[] = [
+            { lower: null, numItems: 4, upper: "z" },
+            { lower: "z", numItems: 4, upper: null },
+        ];
+        const results: (PaginationResult | undefined)[] = [
+            { continueCursor: "z", isDone: true, page: ["a", "b", "c"], splitCursor: "a", splitRequired: true },
+            { continueCursor: null, isDone: true, page: [] },
+        ];
+
+        expect(rebalance(pages, results)).toEqual([
+            { lower: null, numItems: 4, upper: "a" },
+            { lower: "a", numItems: 4, upper: "z" },
+            { lower: "z", numItems: 4, upper: null },
+        ]);
+    });
+
     it("splits only the FIRST eligible page per pass", () => {
         expect.assertions(4);
 
@@ -150,6 +171,27 @@ describe("rebalance — SPLIT", () => {
 // ---------------------------------------------------------------------------
 
 describe("rebalance — JOIN", () => {
+    it("does not join into a neighbour the server cut short, which would only be split back", () => {
+        expect.assertions(1);
+
+        const pages: Page[] = [
+            { lower: null, numItems: 4, upper: "a" },
+            { lower: "a", numItems: 4, upper: "z" },
+        ];
+        const results: (PaginationResult | undefined)[] = [
+            { continueCursor: "a", isDone: true, page: ["a"] }, // 1 row < 0.5×4
+            { continueCursor: "z", isDone: true, page: ["b", "c"], splitCursor: "b", splitRequired: true },
+        ];
+        const next = rebalance(pages, results);
+
+        // The cut neighbour is split instead; the small page is left alone.
+        expect(next).toEqual([
+            { lower: null, numItems: 4, upper: "a" },
+            { lower: "a", numItems: 4, upper: "b" },
+            { lower: "b", numItems: 4, upper: "z" },
+        ]);
+    });
+
     it("joins a bounded page that shrinks below JOIN_FACTOR × numItems when it has a neighbour", () => {
         expect.assertions(1);
 

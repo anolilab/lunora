@@ -1136,6 +1136,12 @@ interface PaginationResult<T = Record<string, unknown>> {
      * into two adjacent ranges. Absent on legacy (open-ended) pages.
      */
     splitCursor?: null | string;
+
+    /**
+     * Reactive-pagination only: a bounded page its read's `limit` cut short. The client splits it
+     * at `splitCursor` whatever its size, since the rows past the cut are reachable no other way.
+     */
+    splitRequired?: boolean;
 }
 
 /** Which way foreign-key edges are followed by {@link DatabaseReader.related}. */

@@ -26,7 +26,7 @@ import { assertArgsObject } from "./assert-args-object";
 import { LunoraError } from "./errors";
 import { methodGuard } from "./method-guard";
 import { applyRestCache } from "./rest-cache";
-import { restEdgeCacheFor, VARY_KEY_PARAM } from "./rest-edge-cache";
+import { KEY_SCOPE_PARAM, restEdgeCacheFor } from "./rest-edge-cache";
 import { trustedClientIp } from "./trusted-client-ip";
 
 /** The bits of a registered function the REST router reads: its kind, its `.expose` tag, and whether it is paid (`.x402`). */
@@ -136,7 +136,7 @@ const readShardKey = (url: URL, request: Request): string | undefined => {
 /**
  * Decode GET args from the query string. Each value is parsed as JSON when it
  * looks like a JSON scalar/array/object (so `?limit=10` → number, `?ids=[1,2]` →
- * array), else kept as a string. `shardKey` (routing) and `__lunora_vary` (the
+ * array), else kept as a string. `shardKey` (routing) and `__lunora_key` (the
  * edge cache key) are reserved and excluded.
  */
 const argsFromQuery = (url: URL): Record<string, unknown> => {
@@ -148,11 +148,11 @@ const argsFromQuery = (url: URL): Record<string, unknown> => {
     const args: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
 
     for (const [key, value] of url.searchParams.entries()) {
-        // `shardKey` is reserved for routing; `VARY_KEY_PARAM` is reserved for the
+        // `shardKey` is reserved for routing; `KEY_SCOPE_PARAM` is reserved for the
         // edge cache key. Neither is an argument, and letting the latter through
         // would hand a caller the one query key it can vary without varying the
         // cache key.
-        if (key === "shardKey" || key === VARY_KEY_PARAM) {
+        if (key === "shardKey" || key === KEY_SCOPE_PARAM) {
             continue;
         }
 
@@ -192,7 +192,7 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
         // so the whole path drops out of the handler for a procedure that declared
         // no policy (or opted out with `edgeCache: null`). A paid route never gets
         // one: the assertion above leaves it no public policy to build one from.
-        const edge = restEdgeCacheFor(cache, edgeCache);
+        const edgeRoute = restEdgeCacheFor(cache, edgeCache);
 
         routes[entry.path] = async (request: Request, env: unknown, _url?: URL, context?: ExecutionContextLike): Promise<Response> => {
             const wrongMethod = methodGuard(request, allowed);
@@ -217,7 +217,8 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
             // cache hit must still be metered (it is a request this caller made,
             // and it still costs a Worker invocation), but it must not cost a
             // shard round trip.
-            const hit = await edge?.lookup(request, context);
+            const edge = edgeRoute?.forRequest(request, env, context);
+            const hit = await edge?.lookup();
 
             if (hit) {
                 return hit;
@@ -261,7 +262,7 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
 
             // Stored only once the headers are on it, so a later hit replays the
             // exact response the first caller got rather than a bare body.
-            return edge ? edge.store(answered, request, context) : answered;
+            return edge ? edge.store(answered) : answered;
         };
     }
 

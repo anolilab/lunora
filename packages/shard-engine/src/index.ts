@@ -338,6 +338,7 @@ export {
     composeReadPredicate,
     containsRelationPredicate,
     DEFAULT_MAX_RELATION_KEYS,
+    findManyPage,
     isRelationPredicate,
     resolveRelationPredicates,
 } from "./relation-predicates";

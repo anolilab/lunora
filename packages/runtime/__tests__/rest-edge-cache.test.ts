@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import type { RestCachePolicy } from "../../../shared/rest-surface";
 import { applyRestCache } from "../src/rest-cache";
-import { EDGE_CACHE_HEADER, restEdgeCacheFor, VARY_KEY_PARAM } from "../src/rest-edge-cache";
+import { EDGE_CACHE_HEADER, KEY_SCOPE_PARAM, restEdgeCacheFor } from "../src/rest-edge-cache";
 import { contextWith, fakeCache } from "./helpers/edge-cache";
 
 const publicCache: RestCachePolicy = { maxAge: 60, scope: "public" };
@@ -47,12 +47,12 @@ describe("the shareable exchange", () => {
         const edge = restEdgeCacheFor(publicCache, cache);
         const request = get();
 
-        edge?.store(applyRestCache(Response.json({ items: [1, 2] }), publicCache, request, context), request, context);
+        edge?.forRequest(request, {}, context)?.store(applyRestCache(Response.json({ items: [1, 2] }), publicCache, request, context));
         await settled();
 
         expect(entries.size).toBe(1);
 
-        const hit = await edge?.lookup(get(), context);
+        const hit = await edge?.forRequest(get(), {}, context)?.lookup();
 
         expect(hit?.status).toBe(200);
         expect(hit?.headers.get(EDGE_CACHE_HEADER)).toBe("hit");
@@ -67,25 +67,22 @@ describe("the shareable exchange", () => {
         const { context, settled } = contextWith();
         const edge = restEdgeCacheFor(publicCache, cache);
         const request = get();
-        const served = edge?.store(applyRestCache(Response.json({ items: [1, 2] }), publicCache, request, context), request, context);
+        const served = edge?.forRequest(request, {}, context)?.store(applyRestCache(Response.json({ items: [1, 2] }), publicCache, request, context));
 
         await settled();
 
         await expect(served?.json()).resolves.toStrictEqual({ items: [1, 2] });
     });
 
-    it("refuses a non-GET", async () => {
+    it("refuses a non-GET", () => {
         expect.assertions(1);
 
-        const { cache, entries } = fakeCache();
-        const { context, settled } = contextWith();
+        const { cache } = fakeCache();
+        const { context } = contextWith();
         const edge = restEdgeCacheFor(publicCache, cache);
-        const request = get({ method: "POST" });
 
-        edge?.store(Response.json({}), request, context);
-        await settled();
-
-        expect(entries.size).toBe(0);
+        // No exchange at all, so there is nothing to read from or write to.
+        expect(edge?.forRequest(get({ method: "POST" }), {}, context)).toBeUndefined();
     });
 
     it("never stores a credentialed exchange, and never serves one from the shared cache", async () => {
@@ -96,22 +93,22 @@ describe("the shareable exchange", () => {
         const edge = restEdgeCacheFor(publicCache, cache);
         const anonymous = get();
 
-        edge?.store(applyRestCache(Response.json({ secret: false }), publicCache, anonymous, context), anonymous, context);
+        edge?.forRequest(anonymous, {}, context)?.store(applyRestCache(Response.json({ secret: false }), publicCache, anonymous, context));
         await settled();
 
         expect(entries.size).toBe(1);
 
         // Each credential form must be refused the stored anonymous body.
         // secret-scanner:allow -- fake test fixture, not a real credential
-        await expect(edge?.lookup(get({ headers: { authorization: "Bearer t" } }), context)).resolves.toBeUndefined();
-        await expect(edge?.lookup(get({ headers: { cookie: "session=abc" } }), context)).resolves.toBeUndefined();
-        await expect(edge?.lookup(get({ headers: { "cf-access-jwt-assertion": "jwt" } }), context)).resolves.toBeUndefined();
+        expect(edge?.forRequest(get({ headers: { authorization: "Bearer t" } }), {}, context)).toBeUndefined();
+        expect(edge?.forRequest(get({ headers: { cookie: "session=abc" } }), {}, context)).toBeUndefined();
+        expect(edge?.forRequest(get({ headers: { "cf-access-jwt-assertion": "jwt" } }), {}, context)).toBeUndefined();
 
         // Cloudflare Access authenticates out-of-band, so the credential is on the
         // execution context with no header to see.
         const accessContext = { access: { email: "a@b.c" }, waitUntil: () => {} } as unknown as ExecutionContextLike;
 
-        await expect(edge?.lookup(get(), accessContext)).resolves.toBeUndefined();
+        expect(edge?.forRequest(get(), {}, accessContext)).toBeUndefined();
     });
 
     it("refuses an app-declared credential header", async () => {
@@ -123,7 +120,7 @@ describe("the shareable exchange", () => {
         const edge = restEdgeCacheFor(policy, cache);
         const request = get({ headers: { "x-api-key": "k" } });
 
-        edge?.store(applyRestCache(Response.json({}), policy, request, context), request, context);
+        edge?.forRequest(request, {}, context)?.store(applyRestCache(Response.json({}), policy, request, context));
         await settled();
 
         expect(entries.size).toBe(0);
@@ -145,12 +142,12 @@ describe("the shareable exchange", () => {
         // The header path agrees: a paid exchange is caller-specific.
         expect(answered.headers.get("cache-control")).toContain("private");
 
-        edge?.store(answered, paid, context);
+        edge?.forRequest(paid, {}, context)?.store(answered);
         await settled();
 
         expect(entries.size).toBe(0);
         // And an unpaid caller finds nothing to be served.
-        await expect(edge?.lookup(get(), context)).resolves.toBeUndefined();
+        await expect(edge?.forRequest(get(), {}, context)?.lookup()).resolves.toBeUndefined();
     });
 
     it.each(["payment-response", "x-payment-response"])("does not store a settlement receipt (%s) even if one reaches it", async (header) => {
@@ -161,7 +158,7 @@ describe("the shareable exchange", () => {
         const edge = restEdgeCacheFor(publicCache, cache);
         const request = get();
 
-        edge?.store(Response.json({ premium: true }, { headers: { [header]: "settled" } }), request, context);
+        edge?.forRequest(request, {}, context)?.store(Response.json({ premium: true }, { headers: { [header]: "settled" } }));
         await settled();
 
         expect(entries.size).toBe(0);
@@ -175,12 +172,12 @@ describe("the shareable exchange", () => {
         const edge = restEdgeCacheFor(publicCache, cache);
         const request = get();
 
-        edge?.store(Response.json({ error: "nope" }, { status: 403 }), request, context);
-        edge?.store(Response.json({}, { headers: { "set-cookie": "a=1" } }), request, context);
+        edge?.forRequest(request, {}, context)?.store(Response.json({ error: "nope" }, { status: 403 }));
+        edge?.forRequest(request, {}, context)?.store(Response.json({}, { headers: { "set-cookie": "a=1" } }));
         await settled();
 
         expect(entries.size).toBe(0);
-        await expect(edge?.lookup(request, context)).resolves.toBeUndefined();
+        await expect(edge?.forRequest(request, {}, context)?.lookup()).resolves.toBeUndefined();
     });
 
     it("still stores when the host gives no waitUntil", async () => {
@@ -190,7 +187,7 @@ describe("the shareable exchange", () => {
         const edge = restEdgeCacheFor(publicCache, cache);
         const request = get();
 
-        edge?.store(applyRestCache(Response.json({}), publicCache, request), request);
+        edge?.forRequest(request, {})?.store(applyRestCache(Response.json({}), publicCache, request));
         // The unawaited `put` settles on the microtask queue.
         await Promise.resolve();
 
@@ -207,13 +204,13 @@ describe("the cache key", () => {
         const edge = restEdgeCacheFor(publicCache, cache);
         const tenantA = get({ headers: { "x-lunora-shard-key": "a" } });
 
-        edge?.store(applyRestCache(Response.json({ tenant: "a" }), publicCache, tenantA, context), tenantA, context);
+        edge?.forRequest(tenantA, {}, context)?.store(applyRestCache(Response.json({ tenant: "a" }), publicCache, tenantA, context));
         await settled();
 
         expect(onlyKey(entries)).toContain("x-lunora-shard-key%3Da");
-        await expect(edge?.lookup(get({ headers: { "x-lunora-shard-key": "a" } }), context)).resolves.toBeDefined();
+        await expect(edge?.forRequest(get({ headers: { "x-lunora-shard-key": "a" } }), {}, context)?.lookup()).resolves.toBeDefined();
         // A different shard is a different body, so it must miss rather than hit.
-        await expect(edge?.lookup(get({ headers: { "x-lunora-shard-key": "b" } }), context)).resolves.toBeUndefined();
+        await expect(edge?.forRequest(get({ headers: { "x-lunora-shard-key": "b" } }), {}, context)?.lookup()).resolves.toBeUndefined();
     });
 
     it("treats an absent and an empty varying header alike, and neither like a present one", async () => {
@@ -224,12 +221,12 @@ describe("the cache key", () => {
         const edge = restEdgeCacheFor(publicCache, cache);
         const absent = get();
 
-        edge?.store(applyRestCache(Response.json({}), publicCache, absent, context), absent, context);
+        edge?.forRequest(absent, {}, context)?.store(applyRestCache(Response.json({}), publicCache, absent, context));
         await settled();
 
         // An absent header and an empty one select the same data, so they share a key.
-        await expect(edge?.lookup(get({ headers: { "x-lunora-shard-key": "" } }), context)).resolves.toBeDefined();
-        await expect(edge?.lookup(get({ headers: { "x-lunora-shard-key": "a" } }), context)).resolves.toBeUndefined();
+        await expect(edge?.forRequest(get({ headers: { "x-lunora-shard-key": "" } }), {}, context)?.lookup()).resolves.toBeDefined();
+        await expect(edge?.forRequest(get({ headers: { "x-lunora-shard-key": "a" } }), {}, context)?.lookup()).resolves.toBeUndefined();
     });
 
     it("separates values that would otherwise concatenate into the same key", async () => {
@@ -241,10 +238,10 @@ describe("the cache key", () => {
         const edge = restEdgeCacheFor(policy, cache);
         const first = get({ headers: { "x-a": "1", "x-b": "23" } });
 
-        edge?.store(applyRestCache(Response.json({}), policy, first, context), first, context);
+        edge?.forRequest(first, {}, context)?.store(applyRestCache(Response.json({}), policy, first, context));
         await settled();
 
-        await expect(edge?.lookup(get({ headers: { "x-a": "12", "x-b": "3" } }), context)).resolves.toBeUndefined();
+        await expect(edge?.forRequest(get({ headers: { "x-a": "12", "x-b": "3" } }), {}, context)?.lookup()).resolves.toBeUndefined();
     });
 
     it("keeps the original request's own query string", async () => {
@@ -255,11 +252,45 @@ describe("the cache key", () => {
         const edge = restEdgeCacheFor(publicCache, cache);
         const request = get({ url: "https://api.example.com/_lunora/rest/messages/list?limit=10" });
 
-        edge?.store(applyRestCache(Response.json({}), publicCache, request, context), request, context);
+        edge?.forRequest(request, {}, context)?.store(applyRestCache(Response.json({}), publicCache, request, context));
         await settled();
 
         expect(new URL(onlyKey(entries)).searchParams.get("limit")).toBe("10");
-        await expect(edge?.lookup(get({ url: "https://api.example.com/_lunora/rest/messages/list?limit=20" }), context)).resolves.toBeUndefined();
+        await expect(
+            edge?.forRequest(get({ url: "https://api.example.com/_lunora/rest/messages/list?limit=20" }), {}, context)?.lookup(),
+        ).resolves.toBeUndefined();
+    });
+
+    it("shares one entry between query strings that differ only in parameter order", async () => {
+        expect.assertions(1);
+
+        const { cache } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const request = get({ url: "https://api.example.com/_lunora/rest/messages/list?a=1&b=2" });
+
+        edge?.forRequest(request, {}, context)?.store(applyRestCache(Response.json({}), publicCache, request, context));
+        await settled();
+
+        await expect(
+            edge?.forRequest(get({ url: "https://api.example.com/_lunora/rest/messages/list?b=2&a=1" }), {}, context)?.lookup(),
+        ).resolves.toBeDefined();
+    });
+
+    it("keeps a repeated parameter's value order in the key, since the last value is the arg", async () => {
+        expect.assertions(1);
+
+        const { cache } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const request = get({ url: "https://api.example.com/_lunora/rest/messages/list?a=1&a=2" });
+
+        edge?.forRequest(request, {}, context)?.store(applyRestCache(Response.json({}), publicCache, request, context));
+        await settled();
+
+        await expect(
+            edge?.forRequest(get({ url: "https://api.example.com/_lunora/rest/messages/list?a=2&a=1" }), {}, context)?.lookup(),
+        ).resolves.toBeUndefined();
     });
 
     it("ignores a caller-supplied copy of the reserved parameter rather than keying on it", async () => {
@@ -270,15 +301,64 @@ describe("the cache key", () => {
         const edge = restEdgeCacheFor(publicCache, cache);
         // Two forged copies: `set` alone replaces only the first occurrence, so a
         // second would otherwise ride into the key.
-        const forged = get({ url: `https://api.example.com/_lunora/rest/messages/list?${VARY_KEY_PARAM}=evil&${VARY_KEY_PARAM}=eviler` });
+        const forged = get({ url: `https://api.example.com/_lunora/rest/messages/list?${KEY_SCOPE_PARAM}=evil&${KEY_SCOPE_PARAM}=eviler` });
 
-        edge?.store(applyRestCache(Response.json({}), publicCache, forged, context), forged, context);
+        edge?.forRequest(forged, {}, context)?.store(applyRestCache(Response.json({}), publicCache, forged, context));
         await settled();
 
         expect(onlyKey(entries)).not.toContain("evil");
         // Which means the forged request keyed exactly where the clean one does —
         // it bought the attacker no partition of its own.
-        await expect(edge?.lookup(get(), context)).resolves.toBeDefined();
+        await expect(edge?.forRequest(get(), {}, context)?.lookup()).resolves.toBeDefined();
+    });
+});
+
+describe("the deploy a key belongs to", () => {
+    const versioned = (id: string): Record<string, unknown> => {
+        return { CF_VERSION_METADATA: { id, tag: "v1", timestamp: "2026-01-01T00:00:00Z" } };
+    };
+
+    it("never serves a response stored by a previous deploy", async () => {
+        expect.assertions(3);
+
+        const { cache, entries } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const request = get();
+
+        edge?.forRequest(request, versioned("version-a"), context)?.store(applyRestCache(Response.json({ code: "old" }), publicCache, request, context));
+        await settled();
+
+        expect(onlyKey(entries)).toContain("version-a");
+        await expect(edge?.forRequest(get(), versioned("version-a"), context)?.lookup()).resolves.toBeDefined();
+        // Same tag, new upload: the id is what separates the two.
+        await expect(edge?.forRequest(get(), versioned("version-b"), context)?.lookup()).resolves.toBeUndefined();
+    });
+
+    it("keeps caching, unscoped, when the version_metadata binding is not declared", async () => {
+        expect.assertions(4);
+
+        const { cache, entries } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const request = get();
+
+        edge?.forRequest(request, { CF_VERSION_METADATA: { id: "" } }, context)?.store(applyRestCache(Response.json({}), publicCache, request, context));
+        await settled();
+
+        // Never null for a public policy: it always fences the credential and
+        // data-selecting headers. It must carry no deploy segment, though.
+        const scope = new URL(onlyKey(entries)).searchParams.get(KEY_SCOPE_PARAM);
+
+        expect(scope).not.toBeNull();
+        expect(scope).not.toContain(":deploy");
+
+        // An empty id and no binding at all key alike: the second write lands on the same entry.
+        edge?.forRequest(request, {}, context)?.store(applyRestCache(Response.json({}), publicCache, request, context));
+        await settled();
+
+        expect(entries.size).toBe(1);
+        await expect(edge?.forRequest(get(), {}, context)?.lookup()).resolves.toBeDefined();
     });
 });
 
@@ -300,10 +380,10 @@ describe("what never reaches a second caller", () => {
         // The first caller still gets them — they describe the exchange it made.
         expect(answered.headers.get("x-d1-bookmark")).toBe("bookmark-1");
 
-        edge?.store(answered, request, context);
+        edge?.forRequest(request, {}, context)?.store(answered);
         await settled();
 
-        const hit = await edge?.lookup(get(), context);
+        const hit = await edge?.forRequest(get(), {}, context)?.lookup();
 
         // A later caller holding a NEWER bookmark must not be handed this stale one.
         expect(hit?.headers.get("x-d1-bookmark")).toBeNull();
@@ -324,16 +404,16 @@ describe("what never reaches a second caller", () => {
         const negotiated = applyRestCache(Response.json({}), publicCache, request, context);
 
         negotiated.headers.set("vary", `${negotiated.headers.get("vary") ?? ""}, Accept-Language`);
-        edge?.store(negotiated, request, context);
+        edge?.forRequest(request, {}, context)?.store(negotiated);
 
         const wildcard = applyRestCache(Response.json({}), publicCache, request, context);
 
         wildcard.headers.set("vary", "*");
-        edge?.store(wildcard, request, context);
+        edge?.forRequest(request, {}, context)?.store(wildcard);
         await settled();
 
         expect(entries.size).toBe(0);
-        await expect(edge?.lookup(request, context)).resolves.toBeUndefined();
+        await expect(edge?.forRequest(request, {}, context)?.lookup()).resolves.toBeUndefined();
     });
 });
 
@@ -354,8 +434,8 @@ describe("a cache is never allowed to fail a request", () => {
         const edge = restEdgeCacheFor(publicCache, broken);
         const response = Response.json({});
 
-        await expect(edge?.lookup(get(), context)).resolves.toBeUndefined();
-        expect(edge?.store(response, get(), context)).toBe(response);
+        await expect(edge?.forRequest(get(), {}, context)?.lookup()).resolves.toBeUndefined();
+        expect(edge?.forRequest(get(), {}, context)?.store(response)).toBe(response);
 
         await settled();
     });
@@ -375,7 +455,7 @@ describe("a cache is never allowed to fail a request", () => {
         const response = Response.json({});
 
         // A served response must not become a 500 because the write failed.
-        expect(edge?.store(response, get(), context)).toBe(response);
+        expect(edge?.forRequest(get(), {}, context)?.store(response)).toBe(response);
     });
 
     it("degrades to a miss when the policy's vary is malformed, instead of throwing", async () => {
@@ -388,14 +468,12 @@ describe("a cache is never allowed to fail a request", () => {
         // request to the endpoint became a 500.
         const policy: RestCachePolicy = { maxAge: 60, scope: "public", vary: "Accept Language" };
         const edge = restEdgeCacheFor(policy, cache);
-        const request = get();
-        const response = Response.json({});
 
-        expect(edge?.store(response, request, context)).toBe(response);
+        expect(edge).toBeDefined();
+        // The key cannot be built, so the request gets no exchange with the cache.
+        expect(() => edge?.forRequest(get(), {}, context)).not.toThrow();
 
         await settled();
-
-        await expect(edge?.lookup(request, context)).resolves.toBeUndefined();
 
         expect(entries.size).toBe(0);
     });

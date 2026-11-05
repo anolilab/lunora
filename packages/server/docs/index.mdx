@@ -107,7 +107,9 @@ Each table exposes a typed delegate with the common read/write helpers:
 
 - `findMany(args)` / `findFirst(args)`: `args` takes `where`, `orderBy`, `with`
   (relation loading), `select` (column projection, top-level and per-relation via
-  `with: { rel: { select: [...] } }`), `cursor` / `limit`, and `includeDeleted`.
+  `with: { rel: { select: [...] } }`), `cursor` / `limit`, `endCursor` (a fixed
+  `(cursor, endCursor]` page for `usePaginatedQuery`, see
+  [Pagination](/docs/concepts/pagination#paging-a-findmany)), and `includeDeleted`.
 - `exists(where?)`: boolean existence check (reuses `findFirst`, no count scan).
 - `insert(doc, { skipDuplicates? })`: `skipDuplicates: true` resolves to `null`
   on a unique conflict instead of throwing.

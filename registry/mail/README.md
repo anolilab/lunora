@@ -110,7 +110,8 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
     ```ts
     import type { Mailer, QueueLike } from "@lunora/mail";
 
-    const mailer = (): Mailer => createMailerFromEnv(env, { cloudflareSend, queue: env["MAIL_QUEUE"] as QueueLike });
+    const mailer = (): Mailer =>
+        createMailerFromEnv(env, { ...(env["SEND_EMAIL"] === undefined ? {} : { cloudflareSend }), queue: env["MAIL_QUEUE"] as QueueLike });
     ```
 
     A producer-only Worker (it enqueues, the consumer delivers) needs no delivery transport: `queue()` works without one, and only `send()` throws `no transport configured`.
@@ -130,7 +131,8 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
 
                 await binding.send(new EmailMessage(from, to, raw));
             };
-            const mailer = createMailerFromEnv(env, { cloudflareSend });
+            // Without the binding, leave `cloudflareSend` out so `RESEND_API_KEY` delivers.
+            const mailer = createMailerFromEnv(env, env["SEND_EMAIL"] === undefined ? {} : { cloudflareSend });
 
             for (const message of batch.messages) {
                 try {
