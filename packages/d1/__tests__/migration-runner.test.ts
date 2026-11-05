@@ -582,6 +582,10 @@ describe("migrationRunner", () => {
     });
 });
 
+/** The statements a run submitted beyond the tracking table's own DDL: migration bodies and tracking-row inserts. */
+const migrationWrites = (database: FakeDatabase): string[] =>
+    database.executed.map((entry) => entry.sql).filter((sql) => !sql.includes("__drizzle_migrations") || sql.startsWith("INSERT"));
+
 describe("migrationRunner destructive statements", () => {
     it.each([
         ["DROP TABLE", "DROP TABLE legacy_sessions"],
@@ -590,19 +594,25 @@ describe("migrationRunner destructive statements", () => {
         ["DROP TRIGGER", "DROP TRIGGER posts_audit"],
         ["DROP COLUMN", "ALTER TABLE users DROP COLUMN email"],
         ["DROP without COLUMN", "ALTER TABLE users DROP email"],
+        ["DROP on a quoted, schema-qualified table", `ALTER TABLE main."user accounts" DROP COLUMN email`],
         ["RENAME without COLUMN", "ALTER TABLE users RENAME email TO mail"],
         ["RENAME TO", "ALTER TABLE users RENAME TO members"],
-        ["RENAME COLUMN", "ALTER TABLE users RENAME COLUMN email TO mail"],
+        ["RENAME COLUMN", "ALTER TABLE [users] RENAME COLUMN email TO mail"],
+        ["TRUNCATE", "TRUNCATE TABLE users"],
         ["INSERT OR REPLACE", "INSERT OR REPLACE INTO config (k, v) VALUES ('a', 'b')"],
         ["REPLACE INTO", "REPLACE INTO config (k, v) VALUES ('a', 'b')"],
+        ["a comment before the statement", "/* tidy up */ DROP TABLE legacy_sessions"],
         ["a comment between the keywords", "INSERT /* upsert */ OR REPLACE INTO config (k, v) VALUES ('a', 'b')"],
-    ])("refuses %s without an opt-in, before any I/O", async (_label, text) => {
+        ["a replace in a trigger body", "CREATE TRIGGER t AFTER INSERT ON a BEGIN INSERT OR REPLACE INTO b (id) VALUES (NEW.id); END;"],
+    ])("refuses %s without an opt-in, applying nothing", async (_label, text) => {
         expect.assertions(2);
 
         const database = await createDatabase();
 
-        await expect(new MigrationRunner(database, [{ name: "drop", sql: text, version: 1 }]).run()).rejects.toThrow(DESTRUCTIVE_RE);
-        expect(database.executed).toStrictEqual([]);
+        await expect(new MigrationRunner(database, [{ name: "drop", sql: text, version: 1 }]).run()).rejects.toMatchObject({
+            code: "MIGRATION_DESTRUCTIVE",
+        });
+        expect(migrationWrites(database)).toStrictEqual([]);
     });
 
     it("refuses a destructive migration late in the list before applying the earlier ones", async () => {
@@ -615,17 +625,17 @@ describe("migrationRunner destructive statements", () => {
         ]);
 
         await expect(runner.run()).rejects.toThrow(DESTRUCTIVE_RE);
-        expect(database.executed).toStrictEqual([]);
+        expect(migrationWrites(database)).toStrictEqual([]);
     });
 
     it.each([
-        ["`allowDestructive: true`", { allowDestructive: true, sql: "DROP TABLE legacy_sessions" }],
-        ["a leading pragma comment", { sql: "-- lunora:allow-destructive\nDROP TABLE legacy_sessions;" }],
-        ["a pragma comment after the statement", { sql: "DROP TABLE legacy_sessions; -- lunora:allow-destructive" }],
-    ])("applies a destructive statement confirmed by %s", async (_label, migration) => {
+        ["a marker before the statement", "-- lunora:allow-destructive\nDROP TABLE legacy_sessions;"],
+        ["a marker after the statement", "DROP TABLE legacy_sessions; -- lunora:allow-destructive"],
+        ["a marker on a CRLF line", "-- lunora:allow-destructive\r\nDROP TABLE legacy_sessions;"],
+    ])("applies a destructive statement confirmed by %s", async (_label, text) => {
         expect.assertions(1);
 
-        const result = await new MigrationRunner(await createDatabase(), [{ name: "drop", version: 1, ...migration }]).run();
+        const result = await new MigrationRunner(await createDatabase(), [{ name: "drop", sql: text, version: 1 }]).run();
 
         expect(result.applied.map((m) => m.version)).toStrictEqual([1]);
     });
@@ -636,6 +646,10 @@ describe("migrationRunner destructive statements", () => {
         ["a block comment", "/* DROP COLUMN email */ CREATE TABLE c (id INTEGER);"],
         ["a quoted identifier", `CREATE TABLE "rename" (id INTEGER, [drop table] TEXT, \`replace into\` TEXT)`],
         ["a function call", "UPDATE notes SET body = replace(body, 'a', 'b')"],
+        ["a column named rename", "CREATE TABLE t (rename TEXT, replace TEXT)"],
+        ["a table named rename", "ALTER TABLE rename ADD COLUMN x TEXT"],
+        ["an added column named drop", `ALTER TABLE t ADD COLUMN "drop" TEXT`],
+        ["an identifier ending in $drop", "CREATE VIEW v AS SELECT foo$drop FROM t"],
     ])("does not read a keyword inside %s as destructive", async (_label, text) => {
         expect.assertions(1);
 
@@ -644,38 +658,48 @@ describe("migrationRunner destructive statements", () => {
         expect(result.applied.map((m) => m.version)).toStrictEqual([1]);
     });
 
-    it("does not take a pragma inside a string literal as the opt-in", async () => {
+    it.each([
+        ["inside a string literal", "REPLACE INTO config (k, v) VALUES ('note', '\n-- lunora:allow-destructive')"],
+        ["with a suffix", "-- lunora:allow-destructive-NOT\nDROP TABLE legacy_sessions;"],
+        ["with trailing words", "-- lunora:allow-destructive later, maybe\nDROP TABLE legacy_sessions;"],
+    ])("does not take a marker %s as the opt-in", async (_label, text) => {
         expect.assertions(1);
 
-        const runner = new MigrationRunner(await createDatabase(), [
-            { name: "replace", sql: "REPLACE INTO config (k, v) VALUES ('note', '\n-- lunora:allow-destructive')", version: 1 },
-        ]);
-
-        await expect(runner.run()).rejects.toThrow(DESTRUCTIVE_RE);
+        await expect(new MigrationRunner(await createDatabase(), [{ name: "drop", sql: text, version: 1 }]).run()).rejects.toThrow(DESTRUCTIVE_RE);
     });
 
-    // The opt-in on the object is what an upgrade needs: a destructive migration applied by a build without this check
-    // would be refused now, and adding the pragma to its SQL would change its hash and read as drift.
-    it("skips an already-applied destructive migration once `allowDestructive` is set, without drift", async () => {
+    // A build without this check may have applied it unconfirmed, and confirming it now would change its hash (drift).
+    it("skips an already-applied destructive migration without an opt-in and applies the pending one after it", async () => {
         expect.assertions(2);
 
         const sqlite = new DatabaseSync(":memory:");
 
         try {
-            const text = "DROP TABLE legacy_sessions;";
+            const text = "DROP TABLE IF EXISTS legacy_sessions;";
 
             sqlite.exec(
                 "CREATE TABLE __drizzle_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL UNIQUE, created_at NUMERIC, version INTEGER)",
             );
             sqlite.prepare("INSERT INTO __drizzle_migrations (hash, created_at, version) VALUES (?, 1, 1)").run(await sha256Hex(text));
 
-            const result = await new MigrationRunner(createSqliteDatabase(sqlite), [{ allowDestructive: true, name: "drop", sql: text, version: 1 }]).run();
+            const result = await new MigrationRunner(createSqliteDatabase(sqlite), [
+                { name: "drop", sql: text, version: 1 },
+                { name: "next", sql: "CREATE TABLE next_one (id INTEGER)", version: 2 },
+            ]).run();
 
             expect(result.skipped.map((m) => m.version)).toStrictEqual([1]);
-            expect(result.applied).toStrictEqual([]);
+            expect(result.applied.map((m) => m.version)).toStrictEqual([2]);
         } finally {
             sqlite.close();
         }
+    });
+
+    it("refuses with a message that names the marker and warns against adding it to an applied migration", async () => {
+        expect.assertions(1);
+
+        await expect(new MigrationRunner(await createDatabase(), [{ name: "drop", sql: "DROP TABLE a", version: 1 }]).run()).rejects.toThrow(
+            /add a `-- lunora:allow-destructive` line comment on its own line before the statement.*never add it to one that already ran/u,
+        );
     });
 });
 
@@ -687,10 +711,10 @@ describe("migrationRunner transaction control", () => {
 
             const database = await createDatabase();
 
-            await expect(new MigrationRunner(database, [{ allowDestructive: true, name: "tx", sql: text, version: 1 }]).run()).rejects.toThrow(
+            await expect(new MigrationRunner(database, [{ name: "tx", sql: `-- lunora:allow-destructive\n${text}`, version: 1 }]).run()).rejects.toThrow(
                 TRANSACTION_CONTROL_RE,
             );
-            expect(database.executed).toStrictEqual([]);
+            expect(migrationWrites(database)).toStrictEqual([]);
         },
     );
 });

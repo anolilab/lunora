@@ -23,7 +23,7 @@ const json = (body: unknown, status = 200): Response => Response.json(body, { he
 
 /** Run the posted migrations; a refusal comes back as a 500 carrying its message rather than an uncaught throw. */
 const migrate = async (request: Request, database: D1Database): Promise<Response> => {
-    const body = await request.json<{ migrations: { allowDestructive?: boolean; name: string; sql: string; version: number }[] }>();
+    const body = await request.json<{ migrations: { name: string; sql: string; version: number }[] }>();
     const runner = new MigrationRunner(database as unknown as D1DatabaseLike, body.migrations);
 
     try {

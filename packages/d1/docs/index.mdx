@@ -76,9 +76,9 @@ recorded in the `__drizzle_migrations` table, so an applied migration is skipped
 by its version and re-running is a no-op.
 
 ```ts
-import { MigrationRunner } from "@lunora/d1";
+import { ALLOW_DESTRUCTIVE_MARKER, MigrationRunner } from "@lunora/d1";
 
-const runner = new MigrationRunner(env.DB, [{ version: 1, name: "drop_legacy_sessions", sql: "DROP TABLE legacy_sessions", allowDestructive: true }]);
+const runner = new MigrationRunner(env.DB, [{ version: 1, name: "drop_legacy_sessions", sql: `${ALLOW_DESTRUCTIVE_MARKER}\nDROP TABLE legacy_sessions` }]);
 
 const { applied, skipped } = await runner.run();
 ```
@@ -100,20 +100,31 @@ is what a hand-written `Migration` is for.
 
 ### Destructive statements need an opt-in
 
-A migration that discards data, or renames something every reader of the old name
-breaks on, is refused unless it says it means to: any `DROP` (a table, view,
-index, trigger or column), any `RENAME`, `TRUNCATE`, `INSERT OR REPLACE` and
-`REPLACE INTO`. Keywords inside a string, a quoted
-identifier or a comment do not count. Confirm one of two ways:
+A pending migration that discards data, or renames something every reader of
+the old name breaks on, is refused with `MIGRATION_DESTRUCTIVE` unless it says it
+means to. These statements count:
 
-- `allowDestructive: true` on the `Migration`. It is not part of the hashed SQL,
-  so it is the way to confirm a migration that has already run: editing that
-  migration's SQL would be refused as drift.
-- A `-- lunora:allow-destructive` line comment in the SQL, for a migration that
-  has not run yet. `lunora migrate generate` writes it after every `DROP` it
-  emits, so a generated file split into one entry per statement applies as is.
+- `DROP TABLE`, `DROP INDEX`, `DROP VIEW` and `DROP TRIGGER`
+- `ALTER TABLE … DROP [COLUMN]` and `ALTER TABLE … RENAME …`
+- `TRUNCATE`
+- `INSERT OR REPLACE` and `REPLACE INTO`, anywhere in the statement, including
+  a trigger body
 
-Every migration is checked before the run touches the database, so a refused one
+They are matched by statement shape, so a column or table named `rename` or
+`replace`, and keywords inside a string, a quoted identifier or a comment, do
+not count. A `DELETE` or `UPDATE` without a `WHERE` is **not** checked: a
+full-table `UPDATE` is what every backfill looks like.
+
+To confirm one, put the `-- lunora:allow-destructive` line comment (exported as
+`ALLOW_DESTRUCTIVE_MARKER`) on its own line before the statement. The line must
+be exactly that comment. It confirms the whole migration it is in.
+`lunora migrate generate` writes it before every `DROP` it emits, so a generated
+file split at each `;` into one entry per statement applies as is.
+
+Only migrations that have not run yet are checked, so one applied before this
+check existed keeps being skipped. Never add the marker to an applied migration:
+it changes the migration's hash, and the run refuses that as drift. Every
+pending migration is checked before the first one is applied, so a refused one
 late in the list leaves the earlier ones unapplied too. Transaction control
 (`BEGIN`, `COMMIT`, `END`, `ROLLBACK`, `SAVEPOINT`, `RELEASE`) is refused the same
 way: each migration already commits atomically with its tracking row, and D1
@@ -163,7 +174,6 @@ interface Migration {
     version: number; // monotonically increasing integer; orders application
     name: string; // human label, e.g. "001_init" (used in logs)
     sql: string; // raw SQL — exactly one statement per migration
-    allowDestructive?: boolean; // confirms a DROP / RENAME / TRUNCATE / REPLACE; see above
 }
 ```
 
