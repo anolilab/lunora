@@ -229,6 +229,8 @@ describe("createPaginatedQuery page errors", () => {
         await flushAsync();
 
         expect(errors).toStrictEqual([]);
+        // The head page is resnapshotted, so a sibling feed holding it cannot hand back the refused build's cursor.
+        expect(fake.resnapshotCalls).toStrictEqual([{ args: { paginationOpts: head }, functionPath: "messages:list", shardKey: undefined }]);
         expect(api!.error()).toBeUndefined();
         expect(api!.status()).toBe("LoadingFirstPage");
         expect(fake.subscriptions.slice(before).map((s) => s.args["paginationOpts"])).toStrictEqual([head]);

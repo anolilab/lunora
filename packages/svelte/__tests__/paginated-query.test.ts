@@ -242,6 +242,7 @@ describe("paginatedQuery page errors", () => {
     it("restarts from the first page when a loaded page's cursor no longer decodes, without reporting it", async () => {
         const subscribeCalls: { args: Record<string, unknown>; callback: (data: unknown) => void; onError?: (error: SubscriptionError) => void }[] = [];
 
+        const resnapshotCalls: Record<string, unknown>[] = [];
         const client = {
             subscribe: (
                 _fn: FunctionReference,
@@ -252,6 +253,9 @@ describe("paginatedQuery page errors", () => {
                 subscribeCalls.push({ args, callback, onError: options?.onError });
 
                 return () => undefined;
+            },
+            resnapshot: (_fn: FunctionReference, args: Record<string, unknown>) => {
+                resnapshotCalls.push(args);
             },
         } as unknown as LunoraClient;
 
@@ -277,6 +281,8 @@ describe("paginatedQuery page errors", () => {
         await flushAsync();
 
         expect(errors).toStrictEqual([]);
+        // The head page is resnapshotted, so a sibling feed holding it cannot hand back the refused build's cursor.
+        expect(resnapshotCalls).toStrictEqual([{ paginationOpts: head }]);
         expect(get(error)).toBeUndefined();
         expect(get(status)).toBe("LoadingFirstPage");
         expect(subscribeCalls.slice(before).map((c) => c.args["paginationOpts"])).toStrictEqual([head]);
@@ -314,6 +320,7 @@ describe("paginatedQuery page errors", () => {
 
                 return () => undefined;
             },
+            resnapshot: () => undefined,
         } as unknown as LunoraClient;
 
         const errors: SubscriptionError[] = [];

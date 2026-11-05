@@ -63,11 +63,14 @@ interface PaginatedCoreResult<T> {
     status: PaginationStatus;
 }
 
-/** First-page seed: a single open-ended range starting at the feed head. */
-const initialPages = (numberItems: number): Page[] => [
+/** The feed's head page: one open-ended range from the start of the feed. */
+const headPage = (numberItems: number): Page => {
     // eslint-disable-next-line unicorn/no-null -- `lower: null` is the feed head, `upper: null` the open-ended tail — both are wire-shape cursors.
-    { lower: null, numItems: numberItems, upper: null },
-];
+    return { lower: null, numItems: numberItems, upper: null };
+};
+
+/** First-page seed: a single open-ended range starting at the feed head. */
+const initialPages = (numberItems: number): Page[] => [headPage(numberItems)];
 
 /**
  * Run the SPLIT/JOIN maintenance pass over the current page list given freshly
@@ -221,4 +224,4 @@ const classifyPageFailure = (pages: Page[], isFailedPage: (page: Page) => boolea
 };
 
 export type { Page, PageFailure, PaginatedCoreResult, PaginationResult, PaginationStatus };
-export { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, isHeadPage, JOIN_FACTOR, rebalance, SPLIT_FACTOR };
+export { applyLoadMore, classifyPageFailure, derivePaginationStatus, headPage, initialPages, isHeadPage, JOIN_FACTOR, rebalance, SPLIT_FACTOR };

@@ -249,6 +249,87 @@ describe("usePaginatedQuery", () => {
         expect(screen.getByTestId("error").textContent).toBe("");
     });
 
+    it("waits for a fresh head snapshot when a sibling feed holds the head page, and leaves the sibling's rows alone", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(undefined, { live: true });
+        const stale = { code: "INVALID_CURSOR", message: "invalid cursor" };
+        const opts = (args: unknown): { cursor: null | string; endCursor: null | string } =>
+            (args as { paginationOpts: { cursor: null | string; endCursor: null | string } }).paginationOpts;
+        const isHead = (args: unknown): boolean => opts(args).cursor === null && opts(args).endCursor === null;
+
+        let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Harness
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback used once to capture the hook's `loadMore`.
+                    onLoadMore={(next) => {
+                        loadMore = next;
+                    }}
+                />
+                {/* A second feed over the same query, still on its head page: it holds the head subscription. */}
+                <Harness />
+            </LunoraProvider>,
+        );
+
+        const results = (): (null | string)[] => screen.getAllByTestId("results").map((node) => node.textContent);
+
+        await act(async () => {
+            mock.emit("items:list", { continueCursor: "2", isDone: false, page: ["a", "b"] }, isHead);
+        });
+
+        await waitFor(() => {
+            expect(results()).toStrictEqual(["a,b", "a,b"]);
+        });
+
+        act(() => {
+            loadMore(2);
+        });
+
+        await act(async () => {
+            mock.emit(
+                "items:list",
+                { continueCursor: "2", isDone: true, page: ["a", "b"] },
+                (args) => opts(args).cursor === null && opts(args).endCursor === "2",
+            );
+            mock.emit("items:list", { continueCursor: "4", isDone: false, page: ["c", "d"] }, (args) => opts(args).cursor === "2");
+        });
+
+        await waitFor(() => {
+            expect(results()).toStrictEqual(["a,b,c,d", "a,b"]);
+        });
+
+        // After a deploy the bounded page's cursor is refused, while the head the sibling holds still
+        // carries the old build's `continueCursor` ("2").
+        act(() => {
+            mock.emitError("items:list", stale, (args) => opts(args).cursor === null && opts(args).endCursor === "2");
+        });
+
+        expect(mock.resnapshot).toHaveBeenCalledExactlyOnceWith(
+            expect.anything(),
+            { paginationOpts: { cursor: null, endCursor: null, numItems: 2 } },
+            { shardKey: undefined },
+        );
+
+        await waitFor(() => {
+            expect(screen.getAllByTestId("status")[0]?.textContent).toBe("LoadingFirstPage");
+        });
+
+        // The sibling keeps its rows while the snapshot is on its way.
+        expect(results()).toStrictEqual(["", "a,b"]);
+
+        await act(async () => {
+            mock.emit("items:list", { continueCursor: "2b", isDone: false, page: ["a", "b"] }, isHead);
+        });
+
+        await waitFor(() => {
+            expect(results()).toStrictEqual(["a,b", "a,b"]);
+        });
+
+        expect(screen.getAllByTestId("status")[0]?.textContent).toBe("CanLoadMore");
+    });
+
     it("reports a second cursor refusal instead of restarting again, when nothing past the head loaded in between", async () => {
         expect.hasAssertions();
 

@@ -84,7 +84,7 @@ import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
 import { fanSubscriptionError, releaseSubscribeFrame, setSubscriptionAck, SubscriptionRegistry, wrapSubscriber } from "./subscription";
-import { advanceWatermark, commitDataFrame, fanCheckpoints, isNonFinalRunFrame, isStaleDataFrame } from "./subscription-frames";
+import { advanceWatermark, commitDataFrame, fanCheckpoints, isNonFinalRunFrame, isStaleDataFrame, replayableValue } from "./subscription-frames";
 import type { LeaderMirror, TabLeadershipHost } from "./tab-leadership";
 import {
     onBecomeLeader,
@@ -3276,6 +3276,30 @@ class LunoraClient {
     // --- Subscriptions ------------------------------------------------------
 
     /**
+     * Ask the server for a fresh, full snapshot of a live subscription, for when the value it
+     * holds is known to be stale: a paginated feed restarting after `INVALID_CURSOR` resnapshots
+     * its head page, whose `continueCursor` came from the same build as the cursor just refused.
+     *
+     * The subscription's resume position is dropped, so the server answers with a snapshot
+     * rather than a `resume`. Subscribers already holding the value keep it until the snapshot
+     * lands; one that joins meanwhile is not handed the stale value and waits for the fresh
+     * one. A no-op when nothing subscribes to `(function_, args, shardKey)`. Without an open
+     * socket the snapshot is taken when one opens.
+     */
+    public resnapshot<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): void {
+        this.assertOpen();
+
+        const state = this.subscriptions.get(SubscriptionRegistry.key(function_.__lunoraRef, args ?? {}, options.shardKey));
+
+        if (state === undefined) {
+            return;
+        }
+
+        state.awaitingSnapshot = true;
+        this.resnapshotSubscription(state);
+    }
+
+    /**
      * Subscribe to a live query. The callback fires with the current value (from
      * the durable read cache, when one is hydrated) and again on every server
      * frame; the returned function unsubscribes.
@@ -3387,9 +3411,11 @@ class LunoraClient {
         }
 
         // Replay last value to new subscriber synchronously if available.
-        if (state.lastValue !== undefined) {
+        const replay = replayableValue(state);
+
+        if (replay !== undefined) {
             try {
-                subscriptionCallback(state.lastValue);
+                subscriptionCallback(replay);
             } catch {
                 /* user callback threw — ignore */
             }
@@ -7569,10 +7595,6 @@ class LunoraClient {
         state.pendingDeltaRun = undefined;
         /* eslint-enable no-param-reassign */
         this.emitSyncStatus();
-
-        // eslint-disable-next-line no-console -- last-resort visibility: the client recovers on its own, but a frame it cannot apply is a protocol-level surprise worth surfacing.
-        console.warn("[lunora] could not merge a row delta into the cached result; re-subscribing for a full snapshot");
-
         this.sendSubscribeIfOpen(state);
     }
 
@@ -7621,6 +7643,8 @@ class LunoraClient {
         }
 
         if (payload === UNMERGEABLE_DELTA) {
+            // eslint-disable-next-line no-console -- last-resort visibility: the client recovers on its own, but a frame it cannot apply is a protocol-level surprise worth surfacing.
+            console.warn("[lunora] could not merge a row delta into the cached result; re-subscribing for a full snapshot");
             this.resnapshotSubscription(state);
 
             return;

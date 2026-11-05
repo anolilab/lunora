@@ -245,6 +245,8 @@ describe("usePaginatedQuery (Vue)", () => {
         await flushAsync();
 
         expect(errors).toStrictEqual([]);
+        // The head page is resnapshotted, so a sibling feed holding it cannot hand back the refused build's cursor.
+        expect(fake.resnapshotCalls).toStrictEqual([{ args: { paginationOpts: head }, functionPath: "messages:list", shardKey: undefined }]);
         expect(result.error.value).toBeUndefined();
         expect(result.status.value).toBe("LoadingFirstPage");
         expect(fake.subscribeCalls.slice(before).map((call) => call.args["paginationOpts"])).toStrictEqual([head]);

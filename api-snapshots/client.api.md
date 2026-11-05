@@ -675,6 +675,9 @@ class LunoraClient {
         queued: number;
     }>;
     subscribeScheduledJobs(onJobs: (jobs: ScheduleRecord[]) => void): Unsubscribe;
+    resnapshot<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: {
+        shardKey?: string;
+    }): void;
     subscribe<F extends FunctionReference>(function_: F, args: ArgsOf<F>, callback: (data: ReturnOf<F>) => void, options?: {
         onCheckpoint?: (watermark: SyncWatermark) => void;
         onError?: SubscriptionErrorCallback;
@@ -1377,6 +1380,7 @@ interface SubscriptionState {
     readonly fn: FunctionReference;
     readonly id: string;
     lastMutationId?: number;
+    awaitingSnapshot?: boolean;
     lastValue: unknown;
     optimisticLayers: OptimisticLayer[];
     pendingDeltaRun?: {
@@ -2304,6 +2308,12 @@ const derivePaginationStatus: <T>(skipped: boolean, pageResults: (PaginationResu
     nextCursor: null | string | undefined;
     status: PaginationStatus;
 };
+```
+
+### `headPage` (const)
+
+```ts
+const headPage: (numberItems: number) => Page;
 ```
 
 ### `initialPages` (const)

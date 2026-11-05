@@ -41,6 +41,8 @@ export interface FakeClient {
     mutationCalls: { args: unknown; functionPath: string; options?: unknown }[];
     /** Push a chunk to every open stream matching `(functionPath, args)`. */
     pushStream: (functionPath: string, args: Record<string, unknown>, value: unknown) => void;
+    /** Every `resnapshot` call made against the fake, in order. */
+    resnapshotCalls: { args: Record<string, unknown>; functionPath: string; shardKey?: string }[];
     /** Set the auth token (and optionally the subject) — fires `onAuthTokenChange`. */
     setAuthToken: (token: string | null, subject?: string | null) => void;
     /** Resolve the next `mutation()` with this value (default: echoes args). */
@@ -55,6 +57,7 @@ export interface FakeClient {
 export const createFakeClient = (): FakeClient => {
     const subscriptions: FakeSubscription[] = [];
     const streamCalls: FakeStreamCall[] = [];
+    const resnapshotCalls: { args: Record<string, unknown>; functionPath: string; shardKey?: string }[] = [];
     const mutationCalls: { args: unknown; functionPath: string; options?: unknown }[] = [];
 
     let mutationResult: unknown;
@@ -85,6 +88,9 @@ export const createFakeClient = (): FakeClient => {
     };
 
     const client = {
+        resnapshot: (function_: FunctionReference, args: Record<string, unknown>, options: { shardKey?: string } = {}): void => {
+            resnapshotCalls.push({ args, functionPath: function_.__lunoraRef, shardKey: options.shardKey });
+        },
         currentIdentity: (): string | null => authSubject ?? authToken,
         // The identity store declares itself on attach; the fake has nothing
         // to gate, so this only has to exist.
@@ -180,6 +186,7 @@ export const createFakeClient = (): FakeClient => {
         setMutationThrow: (error: Error) => {
             mutationThrow = error;
         },
+        resnapshotCalls,
         streamCalls,
         subscriptions,
     };

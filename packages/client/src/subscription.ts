@@ -94,6 +94,14 @@ export interface SubscriptionState {
      * every mutation.
      */
     readonly argsKey: string;
+
+    /**
+     * Set by `LunoraClient.resnapshot` until the snapshot it asked for is committed: the
+     * held `lastValue` is known to be stale, so a subscriber that joins meanwhile is not handed
+     * it and waits for the fresh value. Subscribers already holding it keep it until then.
+     */
+    awaitingSnapshot?: boolean;
+
     readonly callbacks: Set<SubscriptionCallback>;
 
     /**
@@ -112,6 +120,7 @@ export interface SubscriptionState {
     readonly checkpointCallbacks: Set<(watermark: SyncWatermark) => void>;
     /** Notified when the server rejects this subscription (e.g. admin auth). */
     readonly errorCallbacks: Set<SubscriptionErrorCallback>;
+
     readonly fn: FunctionReference;
 
     readonly id: string;

@@ -1,6 +1,6 @@
 import type { FunctionReference, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
-import { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, isHeadPage, rebalance } from "@lunora/client/pagination";
+import { applyLoadMore, classifyPageFailure, derivePaginationStatus, headPage, initialPages, isHeadPage, rebalance } from "@lunora/client/pagination";
 import { stableWireKey } from "@lunora/wire";
 import type { MaybeRefOrGetter, ShallowRef } from "vue";
 import { onScopeDispose, shallowRef, toValue, watch } from "vue";
@@ -217,6 +217,9 @@ const usePaginatedCore = <T>(
                         );
 
                         if (failure === "restart") {
+                            // A sibling feed's head page still carries the refused build's `continueCursor`:
+                            // ask for a fresh snapshot of it before this feed subscribes to it again.
+                            client.resnapshot(function_, buildPageArgs(headPage(initialNumItems), baseArgs), { shardKey });
                             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after restart is defined
                             restart();
                             restartedSinceLoad = true;

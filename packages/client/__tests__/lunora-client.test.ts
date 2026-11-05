@@ -508,6 +508,52 @@ describe("lunoraClient", () => {
     // --- Subscriptions ----------------------------------------------------------
 
     describe("lunoraClient — subscriptions", () => {
+        it("resnapshot asks for a full snapshot and keeps a joining subscriber off the stale value until it lands", () => {
+            expect.assertions(5);
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+            const held: unknown[] = [];
+
+            client.subscribe(fnRef("items:list"), { page: 1 }, (value) => held.push(value));
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const subId = firstSub(socket).id as string;
+
+            socket.receive({ cursor: 7, data: { continueCursor: "old" }, id: subId, type: "data" });
+            client.resnapshot(fnRef("items:list"), { page: 1 });
+
+            // A fresh subscribe, without the resume position: the server answers it with a snapshot.
+            const resent = wireFrames(socket).at(-1) as { id: string; query: { sinceSeq?: number }; type: string };
+
+            expect(resent).toMatchObject({ id: subId, type: "subscribe" });
+            expect(resent.query.sinceSeq).toBeUndefined();
+
+            const joined: unknown[] = [];
+
+            client.subscribe(fnRef("items:list"), { page: 1 }, (value) => joined.push(value));
+
+            // The subscriber that held the value keeps it; the one that joined is not handed it.
+            expect([held, joined]).toStrictEqual([[{ continueCursor: "old" }], []]);
+
+            socket.receive({ cursor: 8, data: { continueCursor: "fresh" }, id: subId, type: "data" });
+
+            expect(joined).toStrictEqual([{ continueCursor: "fresh" }]);
+
+            // Once the snapshot landed, a later subscriber is handed the value again.
+            const later: unknown[] = [];
+
+            client.subscribe(fnRef("items:list"), { page: 1 }, (value) => later.push(value));
+
+            expect(later).toStrictEqual([{ continueCursor: "fresh" }]);
+        });
+
         it("subscribe sends a subscribe envelope and delivers delta payloads", async () => {
             expect.assertions(5);
 

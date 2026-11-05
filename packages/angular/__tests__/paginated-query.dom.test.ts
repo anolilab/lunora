@@ -198,6 +198,8 @@ describe(paginatedQuery, () => {
         find({ cursor: null, endCursor: "cur-1", numItems: NUM_ITEMS })?.emitError({ code: "INVALID_CURSOR", message: "invalid cursor" });
 
         expect(errors).toStrictEqual([]);
+        // The head page is resnapshotted, so a sibling feed holding it cannot hand back the refused build's cursor.
+        expect(fake.resnapshotCalls).toStrictEqual([{ args: { paginationOpts: head }, functionPath: "messages:list", shardKey: undefined }]);
         expect(error()).toBeUndefined();
         expect(status()).toBe("LoadingFirstPage");
         expect(fake.subscriptions.slice(before).map((sub) => sub.args["paginationOpts"])).toStrictEqual([head]);
