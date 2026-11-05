@@ -253,8 +253,44 @@
     {
       "at": "2026-11-05T13:28:06.713Z",
       "key": "@lunora/testing@1.0.0-alpha.335"
+    },
+    {
+      "at": "2026-11-05T14:54:09.291Z",
+      "key": "@lunora/server@1.0.0-alpha.271"
+    },
+    {
+      "at": "2026-11-05T14:54:09.291Z",
+      "key": "@lunora/codegen@1.0.0-alpha.402"
+    },
+    {
+      "at": "2026-11-05T14:54:09.291Z",
+      "key": "@lunora/config@1.0.0-alpha.458"
+    },
+    {
+      "at": "2026-11-05T14:54:09.291Z",
+      "key": "@lunora/runtime@1.0.0-alpha.279"
+    },
+    {
+      "at": "2026-11-05T14:54:09.291Z",
+      "key": "@lunora/astro@1.0.0-alpha.312"
+    },
+    {
+      "at": "2026-11-05T14:54:09.291Z",
+      "key": "@lunora/auth@1.0.0-alpha.258"
+    },
+    {
+      "at": "2026-11-05T14:54:09.291Z",
+      "key": "@lunora/nuxt@1.0.0-alpha.304"
+    },
+    {
+      "at": "2026-11-05T14:54:09.291Z",
+      "key": "@lunora/rspack@1.0.0-alpha.150"
+    },
+    {
+      "at": "2026-11-05T14:54:09.291Z",
+      "key": "@lunora/vite@1.0.0-alpha.428"
     }
   ],
-  "updatedAt": "2026-11-05T13:28:06.714Z",
+  "updatedAt": "2026-11-05T14:54:09.291Z",
   "version": 1
 }
