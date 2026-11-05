@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.486](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.485...@lunora/cli@1.0.0-alpha.486) (2026-11-05)
+
+- fix(mail): bound sends, dedupe on idempotency keys, guard inbound size (#1483)
+
 ## @lunora/cli [1.0.0-alpha.485](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.484...@lunora/cli@1.0.0-alpha.485) (2026-11-05)
 
 - fix(runtime): scope the rest edge cache by worker version (#1484)
