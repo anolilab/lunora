@@ -84,13 +84,9 @@ const devTriggerHints = (options: DevTriggerHintOptions): DevTriggerHint[] => {
     // A hand-edited section may be an object or hold primitives; the banner never throws.
     const producers = Array.isArray(parsed.queues?.producers) ? (parsed.queues.producers as unknown[]) : [];
     const bindings = new Set(stringsOf(producers.map((entry) => (entry as { binding?: unknown } | null | undefined)?.binding)));
-    const queues = [
-        ...new Set(
-            discoverQueueInfo(options.projectRoot, options.schemaDirectory)
-                .queues.filter((queue) => bindings.has(queue.bindingName))
-                .map((queue) => queue.name),
-        ),
-    ];
+    // Discovery parses the queue files, so a worker with no producer skips it.
+    const declared = bindings.size === 0 ? [] : discoverQueueInfo(options.projectRoot, options.schemaDirectory).queues;
+    const queues = [...new Set(declared.filter((queue) => bindings.has(queue.bindingName)).map((queue) => queue.name))];
     const [firstCron] = crons;
 
     return [
