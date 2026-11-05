@@ -174,6 +174,13 @@ const resolveSourceModule = (base: string): string | undefined => {
 };
 
 /**
+ * The extension of the TypeScript files this module reads and writes. Held in one constant, never written as a
+ * `".ts")` literal: packem's dynamic-import extension fix rewrites such a literal to `.mjs` in the minified
+ * build when it shares a line with an `import(` (visulima/packem#450).
+ */
+const TS_SOURCE_EXTENSION = ".ts";
+
+/**
  * The modules the generated output loads with `import()` on an event: the push-queue registry and the
  * email-agent definitions (both in `app.ts`), the workflow definitions (`workflows.ts`) and the agent
  * definitions (`agents.ts`). The generated text decides, not the flag, as for the function manifest. A
@@ -181,14 +188,14 @@ const resolveSourceModule = (base: string): string | undefined => {
  */
 const findDeferredModules = (cwd: string, schemaDirectory: string): DeferredModule[] => {
     const generated = join(cwd, schemaDirectory, "_generated");
-    const read = (name: string): string => {
+    const read = (base: string): string => {
         try {
-            return readFileSync(join(generated, name), "utf8");
+            return readFileSync(join(generated, `${base}${TS_SOURCE_EXTENSION}`), "utf8");
         } catch {
             return "";
         }
     };
-    const app = read("app.ts");
+    const app = read("app");
     const found: DeferredModule[] = [];
     const add = (kind: DeferredKind, file: string | undefined): void => {
         if (file !== undefined) {
@@ -200,11 +207,11 @@ const findDeferredModules = (cwd: string, schemaDirectory: string): DeferredModu
         add("queue", resolveSourceModule(join(generated, "queues")));
     }
 
-    if (read("workflows.ts").includes('import("../workflows.js")')) {
+    if (read("workflows").includes('import("../workflows.js")')) {
         add("workflow", resolveSourceModule(join(cwd, schemaDirectory, "workflows")));
     }
 
-    if (read("agents.ts").includes('import("../agents.js")') || app.includes('import("../agents.js")')) {
+    if (read("agents").includes('import("../agents.js")') || app.includes('import("../agents.js")')) {
         add("agent", resolveSourceModule(join(cwd, schemaDirectory, "agents")));
     }
 
@@ -251,7 +258,7 @@ const findLoaderImports = (cwd: string, schemaDirectory: string, known: Readonly
     let names: string[];
 
     try {
-        names = readdirSync(generated).filter((name) => name.endsWith(".ts") && name !== "functions.ts");
+        names = readdirSync(generated).filter((name) => name.endsWith(TS_SOURCE_EXTENSION) && name !== `functions${TS_SOURCE_EXTENSION}`);
     } catch {
         return found;
     }
@@ -953,7 +960,7 @@ const prepareSmokeProcess = async (input: {
     const { base, configPath, cwd, deferred, directory, environment, functionsFile, integrationModules, missingAssets, preferred, toolchain } = input;
 
     try {
-        const entry = join(directory, "entry.ts");
+        const entry = join(directory, `entry${TS_SOURCE_EXTENSION}`);
         // Echoed back by the probe, so an answer from another run's Worker on the same port is recognised.
         const runId = randomUUID();
         if (missingAssets) {
@@ -1063,7 +1070,7 @@ ${defaultIsEntrypoint ? "export default class extends WorkerEntrypoint {\n    fe
 const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | undefined> => {
     const { composedEntry, cwd, environment, launcher, logger, toolchain } = options;
     const schemaDirectory = resolveSchemaDirectory(cwd);
-    const generatedFunctions = join(cwd, schemaDirectory, "_generated", "functions.ts");
+    const generatedFunctions = join(cwd, schemaDirectory, "_generated", `functions${TS_SOURCE_EXTENSION}`);
     // The generated output decides, not the flag: `deploy --prebuilt` ships whatever an earlier
     // `build`/`prepare` wrote, and an eager registry has no lazy modules to check. A project can defer
     // workflows, agents or queues without a lazy function manifest (it declares no functions), so
