@@ -162,6 +162,22 @@ ${targets("                    ")}
 `;
 };
 
+/**
+ * `LUNORA_SECURITY_HEADERS`, emitted only when `lunora.config` sets `security.headers`, so an app that does not
+ * use it gets the same output as before the option existed.
+ */
+const buildSecurityHeadersConst = (options: ResolvedAppOptions): string =>
+    options.securityHeaders === undefined
+        ? ""
+        : `
+/**
+ * \`security.headers\` from \`lunora.config\`: the baseline security headers the Worker sends, and the same values
+ * the build writes into the static assets' \`_headers\`. An app that calls \`createWorker\` itself passes it as
+ * \`security: { headers: LUNORA_SECURITY_HEADERS }\`.
+ */
+const LUNORA_SECURITY_HEADERS: SecurityOptions["headers"] = ${JSON.stringify(options.securityHeaders)};
+`;
+
 /** The `export type { ... }` list — only the declaration types that were emitted. */
 const buildExportedTypes = (options: ResolvedAppOptions): string =>
     [
@@ -348,7 +364,7 @@ type Selector<Env, T> = (env: Env) => T | undefined;
 
 /** The generated \`createShardDO\` config — \`.observability()\`, \`.maxRelationKeys()\` and the long-tail \`.ai()\` / \`.kv()\` / … methods pass straight through to it. */
 type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
-${identityMemoStoreType(hasAuth)}${buildDeferredModules(options)}${
+${buildSecurityHeadersConst(options)}${identityMemoStoreType(hasAuth)}${buildDeferredModules(options)}${
         options.jurisdiction
             ? `
 // Module scope, so every isolate loading this script (the worker and each Durable
@@ -464,7 +480,17 @@ ${buildBaseWorkerOptions(options).join("\n")}
 ${workerOptionLines.join("\n\n")}${workerOptionLines.length > 0 ? "\n\n" : ""}        for (const fn of this.extendFns) {
             Object.assign(options, fn(env, { ...options }));
         }
-
+${
+    options.securityHeaders === undefined
+        ? ""
+        : `
+        // \`security.headers\` from lunora.config, unless code set its own. After \`.extend()\`, whose shallow
+        // assign would otherwise drop it when an extension sets only \`security.cors\`.
+        if (options.security?.headers === undefined) {
+            options.security = { ...options.security, headers: LUNORA_SECURITY_HEADERS };
+        }
+`
+}
         return options;
     }
 }
@@ -490,6 +516,8 @@ interface LunoraConfig<Env extends object = object> {
     remote?: boolean;
     /** Sibling Workers the app calls through service bindings — key → its folder and, for RPC, the exported \`WorkerEntrypoint\` class (\`rpc: false\` binds that class but calls it with plain \`fetch\`, without importing the service's sources). Becomes \`ctx.services.<key>\` in actions, a wrangler \`services[]\` entry, one \`lunora dev\` session and a services-first \`lunora deploy\`. Literals, for the same reason as \`target\`. */
     services?: Record<string, { dir: string; entrypoint?: string; rpc?: false }>;
+    /** Baseline security headers for the Worker AND the static assets' generated \`_headers\` (\`crossOriginOpenerPolicy\`, \`frameAncestors\`, \`csp\`, …; \`false\` omits a header, \`headers: false\` all of them). A \`security.headers\` set in code wins. Literals, for the same reason as \`target\`. */
+    security?: { headers?: SecurityOptions["headers"] };
     /** Studio settings. \`companion: true\` emits the companion Worker that serves the advisor procedure list to a hosted Studio, bound to the app as \`ADVISOR_COMPANION\`. A literal, for the same reason as \`target\`. */
     studio?: { companion?: boolean };
     /** Deploy target id — \`lunora deploy\`/\`verify\` read it when no \`--target\` is passed. Must be a literal: \`runCodegen\` resolves it synchronously by PARSING this file, so a computed value is not seen — \`lunora verify\` reports \`platform_unreadable_target\` rather than defaulting in silence. */
@@ -508,7 +536,7 @@ interface LunoraConfig<Env extends object = object> {
  */
 const defineApp = <Env extends object>(): AppBuilder<Env> => new AppBuilder<Env>();
 
-export { AppBuilder, defineApp };
+export { AppBuilder, defineApp${options.securityHeaders === undefined ? "" : ", LUNORA_SECURITY_HEADERS"} };
 export type { ${buildExportedTypes(options)} };
 `;
 };

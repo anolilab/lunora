@@ -26,20 +26,21 @@ import celldBindingId from "../celld/celld-binding-id";
 import type { InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "../infer-bindings";
 import { applyModify } from "../jsonc-edit";
 import type { DurableObjectSpec, GeneratedClassModule } from "../worker-entry";
-import type { Manifest } from "./lunora-manifest";
 import { readManifest } from "./lunora-manifest";
 import { D1_PLACEHOLDER_ID, HYPERDRIVE_PLACEHOLDER_ID } from "./placeholder-ids";
+import { reconcileAssetRouting } from "./reconcile-assets";
 import type { OwnedTuning } from "./reconcile-queues";
 import { readOwnedTuning, reconcileEnvQueues, reconcileQueues, recordOwnedTuning } from "./reconcile-queues";
 import type { OwnedServices } from "./reconcile-services";
 import { readOwnedServices, reconcileDevConfigServices, reconcileServices, recordOwnedServices } from "./reconcile-services";
 import collectWarnings from "./reconcile-warnings";
+import { spaStaticPaths } from "./spa-assets";
 import { objectBindingEntries, stringEntries } from "./validate-bindings";
 import { scanAppChains } from "./worker-entry-checks";
 import { settingLeaf, WORKFLOW_SETTING_KEYS, WORKFLOW_SETTINGS, workflowSettingsFor } from "./workflow-settings";
 import { DEFAULT_OBSERVABILITY } from "./wrangler-config";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
-import type { MigrationEntry, ReconcileStep, WranglerShape } from "./wrangler-shape";
+import type { MigrationEntry, OwnershipRecord, ReconcileStep, WranglerShape } from "./wrangler-shape";
 
 /**
  * A container/workflow that is declared (so codegen emits its class) but the
@@ -1015,7 +1016,7 @@ const reconcileWranglerBindings = (
     // original `parsed`. This is only safe because the steps touch disjoint
     // top-level keys (durable_objects / migrations vs d1_databases vs ai vs
     // ai_search_namespaces vs analytics vs browser vs images vs analytics_engine_datasets vs worker_loaders vs containers /
-    // observability vs exports + workflows vs queues vs services + env.*.services;
+    // observability vs assets + env.*.assets vs exports + workflows vs queues vs services + env.*.services;
     // the env queue step writes only env.<name>.queues). A future step that depends on a key an
     // earlier step mutated must re-parse rather than reuse `parsed`.
     // Self-describing bindings (SELF_DESCRIBING_BINDINGS, plus the array-shaped
@@ -1070,6 +1071,11 @@ const reconcileWranglerBindings = (
         { enabled: true, run: (text) => reconcileObservability(text, parsed) },
         // Cloudflare-only; an omitted target is the default, Cloudflare.
         { enabled: target === undefined || target === "cloudflare", run: (text) => reconcileUploadSourceMaps(text, parsed) },
+        // Cloudflare-only (a Workers Static Assets key). Skipped when the routes could not be read: it would cut an owned list to the reserved pair.
+        {
+            enabled: (target === undefined || target === "cloudflare") && inferred.workerRoutes !== undefined,
+            run: (text) => reconcileAssetRouting(text, parsed, inferred.workerRoutes ?? [], manifest, spaStaticPaths(projectRoot)),
+        },
         { enabled: exportedContainers.length > 0, run: (text) => reconcileContainers(text, parsed, exportedContainers) },
         {
             enabled: exportedWorkflows.length > 0 || exportedAgents.length > 0,
@@ -1082,7 +1088,17 @@ const reconcileWranglerBindings = (
 
                 ownedScopes.queues = step.owned;
 
-                return step;
+                // Written after the whole pipeline, so it also carries what the env queue step below owns.
+                const record: OwnershipRecord = {
+                    consequence: "an option removed from defineQueue stays deployed",
+                    key: "queueTuning",
+                    label: "queue tuning",
+                    write: (current) => {
+                        recordOwnedTuning(current, ownedTuning, ownedScopes);
+                    },
+                };
+
+                return { ...step, record };
             },
         },
         {
@@ -1095,7 +1111,17 @@ const reconcileWranglerBindings = (
 
                 ownedServices = step.owned;
 
-                return step;
+                // Written after the dev config step below has added what it owns to `ownedServices`.
+                const record: OwnershipRecord = {
+                    consequence: "a service removed from lunora.config stays bound",
+                    key: "services",
+                    label: "service bindings",
+                    write: (current) => {
+                        recordOwnedServices(current, ownedServices ?? step.owned);
+                    },
+                };
+
+                return { ...step, record };
             },
         },
         ...(environment === undefined || parsed.env?.[environment] === undefined
@@ -1118,6 +1144,7 @@ const reconcileWranglerBindings = (
     let text = original;
     const added: string[] = [];
     const updated: string[] = [];
+    const records: OwnershipRecord[] = [];
 
     for (const step of pipeline) {
         if (!step.enabled) {
@@ -1130,6 +1157,7 @@ const reconcileWranglerBindings = (
         added.push(...result.added);
         updated.push(...(result.updated ?? []));
         warnings.push(...(result.warnings ?? []));
+        records.push(...[result.record].filter((record) => record !== undefined));
     }
 
     // Ownership is recorded only once the config it describes is on disk, never
@@ -1139,34 +1167,6 @@ const reconcileWranglerBindings = (
         if (manifest === undefined) {
             return;
         }
-
-        const servicesOwned = ownedServices;
-        const records = [
-            ...(Object.keys(ownedScopes).length > 0
-                ? [
-                      {
-                          consequence: "an option removed from defineQueue stays deployed",
-                          key: "queueTuning",
-                          label: "queue tuning",
-                          write: (current: Manifest) => {
-                              recordOwnedTuning(current, ownedTuning, ownedScopes);
-                          },
-                      },
-                  ]
-                : []),
-            ...(servicesOwned === undefined
-                ? []
-                : [
-                      {
-                          consequence: "a service removed from lunora.config stays bound",
-                          key: "services",
-                          label: "service bindings",
-                          write: (current: Manifest) => {
-                              recordOwnedServices(current, servicesOwned);
-                          },
-                      },
-                  ]),
-        ];
 
         for (const record of records) {
             // Its own failure, not the caller's "binding inference skipped": the

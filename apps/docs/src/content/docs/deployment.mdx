@@ -67,7 +67,9 @@ deploy `target`, the `remote`-binding dev preference, the `app` hook a
 Vite-first project composes its worker with, and `advisor.minSeverity`, the
 lowest advisory level codegen reports and writes into `_generated/shard.ts`
 (`"info"`, `"warn"` or `"error"`; an ERROR is never dropped, so the codegen gate
-stays on). It replaces `lunora.json`: the two
+stays on), and `security.headers`, the baseline security headers for the Worker
+and the static assets ([Configuring the
+headers](/docs/concepts/security#configuring-the-headers)). It replaces `lunora.json`: the two
 were always the same question, split across a format boundary that existed only
 because the CLI could not read TypeScript. It can now (`jiti`), so there is one
 file and it is real code.
@@ -649,9 +651,150 @@ SSR/API fetch handler still runs underneath:
 ```
 
 The validator requires a non-empty `directory` (pointing at the built client
-output) and shape-checks the optional `binding` / `html_handling` /
-`not_found_handling` fields. Lunora does **not** auto-inject this block; the
-output directory is framework-adapter-specific, so you declare it.
+output), a non-empty `binding` when one is set, an `html_handling` / `not_found_handling` value
+wrangler accepts, and a `run_worker_first` that is a boolean or a list wrangler
+accepts: path rules starting with `/` or `!/`, at least one of them `/`, at most
+100 rules (duplicates included) of 100 characters, none repeated, and none
+already covered by another rule ending in `*`.
+Lunora does **not** auto-inject this block; the output directory is
+framework-adapter-specific, so you declare it.
+
+Once the block exists, Lunora adds one key to it. Cloudflare answers from the
+assets directory before the Worker whenever a file matches, so a request meant
+for the Worker could get a static file instead. So the dev server and `lunora
+deploy` write `run_worker_first` (for the top-level block and for each
+`env.<name>.assets` block) with every path the Worker serves that they can see
+(a [single-page app](#single-page-apps) gets the reverse list):
+
+- Lunora's reserved paths, `/_lunora/*` and `/__lunora/*`;
+- each [`httpRoute`](/docs/concepts/http-endpoints) path under `lunora/`;
+- when the app imports `@lunora/auth`: its base path (a string-literal
+  `basePath` passed to `createAuth`, or a literal `authBasePath` Worker option,
+  else the default `/api/auth`), and the OAuth discovery documents under
+  `/.well-known/oauth-protected-resource` and
+  `/.well-known/oauth-authorization-server`.
+
+```jsonc
+{
+    "assets": {
+        "directory": "./dist/client",
+        "run_worker_first": ["/_lunora/*", "/__lunora/*", "/api/auth", "/api/auth/*", "/api/todos/*"],
+    },
+}
+```
+
+A rule cannot hold a route parameter, so each parameter becomes a `*` where it
+stands: `/api/todos/:id` becomes `/api/todos/*`, `/users/:id/avatar.png` becomes
+`/users/*/avatar.png` (so the SPA keeps `/users/42`), and `/files/*` becomes
+`/files` plus `/files/*`. A `*` in a rule matches across `/` too, so a rule also
+takes deeper paths in the parameter's place (`/api/todos/1/x`,
+`/users/a/b/avatar.png`), which the Worker answers with its 404. A route whose first segment is a parameter
+(`/:tenant/api`), or the site root `/`, would send every path to the Worker and is
+reported instead. Rules another rule covers are dropped, and the list stays
+within Cloudflare's limits (100 rules of at most 100 characters); anything over
+is reported.
+
+Lunora records the list it wrote under `lunora.runWorkerFirst` in
+`package.json`, and rewrites it when your routes change. It also takes over a
+list an earlier version wrote (the reserved pair, or the old `rspack-react`
+template's `["/_lunora/*"]`). When the files under `lunora/` cannot be parsed,
+the list is left as it is until they can. A `run_worker_first`
+you wrote, or edited after Lunora wrote it, is never changed. If it leaves out
+one of the paths above, or a `!/…` rule takes part of one back, Lunora warns and
+names it. Two kinds of route are invisible at config time, so add them yourself:
+an auth `basePath` that is not a string literal, and routes you add to a Hono
+`httpRouter()` directly rather than with `httpRoute`.
+
+### Single-page apps
+
+With `not_found_handling: "single-page-application"`, a list that names only
+the Worker's routes is not enough. Once `run_worker_first` is a list, Cloudflare
+answers every request no rule names with `index.html` and a `200`, a `fetch` or
+a webhook `POST` included: the asset router keeps the SPA fallback whenever
+static routing is configured, not only for browser navigations. So a Worker path
+Lunora cannot see, such as an auth `basePath` that is not a string literal or a
+route on a Hono `httpRouter()`, would never reach the Worker.
+
+When the block also sets a `binding`, Lunora writes the reverse list: the Worker
+first for every path, except the static output it can name. That means the
+hashed directories bundlers write (`assets/`, `static/`, `_astro/`) and each
+top-level entry of `public/`. An exemption that would take a Worker route back
+is left out.
+
+```jsonc
+{
+    "assets": {
+        "binding": "ASSETS",
+        "directory": "./dist",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/*", "!/_astro/*", "!/assets/*", "!/favicon.ico", "!/static/*"],
+    },
+}
+```
+
+The generated Worker then answers what no route serves from that binding:
+
+- a static file the list did not exempt is served as is;
+- a `GET` or `HEAD` page navigation (`Sec-Fetch-Mode: navigate`, or an `Accept`
+  that names `text/html`) gets the app shell, so client-side routes deep-link;
+- any other request keeps the Worker's 404, so a `fetch` to a mistyped API path
+  never gets `index.html`.
+
+Only a request no route matched falls back. A 404 or 403 that one of your
+handlers returns stays as it is, and a `POST`, `PUT`, `PATCH` or `DELETE` that
+misses keeps its 404. That holds for a not-found handler you set on an
+`httpRouter()` with `app.notFound(…)`: it still answers every miss that is not a
+page load. A router that is not built by `httpRouter()` (a plain `new Hono()`)
+never reports a miss, so its deep links keep the 404.
+
+Files served this way go through the Worker. Cloudflare applies your `_headers`
+rules to responses from the binding too, and the Worker then adds each of its
+security headers the response does not already carry. A value your `_headers`
+sets wins, but a rule that only detaches a header (`! X-Frame-Options`) is
+undone on these responses, since the Worker adds the default back. Set the value
+you want instead, or change it in `security.headers`.
+
+Without a `binding`, the Worker cannot reach the shell, so Lunora keeps the list
+of routes it can see and warns: add `"binding": "ASSETS"` to the block. The
+generated `defineApp` wires the binding for you; a worker built with
+`createWorker` directly passes it as the `spaAssets` option.
+
+Because an asset hit never runs the Worker, it also skips the Worker's security
+headers. The production build writes them into the assets' `_headers` file
+instead (from the Vite, Rsbuild, Nuxt or Astro integration), in a block it
+manages beside your own rules. See [Static
+assets](/docs/concepts/security#static-assets) on the security page.
+
+The same block makes Vite's content-hashed output cacheable. Cloudflare's
+default for an asset is `Cache-Control: public, max-age=0, must-revalidate`, so
+a browser revalidates every chunk on every navigation. Every file Vite writes
+into `build.assetsDir` has a content hash in its name, so the block gives that
+directory a year-long immutable policy:
+
+```text
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+```
+
+The rule is left out when it could cache something that is not a hashed file:
+
+- your `public/` has a folder with the same name, which Vite copies in unhashed;
+- an output file name (`entryFileNames`, `chunkFileNames`, `assetFileNames`) is
+  a function, or a pattern without `[hash]`;
+- `build.assetsDir` is empty;
+- no `wrangler.jsonc` / `wrangler.json` was found, or it does not parse, so
+  `not_found_handling` (below) is unknown;
+- `assets.not_found_handling` is `"single-page-application"` or `"404-page"`.
+  `_headers` matches the request path, so after a deploy removes a chunk, a
+  request for it would get `index.html` or `404.html` with the immutable policy,
+  and the browser would keep that page for a year. With `"none"` (or the key
+  unset), a miss goes to the Worker, and `_headers` never touches a Worker
+  response.
+
+It is also left out when one of your own `_headers` rules sets `Cache-Control`
+on a path that reaches that directory (`/*`, `/assets/*`, `/:dir/*`, …). A
+`Cache-Control` rule for another path, such as `/img/*`, does not affect it.
+`LUNORA_SECURITY_HEADERS=off` does not affect it either.
 
 ## Non-goals
 

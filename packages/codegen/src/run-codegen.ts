@@ -80,7 +80,7 @@ import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type { AgentIR, FunctionIR, HttpRouteIR, MaskMetadataIR, MigrationIR, MutatorIR, ShapeIR, WorkflowIR } from "./ir";
 import { setStandardTypeResolver } from "./parse-validator";
 import { gateAdminTokenRevocation, platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
-import { readMergeDurableObjects, readProjectLazyFunctions, readProjectStudioCompanion } from "./project-config-file";
+import { readMergeDurableObjects, readProjectLazyFunctions, readProjectSecurityHeaders, readProjectStudioCompanion } from "./project-config-file";
 import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged } from "./run-codegen-files";
 import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
 import { buildSchemaSnapshot, indexReferencesOf } from "./schema-drift";
@@ -879,6 +879,9 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         tables: schema.tables.map((table) => {
             return { name: table.name, shardMode: table.shardMode };
         }),
+        // `lunora.config`'s `security.headers`, validated; the build's `_headers` writer reads the same value.
+        securityHeaders: readProjectSecurityHeaders(lunoraDirectory),
+        spaAssetsBindings: options.spaAssetsBindings,
         useUmbrella,
         // The app's own declaration, which `emitApp` AND's with `hasVectors`.
         // `emitApp` takes no schema (only the table list), so the count it

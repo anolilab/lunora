@@ -17,6 +17,8 @@
 export { applyModify } from "../jsonc-edit";
 export type { AssertWranglerOptions } from "./assert-wrangler";
 export { assertWranglerSatisfiesSchema } from "./assert-wrangler";
+export type { AssetHeadersOptions, AssetHeadersResult } from "./asset-headers";
+export { writeAssetHeaders } from "./asset-headers";
 export type { BindingManifest, BindingRequirement, ManifestConfigShape } from "./binding-manifest";
 export { BINDING_MANIFEST_VERSION, buildBindingManifest } from "./binding-manifest";
 export type { CloudflareCliConfigFinding } from "./cloudflare-cli-config";
@@ -33,6 +35,8 @@ export { bindingsNeedingDatabase, startLocalHyperdrive } from "./local-hyperdriv
 export type { Manifest } from "./lunora-manifest";
 export { readManifest, recordManifestKey } from "./lunora-manifest";
 export { HYPERDRIVE_PLACEHOLDER_ID } from "./placeholder-ids";
+export type { AssetHeadersLogger, ProjectAssetHeadersInput, ProjectAssetHeadersOutcome } from "./project-asset-headers";
+export { emitProjectAssetHeaders } from "./project-asset-headers";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
 export { collectExportGaps, reconcileWranglerBindings } from "./reconcile-bindings";
 export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";

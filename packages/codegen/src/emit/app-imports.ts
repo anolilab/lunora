@@ -87,6 +87,7 @@ const buildRuntimeImports = (options: ResolvedAppOptions): string[] => {
         "LunoraWorker",
         "Route",
         "ScheduledControllerLike",
+        "SecurityOptions",
         "ShardNamespaceLike",
         ...(hasShardedTables(options) ? ["ShardRegistryRpc"] : []),
         "WorkerOptions",

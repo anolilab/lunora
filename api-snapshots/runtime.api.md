@@ -104,6 +104,14 @@ interface AnalyticsEngineSinkOptions extends OnlyErrorsOption {
 }
 ```
 
+### `AssetsFetcherLike` (interface)
+
+```ts
+interface AssetsFetcherLike {
+    fetch: (request: Request) => Promise<Response>;
+}
+```
+
 ### `AuthAdmin` (interface)
 
 ```ts
@@ -544,6 +552,12 @@ interface CronJobInfo {
     shardKey?: string;
     workflow?: string;
 }
+```
+
+### `CrossOriginOpenerPolicy` (type)
+
+```ts
+type CrossOriginOpenerPolicy = "same-origin" | "same-origin-allow-popups" | "unsafe-none";
 ```
 
 ### `CrossShardCounter` (type)
@@ -1759,7 +1773,7 @@ interface ReportedError {
 interface ResolvedSecurity {
     cors: ResolvedCors;
     csrf: ResolvedCsrf;
-    headers: ResolvedHeaders;
+    headers: ResolvedSecurityHeaders;
 }
 ```
 
@@ -1897,7 +1911,9 @@ interface ScheduledControllerLike {
 
 ```ts
 interface SecurityHeadersOptions {
+    crossOriginOpenerPolicy?: CrossOriginOpenerPolicy | false;
     csp?: string | false;
+    frameAncestors?: ReadonlyArray<string>;
     frameOptions?: "DENY" | "SAMEORIGIN" | false;
     hsts?: boolean | {
         includeSubDomains?: boolean;
@@ -2421,6 +2437,7 @@ interface WorkerOptions {
     security?: SecurityOptions;
     shardDO: ShardNamespaceLike;
     shardRegion?: (shardKey: string) => RegionHint | undefined;
+    spaAssets?: AssetsFetcherLike;
     storage?: (env: unknown, origin?: string) => unknown;
     storageBuckets?: string[];
     storageDelete?: StorageDeleteFunction;
@@ -3263,23 +3280,6 @@ interface ResolvedCsrf {
 }
 ```
 
-### `ResolvedHeaders` (interface)
-
-```ts
-interface ResolvedHeaders {
-    coop: string | undefined;
-    csp: {
-        htmlValue: string | undefined;
-        value: string;
-    } | undefined;
-    enabled: boolean;
-    frameOptions: string | undefined;
-    hsts: string | undefined;
-    permissionsPolicy: string | undefined;
-    referrerPolicy: string | undefined;
-}
-```
-
 ### `ResolvedIdentity` (interface)
 
 ```ts
@@ -3288,6 +3288,23 @@ interface ResolvedIdentity {
     exp?: number;
     expiresAtMs?: number;
     userId: string;
+}
+```
+
+### `ResolvedSecurityHeaders` (interface)
+
+```ts
+interface ResolvedSecurityHeaders {
+    coop: string | undefined;
+    csp: {
+        htmlValue: string;
+        value: string;
+    } | undefined;
+    enabled: boolean;
+    frameOptions: string | undefined;
+    hsts: string | undefined;
+    permissionsPolicy: string | undefined;
+    referrerPolicy: string | undefined;
 }
 ```
 

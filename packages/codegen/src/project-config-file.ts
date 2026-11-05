@@ -48,9 +48,12 @@ import { createJiti } from "jiti";
 import type { ObjectLiteralElementLike, ObjectLiteralExpression, PropertyAssignment, ShorthandPropertyAssignment, SourceFile } from "ts-morph";
 import { Node as TsNode, Project, VariableDeclarationKind } from "ts-morph";
 
+import type { SecurityHeadersOptions } from "../../../shared/security-headers";
+import { parseSecurityHeaders } from "../../../shared/security-headers";
 import type { AcceptedFinding } from "./advisor-accept";
 import { propertyKeyName } from "./discover/property-name";
 import { findCodegenConfigFile, findProjectConfigFile } from "./project-config-path";
+import { literalOf, NOT_LITERAL } from "./static-literal";
 
 /**
  * The literals {@link readProjectConfigLiterals} proves by parsing — narrowed,
@@ -84,6 +87,14 @@ interface ProjectConfigLiterals {
      */
     durableObjects?: { merge?: boolean; unreadable?: boolean };
     remote?: boolean;
+
+    /**
+     * `security.headers` as its literal value, not yet parsed (see
+     * {@link readProjectSecurityHeaders}). `unreadable` when `security` is declared
+     * but its `headers` is not built from literals; the caller then keeps the
+     * defaults and says so, since an unreadable value must never read as "headers off".
+     */
+    security?: { headers?: unknown; unreadable?: true };
 
     /**
      * `services`: binding key → `{ dir, entrypoint? }` (plan 457). `unreadable`
@@ -129,6 +140,8 @@ interface LunoraProjectConfig {
     durableObjects?: unknown;
     /** Remote-binding dev preference. */
     remote?: unknown;
+    /** Baseline security headers (`headers`), read through {@link readProjectConfigLiterals}. */
+    security?: unknown;
     /** Deploy target id. */
     target?: unknown;
 }
@@ -476,21 +489,21 @@ const readStudio = (declared: TsNode | undefined, sourceFile: SourceFile): Proje
         : { studio: { unreadable: true } };
 };
 
-/** The sections that carry one boolean literal: `durableObjects.merge` and `studio.companion`. */
-const BOOLEAN_SECTION_READERS: ReadonlyMap<string, (declared: TsNode | undefined, sourceFile: SourceFile) => ProjectConfigLiterals> = new Map([
-    ["durableObjects", readDurableObjects],
-    ["studio", readStudio],
-]);
+/**
+ * `security.headers` from the `security` object literal, evaluated as a literal and handed on unjudged:
+ * {@link readProjectSecurityHeaders} parses it, the same way the runtime does.
+ */
+const readSecurity = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+    const member = readPlainMember(declared, sourceFile, "headers");
 
-/** What a getter or method under each key this reader cares about contributes: it declares a value the parser cannot see. */
-const UNREADABLE_ACCESSOR: ReadonlyMap<string, ProjectConfigLiterals> = new Map([
-    ["advisor", { advisor: { unreadable: true } }],
-    ["codegen", { codegen: { lazyFunctionsUnreadable: true, unreadable: true } }],
-    ["durableObjects", { durableObjects: { unreadable: true } }],
-    ["remote", { unreadable: true }],
-    ["studio", { studio: { unreadable: true } }],
-    ["target", { unreadable: true }],
-]);
+    if ("absent" in member) {
+        return { security: {} };
+    }
+
+    const headers = "literal" in member ? literalOf(member.literal) : NOT_LITERAL;
+
+    return headers === NOT_LITERAL ? { security: { unreadable: true } } : { security: { headers } };
+};
 
 /** A member's initializer: `undefined` when absent, `"unreadable"` when present but not a plain `key: value` assignment. */
 const memberInitializer = (object: ObjectLiteralExpression, name: string): TsNode | "unreadable" | undefined => {
@@ -579,67 +592,82 @@ const readServices = (wrapped: TsNode | undefined): ProjectConfigLiterals => {
 const codegenValueOf = (property: PropertyAssignment | ShorthandPropertyAssignment, sourceFile: SourceFile): TsNode | undefined =>
     TsNode.isShorthandPropertyAssignment(property) ? property.getNameNode() : propertyLiteral(property, sourceFile);
 
+type ConfigProperty = PropertyAssignment | ShorthandPropertyAssignment;
+
+interface ConfigSection {
+    read: (property: ConfigProperty, sourceFile: SourceFile) => ProjectConfigLiterals;
+    unreadable: ProjectConfigLiterals;
+}
+
+/** `target`: a string literal, or `unreadable`. */
+const readTarget = (property: ConfigProperty, sourceFile: SourceFile): ProjectConfigLiterals => {
+    const value = propertyLiteral(property, sourceFile);
+
+    return value !== undefined && TsNode.isStringLiteral(value) ? { target: value.getLiteralValue() } : { unreadable: true };
+};
+
+/** `remote`: a boolean literal, or the object form, which is a reserved opt-in meaning "on". */
+const readRemote = (property: ConfigProperty, sourceFile: SourceFile): ProjectConfigLiterals => {
+    const value = propertyLiteral(property, sourceFile);
+
+    if (value !== undefined && (TsNode.isTrueLiteral(value) || TsNode.isFalseLiteral(value))) {
+        return { remote: value.getLiteralValue() };
+    }
+
+    // Reading only the booleans turned a documented config into "no preference" without a word.
+    return value !== undefined && TsNode.isObjectLiteralExpression(value) ? { remote: true } : { unreadable: true };
+};
+
 /**
- * What one property of the config object contributes.
- *
- * A key this reader cares about but cannot resolve to a literal contributes
- * `unreadable`, never absence: "no `target` declared" and "a `target` I could not
+ * Each top-level key this reader understands: how its value is read, and what it
+ * contributes when the parser cannot see it (a getter or method declares it, or a
+ * spread in the config object may shadow it). A key that cannot be resolved is
+ * `unreadable`, never absent: "no `target` declared" and "a `target` I could not
  * read" must not be the same answer, because the second silently ships the app to
  * the default provider.
  */
+const SECTIONS: ReadonlyMap<string, ConfigSection> = new Map<string, ConfigSection>([
+    [
+        "advisor",
+        { read: (property, sourceFile) => readAdvisor(propertyLiteral(property, sourceFile), sourceFile), unreadable: { advisor: { unreadable: true } } },
+    ],
+    // Shorthand `{ codegen }` names the value: its identifier is what readCodegen resolves, whether the name is imported or a const here.
+    [
+        "codegen",
+        {
+            read: (property, sourceFile) => readCodegen(codegenValueOf(property, sourceFile), sourceFile),
+            unreadable: { codegen: { lazyFunctionsUnreadable: true, unreadable: true } },
+        },
+    ],
+    [
+        "durableObjects",
+        {
+            read: (property, sourceFile) => readDurableObjects(propertyLiteral(property, sourceFile), sourceFile),
+            unreadable: { durableObjects: { unreadable: true } },
+        },
+    ],
+    ["remote", { read: readRemote, unreadable: { unreadable: true } }],
+    [
+        "security",
+        { read: (property, sourceFile) => readSecurity(propertyLiteral(property, sourceFile), sourceFile), unreadable: { security: { unreadable: true } } },
+    ],
+    ["services", { read: (property, sourceFile) => readServices(propertyLiteral(property, sourceFile)), unreadable: { services: { unreadable: true } } }],
+    ["studio", { read: (property, sourceFile) => readStudio(propertyLiteral(property, sourceFile), sourceFile), unreadable: { studio: { unreadable: true } } }],
+    ["target", { read: readTarget, unreadable: { unreadable: true } }],
+]);
+
+/** What one property of the config object contributes. */
 const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile): ProjectConfigLiterals => {
     // A getter or method declares a value this reader cannot see.
     if (TsNode.isGetAccessorDeclaration(property) || TsNode.isMethodDeclaration(property)) {
-        return UNREADABLE_ACCESSOR.get(propertyKeyName(property)) ?? {};
+        return SECTIONS.get(propertyKeyName(property))?.unreadable ?? {};
     }
 
     if (!TsNode.isPropertyAssignment(property) && !TsNode.isShorthandPropertyAssignment(property)) {
         return {};
     }
 
-    const key = propertyKeyName(property);
-
-    if (key === "advisor") {
-        return readAdvisor(propertyLiteral(property, sourceFile), sourceFile);
-    }
-
-    if (key === "services") {
-        return readServices(propertyLiteral(property, sourceFile));
-    }
-
-    if (key === "codegen") {
-        // Shorthand `{ codegen }` names the value: its identifier is what readCodegen resolves, whether the name is imported or a const here.
-        return readCodegen(codegenValueOf(property, sourceFile), sourceFile);
-    }
-
-    const sectionReader = BOOLEAN_SECTION_READERS.get(key);
-
-    if (sectionReader !== undefined) {
-        return sectionReader(propertyLiteral(property, sourceFile), sourceFile);
-    }
-
-    if (key !== "target" && key !== "remote") {
-        return {};
-    }
-
-    const value = propertyLiteral(property, sourceFile);
-
-    if (value === undefined) {
-        return { unreadable: true };
-    }
-
-    if (key === "target") {
-        return TsNode.isStringLiteral(value) ? { target: value.getLiteralValue() } : { unreadable: true };
-    }
-
-    if (TsNode.isTrueLiteral(value) || TsNode.isFalseLiteral(value)) {
-        return { remote: value.getLiteralValue() };
-    }
-
-    // The object form (`{ kinds: [...] }`) is a reserved opt-in meaning "on", so
-    // it has to be visible here too — reading only the booleans turned a
-    // documented config into "no preference" without a word.
-    return TsNode.isObjectLiteralExpression(value) ? { remote: true } : { unreadable: true };
+    return SECTIONS.get(propertyKeyName(property))?.read(property, sourceFile) ?? {};
 };
 
 /** The literals of one config file, read the same way whichever way the file was found. */
@@ -675,14 +703,15 @@ const readConfigLiterals = (configPath: string): ProjectConfigLiterals => {
         const declares = (key: string): boolean =>
             object.getProperties().some((property) => !TsNode.isSpreadAssignment(property) && propertyKeyName(property) === key);
 
-        return {
-            ...(declares("advisor") ? { advisor: { unreadable: true } } : {}),
-            ...(declares("codegen") ? { codegen: { lazyFunctionsUnreadable: true, unreadable: true } } : {}),
-            ...(declares("durableObjects") ? { durableObjects: { unreadable: true } } : {}),
-            ...(declares("studio") ? { studio: { unreadable: true } } : {}),
-            ...(declares("services") ? { services: { unreadable: true } } : {}),
-            unreadable: true,
-        };
+        let shadowed: ProjectConfigLiterals = { unreadable: true };
+
+        for (const [key, section] of SECTIONS) {
+            if (declares(key)) {
+                shadowed = { ...shadowed, ...section.unreadable };
+            }
+        }
+
+        return shadowed;
     }
 
     let literals: ProjectConfigLiterals = {};
@@ -772,6 +801,58 @@ const readProjectStudioCompanion = (lunoraDirectory: string): boolean => {
     return studio?.companion === true;
 };
 
+const securityWarnedFor = new Set<string>();
+
+/** Say why `security.headers` could not be used, once per config file and reason, and pin the defaults. */
+const warnDefaultSecurityHeaders = (configPath: string | undefined, literals: ProjectConfigLiterals, parsed: { problems: string[] } | undefined): true => {
+    let problems: string[];
+
+    if (parsed !== undefined) {
+        ({ problems } = parsed);
+    } else if (literals.unreadable && literals.security === undefined) {
+        problems = ["is not an object literal codegen can read, so `security.headers` cannot be read either"];
+    } else {
+        problems = ["`security.headers` is not built from literals"];
+    }
+
+    const key = `${configPath ?? ""}:${problems.join(";")}`;
+
+    if (!securityWarnedFor.has(key)) {
+        securityWarnedFor.add(key);
+        // eslint-disable-next-line no-console -- codegen has no diagnostic sink for config literals; matches `durableObjects.merge`'s warning.
+        console.warn(`@lunora/codegen: lunora.config ${problems.join("; ")}, so the default security headers apply.`);
+    }
+
+    return true;
+};
+
+/**
+ * `lunora.config`'s `security.headers`, `undefined` when the config sets none,
+ * or `true` (the defaults) when the value cannot be used. Unreadable or invalid,
+ * a whole config codegen cannot read included, is said out loud and pins the
+ * defaults: `undefined` would let `LUNORA_SECURITY_HEADERS` turn every header
+ * off, and an invalid value would fail every request at runtime. The build's
+ * `_headers` writer resolves the same way, so the Worker and the static assets
+ * keep sending the same headers.
+ */
+const readProjectSecurityHeaders = (lunoraDirectory: string): boolean | SecurityHeadersOptions | undefined => {
+    const configPath = findCodegenConfigFile(lunoraDirectory);
+    const literals: ProjectConfigLiterals = configPath === undefined ? {} : readConfigLiterals(configPath);
+    const { security } = literals;
+    // The top-level flag also marks a computed `target` or `remote`; it hides `security` only when that was not read.
+    const unreadable = security?.unreadable === true || (literals.unreadable === true && security === undefined);
+    const parsed = unreadable ? undefined : parseSecurityHeaders(security?.headers);
+
+    return parsed?.ok ? parsed.value : warnDefaultSecurityHeaders(configPath, literals, parsed);
+};
+
 export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral };
 export { findProjectConfigFile, PROJECT_CONFIG_FILENAMES } from "./project-config-path";
-export { loadProjectConfig, readMergeDurableObjects, readProjectConfigLiterals, readProjectLazyFunctions, readProjectStudioCompanion };
+export {
+    loadProjectConfig,
+    readMergeDurableObjects,
+    readProjectConfigLiterals,
+    readProjectLazyFunctions,
+    readProjectSecurityHeaders,
+    readProjectStudioCompanion,
+};

@@ -73,10 +73,8 @@ import { dirname, join, resolve } from "node:path";
 import { addServerHandler, createResolver, defineNuxtModule, useLogger } from "@nuxt/kit";
 
 import { codeOnly, withoutComments } from "../../../shared/code-only";
+import writeNuxtAssetHeaders from "./asset-headers";
 import resolveTildePath from "./resolve-tilde-path";
-
-/** Matches a trailing `.js` extension so it can be swapped for `.ts` (module-scope: compiled once). */
-const JS_EXTENSION_SUFFIX = /\.js$/;
 
 /**
  * Minimal structural shape of the rollup plugin this module contributes (a
@@ -131,7 +129,10 @@ const lunoraTsSourceResolver = (rootDirectory: string): TsSourceResolverPlugin =
                     return undefined;
                 }
 
-                const tsSource = absolute.replace(JS_EXTENSION_SUFFIX, ".ts");
+                // Built without a `".ts"` literal: packem's `fix-dynamic-import-extension` rewrites any `.ts`
+                // + quote + `)` that follows an `import(` on the same minified line to `.mjs`, and this module
+                // holds a dynamic import, so `replace(…, ".ts")` shipped as `replace(…, ".mjs")`.
+                const tsSource = `${absolute.slice(0, -"js".length)}ts`;
 
                 return existsSync(tsSource) ? tsSource : undefined;
             },
@@ -414,6 +415,17 @@ const lunoraNuxtModule: LunoraNuxtModule = defineNuxtModule<ModuleOptions>({
 
             // eslint-disable-next-line no-param-reassign -- the nitro:config hook exists to mutate the passed config
             nitroConfig.rollupConfig = { ...nitroConfig.rollupConfig, plugins };
+        });
+
+        nuxt.hook("nitro:init", (nitro) => {
+            nitro.hooks.hook("compiled", async () => {
+                // Nuxt's fallback Nitro type leaves `output` untyped.
+                const publicDirectory: unknown = nitro.options.output["publicDir"];
+
+                if (typeof publicDirectory === "string") {
+                    await writeNuxtAssetHeaders({ dev: nitro.options.dev, publicDirectory }, nuxt.options.rootDir, useLogger("@lunora/nuxt"));
+                }
+            });
         });
 
         // Mount Lunora realtime (RPC + WebSocket + admin) as a Nitro server route.

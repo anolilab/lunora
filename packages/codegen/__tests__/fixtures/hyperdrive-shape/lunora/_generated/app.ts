@@ -4,7 +4,7 @@
 import type { HyperdriveEngine } from "@lunora/hyperdrive/global";
 import { applyHyperdriveGlobalCdc, createHyperdriveGlobalCtxDb, createHyperdriveGlobalIntrospector, exportHyperdriveGlobalRows, importHyperdriveGlobalRows, readHyperdriveGlobalCdc } from "@lunora/hyperdrive/global";
 import type { SqlCtxDbOptions, SqlExec } from "@lunora/sql-store";
-import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, ShardRegistryRpc, WorkerOptions } from "@lunora/runtime";
+import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, SecurityOptions, ShardingInfo, ShardNamespaceLike, ShardRegistryRpc, WorkerOptions } from "@lunora/runtime";
 import { createCrossShardRelationCapabilities, createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
 
 import schema from "../schema.js";
@@ -423,6 +423,8 @@ interface LunoraConfig<Env extends object = object> {
     remote?: boolean;
     /** Sibling Workers the app calls through service bindings — key → its folder and, for RPC, the exported `WorkerEntrypoint` class (`rpc: false` binds that class but calls it with plain `fetch`, without importing the service's sources). Becomes `ctx.services.<key>` in actions, a wrangler `services[]` entry, one `lunora dev` session and a services-first `lunora deploy`. Literals, for the same reason as `target`. */
     services?: Record<string, { dir: string; entrypoint?: string; rpc?: false }>;
+    /** Baseline security headers for the Worker AND the static assets' generated `_headers` (`crossOriginOpenerPolicy`, `frameAncestors`, `csp`, …; `false` omits a header, `headers: false` all of them). A `security.headers` set in code wins. Literals, for the same reason as `target`. */
+    security?: { headers?: SecurityOptions["headers"] };
     /** Studio settings. `companion: true` emits the companion Worker that serves the advisor procedure list to a hosted Studio, bound to the app as `ADVISOR_COMPANION`. A literal, for the same reason as `target`. */
     studio?: { companion?: boolean };
     /** Deploy target id — `lunora deploy`/`verify` read it when no `--target` is passed. Must be a literal: `runCodegen` resolves it synchronously by PARSING this file, so a computed value is not seen — `lunora verify` reports `platform_unreadable_target` rather than defaulting in silence. */

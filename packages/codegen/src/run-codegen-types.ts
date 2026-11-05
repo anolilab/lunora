@@ -65,6 +65,17 @@ export interface CodegenOptions {
     projectRoot: string;
 
     /**
+     * Wrangler's `assets.binding` of each `assets` block (top level and every
+     * `env.<name>`) that falls back to a single-page app (`not_found_handling:
+     * "single-page-application"`). `@lunora/config` then routes every path to the
+     * Worker first, and the generated worker passes what no route serves to the
+     * first of these bindings the deployment has (`spaAssets`). Produced by
+     * `@lunora/config`, which reads `wrangler.jsonc`; absent or empty for any other
+     * app, whose output is unchanged.
+     */
+    spaAssetsBindings?: ReadonlyArray<string>;
+
+    /**
      * The deploy target codegen tailors the emitted `ctx.*` surface to.
      * Defaults to `"cloudflare"` — whose capability matrix marks every feature
      * native or emulated, so the default output is unchanged (byte-identical

@@ -99,6 +99,8 @@ import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
 import { runScheduledBackup } from "./scheduled-backup";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
+import type { AssetsFetcherLike } from "./spa-assets";
+import { serveSpaAsset, serveSpaShell } from "./spa-assets";
 import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
 import { buildTenantFanoutRoutes, QUEUE_DISPATCH_MAX_BODY_BYTES, QUEUE_DISPATCH_PATH } from "./tenant-fanout-routes";
 import type { TrustInboundTraceContext } from "./trace-trust";
@@ -1717,6 +1719,22 @@ interface WorkerOptions {
      * hinted region rather than exactly in it.
      */
     shardRegion?: (shardKey: string) => RegionHint | undefined;
+
+    /**
+     * The Workers Static Assets binding of a single-page app
+     * (`not_found_handling: "single-page-application"`), whose `run_worker_first`
+     * sends every path to the Worker first. Codegen wires it from wrangler's
+     * `assets.binding` when the fallback is the SPA one.
+     *
+     * A `GET` / `HEAD` no route answered is passed to it unchanged: a real
+     * static file comes back as is, a page navigation gets the app shell, and
+     * anything else (a `fetch` to a path nothing serves) keeps the 404, since the
+     * binding answers a miss with the shell too. "No route answered" means no
+     * `httpRouter` at all, or its own not-found handler ran (see `httpRouter()`
+     * in `@lunora/server`), never a handler's 404 or 403. `undefined` keeps every
+     * miss a 404.
+     */
+    spaAssets?: AssetsFetcherLike;
 
     /**
      * Resolve the app-facing storage capability from the worker `env` — the same
@@ -4946,10 +4964,78 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         };
     };
 
-    const dispatchHttpRoute = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response | undefined> => {
-        if (!options.httpRouter) {
-            return undefined;
+    /** Responses {@link answerMiss} took from the assets binding, which `fetch` decorates as static files. */
+    const servedAssets = new WeakSet<Response>();
+
+    /**
+     * The 404 for a request nothing answered, unless a single-page app's assets
+     * serve it (see {@link WorkerOptions.spaAssets}). Only when no route matched:
+     * a 404 a handler returned stays its own.
+     */
+    const answerMiss = async (request: Request, notFound: Response, unrouted: boolean): Promise<Response> => {
+        const assetResponse = options.spaAssets === undefined || !unrouted ? undefined : await serveSpaAsset(options.spaAssets, request);
+
+        if (assetResponse === undefined) {
+            return notFound;
         }
+
+        await notFound.body?.cancel();
+        servedAssets.add(assetResponse);
+
+        return assetResponse;
+    };
+
+    /**
+     * What a request the router answered with a 404 (or no router at all) gets: the auth discovery documents, else
+     * the shell read up front when no route matched, else {@link answerMiss}.
+     */
+    const answerRouterMiss = async (
+        request: Request,
+        routerResponse: Response | undefined,
+        unrouted: boolean,
+        shell: Response | undefined,
+    ): Promise<Response> => {
+        // Only a 404 — the router's own, or none at all — leaves room for the auth
+        // discovery documents, so an app route at the same path always wins.
+        const discoveryResponse = await options.authDiscoveryHandler?.(request);
+
+        if (discoveryResponse) {
+            await Promise.all([routerResponse?.body?.cancel(), shell?.body?.cancel()]);
+
+            return discoveryResponse;
+        }
+
+        if (shell !== undefined && unrouted) {
+            await routerResponse?.body?.cancel();
+            servedAssets.add(shell);
+
+            return shell;
+        }
+
+        await shell?.body?.cancel();
+
+        return answerMiss(request, routerResponse ?? new Response("Not found", { status: 404 }), unrouted);
+    };
+
+    /**
+     * The router's answer, and whether no route matched: no router at all, or its own not-found handler ran.
+     * `shellFirst` lets an `httpRouter()` skip the app's middleware for a path no route matches; pass it only when the
+     * assets binding answers the request with the app shell.
+     */
+    const dispatchHttpRoute = async (
+        request: Request,
+        env: unknown,
+        context: ExecutionContextLike,
+        shellFirst: boolean,
+    ): Promise<{ response: Response | undefined; unrouted: boolean }> => {
+        if (!options.httpRouter) {
+            return { response: undefined, unrouted: true };
+        }
+
+        let unrouted = false;
+        const markUnrouted = (): void => {
+            unrouted = true;
+        };
 
         // Build the action context up front and inject it on a private env
         // binding; the router's middleware lifts it into the handler's context.
@@ -4980,12 +5066,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // leaves queries / mutations / subscriptions (`/_lunora/rpc`, `/_lunora/ws`)
         // fully serviceable.
         try {
-            return await options.httpRouter.fetch(request, { ...(env as object), __lunoraCtx: httpContext }, context);
+            const response = await options.httpRouter.fetch(
+                request,
+                { ...(env as object), __lunoraCtx: httpContext, __lunoraShellFirst: shellFirst, __lunoraUnrouted: markUnrouted },
+                context,
+            );
+
+            return { response, unrouted };
         } catch (error: unknown) {
             // eslint-disable-next-line no-console -- surface the SSR render fault server-side; the client gets a generic 500, never the raw message
             console.error("[lunora] httpRouter (SSR) handler threw:", error);
 
-            return new Response("Internal Server Error", { status: 500 });
+            return { response: new Response("Internal Server Error", { status: 500 }), unrouted: false };
         }
     };
 
@@ -6580,6 +6672,26 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // (honoring the `LUNORA_SECURITY_*` opt-out vars) happens lazily on the first
     // request — env is per-invocation, but deployment-stable, so it is memoized.
     let resolvedSecurity = resolveSecurity(options.security);
+
+    /**
+     * A file the assets binding served carries the CSP `_headers` gives the same
+     * file on a direct asset hit, the HTML policy, whatever its type: the strict
+     * `default-src 'none'` would stop a service worker script (which runs under
+     * its own response's CSP) from fetching or importing anything.
+     */
+    const asStaticAsset = (response: Response): Response => {
+        const policy = resolvedSecurity.headers.enabled ? resolvedSecurity.headers.csp?.htmlValue : undefined;
+
+        if (policy === undefined || response.headers.has("content-security-policy")) {
+            return response;
+        }
+
+        const headers = new Headers(response.headers);
+
+        headers.set("content-security-policy", policy);
+
+        return new Response(response.body, { headers, status: response.status, statusText: response.statusText });
+    };
     let securityEnvResolved = false;
 
     // Fold the deployment env into the resolved security config once, on the
@@ -6737,23 +6849,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // HTTP actions are the lowest-priority app matcher: explicit routes and the
         // internal `/_lunora/*` endpoints above always win. Once the request
         // reaches the router, hono owns routing.
-        const httpRouteResponse = await dispatchHttpRoute(request, env, context);
+        // A single-page app's shell is read first for a page load, so the router may skip the app's middleware only
+        // for a path the binding answers with the shell, never for a real file the middleware guards.
+        const shell = options.spaAssets === undefined || !options.httpRouter ? undefined : await serveSpaShell(options.spaAssets, request);
+        const { response: httpRouteResponse, unrouted } = await dispatchHttpRoute(request, env, context, shell !== undefined);
 
         if (httpRouteResponse && httpRouteResponse.status !== 404) {
+            await shell?.body?.cancel();
+
             return httpRouteResponse;
         }
 
-        // Only a 404 — the router's own, or none at all — leaves room for the auth
-        // discovery documents, so an app route at the same path always wins.
-        const discoveryResponse = await options.authDiscoveryHandler?.(request);
-
-        if (discoveryResponse) {
-            await httpRouteResponse?.body?.cancel();
-
-            return discoveryResponse;
-        }
-
-        return httpRouteResponse ?? new Response("Not found", { status: 404 });
+        return answerRouterMiss(request, httpRouteResponse, unrouted, shell);
     };
 
     return {
@@ -6792,7 +6899,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             try {
                 const response = await handle(request, env, context);
 
-                return decorateResponse(response, request, resolvedSecurity);
+                return decorateResponse(servedAssets.has(response) ? asStaticAsset(response) : response, request, resolvedSecurity);
             } catch (error: unknown) {
                 return decorateResponse(toErrorResponse(error), request, resolvedSecurity);
             } finally {

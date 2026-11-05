@@ -2885,6 +2885,9 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
+      '@lunora/config':
+        specifier: workspace:*
+        version: link:../config
       '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -4260,6 +4263,9 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
+      '@lunora/config':
+        specifier: workspace:*
+        version: link:../config
       '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime

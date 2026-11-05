@@ -1,9 +1,12 @@
 /**
  * Secure-by-default HTTP edge for the Lunora worker.
  *
- * The worker's top-level `fetch` (see `./create-worker`) is the single choke
- * point every response passes through — RPC, auth, admin, `httpRoute` handlers,
- * and the SSR fallback alike. This module supplies what is applied there:
+ * The worker's top-level `fetch` (see `./create-worker`) is the choke point every
+ * response the Worker produces passes through — RPC, auth, admin, `httpRoute`
+ * handlers, and the SSR fallback alike. A static asset hit never reaches it:
+ * Cloudflare serves the file without running the Worker, so the build writes the
+ * same default headers into the assets' `_headers` file instead (see
+ * `@lunora/config`'s `asset-headers`). This module supplies what is applied here:
  * `decorateResponse` adds baseline security headers plus, for allowed
  * cross-origin requests, the matching `Access-Control-Allow-*` headers (never
  * overwriting a header the inner handler set); `handleCorsPreflight` answers
@@ -18,30 +21,9 @@
  */
 
 import { isEnvDisabled, isEnvEnabled } from "../../../shared/env-flag";
+import type { ResolvedSecurityHeaders, SecurityHeadersOptions } from "../../../shared/security-headers";
+import { effectiveSecurityHeaders, parseSecurityHeaders, resolveSecurityHeaders } from "../../../shared/security-headers";
 import { LunoraError } from "./errors";
-
-/** Per-header overrides for {@link SecurityHeadersOptions}. `false` omits the header. */
-interface SecurityHeadersOptions {
-    /**
-     * `Content-Security-Policy`. Omitted (`undefined`) applies a restrictive
-     * `default-src 'none'` policy to **non-HTML** responses, and a conservative
-     * hardening policy to **HTML** responses (`base-uri 'none'; frame-ancestors
-     * 'self'; object-src 'none'`) — this does NOT set `default-src`/`script-src`,
-     * so it never blocks an SSR page's own scripts/styles/images/fetches, it only
-     * locks down the `base` element, framing (mirroring the `SAMEORIGIN`
-     * X-Frame-Options default), and legacy plugins. Pass a string to apply that
-     * exact policy to every response (HTML included); `false` to never send one.
-     */
-    csp?: string | false;
-    /** `X-Frame-Options` (clickjacking). Defaults to `SAMEORIGIN`. `false` omits it. */
-    frameOptions?: "DENY" | "SAMEORIGIN" | false;
-    /** `Strict-Transport-Security`. Only ever sent over HTTPS. `false` omits it. */
-    hsts?: boolean | { includeSubDomains?: boolean; maxAge?: number; preload?: boolean };
-    /** `Permissions-Policy`. Defaults to a minimal deny list. `false` omits it. */
-    permissionsPolicy?: string | false;
-    /** `Referrer-Policy`. Defaults to `strict-origin-when-cross-origin`. `false` omits it. */
-    referrerPolicy?: string | false;
-}
 
 /** CORS allowlist. Cross-origin is denied unless an origin matches. */
 interface CorsOptions {
@@ -98,16 +80,6 @@ interface SecurityOptions {
     headers?: boolean | SecurityHeadersOptions;
 }
 
-interface ResolvedHeaders {
-    coop: string | undefined;
-    csp: { htmlValue: string | undefined; value: string } | undefined;
-    enabled: boolean;
-    frameOptions: string | undefined;
-    hsts: string | undefined;
-    permissionsPolicy: string | undefined;
-    referrerPolicy: string | undefined;
-}
-
 interface ResolvedCors {
     allowCredentials: boolean;
     allowedHeaders: string[];
@@ -137,38 +109,8 @@ interface ResolvedCsrf {
 interface ResolvedSecurity {
     cors: ResolvedCors;
     csrf: ResolvedCsrf;
-    headers: ResolvedHeaders;
+    headers: ResolvedSecurityHeaders;
 }
-
-const DEFAULT_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
-
-/**
- * Conservative default CSP for HTML responses, derived from the resolved
- * `frameOptions` so the two framing controls agree — a static `frame-ancestors
- * 'self'` would otherwise *weaken* an `X-Frame-Options: DENY` policy, since
- * modern browsers prefer CSP `frame-ancestors` over the legacy header.
- * Deliberately omits `default-src`/`script-src`/`style-src`/`connect-src`/
- * `form-action` so it never breaks an SSR page's own resources or cross-origin
- * form posts (e.g. OAuth redirects); it only locks the `base` element's href,
- * forbids legacy plugins, and mirrors the framing policy: `DENY` → `'none'`,
- * `SAMEORIGIN` → `'self'`, disabled (`frameOptions: false`) → no
- * `frame-ancestors` (framing left unrestricted, matching the absent header).
- * Operators wanting a strict HTML policy pass an explicit `csp` string.
- */
-const htmlCspFor = (frameOptions: string | undefined): string => {
-    const parts = ["base-uri 'none'", "object-src 'none'"];
-
-    if (frameOptions === "DENY") {
-        parts.push("frame-ancestors 'none'");
-    } else if (frameOptions === "SAMEORIGIN") {
-        parts.push("frame-ancestors 'self'");
-    }
-
-    return parts.join("; ");
-};
-
-const DEFAULT_PERMISSIONS_POLICY =
-    "accelerometer=(), autoplay=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 
 /**
  * Request headers a cross-origin caller may send by default.
@@ -202,68 +144,8 @@ const DEFAULT_CORS_HEADERS = [
 
 const DEFAULT_CORS_METHODS = ["DELETE", "GET", "HEAD", "PATCH", "POST", "PUT"];
 
-const ONE_YEAR_SECONDS = 31_536_000;
-
 /** Methods that never mutate state and so are exempt from the CSRF/origin guard. */
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-
-/**
- * @returns the HSTS header value string, or `undefined` when HSTS is disabled.
- */
-const resolveHstsHeader = (hsts: SecurityHeadersOptions["hsts"]): string | undefined => {
-    if (hsts === false) {
-        return undefined;
-    }
-
-    const config = hsts === undefined || hsts === true ? {} : hsts;
-    const maxAge = config.maxAge ?? ONE_YEAR_SECONDS;
-    const includeSubDomains = config.includeSubDomains ?? true;
-
-    return `max-age=${String(maxAge)}${includeSubDomains ? "; includeSubDomains" : ""}${config.preload ? "; preload" : ""}`;
-};
-
-/**
- * @returns the resolved CSP config object, or `undefined` when CSP is disabled.
- */
-const resolveCspHeader = (csp: SecurityHeadersOptions["csp"], htmlDefault: string): ResolvedHeaders["csp"] => {
-    if (csp === false) {
-        return undefined;
-    }
-
-    if (typeof csp === "string") {
-        return { htmlValue: csp, value: csp };
-    }
-
-    return { htmlValue: htmlDefault, value: DEFAULT_CSP };
-};
-
-const resolveHeaders = (input: boolean | SecurityHeadersOptions | undefined): ResolvedHeaders => {
-    if (input === false) {
-        return {
-            coop: undefined,
-            csp: undefined,
-            enabled: false,
-            frameOptions: undefined,
-            hsts: undefined,
-            permissionsPolicy: undefined,
-            referrerPolicy: undefined,
-        };
-    }
-
-    const options: SecurityHeadersOptions = input === undefined || input === true ? {} : input;
-    // Resolve framing first so the default HTML CSP's `frame-ancestors` tracks it.
-    const frameOptions = options.frameOptions === false ? undefined : (options.frameOptions ?? "SAMEORIGIN");
-
-    return {
-        coop: "same-origin",
-        csp: resolveCspHeader(options.csp, htmlCspFor(frameOptions)),
-        enabled: true,
-        frameOptions,
-        hsts: resolveHstsHeader(options.hsts),
-        permissionsPolicy: options.permissionsPolicy === false ? undefined : (options.permissionsPolicy ?? DEFAULT_PERMISSIONS_POLICY),
-        referrerPolicy: options.referrerPolicy === false ? undefined : (options.referrerPolicy ?? "strict-origin-when-cross-origin"),
-    };
-};
 
 const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
     const disabled: ResolvedCors = {
@@ -414,14 +296,20 @@ const parseEnvCors = (env: Record<string, unknown> | undefined): CorsOptions | u
  * worker. Setting a layer in code means leaving its env var unset.
  */
 const resolveSecurity = (security: SecurityOptions | undefined, env?: Record<string, unknown>): ResolvedSecurity => {
-    const headers = security?.headers ?? (isEnvDisabled(env?.["LUNORA_SECURITY_HEADERS"]) ? false : undefined);
+    const headers = parseSecurityHeaders(effectiveSecurityHeaders<unknown>(security?.headers, env?.["LUNORA_SECURITY_HEADERS"]));
     const csrf = security?.csrf ?? (isEnvDisabled(env?.["LUNORA_SECURITY_CSRF"]) ? false : undefined);
     const cors = security?.cors ?? parseEnvCors(env);
+
+    // Thrown at construction, like the wildcard-CORS check: a value with a line break would otherwise make `Headers.set`
+    // throw on every response, and a typo'd key or value would do nothing without a word.
+    if (!headers.ok) {
+        throw new LunoraError(`@lunora/runtime: ${headers.problems.join("; ")}`);
+    }
 
     return {
         cors: resolveCors(cors),
         csrf: resolveCsrf(csrf),
-        headers: resolveHeaders(headers),
+        headers: resolveSecurityHeaders(headers.value),
     };
 };
 
@@ -669,7 +557,7 @@ const setIfAbsent = (headers: Headers, name: string, value: string): void => {
 };
 
 /** Layer the baseline security headers onto `headers`, respecting per-header opt-outs. */
-const applyBaselineHeaders = (headers: Headers, request: Request, response: Response, config: ResolvedHeaders): void => {
+const applyBaselineHeaders = (headers: Headers, request: Request, response: Response, config: ResolvedSecurityHeaders): void => {
     // HSTS is meaningful only over HTTPS; sending it on `http://localhost` would
     // pin dev to HTTPS and break local development.
     if (config.hsts !== undefined && new URL(request.url).protocol === "https:") {
@@ -695,14 +583,8 @@ const applyBaselineHeaders = (headers: Headers, request: Request, response: Resp
     }
 
     if (config.csp !== undefined) {
-        // HTML responses get the (possibly conservative) HTML policy; everything
-        // else gets the strict policy. `htmlValue` may be undefined only in
-        // future configs that opt HTML out entirely.
-        const cspValue = isHtmlResponse(response) ? config.csp.htmlValue : config.csp.value;
-
-        if (cspValue !== undefined) {
-            setIfAbsent(headers, "content-security-policy", cspValue);
-        }
+        // HTML responses get the (possibly conservative) HTML policy; everything else gets the strict one.
+        setIfAbsent(headers, "content-security-policy", isHtmlResponse(response) ? config.csp.htmlValue : config.csp.value);
     }
 };
 
@@ -752,5 +634,6 @@ const decorateResponse = (response: Response, request: Request, resolved: Resolv
     return new Response(response.body, { headers, status: response.status, statusText: response.statusText });
 };
 
-export type { CorsOptions, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions };
+export type { CrossOriginOpenerPolicy, SecurityHeadersOptions } from "../../../shared/security-headers";
+export type { CorsOptions, CsrfOptions, ResolvedSecurity, SecurityOptions };
 export { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity };

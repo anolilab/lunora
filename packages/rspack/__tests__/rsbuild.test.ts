@@ -1,9 +1,11 @@
-import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import type { RsbuildConfig, RsbuildPlugin } from "@rsbuild/core";
+import { createRsbuild } from "@rsbuild/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { DevServerLike, RsbuildApiLike, RsbuildConfigLike, RspackConfigLike } from "../src/rsbuild";
+import type { BuildEnvironmentLike, DevServerLike, RsbuildApiLike, RsbuildConfigLike, RspackConfigLike } from "../src/rsbuild";
 import { lunoraRsbuild, withLunoraProxy } from "../src/rsbuild";
 import { startWorker } from "../src/worker";
 import { createFixture } from "./fixture";
@@ -85,6 +87,7 @@ const captureSetup = (plugin: ReturnType<typeof lunoraRsbuild>): { rsbuild: Rsbu
         modifyRspackConfig: (callback) => {
             rspack = callback(rspack);
         },
+        onAfterBuild: () => {},
         onAfterStartDevServer: () => {},
         onBeforeStartDevServer: () => {
             startedDevServer = true;
@@ -143,6 +146,7 @@ describe(lunoraRsbuild, () => {
                 config = callback(config);
             },
             modifyRspackConfig: () => {},
+            onAfterBuild: () => {},
             onAfterStartDevServer: () => {},
             onBeforeStartDevServer: () => {},
             onCloseDevServer: () => {},
@@ -197,6 +201,7 @@ describe(lunoraRsbuild, () => {
             },
             modifyRsbuildConfig: (callback) => callback({}),
             modifyRspackConfig: (callback) => callback({}),
+            onAfterBuild: () => {},
             onAfterStartDevServer: () => {},
             onBeforeStartDevServer: (callback) => {
                 beforeStart = callback;
@@ -264,6 +269,7 @@ describe(lunoraRsbuild, () => {
             },
             modifyRsbuildConfig: (callback) => callback({}),
             modifyRspackConfig: (callback) => callback({}),
+            onAfterBuild: () => {},
             onAfterStartDevServer: () => {},
             onBeforeStartDevServer: (callback) => {
                 beforeStart = callback;
@@ -313,6 +319,7 @@ describe(lunoraRsbuild, () => {
             },
             modifyRsbuildConfig: (callback) => callback({}),
             modifyRspackConfig: (callback) => callback({}),
+            onAfterBuild: () => {},
             onAfterStartDevServer: () => {},
             onBeforeStartDevServer: (callback) => {
                 beforeStart = callback;
@@ -384,6 +391,7 @@ describe(startWorker, () => {
             },
             modifyRsbuildConfig: (callback) => callback({}),
             modifyRspackConfig: (callback) => callback({}),
+            onAfterBuild: () => {},
             onAfterStartDevServer: () => {},
             onBeforeStartDevServer: (callback) => {
                 beforeStart = callback;
@@ -402,4 +410,129 @@ describe(startWorker, () => {
 
         expect(celldStop).toHaveBeenCalledTimes(1);
     }, 45_000);
+
+    describe("managed _headers after a production build", () => {
+        /** Run the plugin's `onAfterBuild` for the given environments, as `rsbuild build` would. */
+        const build = async (root: string, environments: Record<string, BuildEnvironmentLike>, isWatch = false): Promise<void> => {
+            let afterBuild: Parameters<RsbuildApiLike["onAfterBuild"]>[0] | undefined;
+
+            lunoraRsbuild({ projectRoot: root, studio: false, validateWrangler: false, worker: false }).setup({
+                getRsbuildConfig: () => {
+                    return {};
+                },
+                modifyRsbuildConfig: (callback) => callback({}),
+                modifyRspackConfig: (callback) => callback({}),
+                onAfterBuild: (callback) => {
+                    afterBuild = callback;
+                },
+                onAfterStartDevServer: () => {},
+                onBeforeStartDevServer: () => {},
+                onCloseDevServer: () => {},
+            });
+
+            await afterBuild?.({ environments, isWatch });
+        };
+
+        /** The environments a real `rsbuild build` hands `onAfterBuild`, with Rsbuild's own normalized defaults. */
+        const rsbuildEnvironments = async (root: string, rsbuildConfig: RsbuildConfig = {}): Promise<Record<string, BuildEnvironmentLike>> => {
+            let environments: Record<string, BuildEnvironmentLike> = {};
+
+            mkdirSync(join(root, "src"), { recursive: true });
+            writeFileSync(join(root, "src", "index.js"), "", "utf8");
+
+            const capture: RsbuildPlugin = {
+                name: "capture-environments",
+                setup: (api) => {
+                    api.onBeforeCreateCompiler(({ environments: created }) => {
+                        environments = created;
+                    });
+                },
+            };
+            const rsbuild = await createRsbuild({ cwd: root, rsbuildConfig: { mode: "production", ...rsbuildConfig, plugins: [capture] } });
+
+            await rsbuild.createCompiler();
+
+            return environments;
+        };
+
+        const withAssets = (root: string, assets: Record<string, unknown>): void => {
+            const wrangler = JSON.parse(readFileSync(join(root, "wrangler.jsonc"), "utf8")) as Record<string, unknown>;
+
+            writeFileSync(join(root, "wrangler.jsonc"), JSON.stringify({ ...wrangler, assets }), "utf8");
+        };
+
+        it("writes the block into the output wrangler serves, and caches static/ for good", async () => {
+            expect.assertions(2);
+
+            const root = fixture();
+            const client = join(root, "dist", "client");
+
+            mkdirSync(client, { recursive: true });
+            mkdirSync(join(root, "dist", "server"), { recursive: true });
+            withAssets(root, { directory: "./dist/client" });
+
+            await build(
+                root,
+                await rsbuildEnvironments(root, {
+                    environments: {
+                        node: { output: { distPath: { root: "dist/server" }, target: "node" } },
+                        web: { output: { distPath: { root: "dist/client" } } },
+                    },
+                }),
+            );
+
+            expect(readFileSync(join(client, "_headers"), "utf8")).toContain("/static/*\n  Cache-Control: public, max-age=31536000, immutable");
+            // The SSR half is not what Cloudflare serves, so a `_headers` there would be published as a file.
+            expect(existsSync(join(root, "dist", "server", "_headers"))).toBe(false);
+        });
+
+        it("caches static/ for good with Rsbuild's defaults, which place the favicon at the output root", async () => {
+            expect.assertions(1);
+
+            const root = fixture();
+            const dist = join(root, "dist");
+
+            mkdirSync(dist, { recursive: true });
+            withAssets(root, { directory: "./dist" });
+            await build(root, await rsbuildEnvironments(root));
+
+            expect(readFileSync(join(dist, "_headers"), "utf8")).toContain("/static/*\n  Cache-Control: public, max-age=31536000, immutable");
+        });
+
+        it.each<[string, RsbuildConfig]>([
+            ["the SPA fallback is on", {}],
+            ["filenameHash is off", { output: { filenameHash: false } }],
+            ["filenameHash is { enable: false }", { output: { filenameHash: { enable: false } } }],
+            ["the build is not production, where JS and CSS go unhashed", { mode: "development" }],
+            ["a custom JS file name has no hash", { output: { filename: { js: "[name].js" } } }],
+            [
+                "a custom file name writes an unhashed file into static/ from outside it",
+                { output: { distPath: { js: "." }, filename: { js: "static/[name].js" } } },
+            ],
+        ])("writes no immutable rule when %s", async (reason, rsbuildConfig) => {
+            expect.assertions(1);
+
+            const root = fixture();
+            const dist = join(root, "dist");
+
+            mkdirSync(dist, { recursive: true });
+            withAssets(root, reason.startsWith("the SPA") ? { directory: "./dist", not_found_handling: "single-page-application" } : { directory: "./dist" });
+            await build(root, await rsbuildEnvironments(root, rsbuildConfig));
+
+            expect(readFileSync(join(dist, "_headers"), "utf8")).not.toContain("Cache-Control");
+        });
+
+        it("writes nothing for a watch build", async () => {
+            expect.assertions(1);
+
+            const root = fixture();
+            const dist = join(root, "dist");
+
+            mkdirSync(dist, { recursive: true });
+            withAssets(root, { directory: "./dist" });
+            await build(root, await rsbuildEnvironments(root), true);
+
+            expect(existsSync(join(dist, "_headers"))).toBe(false);
+        });
+    });
 });

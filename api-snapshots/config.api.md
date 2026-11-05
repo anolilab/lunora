@@ -810,6 +810,7 @@ interface InferredBindings {
     usesWorkerLoader: boolean;
     usesX402: boolean;
     usesX402Charge: boolean;
+    workerRoutes: string[] | undefined;
     workflows: InferredWorkflow[];
 }
 ```
@@ -2086,6 +2087,34 @@ interface AssertWranglerOptions {
 }
 ```
 
+### `AssetHeadersLogger` (interface)
+
+```ts
+interface AssetHeadersLogger {
+    info: (message: string) => void;
+    warn: (message: string) => void;
+}
+```
+
+### `AssetHeadersOptions` (interface)
+
+```ts
+interface AssetHeadersOptions {
+    headers: boolean | SecurityHeadersOptions | undefined;
+    immutableDirectory?: string;
+}
+```
+
+### `AssetHeadersResult` (interface)
+
+```ts
+interface AssetHeadersResult {
+    deferred: string[];
+    path: string | undefined;
+    warnings: string[];
+}
+```
+
 ### `BINDING_MANIFEST_VERSION` (const)
 
 ```ts
@@ -2342,6 +2371,34 @@ interface ObservabilitySignalSampling {
 }
 ```
 
+### `ProjectAssetHeadersInput` (interface)
+
+```ts
+interface ProjectAssetHeadersInput {
+    hashedDirectory?: string;
+    hashedNamePatterns?: ReadonlyArray<string>;
+    outputDirectory: string;
+    projectRoot: string;
+    publicDirectory?: string;
+    requireAssetsDirectory: boolean;
+    schemaDir?: string;
+    target?: string;
+    wranglerPath?: string;
+}
+```
+
+### `ProjectAssetHeadersOutcome` (type)
+
+```ts
+type ProjectAssetHeadersOutcome = {
+    reason: string;
+    written: false;
+} | {
+    result: AssetHeadersResult;
+    written: true;
+};
+```
+
 ### `REMOTE_ELIGIBLE_KEYS` (const)
 
 ```ts
@@ -2572,6 +2629,7 @@ interface WranglerCacheShape {
 
 ```ts
 interface WranglerCodegenInputs {
+    spaAssetsBindings?: string[];
     wranglerQueueProducers: WranglerQueueProducerIR[];
     wranglerVariables: WranglerVariableIR[];
 }
@@ -2613,6 +2671,7 @@ interface WranglerConfig {
         directory?: string;
         html_handling?: string;
         not_found_handling?: string;
+        run_worker_first?: boolean | ReadonlyArray<string>;
     };
     browser?: {
         binding?: string;
@@ -2954,6 +3013,12 @@ const describeWithheld: ({ binding, kind }: WithheldBinding) => string;
 const detectCloudflareCliConfig: (projectRoot: string) => CloudflareCliConfigFinding | undefined;
 ```
 
+### `emitProjectAssetHeaders` (const)
+
+```ts
+const emitProjectAssetHeaders: (input: ProjectAssetHeadersInput, logger: AssetHeadersLogger) => ProjectAssetHeadersOutcome;
+```
+
 ### `findWranglerFile` (const)
 
 ```ts
@@ -3132,6 +3197,12 @@ const wranglerCodegenInputs: (projectRoot: string) => WranglerCodegenInputs;
 
 ```ts
 const wranglerToAlchemy: (config: WranglerConfigShape) => AlchemyTranslation;
+```
+
+### `writeAssetHeaders` (const)
+
+```ts
+const writeAssetHeaders: (directory: string, options: AssetHeadersOptions) => AssetHeadersResult;
 ```
 
 ## `@lunora/config/studio-host`
@@ -3546,6 +3617,12 @@ interface CelldCommandResult {
 type CelldCommandRunner = (command: string, args: ReadonlyArray<string>) => Promise<CelldCommandResult | undefined>;
 ```
 
+### `CrossOriginOpenerPolicy` (type)
+
+```ts
+type CrossOriginOpenerPolicy = "same-origin" | "same-origin-allow-popups" | "unsafe-none";
+```
+
 ### `DockerLogStream` (interface)
 
 ```ts
@@ -3624,6 +3701,24 @@ interface RemoteOnlyBindings {
     artifacts?: ReadonlyArray<{
         binding?: string;
     } | null | undefined> | null;
+}
+```
+
+### `SecurityHeadersOptions` (interface)
+
+```ts
+interface SecurityHeadersOptions {
+    crossOriginOpenerPolicy?: CrossOriginOpenerPolicy | false;
+    csp?: string | false;
+    frameAncestors?: ReadonlyArray<string>;
+    frameOptions?: "DENY" | "SAMEORIGIN" | false;
+    hsts?: boolean | {
+        includeSubDomains?: boolean;
+        maxAge?: number;
+        preload?: boolean;
+    };
+    permissionsPolicy?: string | false;
+    referrerPolicy?: string | false;
 }
 ```
 

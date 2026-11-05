@@ -162,7 +162,13 @@ interface LivePublisher {
  * `c.var.lunora` so handlers can read it as a typed variable.
  */
 interface LunoraHttpEnv {
-    Bindings: Record<string, unknown> & { __lunoraCtx?: HttpActionCtx };
+    /**
+     * `__lunoraUnrouted` is how the runtime learns that no route matched (rather than a handler answering 404 on
+     * purpose): only the router's own not-found handler calls it. `__lunoraShellFirst` marks a page navigation the
+     * single-page app's assets binding answers with its shell (never a real file): when no route matches it, the
+     * router says so before any app middleware runs, so a blanket auth gate cannot turn a deep link into its 401.
+     */
+    Bindings: Record<string, unknown> & { __lunoraCtx?: HttpActionCtx; __lunoraShellFirst?: boolean; __lunoraUnrouted?: () => void };
     Variables: { lunora: HttpActionCtx };
 }
 
@@ -218,10 +224,58 @@ const httpAction =
         }
     };
 
+/** Requests whose handler or middleware called `c.notFound()` itself, which is never "no route matched". */
+const deliberateNotFound = new WeakSet<object>();
+
 /** Apps built by {@link httpRouter}: the only Hono apps known to lift `__lunoraCtx` into `c.var.lunora`. */
 const httpRouters = new WeakSet<object>();
 
 const isHttpRouter = (app: object): boolean => httpRouters.has(app);
+
+/**
+ * Handlers registered through an {@link httpRouter}'s blanket `use` (`"*"`, `"/*"` or no path), which run around
+ * every route. A `use` on a narrower path may own that path (a legacy handler that never calls `next()`), so it
+ * counts as a route.
+ */
+const middlewareHandlers = new WeakSet<object>();
+
+const BLANKET_PATHS: ReadonlySet<string> = new Set(["*", "/*"]);
+
+/** Where Hono keeps the handler it wrapped when `.route()` mounts an app with its own error handler. */
+const COMPOSED_HANDLER = "__COMPOSED_HANDLER";
+
+const unwrapHandler = (handler: object): object => (handler as Record<string, object | undefined>)[COMPOSED_HANDLER] ?? handler;
+
+/**
+ * Whether some route of `app` (middleware left out) matches `request`'s method and path, by replaying the routes
+ * into a router that answers `204` for each. Rebuilt when routes are added. A handler that is not known to be
+ * middleware (a `use` on a `basePath()` view, or on a plain Hono app mounted with `.route()`) counts as a route, so
+ * an unknown case keeps today's answer rather than serving the shell over it.
+ */
+const routeMatcher = (app: LunoraHttpApp): ((request: Request) => Promise<boolean>) => {
+    let probe: Hono | undefined;
+    let built = -1;
+
+    return async (request) => {
+        if (probe === undefined || built !== app.routes.length) {
+            const next = new Hono();
+
+            for (const route of app.routes) {
+                if (!middlewareHandlers.has(unwrapHandler(route.handler))) {
+                    // eslint-disable-next-line unicorn/no-null -- the Fetch API requires `null` (not `undefined`) for an empty 204 body
+                    next.on(route.method, route.path, () => new Response(null, { status: 204 }));
+                }
+            }
+
+            probe = next;
+            built = app.routes.length;
+        }
+
+        const response = await probe.fetch(new Request(request.url, { method: request.method }));
+
+        return response.status === 204;
+    };
+};
 
 /**
  * Create the hono app for HTTP actions. Pre-wired with a middleware that lifts
@@ -237,6 +291,11 @@ const isHttpRouter = (app: object): boolean => httpRouters.has(app);
  * export default createWorker({ httpRouter: app, ... });
  * ```
  *
+ * A request no route matched answers Hono's plain 404 and tells the runtime, which
+ * may serve a single-page app's shell for it (`spaAssets` in `@lunora/runtime`).
+ * That holds for a not-found handler the app sets with `app.notFound(…)` too. A
+ * `c.notFound()` a handler or middleware returns stays a real 404.
+ *
  * The lifting middleware throws if the context is absent. `createWorker` injects
  * it on every request the router sees, so this only trips when the app is run
  * outside the runtime — a misconfiguration we surface loudly rather than let
@@ -244,8 +303,25 @@ const isHttpRouter = (app: object): boolean => httpRouters.has(app);
  */
 const httpRouter = (): LunoraHttpApp => {
     const app = new Hono<LunoraHttpEnv>();
+    const hasRoute = routeMatcher(app);
+    const use = app.use.bind(app);
 
     httpRouters.add(app);
+
+    // Hono assigns `use` per instance; recording what it registers is how a route is told from middleware.
+    app.use = ((...arguments_: Parameters<typeof use>) => {
+        const [path] = arguments_;
+
+        if (typeof path !== "string" || BLANKET_PATHS.has(path)) {
+            for (const handler of arguments_) {
+                if (typeof handler === "function") {
+                    middlewareHandlers.add(handler);
+                }
+            }
+        }
+
+        return use(...arguments_);
+    }) as typeof app.use;
 
     app.use("*", async (c, next) => {
         const injected = c.env.__lunoraCtx;
@@ -259,8 +335,50 @@ const httpRouter = (): LunoraHttpApp => {
 
         c.set("lunora", injected);
 
+        // A page navigation no route matches gets the app shell from the runtime, whatever the app's middleware would
+        // have answered: a blanket auth gate's 401 must not stand in for the shell of a client-side route.
+        const { __lunoraShellFirst: shellFirst, __lunoraUnrouted: markUnrouted } = c.env;
+
+        if (shellFirst === true && !(await hasRoute(c.req.raw))) {
+            markUnrouted?.();
+
+            return c.text("404 Not Found", 404);
+        }
+
+        // A handler or middleware that calls `c.notFound()` answers 404 on purpose (a denial, a hidden record). Hono
+        // reaches the app's not-found handler through this field only from such a call; when no route matched it
+        // calls the handler directly, so wrapping the field tells the two apart.
+        const deliberate = c.notFound;
+
+        // eslint-disable-next-line no-param-reassign -- Hono reads `notFound` off this request's context; replacing it is the only hook on a deliberate call
+        c.notFound = () => {
+            deliberateNotFound.add(c);
+
+            return deliberate();
+        };
+
         await next();
+
+        return undefined;
     });
+
+    // Every not-found handler, Hono's default or one the app sets later, also signals that no route matched. The
+    // runtime serves a single-page app's shell only on that signal, never on a status: a 404 a handler returns,
+    // `c.notFound()` included, stays a 404, and a custom handler still answers every miss that is not a page load.
+    const setNotFound = app.notFound;
+
+    app.notFound = (handler) =>
+        setNotFound((c) => {
+            const { __lunoraUnrouted: markUnrouted } = c.env;
+
+            if (!deliberateNotFound.has(c)) {
+                markUnrouted?.();
+            }
+
+            return handler(c);
+        });
+
+    app.notFound((c) => c.text("404 Not Found", 404));
 
     return app;
 };
