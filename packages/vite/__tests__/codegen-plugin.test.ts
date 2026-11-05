@@ -628,8 +628,9 @@ describe("codegen-plugin", () => {
             // `server.close()`, regardless of middleware mode.
             (plugin.buildEnd as (this: { environment: unknown }) => void).call({ environment: server.environments.client });
 
+            // Every listener `configureServer` registered comes off again, the binding-drift ones included.
             // eslint-disable-next-line @typescript-eslint/unbound-method -- vi.fn mock on the fake server's watcher; no `this` binding to lose
-            expect(server.watcher.off).toHaveBeenCalledTimes(7);
+            expect(server.watcher.off).toHaveBeenCalledTimes((server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.length);
 
             // The pending debounce fires after close but must no-op (closed guard).
             await vi.runAllTimersAsync();
@@ -669,8 +670,9 @@ describe("codegen-plugin", () => {
             closeListeners[0]?.();
             closeListeners[0]?.();
 
+            // Every listener `configureServer` registered comes off again, the binding-drift ones included.
             // eslint-disable-next-line @typescript-eslint/unbound-method -- vi.fn mock on the fake server's watcher; no `this` binding to lose
-            expect(server.watcher.off).toHaveBeenCalledTimes(7);
+            expect(server.watcher.off).toHaveBeenCalledTimes((server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.length);
         });
     });
 

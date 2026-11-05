@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -31,5 +31,17 @@ describe("prepareDevSession", () => {
 
         await expect(new LunoraRspackPlugin(resolveOptions({ projectRoot: workdir })).prepareDevSession()).resolves.toBeUndefined();
         expect(warn.mock.calls.filter(([line]) => String(line).includes("EISDIR"))).toHaveLength(1);
+    });
+
+    it("writes no .dev.vars when the example it would scaffold from is unreadable", async () => {
+        expect.assertions(1);
+
+        mkdirSync(join(workdir, ".dev.vars.example"));
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        vi.spyOn(console, "info").mockImplementation(() => {});
+
+        await new LunoraRspackPlugin(resolveOptions({ projectRoot: workdir })).prepareDevSession();
+
+        expect(existsSync(join(workdir, ".dev.vars"))).toBe(false);
     });
 });

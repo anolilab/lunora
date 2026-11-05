@@ -220,6 +220,12 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
         );
     }
 
+    // The scaffold warned it wrote nothing because a dev-vars file is not readable;
+    // filling secrets now would write `.dev.vars` behind that warning.
+    if (result.status === "unreadable") {
+        return;
+    }
+
     // Phase 3 — fill any empty/placeholder secret already in .dev.vars (a
     // `lunora add`-scaffolded project writes secrets blank) and ensure the core
     // LUNORA_ADMIN_TOKEN is present + generated, so the worker boots with real

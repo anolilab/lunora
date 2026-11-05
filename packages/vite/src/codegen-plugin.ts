@@ -1155,16 +1155,15 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 scheduler.dispose();
                 bindingDrift.dispose();
 
-                if (codegenDisabled) {
-                    server.watcher.off("add", onDriftSource);
-                    server.watcher.off("change", onDriftSource);
-                    server.watcher.off("unlink", onDriftSource);
-                } else {
+                if (!codegenDisabled) {
                     server.watcher.off("add", onChange);
                     server.watcher.off("change", onChange);
                     server.watcher.off("unlink", onChange);
                     server.watcher.off("unlink", onConfigFileRemoved);
                 }
+                server.watcher.off("add", onDriftSource);
+                server.watcher.off("change", onDriftSource);
+                server.watcher.off("unlink", onDriftSource);
                 server.watcher.off("add", onConfigChange);
                 server.watcher.off("change", onConfigChange);
                 server.watcher.off("unlink", onConfigChange);

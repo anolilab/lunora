@@ -1348,6 +1348,35 @@ describe("lunora dev", () => {
             expect(sidecarKilled).toBe(true); // primary exit tore the sidecar down
         });
 
+        it("fills no secrets when the scaffold found a dev-vars file unreadable", async () => {
+            expect.assertions(2);
+
+            let filled = false;
+
+            const result = await runDevCommand({
+                cwd: workdir,
+                ensureEnv: async () => {
+                    return { addedKeys: [], generatedKeys: [], status: "unreadable" };
+                },
+                fillSecrets: () => {
+                    filled = true;
+
+                    return { addedKeys: [], filledKeys: [], status: "filled" };
+                },
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(filled).toBe(false);
+            expect(result.code).toBe(0);
+        });
+
         it("fills empty .dev.vars secrets + the admin token before the worker boots", async () => {
             expect.assertions(2);
 

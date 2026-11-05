@@ -84,11 +84,13 @@ const EMBEDDED_PREFIXED_TOKEN_LONG = /\b(?:AKIA|AIza)[\w./+-]+|Bearer\s+[\w./+-]
  * are ordinary usernameless credential URLs, and requiring a username left their
  * passwords in the clear.
  *
- * The user/password class covers alphanumerics plus dot, percent-encoding, plus
- * and hyphen. Both runs stay unbounded on purpose — a bound either could exceed
- * would silently stop redacting a real credential.
+ * The user class covers alphanumerics plus dot, percent-encoding, plus and
+ * hyphen. The password class adds RFC 3986's sub-delims and `~`, which a
+ * password may carry unencoded; `:` and `@` stay out, since they delimit it.
+ * Both runs stay unbounded on purpose — a bound either could exceed would
+ * silently stop redacting a real credential.
  */
-const URL_CREDENTIAL = /:\/\/([\w.%+-]*):[\w.%+-]+@/gu;
+const URL_CREDENTIAL = /:\/\/([\w.%+-]*):[\w.%+\-!$&'()*,;=~]+@/gu;
 
 /** The fixed placeholder substituted for any redacted secret. */
 const REDACTED = "[redacted]";
@@ -174,10 +176,12 @@ const replaceQuotedValues = (message: string, replace: (match: string, inner: st
 
 /**
  * Matches a `KEY=value` / `KEY: value` pair; the value is masked when the key is
- * secret-named. A quoted value is taken whole, up to its closing quote, so a
- * secret with a space in it is not masked only up to the space.
+ * secret-named. A quoted value is taken whole, up to its closing quote and past
+ * an escaped one, so a secret with a space or `\"` in it is not masked only up
+ * to there. Each quoted branch's two alternatives cannot both match a character,
+ * so it runs in linear time.
  */
-const KEYED_VALUE = /\b(?<key>[A-Za-z_]\w*)\s*[=:]\s*(?:"[^"\n]*"|'[^'\n]*'|\S+)/gu;
+const KEYED_VALUE = /\b(?<key>[A-Za-z_]\w*)\s*[=:]\s*(?:"(?:[^"\\\n]|\\[^\n])*"|'(?:[^'\\\n]|\\[^\n])*'|\S+)/gu;
 
 /**
  * Redact secrets from a free-form message. Masks, in order: any quoted value

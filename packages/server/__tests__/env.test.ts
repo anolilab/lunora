@@ -376,6 +376,21 @@ describe("redactSecrets", () => {
         expect(out).toContain("postgres://appuser");
     });
 
+    it("redacts a URL password that carries RFC 3986 sub-delims or a tilde", () => {
+        expect.assertions(2);
+
+        const redacted = redactSecrets("could not reach postgres://app:pa$$!w&o'r(d)*,;=~x@db.local/app");
+
+        expect(redacted).toBe("could not reach postgres://app:[redacted]@db.local/app");
+        expect(redacted).not.toContain("~x");
+    });
+
+    it("masks a secret-named quoted value past an escaped quote", () => {
+        expect.assertions(1);
+
+        expect(redactSecrets(String.raw`PASSWORD="abc\" def" then`)).toBe("PASSWORD=[redacted] then");
+    });
+
     it("stays linear on a boundary-rich payload — redaction runs on request bodies and thrown errors", () => {
         expect.assertions(2);
 

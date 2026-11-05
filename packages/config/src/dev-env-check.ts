@@ -56,7 +56,7 @@ interface DevEnvCheckOptions {
     projectRoot: string;
     schemaDirectory: string;
 
-    /** `--var` values the dev worker is started with. A key the config or env files set keeps their value, as wrangler keeps it. */
+    /** `--var` values the dev worker is started with: they win over the config's `vars`, and `.dev.vars` / `.env` win over them. */
     vars?: Readonly<Record<string, string>>;
 
     /** Binding names the dev session leaves out of the worker (a logged-out `ai` / `artifacts`), so they are not exempt. */
@@ -152,6 +152,11 @@ const runCheck = async (options: DevEnvCheckOptions): Promise<DevEnvCheck> => {
     const environment = options.environment ?? (fromProcess === "" ? undefined : fromProcess);
     const wrangler = readDevWrangler(options);
 
+    // Checking the project's own files instead would pass or fail an env the worker never sees.
+    if (options.configPath !== undefined && wrangler === undefined) {
+        return { error: `${options.configPath} does not exist`, kind: "unloadable" };
+    }
+
     if (wrangler !== undefined && wrangler.parsed === undefined) {
         return { error: `${wrangler.path} could not be read as JSONC`, kind: "unloadable" };
     }
@@ -162,8 +167,9 @@ const runCheck = async (options: DevEnvCheckOptions): Promise<DevEnvCheck> => {
         environment,
         processEnv,
         projectRoot: options.projectRoot,
+        vars: options.vars,
     });
-    const env = { ...options.vars, ...resolved.env };
+    const { env } = resolved;
     const scope = activeScope(wrangler?.parsed, environment) as ManifestConfigShape;
     const withheld = new Set(options.withheld);
     // A key the worker gets as a binding is not a var, so its absence here is not
@@ -172,7 +178,9 @@ const runCheck = async (options: DevEnvCheckOptions): Promise<DevEnvCheck> => {
         wrangler === undefined
             ? []
             : buildBindingManifest(scope)
-                  .bindings.map((requirement) => requirement.binding)
+                  // A consumer's `binding` is the queue it reads, not a name on `env`.
+                  .bindings.filter((requirement) => requirement.type !== "queue_consumer")
+                  .map((requirement) => requirement.binding)
                   .filter((binding) => !withheld.has(binding)),
     );
     const failures = check(env)

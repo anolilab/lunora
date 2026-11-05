@@ -242,6 +242,25 @@ describe(checkDevEnv, () => {
         await expect(check(requireKeys("CACHE"))).resolves.toStrictEqual({ kind: "valid" });
     });
 
+    it("still counts a key that only shares its name with a consumed queue", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(projectRoot, "wrangler.jsonc"), `{ "name": "app", "queues": { "consumers": [{ "queue": "API_URL" }] } }`);
+
+        await expect(check(requireKeys("API_URL"))).resolves.toMatchObject({ kind: "invalid" });
+    });
+
+    it("answers unloadable for a worker config that does not exist, rather than checking the project's files", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(projectRoot, ".dev.vars"), "API_URL=https://api.test\n");
+
+        await expect(check(requireKeys("API_URL"), { configPath: join(projectRoot, "wrangler.custom.jsonc") })).resolves.toMatchObject({
+            error: expect.stringContaining("does not exist") as unknown,
+            kind: "unloadable",
+        });
+    });
+
     it("counts a binding the dev session withholds from the worker as missing", async () => {
         expect.assertions(1);
 
@@ -262,6 +281,14 @@ describe(checkDevEnv, () => {
 
         await expect(check(requireKeys("SIDECAR_ONLY", "WORKER_ENV"), options)).resolves.toStrictEqual({ kind: "valid" });
         await expect(check(requireKeys("DEPLOY_ONLY"), options)).resolves.toMatchObject({ failures: [{ key: "DEPLOY_ONLY" }], kind: "invalid" });
+    });
+
+    it("lets a started-with var win over the config's own vars", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(projectRoot, "wrangler.jsonc"), JSON.stringify({ name: "app", vars: { WORKER_ENV: "production" } }));
+
+        await expect(envSeen({ vars: { WORKER_ENV: "development" } })).resolves.toMatchObject({ WORKER_ENV: "development" });
     });
 
     it("lets a var the env files set win over a started-with var, as wrangler does", async () => {

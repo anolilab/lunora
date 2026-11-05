@@ -381,6 +381,17 @@ export const env = Object.defineProperty((value: unknown) => value, Symbol.for("
         expect(options?.vars).toBeUndefined();
     });
 
+    it("writes no .dev.vars when the example it would scaffold from is unreadable", async () => {
+        expect.assertions(1);
+
+        mkdirSync(join(dir, ".dev.vars.example"));
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        await runHooks(devVariablesPlugin(RESOLVED(dir)));
+
+        expect(existsSync(join(dir, ".dev.vars"))).toBe(false);
+    });
+
     it("writes nothing under `vite preview`, which resolves as a `serve` command", async () => {
         expect.assertions(1);
 

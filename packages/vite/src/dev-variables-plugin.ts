@@ -162,11 +162,14 @@ const devVariablesPlugin = (
                 console.warn(lunoraLine(message));
             };
 
-            await ensureDevVariables({ confirm: createConfirm("[lunora] "), cwd: options.projectRoot, info, warn });
+            const scaffold = await ensureDevVariables({ confirm: createConfirm("[lunora] "), cwd: options.projectRoot, info, warn });
 
-            const secretSources = await secretSourcesOrUndefined(options.projectRoot, options.schemaDir, info);
-            fillDevSecrets({ cwd: options.projectRoot, info, secretSources });
-            ensureDevWorkerEnv(options.projectRoot, info);
+            // An unreadable dev-vars file was reported as "nothing written"; writing `.dev.vars` now would contradict it.
+            if (scaffold.status !== "unreadable") {
+                const secretSources = await secretSourcesOrUndefined(options.projectRoot, options.schemaDir, info);
+                fillDevSecrets({ cwd: options.projectRoot, info, secretSources });
+                ensureDevWorkerEnv(options.projectRoot, info);
+            }
 
             // `console`: a startup notice, before Vite's logger is wired up.
             await runCheck(console);
