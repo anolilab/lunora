@@ -227,8 +227,9 @@ const newCopyState = (errors: ErrorEncoding): CopyState => {
  * reference is copied once and reused under every key it sits under, rather than re-expanded per path.
  */
 const plainCopy = (value: unknown, state: CopyState): unknown => {
-    // A symbol or function is exported as its string form, so redaction must see that string.
-    if (typeof value === "symbol" || typeof value === "function") {
+    // A symbol, function or bigint is exported as its string form, so redaction must see that string; a bigint left in
+    // place would also make an Error record that holds it unwritable.
+    if (typeof value === "symbol" || typeof value === "function" || typeof value === "bigint") {
         return String(value);
     }
 

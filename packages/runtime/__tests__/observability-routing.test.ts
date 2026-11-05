@@ -295,6 +295,24 @@ describe("enrichSink", () => {
         expect(failure.cause.stack).toContain("disk full");
     });
 
+    it("keeps an enriched Error's stack and cause when they sit beside a bigint", () => {
+        expect.assertions(3);
+
+        const failure = Object.assign(new Error("over quota", { cause: { used: 10n } }), { limit: 5n });
+        const { received, sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => {
+            return { failure };
+        });
+
+        wrapped.onLog?.(log);
+
+        const logged = parseLoggedError(received.logs[0]?.fields?.failure);
+
+        expect(logged?.stack).toContain("over quota");
+        expect(logged?.limit).toBe("5");
+        expect(logged?.cause).toStrictEqual({ used: "10" });
+    });
+
     it("keeps the inner errors of an enriched AggregateError", () => {
         expect.assertions(1);
 

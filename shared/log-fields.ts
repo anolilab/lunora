@@ -286,12 +286,12 @@ const encodeTree = (value: unknown, encoding: Encoding, depth: number, errorDept
     );
 };
 
-/** Length of `value`'s JSON, or `0` when it has none to measure (`JSON.stringify` throws). */
+/** Length of `value`'s JSON, or `Infinity` when `JSON.stringify` throws: a record that cannot be written does not fit. */
 const jsonLength = (value: unknown): number => {
     try {
         return JSON.stringify(value).length;
     } catch {
-        return 0;
+        return Number.POSITIVE_INFINITY;
     }
 };
 
