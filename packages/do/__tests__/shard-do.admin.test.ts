@@ -2006,6 +2006,8 @@ describe("shardDO admin introspection", () => {
             instance: "do-abc123",
             level: "info",
             message: "stop: runtime_signal (exit 137)",
+            // The buffer numbers each line, which is what the Studio keys a row by.
+            seq: expect.any(Number),
             timestamp: 1_700_000_000_000,
         });
     });

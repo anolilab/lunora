@@ -35,6 +35,23 @@ describe("logBuffer", () => {
         expect(buffer.entries().map((event) => event.message)).toEqual(["c", "b"]);
     });
 
+    it("numbers each line once, so identical lines and evicted ones never share a seq", () => {
+        expect.assertions(2);
+
+        const buffer = new LogBuffer(2);
+
+        for (const event of [entry("same", 1), entry("same", 1), entry("same", 1)]) {
+            buffer.push(event);
+        }
+
+        expect(buffer.entries().map((event) => event.seq)).toStrictEqual([2, 1]);
+
+        buffer.clear();
+        buffer.push(entry("after clear", 2));
+
+        expect(buffer.entries()[0]?.seq).toBe(3);
+    });
+
     it("clear() empties the buffer", () => {
         expect.assertions(2);
 

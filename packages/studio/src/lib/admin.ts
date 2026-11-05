@@ -905,6 +905,8 @@ export interface LogEntry {
     instance?: string;
     level: LogLevel;
     message: string;
+    /** The line's place in its shard's buffer, never reused: what a row is keyed by. Absent on a worker predating the field. */
+    seq?: number;
     timestamp: number;
 
     /** Trace the line was emitted under; absent outside a dispatch (container lifecycle, hibernation-path errors) and on any worker predating the field. The key the Logs panel's Trace link and the Traces panel's correlated logs both join on. */

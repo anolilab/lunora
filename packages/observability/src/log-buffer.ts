@@ -25,6 +25,13 @@ interface LogEntry {
     instance?: string;
     level: LogLevel;
     message: string;
+
+    /**
+     * The line's place in this buffer, set by {@link LogBuffer.push}: one higher for each line, never reused. What a
+     * reader keys a line by: two lines can share every other field (a retry loop), and a live reader's list shifts as
+     * lines are prepended and evicted.
+     */
+    seq?: number;
     timestamp: number;
 
     /** Trace the line was emitted under; absent outside a dispatch (container lifecycle, hibernation-path errors). What the Studio joins a log line to its waterfall on. */
@@ -73,6 +80,9 @@ class LogBuffer {
     /** How many entries the ring has evicted since it was last cleared. */
     private droppedCount = 0;
 
+    /** The next {@link LogEntry.seq}. Not reset by {@link LogBuffer.clear}, so a line pushed after a clear never takes a cleared line's key. */
+    private nextSeq = 0;
+
     public constructor(capacity: number = DEFAULT_CAPACITY) {
         this.capacity = normalizeCapacity(capacity);
     }
@@ -114,7 +124,8 @@ class LogBuffer {
      * grows past its bound.
      */
     public push(entry: LogEntry): void {
-        this.buffer.push(entry);
+        this.buffer.push({ ...entry, seq: this.nextSeq });
+        this.nextSeq += 1;
 
         if (this.buffer.length > this.capacity) {
             this.buffer.shift();

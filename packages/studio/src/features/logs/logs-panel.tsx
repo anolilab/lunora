@@ -256,25 +256,6 @@ interface LogFilterCriteria {
 }
 
 /**
- * A key per entry that survives a live push, which replaces every entry object:
- * the line's identity (time, level, path, message, trace), plus its occurrence
- * number among lines sharing it, since two identical messages in the same
- * millisecond are ordinary (a retry loop).
- */
-const logEntryKeys = (entries: ReadonlyArray<LogEntry>): string[] => {
-    const seen = new Map<string, number>();
-
-    return entries.map((entry) => {
-        const content = JSON.stringify([entry.timestamp, entry.level, entry.functionPath, entry.message, entry.traceId]);
-        const occurrence = seen.get(content) ?? 0;
-
-        seen.set(content, occurrence + 1);
-
-        return `${content}#${String(occurrence)}`;
-    });
-};
-
-/**
  * Pure, AND-composed filter over the loaded log entries. Lunora's `getLogs` is
  * an in-memory ring buffer, not a queryable store, so there is no SQL to run —
  * this is the client-side equivalent: level allow-set, function-path substring,
@@ -468,15 +449,13 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     const scrollRef = useRef<HTMLDivElement>(null);
 
     // react-doctor-disable-next-line react-hooks-js/incompatible-library -- TanStack Virtual returns functions the compiler refuses to memoize; the alternative is not using the library
-    // An Errors-view row is keyed on its entry, not its position: a live push that
-    // prepends lines shifts every index, and a row's state (an opened "Error
-    // details") must stay with the line it was opened on.
-    const entryKeys = logEntryKeys(filtered);
-
     const virtualizer = useVirtualizer({
         count: activeCount,
         estimateSize: () => ROW_HEIGHT,
-        getItemKey: (index) => (view === "errors" ? (entryKeys[index] ?? index) : index),
+        // An Errors-view row is keyed on its line's `seq`, not its position: a live push that prepends lines shifts
+        // every index, and a row's state (an opened "Error details") must stay with the line it was opened on.
+        // A worker predating `seq` keys by position.
+        getItemKey: (index) => (view === "errors" ? (filtered[index]?.seq ?? index) : index),
         getScrollElement: () => scrollRef.current,
         initialRect: { height: SCROLL_HEIGHT, width: 800 },
         observeElementRect: (instance, callback) => flooredRectObserver(instance, callback, SCROLL_HEIGHT),

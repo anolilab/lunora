@@ -440,6 +440,7 @@ interface LogEntry {
     instance?: string;
     level: LogLevel;
     message: string;
+    seq?: number;
     timestamp: number;
     traceId?: string;
 }

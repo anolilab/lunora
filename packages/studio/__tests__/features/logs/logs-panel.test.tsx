@@ -330,12 +330,20 @@ describe("logsPanel — errors view", () => {
         expect(detail.textContent).toContain("caused by: Error: disk full");
     });
 
-    it("keeps an opened Error details with its line when a live push shifts the rows", async () => {
+    it("keeps an opened Error details with its line when a live push prepends an identical-looking line", async () => {
         expect.assertions(3);
 
         const err = JSON.stringify({ message: "save failed", name: "Error", stack: "Error: save failed\n    at save (orders.ts:4:11)" });
-        const failed: LogEntry = { fields: { err }, functionPath: "orders:place", level: "error", message: "charge failed", timestamp: 1_700_000_005_000 };
-        const later: LogEntry = { fields: { err }, functionPath: "orders:retry", level: "error", message: "retry failed", timestamp: 1_700_000_006_000 };
+        const failed: LogEntry = {
+            fields: { err },
+            functionPath: "orders:place",
+            level: "error",
+            message: "charge failed",
+            seq: 7,
+            timestamp: 1_700_000_005_000,
+        };
+        // Same timestamp, level, path, message and fields: a retry loop logging twice in one millisecond. Only `seq` differs.
+        const later: LogEntry = { ...failed, seq: 8 };
         const mock = createClient([failed]);
 
         render(renderPanel(mock));
