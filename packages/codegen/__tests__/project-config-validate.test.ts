@@ -149,6 +149,36 @@ describe("lunora.config validation", () => {
         expect(readProjectConfigLiterals(projectRoot).target).toBeUndefined();
     });
 
+    it("reads a config held in a let or var nothing reassigns, as it did before", () => {
+        expect.assertions(2);
+
+        writeConfig("let config = { target: 'celld', remot: true };\nexport default config;\n");
+
+        expect(readProjectConfigLiterals(projectRoot).target).toBe("celld");
+        expect(projectConfigProblems(configPath)).toStrictEqual([
+            "unknown key `remot`. Did you mean `remote`? Valid keys: advisor, app, codegen, durableObjects, remote, security, services, studio, target.",
+        ]);
+    });
+
+    it.each([
+        ["services: { api: {} }", "`services.api` is missing `dir`."],
+        ["advisor: { accept: [{ rule: 'unauthenticated-query' }] }", "`advisor.accept[0]` is missing `exportName`, `file`, `reason`."],
+    ])("refuses an entry without the fields the readers need: %s", (member, problem) => {
+        expect.assertions(1);
+
+        writeConfig(`export default { ${member} };\n`);
+
+        expect(projectConfigProblems(configPath)).toStrictEqual([problem]);
+    });
+
+    it("does not call a field missing that a spread may supply", () => {
+        expect.assertions(1);
+
+        writeConfig("const base = { dir: './api' };\nexport default { services: { api: { ...base, entrypoint: 'Api' } } };\n");
+
+        expect(projectConfigProblems(configPath)).toStrictEqual([]);
+    });
+
     it("follows a const to the value it names", () => {
         expect.assertions(1);
 
@@ -164,6 +194,7 @@ describe("lunora.config validation", () => {
 
         expect(projectConfigProblems(configPath)).toStrictEqual([
             "unknown key `advisor.accept[0].rules`. Did you mean `advisor.accept[0].rule`? Valid keys of `advisor.accept[0]`: exportName, file, reason, rule.",
+            "`advisor.accept[0]` is missing `rule`.",
         ]);
     });
 

@@ -55,7 +55,17 @@ import { propertyKeyName } from "./discover/property-name";
 import namedOnlyExportsProblem from "./project-config-exports";
 import { findCodegenConfigFile, findProjectConfigFile } from "./project-config-path";
 import type { FieldShape } from "./project-config-shape";
-import { BOOLEAN, constInitializer, FUNCTION, objectOf, objectProblems, SECURITY_HEADERS, STRING, STRING_ARRAY, unwrapLiteral } from "./project-config-shape";
+import {
+    BOOLEAN,
+    FUNCTION,
+    objectOf,
+    objectProblems,
+    SECURITY_HEADERS,
+    STRING,
+    STRING_ARRAY,
+    unchangedInitializer,
+    unwrapLiteral,
+} from "./project-config-shape";
 import { literalOf, NOT_LITERAL } from "./static-literal";
 
 /**
@@ -165,7 +175,8 @@ interface LoadedProjectConfig {
  * The expression the default export resolves to, or `undefined` when there is none.
  *
  * A `satisfies` / `as` / parenthesised wrapper is unwrapped, because that is the
- * documented shape. An identifier, or an `export { name as default }`, is followed to a `const` in the same file,
+ * documented shape. An identifier, or an `export { name as default }`, is followed to its variable in the same file
+ * (a `const`, or a `let` nothing reassigns),
  * because `const config = { … }; export default config;` is the commonest config
  * idiom there is and reading it as "no keys" was indistinguishable from an empty
  * config.
@@ -181,8 +192,8 @@ const defaultExportExpression = (sourceFile: SourceFile): TsNode | undefined => 
     const expression: TsNode | undefined =
         assignment === undefined && specifier !== undefined ? specifier.getNameNode() : unwrapLiteral(assignment?.getExpression());
 
-    // `export default config` names a `const`; its initializer unwraps the same way, parentheses included.
-    return expression !== undefined && TsNode.isIdentifier(expression) ? unwrapLiteral(constInitializer(sourceFile, expression.getText())) : expression;
+    // `export default config` names a variable; its initializer unwraps the same way, parentheses included.
+    return expression !== undefined && TsNode.isIdentifier(expression) ? unwrapLiteral(unchangedInitializer(sourceFile, expression.getText())) : expression;
 };
 
 /** The object literal the default export resolves to, or `undefined` when it does not resolve to one. */
@@ -228,7 +239,7 @@ const propertyLiteral = (property: PropertyAssignment | ShorthandPropertyAssignm
         return property.getInitializer();
     }
 
-    return constInitializer(sourceFile, propertyKeyName(property));
+    return unchangedInitializer(sourceFile, propertyKeyName(property));
 };
 
 /**
@@ -609,7 +620,11 @@ const SECTIONS: ReadonlyMap<string, ConfigSection> = new Map<string, ConfigSecti
         {
             read: (property, sourceFile) => readAdvisor(propertyLiteral(property, sourceFile), sourceFile),
             shape: objectOf({
-                accept: { ...STRING_ARRAY, expected: "an array of objects", items: objectOf(Object.fromEntries(ACCEPT_KEYS.map((key) => [key, STRING]))) },
+                accept: {
+                    ...STRING_ARRAY,
+                    expected: "an array of objects",
+                    items: objectOf(Object.fromEntries(ACCEPT_KEYS.map((key) => [key, STRING])), ACCEPT_KEYS),
+                },
                 minSeverity: STRING,
             }),
             unreadable: { advisor: { unreadable: true } },
@@ -659,12 +674,15 @@ const SECTIONS: ReadonlyMap<string, ConfigSection> = new Map<string, ConfigSecti
             read: (property, sourceFile) => readServices(propertyLiteral(property, sourceFile)),
             shape: {
                 accepts: ["object"],
-                entries: objectOf({
-                    dir: STRING,
-                    entrypoint: STRING,
-                    // `true` is the default, never written: only `false` changes anything.
-                    rpc: { accepts: ["boolean"], expected: "`false`", hint: "Leave it out for an RPC binding.", literal: false },
-                }),
+                entries: objectOf(
+                    {
+                        dir: STRING,
+                        entrypoint: STRING,
+                        // `true` is the default, never written: only `false` changes anything.
+                        rpc: { accepts: ["boolean"], expected: "`false`", hint: "Leave it out for an RPC binding.", literal: false },
+                    },
+                    ["dir"],
+                ),
                 expected: "an object",
             },
             unreadable: { services: { unreadable: true } },

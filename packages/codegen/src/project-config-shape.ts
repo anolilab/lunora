@@ -38,6 +38,8 @@ interface FieldShape {
     keys?: Readonly<Record<string, FieldShape>>;
     /** The one boolean the value may be, when a boolean is accepted only as that literal (`rpc: false`, `csp: false`). */
     literal?: boolean;
+    /** For an object with fixed keys, the ones it must have; the readers refuse an entry without them. */
+    required?: ReadonlyArray<string>;
 }
 
 const BOOLEAN: FieldShape = { accepts: ["boolean"], expected: "a boolean" };
@@ -47,8 +49,8 @@ const STRING: FieldShape = { accepts: ["string"], expected: "a string" };
 const STRING_ARRAY: FieldShape = { accepts: ["array"], expected: "an array of strings", items: STRING };
 const STRING_OR_FALSE: FieldShape = { accepts: ["boolean", "string"], expected: "a string or `false`", literal: false };
 
-const objectOf = (keys: Readonly<Record<string, FieldShape>>): FieldShape => {
-    return { accepts: ["object"], expected: "an object", keys };
+const objectOf = (keys: Readonly<Record<string, FieldShape>>, required?: ReadonlyArray<string>): FieldShape => {
+    return { accepts: ["object"], expected: "an object", keys, ...(required === undefined ? {} : { required }) };
 };
 
 /** Each `security.headers` option's shape. A mapped type, so an option added to `SecurityHeadersOptions` without a shape here does not compile. */
@@ -87,21 +89,45 @@ const unwrapLiteral = (value: TsNode | undefined): TsNode | undefined => {
     return inner;
 };
 
+/** Whether anything in the file assigns to `name` again: `name = …`, `name += …`, `name++` and the like. */
+const isReassigned = (sourceFile: SourceFile, name: string): boolean =>
+    sourceFile.getDescendants().some((node) => {
+        if (TsNode.isBinaryExpression(node)) {
+            const operator = node.getOperatorToken().getKind();
+            const left = node.getLeft();
+
+            return operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment && TsNode.isIdentifier(left) && left.getText() === name;
+        }
+
+        return (
+            (TsNode.isPrefixUnaryExpression(node) || TsNode.isPostfixUnaryExpression(node)) &&
+            (node.getOperatorToken() === SyntaxKind.PlusPlusToken || node.getOperatorToken() === SyntaxKind.MinusMinusToken) &&
+            node.getOperand().getText() === name
+        );
+    });
+
 /**
- * The initializer of the `const` named `name` in this file, or `undefined`. Only a `const` is followed: a `let` or
- * `var` may be reassigned before the config is exported, so its initializer is not the value that is read.
+ * The initializer of the variable named `name` in this file when it is the value that is read, else `undefined`: a
+ * `const`, or a `let` / `var` nothing reassigns. A reassigned one may hold another value by the time the config is
+ * exported, so its initializer is not followed.
  */
-const constInitializer = (sourceFile: SourceFile, name: string): TsNode | undefined => {
+const unchangedInitializer = (sourceFile: SourceFile, name: string): TsNode | undefined => {
     const declaration = sourceFile.getVariableDeclaration(name);
 
-    return declaration?.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const ? declaration.getInitializer() : undefined;
+    if (declaration === undefined) {
+        return undefined;
+    }
+
+    const isConst = declaration.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const;
+
+    return isConst || !isReassigned(sourceFile, name) ? declaration.getInitializer() : undefined;
 };
 
-/** `node` unwrapped, and followed when it names a `const` in the same file. A method is its own value. */
+/** `node` unwrapped, and followed when it names a variable in the same file whose value never changes. A method is its own value. */
 const resolveValue = (node: TsNode | undefined, sourceFile: SourceFile): TsNode | undefined => {
     const value = unwrapLiteral(node);
 
-    return value !== undefined && TsNode.isIdentifier(value) ? unwrapLiteral(constInitializer(sourceFile, value.getText())) : value;
+    return value !== undefined && TsNode.isIdentifier(value) ? unwrapLiteral(unchangedInitializer(sourceFile, value.getText())) : value;
 };
 
 /** The boolean `!0` / `!1` (a minifier's `true` / `false`) evaluates to, or `undefined` for anything else. */
@@ -221,6 +247,13 @@ const fieldProblems = (node: TsNode | undefined, field: FieldShape, label: strin
         : [];
 };
 
+/** The fields `shape` requires that `present` lacks, as one problem. */
+const missingFieldsProblems = (shape: FieldShape, present: ReadonlyMap<string | undefined, unknown>, path: string): string[] => {
+    const missing = (shape.required ?? []).filter((key) => !present.has(key));
+
+    return missing.length === 0 ? [] : [`\`${path}\` is missing ${missing.map((key) => `\`${key}\``).join(", ")}.`];
+};
+
 /**
  * The problems in `object` checked against `keys` (fixed keys) or `entries` (user-chosen keys, each checked against one
  * shape). `namesOnly` is set below a member whose value may be shadowed: its nested names are still checked, its values not.
@@ -254,7 +287,8 @@ const objectProblems = (object: ObjectLiteralExpression, shape: FieldShape, path
         }
     }
 
-    return problems;
+    // A spread or an unnamed computed key may supply a field, so a missing one is reported only when every member is known.
+    return valuesReadable ? [...problems, ...missingFieldsProblems(shape, effective, path)] : problems;
 };
 
 /**
@@ -278,4 +312,4 @@ const memberProblems = (member: TsNode, field: FieldShape, label: string, source
 };
 
 export type { FieldShape };
-export { BOOLEAN, constInitializer, FUNCTION, objectOf, objectProblems, SECURITY_HEADERS, STRING, STRING_ARRAY, unwrapLiteral };
+export { BOOLEAN, FUNCTION, objectOf, objectProblems, SECURITY_HEADERS, STRING, STRING_ARRAY, unchangedInitializer, unwrapLiteral };
