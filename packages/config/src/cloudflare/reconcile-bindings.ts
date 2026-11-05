@@ -1032,6 +1032,8 @@ const planWranglerBindings = (
     const ownedScopes: Record<string, OwnedTuning> = {};
     const ownedServicesRecord = readOwnedServices(manifest);
     let ownedServices: OwnedServices | undefined;
+    // The dev config's share of the services record, by whether its write lands.
+    let devOwned: Record<"unwritten" | "written", OwnedServices> = { unwritten: {}, written: {} };
 
     // The reconcile pipeline: each enabled step rewrites `text` but reads the
     // original `parsed`. This is only safe because the steps touch disjoint
@@ -1132,13 +1134,13 @@ const planWranglerBindings = (
 
                 ownedServices = step.owned;
 
-                // Written after the dev config step below has added what it owns to `ownedServices`.
+                // Written after the dev config step below has planned what it owns.
                 const record: OwnershipRecord = {
                     consequence: "a service removed from lunora.config stays bound",
                     key: "services",
                     label: "service bindings",
-                    write: (current) => {
-                        recordOwnedServices(current, ownedServices ?? step.owned);
+                    write: (current, { devConfigWritten }) => {
+                        recordOwnedServices(current, { ...ownedServices, ...(devConfigWritten ? devOwned.written : devOwned.unwritten) });
                     },
                 };
 
@@ -1191,7 +1193,7 @@ const planWranglerBindings = (
         const devStep = planDevConfigServices(projectRoot, inferred.services, ownedServicesRecord);
 
         warnings.push(...devStep.warnings);
-        ownedServices = { ...ownedServices, ...devStep.owned };
+        devOwned = { unwritten: devStep.previouslyOwned, written: devStep.owned };
         devConfig = devStep;
     }
 

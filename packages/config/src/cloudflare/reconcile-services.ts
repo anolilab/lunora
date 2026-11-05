@@ -172,6 +172,8 @@ interface DevConfigServicesPlan {
     original: string;
     owned: OwnedServices;
     path: string;
+    /** What was recorded for the dev config before this plan, kept when its write fails. */
+    previouslyOwned: OwnedServices;
     text: string;
     updated: string[];
     warnings: string[];
@@ -185,7 +187,9 @@ interface DevConfigServicesPlan {
  */
 const planDevConfigServices = (projectRoot: string, declared: ReadonlyArray<ServiceBindingIR>, recorded: OwnedServices): DevConfigServicesPlan => {
     const path = join(projectRoot, DEV_CONFIG);
-    const unchanged = { added: [], original: "", path, text: "", updated: [], warnings: [] };
+    const previous = recorded[DEV_CONFIG_SCOPE];
+    const previouslyOwned: OwnedServices = previous === undefined || previous.length === 0 ? {} : { [DEV_CONFIG_SCOPE]: previous };
+    const unchanged = { added: [], original: "", path, previouslyOwned, text: "", updated: [], warnings: [] };
 
     // Nothing declared and nothing of ours to remove.
     if (declared.length === 0 && recorded[DEV_CONFIG_SCOPE] === undefined) {
@@ -196,9 +200,7 @@ const planDevConfigServices = (projectRoot: string, declared: ReadonlyArray<Serv
 
     if (parsed === undefined) {
         // Absent or unreadable: nothing to reconcile, but what was owned stays owned for the next pass.
-        const previous = recorded[DEV_CONFIG_SCOPE];
-
-        return { ...unchanged, owned: previous === undefined || previous.length === 0 ? {} : { [DEV_CONFIG_SCOPE]: previous } };
+        return { ...unchanged, owned: previouslyOwned };
     }
 
     const step = reconcileScope(text, ["services"], parsed.services ?? [], declared, new Set(recorded[DEV_CONFIG_SCOPE]), undefined, new Map());
@@ -208,6 +210,7 @@ const planDevConfigServices = (projectRoot: string, declared: ReadonlyArray<Serv
         original: text,
         owned: step.owned.length > 0 ? { [DEV_CONFIG_SCOPE]: step.owned } : {},
         path,
+        previouslyOwned,
         text: step.text,
         updated: step.updated ?? [],
         warnings: (step.warnings ?? []).map((entry) => `${DEV_CONFIG} ${entry}`),

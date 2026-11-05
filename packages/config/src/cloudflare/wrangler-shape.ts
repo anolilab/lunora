@@ -123,7 +123,8 @@ interface OwnershipRecord {
     /** The key under `lunora`. */
     key: string;
     label: string;
-    write: (manifest: Manifest) => void;
+    /** `devConfigWritten` is false when the dev sidecar's config failed to write, so nothing may claim what it would have held. */
+    write: (manifest: Manifest, options: { devConfigWritten: boolean }) => void;
 }
 
 interface ReconcileStep {

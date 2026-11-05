@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,7 +6,7 @@ import type { ServiceBindingIR } from "@lunora/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { reconcileWranglerBindings } from "../src/cloudflare/apply-bindings";
+import { applyWranglerBindings, reconcileWranglerBindings } from "../src/cloudflare/apply-bindings";
 import { planWranglerBindings } from "../src/cloudflare/reconcile-bindings";
 import type { InferredBindings } from "../src/infer-bindings";
 
@@ -246,6 +246,28 @@ describe("reconcileServices", () => {
         reconcileWranglerBindings(root, inferred([parser]));
 
         expect((lunora() as { services: Record<string, unknown> }).services["dev:services"]).toStrictEqual(["SERVICE_PARSER"]);
+    });
+
+    it("still records what wrangler.jsonc now holds when the dev sidecar's config cannot be written", () => {
+        expect.assertions(4);
+
+        writeFileSync(join(root, "wrangler.dev.jsonc"), `{ "name": "app-dev", "main": "lunora/server.ts" }\n`, "utf8");
+
+        const plan = planWranglerBindings(root, inferred([parser]));
+        // A directory where the file should be: EISDIR, which root-run CI cannot chmod its way past.
+        const unwritable = join(root, "unwritable.jsonc");
+
+        mkdirSync(unwritable);
+
+        const result = applyWranglerBindings(root, { ...plan, devConfig: plan.devConfig && { ...plan.devConfig, path: unwritable } });
+        const services = (lunora() as { services?: Record<string, unknown> }).services ?? {};
+
+        expect(config()["services"]).toContainEqual({ binding: "SERVICE_PARSER", service: "neore-parser" });
+        // The main config's binding is owned, so a later pass still removes it with its declaration…
+        expect(Object.values(services).flat()).toContain("SERVICE_PARSER");
+        // …and nothing claims the sidecar binding that never reached disk.
+        expect(services["dev:services"]).toBeUndefined();
+        expect(result.warnings).toContainEqual(expect.stringContaining(`writing ${unwritable} failed`));
     });
 
     it("plans the dev sidecar's bindings without writing wrangler.jsonc, wrangler.dev.jsonc or the record", () => {
