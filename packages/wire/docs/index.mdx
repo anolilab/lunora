@@ -100,9 +100,11 @@ input.
 **Type:** `(text: string) => Record<string, unknown> | undefined`
 
 Parses a stored JSON blob into a document. Returns `undefined` instead of
-throwing when the text is not valid JSON, holds a malformed tag, or decodes to
-something other than a plain object. Use it on read paths that must degrade
-rather than fail.
+throwing when the text is not valid JSON, when decoding throws (a `bigint` over
+1024 digits, or tagged text nested past 64 levels), or when the result is not a
+plain object. It does not validate every tag: a malformed frame that
+`decodeWire` accepts comes back decoded as it is. Use it on read paths that must
+degrade rather than fail.
 
 ### `encodeArgsOrThrow(label, path, args)`
 
