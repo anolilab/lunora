@@ -163,6 +163,27 @@ describe(emitProjectAssetHeaders, () => {
         expect(readFileSync(join(output, "_headers"), "utf8")).toContain("  X-Frame-Options: SAMEORIGIN");
     });
 
+    it("caches the hashed directory for good only once a wrangler config says how a miss is handled", () => {
+        expect.assertions(4);
+
+        run({ requireAssetsDirectory: false });
+
+        expect(readFileSync(join(output, "_headers"), "utf8")).not.toContain("immutable");
+        expect(logger.warn).toHaveBeenCalledWith(
+            expect.stringContaining("no long-term caching for _astro/, because no wrangler.jsonc or wrangler.json was found"),
+        );
+
+        writeFileSync(join(projectRoot, "wrangler.jsonc"), '{ "name": "app", "assets": { ', "utf8");
+        run({ requireAssetsDirectory: false });
+
+        expect(readFileSync(join(output, "_headers"), "utf8")).not.toContain("immutable");
+
+        writeWrangler({ assets: { directory: "./dist/client" } });
+        run({ requireAssetsDirectory: false });
+
+        expect(readFileSync(join(output, "_headers"), "utf8")).toContain("/_astro/*\n  Cache-Control: public, max-age=31536000, immutable");
+    });
+
     it("reports the headers left to the user's own rules, and each warning, through the build's logger", () => {
         expect.assertions(2);
 

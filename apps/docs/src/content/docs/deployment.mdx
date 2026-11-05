@@ -748,6 +748,8 @@ The rule is left out when it could cache something that is not a hashed file:
 - an output file name (`entryFileNames`, `chunkFileNames`, `assetFileNames`) is
   a function, or a pattern without `[hash]`;
 - `build.assetsDir` is empty;
+- no `wrangler.jsonc` / `wrangler.json` was found, or it does not parse, so
+  `not_found_handling` (below) is unknown;
 - `assets.not_found_handling` is `"single-page-application"` or `"404-page"`.
   `_headers` matches the request path, so after a deploy removes a chunk, a
   request for it would get `index.html` or `404.html` with the immutable policy,

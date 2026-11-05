@@ -149,10 +149,21 @@ const writeProjectAssetHeaders = (input: ProjectAssetHeadersInput): ProjectAsset
         }
     }
 
+    // Without a parsed config `not_found_handling` is unknown, not unset: under a fallback, a request for a chunk a
+    // later deploy removed would get the fallback page cached for a year, so the immutable rule waits for the config.
+    const configRead = wrangler !== undefined;
     const result = writeAssetHeaders(input.outputDirectory, {
         headers: projectSecurityHeaders(resolve(input.projectRoot, input.schemaDir ?? "lunora"), wrangler, environment),
-        immutableDirectory: cacheableDirectory(input, assets?.["not_found_handling"]),
+        immutableDirectory: configRead ? cacheableDirectory(input, assets?.["not_found_handling"]) : undefined,
     });
+
+    if (!configRead && input.hashedDirectory !== undefined && input.hashedDirectory !== "") {
+        result.warnings.push(
+            `_headers: no long-term caching for ${input.hashedDirectory}/, because ${
+                wranglerPath === undefined ? "no wrangler.jsonc or wrangler.json was found" : `${wranglerPath} could not be parsed`
+            } and assets.not_found_handling decides whether that is safe`,
+        );
+    }
 
     return { result, written: true };
 };
