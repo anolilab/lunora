@@ -1,5 +1,5 @@
 import { runCodegen } from "@lunora/codegen";
-import type { ContainerLogStreamHandle, DiscoveryCache } from "@lunora/config";
+import type { ContainerLogStreamHandle, DiscoveryCache, EnsureDevVariablesResult } from "@lunora/config";
 import {
     AGENT_RULES_HINT,
     checkDevEnv,
@@ -147,6 +147,37 @@ const reportDevEnv = async (logger: Logger, cwd: string, plan: DevCommandPlan): 
     }
 };
 
+/** Read failures that mean a path exists but is not a file this process can read. */
+const UNREADABLE_FILE_CODES: ReadonlySet<string> = new Set(["EACCES", "EISDIR", "EPERM"]);
+
+/**
+ * Phase 2 of {@link offerDevVariablesScaffold}, or `undefined` when `.dev.vars`
+ * or its example is not a readable file. That is the user's to fix and wrangler
+ * reports it when it loads `.dev.vars`, so the offer is skipped with one line
+ * rather than aborting the start. Any other failure still propagates.
+ */
+const ensureDevVariablesOrSkip = async (options: DevCommandOptions, cwd: string): Promise<EnsureDevVariablesResult | undefined> => {
+    try {
+        return await (options.ensureEnv ?? ensureDevVariables)({
+            confirm: createTuiConfirm(),
+            cwd,
+            info: (message) => {
+                options.logger.info(message);
+            },
+        });
+    } catch (error: unknown) {
+        const code = (error as NodeJS.ErrnoException | undefined)?.code;
+
+        if (code === undefined || !UNREADABLE_FILE_CODES.has(code)) {
+            throw error;
+        }
+
+        options.logger.warn(`skipped the ${DEV_VARS_FILE} scaffold: ${DEV_VARS_FILE} or ${DEV_VARS_EXAMPLE_FILE} is not a readable file (${code})`);
+
+        return undefined;
+    }
+};
+
 /**
  * Offer to scaffold `.dev.vars` before the worker starts — otherwise it throws
  * on the first required secret (e.g. `AUTH_SECRET is required`). Non-interactive
@@ -190,19 +221,13 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
     }
 
     // Phase 2 — offer to generate / top up .dev.vars from the example.
-    const result = await (options.ensureEnv ?? ensureDevVariables)({
-        confirm: createTuiConfirm(),
-        cwd,
-        info: (message) => {
-            options.logger.info(message);
-        },
-    });
+    const result = await ensureDevVariablesOrSkip(options, cwd);
 
     // In CI / non-TTY contexts the scaffolder declines silently. Emit an
     // actionable hint so engineers know how to get their secrets in place —
     // otherwise the next failure is a cryptic runtime error from inside the
     // worker (e.g. `AUTH_SECRET is required`), not a setup prompt.
-    if (result.status === "declined" && !isInteractive()) {
+    if (result?.status === "declined" && !isInteractive()) {
         options.logger.info(
             `hint: ${DEV_VARS_FILE} was not scaffolded (non-interactive run). ` +
                 `Copy ${DEV_VARS_EXAMPLE_FILE} → ${DEV_VARS_FILE} and fill in secrets, ` +

@@ -1708,6 +1708,34 @@ describe("lunora dev", () => {
             }
         });
 
+        it("skips the scaffold offer with one warning when .dev.vars is a directory", async () => {
+            expect.assertions(3);
+
+            // The real scaffolder only reads `.dev.vars` once an example exists,
+            // so both are needed to reach the read that used to abort the start.
+            writeFileSync(join(workdir, ".dev.vars.example"), "AUTH_SECRET=\n", "utf8");
+            mkdirSync(join(workdir, ".dev.vars"));
+
+            const warnings: string[] = [];
+            const result = await runDevCommand({
+                cwd: workdir,
+                logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            const scaffoldWarnings = warnings.filter((line) => line.includes("scaffold"));
+
+            expect(result.code).toBe(0);
+            expect(scaffoldWarnings).toHaveLength(1);
+            expect(scaffoldWarnings[0]).toContain("EISDIR");
+        });
+
         it("logs an actionable .dev.vars hint when the scaffolder is declined non-interactively", async () => {
             expect.assertions(2);
 
