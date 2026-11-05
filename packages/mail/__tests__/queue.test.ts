@@ -146,7 +146,8 @@ describe("consumeQueuedSend with a sent-mail store", () => {
 
     /** A KV-shaped store over a Map, recording every `put`. */
     /** The sent records a store was given, without the attempt marks kept beside them. */
-    const recordsOf = (puts: { key: string; ttl: number; value: string }[]) => puts.filter((put) => !put.key.endsWith("#attempt"));
+    const recordsOf = (puts: { key: string; ttl: number; value: string }[]) =>
+        puts.filter((put) => !put.key.startsWith("sending ") && !put.key.startsWith("failed "));
 
     const memoryStore = (initial: Record<string, string> = {}) => {
         const entries = new Map(Object.entries(initial));
@@ -178,19 +179,31 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         expect(redelivered).toStrictEqual({ deduplicated: true, id: "queued-send" });
         expect(mailer.send).toHaveBeenCalledTimes(1);
         expect(puts).toStrictEqual([
-            { key: "order-42#attempt", ttl: 86_400, value: "sending" },
+            { key: "sending 1 order-42", ttl: 15 * 86_400, value: "sending" },
             { key: "order-42", ttl: 86_400, value: "queued-send" },
         ]);
     });
 
-    it("keeps the attempt mark for the provider's whole dedupe window, even with a shorter TTL", async () => {
+    it("keeps the attempt mark as long as a queued message can live, even with a shorter TTL", async () => {
         expect.assertions(1);
 
         const { puts, store } = memoryStore();
 
         await consumeQueuedSend(noopMailer(), body, { sent: store, sentTtlSeconds: 60 });
 
-        expect(puts.find((put) => put.key === "order-42#attempt")?.ttl).toBe(86_400);
+        expect(puts.find((put) => put.key === "sending 1 order-42")?.ttl).toBe(15 * 86_400);
+    });
+
+    it("never takes a message keyed like a mark for one already sent", async () => {
+        expect.assertions(2);
+
+        const mailer = noopMailer();
+        const { store } = memoryStore();
+
+        await consumeQueuedSend(mailer, { ...body, idempotencyKey: "foo" }, { sent: store });
+
+        await expect(consumeQueuedSend(mailer, { ...body, idempotencyKey: "foo#attempt" }, { sent: store })).resolves.toMatchObject({ deduplicated: false });
+        expect(mailer.send).toHaveBeenCalledTimes(2);
     });
 
     it("remembers a key for the configured TTL", async () => {
@@ -307,7 +320,7 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         const store: SentMailStore = {
             get: async () => null,
             put: async (key) => {
-                if (!key.endsWith("#attempt")) {
+                if (!key.startsWith("sending ")) {
                     throw new Error("KV write failed");
                 }
             },
@@ -352,7 +365,7 @@ describe("consumeQueuedSend with a sent-mail store", () => {
             const store: SentMailStore = {
                 get: async () => null,
                 put: async (key) =>
-                    key.endsWith("#attempt")
+                    key.startsWith("sending ")
                         ? undefined
                         : new Promise<void>(() => {
                               // never settles, as a stalled store looks
@@ -519,7 +532,7 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         it("refuses an old redelivery whose earlier delivery reached the provider and left no record", async () => {
             expect.assertions(3);
 
-            const { store } = memoryStore({ "order-42#attempt": "sending" });
+            const { store } = memoryStore({ "sending 1 order-42": "sending" });
             const mailer = noopMailer();
 
             const error = await consumeQueuedSend(mailer, body, { attempts: 2, enqueuedAt: new Date(Date.now() - 23 * HOUR_MS), sent: store }).catch(
@@ -540,7 +553,61 @@ describe("consumeQueuedSend with a sent-mail store", () => {
             await expect(consumeQueuedSend(failingMailer(new MailSendError({ retryable: true })), body, { enqueuedAt, sent: store })).rejects.toBeInstanceOf(
                 MailSendError,
             );
-            expect(entries.get("order-42#attempt")).toBe("failed");
+            expect(entries.get("failed 1 order-42")).toBe("failed");
+            await expect(consumeQueuedSend(noopMailer(), body, { attempts: 2, enqueuedAt, sent: store })).resolves.toMatchObject({ id: "queued-send" });
+        });
+
+        it("keeps an earlier attempt that may have landed even when a later one fails knowingly", async () => {
+            expect.assertions(2);
+
+            const { store } = memoryStore();
+            const enqueuedAt = new Date(Date.now() - 22 * HOUR_MS);
+            const send = vi
+                .fn<Mailer["send"]>()
+                .mockRejectedValueOnce(new MailSendError({ outcomeUnknown: true, retryable: true }))
+                .mockRejectedValueOnce(new MailSendError({ retryable: true }))
+                .mockResolvedValueOnce({ id: "repeat" });
+            const mailer: Mailer = {
+                queue: async () => {
+                    return { queued: true };
+                },
+                send,
+            };
+
+            await consumeQueuedSend(mailer, body, { attempts: 1, enqueuedAt, sent: store }).catch(() => undefined);
+            await consumeQueuedSend(mailer, body, { attempts: 2, enqueuedAt, sent: store }).catch(() => undefined);
+
+            const late = await consumeQueuedSend(mailer, body, { attempts: 3, enqueuedAt: new Date(Date.now() - 23 * HOUR_MS), sent: store }).catch(
+                (error: unknown) => error,
+            );
+
+            expect(isOutcomeUnknownMailError(late)).toBe(true);
+            expect(send).toHaveBeenCalledTimes(2);
+        });
+
+        it("writes no key twice, so Workers KV's one-write-per-second limit never drops a mark", async () => {
+            expect.assertions(2);
+
+            const written = new Set<string>();
+            const { entries, store: memory } = memoryStore();
+            const store: SentMailStore = {
+                get: memory.get,
+                put: async (key, value, options) => {
+                    if (written.has(key)) {
+                        throw new Error("KV: too many writes to the same key");
+                    }
+
+                    written.add(key);
+                    await memory.put(key, value, options);
+                },
+            };
+            const enqueuedAt = new Date(Date.now() - 23 * HOUR_MS);
+
+            await consumeQueuedSend(failingMailer(new MailSendError({ retryable: true })), body, { attempts: 1, enqueuedAt, sent: store }).catch(
+                () => undefined,
+            );
+
+            expect(entries.get("failed 1 order-42")).toBe("failed");
             await expect(consumeQueuedSend(noopMailer(), body, { attempts: 2, enqueuedAt, sent: store })).resolves.toMatchObject({ id: "queued-send" });
         });
 

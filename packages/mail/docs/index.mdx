@@ -194,10 +194,13 @@ deliver the repeat, so pass `enqueuedAt: message.timestamp` and
 `attempts: message.attempts` as above: an outcome-unknown failure of a message
 enqueued 23 or more hours ago is then not retryable, and a redelivery that old is
 refused before any request when an earlier delivery may have landed; the consumer
-acks and reports either. With a `sent` store that is decided by an attempt mark
-(`<key>#attempt`) written just before the provider call, so a delivery that failed
-before reaching the provider (a store outage, say) is still sent; without one, any
-redelivery (`attempts` above 1) counts, since each earlier failure was a send. Without
+acks and reports either. With a `sent` store that is decided by marks it keeps per
+delivery, 15 days, under keys no idempotency key can take: `sending <n> <key>` just
+before delivery `n` asks the provider and `failed <n> <key>` once that send is known
+not to have gone out. A redelivery is refused while an earlier delivery has `sending`
+without `failed`, so one that failed before reaching the provider (a store outage,
+say) is still sent; without a store, any redelivery (`attempts` above 1) counts,
+since each earlier failure was a send. Without
 `enqueuedAt` nothing tracks the message's age, and a send retried for more than a
 day can be delivered twice.
 

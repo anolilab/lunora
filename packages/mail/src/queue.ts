@@ -52,8 +52,8 @@ interface ConsumeQueuedSendOptions {
     /**
      * Which delivery of the message this is: pass the Cloudflare Queues `message.attempts` (1 for the first). Used
      * without a `sent` store, where every redelivery follows a send that reached the provider: one older than the
-     * provider's dedupe window (`enqueuedAt`) is then refused before any request. With a store, its attempt mark
-     * decides instead, so a delivery that failed before the send (the store was down) is still sent.
+     * provider's dedupe window (`enqueuedAt`) is then refused before any request. With a store, the marks it keeps per
+     * delivery decide instead, so a delivery that failed before the send (the store was down) is still sent.
      */
     attempts?: number;
 
@@ -86,20 +86,22 @@ interface ConsumeQueuedSendOptions {
 const DEFAULT_SENT_TTL_SECONDS = 86_400;
 
 /**
- * The attempt mark kept beside a key: `sending` from just before the provider call, `failed` once the send is known
- * not to have gone out. Only `sending` makes a late redelivery a possible repeat.
+ * Attempt marks, one pair per delivery: `sending <n> <key>` just before delivery `n` asks the provider, and
+ * `failed <n> <key>` once that send is known not to have gone out. Each is written once to its own key, so a later
+ * attempt never erases an earlier one's evidence and no key is written twice in a second (Workers KV's per-key limit).
+ * The space keeps them apart from every idempotency key, which holds visible ASCII only.
  */
-const attemptKey = (key: string): string => `${key}#attempt`;
+const sendingMark = (key: string, attempt: number): string => `sending ${String(attempt)} ${key}`;
 
-const ATTEMPT_SENDING = "sending";
-
-const ATTEMPT_FAILED = "failed";
+const failedMark = (key: string, attempt: number): string => `failed ${String(attempt)} ${key}`;
 
 /**
- * The attempt mark outlives the provider's 24-hour dedupe window whatever `sentTtlSeconds` is: a mark that lapsed
- * inside it would read as "never sent" and let a late redelivery repeat a send that may have landed.
+ * Marks outlive a queued message whatever `sentTtlSeconds` is: Cloudflare Queues keeps a message up to 14 days, and a
+ * mark that lapsed first would read as "never sent" and let a late redelivery repeat a send that may have landed.
  */
-const attemptMarkTtl = (sentTtlSeconds: number): number => Math.max(sentTtlSeconds, 86_400);
+const ATTEMPT_MARK_TTL_SECONDS = 15 * 86_400;
+
+const attemptMarkTtl = (sentTtlSeconds: number): number => Math.max(sentTtlSeconds, ATTEMPT_MARK_TTL_SECONDS);
 
 /** How long a read of, or a write to, the sent-mail store may take before it is given up on. */
 const SENT_STORE_TIMEOUT_MS = 10_000;
@@ -273,6 +275,36 @@ const withinStoreDeadline = async <T>(work: Promise<T>): Promise<T> => {
     }
 };
 
+/** Whether a delivery before `attempt` reached the provider without being known to have failed. */
+const earlierSendMayHaveLanded = async (sent: SentMailStore, key: string, attempt: number): Promise<boolean> => {
+    const earlier = Array.from({ length: attempt - 1 }, (_unused, index) => index + 1);
+    const marks = await withinStoreDeadline(
+        Promise.all(earlier.map(async (previous) => await Promise.all([sent.get(sendingMark(key, previous)), sent.get(failedMark(key, previous))]))),
+    );
+
+    return marks.some(([sending, failed]) => typeof sending === "string" && typeof failed !== "string");
+};
+
+/**
+ * Refuse a redelivery past the provider's window when an earlier delivery may have landed. Read only then: inside the
+ * window the provider drops a repeat itself. A store that cannot be read fails as retryable; nothing went out.
+ */
+const refuseLateRepeat = async (sent: SentMailStore, key: string, delivery: number, enqueuedAt: Date | undefined): Promise<void> => {
+    if (delivery <= 1 || !pastDedupeWindow(enqueuedAt)) {
+        return;
+    }
+
+    let mayHaveLanded: boolean;
+
+    try {
+        mayHaveLanded = await earlierSendMayHaveLanded(sent, key, delivery);
+    } catch (error) {
+        throw new MailSendError({ cause: error, message: "@lunora/mail: could not read the sent-mail store", retryable: true });
+    }
+
+    refuseLandedRepeat(mayHaveLanded, enqueuedAt);
+};
+
 /** A Workers Logs line: JSON, so the event and its fields can be filtered on. */
 const logEvent = (level: "error" | "warn", event: string, message: string, error?: unknown): void => {
     const line = JSON.stringify({
@@ -304,6 +336,15 @@ const recordSent = async (sent: SentMailStore, key: string, id: string, expirati
     }
 };
 
+/** Delivery `delivery` is known not to have gone out: a late redelivery may send it after all. Logged, never thrown. */
+const markFailed = async (sent: SentMailStore, key: string, delivery: number, sentTtlSeconds: number): Promise<void> => {
+    try {
+        await withinStoreDeadline(sent.put(failedMark(key, delivery), "failed", { expirationTtl: attemptMarkTtl(sentTtlSeconds) }));
+    } catch (error) {
+        logEvent("warn", "lunora.mail.attempt_mark_failed", "@lunora/mail: could not mark a failed send; a late redelivery will be refused", error);
+    }
+};
+
 /**
  * Helper used by Queue consumers: validate a `QueuedSend` body and send it
  * through `mailer.send()`. Use it inside your Worker's `queue()` handler, and
@@ -314,12 +355,13 @@ const recordSent = async (sent: SentMailStore, key: string, id: string, expirati
  * returns its recorded id with `deduplicated: true` and sends nothing, and a
  * successful send records its key. Only a success is recorded, so a retryable
  * or outcome-unknown failure never blocks a later attempt. Beside the key it
- * keeps an attempt mark (`<key>#attempt`, kept at least 24 hours): `sending`
- * from just before the provider call, `failed` once a send is known not to have
- * gone out. A
- * redelivery past the provider's dedupe window is refused only while the mark
- * says `sending`, so a message whose earlier delivery never reached the provider
- * is still sent; a mark that cannot be written fails the send as retryable. A store that cannot
+ * keeps attempt marks, one pair per delivery `n` (pass `attempts`): `sending`
+ * just before it asks the provider, `failed` once that send is known not to have
+ * gone out, each under its own key and kept 15 days. A redelivery past the
+ * provider's dedupe window is refused while any earlier delivery has `sending`
+ * without `failed`, so a message whose earlier deliveries never reached the
+ * provider is still sent; a mark that cannot be written fails the send as
+ * retryable. A store that cannot
  * be read, or does not answer within 10 seconds, fails the send as retryable,
  * since nothing has gone out; a store that cannot be written after the send, or
  * does not answer within 10 seconds, is logged and the id still returned, because throwing then would redeliver a
@@ -405,10 +447,9 @@ const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: Cons
     }
 
     let recorded: string | null | undefined;
-    let attempt: string | null | undefined;
 
     try {
-        [recorded, attempt] = await withinStoreDeadline(Promise.all([sent.get(key), sent.get(attemptKey(key))]));
+        recorded = await withinStoreDeadline(sent.get(key));
     } catch (error) {
         // Nothing has been sent yet, so a redelivery is safe and an ack would drop the mail. A read that never
         // settles fails the same way, rather than holding the invocation.
@@ -421,12 +462,15 @@ const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: Cons
         return { deduplicated: true, id: recorded };
     }
 
-    refuseLandedRepeat(attempt === ATTEMPT_SENDING, enqueuedAt);
+    // Without `attempts` every delivery is the first, and only the failed-send check below guards the window.
+    const delivery = attempts ?? 1;
+
+    await refuseLateRepeat(sent, key, delivery, enqueuedAt);
 
     // Marked before the provider is asked, so a later redelivery can tell a send that may have landed from one that
     // never went out (a store read that failed, say). Unmarked, nothing is sent: a redelivery is safe.
     try {
-        await withinStoreDeadline(sent.put(attemptKey(key), ATTEMPT_SENDING, { expirationTtl: attemptMarkTtl(sentTtlSeconds) }));
+        await withinStoreDeadline(sent.put(sendingMark(key, delivery), "sending", { expirationTtl: attemptMarkTtl(sentTtlSeconds) }));
     } catch (error) {
         throw new MailSendError({ cause: error, message: "@lunora/mail: could not mark the send in the sent-mail store", retryable: true });
     }
@@ -436,18 +480,8 @@ const consumeQueuedSend = async (mailer: Mailer, payload: unknown, options: Cons
     try {
         ({ id } = await sendInsideDedupeWindow(mailer, sendOptions, enqueuedAt));
     } catch (error) {
-        // Known not to have gone out: a late redelivery may send it after all.
         if (isRetryableMailError(error) && !isOutcomeUnknownMailError(error)) {
-            await withinStoreDeadline(sent.put(attemptKey(key), ATTEMPT_FAILED, { expirationTtl: attemptMarkTtl(sentTtlSeconds) })).catch(
-                (markError: unknown) => {
-                    logEvent(
-                        "warn",
-                        "lunora.mail.attempt_mark_failed",
-                        "@lunora/mail: could not mark a failed send; a late redelivery will be refused",
-                        markError,
-                    );
-                },
-            );
+            await markFailed(sent, key, delivery, sentTtlSeconds);
         }
 
         throw error;
