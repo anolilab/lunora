@@ -301,10 +301,13 @@ describe("redactSecrets", () => {
     });
 
     it("masks the value following a secret-named key", () => {
-        expect.assertions(2);
+        expect.assertions(4);
 
         expect(redactSecrets(`AUTH_SECRET=${secretValue} was rejected`)).toBe("AUTH_SECRET=[redacted] was rejected");
         expect(redactSecrets("DB_PASSWORD: short")).toContain("DB_PASSWORD=[redacted]");
+        // A quoted value is masked whole, not only up to its first space.
+        expect(redactSecrets(`AUTH_SECRET="p@ss w0rd!" was rejected`)).toBe("AUTH_SECRET=[redacted] was rejected");
+        expect(redactSecrets(`password: 'two words'`)).toBe("password=[redacted]");
     });
 
     it("masks secret-named keys in every convention keys arrive in", () => {

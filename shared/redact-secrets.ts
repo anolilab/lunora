@@ -172,8 +172,12 @@ const replaceQuotedValues = (message: string, replace: (match: string, inner: st
     return out;
 };
 
-/** Matches a `KEY=value` / `KEY: value` pair; the value is masked when the key is secret-named. */
-const KEYED_VALUE = /\b(?<key>[A-Za-z_]\w*)\s*[=:]\s*\S+/gu;
+/**
+ * Matches a `KEY=value` / `KEY: value` pair; the value is masked when the key is
+ * secret-named. A quoted value is taken whole, up to its closing quote, so a
+ * secret with a space in it is not masked only up to the space.
+ */
+const KEYED_VALUE = /\b(?<key>[A-Za-z_]\w*)\s*[=:]\s*(?:"[^"\n]*"|'[^'\n]*'|\S+)/gu;
 
 /**
  * Redact secrets from a free-form message. Masks, in order: any quoted value
