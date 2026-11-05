@@ -289,8 +289,44 @@
     {
       "at": "2026-11-05T14:54:09.291Z",
       "key": "@lunora/vite@1.0.0-alpha.428"
+    },
+    {
+      "at": "2026-11-05T17:36:50.706Z",
+      "key": "@lunora/errors@1.0.0-alpha.88"
+    },
+    {
+      "at": "2026-11-05T17:36:50.706Z",
+      "key": "@lunora/server@1.0.0-alpha.272"
+    },
+    {
+      "at": "2026-11-05T17:36:50.706Z",
+      "key": "@lunora/codegen@1.0.0-alpha.403"
+    },
+    {
+      "at": "2026-11-05T17:36:50.706Z",
+      "key": "@lunora/observability@1.0.0-alpha.202"
+    },
+    {
+      "at": "2026-11-05T17:36:50.706Z",
+      "key": "@lunora/runtime@1.0.0-alpha.280"
+    },
+    {
+      "at": "2026-11-05T17:36:50.706Z",
+      "key": "@lunora/studio@1.0.0-alpha.378"
+    },
+    {
+      "at": "2026-11-05T17:36:50.706Z",
+      "key": "@lunora/config@1.0.0-alpha.459"
+    },
+    {
+      "at": "2026-11-05T17:36:50.706Z",
+      "key": "@lunora/cli@1.0.0-alpha.487"
+    },
+    {
+      "at": "2026-11-05T17:36:50.706Z",
+      "key": "@lunora/do@1.0.0-alpha.283"
     }
   ],
-  "updatedAt": "2026-11-05T14:54:09.291Z",
+  "updatedAt": "2026-11-05T17:36:50.706Z",
   "version": 1
 }
