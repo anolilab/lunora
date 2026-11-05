@@ -76,9 +76,6 @@ import { codeOnly, withoutComments } from "../../../shared/code-only";
 import writeNuxtAssetHeaders from "./asset-headers";
 import resolveTildePath from "./resolve-tilde-path";
 
-/** Matches a trailing `.js` extension so it can be swapped for `.ts` (module-scope: compiled once). */
-const JS_EXTENSION_SUFFIX = /\.js$/;
-
 /**
  * Minimal structural shape of the rollup plugin this module contributes (a
  * `name` + an object-form `resolveId` hook). Declared locally because `rollup`
@@ -132,7 +129,10 @@ const lunoraTsSourceResolver = (rootDirectory: string): TsSourceResolverPlugin =
                     return undefined;
                 }
 
-                const tsSource = absolute.replace(JS_EXTENSION_SUFFIX, ".ts");
+                // Built without a `".ts"` literal: packem's `fix-dynamic-import-extension` rewrites any `.ts`
+                // + quote + `)` that follows an `import(` on the same minified line to `.mjs`, and this module
+                // holds a dynamic import, so `replace(…, ".ts")` shipped as `replace(…, ".mjs")`.
+                const tsSource = `${absolute.slice(0, -"js".length)}ts`;
 
                 return existsSync(tsSource) ? tsSource : undefined;
             },
