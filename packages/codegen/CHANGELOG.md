@@ -1,3 +1,8 @@
+## @lunora/codegen [1.0.0-alpha.403](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.402...@lunora/codegen@1.0.0-alpha.403) (2026-11-05)
+
+- fix(codegen): read the lunora.config booleans the validator accepts (#1500)
+- feat(codegen): validate lunora.config; Access-aware health probe; env queue warning (#1492)
+
 ## @lunora/codegen [1.0.0-alpha.402](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.401...@lunora/codegen@1.0.0-alpha.402) (2026-11-05)
 
 - feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)

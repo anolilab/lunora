@@ -1,3 +1,7 @@
+## @lunora/errors [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.87...@lunora/errors@1.0.0-alpha.88) (2026-11-05)
+
+- feat(codegen): validate lunora.config; Access-aware health probe; env queue warning (#1492)
+
 ## @lunora/errors [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.86...@lunora/errors@1.0.0-alpha.87) (2026-11-05)
 
 - fix(client): restart a paginated feed when the server refuses its cursor (#1496)

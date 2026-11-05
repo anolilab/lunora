@@ -1,3 +1,7 @@
+## @lunora/runtime [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.279...@lunora/runtime@1.0.0-alpha.280) (2026-11-05)
+
+- fix(server): guard httpRoute cache headers and keep error causes in logs (#1488)
+
 ## @lunora/runtime [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.278...@lunora/runtime@1.0.0-alpha.279) (2026-11-05)
 
 - feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)

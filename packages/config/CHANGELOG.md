@@ -1,3 +1,8 @@
+## @lunora/config [1.0.0-alpha.459](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.458...@lunora/config@1.0.0-alpha.459) (2026-11-05)
+
+- fix(server): guard httpRoute cache headers and keep error causes in logs (#1488)
+- feat(codegen): validate lunora.config; Access-aware health probe; env queue warning (#1492)
+
 ## @lunora/config [1.0.0-alpha.458](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.457...@lunora/config@1.0.0-alpha.458) (2026-11-05)
 
 - feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)

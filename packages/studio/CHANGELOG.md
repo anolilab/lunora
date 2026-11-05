@@ -1,3 +1,7 @@
+## @lunora/studio [1.0.0-alpha.378](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.377...@lunora/studio@1.0.0-alpha.378) (2026-11-05)
+
+- fix(server): guard httpRoute cache headers and keep error causes in logs (#1488)
+
 ## @lunora/studio [1.0.0-alpha.377](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.376...@lunora/studio@1.0.0-alpha.377) (2026-11-04)
 
 - perf(studio): serve advisor procedures from a generated sidecar (#1465)

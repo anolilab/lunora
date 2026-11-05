@@ -1,3 +1,7 @@
+## @lunora/observability [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.201...@lunora/observability@1.0.0-alpha.202) (2026-11-05)
+
+- fix(server): guard httpRoute cache headers and keep error causes in logs (#1488)
+
 ## @lunora/observability [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.200...@lunora/observability@1.0.0-alpha.201) (2026-11-04)
 
 - Release 1.0.0-alpha.201. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
