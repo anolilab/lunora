@@ -59,7 +59,7 @@ describe("wranglerCodegenInputs — wranglerQueueProducers", () => {
     });
 });
 
-describe("wranglerCodegenInputs — spaAssetsBinding", () => {
+describe("wranglerCodegenInputs — spaAssetsBindings", () => {
     let root: string;
 
     beforeEach(() => {
@@ -71,7 +71,7 @@ describe("wranglerCodegenInputs — spaAssetsBinding", () => {
     });
 
     it("names the binding of an assets block that falls back to a single-page app, top level or env", () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         writeFileSync(
             join(root, "wrangler.jsonc"),
@@ -79,7 +79,7 @@ describe("wranglerCodegenInputs — spaAssetsBinding", () => {
             "utf8",
         );
 
-        expect(wranglerCodegenInputs(root).spaAssetsBinding).toBe("ASSETS");
+        expect(wranglerCodegenInputs(root).spaAssetsBindings).toStrictEqual(["ASSETS"]);
 
         writeFileSync(
             join(root, "wrangler.jsonc"),
@@ -87,11 +87,20 @@ describe("wranglerCodegenInputs — spaAssetsBinding", () => {
             "utf8",
         );
 
-        expect(wranglerCodegenInputs(root).spaAssetsBinding).toBe("STATIC");
+        expect(wranglerCodegenInputs(root).spaAssetsBindings).toStrictEqual(["STATIC"]);
+
+        // Each environment's block replaces the top-level one whole, so each binding name is kept, once.
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            '{ "name": "app", "assets": { "binding": "ASSETS", "not_found_handling": "single-page-application" }, "env": { "preview": { "assets": { "binding": "STATIC", "not_found_handling": "single-page-application" } }, "staging": { "assets": { "binding": "ASSETS", "not_found_handling": "single-page-application" } } } }',
+            "utf8",
+        );
+
+        expect(wranglerCodegenInputs(root).spaAssetsBindings).toStrictEqual(["ASSETS", "STATIC"]);
 
         // No binding: the Worker has nothing to serve the shell from.
         writeFileSync(join(root, "wrangler.jsonc"), '{ "name": "app", "assets": { "not_found_handling": "single-page-application" } }', "utf8");
 
-        expect(wranglerCodegenInputs(root).spaAssetsBinding).toBeUndefined();
+        expect(wranglerCodegenInputs(root).spaAssetsBindings).toBeUndefined();
     });
 });

@@ -30,6 +30,7 @@ const SHELL = "<!doctype html><div id=app></div>";
 const spaAssets = (): AssetsFetcherLike & { requests: Request[] } => {
     const files: Record<string, { body: string; etag: string; type: string }> = {
         "/favicon.ico": { body: "icon", etag: '"icon"', type: "image/x-icon" },
+        "/sw.js": { body: "self.addEventListener('fetch', () => {});", etag: '"sw"', type: "text/javascript" },
         "/privacy.html": { body: "<p>privacy</p>", etag: '"privacy"', type: "text/html" },
     };
     const requests: Request[] = [];
@@ -126,6 +127,18 @@ describe("createWorker — a single-page app's assets behind `/*`", () => {
         await expect(icon.text()).resolves.toBe("icon");
         expect(privacy.status).toBe(200);
         await expect(privacy.text()).resolves.toBe("<p>privacy</p>");
+    });
+
+    it("gives a static file the binding serves the HTML policy _headers gives it, not the strict API one", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ httpRouter: router, shardDO: shardNamespace(), spaAssets: spaAssets() });
+        const script = await worker.fetch(new Request("https://app.test/sw.js", { headers: { accept: "*/*" } }), {}, fakeContext);
+        const policy = script.headers.get("content-security-policy");
+
+        // A service worker runs under its own script's CSP, so `default-src 'none'` would block its fetches and imports.
+        expect(policy).not.toContain("default-src 'none'");
+        expect(policy).toContain("frame-ancestors 'self'");
     });
 
     it("lets a webhook no route discovery sees reach its handler", async () => {

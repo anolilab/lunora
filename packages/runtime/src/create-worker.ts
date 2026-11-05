@@ -100,7 +100,7 @@ import { runScheduledBackup } from "./scheduled-backup";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 import type { AssetsFetcherLike } from "./spa-assets";
-import { serveSpaAsset } from "./spa-assets";
+import { isShellNavigation, serveSpaAsset } from "./spa-assets";
 import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
 import { buildTenantFanoutRoutes, QUEUE_DISPATCH_MAX_BODY_BYTES, QUEUE_DISPATCH_PATH } from "./tenant-fanout-routes";
 import type { TrustInboundTraceContext } from "./trace-trust";
@@ -4964,6 +4964,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         };
     };
 
+    /** Responses {@link answerMiss} took from the assets binding, which `fetch` decorates as static files. */
+    const servedAssets = new WeakSet<Response>();
+
     /**
      * The 404 for a request nothing answered, unless a single-page app's assets
      * serve it (see {@link WorkerOptions.spaAssets}). Only when no route matched:
@@ -4977,6 +4980,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         await notFound.body?.cancel();
+        servedAssets.add(assetResponse);
 
         return assetResponse;
     };
@@ -5025,7 +5029,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // leaves queries / mutations / subscriptions (`/_lunora/rpc`, `/_lunora/ws`)
         // fully serviceable.
         try {
-            const response = await options.httpRouter.fetch(request, { ...(env as object), __lunoraCtx: httpContext, __lunoraUnrouted: markUnrouted }, context);
+            // `__lunoraShellFirst` lets an `httpRouter()` skip the app's middleware for a navigation no route matches.
+            const shellFirst = options.spaAssets !== undefined && isShellNavigation(request);
+            const response = await options.httpRouter.fetch(
+                request,
+                { ...(env as object), __lunoraCtx: httpContext, __lunoraShellFirst: shellFirst, __lunoraUnrouted: markUnrouted },
+                context,
+            );
 
             return { response, unrouted };
         } catch (error: unknown) {
@@ -6627,6 +6637,26 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // (honoring the `LUNORA_SECURITY_*` opt-out vars) happens lazily on the first
     // request — env is per-invocation, but deployment-stable, so it is memoized.
     let resolvedSecurity = resolveSecurity(options.security);
+
+    /**
+     * A file the assets binding served carries the CSP `_headers` gives the same
+     * file on a direct asset hit, the HTML policy, whatever its type: the strict
+     * `default-src 'none'` would stop a service worker script (which runs under
+     * its own response's CSP) from fetching or importing anything.
+     */
+    const asStaticAsset = (response: Response): Response => {
+        const policy = resolvedSecurity.headers.enabled ? resolvedSecurity.headers.csp?.htmlValue : undefined;
+
+        if (policy === undefined || response.headers.has("content-security-policy")) {
+            return response;
+        }
+
+        const headers = new Headers(response.headers);
+
+        headers.set("content-security-policy", policy);
+
+        return new Response(response.body, { headers, status: response.status, statusText: response.statusText });
+    };
     let securityEnvResolved = false;
 
     // Fold the deployment env into the resolved security config once, on the
@@ -6839,7 +6869,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             try {
                 const response = await handle(request, env, context);
 
-                return decorateResponse(response, request, resolvedSecurity);
+                return decorateResponse(servedAssets.has(response) ? asStaticAsset(response) : response, request, resolvedSecurity);
             } catch (error: unknown) {
                 return decorateResponse(toErrorResponse(error), request, resolvedSecurity);
             } finally {

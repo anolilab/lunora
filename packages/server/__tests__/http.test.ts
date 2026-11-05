@@ -261,6 +261,52 @@ describe("httpRouter behind a single-page app's worker", () => {
         await expect(page.text()).resolves.toBe(shell);
     });
 
+    it("serves the shell for a navigation no route matches even behind a blanket auth middleware, which still guards every route", async () => {
+        expect.assertions(5);
+
+        const app = httpRouter();
+
+        app.use("*", async (c, next) => {
+            if (c.req.header("authorization") === undefined) {
+                return c.json({ error: "UNAUTHENTICATED" }, 401);
+            }
+
+            await next();
+
+            return undefined;
+        });
+        app.get("/api/me", (c) => c.text("me"));
+
+        const shell = "<!doctype html><div id=app></div>";
+        const worker = createWorker({
+            httpRouter: app,
+            shardDO: {
+                get: () => {
+                    return { fetch: async () => Response.json({ result: null }) };
+                },
+                idFromName: (name: string) => {
+                    return { __name: name };
+                },
+            },
+            spaAssets: {
+                fetch: async () => new Response(shell, { headers: { "content-type": "text/html", etag: '"shell"' } }),
+            },
+        });
+        const navigate = (path: string): Request => new Request(`https://app.test${path}`, { headers: { accept: "text/html", "sec-fetch-mode": "navigate" } });
+        const executionContext = { passThroughOnException: () => undefined, waitUntil: () => undefined };
+
+        const page = await worker.fetch(navigate("/dashboard"), {}, executionContext);
+        const guarded = await worker.fetch(navigate("/api/me"), {}, executionContext);
+        const fetched = await worker.fetch(new Request("https://app.test/dashboard", { headers: { accept: "application/json" } }), {}, executionContext);
+
+        expect(page.status).toBe(200);
+        await expect(page.text()).resolves.toBe(shell);
+        // A real route keeps its guard, and a non-navigation miss still runs the middleware.
+        expect(guarded.status).toBe(401);
+        expect(fetched.status).toBe(401);
+        await expect(fetched.json()).resolves.toStrictEqual({ error: "UNAUTHENTICATED" });
+    });
+
     it("still serves the shell for a page navigation when the app sets its own not-found handler, which answers every other miss", async () => {
         expect.assertions(4);
 

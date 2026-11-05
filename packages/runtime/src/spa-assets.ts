@@ -87,5 +87,8 @@ const serveSpaAsset = async (assets: AssetsFetcherLike, request: Request): Promi
     return undefined;
 };
 
+/** A `GET` / `HEAD` page load, which a route-less path answers with the shell. */
+const isShellNavigation = (request: Request): boolean => (request.method === "GET" || request.method === "HEAD") && isNavigation(request);
+
 export type { AssetsFetcherLike };
-export { serveSpaAsset };
+export { isShellNavigation, serveSpaAsset };

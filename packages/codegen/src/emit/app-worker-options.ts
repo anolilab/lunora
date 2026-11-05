@@ -595,10 +595,15 @@ const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
     ...(options.liveStreamsWithheld ? [`            liveStreams: false,`] : []),
     `            shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),`,
     // A single-page app routes every path to the Worker first; what no route serves goes to its assets binding.
+    // Each wrangler environment may name its own, so the first one this deployment has wins.
     // Emitted only for such an app, so every other app keeps unchanged output.
-    ...(options.spaAssetsBinding === undefined
+    ...(options.spaAssetsBindings === undefined || options.spaAssetsBindings.length === 0
         ? []
-        : [`            spaAssets: (env as Record<string, unknown>)[${JSON.stringify(options.spaAssetsBinding)}] as WorkerOptions["spaAssets"],`]),
+        : [
+              `            spaAssets: (${options.spaAssetsBindings
+                  .map((binding) => `(env as Record<string, unknown>)[${JSON.stringify(binding)}]`)
+                  .join(" ?? ")}) as WorkerOptions["spaAssets"],`,
+          ]),
 ];
 
 export { buildBaseWorkerOptions, buildFrameworkHostLine, buildWorkerOptionLines };

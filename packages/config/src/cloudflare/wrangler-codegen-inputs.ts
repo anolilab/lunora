@@ -22,8 +22,11 @@ interface WranglerCodegenShape {
 }
 
 interface WranglerCodegenInputs {
-    /** The assets binding of the first `assets` block (top level, then each `env.<name>`) that falls back to a single-page app. */
-    spaAssetsBinding?: string;
+    /**
+     * The assets binding of every `assets` block (top level, then each `env.<name>`) that falls back to a single-page
+     * app, each name once. An environment's block replaces the top-level one whole, so each may name its own binding.
+     */
+    spaAssetsBindings?: string[];
     /** Every well-formed `queues.producers[]` entry of the top level and each `env.<name>` block. */
     wranglerQueueProducers: WranglerQueueProducerIR[];
     /** Top-level `vars` entries that look like plaintext secrets. */
@@ -51,12 +54,12 @@ const wranglerCodegenInputs = (projectRoot: string): WranglerCodegenInputs => {
         return { wranglerQueueProducers: [], wranglerVariables: [] };
     }
 
-    const spaAssetsBinding = [parsed.assets, ...Object.values(parsed.env ?? {}).map((block) => block?.assets)]
-        .map((assets) => spaAssetsBindingOf(assets))
-        .find((binding) => binding !== undefined);
+    const spaAssetsBindings = [
+        ...new Set([parsed.assets, ...Object.values(parsed.env ?? {}).map((block) => block?.assets)].flatMap((assets) => spaAssetsBindingOf(assets) ?? [])),
+    ];
 
     return {
-        ...(spaAssetsBinding === undefined ? {} : { spaAssetsBinding }),
+        ...(spaAssetsBindings.length === 0 ? {} : { spaAssetsBindings }),
         wranglerQueueProducers: [...producersOf(parsed.queues), ...Object.entries(parsed.env ?? {}).flatMap(([env, block]) => producersOf(block?.queues, env))],
         wranglerVariables: scanWranglerVariablesForSecrets(isPlainObject(parsed.vars) ? parsed.vars : undefined, relative(projectRoot, wranglerPath)),
     };
