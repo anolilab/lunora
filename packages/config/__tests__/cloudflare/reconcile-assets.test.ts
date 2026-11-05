@@ -22,6 +22,9 @@ describe(workerPathRules, () => {
         ["/files/*", ["/files", "/files/*"]],
         ["/users/:id{[0-9]+}", ["/users/*"]],
         ["/a/:b?", ["/a", "/a/*"]],
+        // The bare prefix of an optional tail keeps the earlier parameter a wildcard too.
+        ["/orgs/:orgId/:child?", ["/orgs/*", "/orgs/*/*"]],
+        ["/orgs/:orgId/files/*", ["/orgs/*/files", "/orgs/*/files/*"]],
     ])("turns %s into rules that name it", (route, rules) => {
         expect.assertions(1);
 

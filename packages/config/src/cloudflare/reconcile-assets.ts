@@ -53,11 +53,12 @@ const workerPathRules = (route: string): string[] | undefined => {
         return undefined;
     }
 
-    const rule = `/${segments.map((segment, index) => (plain[index] ? segment : "*")).join("/")}`;
+    const ruleSegments = segments.map((segment, index) => (plain[index] ? segment : "*"));
+    const rule = `/${ruleSegments.join("/")}`;
     const last = segments.at(-1) ?? "";
     const optionalTail = last === "*" || (plain.at(-1) === false && last.endsWith("?"));
 
-    return optionalTail ? [`/${segments.slice(0, -1).join("/")}`, rule] : [rule];
+    return optionalTail ? [`/${ruleSegments.slice(0, -1).join("/")}`, rule] : [rule];
 };
 
 /** Whether `rule` is redundant beside `wider`, as wrangler judges it: `wider` ends in `*` and `rule` starts with the rest of it. */
@@ -174,15 +175,62 @@ const planRunWorkerFirst = (routes: ReadonlyArray<string>): { rules: string[]; w
     return { rules: [...LUNORA_WORKER_FIRST_PATHS, ...kept.slice(0, room)], warnings };
 };
 
-/** Reserved paths an authored `run_worker_first` leaves to the assets, so the caller can say which ones. */
-const unroutedPaths = (runWorkerFirst: unknown, wanted: ReadonlyArray<string>): string[] => {
+/** Whether two rules match some path in common: equal, or one ending in `*` covers the other. */
+const overlaps = (left: string, right: string): boolean => left === right || coveredBy(left, right) || coveredBy(right, left);
+
+/**
+ * The paths an authored `run_worker_first` leaves to the assets, so the caller
+ * can say which ones and why: `missing` has no positive rule naming it, and
+ * `excluded` maps each path a positive rule names to the `!/…` rules that take
+ * part of it back (a negative rule wins over a positive one).
+ */
+const unroutedPaths = (runWorkerFirst: unknown, wanted: ReadonlyArray<string>): { excluded: Map<string, string[]>; missing: string[] } => {
+    const excluded = new Map<string, string[]>();
+    const missing: string[] = [];
+
     if (runWorkerFirst === true) {
-        return [];
+        return { excluded, missing };
     }
 
-    const rules = Array.isArray(runWorkerFirst) ? (runWorkerFirst as unknown[]) : [];
+    const rules = Array.isArray(runWorkerFirst) ? (runWorkerFirst as unknown[]).filter((rule): rule is string => typeof rule === "string") : [];
+    const positive = rules.filter((rule) => rule.startsWith("/"));
+    const negative = rules.filter((rule) => rule.startsWith("!/"));
 
-    return wanted.filter((path) => !rules.includes(path) && !rules.some((rule) => typeof rule === "string" && coveredBy(path, rule)));
+    for (const path of wanted) {
+        if (!positive.some((rule) => rule === path || coveredBy(path, rule))) {
+            missing.push(path);
+
+            continue;
+        }
+
+        const exclusions = negative.filter((rule) => overlaps(rule.slice(1), path));
+
+        if (exclusions.length > 0) {
+            excluded.set(path, exclusions);
+        }
+    }
+
+    return { excluded, missing };
+};
+
+/** The warning for an authored `run_worker_first` that leaves some of `rules` to the assets, or `undefined` when it leaves none. */
+const unroutedWarning = (current: unknown, label: string, rules: ReadonlyArray<string>): string | undefined => {
+    const { excluded, missing } = unroutedPaths(current, rules);
+    const notes: string[] = [];
+
+    if (missing.length > 0) {
+        notes.push(
+            `${label} does not send ${missing.join(", ")} to the Worker first, so a matching file in the assets directory (or the SPA fallback) answers instead of Lunora — add ${missing.map((entry) => `"${entry}"`).join(", ")} to it`,
+        );
+    }
+
+    for (const [path, exclusions] of excluded) {
+        notes.push(
+            `${label} sends ${path} to the Worker first, but ${exclusions.map((entry) => `"${entry}"`).join(", ")} takes part of it back to the assets — remove ${exclusions.length === 1 ? "that rule" : "those rules"} unless the Worker never serves the paths it names`,
+        );
+    }
+
+    return notes.length === 0 ? undefined : notes.join("; ");
 };
 
 const sameRules = (left: unknown, right: ReadonlyArray<string> | undefined): boolean =>
@@ -216,13 +264,7 @@ const reconcileScope = (
     const lunoraWrote = current === undefined || sameRules(current, recorded) || LEGACY_WORKER_FIRST_VALUES.some((value) => sameRules(current, value));
 
     if (!lunoraWrote) {
-        const missing = unroutedPaths(current, rules);
-        const warning =
-            missing.length === 0
-                ? undefined
-                : `${label} does not send ${missing.join(", ")} to the Worker first, so a matching file in the assets directory (or the SPA fallback) answers instead of Lunora — add ${missing.map((entry) => `"${entry}"`).join(", ")} to it`;
-
-        return { change: undefined, owned: false, warning };
+        return { change: undefined, owned: false, warning: unroutedWarning(current, label, rules) };
     }
 
     if (sameRules(current, rules)) {

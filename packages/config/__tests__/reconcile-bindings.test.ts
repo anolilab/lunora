@@ -299,6 +299,23 @@ describe("reconcileWranglerBindings", () => {
             expect(result.warnings.join(" ")).toContain("assets.run_worker_first does not send /_lunora/*, /__lunora/* to the Worker first");
         });
 
+        it("warns when a negative rule takes part of a reserved path back to the assets", () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets('{ "directory": "./dist/client", "run_worker_first": ["/_lunora/*", "/__lunora/*", "!/_lunora/admin/auth/*"] }'),
+                "utf8",
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+            const warnings = result.warnings.join(" ");
+
+            expect(result.changed).toBe(false);
+            expect(warnings).toContain('sends /_lunora/* to the Worker first, but "!/_lunora/admin/auth/*" takes part of it back to the assets');
+            expect(warnings).not.toContain("does not send");
+        });
+
         it("leaves a config with no assets block alone", () => {
             expect.assertions(1);
 
