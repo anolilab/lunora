@@ -88,6 +88,49 @@ describe("queued send idempotency key", () => {
         expect(messages[0]?.idempotencyKey).toBe("order-42");
     });
 
+    it("refuses a numeric key before enqueueing it, so the consumer never acks it unsent", async () => {
+        expect.assertions(3);
+
+        const { messages, queue } = captureQueue();
+        const { transport } = captureTransport();
+        const mailer = createMailer({ from: "noreply@x.test", queue, transport });
+
+        // A number matches the key pattern through its string form, but the consumer refuses it.
+        const error = await mailer.queue({ idempotencyKey: 42 as unknown as string, subject: "Hi", to: "a@x.test" }).catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(MailSendError);
+        expect(isRetryableMailError(error)).toBe(false);
+        expect(messages).toHaveLength(0);
+    });
+
+    it.each([".", ".."])("refuses the key %j before enqueueing it, as Workers KV rejects it as a key name", async (idempotencyKey) => {
+        expect.assertions(2);
+
+        const { messages, queue } = captureQueue();
+        const { transport } = captureTransport();
+        const mailer = createMailer({ from: "noreply@x.test", queue, transport });
+
+        await expect(mailer.queue({ idempotencyKey, subject: "Hi", to: "a@x.test" })).rejects.toThrow(/idempotencyKey/u);
+        expect(messages).toHaveLength(0);
+    });
+
+    it("refuses a non-list `bcc`, wraps a lone address into a list and keeps a list as is", async () => {
+        expect.assertions(4);
+
+        const mailer = noopMailer();
+        const refusal = await consumeQueuedSend(mailer, { bcc: 42, subject: "Hi", to: "a@x.test" }).catch((error: unknown) => error);
+
+        expect(refusal).toBeInstanceOf(MailSendError);
+        expect(isRetryableMailError(refusal)).toBe(false);
+
+        await consumeQueuedSend(mailer, { bcc: "b@x.test", subject: "Hi", to: "a@x.test" });
+
+        await consumeQueuedSend(mailer, { bcc: ["b@x.test", "c@x.test"], subject: "Hi", to: "a@x.test" });
+
+        expect(vi.mocked(mailer.send).mock.calls[0]?.[0].bcc).toStrictEqual(["b@x.test"]);
+        expect(vi.mocked(mailer.send).mock.calls[1]?.[0].bcc).toStrictEqual(["b@x.test", "c@x.test"]);
+    });
+
     it("still rejects malformed queue bodies (regression guard)", async () => {
         expect.assertions(2);
 
@@ -285,6 +328,21 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         );
 
         expect(error).toBeInstanceOf(MailSendError);
+        expect(isRetryableMailError(error)).toBe(false);
+        expect(get).not.toHaveBeenCalled();
+        expect(mailer.send).not.toHaveBeenCalled();
+    });
+
+    it.each([".", ".."])("refuses the key %j before the store is read, as Workers KV rejects it as a key name", async (idempotencyKey) => {
+        expect.assertions(3);
+
+        const mailer = noopMailer();
+        const get = vi.fn<SentMailStore["get"]>(async () => null);
+
+        const error = await consumeQueuedSend(mailer, { idempotencyKey, subject: "Hi", to: "a@x.test" }, { sent: { get, put: async () => undefined } }).catch(
+            (error_: unknown) => error_,
+        );
+
         expect(isRetryableMailError(error)).toBe(false);
         expect(get).not.toHaveBeenCalled();
         expect(mailer.send).not.toHaveBeenCalled();

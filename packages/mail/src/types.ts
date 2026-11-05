@@ -57,7 +57,8 @@ export interface SendOptions {
 
     /**
      * Stable key for deduping a send across retries and Cloudflare Queues'
-     * at-least-once redelivery: 1-256 visible ASCII characters. When omitted,
+     * at-least-once redelivery: 1-256 visible ASCII characters, other than `.` and
+     * `..` (Workers KV refuses both as key names). When omitted,
      * `queue()` generates one at enqueue time so it survives redelivery (a key
      * minted in the consumer would change on every retry, defeating the point).
      * `consumeQueuedSend` dedupes on it when given a `sent` store, and the transport

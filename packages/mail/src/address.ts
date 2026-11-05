@@ -139,7 +139,10 @@ const assertSafeAddresses = (payload: { bcc?: string | string[]; cc?: string | s
     }
 };
 
-/** What Resend accepts as an `Idempotency-Key`, and short enough for a Workers KV key (512 bytes). */
+/**
+ * What Resend accepts as an `Idempotency-Key`, and short enough for a Workers KV key (512 bytes).
+ * `.` and `..` match it but are refused separately: Workers KV rejects both as key names.
+ */
 const IDEMPOTENCY_KEY_PATTERN = /^[\u0021-\u007E]{1,256}$/u;
 
 /**
@@ -148,9 +151,18 @@ const IDEMPOTENCY_KEY_PATTERN = /^[\u0021-\u007E]{1,256}$/u;
  * a retryable store error and redeliver the message into the dead-letter queue.
  * The same key fails the same way on every attempt, so the refusal is final.
  */
-const assertValidIdempotencyKey = (key: string | undefined): void => {
-    if (key !== undefined && !IDEMPOTENCY_KEY_PATTERN.test(key)) {
-        throw new MailSendError({ message: "@lunora/mail: `idempotencyKey` must be 1-256 visible ASCII characters", retryable: false });
+const assertValidIdempotencyKey = (key: unknown): void => {
+    if (key === undefined) {
+        return;
+    }
+
+    // `typeof` first: a number would pass the pattern through its string form, be queued as a number,
+    // and then be refused by the consumer, which acks it unsent.
+    if (typeof key !== "string" || !IDEMPOTENCY_KEY_PATTERN.test(key) || key === "." || key === "..") {
+        throw new MailSendError({
+            message: "@lunora/mail: `idempotencyKey` must be a string of 1-256 visible ASCII characters, other than `.` or `..`",
+            retryable: false,
+        });
     }
 };
 
