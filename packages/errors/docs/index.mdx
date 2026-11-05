@@ -9,8 +9,8 @@ error model, but deliberately not extending it (see
 [Rendering](#rendering)) — plus a
 central catalog mapping each machine `code` to its transport `status`, a human
 `title`, and, where useful, a Markdown `hint` and `docsUrl`. Those
-hints render consistently in the CLI, the Vite error overlay, the Studio UI, and
-the client SDK.
+hints render in the CLI and the Studio UI, and the client SDK derives its error
+codes from the same catalog.
 
 ```ts
 import { LunoraError, isLunoraError, resolveHint } from "@lunora/errors";
@@ -34,7 +34,7 @@ The Markdown fix for each code lives apart, in `ERROR_HINTS`, so browser bundles
 (which construct errors but never render a fix) do not carry its text. A
 `LunoraError` holds only an explicit or wire-received `hint`; call
 `resolveHint(error)` for the catalog fallback. `toErrorBody` does this for every
-envelope, so a client still receives the hint on the wire.
+non-internal Lunora error, so a client still receives the hint on the wire.
 
 ## Structural matching
 
@@ -84,3 +84,14 @@ the whole barrel rather than tree-shaking it — so extending it would drag
 (tiny) shape here is what keeps `@lunora/errors` **zero-dependency**, so its
 class/catalog tree-shakes cleanly into every runtime while staying fully
 renderer-compatible.
+
+## Other exports
+
+| Export                           | Purpose                                                                                                                                             |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LunoraErrorOptions`             | Options for the `LunoraError` constructor: `hint`, `title`, `status`, `data`, `docsUrl`, `why`, `location`, `internal`, `headers`, `cause`, `name`. |
+| `getCatalogEntry(code)`          | Returns the `ERROR_CATALOG` entry for `code`, or `undefined` when the code is not in the catalog.                                                   |
+| `isInternalCode(code)`           | Returns `true` when the catalog marks `code` `internal`, so `toErrorBody` redacts its message on the wire.                                          |
+| `ERROR_HINTS`                    | The Markdown fix for each catalog code. `resolveHint` reads it when an error carries no explicit `hint`.                                            |
+| `CLOUDFLARE_PLATFORM_ERRORS`     | Cloudflare platform error codes (the `1xxx` and `5xx` families) with a summary and a fix for each.                                                  |
+| `findSolutionByMessage(message)` | Returns the first message-matched `Solution` for an error message, or `undefined` when none matches.                                                |

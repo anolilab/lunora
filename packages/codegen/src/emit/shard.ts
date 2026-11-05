@@ -39,7 +39,7 @@ import {
     renderThrowingStub,
 } from "./shard-bindings";
 import renderBuildContext from "./shard-context";
-import { dispatchMethods, dispatchRunSource, SUBSCRIPTION_METHODS } from "./shard-dispatch";
+import { dispatchMethods, dispatchRunSource, subscriptionMethods as renderSubscriptionMethods } from "./shard-dispatch";
 import { buildStorageColumns, buildTableColumns, buildTableIndexes, buildTableReferences, buildTtlSweeps } from "./shard-metadata";
 import {
     buildDoTypeImports,
@@ -906,7 +906,7 @@ ${ipReaderBootstrap}${sourceBootstrap}${ttlBootstrap}        }
     const prepareFunctionCall = lazyFunctions
         ? '            const preparation = this.prepareFunction(functionPath, "subscription");\n            if (preparation !== undefined) await preparation;\n'
         : "";
-    const subscriptionMethods = SUBSCRIPTION_METHODS.replace("__PREPARE_FUNCTION__", prepareFunctionCall);
+    const subscriptionMethods = renderSubscriptionMethods(sensitiveArgs).replace("__PREPARE_FUNCTION__", prepareFunctionCall);
     const shardDispatchMethods = dispatchMethods(hasRooms, lazyFunctions, agentsStampOutbox);
 
     const facadeBlock = hasTables

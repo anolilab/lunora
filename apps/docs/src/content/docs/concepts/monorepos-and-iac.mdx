@@ -103,7 +103,7 @@ lunora info --bindings --out reqs.json
 they exist. `--emit-bindings <file>` moves the manifest elsewhere. Naming a path also changes the
 failure policy: a project with no readable `wrangler.jsonc` then fails the run,
 because a named path means something is waiting on that file. The default write
-stays a courtesy and simply skips.
+stays a courtesy and skips.
 
 It is written once, before the worker starts, so your runner can reserve the
 port and wire its proxy while Lunora is still booting. Readiness is deliberately

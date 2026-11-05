@@ -9,7 +9,7 @@ related:
     - to: /docs/limits
 ---
 
-A mutation runs inside a single Durable Object, and that DO runs one mutation at
+A mutation runs inside a single Durable Object (DO), and that DO runs one mutation at
 a time. This is the property most of Lunora's consistency story rests on, so it
 is worth stating plainly.
 
@@ -17,7 +17,7 @@ is worth stating plainly.
 
 The Worker routes a mutation to the owning shard, which runs the handler inside
 `blockConcurrencyWhile` plus a storage transaction. There is no second writer
-racing you, so there is no read-set validation and no OCC retry loop for
+racing you, so there is no read-set validation and no optimistic concurrency control (OCC) retry loop for
 ordinary shard-local writes.
 
 The practical consequence: **a mutation that does not yield is a transaction.**
@@ -76,8 +76,9 @@ are separable when handling errors.
 ## Handling a conflict on the client
 
 Conflicts surface to the caller as the `CONFLICT` error code (HTTP 409). There is
-no transparent server-side retry; the caller decides, because the right response
-depends on what the mutation meant.
+no transparent server-side retry for a conflicting write; the caller decides, because the right response
+depends on what the mutation meant. `ctx.db.patchIf` retries internally: it re-reads the row and re-evaluates its
+`where` a bounded number of times before it raises the conflict.
 
 ```ts
 import { isConflictError } from "@lunora/client";

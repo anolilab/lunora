@@ -46,7 +46,8 @@ export const send = mutation.input({ channelId: v.id("channels"), text: v.string
 });
 ```
 
-The codes are a fixed set, each with a status attached:
+These are the common codes, each with the status it maps to. A code is any string, so
+the [errors reference](/docs/errors) lists every code Lunora defines:
 
 | Code                    | Status | Code                    | Status |
 | ----------------------- | ------ | ----------------------- | ------ |
@@ -77,7 +78,7 @@ paths, or internal identifiers, so they never reach the wire.
 Codes the catalog marks **internal** are redacted too, even when thrown as a
 `LunoraError`: the `code` and status reach the client, but the message is
 replaced with `Internal error`. See the
-[errors reference](/docs/errors#internal-errors) for the list.
+[errors reference](/docs/errors#redacted-codes) for the list.
 
 The practical rule: throw `LunoraError` for anything the client should be able
 to react to (not-found, forbidden, validation, rate-limited). Let unexpected

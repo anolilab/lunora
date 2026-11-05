@@ -338,9 +338,7 @@ __PREPARE_FUNCTION__            this.ensureServable();
             // Identity is threaded EXPLICITLY from the (deferred/interleaved)
             // subscription caller — never read from the shared per-request field
             // here — so a concurrent RPC can't leak its identity into this re-run.
-            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange });
-            const result = await registered.handler(ctx, args);
-
+__SUBSCRIPTION_RUN__
             // Ranges come from THIS run's reads, never a shared field on the DO:
             // a deferred re-run interleaves with unrelated dispatches.
             const ranges = footprint.ranges();
@@ -412,4 +410,28 @@ const dispatchMethods = (hasRooms: boolean, lazyFunctions = false, stampsOutbox 
         .replace("__OUTBOX_SCHEDULER__", outboxScheduler);
 };
 
-export { DISPATCH_RUN_SOURCE, dispatchMethods, dispatchRunSource, SUBSCRIPTION_METHODS };
+const SUBSCRIPTION_RUN_PLAIN = `            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange });
+            const result = await registered.handler(ctx, args);
+`;
+
+// With a \`v.sensitive\` argument in the app, a subscription run opens the scope from its raw args and hands it to the ctx,
+// which admits the validator's transformed values, so an error the handler throws is masked at the throw site, before
+// the shard logs it. Apps without one keep the plain body, so their \`shard.ts\` is byte-identical.
+const SUBSCRIPTION_RUN_SENSITIVE = `            const sensitive = this.openSensitiveScope(functionPath, args);
+            let result: unknown;
+
+            try {
+                const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange, sensitive });
+
+                result = await registered.handler(ctx, args);
+            } catch (error) {
+                throw this.maskSensitiveError(error, sensitive);
+            } finally {
+                sensitive.clear();
+            }
+`;
+
+const subscriptionMethods = (hasSensitiveArgs: boolean): string =>
+    SUBSCRIPTION_METHODS.replace("__SUBSCRIPTION_RUN__", hasSensitiveArgs ? SUBSCRIPTION_RUN_SENSITIVE : SUBSCRIPTION_RUN_PLAIN);
+
+export { DISPATCH_RUN_SOURCE, dispatchMethods, dispatchRunSource, subscriptionMethods };

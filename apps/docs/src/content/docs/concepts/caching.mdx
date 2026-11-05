@@ -25,13 +25,12 @@ Add the `cache` block to `wrangler.jsonc`:
 
 When `cache.enabled` is `true`, the dev server (`lunora dev` or the Vite plugin) and the CLI (`lunora prepare` / `lunora deploy`) automatically bump `compatibility_date` to at least `2026-05-01` if it is lower. You do not need to know or set the date manually. Lunora reconciles it for you and preserves the comments and formatting in `wrangler.jsonc`.
 
-You can also enable cache per entrypoint in `exports`:
+You can also enable cache for one named export, with `exports[name].cache.enabled`:
 
 ```jsonc
 {
     "exports": {
         "default": {
-            "type": "webpack",
             "cache": { "enabled": true },
         },
     },
@@ -48,8 +47,10 @@ The `httpRoute` builder carries three chainable methods for cache headers. They 
 | `.cacheTag(value)`     | `Cache-Tag`     | Logical tag for bulk purging via `ctx.cache.purge`. |
 | `.vary(value)`         | `Vary`          | Store separate cached variants per request header.  |
 
-```ts
+```ts title="lunora/products.ts"
 import { httpRoute, v } from "lunorash/server";
+
+import { api } from "@/lunora/_generated/api";
 
 export const getProduct = httpRoute
     .get("/api/products/:id")
@@ -70,8 +71,7 @@ The headers are sent on both **200 OK** and **204 No Content** responses, as wel
 
 `ctx.cache` is built by the Worker, so it reaches **HTTP action handlers only** — the ones mounted on `httpRouter()`. Purge by tag, or purge everything:
 
-```ts
-// lunora/http.ts
+```ts title="lunora/http.ts"
 import { httpAction, httpRouter } from "lunorash/server";
 
 const app = httpRouter();
@@ -134,8 +134,7 @@ already ships the memo: `defineActionCache` is a schema-extension component that
 adds one table and derives the key for you, so there is no hand-rolled hash and
 no bespoke read/write pair.
 
-```ts
-// lunora/cache.ts
+```ts title="lunora/cache.ts"
 import { defineActionCache } from "@lunora/server";
 
 export const cache = defineActionCache({ ttlMs: 60 * 60 * 1000 });
@@ -149,8 +148,7 @@ export const schema = defineSchema({ ... }).extend(cache.extension);
 export const { purgeExpired } = cache.functions;
 ```
 
-```ts
-// lunora/embeddings.ts
+```ts title="lunora/embeddings.ts"
 import { action, v } from "@/lunora/_generated/server";
 
 import { cache } from "./cache";

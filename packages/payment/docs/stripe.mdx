@@ -13,7 +13,7 @@ surface, the state machine, the store, `reconcile`) read the
 
 ## Stripe is a PSP: you are the merchant of record
 
-Stripe is a **payment service provider**, not a Merchant-of-Record. That is the
+Stripe is a **payment service provider (PSP)**, not a Merchant-of-Record. That is the
 one fact that shapes everything else: **you** are the merchant of record, so
 **you** own tax calculation, invoicing, and remittance (Stripe Tax and Invoicing
 are add-on products you enable on your own account; the adapter does not do this
@@ -224,7 +224,7 @@ The adapter options:
 Call the facade from an action. `createCheckout` returns a hosted Stripe Checkout
 URL to redirect the browser to. Use `mode: "subscription"` for recurring plans and
 `mode: "payment"` for one-time charges. `attach` is the plan-oriented alias with
-`mode` defaulting to `"subscription"`, so a subscription is just
+`mode` defaulting to `"subscription"`, so a subscription takes only
 `{ referenceId, priceId, successUrl, cancelUrl }`:
 
 ```ts
@@ -252,7 +252,7 @@ only on first checkout, and attaches an outbound idempotency key automatically
 (override via `input.idempotencyKey`), so a double-submit never double-charges.
 
 The subscription only becomes **active** in your store once Stripe confirms
-payment through a webhook (see below); `createCheckout` just starts the flow.
+payment through a webhook (see below); `createCheckout` only starts the flow.
 
 ## Entitlements and metered usage
 
@@ -326,6 +326,8 @@ app.post(
 );
 ```
 
+The following internal action rebuilds the request from the raw body and signature, then hands it to `handleWebhook`:
+
 ```ts
 // lunora/billing.ts
 import { internalAction, v } from "./_generated/server";
@@ -384,7 +386,9 @@ deduplicated, so Stripe stops retrying; a duplicate or no-op is acknowledged, no
 re-applied (the Stripe event id keys an append-only `events` log for idempotency
 and audit). An **orphaned** event — one whose subscription or customer row has not
 been created yet, i.e. an out-of-order delivery — returns **500** instead, so
-Stripe redelivers it after the parent row lands.
+Stripe redelivers it after the parent row lands. The adapter bounds an orphaned
+event to one such retry (`packages/payment/src/sync.ts:7` and `:35-38`), so a second
+orphaned delivery of the same event is not answered with a 500 again.
 
 | Stripe event                                 | Normalized transition                                                                                           | Notes                                                                                                                                        |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -444,7 +448,7 @@ await ctx.payments.refundPayment({ sessionId: paymentIntentId, amount: money(500
 **Customer portal.** `capabilities.portal` is `true`, so `createPortalSession`
 opens Stripe's hosted [Billing Portal](https://docs.stripe.com/api/customer_portal/sessions/create)
 where customers manage payment methods, invoices, and cancellations. The customer
-is derived from the store, never a caller-supplied id, so there is no IDOR:
+is derived from the store, never a caller-supplied id, so there is no insecure direct object reference (IDOR):
 
 ```ts
 export const openPortal = action.action(async ({ ctx }): Promise<{ url: string }> => {

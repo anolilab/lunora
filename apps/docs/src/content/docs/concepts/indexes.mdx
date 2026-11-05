@@ -101,7 +101,7 @@ at build time and surface these in the Studio:
   `.withIndex()` first; it loads every row and filters in memory.
 - **`unindexed_foreign_key`** (info): a foreign-key column with no index leading
   with it, so reads on it full-scan. (It honours SQLite's leftmost-prefix rule;
-  FKs onto `_id` are exempt.)
+  a foreign-key column named `_id` is exempt.)
 - **`empty_index`** (warn) and **`duplicate_index`** (info) catch indexes that
   narrow nothing or are a redundant prefix of another.
 

@@ -5,7 +5,7 @@ description: Multi-channel notifications — ctx.notify / ctx.push over @visulim
 
 `@lunora/notify` gives an app two context surfaces: `ctx.notify` for
 multi-channel messages (chat, in-app inbox, webhooks) and `ctx.push` for device
-push (Web Push and FCM). Both are built on
+push (Web Push and Firebase Cloud Messaging (FCM)). Both are built on
 [`@visulima/notification`](https://www.npmjs.com/package/@visulima/notification),
 with subscription storage and queue-backed fan-out on top.
 
@@ -33,11 +33,12 @@ the `ctx` facades from it.
 `webPushFromEnv` and `fcmFromEnv` read the conventional variables, so a project
 sets them in `.dev.vars` (or as secrets) rather than in code:
 
-| Channel                            | Variables                                                     |
-| ---------------------------------- | ------------------------------------------------------------- |
-| Web Push                           | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`      |
-| FCM                                | `FCM_SERVICE_ACCOUNT` (+ optional `FCM_PROJECT_ID`)           |
-| FCM with your own `getAccessToken` | `FCM_PROJECT_ID`, unless the config sets a string `projectId` |
+| Channel                            | Variables                                                                                       |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Web Push                           | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`                                        |
+| FCM                                | `FCM_SERVICE_ACCOUNT` (+ optional `FCM_PROJECT_ID`)                                             |
+| FCM with your own `getAccessToken` | `FCM_PROJECT_ID`, unless the config sets a string `projectId`                                   |
+| FCM for local development          | `FCM_ACCESS_TOKEN`, used only when `FCM_SERVICE_ACCOUNT` is not set. It expires within an hour. |
 
 The key names are exported as `WEB_PUSH_ENV_KEYS` / `FCM_ENV_KEYS` so tooling can
 reference them without restating string literals.
@@ -53,8 +54,8 @@ optionally tied to a `userId`. Two stores ship:
 `SubscriptionStore` is a small interface (`get` / `list` / `delete` / …), so a
 custom backing store is a matter of implementing it. `list` filters apply
 server-side and take a `limit`, so a large audience never materializes wholesale
-inside the isolate. `broadcast` deliberately leaves the limit unset: it has to
-reach everyone matched.
+inside the isolate. `broadcast` pages through the whole audience with keyset pagination, so it
+reaches everyone matched. A `limit` on the filter caps the total across all pages.
 
 Dead subscriptions prune themselves: an endpoint the push service reports as gone
 (Web Push HTTP 404/410, or FCM's `NOT_FOUND` answer for a dead token) is
@@ -64,16 +65,71 @@ rather than retried forever.
 ## What is deliberately not on the edge
 
 Only channels that survive workerd are wired here: Web Push and FCM run on Web
-Crypto and `fetch`. APNs needs `node:http2`, and the SMS and Node-only queue
-adapters likewise have no edge implementation, so the edge facade does not expose
-them. Route heavy fan-out through `@lunora/queue` instead: `enqueuePushBroadcast`
+Crypto and `fetch`. Apple Push Notification service (APNs) needs `node:http2`, and
+the SMS and Node-only queue adapters likewise have no edge implementation, so the
+edge facade does not expose them. Route heavy fan-out through `@lunora/queue` instead: `enqueuePushBroadcast`
 hands the audience to a queue and `runPushBroadcastPage` drains it, so one request
 never blocks on thousands of sends.
+
+## API
+
+The entries below cover the main exports. The full list is in
+`api-snapshots/notify.api.md`.
+
+### `defineNotify(config)`
+
+**Type:** `(config: NotifyConfig) => NotifyDefinition`
+
+Validates the channel configuration and returns it for codegen. It throws a
+`TypeError` for a malformed channel, and when neither `webPush` nor `fcm` is set.
+
+### `memorySubscriptionStore()`
+
+**Type:** `() => SubscriptionStore`
+
+In-memory subscription store for tests and development.
+
+### `d1SubscriptionStore(database, options?)`
+
+**Type:** `(database: D1Like, options?: D1StoreOptions) => SubscriptionStore`
+
+Durable subscription store on a D1 database. `options.tableName` sets the table name.
+
+### `webPushFromEnv(env, overrides?)` and `fcmFromEnv(env, overrides?)`
+
+**Type:** `(env: NotifyEnv, overrides?: Partial<WebPushConfig>) => WebPushConfig | undefined`
+and `(env: NotifyEnv, overrides?: Partial<FcmConfig>) => FcmConfig | undefined`
+
+Read the channel configuration from the environment variables in the table above.
+`overrides` replaces any field read from the environment.
+
+### `isGoneError(message, kind?)`
+
+**Type:** `(message: string | undefined, kind?: StoredSubscription["kind"]) => boolean`
+
+Returns `true` when a push error message means the subscription is gone (Web Push
+HTTP 404 or 410, or FCM `NOT_FOUND`).
+
+### `enqueuePushBroadcast(queue, job)` and `runPushBroadcastPage(push, job)`
+
+**Type:** `(queue: QueueProducerLike, job: Omit<PushBroadcastJob, "type">) => Promise<void>`
+and `(push: LunoraPush, job: PushBroadcastJob) => Promise<PushBroadcastPageOutcome>`
+
+`enqueuePushBroadcast` hands a broadcast job to a queue. `runPushBroadcastPage`
+delivers one page of that job and returns the outcome.
+
+### `WEB_PUSH_ENV_KEYS` and `FCM_ENV_KEYS`
+
+**Type:** `const` objects of environment variable names
+
+The variable names from the table above, so tooling can reference them without
+string literals.
 
 ## Browser side
 
 `@lunora/notify/web` is the client half: service-worker registration and
-permission flow, kept in its own subpath so none of it reaches the worker bundle:
+permission flow, kept in its own subpath so none of it reaches the worker bundle.
+Import the helpers from that subpath:
 
 ```ts
 import { isPushSupported, subscribeToPush, unsubscribeFromPush } from "@lunora/notify/web";

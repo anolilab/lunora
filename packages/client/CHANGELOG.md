@@ -1,3 +1,7 @@
+## @lunora/client [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.286...@lunora/client@1.0.0-alpha.287) (2026-11-05)
+
+- feat(shard-engine): accept endCursor on findMany for reactive pages (#1485)
+
 ## @lunora/client [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.285...@lunora/client@1.0.0-alpha.286) (2026-11-03)
 
 - fix: resolve open review defects across agent, client, codegen and SDKs (#1460)

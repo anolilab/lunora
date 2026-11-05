@@ -162,7 +162,7 @@ lunora migrate create backfill_read_by --table messages
 
 ### `@lunora/cli`: Cloudflare-only commands moved under `lunora cloudflare`
 
-Lunora deploys to Cloudflare, celld and Node, and three commands only ever
+Lunora deploys to Cloudflare, celld and Node, and four commands only ever
 drove Cloudflare. They now live in the `lunora cloudflare` group, keep their
 subcommands and flags, and refuse on a celld or Node project (the target comes
 from `--target`, then `target` in `lunora.config.*`, then Cloudflare):
@@ -171,6 +171,7 @@ from `--target`, then `target` in `lunora.config.*`, then Cloudflare):
 | -------------------------------------- | ------------------------------------------------- |
 | `lunora containers <subcommand> …`     | `lunora cloudflare containers <subcommand> …`     |
 | `lunora deployments <subcommand> …`    | `lunora cloudflare deployments <subcommand> …`    |
+| `lunora alerts <subcommand> …`         | `lunora cloudflare alerts <subcommand> …`         |
 | `lunora ai gateway [--id] [--no-logs]` | `lunora cloudflare ai-gateway [--id] [--no-logs]` |
 
 The old names are not aliases. They exit `2` without running anything and print
@@ -306,7 +307,7 @@ typed its deps as `WalletDeps` should use `X402PayDeps`.
 
 ### `@lunora/browser`: the SSRF guard moved to the context
 
-The redirect guard used `page.route`, which Playwright never calls for a
+The redirect guard, which blocks server-side request forgery (SSRF), used `page.route`, which Playwright never calls for a
 redirect hop, so a public URL could 302 the browser to a private address. The
 guard now sits on the context (`context.route`), fetches each navigation itself
 without following redirects, and checks every `Location` before it is
@@ -315,7 +316,7 @@ requested. It also covers the browsers `launch` and `connect` hand to your code.
 The structural projections changed with it: `BrowserContextLike` requires
 `route`, `PageLike` drops `route` and gains an optional `mainFrame`, and
 `RouteLike` gains `fetch` and `fulfill`. A `launch` keepAlive session whose
-callback throws is now closed. A DoH answer with no address (empty, SERVFAIL,
+callback throws is now closed. A DNS-over-HTTPS (DoH) answer with no address (empty, SERVFAIL,
 NXDOMAIN) is refused instead of treated as public.
 
 **Migration:** test doubles passed as `launch` / `connect` need a context with
@@ -325,7 +326,7 @@ unchanged.
 ### `@lunora/cli`: exports end with a row-count marker
 
 Every export now ends with a last line, `{"end":true,"rows":N}`, and
-`lunora import` (and `lunora backup restore`, which imports) refuses an NDJSON
+`lunora import` (and `lunora backup restore`, which imports) refuses a newline-delimited JSON (NDJSON)
 file that has no marker, whose count differs from the rows it holds, or that
 continues after it. A file or response cut on a row boundary is still valid
 NDJSON, so the marker is what proves it is whole.

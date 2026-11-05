@@ -34,7 +34,7 @@ codegen and the runtime.
 
 Create a `TableBuilder`. Fluent methods:
 
-- `.global({ backend? })`: store in D1 (cross-shard) instead of a Durable Object
+- `.global({ backend? })`: store in D1 (cross-shard) instead of a Durable Object (DO)
 - `.shardBy(field)`: partition by the named field
 - `.source({ binding, query, tenantBy?, idColumn?, map?, columns?, refresh?, mode? })`: materialize this table from an external Postgres/MySQL behind Cloudflare Hyperdrive. A system poll loop reads the (tenant-scoped) slice and lands it in the DO's SQLite, then `defineShape` carries it to clients. Implies `.externallyManaged()`; under `.shardBy()`, `tenantBy` is mandatory (the tenant-isolation boundary, enforced by the `external_source_unscoped` advisor lint)
 - `.index(name, fields, { unique? })`: secondary index
@@ -161,7 +161,7 @@ mechanisms cooperate to guarantee this on the DO-backed runtime:
 - **Idempotency dedup.** A client-issued `x-lunora-mutation-id` is deduped by
   `(identity, mutationId)`. A replay of an unacknowledged write returns the
   **cached** result without re-running the handler at all.
-- **OCC surfaces as an error, not a retry.** A write guarded by optimistic
+- **Optimistic concurrency control (OCC) surfaces as an error, not a retry.** A write guarded by optimistic
   concurrency that loses the race fails the request with a `409 Conflict`
   response back to the caller. The runtime does not catch it and re-invoke the
   handler internally; the caller decides whether to retry, and a retry is a
@@ -201,7 +201,7 @@ export const messagesByChannel = defineShape({
 });
 ```
 
-`where` returns the same `WhereInput` the RLS DSL uses, so there is no second
+`where` returns the same `WhereInput` the row-level security (RLS) DSL uses, so there is no second
 predicate implementation. Because it runs with an identity the client can't
 forge, a shape is a _read-as-permission_.
 
@@ -325,8 +325,8 @@ export const listPublicPosts = c.query
 
 Caching a procedure-backed endpoint can leak data, because the procedure runs
 under `ctx.auth` and RLS. So `scope` is enforced, not
-trusted: **a request carrying `Authorization`, `Cookie`, or
-`Cf-Access-Jwt-Assertion` is always answered `private`**, even under
+trusted: **a request carrying `Authorization`, `Cookie`,
+`Cf-Access-Jwt-Assertion`, `Payment-Signature`, or `X-Payment` is always answered `private`**, even under
 `scope: "public"`. A per-caller response therefore never reaches a shared or edge
 cache, and the worst a mis-declared `scope` costs you is a missed cache hit.
 
@@ -437,6 +437,23 @@ to index directly. Because the encoding is structural, `{ a, b }` and `{ b, a }`
 are one entry, and `bigint` / `Date` / bytes arguments key distinctly instead of
 collapsing together.
 
+<Callout type="warn">
+    The cache is **global, not per caller**: the key holds `name` and `args` and no identity. If `fn` reads `ctx.auth` (or anything else that varies by caller),
+    put that value in `args`, or a second caller with the same arguments gets the first caller's result. A result that differs per caller and cannot be keyed
+    that way must not be cached.
+</Callout>
+
+The following action caches a per-user summary safely, because the verified user
+id is part of the key:
+
+```ts
+export const summary = action.input({ docId: v.id("docs") }).action(async ({ args, ctx }) => {
+    const userId = ctx.auth.userId;
+
+    return cache.wrap(ctx, "summary", { docId: args.docId, userId }, async () => summarizeFor(args.docId, userId));
+});
+```
+
 `invalidate(ctx, name, args)` drops one entry. `invalidateAll(ctx, name)` drops
 every entry under a name and returns `{ deleted, complete }` — call it again while
 `complete` is `false`.
@@ -469,3 +486,407 @@ not stored, so a large answer costs a cache miss rather than a failed action.
 - `@lunora/server/drizzle`: drizzle's SQLite schema-definition surface, used by
   the generated `_generated/drizzle.*` files.
 - `@lunora/server/data-model` / `@lunora/server/types`: type-only helpers.
+
+## API reference
+
+The root entry point's exports that app code calls or configures. Signatures are
+shortened from the API snapshot; each entry links to the section that explains it
+in depth where one exists.
+
+### Schema and tables
+
+#### `defineSchema`
+
+**Type:** `(tables: T, vectorIndexes?, aggregateIndexes?, rankIndexes?) => ExtendableSchema<T>`
+
+Builds the application schema from a map of table names to `defineTable` results.
+Details in [defineSchema](#defineschematables).
+
+#### `defineTable`
+
+**Type:** `(inputShape: Shape) => TableBuilder<Shape>`
+
+Creates a table from a map of `v.*` validators. Chain the fluent methods on the
+result to add indexes and storage options. Details in [defineTable](#definetableshape).
+
+#### `TableBuilder`
+
+**Type:** `TableBuilder<Shape>`
+
+The fluent table configuration returned by `defineTable`. Each method returns the
+builder, so calls chain. The methods are described under [defineTable](#definetableshape).
+
+#### `Schema`
+
+**Type:** `Schema<T>`
+
+The schema object consumed by codegen and the runtime. It holds `tables`,
+`vectorIndexes`, and the optional `rlsMode`. Apps normally get one from
+`defineSchema` rather than building it by hand.
+
+### Validators
+
+#### `v`
+
+**Type:** `v` (re-exported from `@lunora/values`)
+
+The validator namespace used in schemas and function arguments, such as `v.string()`
+and `v.id("users")`. The signatures live on the [`@lunora/values`](/docs/packages/values)
+page; the usage is in [Validators](#validators-v).
+
+### Indexes
+
+#### `defineVectorIndex`
+
+**Type:** `(options: VectorIndexOptions) => VectorIndexDefinition`
+
+Declares a standalone vector index for a source derived from several fields or a
+computation. Pass it in the `vectorIndexes` map of `defineSchema`.
+
+#### `VectorIndexOptions`
+
+**Type:** `{ dimensions, embed, metric, source: { table, select }, metadata?, model? }`
+
+Options for `defineVectorIndex`. `source` names the table and a `select` function
+that picks the value to embed. `metric` is a `VectorMetric`, and `embed` is the
+`VectorEmbedder` the index uses.
+
+#### `defineRankIndex`
+
+**Type:** `(name: string, options: RankIndexOptions) => RankIndexDefinition`
+
+Declares a standalone rank index. Pass it as the fourth argument to `defineSchema`,
+keyed by index name.
+
+#### `defineAggregateIndex`
+
+**Type:** `(name: string, options: AggregateIndexOptions) => AggregateIndexDefinition`
+
+Declares a standalone aggregate index. Pass it as the third argument to `defineSchema`,
+keyed by index name.
+
+### Function builders
+
+#### `QueryBuilder`
+
+**Type:** `QueryBuilder<Context, Args, Output>`
+
+The chainable builder for a query. Chain `input`, `output`, `expose`, `meta`, and
+`use` before the terminal `query` call. Details in [query / mutation / action](#query--mutation--action).
+
+#### `MutationBuilder`
+
+**Type:** `MutationBuilder<Context, Args, Output>`
+
+The same chain as `QueryBuilder`, ending in the terminal `mutation` call. A mutation
+handler is one transaction for the shard-local tables it writes. Details in
+[query / mutation / action](#query--mutation--action).
+
+#### `ActionBuilder`
+
+**Type:** `ActionBuilder<Context, Args, Output>`
+
+The same chain as `QueryBuilder`, ending in the terminal `action` call. Action writes
+autocommit one at a time, so read [ctx shape](#ctx-shape) before relying on them.
+
+#### `initLunora`
+
+**Type:** `{ dataModel: <DataModel>() => DataModelInit<DataModel> }`
+
+The entry point for a typed data model. `initLunora.dataModel<DataModel>()` returns
+an object whose `create()` method gives the typed builders.
+
+### Shapes and mutators
+
+#### `defineShape`
+
+**Type:** `<Args, Context>(definition: ShapeDefinition<Args, Context>) => RegisteredShape<Args, Context>`
+
+Declares a named partial replication of a table for the local-first sync engine.
+Details in [defineShape](#defineshapedefinition--partial-replication).
+
+#### `ShapeDefinition`
+
+**Type:** `{ table, args?, use?, where?, columns?, owner?: string | true }`
+
+The fields of a shape. `table` names the table, and `where` returns the predicate the
+shard applies with a trusted context. `use` lists the `rls(...)` guards that gate reads,
+and `columns` is an optional projection. `owner` owner-scopes the shape to the
+verified identity: `true` uses the column declared by the table's `.ownedBy(field)`, and a
+string names the owning column directly. A shape needs either `where` or `owner`.
+
+#### `defineMutator`
+
+**Type:** `(definition: MutatorDefinition) => RegisteredMutator`
+
+Declares a custom mutator: an authoritative `server` implementation, paired with an
+optional `client` twin that runs optimistically in the browser. Details in
+[defineMutator](#definemutatordefinition--custom-mutators).
+
+#### `MutatorDefinition`
+
+**Type:** `{ server, args?, client?, owner? }`
+
+`server` is the authoritative implementation that runs in the shard. `client` is the
+optimistic twin. `owner` names the column for an owner-scoped write.
+
+### Lists
+
+#### `defineListArgs`
+
+**Type:** `<TDocument>() => (config: DefineListArgsConfig) => ListArgsSpec`
+
+The shared convention for paginated list queries. Call it with the document type, then
+with the config. The result provides the validator map for `.input()` and a
+`toQueryArgs` translation into `findMany` options. Details in [List endpoints](#list-endpoints).
+
+#### `DefineListArgsConfig`
+
+**Type:** `{ filter, orderBy, defaultLimit?, maxLimit?, maxInValues?, maxOrderBy? }`
+
+**Default:** `defaultLimit` 25, `maxLimit` 100, `maxInValues` 100, `maxOrderBy` 8
+
+`filter` is the allow-list of filterable columns, and `orderBy` lists the sortable ones.
+`limit` is clamped into `[1, maxLimit]` rather than rejected.
+
+### Caching and history
+
+#### `defineActionCache`
+
+**Type:** `(options?: DefineActionCacheOptions) => ActionCacheComponent`
+
+Creates a TTL cache for action results, keyed by a digest of the action name and its
+arguments. Call `cache.wrap(ctx, name, args, fn)` inside an action. The cache is
+shared by every caller and the key holds no identity, so a result that depends on
+`ctx.auth` must carry the user or tenant id in `args`. Details in
+[defineActionCache](#defineactioncacheoptions--memoising-an-action).
+
+#### `DefineActionCacheOptions`
+
+**Type:** `{ ttlMs?, maxValueBytes? }`
+
+**Default:** `ttlMs` 3600000 (one hour), `maxValueBytes` 524288 (512 KB)
+
+`ttlMs` sets how long an entry is a hit. A result over `maxValueBytes` is returned to
+the caller but not stored.
+
+#### `defineDocumentHistory`
+
+**Type:** `(options?: DefineDocumentHistoryOptions) => DocumentHistoryComponent`
+
+Creates a row-version history. Attach `history.record` to each table with `.triggers(...)`
+and merge `history.extension` into the schema. Details in
+[defineDocumentHistory](#definedocumenthistoryoptions--row-version-history).
+
+#### `DefineDocumentHistoryOptions`
+
+**Type:** `{ retentionMs?, maxSnapshotBytes?, redact? }`
+
+**Default:** `retentionMs` 7776000000 (90 days), `maxSnapshotBytes` 65536 (64 KB)
+
+`retentionMs` is how long `vacuum` keeps an entry. `redact` lists extra field names to
+drop from snapshots, on top of the built-in secret-shaped fields.
+
+### Access control
+
+#### `rls`
+
+**Type:** `(policies, options?) => PolicyMiddleware`
+
+Builds the row-level security middleware from a list of policies. Add it to a
+procedure with `.use(...)`, or to a shape through its `use` list.
+
+#### `definePolicy`
+
+**Type:** `<Context>(input: DefinePolicyInput<Context>) => Policy<Context>`
+
+Declares one row policy. `on` names the operation, and `when` is the predicate that
+allows it.
+
+#### `defineRole`
+
+**Type:** `(name: string, options?) => Role`
+
+Declares a named role. Grant it permissions through its options, and register it with
+`rls(policies, { roles })`.
+
+#### `definePermission`
+
+**Type:** `(name: string, options?) => Permission`
+
+Declares a named permission. A policy checks it with `auth.can(permission)`, and a role
+grants it through `defineRole`.
+
+#### `expectPolicy`
+
+**Type:** `(policies, options?) => PolicyAssertion`
+
+An in-process harness from `@lunora/server/rls/testing`. It evaluates policies without a
+Worker or Durable Object. Details in [Subpaths](#subpaths).
+
+### Plugins, env and identity
+
+#### `definePlugin`
+
+**Type:** `(key: string, options: DefinePluginOptions<TExtension, TContextIn, TContextOut>) => Plugin<TExtension, TContextIn, TContextOut>`
+
+Packages a schema extension and middleware as a reusable plugin under a unique `key`.
+Both option fields are optional. When `options.extension` is given, the returned plugin
+keeps that extension typed under the literal `key`.
+
+#### `DefinePluginOptions`
+
+**Type:** `{ extension?, middleware? }`
+
+`extension` is a schema extension that adds tables. `middleware` runs for the procedures
+the plugin is installed on.
+
+#### `defineEnv`
+
+**Type:** `<S extends EnvShape>(shape: S) => EnvAccessor<S>`
+
+Declares typed environment keys. A missing or invalid key throws `LunoraEnvError`, with
+secret values redacted. The check runs lazily on first access, or eagerly through `parse`.
+
+#### `defineIdentity`
+
+**Type:** `(claims, options?) => IdentityContract`
+
+Declares the identity claim contract. `claims` is a validator map that must include a
+required `userId` string, or the call fails to typecheck.
+
+#### `DefineIdentityOptions`
+
+**Type:** `{ onInvalid? }`
+
+**Default:** `onInvalid` `"anonymous"`
+
+`onInvalid` (an `IdentityRejectMode`) sets what the worker does with a request whose
+identity fails validation.
+
+### HTTP
+
+#### `httpRouter`
+
+**Type:** `() => LunoraHttpApp`
+
+Creates a [Hono](https://hono.dev) app for the HTTP routes the Worker serves.
+Register handlers with `app.get(path, handler)` and similar methods, and make the
+app the default export of `lunora/http.ts`. See
+[HTTP endpoints](/docs/concepts/http-endpoints).
+
+#### `httpAction`
+
+**Type:** `(handler: HttpActionHandler) => LunoraRouteHandler`
+
+Wraps a `(ctx, request) => Response` function as a route handler. It is the raw escape
+hatch, mounted with `app.all(path, httpAction(fn))`.
+
+#### `httpRoute`
+
+**Type:** `interface HttpRoute { get; post; put; patch; delete; head; options }` where each is `(path: string) => HttpRouteBuilder`
+
+The entry point for a typed route, with one factory per HTTP verb. Start with
+`httpRoute.get(path)`, chain `.params(...)`, `.searchParams(...)`, `.body(...)`, and
+`.output(...)`, and finish with `.handler(...)`. The result is a route handler to register on a router.
+
+### Live, presence and storage
+
+#### `defineLiveStream`
+
+**Type:** `<Topics>(config: LiveStreamConfig<Topics>) => LiveStream<Topics>`
+
+Declares a live stream of named topics, delivered over server-sent events. A
+subscription is authorized once, at subscribe. Live streams cannot be combined with
+`.deliveryAuthorization(...)`.
+
+#### `LiveStreamConfig`
+
+**Type:** `{ id, topics, onSubscribe?, allowAnonymousControl? }`
+
+`id` names the stream, and `topics` declares what subscribers can receive. `onSubscribe`
+authorizes a subscription when it opens.
+
+#### `definePresence`
+
+**Type:** `(options?: DefinePresenceOptions) => PresenceComponent`
+
+Creates the presence component, which tracks connected sessions. A session drops out
+after its TTL unless it is refreshed.
+
+#### `DefinePresenceOptions`
+
+**Type:** `{ ttlMs?, maxSessions?, disconnectGraceMs?, tenant? }`
+
+**Default:** `ttlMs` 30000 (30 seconds), `maxSessions` 1024, `disconnectGraceMs` 0
+
+`tenant` maps the verified identity to the tenant whose rooms the caller can reach, and
+it defaults to the identity's `orgId` claim, or `""` when there is none.
+`disconnectGraceMs` defaults to 0, which drops a session the moment its socket closes.
+
+#### `defineStorageRule`
+
+**Type:** `<Context>(input: DefineStorageRuleInput<Context>) => StorageRule<Context>`
+
+Declares one rule for R2 object access: the bucket, the operation it covers, an optional
+key prefix, and the decision function.
+
+#### `defineStorageRules`
+
+**Type:** `(rules) => ReadonlyArray<StorageRule>`
+
+Collects storage rules for the `storageRules()` middleware. Rules for the same bucket and
+operation are combined with OR, and a duplicated rule throws at module load.
+
+### Migrations, modules and scheduling
+
+#### `defineMigration`
+
+**Type:** `(definition: MigrationDefinition) => RegisteredMigration`
+
+Declares an online data migration over the documents of one table. `migrate up` applies
+the `up` transform to each row.
+
+#### `MigrationDefinition`
+
+**Type:** `{ id, table, up, down?, covers?, batchSize? }`
+
+`id` is the stable key that per-shard run state is tracked under. `up` and `down` are the
+forward and reverse row transforms.
+
+#### `defineModule`
+
+**Type:** `(config?: ModuleConfig) => ModuleDefinition`
+
+Declares the module that a `lunora/<folder>/module.ts` file stands for, with a
+`description` and the `tables` it owns.
+
+#### `cronJobs`
+
+**Type:** `cronJobs` (re-exported from `@lunora/scheduler`)
+
+Builds the cron jobs declared in `lunora/crons.ts`. The signatures live on the
+[`@lunora/scheduler`](/docs/packages/scheduler) page.
+
+### Errors
+
+#### `LunoraEnvError`
+
+**Type:** `class LunoraEnvError extends LunoraError`
+
+Thrown by `defineEnv` accessors when a key is missing or invalid. Its `failures` property
+lists each failing key, with secret values redacted.
+
+#### `ValidationError`
+
+**Type:** `ValidationError` (re-exported from `@lunora/values`)
+
+Thrown when a validator rejects a value. The runtime rewraps it with an `args.<field>`
+path that points at the failing field.
+
+#### `LunoraError`
+
+**Type:** `class LunoraError` (re-exported from `@lunora/errors`)
+
+The base class for Lunora's errors. The codes are documented on the
+[`@lunora/errors`](/docs/packages/errors) page.

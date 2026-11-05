@@ -10,7 +10,7 @@ related:
       note: "full `lunora export`, `lunora import`, and `lunora deploy` reference"
 ---
 
-Cloudflare [Durable Object jurisdictions](https://developers.cloudflare.com/durable-objects/reference/data-location/)
+Cloudflare [Durable Object (DO) jurisdictions](https://developers.cloudflare.com/durable-objects/reference/data-location/)
 restrict where a DO runs and stores data, for GDPR, FedRAMP, or US data
 residency. Declare one on your schema and Lunora pins every DO the app reaches
 to that region.
@@ -275,8 +275,8 @@ drift gate flags it as **breaking** and blocks the deploy:
 ```text
 Durable Object jurisdiction changed from (none) to us — this re-homes every DO
 and strands all existing shard, scheduler, and session-DO data in the old region
-(no in-place migration; export then import to move it). Revert the change, or
-override the gate to proceed intentionally.
+(export then import to move it). Revert the change, or declare a migration with
+covers: { jurisdiction: "us" } once the data is moved.
 ```
 
 Revert the change, or, if a region move is genuinely intended, follow the runbook
@@ -299,7 +299,7 @@ import are not carried over.
 ### Export first, before changing anything
 
 While the deployed worker still resolves the **current** region's DOs, dump every
-table to NDJSON. This is your only window to read the old data.
+table to newline-delimited JSON (NDJSON). This is your only window to read the old data.
 
 ```bash
 LUNORA_ADMIN_TOKEN=… lunora export --prod --url https://app.example.com \

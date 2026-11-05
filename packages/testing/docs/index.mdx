@@ -45,8 +45,8 @@ bun add -D @lunora/testing
 `lunoraTest(schema)` runs the migrations against a fresh in-memory SQLite
 database, builds the same `ctx.db` writer the real Durable Object builds, and
 returns a harness whose methods execute a registered function's `handler`
-directly. It mirrors the first five methods of Convex's `convexTest`, and all
-of them share one database, so a write from a mutation is visible to a later
+directly. It follows the shape of Convex's `convexTest`, and all
+of its methods share one database, so a write from a mutation is visible to a later
 query.
 
 ```ts
@@ -91,6 +91,20 @@ afterEach(() => {
     }
 });
 ```
+
+### `lunoraTest` options
+
+`lunoraTest(schema, options?)` accepts these options. Each one is optional.
+
+| Option              | Default       | Description                                                                                                                                                                                                 |
+| ------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enforceRls`        | `true`        | Runs procedures through the RLS guard that production uses. Under `.rls("required")`, a procedure without `.use(rls(...))` rejects with `RlsRequiredError`. Set `false` to restore the permissive behavior. |
+| `env`               | `undefined`   | The object that `ctx.env` returns in every context.                                                                                                                                                         |
+| `fetch`             | throwing stub | The implementation `ctx.fetch` calls inside actions. See [Injecting `ctx.fetch`](#injecting-ctxfetch).                                                                                                      |
+| `services`          | `undefined`   | A fake for each `lunora.config` service an action calls. See [Injectable `ctx.services`](#injectable-ctxservices).                                                                                          |
+| `functions`         | `undefined`   | The registered functions by path, which the scheduler dispatches to. See [Scheduler](#scheduler).                                                                                                           |
+| `queues` / `topics` | `undefined`   | The export names of the queues and topics that `ctx.queues` and `ctx.topics` accept.                                                                                                                        |
+| `notify`            | `undefined`   | The `lunora/notify.ts` default export that builds `ctx.notify` and `ctx.push`.                                                                                                                              |
 
 ### Harness API
 
@@ -232,7 +246,7 @@ const t = lunoraTest(schema, {
 List the export names of your `lunora/queues.ts` queues in the `queues` option
 and mutations and actions get a recording `ctx.queues`. Sends go through
 `@lunora/queue`'s own validation, so a batch over 100 messages, a delay past
-12 hours, or a queue name you did not list rejects as it would in production.
+24 hours, or a queue name you did not list rejects as it would in production.
 Each body is recorded as the consumer decodes it: encoded with its content type
 (Cloudflare's default `json`, unless the send names one) and decoded back, so a
 `Date` arrives as its ISO string and a `BigInt` rejects. Encoded sizes are checked
@@ -466,23 +480,23 @@ test("password reset email carries a working link", async () => {
 
 `waitForMail` accepts everything in `InboxOptions` plus a few polling knobs:
 
-| Option         | Default      | Description                                         |
-| -------------- | ------------ | --------------------------------------------------- |
-| `adminToken`   | —            | Admin bearer token (`LUNORA_ADMIN_TOKEN`).          |
-| `baseUrl`      | —            | App base URL, e.g. `http://localhost:8787`.         |
-| `to`           | —            | Recipient address the message must be addressed to. |
-| `subjectMatch` | —            | Only match a subject containing this substring.     |
-| `limit`        | `50`         | Newest-N messages to read per poll.                 |
-| `pollMs`       | `250`        | Poll interval in ms.                                |
-| `timeoutMs`    | `10000`      | Give up after this many ms.                         |
-| `fetch`        | `globalThis` | Inject a `fetch` implementation (e.g. a stub).      |
+| Option         | Default            | Description                                         |
+| -------------- | ------------------ | --------------------------------------------------- |
+| `adminToken`   | —                  | Admin bearer token (`LUNORA_ADMIN_TOKEN`).          |
+| `baseUrl`      | —                  | App base URL, e.g. `http://localhost:8787`.         |
+| `to`           | —                  | Recipient address the message must be addressed to. |
+| `subjectMatch` | —                  | Only match a subject containing this substring.     |
+| `limit`        | `50`               | Newest-N messages to read per poll.                 |
+| `pollMs`       | `250`              | Poll interval in ms.                                |
+| `timeoutMs`    | `10000`            | Give up after this many ms.                         |
+| `fetch`        | `globalThis.fetch` | Inject a `fetch` implementation (e.g. a stub).      |
 
 ## Evals — scoring model output
 
 `evaluate` runs a dataset through a producer and scores each output. The
 built-in scorers are heuristic (`containsScorer`, `absentScorer`,
-`regexScorer`, `exactMatchScorer`, `keywordScorer`) plus `llmScorer`, an
-LLM-as-judge whose `judge` is **injected** — a `(prompt) => Promise<string>`
+`regexScorer`, `exactMatchScorer`, `keywordScorer`) plus `llmScorer`, a large
+language model (LLM) used as judge, whose `judge` is **injected** — a `(prompt) => Promise<string>`
 you wire to your own model — so this package stays model-agnostic and the
 judge is mockable. `absentScorer` is the one that can express a refusal: "the
 write was never dispatched", "the tool above this tier was never offered".
@@ -539,5 +553,5 @@ failure a quality gate has.
 `recallAtK` and `ndcgAtK` answer different questions and you generally want
 both. Recall@10 cannot distinguish a gold passage at rank 1 from one at rank 10,
 but only the first survives a context-window trim — that difference is exactly
-what nDCG and MRR measure, and it is how you tell whether a reranker or a
+what normalized discounted cumulative gain (nDCG) and mean reciprocal rank (MRR) measure, and it is how you tell whether a reranker or a
 hybrid leg actually helped rather than just moved results around.

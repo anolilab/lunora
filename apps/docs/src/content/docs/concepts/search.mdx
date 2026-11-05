@@ -13,10 +13,13 @@ A `searchIndex` adds a full-text index over one string column so you can match
 documents by their words rather than by an exact key. Results come back ordered
 by **relevance**, with optional exact-match filtering on declared filter fields.
 
-Search behaves the same on every backend: sharded Durable Object tables,
+Search behaves the same on every backend by default: sharded Durable Object tables,
 `.global()` tables on D1, and `.global()` tables on PlanetScale behind
 Hyperdrive. Same tokenizer, same AND/prefix rules, same ranking, same accent
-folding. Lunora analyzes text before it reaches the engine, so `café` and `cafe`
+folding. The one exception is an index that opts into `strategy: "native"`, which
+can order results differently (see [Native engine indexes](#native-engine-indexes)).
+
+Lunora analyzes text before it reaches the engine, so `café` and `cafe`
 match each other everywhere rather than depending on whose collation is
 underneath.
 
@@ -268,13 +271,13 @@ sharded twin. That is the whole trade, and it is why this is opt-in.
 
 On backends without a native index (D1, sharded Durable Objects, MySQL) the
 option is ignored and the portable path serves the query. The answer is still
-correct, it is just not the faster path.
+correct, it is not the faster path.
 
 ## How each backend indexes
 
 You don't have to care, but it explains the operational cost:
 
-- **Sharded DO tables and `.global()` on D1** use an FTS5 shadow table, kept in
+- **Sharded Durable Object (DO) tables and `.global()` on D1** use an FTS5 shadow table, kept in
   step with every row write.
 - **`.global()` on PlanetScale via Hyperdrive** (Postgres and MySQL, neither of
   which has FTS5) uses a portable inverted table: one indexed row per distinct
