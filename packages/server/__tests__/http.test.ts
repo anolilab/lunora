@@ -313,6 +313,55 @@ describe("httpRouter behind a single-page app's worker", () => {
         await expect(fetched.json()).resolves.toStrictEqual({ error: "UNAUTHENTICATED" });
     });
 
+    it("keeps the shell-first path for a revalidated shell, and runs a use() handler that owns its own path", async () => {
+        expect.assertions(3);
+
+        const app = httpRouter();
+
+        app.use("*", async (c, next) => {
+            if (c.req.header("authorization") === undefined) {
+                return c.json({ error: "UNAUTHENTICATED" }, 401);
+            }
+
+            await next();
+
+            return undefined;
+        });
+        app.use("/legacy/*", async (c) => c.text("legacy"));
+
+        const worker = createWorker({
+            httpRouter: app,
+            shardDO: {
+                get: () => {
+                    return { fetch: async () => Response.json({ result: null }) };
+                },
+                idFromName: (name: string) => {
+                    return { __name: name };
+                },
+            },
+            spaAssets: {
+                // The binding answers a conditional request for the shell it already sent with a 304.
+                fetch: async (request: Request) =>
+                    request.headers.get("if-none-match") === '"shell"'
+                        ? new Response(null, { headers: { etag: '"shell"' }, status: 304 })
+                        : new Response("<!doctype html>", { headers: { "content-type": "text/html", etag: '"shell"' } }),
+            },
+        });
+        const executionContext = { passThroughOnException: () => undefined, waitUntil: () => undefined };
+        const headers = { accept: "text/html", authorization: "Bearer t", "sec-fetch-mode": "navigate" };
+
+        const revalidated = await worker.fetch(
+            new Request("https://app.test/dashboard", { headers: { accept: "text/html", "if-none-match": '"shell"', "sec-fetch-mode": "navigate" } }),
+            {},
+            executionContext,
+        );
+        const legacy = await worker.fetch(new Request("https://app.test/legacy/page", { headers }), {}, executionContext);
+
+        expect(revalidated.status).toBe(304);
+        expect(legacy.status).toBe(200);
+        await expect(legacy.text()).resolves.toBe("legacy");
+    });
+
     it("still serves the shell for a page navigation when the app sets its own not-found handler, which answers every other miss", async () => {
         expect.assertions(4);
 

@@ -232,8 +232,14 @@ const httpRouters = new WeakSet<object>();
 
 const isHttpRouter = (app: object): boolean => httpRouters.has(app);
 
-/** Handlers registered through an {@link httpRouter}'s `use`, which run around a route and never answer as one. */
+/**
+ * Handlers registered through an {@link httpRouter}'s blanket `use` (`"*"`, `"/*"` or no path), which run around
+ * every route. A `use` on a narrower path may own that path (a legacy handler that never calls `next()`), so it
+ * counts as a route.
+ */
 const middlewareHandlers = new WeakSet<object>();
+
+const BLANKET_PATHS: ReadonlySet<string> = new Set(["*", "/*"]);
 
 /** Where Hono keeps the handler it wrapped when `.route()` mounts an app with its own error handler. */
 const COMPOSED_HANDLER = "__COMPOSED_HANDLER";
@@ -304,9 +310,13 @@ const httpRouter = (): LunoraHttpApp => {
 
     // Hono assigns `use` per instance; recording what it registers is how a route is told from middleware.
     app.use = ((...arguments_: Parameters<typeof use>) => {
-        for (const handler of arguments_) {
-            if (typeof handler === "function") {
-                middlewareHandlers.add(handler);
+        const [path] = arguments_;
+
+        if (typeof path !== "string" || BLANKET_PATHS.has(path)) {
+            for (const handler of arguments_) {
+                if (typeof handler === "function") {
+                    middlewareHandlers.add(handler);
+                }
             }
         }
 

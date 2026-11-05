@@ -809,7 +809,7 @@ const warnDefaultSecurityHeaders = (configPath: string | undefined, literals: Pr
 
     if (parsed !== undefined) {
         ({ problems } = parsed);
-    } else if (literals.unreadable) {
+    } else if (literals.unreadable && literals.security === undefined) {
         problems = ["is not an object literal codegen can read, so `security.headers` cannot be read either"];
     } else {
         problems = ["`security.headers` is not built from literals"];
@@ -839,7 +839,9 @@ const readProjectSecurityHeaders = (lunoraDirectory: string): boolean | Security
     const configPath = findCodegenConfigFile(lunoraDirectory);
     const literals: ProjectConfigLiterals = configPath === undefined ? {} : readConfigLiterals(configPath);
     const { security } = literals;
-    const parsed = literals.unreadable || security?.unreadable ? undefined : parseSecurityHeaders(security?.headers);
+    // The top-level flag also marks a computed `target` or `remote`; it hides `security` only when that was not read.
+    const unreadable = security?.unreadable === true || (literals.unreadable === true && security === undefined);
+    const parsed = unreadable ? undefined : parseSecurityHeaders(security?.headers);
 
     return parsed?.ok ? parsed.value : warnDefaultSecurityHeaders(configPath, literals, parsed);
 };

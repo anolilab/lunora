@@ -51,6 +51,14 @@ describe("security.headers in lunora.config", () => {
         expect(readProjectSecurityHeaders(join(projectRoot, "lunora"))).toBeUndefined();
     });
 
+    it("reads security.headers beside a computed target, which marks only the target unreadable", () => {
+        expect.assertions(1);
+
+        writeConfig("{ target: process.env.TARGET, security: { headers: { csp: \"default-src 'self'\" } } }");
+
+        expect(readProjectSecurityHeaders(join(projectRoot, "lunora"))).toStrictEqual({ csp: "default-src 'self'" });
+    });
+
     it("reads every section a getter declares as unreadable, services included", () => {
         expect.assertions(1);
 
@@ -77,7 +85,7 @@ describe("security.headers in lunora.config", () => {
         ['{ security: { headers: { frameAncestors: "https://a.example" } } }', "frameAncestors must be an array"],
         ['{ security: { headers: { csp: false, frameAncestors: ["https://a.example"] } } }', "cannot be combined with csp: false"],
         ["{ security: { headers: [] } }", "must be a boolean or an object"],
-        ["{ ...base, security: { headers: false } }", "is not an object literal codegen can read"],
+        ["{ ...base, security: { headers: false } }", "not built from literals"],
         ["makeConfig()", "is not an object literal codegen can read"],
     ])("falls back to the defaults, saying why, for %s", (body, reason) => {
         expect.assertions(2);

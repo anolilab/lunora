@@ -192,6 +192,22 @@ describe("createWorker — a single-page app's assets behind `/*`", () => {
         expect([...(shell?.headers.keys() ?? [])]).toStrictEqual([]);
     });
 
+    it("lets the router answer, and keeps a miss a 404, when the assets binding fails", async () => {
+        expect.assertions(2);
+
+        const broken: AssetsFetcherLike = {
+            fetch: async () => {
+                throw new Error("assets unavailable");
+            },
+        };
+        const worker = createWorker({ httpRouter: router, shardDO: shardNamespace(), spaAssets: broken });
+        const routed = await worker.fetch(navigate("/api/secret"), {}, fakeContext);
+        const missed = await worker.fetch(navigate("/settings"), {}, fakeContext);
+
+        expect(routed.status).toBe(403);
+        expect(missed.status).toBe(404);
+    });
+
     it("keeps every miss a 404 without an assets binding", async () => {
         expect.assertions(1);
 

@@ -51,18 +51,7 @@ const shellETag = async (assets: AssetsFetcherLike, request: Request): Promise<s
 const isNavigation = (request: Request): boolean =>
     request.headers.get("Sec-Fetch-Mode") === "navigate" || (request.headers.get("Accept") ?? "").includes("text/html");
 
-/**
- * The binding's answer for a request no route served, or `undefined` to keep the
- * Worker's 404: a real file (or the redirect `html_handling` gives one) as is,
- * the shell for a page navigation, and nothing for any other method, for a
- * non-navigation request the binding could only answer with the shell, or for a
- * binding error.
- */
-const serveSpaAsset = async (assets: AssetsFetcherLike, request: Request): Promise<Response | undefined> => {
-    if (request.method !== "GET" && request.method !== "HEAD") {
-        return undefined;
-    }
-
+const readSpaAsset = async (assets: AssetsFetcherLike, request: Request): Promise<Response | undefined> => {
     const response = await assets.fetch(request);
 
     if (response.status >= 300 && response.status < 400 && response.status !== 304) {
@@ -88,6 +77,26 @@ const serveSpaAsset = async (assets: AssetsFetcherLike, request: Request): Promi
 };
 
 /**
+ * The binding's answer for a request no route served, or `undefined` to keep the
+ * Worker's 404: a real file (or the redirect `html_handling` gives one) as is,
+ * the shell for a page navigation, and nothing for any other method, for a
+ * non-navigation request the binding could only answer with the shell, or for a
+ * binding error.
+ */
+const serveSpaAsset = async (assets: AssetsFetcherLike, request: Request): Promise<Response | undefined> => {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+        return undefined;
+    }
+
+    try {
+        return await readSpaAsset(assets, request);
+    } catch {
+        // A binding that fails keeps the Worker's 404 rather than turning the miss into a 500.
+        return undefined;
+    }
+};
+
+/**
  * The binding's answer for a `GET` / `HEAD` page load when that answer is the app
  * shell, else `undefined`. Only then may an `httpRouter()` skip the app's
  * middleware for it: the shell is what every client-side route gets, while a real
@@ -99,14 +108,19 @@ const serveSpaShell = async (assets: AssetsFetcherLike, request: Request): Promi
         return undefined;
     }
 
-    const response = await assets.fetch(request);
-    const tag = response.ok ? (response.headers.get("ETag") ?? undefined) : undefined;
+    try {
+        const response = await assets.fetch(request);
+        // A browser revalidating its cached shell sends `If-None-Match` and gets a `304` carrying the shell's tag.
+        const tag = response.ok || response.status === 304 ? (response.headers.get("ETag") ?? undefined) : undefined;
 
-    if (tag !== undefined && tag === (await shellETag(assets, request))) {
-        return response;
+        if (tag !== undefined && tag === (await shellETag(assets, request))) {
+            return response;
+        }
+
+        await response.body?.cancel();
+    } catch {
+        // A binding that fails must not stop the router answering the page.
     }
-
-    await response.body?.cancel();
 
     return undefined;
 };
