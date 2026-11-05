@@ -7,7 +7,7 @@ import type { QueryKey } from "@tanstack/react-query";
 import { CancelledError, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
-import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
+import { blankQuery, getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
 import { useLunora } from "./lunora-provider";
 import useLazyRef from "./use-lazy-ref";
 
@@ -188,14 +188,13 @@ const usePaginatedCore = function <T>(
         }
 
         const desired = desiredRef.current;
-        const hashOf = (page: Page): string =>
-            serializeQueryKey(
-                lunoraQueryKey(
-                    desired.fn,
-                    { ...desired.baseArgs, paginationOpts: { cursor: page.lower, endCursor: page.upper, numItems: page.numItems } },
-                    desired.shardKey,
-                ),
+        const keyOf = (page: Page): QueryKey =>
+            lunoraQueryKey(
+                desired.fn,
+                { ...desired.baseArgs, paginationOpts: { cursor: page.lower, endCursor: page.upper, numItems: page.numItems } },
+                desired.shardKey,
             );
+        const hashOf = (page: Page): string => serializeQueryKey(keyOf(page));
         const failure = classifyPageFailure(desired.pages, (page) => hashOf(page) === hash, pageError, restartedSinceLoadRef.current);
 
         if (failure === "restart") {
@@ -206,6 +205,17 @@ const usePaginatedCore = function <T>(
             // replaced, where the restart flag would surface them.
             desiredRef.current = { ...desired, pages: restarted };
             restartedSinceLoadRef.current = true;
+
+            // Another feed over the same query can still hold the head page's value from before the
+            // deploy, and its `continueCursor` is as stale as the one just refused: shown, it would
+            // offer `loadMore` straight back into the refusal. Blank it so the restart waits for the
+            // fresh snapshot the head's attach fetches, which refills it for that feed too.
+            const [head] = restarted;
+
+            if (head !== undefined) {
+                blankQuery(queryClient.getQueryCache().find({ exact: true, queryKey: keyOf(head) }));
+            }
+
             setPages(restarted);
             setError(undefined);
         }
