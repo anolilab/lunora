@@ -32,17 +32,26 @@ meta-framework's server-side rendering (SSR) handler has exactly that shape, so 
 `httpRouter` and Lunora dispatches by path:
 
 ```ts title="src/server.ts"
-import { createWorker } from "lunorash/runtime";
+import { createWorker, type ExecutionContextLike, type LunoraWorker } from "lunorash/runtime";
 
-import { ShardDO } from "lunorash/do";
 import { ssrHandler } from "./framework-entry"; // your framework's SSR fetch handler
 
-export default createWorker({
-    httpRouter: ssrHandler, // pages / API / SSR loaders ───────┐
-    shardDO: ShardDO, //                                        │
-    auth, // /api/auth/* ───────────────────────────────────────┤
-    // …                                                         ▼
-});
+// The Durable Object class is exported for wrangler; `shardDO` takes its namespace binding.
+export { ShardDO } from "lunorash/do";
+
+let worker: LunoraWorker | undefined;
+
+export default {
+    fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
+        worker ??= createWorker({
+            httpRouter: ssrHandler, // pages / API / SSR loaders
+            shardDO: env.SHARD, // the SHARD Durable Object namespace from wrangler.jsonc
+            // auth (serves /api/auth/*), …
+        });
+
+        return worker.fetch(request, env, ctx);
+    },
+};
 ```
 
 The worker resolves each request in this order:

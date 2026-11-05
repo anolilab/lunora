@@ -60,9 +60,10 @@ Tagged values are JSON arrays whose first element is the sentinel
 sentinel is escaped, so it cannot be mistaken for a tag.
 
 <Callout type="warn">
-    A non-plain object (a `RegExp`, `Headers`, a class instance, an object with a `toJSON()`) throws a `TypeError` instead of encoding to `{}`. Nesting deeper
-    than 64 levels throws a `RangeError`, and so does a cyclic graph, which recurses until it hits that limit. Functions and symbols are **not** rejected:
-    `encodeWire` returns them unchanged, and `JSON.stringify` then drops them from an object or writes `null` in an array. Strip them before encoding.
+    A non-plain object (a `RegExp`, `Headers`, a class instance) throws a `TypeError` instead of encoding to `{}`. A plain object with a `toJSON()` method is
+    encoded from its enumerable fields, and the method is not called, so convert it yourself first if you rely on its output. Nesting deeper than 64 levels
+    throws a `RangeError`, and so does a cyclic graph, which recurses until it hits that limit. Functions and symbols are **not** rejected: `encodeWire` returns
+    them unchanged, and `JSON.stringify` then drops them from an object or writes `null` in an array. Strip them before encoding.
 </Callout>
 
 ## API

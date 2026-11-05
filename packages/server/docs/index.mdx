@@ -435,6 +435,23 @@ to index directly. Because the encoding is structural, `{ a, b }` and `{ b, a }`
 are one entry, and `bigint` / `Date` / bytes arguments key distinctly instead of
 collapsing together.
 
+<Callout type="warn">
+    The cache is **global, not per caller**: the key holds `name` and `args` and no identity. If `fn` reads `ctx.auth` (or anything else that varies by caller),
+    put that value in `args`, or a second caller with the same arguments gets the first caller's result. A result that differs per caller and cannot be keyed
+    that way must not be cached.
+</Callout>
+
+The following action caches a per-user summary safely, because the verified user
+id is part of the key:
+
+```ts
+export const summary = action.input({ docId: v.id("docs") }).action(async ({ args, ctx }) => {
+    const userId = ctx.auth.userId;
+
+    return cache.wrap(ctx, "summary", { docId: args.docId, userId }, async () => summarizeFor(args.docId, userId));
+});
+```
+
 `invalidate(ctx, name, args)` drops one entry. `invalidateAll(ctx, name)` drops
 every entry under a name and returns `{ deleted, complete }` — call it again while
 `complete` is `false`.
@@ -637,7 +654,9 @@ with the config. The result provides the validator map for `.input()` and a
 **Type:** `(options?: DefineActionCacheOptions) => ActionCacheComponent`
 
 Creates a TTL cache for action results, keyed by a digest of the action name and its
-arguments. Call `cache.wrap(ctx, name, args, fn)` inside an action. Details in
+arguments. Call `cache.wrap(ctx, name, args, fn)` inside an action. The cache is
+shared by every caller and the key holds no identity, so a result that depends on
+`ctx.auth` must carry the user or tenant id in `args`. Details in
 [defineActionCache](#defineactioncacheoptions--memoising-an-action).
 
 #### `DefineActionCacheOptions`

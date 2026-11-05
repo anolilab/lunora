@@ -432,9 +432,13 @@ is read at call time and does not resubscribe.
 
 ### `stream(fn, args, options?)`
 
-A streaming query, as readable stores `{ chunks, status, error, cancel }`. `chunks`
-holds every chunk the server pushes so far, in arrival order. Its stream opens on
-the first subscriber and is cancelled when the last one leaves. Pass `"skip"` as
+A streaming query. It returns three readable stores, `chunks`, `status` and
+`error`, plus a `cancel()` function. `chunks` holds every chunk the server pushes
+so far, in arrival order, and it is the store that drives the stream: the stream
+opens on the first subscriber to `chunks` and is cancelled when the last one
+leaves. Subscribing only to `status` or `error` does not open it, so subscribe to
+`chunks` (for example `$chunks` in the template) even when you only show the
+status. Pass `"skip"` as
 `args` to keep the stores connected but leave the stream dormant. `fn` must be a
 stream reference, not a query.
 
