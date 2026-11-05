@@ -22,7 +22,7 @@ function MarketingPage() {
             <ul className="lu-saas-list">
                 <li className="lu-saas-row">
                     <span className="lu-saas-row__name">Free</span>
-                    <span>1 seat</span>
+                    <span>3 seats</span>
                 </li>
                 <li className="lu-saas-row">
                     <span className="lu-saas-row__name">Pro</span>

@@ -172,16 +172,51 @@ type LunoraHttpApp = Hono<LunoraHttpEnv>;
 /** A compiled route handler: a hono handler that resolves to a raw {@link Response}. */
 type LunoraRouteHandler = (c: Context<LunoraHttpEnv>) => Promise<Response>;
 
+/** Map a thrown error to its HTTP response, re-throwing anything unrecognised. */
+const errorResponse = (error: unknown): Response => {
+    if (error instanceof ValidationError) {
+        return Response.json({ code: "BAD_REQUEST", error: error.message }, { status: 400 });
+    }
+
+    // Structural, NOT `instanceof`: the errors that actually reach a route
+    // handler are minted by several classes (the facade's `@lunora/errors`
+    // `LunoraError`, the runtime's own subclass, a twin rebuilt from a shard-RPC
+    // error payload) and by other bundled copies of this package. An
+    // `instanceof` test against any single class misses all of those and falls
+    // through to the rethrow below, which escapes hono as a bare
+    // `500 text/plain` — losing the code, status, hint and `data`.
+    if (isLunoraError(error)) {
+        const { body, redacted, status } = toErrorBody(error, { fallbackCode: "INTERNAL_SERVER_ERROR", redactedMessage: "Internal error" });
+
+        if (redacted) {
+            // eslint-disable-next-line no-console -- log internal errors server-side; never echo raw details to the client
+            console.error("[lunora] http action error (redacted on the wire):", error);
+        }
+
+        return Response.json({ code: body.code, error: body.message, ...(body.why === undefined ? {} : { why: body.why }) }, { status });
+    }
+
+    throw error;
+};
+
 /**
  * Wrap a `(ctx, request) => Response` handler as a hono handler. The raw escape
  * hatch — mount it with `app.all(path, httpAction(fn))`. `ctx` is the
  * runtime-injected {@link HttpActionCtx} lifted into `c.var.lunora` by
  * {@link httpRouter}; `request` is the underlying `c.req.raw`.
+ *
+ * A thrown `LunoraError` answers with its own status and code, as it does from
+ * an {@link httpRoute}; anything else still escapes to the host's 500.
  */
 const httpAction =
     (handler: HttpActionHandler): LunoraRouteHandler =>
-    async (c) =>
-        handler(c.get("lunora"), c.req.raw);
+    async (c) => {
+        try {
+            return await handler(c.get("lunora"), c.req.raw);
+        } catch (error) {
+            return errorResponse(error);
+        }
+    };
 
 /** Apps built by {@link httpRouter}: the only Hono apps known to lift `__lunoraCtx` into `c.var.lunora`. */
 const httpRouters = new WeakSet<object>();
@@ -480,33 +515,6 @@ const parseBody = async (validators: ArgsValidator, c: Context<LunoraHttpEnv>): 
     }
 
     return parseValidatorMap(validators, json as Record<string, unknown>, "body");
-};
-
-/** Map a thrown error to its HTTP response, re-throwing anything unrecognised. */
-const errorResponse = (error: unknown): Response => {
-    if (error instanceof ValidationError) {
-        return Response.json({ code: "BAD_REQUEST", error: error.message }, { status: 400 });
-    }
-
-    // Structural, NOT `instanceof`: the errors that actually reach a route
-    // handler are minted by several classes (the facade's `@lunora/errors`
-    // `LunoraError`, the runtime's own subclass, a twin rebuilt from a shard-RPC
-    // error payload) and by other bundled copies of this package. An
-    // `instanceof` test against any single class misses all of those and falls
-    // through to the rethrow below, which escapes hono as a bare
-    // `500 text/plain` — losing the code, status, hint and `data`.
-    if (isLunoraError(error)) {
-        const { body, redacted, status } = toErrorBody(error, { fallbackCode: "INTERNAL_SERVER_ERROR", redactedMessage: "Internal error" });
-
-        if (redacted) {
-            // eslint-disable-next-line no-console -- log internal errors server-side; never echo raw details to the client
-            console.error("[lunora] http action error (redacted on the wire):", error);
-        }
-
-        return Response.json({ code: body.code, error: body.message, ...(body.why === undefined ? {} : { why: body.why }) }, { status });
-    }
-
-    throw error;
 };
 
 /**

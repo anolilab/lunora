@@ -211,6 +211,12 @@ Cloudflare's cache honours `Vary` for `Accept-Encoding` only, so Lunora does not
 delegate it: every header the policy varies on — including `x-lunora-shard-key`
 and `x-d1-bookmark`, which select _which_ data a request sees — is folded into the
 cache key itself. Two requests that differ on any of them can never share an entry.
+Query parameter order is not part of the key: `?a=1&b=2` and `?b=2&a=1` are the
+same call and share one entry. The procedure receives the same values either way,
+but the args object's key order follows the query string, so a cached answer
+was produced from whichever order arrived first. Only a procedure whose output
+depends on that order (one that echoes its args back, say) can tell the
+difference.
 
 Only a `200` is stored, and a response carrying `Set-Cookie` is skipped. So is a
 response advertising a `Vary` header the key does not fence on — a procedure that
@@ -220,6 +226,25 @@ risking one variant being served in place of another.
 The stored copy also drops the headers that describe the exchange rather than the
 resource (`X-D1-Bookmark`, `X-Lunora-Shard-Key`): the first caller still receives
 them, but replaying them would hand a later caller someone else's read cursor.
+
+### A deploy starts cold
+
+The key Lunora stores under also carries the running Worker version's id, read
+from the `version_metadata` binding (`CF_VERSION_METADATA`, declared by every
+`lunora init` template). After a deploy the Worker therefore never answers from
+an entry the previous code wrote: the old entries are not purged, they are just
+never looked up again and expire on their own `maxAge`. This covers only the
+colo entry Lunora writes. A browser, a CDN, or Workers Cache in front of the
+Worker keys on the URL and still honours the emitted `Cache-Control` for up to
+`maxAge`. If your `wrangler.jsonc` does not declare the binding, the key has no
+version in it and entries written before a deploy keep being served until they
+expire:
+
+```jsonc
+{
+    "version_metadata": { "binding": "CF_VERSION_METADATA" },
+}
+```
 
 ### Opting out
 

@@ -1666,6 +1666,7 @@ interface PaginationResult<T = Record<string, unknown>> {
     isDone: boolean;
     page: T[];
     splitCursor?: null | string;
+    splitRequired?: boolean;
 }
 ```
 
@@ -4176,6 +4177,7 @@ interface QueryArgs<TDocument> {
 interface QueryArgsOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> {
     consistency?: "primary";
     cursor?: null | string;
+    endCursor?: null | string;
     includeDeleted?: boolean;
     limit?: number;
     orderBy?: OrderBy<DM[T]>[];
@@ -4190,6 +4192,8 @@ interface QueryPage<TDocument> {
     continueCursor: null | string;
     isDone: boolean;
     page: TDocument[];
+    splitCursor?: null | string;
+    splitRequired?: boolean;
 }
 ```
 
@@ -4363,7 +4367,7 @@ interface TableReaderFacade<DM, REL extends Record<keyof DM, object>, RANK exten
         select?: S;
         with?: W;
     }) => Promise<QueryPage<LoadWith<DM, REL, T, W, S>>>;
-    findUnique: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "limit"> & {
+    findUnique: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "endCursor" | "limit"> & {
         select?: S;
         with?: W;
     }) => Promise<LoadWith<DM, REL, T, W, S> | null>;

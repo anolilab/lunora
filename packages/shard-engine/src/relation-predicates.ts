@@ -34,7 +34,16 @@ import type { RelationOperator } from "../../../shared/relation-operators";
 import { isRelationPredicate as isSharedRelationPredicate, RELATION_OPERATOR_SET } from "../../../shared/relation-operators";
 import { mergeWhere } from "./aggregates";
 import { isMemoryTable } from "./ctx-db-memory";
-import { buildSeekWhere, decodeCursor, equalityPinnedFields, normalizeOrderKeys, softDeleteScope, uniqueIndexFields } from "./query-args";
+import {
+    buildSeekBeforeWhere,
+    buildSeekWhere,
+    decodeCursor,
+    encodeCursor,
+    equalityPinnedFields,
+    normalizeOrderKeys,
+    softDeleteScope,
+    uniqueIndexFields,
+} from "./query-args";
 import { distinctValues } from "./relations";
 import type {
     KeyedRelationDefinitionLike,
@@ -613,16 +622,51 @@ const resolveRelationPredicates = async (where: WhereInput | undefined, options:
     });
 };
 
+/** Workerd's ceiling on the parameters one statement binds; past it SQLite raises a bare "too many SQL variables". */
+const MAX_SEEK_PARAMETERS = 100;
+
+/**
+ * The values a `where` tree binds as parameters: one per comparison operand, none for `isNull`.
+ * Used on the cursor seeks only, whose leaves are all plain comparisons.
+ */
+const boundValues = (where: WhereInput | undefined): number => {
+    if (where === undefined) {
+        return 0;
+    }
+
+    let count = 0;
+
+    for (const [key, value] of Object.entries(where)) {
+        if (key === "AND" || key === "OR") {
+            count += (value as WhereInput[]).reduce((total, branch) => total + boundValues(branch), 0);
+        } else if (key === "NOT") {
+            count += boundValues(value as WhereInput);
+        } else if (typeof value === "object" && value !== null) {
+            count += Object.keys(value).filter((operator) => operator !== "isNull").length;
+        } else {
+            count += 1;
+        }
+    }
+
+    return count;
+};
+
 /**
  * Compose the predicate, ordering and page size of a `findMany`-shaped read. This is the one
  * place that fixes the composition order, so `findMany` and `explain` cannot disagree about it:
  * the ordering and keyset seek come from the cursor's own columns; `baseWhere` (RLS / aggregate
  * scope) AND-merges with `where`; the soft-delete scope joins them; relation predicates are then
  * resolved to flat columns (the one await, which reads through `relation.fetcher`); and the seek
- * is ANDed in last. A malformed cursor throws before any child fetch runs.
+ * is ANDed in last. A malformed cursor or end cursor throws before any child fetch runs.
+ *
+ * `endCursor` adds the inclusive upper bound, so the read selects the fixed range
+ * `(cursor, endCursor]` a reactive page subscribes to — the same bound `paginateStage` uses.
+ * It is `buildSeekBeforeWhere` and not `NOT (after endCursor)`: for a nullable key the strict
+ * seek is a bare comparator, and `NOT (col > x)` is UNKNOWN on a NULL row that sorts before `x`.
  *
  * Each dialect compiles the result to its own SQL. `fetchLimit` is `limit + 1`, the over-fetch
- * that tells the caller whether another page exists without a second query.
+ * that tells the caller whether another page exists without a second query — except on a bounded
+ * read, whose end is pinned, so there is no next page to probe for.
  */
 const composeReadPredicate = async (
     definition: TableDefinitionLike,
@@ -633,7 +677,19 @@ const composeReadPredicate = async (
         pinned: equalityPinnedFields(args.where),
         uniqueBy: uniqueIndexFields(definition.indexes, definition.shape),
     });
-    const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
+    // `typeof`, not truthiness, as in `paginateStage` and `findManyPage`: an empty string is a
+    // malformed cursor to refuse, not an absent one to read past.
+    const seek = typeof args.cursor === "string" ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
+    const end = typeof args.endCursor === "string" ? buildSeekBeforeWhere(orderKeys, decodeCursor(args.endCursor)) : undefined;
+
+    // A bounded read binds a second seek, so an ordering wide enough to fit one can overflow with
+    // both. Refused here, with a reason, rather than failing to prepare with a bare SQLite error.
+    if (end !== undefined && boundValues(seek) + boundValues(end) > MAX_SEEK_PARAMETERS) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `findMany: an endCursor read with this orderBy binds ${String(boundValues(seek) + boundValues(end))} cursor parameters, and a statement takes at most ${String(MAX_SEEK_PARAMETERS)} — order by fewer fields`,
+        );
+    }
 
     let predicate: WhereInput | undefined = mergeWhere(args.baseWhere, args.where);
     predicate = mergeWhere(predicate, softDeleteScope(definition.softDeleteMode, args.includeDeleted));
@@ -642,13 +698,73 @@ const composeReadPredicate = async (
     // `with`-load `resolveWith` calls do; without it a relation predicate could read rows the caller may not.
     predicate = await resolveRelationPredicates(predicate, { ...relation, relationBaseWhere: args.relationBaseWhere });
 
-    if (seek) {
-        predicate = predicate ? { AND: [predicate, seek] } : seek;
+    for (const bound of [seek, end]) {
+        if (bound) {
+            predicate = predicate ? { AND: [predicate, bound] } : bound;
+        }
     }
 
     const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
 
+    // One row past `limit`: on an open-ended read it says another page exists; on a bounded one,
+    // that the cap cut the range short, which `findManyPage` reports as `splitRequired`.
     return { fetchLimit: limit === undefined ? undefined : limit + 1, limit, orderKeys, predicate };
+};
+
+/**
+ * Turn the rows a composed `findMany` statement returned into its page envelope. Shared by every
+ * store's `findMany` so the open-ended and bounded shapes cannot drift between them.
+ *
+ * Open-ended: the rows past `limit` are the over-fetch, so their presence is `!isDone` and the last
+ * kept row is `continueCursor`. Bounded (`endCursor` set): the shape `query().paginate()` gives a
+ * fixed range — `isDone: true`, `continueCursor` echoing `endCursor` so the next page still starts
+ * exactly where this one ends, and `splitCursor` naming the midpoint row (`null` under two rows) so
+ * a client whose page has grown can split it. The midpoint is taken over the rows RETURNED, after
+ * `limit` caps them: a capped range then splits inside what was read, and the half past the split
+ * reads the rows the cap held back. A capped range also answers `splitRequired: true`, so the
+ * client splits it even when the rows returned are within its usual split threshold.
+ *
+ * Cursors encode the full rows, so call this before `applySelect` trims them.
+ */
+const findManyPage = (
+    documents: Record<string, unknown>[],
+    read: { endCursor?: null | string; limit: number | undefined; omitContinueCursor?: boolean; orderKeys: OrderKey[] },
+): QueryPage => {
+    const { endCursor, limit, omitContinueCursor, orderKeys } = read;
+    const overLimit = limit !== undefined && documents.length > limit;
+    const page = overLimit ? documents.slice(0, limit) : documents;
+
+    if (typeof endCursor === "string") {
+        // A range the cap cut short must split however few rows came back, so a single kept row
+        // splits there; an uncut one under two rows is too small to split.
+        let middle: Record<string, unknown> | undefined;
+
+        if (page.length >= 2) {
+            middle = page[Math.floor(page.length / 2) - 1];
+        } else if (overLimit) {
+            [middle] = page;
+        }
+
+        return {
+            continueCursor: endCursor,
+            isDone: true,
+            page,
+            // eslint-disable-next-line unicorn/no-null -- splitCursor is `null | string`; null marks "too small to split", as `paginateStage` returns it
+            splitCursor: middle && omitContinueCursor !== true ? encodeCursor(middle, orderKeys) : null,
+            // The client splits a page only once it outgrows twice its size; a cut page may never
+            // get there, and the rows past the cut would stay out of reach.
+            ...(overLimit ? { splitRequired: true } : {}),
+        };
+    }
+
+    const last = page.at(-1);
+
+    return {
+        // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
+        continueCursor: overLimit && last && omitContinueCursor !== true ? encodeCursor(last, orderKeys) : null,
+        isDone: !overLimit,
+        page,
+    };
 };
 
 /**
@@ -827,6 +943,7 @@ export {
     composeReadPredicate,
     containsRelationPredicate,
     DEFAULT_MAX_RELATION_KEYS,
+    findManyPage,
     isRelationPredicate,
     resolveRelationPredicates,
 };

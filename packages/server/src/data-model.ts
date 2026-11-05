@@ -197,6 +197,18 @@ export interface QueryArgsOf<DM, REL extends Record<keyof DM, object>, T extends
     cursor?: null | string;
 
     /**
+     * Pin the page's end to an earlier page's `continueCursor`, for reactive pagination: the read is
+     * the fixed range `(cursor, endCursor]` under this call's `orderBy`, so a row inserted inside it
+     * grows this page and the next page (starting at `endCursor`) is unchanged. The result is
+     * `isDone: true`, echoes `endCursor` as `continueCursor`, and carries `splitCursor`.
+     *
+     * `limit` still caps the read. A range it cuts short answers `splitRequired: true`, and the
+     * client splits it at `splitCursor`, so the rows past the cap come back in the second half. On
+     * a `.global()` table a read with no `limit` is capped at 4096 rows the same way.
+     */
+    endCursor?: null | string;
+
+    /**
      * Include soft-deleted rows (`.softDelete()` tables only). Default hides them;
      * `true` returns deleted rows alongside live ones. No effect on a table
      * without `.softDelete()`.
@@ -211,6 +223,18 @@ export interface QueryPage<TDocument> {
     continueCursor: null | string;
     isDone: boolean;
     page: TDocument[];
+
+    /**
+     * Only on an `endCursor` read: the cursor of the page's midpoint row, `null` under two rows. Paging
+     * `(cursor, splitCursor]` and `(splitCursor, endCursor]` reproduces the range in two halves.
+     */
+    splitCursor?: null | string;
+
+    /**
+     * Only on an `endCursor` read that `limit` (or the global read cap) cut short: the page holds
+     * the first rows of its range, and splitting at `splitCursor` is the way to reach the rest.
+     */
+    splitRequired?: boolean;
 }
 
 /** The nested `with` sub-argument inside a relation's with-value, or `{}`. */
@@ -491,11 +515,11 @@ export interface TableReaderFacade<
      * the read rather than as a wrong answer downstream. `findFirst` drops that
      * assertion; this is the ORM spelling of the fluent reader's `.unique()`.
      *
-     * `limit`/`cursor` are not accepted rather than silently ignored: paging a read
+     * `limit`/`cursor`/`endCursor` are not accepted rather than silently ignored: paging a read
      * that must match at most one row is the assertion being dropped again.
      */
     findUnique: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
-        args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "limit"> & { select?: S; with?: W },
+        args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "endCursor" | "limit"> & { select?: S; with?: W },
     ) => Promise<LoadWith<DM, REL, T, W, S> | null>;
     get: (id: Id<string & T>) => Promise<DM[T] | null>;
 

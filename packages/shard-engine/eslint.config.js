@@ -133,6 +133,7 @@ export default createConfig(
             "**/__tests__/admin-tokens.test.ts",
             "**/__tests__/ctx-db.aggregates.test.ts",
             "**/__tests__/ctx-db.batch-writes.test.ts",
+            "**/__tests__/ctx-db.bounded-find-many.test.ts",
             "**/__tests__/ctx-db.geo.test.ts",
             "**/__tests__/ctx-db.headroom.test.ts",
             "**/__tests__/ctx-db.order-plan.test.ts",

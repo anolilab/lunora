@@ -15,6 +15,12 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 const AGENTS_FILENAME = "agents.ts";
 ```
 
+### `ALL_NOTIFY_CHANNELS` (const)
+
+```ts
+const ALL_NOTIFY_CHANNELS: NotifyChannels;
+```
+
 ### `AgentIR` (interface)
 
 ```ts
@@ -347,6 +353,12 @@ interface EmitAppOptions {
 const FLAGS_FILENAME = "flags.ts";
 ```
 
+### `FcmCredentials` (type)
+
+```ts
+type FcmCredentials = "absent" | "env" | "ownCredentials" | "ownToken";
+```
+
 ### `FieldSnapshot` (interface)
 
 ```ts
@@ -661,7 +673,7 @@ const NOTIFY_FILENAME = "notify.ts";
 
 ```ts
 interface NotifyChannels {
-    hasFcm: boolean;
+    fcm: FcmCredentials;
     hasWebPush: boolean;
 }
 ```

@@ -1,3 +1,12 @@
+## @lunora/cli [1.0.0-alpha.485](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.484...@lunora/cli@1.0.0-alpha.485) (2026-11-05)
+
+- fix(runtime): scope the rest edge cache by worker version (#1484)
+- fix: resolve registry and saas kit defects found reviewing the bench (#1481)
+
+## @lunora/cli [1.0.0-alpha.484](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.483...@lunora/cli@1.0.0-alpha.484) (2026-11-04)
+
+- feat(config): ask an fcm channel with its own token only for FCM_PROJECT_ID (#1479)
+
 ## @lunora/cli [1.0.0-alpha.483](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.482...@lunora/cli@1.0.0-alpha.483) (2026-11-04)
 
 - fix(notify): mint FCM access tokens from a service-account key (#1471)

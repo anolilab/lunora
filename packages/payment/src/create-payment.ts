@@ -5,7 +5,7 @@
  * authorization (no IDOR), outbound idempotency keys (no double-charge), and webhook ingestion
  * that verifies, normalizes, and applies through the FSM.
  */
-import { toErrorBody } from "@lunora/errors";
+import { LunoraError, toErrorBody } from "@lunora/errors";
 
 import { jsonResponse } from "../../../shared/json-response";
 import type { PaymentAdapter } from "./adapter";
@@ -30,11 +30,13 @@ import type {
     FeatureBalance,
     Money,
     PaymentSession,
+    ProviderId,
     RefundInput,
     Subscription,
     TrackInput,
     TrackResult,
 } from "./types";
+import { readWebhookBody } from "./webhook-body";
 
 /**
  * Strictly increasing event stamps for the usage ledger.
@@ -91,6 +93,13 @@ const stripReferenceId = (metadata: Record<string, string> | undefined): Record<
 export interface WebhookOutcome {
     /** Whether the event advanced a row. A verified no-op/duplicate is `false`. */
     applied: boolean;
+
+    /**
+     * The reference a verified subscription event concerns (applied, duplicate or stale alike),
+     * from the stored subscription — what an app re-derives plan-dependent state for, idempotently.
+     * Never sent back to the provider: {@link webhookResponse} answers with `applied` only.
+     */
+    referenceId?: string;
     /** The status {@link LunoraPayment.handleWebhook} answered — 500 for an orphaned event. */
     status: number;
 }
@@ -192,6 +201,21 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     if (typeof options.authorize !== "function") {
         throw new LunoraPaymentError("CONFIG_INVALID", "createPayment(): `authorize` must be a function (per-caller authorization is required)");
     }
+
+    /**
+     * The reference a subscription event concerns, read from the stored subscription after the
+     * event is applied, so it follows the owner the merge kept rather than whatever the event
+     * named. The event's own reference only stands in when nothing was stored.
+     */
+    const subscriptionReference = async (provider: ProviderId, subscriptionId: string, named: string | undefined): Promise<string | undefined> => {
+        const stored = await store.getSubscription(provider, subscriptionId);
+
+        if (stored !== undefined && stored.referenceId.trim() !== "") {
+            return stored.referenceId;
+        }
+
+        return named !== undefined && named.trim() !== "" ? named.trim() : undefined;
+    };
 
     const ensureAuthorized = async (referenceId: string): Promise<void> => {
         // `unknown`, compared to an exact `true`. The authorizer is app code and
@@ -462,10 +486,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             let action;
 
             try {
-                const payload = await request.text();
+                const payload = await readWebhookBody(request);
 
                 action = await adapter.parseWebhook({ headers: request.headers, payload });
             } catch (error) {
+                if (error instanceof LunoraError && error.code === "PAYLOAD_TOO_LARGE") {
+                    return jsonResponse({ error: "webhook body too large" }, 413);
+                }
+
                 // Only surface our own (non-sensitive) error messages; mask anything
                 // unexpected. Routed through `toErrorBody` so a payment code's
                 // echo-vs-redact posture is governed centrally by the shared
@@ -496,8 +524,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             }
 
             // Every other outcome acknowledges: once verified, a no-op is still a 200 and the provider
-            // stops retrying.
-            return jsonResponse({ applied: result.applied, reason: result.reason }, 200);
+            // stops retrying. A subscription event names the reference it concerns, so the app can
+            // refresh what it derives from that reference's plan. A duplicate or stale one does
+            // too: when the app's refresh failed and the route answered 5xx, the provider's retry
+            // arrives as a duplicate, and is the app's chance to finish it.
+            const referenceId =
+                action.subscriptionId === undefined ? undefined : await subscriptionReference(action.provider, action.subscriptionId, action.referenceId);
+
+            return jsonResponse({ applied: result.applied, reason: result.reason, ...(referenceId === undefined ? {} : { referenceId }) }, 200);
         },
 
         listBalances: async (referenceId) => {

@@ -10,13 +10,10 @@
  *
  * `packages/cli/vitest.config.ts` aliases the specifiers the items import.
  */
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { env } from "../fixtures/registry-runtime/cloudflare-workers";
-import { FUNCTION_PATH } from "../fixtures/registry-runtime/generated-internal";
+import type { Handler, Row } from "../helpers/registry-runtime";
+import { createDatabase, load, signedIn } from "../helpers/registry-runtime";
 
 // The items import their table names from a sibling `schema.ts`, which pulls in `@lunora/server`.
 // That package is not a dependency here and aliasing it would reach every suite, so the two
@@ -35,191 +32,14 @@ vi.mock("../../../../registry/presence/schema.ts", () => {
     return { PRESENCE_TABLE: "presence_present", PRESENCE_TTL_MS: 30_000 };
 });
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+interface OrganizationFilter {
+    plan?: string;
+    search?: string;
+}
 
-type Row = Record<string, unknown>;
-type Handler<TArgs, TResult> = (invocation: { args: TArgs; ctx: unknown }) => Promise<TResult>;
-
-/** Load an item through a computed specifier, so this package's `tsc` never sees its aliased imports. */
-const load = async <T>(...segments: string[]): Promise<T> => (await import(pathToFileURL(join(root, ...segments)).href)) as T;
-
-/**
- * An in-memory `ctx.db` over named tables with the unique indexes the kit
- * declares. A duplicate on a unique index throws, as the real engine does.
- */
-/** A row predicate: every bound field equals its value. */
-const equalsAll =
-    (bound: Row) =>
-    (row: Row): boolean =>
-        Object.entries(bound).every(([field, value]) => row[field] === value);
-
-const createDatabase = (unique: Record<string, string[][]>) => {
-    const tables = new Map<string, Row[]>();
-    let counter = 0;
-
-    const rows = (table: string): Row[] => {
-        if (!tables.has(table)) {
-            tables.set(table, []);
-        }
-
-        return tables.get(table)!;
-    };
-
-    const match = (row: Row, where: Row): boolean =>
-        Object.entries(where).every(([field, condition]) => {
-            if (typeof condition === "object" && condition !== null && "ne" in condition) {
-                return row[field] !== condition.ne;
-            }
-
-            return row[field] === condition;
-        });
-
-    const assertUnique = (table: string, candidate: Row): void => {
-        for (const fields of unique[table] ?? []) {
-            const clash = rows(table).find((row) => row["_id"] !== candidate["_id"] && fields.every((field) => row[field] === candidate[field]));
-
-            if (clash) {
-                throw new Error(`UNIQUE constraint failed: ${table}.${fields.join(", ")}`);
-            }
-        }
-    };
-
-    const find = (table: string, id: unknown): Row | undefined => rows(table).find((row) => row["_id"] === id);
-
-    const facade = (table: string) => {
-        return {
-            findFirst: async ({ where }: { where: Row }) => rows(table).find((row) => match(row, where)) ?? null,
-            findMany: async ({ where = {} }: { where?: Row }) => {
-                return { page: rows(table).filter((row) => match(row, where)) };
-            },
-        };
-    };
-
-    return {
-        db: {
-            delete: async (table: string, id: unknown) => {
-                const found = find(table, id);
-
-                if (found) {
-                    tables.set(
-                        table,
-                        rows(table).filter((row) => row !== found),
-                    );
-                }
-            },
-            get: async (table: string, id: unknown) => find(table, id) ?? null,
-            insert: async (table: string, document: Row) => {
-                counter += 1;
-
-                const row = { ...document, _id: `${table}:${String(counter)}` };
-
-                assertUnique(table, row);
-                rows(table).push(row);
-
-                return row["_id"];
-            },
-            patch: async (table: string, id: unknown, patch: Row) => {
-                const found = find(table, id);
-
-                if (!found) {
-                    throw new Error(`no row ${String(id)} in ${table}`);
-                }
-
-                const next = { ...found, ...patch };
-
-                assertUnique(table, next);
-                Object.assign(found, patch);
-            },
-            replace: async (table: string, id: unknown, document: Row) => {
-                const found = find(table, id);
-
-                if (!found) {
-                    throw new Error(`no row ${String(id)} in ${table}`);
-                }
-
-                const next = { ...document, _id: found["_id"] };
-
-                assertUnique(table, next);
-                tables.set(
-                    table,
-                    rows(table).map((row) => (row === found ? next : row)),
-                );
-            },
-            query: (table: string) => {
-                let predicate = (_row: Row) => true;
-                let descending = false;
-
-                const ordered = (): Row[] => {
-                    const matching = rows(table).filter((row) => predicate(row));
-
-                    return descending ? matching.toReversed() : matching;
-                };
-
-                const query = {
-                    collect: async () => rows(table).filter((row) => predicate(row)),
-                    filter: (callback: (row: Row) => boolean) => {
-                        const previous = predicate;
-
-                        predicate = (row) => previous(row) && callback(row);
-
-                        return query;
-                    },
-                    first: async () => rows(table).find((row) => predicate(row)) ?? null,
-                    order: (direction: "asc" | "desc") => {
-                        descending = direction === "desc";
-
-                        return query;
-                    },
-                    // Keyset over the row's `_id`, the way the engine's cursor names a position rather than an offset.
-                    paginate: async ({ cursor, endCursor, numItems }: { cursor?: string | null; endCursor?: string | null; numItems: number }) => {
-                        const all = ordered();
-                        const from = cursor ? all.findIndex((row) => row["_id"] === cursor) + 1 : 0;
-
-                        if (endCursor) {
-                            const to = all.findIndex((row) => row["_id"] === endCursor) + 1;
-
-                            return { continueCursor: endCursor, isDone: true, page: all.slice(from, to) };
-                        }
-
-                        const page = all.slice(from, from + numItems);
-                        const isDone = from + numItems >= all.length;
-
-                        return { continueCursor: isDone ? null : (page.at(-1)?.["_id"] as string), isDone, page };
-                    },
-                    take: async (limit: number) =>
-                        rows(table)
-                            .filter((row) => predicate(row))
-                            .slice(0, limit),
-                    withIndex: (_name: string, build: (q: { eq: (field: string, value: unknown) => unknown }) => unknown) => {
-                        const bound: Row = {};
-                        const q = {
-                            eq: (field: string, value: unknown) => {
-                                bound[field] = value;
-
-                                return q;
-                            },
-                        };
-
-                        build(q);
-                        predicate = equalsAll(bound);
-
-                        return query;
-                    },
-                };
-
-                return query;
-            },
-            saas_organizations: facade("saas_organizations"),
-        },
-        rows,
-    };
-};
-
-const signedIn = (claims: Row) => {
-    return {
-        getIdentity: async () => claims,
-    };
-};
+interface OrganizationListArgs extends OrganizationFilter {
+    paginationOpts: { cursor?: string | null; endCursor?: string | null; numItems: number };
+}
 
 describe("saas kit functions", () => {
     const NOW = 1_700_000_000_000;
@@ -227,8 +47,10 @@ describe("saas kit functions", () => {
     interface Saas {
         archiveProject: Handler<Record<"projectId", string>, void>;
         createProject: Handler<{ name: string }, string>;
-        listOrganizations: (invocation: { ctx: unknown }) => Promise<Row[]>;
-        syncOrganization: Handler<{ name: string; organizationId: string; seats?: number; slug: string; status?: string }, void>;
+        listOrganizations: Handler<OrganizationListArgs, { continueCursor: string | null; isDone: boolean; page: Row[]; splitCursor?: string | null }>;
+        organizationTotals: Handler<OrganizationFilter, { organizations: number; seats: number }>;
+        syncOrganization: Handler<{ name: string; organizationId: string; plan?: string; seats?: number; slug: string; status?: string }, void>;
+        syncOrganizationPlan: Handler<{ asOf: number; organizationId: string; plan: string }, void>;
     }
 
     const SAAS_UNIQUE = {
@@ -389,11 +211,96 @@ describe("saas kit functions", () => {
 
             expect(rows("saas_organizations")).toHaveLength(1);
             expect(rows("saas_organizations")[0]).toMatchObject({ slug: "~deleted~org-1", status: "deleted" });
-            await expect(saas.listOrganizations({ ctx: admin })).resolves.toStrictEqual([]);
+            await expect(saas.listOrganizations({ args: { paginationOpts: { numItems: 10 } }, ctx: admin })).resolves.toMatchObject({ isDone: true, page: [] });
+        });
+    });
+
+    describe("syncOrganizationPlan", () => {
+        it("records the plan on a projected organisation, leaves a deleted one alone, and refuses an unknown one as retryable", async () => {
+            expect.assertions(4);
+
+            const { rows, saas, writer } = await setup();
+
+            await saas.syncOrganization({ args: { name: "Acme", organizationId: "org-1", slug: "acme" }, ctx: writer });
+            await saas.syncOrganization({ args: { name: "Gone", organizationId: "org-2", slug: "gone", status: "deleted" }, ctx: writer });
+            await saas.syncOrganizationPlan({ args: { asOf: 1, organizationId: "org-1", plan: "pro" }, ctx: writer });
+            await saas.syncOrganizationPlan({ args: { asOf: 1, organizationId: "org-2", plan: "pro" }, ctx: writer });
+
+            // Not projected yet: a 503 the webhook's provider retries, not a success that records nothing.
+            await expect(saas.syncOrganizationPlan({ args: { asOf: 1, organizationId: "org-3", plan: "pro" }, ctx: writer })).rejects.toMatchObject({
+                code: "SERVICE_UNAVAILABLE",
+            });
+
+            expect(rows("saas_organizations").find((row) => row["organizationId"] === "org-1")).toMatchObject({ plan: "pro" });
+            expect(rows("saas_organizations").find((row) => row["organizationId"] === "org-2")).toMatchObject({ plan: "free" });
+            expect(rows("saas_organizations")).toHaveLength(2);
+        });
+
+        it("keeps the newer plan when an older derivation lands after it", async () => {
+            expect.assertions(2);
+
+            const { rows, saas, writer } = await setup();
+            const plan = () => rows("saas_organizations")[0]!["plan"];
+
+            await saas.syncOrganization({ args: { name: "Acme", organizationId: "org-1", slug: "acme" }, ctx: writer });
+            // Billing moved free → pro → scale; the scale derivation lands first, the pro one last.
+            await saas.syncOrganizationPlan({ args: { asOf: 20, organizationId: "org-1", plan: "scale" }, ctx: writer });
+            await saas.syncOrganizationPlan({ args: { asOf: 10, organizationId: "org-1", plan: "pro" }, ctx: writer });
+
+            expect(plan()).toBe("scale");
+
+            await saas.syncOrganizationPlan({ args: { asOf: 30, organizationId: "org-1", plan: "free" }, ctx: writer });
+
+            expect(plan()).toBe("free");
         });
     });
 
     describe("listOrganizations", () => {
+        /** Five tenants with ties on seats and plan, each synced at its own time. */
+        const seed = async () => {
+            const context = await setup();
+            const { saas, writer } = context;
+            const tenants = [
+                { name: "Globex", organizationId: "org-1", plan: "pro", seats: 3, slug: "globex" },
+                { name: "Acme", organizationId: "org-2", plan: "free", seats: 12, slug: "acme-corp" },
+                { name: "Initech", organizationId: "org-3", plan: "pro", seats: 12, slug: "initech" },
+                { name: "Hooli", organizationId: "org-4", plan: "scale", seats: 40, slug: "hooli" },
+                { name: "Umbrella", organizationId: "org-5", plan: "pro", seats: 3, slug: "umbrella" },
+            ];
+
+            for (const [index, tenant] of tenants.entries()) {
+                // eslint-disable-next-line no-await-in-loop -- each sync stamps its own `now`, in order
+                await saas.syncOrganization({ args: tenant, ctx: { ...writer, now: NOW + index } });
+            }
+
+            const admin = { ...writer, auth: { ...signedIn({ appRole: "admin" }), userId: "admin-1" } };
+
+            return { ...context, admin };
+        };
+
+        type Seeded = Awaited<ReturnType<typeof seed>>;
+
+        /** Every page of a listing, followed through `continueCursor`. */
+        const pageThrough = async ({ admin, saas }: Seeded, args: Omit<OrganizationListArgs, "paginationOpts">, numItems: number): Promise<unknown[]> => {
+            const names: unknown[] = [];
+            let cursor: string | null = null;
+
+            for (;;) {
+                // eslint-disable-next-line no-await-in-loop -- a page's cursor comes from the one before it
+                const result = await saas.listOrganizations({ args: { ...args, paginationOpts: { cursor, numItems } }, ctx: admin });
+
+                names.push(...result.page.map((row) => row["name"]));
+
+                if (result.isDone) {
+                    return names;
+                }
+
+                expect(result.page).toHaveLength(numItems);
+
+                cursor = result.continueCursor;
+            }
+        };
+
         it("leaves deleted organisations out of the admin list", async () => {
             expect.assertions(1);
 
@@ -404,334 +311,159 @@ describe("saas kit functions", () => {
             await saas.syncOrganization({ args: { name: "Beta", organizationId: "org-2", seats: 1, slug: "beta" }, ctx: writer });
             await saas.syncOrganization({ args: { name: "Acme", organizationId: "org-1", seats: 0, slug: "acme", status: "deleted" }, ctx: writer });
 
-            const listed = await saas.listOrganizations({ ctx: admin });
+            const listed = await saas.listOrganizations({ args: { paginationOpts: { numItems: 10 } }, ctx: admin });
 
-            expect(listed.map((row) => row["organizationId"])).toStrictEqual(["org-2"]);
-        });
-    });
-});
-
-describe("saas template checkout", () => {
-    type Checkout = Handler<{ priceId: string }, { url: string }>;
-
-    interface Payment {
-        checkout: Checkout;
-        holdCheckout: Handler<{ priceId: string; referenceId: string }, { holdId: string; sessionExpiresAt: number } | { url: string }>;
-        settleCheckoutHold: Handler<{ holdId: string; url: string }, void>;
-    }
-
-    const NOW = 1_700_000_000_000;
-    const SESSION_MS = 35 * 60_000;
-    const HOLD_MS = SESSION_MS + 60_000;
-
-    const setup = async (subscriptions: Row[], { checkoutExpiry = true } = {}) => {
-        env["APP_BASE_URL"] = "https://app.example.test";
-
-        const payment = await load<Payment>("templates", "saas", "lunora", "payment", "index.ts");
-        const database = createDatabase({ checkout_holds: [["referenceId"]] });
-        let sessions = 0;
-        const createCheckout = vi.fn<(input: { email?: string; expiresAt?: number; idempotencyKey?: string }) => Promise<{ url: string }>>(async () => {
-            sessions += 1;
-
-            return { url: `https://pay.example.test/session-${String(sessions)}` };
-        });
-        const clock = { now: NOW };
-        const auth = signedIn({ activeOrganizationId: "org-1", email: "owner@example.test", orgRole: "owner" });
-        // The internal mutations run in the same shard, over the same database.
-        const runMutation = async (reference: Record<typeof FUNCTION_PATH, string>, args: Row) => {
-            const name = reference[FUNCTION_PATH].replace("payment.", "") as "holdCheckout" | "settleCheckoutHold";
-
-            return (payment[name] as Handler<Row, unknown>)({ args, ctx: { db: database.db, now: clock.now } });
-        };
-        const ctx = {
-            auth,
-            payments: {
-                adapter: { capabilities: { checkoutExpiry }, identifier: checkoutExpiry ? "stripe" : "polar" },
-                createCheckout,
-                listSubscriptions: vi.fn<() => Promise<Row[]>>(async () => subscriptions),
-            },
-            runMutation,
-            shardKey: "__root__",
-        };
-        return { clock, createCheckout, ctx, database, payment };
-    };
-
-    it.each(["active", "trialing", "past_due", "paused"])("refuses a second subscription while one is %s", async (state) => {
-        expect.assertions(2);
-
-        const { createCheckout, ctx, payment } = await setup([{ state }]);
-
-        await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).rejects.toMatchObject({ code: "CONFLICT" });
-        expect(createCheckout).not.toHaveBeenCalled();
-    });
-
-    it("starts a checkout for an organisation with no live subscription", async () => {
-        expect.assertions(2);
-
-        const { createCheckout, ctx, payment } = await setup([{ state: "canceled" }]);
-
-        await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).resolves.toStrictEqual({ url: "https://pay.example.test/session-1" });
-        expect(createCheckout).toHaveBeenCalledTimes(1);
-    });
-
-    it("refuses to run off the root shard, where the billing tables are empty copies", async () => {
-        expect.assertions(2);
-
-        const { createCheckout, ctx, payment } = await setup([]);
-
-        await expect(payment.checkout({ args: { priceId: "price_pro" }, ctx: { ...ctx, shardKey: "org-1" } })).rejects.toMatchObject({ code: "FORBIDDEN" });
-        expect(createCheckout).not.toHaveBeenCalled();
-    });
-
-    it("refuses a provider that cannot expire the session, before taking a hold", async () => {
-        expect.assertions(3);
-
-        const { createCheckout, ctx, database, payment } = await setup([], { checkoutExpiry: false });
-
-        await expect(payment.checkout({ args: { priceId: "price_pro" }, ctx })).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
-        expect(createCheckout).not.toHaveBeenCalled();
-        expect(database.rows("checkout_holds")).toHaveLength(0);
-    });
-
-    it("hands the provider the caller's verified email for a first customer", async () => {
-        expect.assertions(1);
-
-        const { createCheckout, ctx, payment } = await setup([]);
-
-        await payment.checkout({ args: { priceId: "price_pro" }, ctx });
-
-        expect(createCheckout.mock.calls[0]![0].email).toBe("owner@example.test");
-    });
-
-    it("has the provider expire the session before the hold ends", async () => {
-        expect.assertions(1);
-
-        const { createCheckout, ctx, database, payment } = await setup([]);
-
-        await payment.checkout({ args: { priceId: "price_pro" }, ctx });
-
-        const sessionExpiresAt = createCheckout.mock.calls[0]![0].expiresAt;
-
-        expect([sessionExpiresAt, database.rows("checkout_holds")[0]!["expiresAt"]]).toStrictEqual([NOW + SESSION_MS, NOW + HOLD_MS]);
-    });
-
-    it("refuses a checkout for another plan while one is in flight, before either webhook lands", async () => {
-        expect.assertions(2);
-
-        const { createCheckout, ctx, payment } = await setup([]);
-
-        await payment.checkout({ args: { priceId: "price_pro" }, ctx });
-
-        await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).rejects.toMatchObject({ code: "CONFLICT" });
-        expect(createCheckout).toHaveBeenCalledTimes(1);
-    });
-
-    it("hands a repeat for the same plan the session already started", async () => {
-        expect.assertions(2);
-
-        const { createCheckout, ctx, payment } = await setup([]);
-
-        const first = await payment.checkout({ args: { priceId: "price_pro" }, ctx });
-
-        await expect(payment.checkout({ args: { priceId: "price_pro" }, ctx })).resolves.toStrictEqual(first);
-        expect(createCheckout).toHaveBeenCalledTimes(1);
-    });
-
-    it("keeps the hold until it expires, and lets another plan start then", async () => {
-        expect.assertions(2);
-
-        const { clock, ctx, payment } = await setup([]);
-
-        await payment.checkout({ args: { priceId: "price_pro" }, ctx });
-
-        clock.now += HOLD_MS - 1;
-
-        await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).rejects.toMatchObject({ code: "CONFLICT" });
-
-        clock.now += 2;
-
-        await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).resolves.toMatchObject({ url: "https://pay.example.test/session-2" });
-    });
-
-    it("starts a new session for the same plan once the hold has expired", async () => {
-        expect.assertions(1);
-
-        const { clock, ctx, payment } = await setup([]);
-
-        await payment.checkout({ args: { priceId: "price_pro" }, ctx });
-
-        clock.now += HOLD_MS + 1;
-
-        await expect(payment.checkout({ args: { priceId: "price_pro" }, ctx })).resolves.toStrictEqual({ url: "https://pay.example.test/session-2" });
-    });
-
-    it("leaves a newer hold alone when a stale provider call settles", async () => {
-        expect.assertions(2);
-
-        const { clock, ctx, database, payment } = await setup([]);
-        const stale = await payment.holdCheckout({ args: { priceId: "price_pro", referenceId: "org-1" }, ctx: { db: database.db, now: clock.now } });
-
-        clock.now += HOLD_MS + 1;
-
-        await payment.checkout({ args: { priceId: "price_scale" }, ctx });
-        await payment.settleCheckoutHold({
-            args: { holdId: (stale as { holdId: string }).holdId, url: "https://pay.example.test/stale" },
-            ctx: { db: database.db, now: clock.now },
+            expect(listed.page.map((row) => row["organizationId"])).toStrictEqual(["org-2"]);
         });
 
-        expect(database.rows("checkout_holds")).toHaveLength(1);
-        expect(database.rows("checkout_holds")[0]).toMatchObject({ priceId: "price_scale", url: "https://pay.example.test/session-1" });
-    });
+        it("pages through every organisation newest first, two at a time, without repeating or skipping one", async () => {
+            expect.hasAssertions();
 
-    it("keeps the hold when the provider call fails, and retries the same plan under the same key", async () => {
-        expect.assertions(5);
+            const seeded = await seed();
 
-        const { createCheckout, ctx, database, payment } = await setup([]);
+            await expect(pageThrough(seeded, {}, 2)).resolves.toStrictEqual(["Umbrella", "Hooli", "Initech", "Acme", "Globex"]);
+        });
 
-        createCheckout.mockRejectedValueOnce(new Error("provider timed out"));
+        it("breaks a tie on the update time by organisation id, so a page boundary between two never moves", async () => {
+            expect.hasAssertions();
 
-        await expect(payment.checkout({ args: { priceId: "price_pro" }, ctx })).rejects.toThrow("provider timed out");
-        expect(database.rows("checkout_holds")).toHaveLength(1);
-        // The session may exist after all, so another plan must still wait for the hold.
-        await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).rejects.toMatchObject({ code: "CONFLICT" });
+            const seeded = await seed();
+            const { saas, writer } = seeded;
 
-        await payment.checkout({ args: { priceId: "price_pro" }, ctx });
+            // Acme and Hooli now share one update time.
+            await saas.syncOrganization({ args: { name: "Acme", organizationId: "org-2", slug: "acme-corp" }, ctx: { ...writer, now: NOW + 10 } });
+            await saas.syncOrganization({ args: { name: "Hooli", organizationId: "org-4", slug: "hooli" }, ctx: { ...writer, now: NOW + 10 } });
 
-        const keys = createCheckout.mock.calls.map(([input]) => (input as { idempotencyKey?: string }).idempotencyKey);
+            await expect(pageThrough(seeded, {}, 1)).resolves.toStrictEqual(["Hooli", "Acme", "Umbrella", "Initech", "Globex"]);
+        });
 
-        expect(keys).toHaveLength(2);
-        expect(keys[1]).toBe(keys[0]);
-    });
-});
+        it("keeps a bounded page's range fixed, so a row landing inside it grows that page instead of shifting the next", async () => {
+            expect.assertions(4);
 
-describe("saas template admin subscriptions", () => {
-    interface Page {
-        continueCursor: string | null;
-        isDone: boolean;
-        page: Row[];
-    }
+            const seeded = await seed();
+            const { admin, saas, writer } = seeded;
+            const first = await saas.listOrganizations({ args: { paginationOpts: { numItems: 2 } }, ctx: admin });
 
-    type AdminSubscriptions = Handler<{ paginationOpts: { cursor?: string | null; endCursor?: string | null; numItems: number } }, Page>;
-    type AdminPastDueSubscriptions = Handler<Record<string, never>, { more: boolean; rows: Row[] }>;
+            await saas.syncOrganization({ args: { name: "Aardvark", organizationId: "org-6", seats: 1, slug: "aardvark" }, ctx: { ...writer, now: NOW + 10 } });
 
-    const setup = async (claims: Row, count = 1) => {
-        env["APP_BASE_URL"] = "https://app.example.test";
-
-        const { adminPastDueSubscriptions, adminSubscriptions } = await load<{
-            adminPastDueSubscriptions: AdminPastDueSubscriptions;
-            adminSubscriptions: AdminSubscriptions;
-        }>("templates", "saas", "lunora", "payment", "index.ts");
-        const database = createDatabase({});
-
-        for (let index = 1; index <= count; index += 1) {
-            database.rows("payment_subscriptions").push({
-                _id: `s${String(index)}`,
-                priceId: "price_pro",
-                providerSubscriptionId: `sub_${String(index)}`,
-                referenceId: `org-${String(index)}`,
-                state: "active",
+            const grown = await saas.listOrganizations({
+                args: { paginationOpts: { cursor: null, endCursor: first.continueCursor, numItems: 2 } },
+                ctx: admin,
             });
-        }
+            const next = await saas.listOrganizations({ args: { paginationOpts: { cursor: first.continueCursor, numItems: 2 } }, ctx: admin });
 
-        return { adminPastDueSubscriptions, adminSubscriptions, ctx: { auth: signedIn(claims), database, db: database.db, shardKey: "__root__" } };
-    };
+            expect(grown.page.map((row) => row["name"])).toStrictEqual(["Aardvark", "Umbrella", "Hooli"]);
+            expect(grown).toMatchObject({ continueCursor: first.continueCursor, isDone: true });
+            expect(grown.splitCursor).toStrictEqual(expect.any(String));
+            expect(next.page.map((row) => row["name"])).toStrictEqual(["Initech", "Acme"]);
+        });
 
-    it("refuses a platform admin on a tenant shard instead of reading its empty copy", async () => {
-        expect.assertions(1);
+        it("searches the name and slug as a case-insensitive substring, and filters by plan", async () => {
+            expect.assertions(3);
 
-        const { adminSubscriptions, ctx } = await setup({ appRole: "admin" });
+            const seeded = await seed();
 
-        await expect(adminSubscriptions({ args: { paginationOpts: { numItems: 10 } }, ctx: { ...ctx, shardKey: "org-1" } })).rejects.toMatchObject({
-            code: "FORBIDDEN",
-            message: expect.stringContaining("root shard"),
+            await expect(pageThrough(seeded, { search: "CORP" }, 10)).resolves.toStrictEqual(["Acme"]);
+            await expect(pageThrough(seeded, { search: "o" }, 10)).resolves.toStrictEqual(["Hooli", "Acme", "Globex"]);
+            await expect(pageThrough(seeded, { plan: "pro" }, 10)).resolves.toStrictEqual(["Umbrella", "Initech", "Globex"]);
+        });
+
+        it("refuses a page size it cannot serve, rather than quietly serving less", async () => {
+            expect.assertions(2);
+
+            const { saas, writer } = await setup();
+            const admin = { ...writer, auth: { ...signedIn({ appRole: "admin" }), userId: "admin-1" } };
+
+            await expect(saas.listOrganizations({ args: { paginationOpts: { numItems: 101 } }, ctx: admin })).rejects.toMatchObject({
+                code: "VALIDATION_ERROR",
+            });
+            await expect(saas.listOrganizations({ args: { paginationOpts: { numItems: 0 } }, ctx: admin })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        });
+
+        it("caps a re-read page that grew far past its size, and the client's splits still reach every row", async () => {
+            expect.assertions(3);
+
+            const { saas, writer } = await setup();
+            const admin = { ...writer, auth: { ...signedIn({ appRole: "admin" }), userId: "admin-1" } };
+            const add = async (name: string, at: number) =>
+                saas.syncOrganization({ args: { name, organizationId: `org-${name}`, slug: name }, ctx: { ...writer, now: NOW + at } });
+
+            await add("a", 1);
+            await add("b", 2);
+            await add("c", 3);
+
+            const first = await saas.listOrganizations({ args: { paginationOpts: { numItems: 2 } }, ctx: admin });
+
+            // Twenty newer organisations land inside the loaded first page's range.
+            for (let index = 0; index < 20; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- seeding, in order
+                await add(`m${String(index).padStart(2, "0")}`, 10 + index);
+            }
+
+            const read = async (lower: string | null, upper: string): Promise<{ names: unknown[]; widest: number }> => {
+                const result = await saas.listOrganizations({ args: { paginationOpts: { cursor: lower, endCursor: upper, numItems: 2 } }, ctx: admin });
+
+                // What the client does: a page over twice its size is split at the server's midpoint.
+                if (result.page.length > 2 * 2 && result.splitCursor) {
+                    const [low, high] = await Promise.all([read(lower, result.splitCursor), read(result.splitCursor, upper)]);
+
+                    return { names: [...low.names, ...high.names], widest: Math.max(result.page.length, low.widest, high.widest) };
+                }
+
+                return { names: result.page.map((row) => row["name"]), widest: result.page.length };
+            };
+
+            const { names, widest } = await read(null, first.continueCursor as string);
+
+            expect(widest).toBe(4 * 2);
+            expect(names).toHaveLength(22);
+            expect(names).toStrictEqual([...Array.from({ length: 20 }, (_, index) => `m${String(19 - index).padStart(2, "0")}`), "c", "b"]);
+        });
+
+        it("refuses a cursor it did not mint", async () => {
+            expect.assertions(2);
+
+            const { admin, saas } = await seed();
+
+            await expect(saas.listOrganizations({ args: { paginationOpts: { cursor: "not json", numItems: 2 } }, ctx: admin })).rejects.toMatchObject({
+                code: "VALIDATION_ERROR",
+            });
+            // The right length with the wrong key types: a name where the update time goes.
+            await expect(
+                saas.listOrganizations({ args: { paginationOpts: { cursor: JSON.stringify(["Acme", "org-2"]), numItems: 2 } }, ctx: admin }),
+            ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        });
+
+        it("refuses everyone but a platform admin", async () => {
+            expect.assertions(2);
+
+            const { saas, writer } = await seed();
+
+            await expect(saas.listOrganizations({ args: { paginationOpts: { numItems: 2 } }, ctx: writer })).rejects.toMatchObject({ code: "FORBIDDEN" });
+            await expect(saas.organizationTotals({ args: {}, ctx: writer })).rejects.toMatchObject({ code: "FORBIDDEN" });
         });
     });
 
-    it("refuses anyone without the platform admin role", async () => {
-        expect.assertions(1);
+    describe("organizationTotals", () => {
+        it("counts and sums seats over the whole filtered set, not a page of it", async () => {
+            expect.assertions(4);
 
-        const { adminSubscriptions, ctx } = await setup({ appRole: "user" });
+            const { saas, writer } = await setup();
+            const admin = { ...writer, auth: { ...signedIn({ appRole: "admin" }), userId: "admin-1" } };
 
-        await expect(adminSubscriptions({ args: { paginationOpts: { numItems: 10 } }, ctx })).rejects.toMatchObject({
-            code: "FORBIDDEN",
-            message: expect.stringContaining("platform admin"),
+            await saas.syncOrganization({ args: { name: "Acme", organizationId: "org-1", plan: "pro", seats: 12, slug: "acme" }, ctx: writer });
+            await saas.syncOrganization({ args: { name: "Globex", organizationId: "org-2", plan: "pro", seats: 3, slug: "globex" }, ctx: writer });
+            await saas.syncOrganization({ args: { name: "Hooli", organizationId: "org-3", plan: "free", seats: 1, slug: "hooli" }, ctx: writer });
+            await saas.syncOrganization({ args: { name: "Gone", organizationId: "org-4", seats: 0, slug: "gone", status: "deleted" }, ctx: writer });
+
+            await expect(saas.organizationTotals({ args: {}, ctx: admin })).resolves.toStrictEqual({ organizations: 3, seats: 16 });
+            await expect(saas.organizationTotals({ args: { plan: "pro" }, ctx: admin })).resolves.toStrictEqual({ organizations: 2, seats: 15 });
+            await expect(saas.organizationTotals({ args: { search: "nothing" }, ctx: admin })).resolves.toStrictEqual({ organizations: 0, seats: 0 });
+            await expect(saas.organizationTotals({ args: { plan: "pro", search: "ACME" }, ctx: admin })).resolves.toStrictEqual({
+                organizations: 1,
+                seats: 12,
+            });
         });
-    });
-
-    it("pages the root shard's subscriptions newest first, carrying the organisation each bills", async () => {
-        expect.assertions(4);
-
-        const { adminSubscriptions, ctx } = await setup({ appRole: "user,admin" }, 3);
-        const first = await adminSubscriptions({ args: { paginationOpts: { cursor: null, numItems: 2 } }, ctx });
-
-        expect(first.page.map((row) => [row["providerSubscriptionId"], row["referenceId"]])).toStrictEqual([
-            ["sub_3", "org-3"],
-            ["sub_2", "org-2"],
-        ]);
-        expect(first.isDone).toBe(false);
-
-        const second = await adminSubscriptions({ args: { paginationOpts: { cursor: first.continueCursor, numItems: 2 } }, ctx });
-
-        expect(second.page.map((row) => row["providerSubscriptionId"])).toStrictEqual(["sub_1"]);
-        expect(second.isDone).toBe(true);
-    });
-
-    it("finds an older past-due subscription the newest page does not reach", async () => {
-        expect.assertions(2);
-
-        const { adminPastDueSubscriptions, adminSubscriptions, ctx } = await setup({ appRole: "admin" }, 4);
-
-        // s1 is the oldest row; put it in dunning.
-        ctx.database.rows("payment_subscriptions")[0]!["state"] = "past_due";
-
-        const firstPage = await adminSubscriptions({ args: { paginationOpts: { numItems: 2 } }, ctx });
-
-        expect(firstPage.page.map((row) => row["state"])).toStrictEqual(["active", "active"]);
-        await expect(adminPastDueSubscriptions({ args: {}, ctx })).resolves.toMatchObject({
-            more: false,
-            rows: [{ providerSubscriptionId: "sub_1", state: "past_due" }],
-        });
-    });
-
-    it("bounds the dunning read, and says when there are more", async () => {
-        expect.assertions(2);
-
-        const { adminPastDueSubscriptions, ctx } = await setup({ appRole: "admin" }, 101);
-
-        for (const row of ctx.database.rows("payment_subscriptions")) {
-            row["state"] = "past_due";
-        }
-
-        const { more, rows } = await adminPastDueSubscriptions({ args: {}, ctx });
-
-        expect(rows).toHaveLength(100);
-        expect(more).toBe(true);
-    });
-
-    it("refuses the dunning read off the root shard and to anyone but a platform admin", async () => {
-        expect.assertions(2);
-
-        const admin = await setup({ appRole: "admin" });
-        const member = await setup({ appRole: "user" });
-
-        await expect(admin.adminPastDueSubscriptions({ args: {}, ctx: { ...admin.ctx, shardKey: "org-1" } })).rejects.toMatchObject({
-            code: "FORBIDDEN",
-            message: expect.stringContaining("root shard"),
-        });
-        await expect(member.adminPastDueSubscriptions({ args: {}, ctx: member.ctx })).rejects.toMatchObject({
-            code: "FORBIDDEN",
-            message: expect.stringContaining("platform admin"),
-        });
-    });
-
-    it("caps a page however many rows the caller asks for", async () => {
-        expect.assertions(2);
-
-        const { adminSubscriptions, ctx } = await setup({ appRole: "admin" }, 150);
-        const page = await adminSubscriptions({ args: { paginationOpts: { numItems: 10_000 } }, ctx });
-
-        expect(page.page).toHaveLength(100);
-        expect(page.isDone).toBe(false);
     });
 });
 

@@ -1,3 +1,4 @@
+import { VERSION_METADATA_BINDING } from "../../../shared/worker-version";
 import type { DeployInfo, SettingEntry, SettingsResult } from "./introspect";
 
 /**
@@ -115,7 +116,11 @@ const readDeployInfo = (rawEnv: unknown): DeployInfo => {
         deploy.environment = environment;
     }
 
-    const versionMetadata = env["CF_VERSION_METADATA"];
+    // Read raw rather than through `workerVersionId`, which drops an empty id.
+    // Here an empty id still reaches `deploymentId` (and the request-log row
+    // `ShardDO.attributeToDeploy` stamps from it): this is a report of what the
+    // binding says, not a cache key that must change per deploy.
+    const versionMetadata = env[VERSION_METADATA_BINDING];
 
     if (versionMetadata !== null && typeof versionMetadata === "object") {
         const meta = versionMetadata as Record<string, unknown>;

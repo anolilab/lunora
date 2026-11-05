@@ -416,7 +416,7 @@ catalogs:
     "@commitlint/cli": ^21.2.4
     "@commitlint/config-conventional": ^21.2.4
     cz-conventional-changelog: ^3.3.0
-    "@visulima/vis": 6.5.4
+    "@visulima/vis": 6.6.0
     "@visulima/tabular": 4.1.0
     "@visulima/error": 6.1.0
   test:
@@ -1153,6 +1153,16 @@ minimumReleaseAgeExclude:
   - '@better-auth/telemetry@1.7.16'
   - 'better-call@1.4.5'
   # oxlint/oxfmt presets published 2026-10-21 and 2026-11-03; drop once they age past the window.
+  # Published 2026-11-04 21:19 UTC for the vis 6.6.0 bump; drop each entry once it ages past the 24h window.
+  - '@visulima/vis@6.6.0'
+  - '@visulima/vis-binding-darwin-arm64@6.6.0'
+  - '@visulima/vis-binding-darwin-x64@6.6.0'
+  - '@visulima/vis-binding-linux-arm64-gnu@6.6.0'
+  - '@visulima/vis-binding-linux-arm64-musl@6.6.0'
+  - '@visulima/vis-binding-linux-x64-gnu@6.6.0'
+  - '@visulima/vis-binding-linux-x64-musl@6.6.0'
+  - '@visulima/vis-binding-win32-arm64-msvc@6.6.0'
+  - '@visulima/vis-binding-win32-x64-msvc@6.6.0'
   # Published 2026-11-04 13:37 UTC for the vis 6.5.4 bump; drop each entry once it ages past the 24h window.
   - '@visulima/vis@6.5.4'
   - '@visulima/vis-binding-darwin-arm64@6.5.4'

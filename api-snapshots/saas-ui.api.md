@@ -162,8 +162,6 @@ interface AdminUsersState {
 interface AdminView {
     plan: string;
     search: string;
-    sort: OrganizationSort;
-    status: string;
 }
 ```
 
@@ -268,6 +266,21 @@ interface ImpersonationSessionLike {
 const NAME_MAX_LENGTH: 120;
 ```
 
+### `ORGANIZATION_SEARCH_MAX` (const)
+
+```ts
+const ORGANIZATION_SEARCH_MAX: 100;
+```
+
+### `OrganizationFilter` (interface)
+
+```ts
+interface OrganizationFilter {
+    plan?: string;
+    search?: string;
+}
+```
+
 ### `OrganizationRow` (interface)
 
 ```ts
@@ -284,10 +297,13 @@ interface OrganizationRow {
 }
 ```
 
-### `OrganizationSort` (type)
+### `OrganizationTotals` (interface)
 
 ```ts
-type OrganizationSort = "name" | "plan" | "seats" | "updated";
+interface OrganizationTotals {
+    organizations: number;
+    seats: number;
+}
 ```
 
 ### `OverviewPayload` (interface)
@@ -503,12 +519,6 @@ interface UserActions {
 }
 ```
 
-### `adminTotals` (const)
-
-```ts
-const adminTotals: (rows: ReadonlyArray<OrganizationRow>) => { organizations: number; seats: number; };
-```
-
 ### `adminUsersPage` (const)
 
 ```ts
@@ -638,7 +648,7 @@ const planLabel: (plan: string) => string;
 ### `planOptions` (const)
 
 ```ts
-const planOptions: (rows: ReadonlyArray<OrganizationRow>) => ReadonlyArray<{ label: string; value: string; }>;
+const planOptions: (plans: ReadonlyArray<Pick<Plan, "id" | "name">>) => ReadonlyArray<{ label: string; value: string; }>;
 ```
 
 ### `presenceRoster` (const)
@@ -689,12 +699,6 @@ const seatSummary: (usage: SeatUsage) => string;
 const seatUsage: (plan: Plan | undefined, memberCount: number) => SeatUsage;
 ```
 
-### `selectOrganizations` (const)
-
-```ts
-const selectOrganizations: (rows: ReadonlyArray<OrganizationRow>, view?: AdminView) => ReadonlyArray<OrganizationRow>;
-```
-
 ### `selectProjects` (const)
 
 ```ts
@@ -729,6 +733,12 @@ const subscriptionTotals: (subscriptions: ReadonlyArray<AdminSubscriptionRow>) =
 
 ```ts
 const subscriptionsSubtitle: (subscriptions: ReadonlyArray<AdminSubscriptionRow>, hasMore: boolean, pastDue?: PastDueSubscriptions) => string;
+```
+
+### `toOrganizationFilter` (const)
+
+```ts
+const toOrganizationFilter: (view: AdminView) => OrganizationFilter;
 ```
 
 ### `userActions` (const)
@@ -783,7 +793,7 @@ interface ActivityFeedProps {
 ### `AdminOrganizations` (const)
 
 ```ts
-const AdminOrganizations: ({ now, rows, timeZone }: AdminOrganizationsProps) => ReactNode;
+const AdminOrganizations: ({ now, onLoadMore, onViewChange, plans, rows, timeZone, totals, view }: AdminOrganizationsProps) => ReactNode;
 ```
 
 ### `AdminOrganizationsProps` (interface)
@@ -791,8 +801,13 @@ const AdminOrganizations: ({ now, rows, timeZone }: AdminOrganizationsProps) => 
 ```ts
 interface AdminOrganizationsProps {
     now: number;
+    onLoadMore?: () => void;
+    onViewChange: (view: AdminView) => void;
+    plans: ReadonlyArray<Pick<Plan, "id" | "name">>;
     rows: ReadonlyArray<OrganizationRow> | undefined;
     timeZone?: string;
+    totals: OrganizationTotals | undefined;
+    view: AdminView;
 }
 ```
 

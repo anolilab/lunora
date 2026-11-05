@@ -102,7 +102,7 @@ Webhook signature verification needs the raw request body, so the endpoint runs 
 
 ```ts
 // lunora/http.ts
-import { webhookResponse } from "@lunora/payment";
+import { readWebhookBody, webhookResponse } from "@lunora/payment";
 import { httpAction, httpRouter } from "lunorash/server";
 import { processWebhook } from "./billing";
 
@@ -111,13 +111,15 @@ export const app = httpRouter();
 app.post(
     "/payment/webhook",
     httpAction(async (ctx, request) => {
-        const body = await request.text();
+        const body = await readWebhookBody(request);
         const signature = request.headers.get("stripe-signature") ?? "";
 
         return webhookResponse(await ctx.runAction(processWebhook, { body, signature }));
     }),
 );
 ```
+
+`readWebhookBody` caps the body at `MAX_WEBHOOK_BODY_BYTES` (1 MiB) and throws `PAYLOAD_TOO_LARGE` past it, which an `httpAction` answers with `413`: the route is public and the body has to be read before its signature can be checked, so a plain `request.text()` lets anyone make the Worker buffer as much as they send. `handleWebhook` applies the same cap.
 
 Once the signature verifies, `handleWebhook` acknowledges with `200` — a duplicate or no-op event is not re-applied — with one deliberate exception: an **orphaned** event, one patching a row whose create event has not arrived yet, answers `500` so the provider retries it (bounded to a single retry). That is why the route must use `webhookResponse`: `Response.json(result)` would answer `200` for every outcome, and an out-of-order delivery would be lost for good.
 

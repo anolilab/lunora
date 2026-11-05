@@ -1,3 +1,7 @@
+## @lunora/config [1.0.0-alpha.457](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.456...@lunora/config@1.0.0-alpha.457) (2026-11-04)
+
+- feat(config): ask an fcm channel with its own token only for FCM_PROJECT_ID (#1479)
+
 ## @lunora/config [1.0.0-alpha.456](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.455...@lunora/config@1.0.0-alpha.456) (2026-11-04)
 
 - fix(notify): mint FCM access tokens from a service-account key (#1471)

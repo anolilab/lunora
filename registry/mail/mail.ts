@@ -86,10 +86,11 @@ const cloudflareSend = async (from: string, to: string, raw: string): Promise<vo
  * Pass a `queue` binding in `createMailerFromEnv`'s options to enable
  * {@link queueEmail}.
  *
- * `cloudflareSend` is used only when the `SEND_EMAIL` binding exists, so a
- * Resend-only deployment falls back to `RESEND_API_KEY`.
+ * `cloudflareSend` is passed only when the `SEND_EMAIL` binding exists:
+ * `createMailerFromEnv` prefers it whenever it is supplied, so a Resend-only
+ * deployment would otherwise fail inside it instead of using `RESEND_API_KEY`.
  */
-const mailer = (): Mailer => createMailerFromEnv(env, { cloudflareSend });
+const mailer = (): Mailer => createMailerFromEnv(env, env["SEND_EMAIL"] === undefined ? {} : { cloudflareSend });
 
 /**
  * Validator for the email payload. Mirrors `@lunora/mail`'s `SendOptions` minus

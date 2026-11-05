@@ -1,3 +1,7 @@
+## @lunora/payment [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.269...@lunora/payment@1.0.0-alpha.270) (2026-11-05)
+
+- fix: resolve registry and saas kit defects found reviewing the bench (#1481)
+
 ## @lunora/payment [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.268...@lunora/payment@1.0.0-alpha.269) (2026-11-03)
 
 - fix(ci): mark test fixtures so the secrets scan passes (#1470)
