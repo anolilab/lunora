@@ -2382,6 +2382,7 @@ interface ProjectAssetHeadersInput {
     requireAssetsDirectory: boolean;
     schemaDir?: string;
     target?: string;
+    wranglerPath?: string;
 }
 ```
 
@@ -2627,7 +2628,7 @@ interface WranglerCacheShape {
 
 ```ts
 interface WranglerCodegenInputs {
-    spaAssetsBinding?: string;
+    spaAssetsBindings?: string[];
     wranglerQueueProducers: WranglerQueueProducerIR[];
     wranglerVariables: WranglerVariableIR[];
 }

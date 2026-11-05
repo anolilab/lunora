@@ -1288,6 +1288,7 @@ type LunoraHttpApp = Hono<LunoraHttpEnv>;
 interface LunoraHttpEnv {
     Bindings: Record<string, unknown> & {
         __lunoraCtx?: HttpActionCtx;
+        __lunoraShellFirst?: boolean;
         __lunoraUnrouted?: () => void;
     };
     Variables: {
