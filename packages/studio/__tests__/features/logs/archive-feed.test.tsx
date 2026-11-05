@@ -88,7 +88,9 @@ describe("archiveFeed", () => {
 
         render(renderFeed(createClient({ rows: [ROW({ fields: { err, orderId: "o-1" } })] })));
 
-        const detail = await screen.findByTestId("lg-archive-error");
+        fireEvent.click(await screen.findByTestId("lg-error-toggle"));
+
+        const detail = await screen.findByTestId("lg-error-detail");
 
         expect(screen.getByTestId("lg-archive-table").textContent).toContain("err=Error: save failed orderId=o-1");
         expect(detail.textContent).toContain("at save (orders.ts:4:11)");

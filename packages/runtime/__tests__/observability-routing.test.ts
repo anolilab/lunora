@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { LoggedError } from "../../../shared/log-fields";
+import { parseLoggedError } from "../../../shared/log-fields";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext, SpanEvent } from "../src/observability";
 import { emitRpcEvent } from "../src/observability";
 import type { SinkEnricher } from "../src/observability-routing";
@@ -308,7 +310,69 @@ describe("enrichSink", () => {
         expect(failure.errors.map((error) => error.message)).toStrictEqual(["first", "second"]);
     });
 
-    it("cuts an Error whose cause is itself and keeps the other fields", () => {
+    it("caps an enriched Error like a ctx.log field: ten AggregateError members, four cause levels, stacks that fit", () => {
+        expect.assertions(5);
+
+        const frames = Array.from({ length: 80 }, (_, index) => `    at frame${String(index)} (some/long/path/to/a/module/file-${String(index)}.ts:1:1)`).join(
+            "\n",
+        );
+        const root = new Error("level 0");
+        let current = root;
+
+        for (let level = 1; level <= 6; level += 1) {
+            const next = new Error(`level ${String(level)}`);
+
+            next.stack = `Error: level ${String(level)}\n${frames}`;
+            current.cause = next;
+            current = next;
+        }
+
+        root.stack = `Error: level 0\n${frames}`;
+
+        const { received, sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => {
+            return {
+                chain: root,
+                many: new AggregateError(
+                    Array.from({ length: 12 }, (_, index) => new Error(`member ${String(index)}`)),
+                    "all failed",
+                ),
+            };
+        });
+
+        wrapped.onLog?.(log);
+
+        const chainField = String(received.logs[0]?.fields?.chain);
+        const many = parseLoggedError(received.logs[0]?.fields?.many);
+        let cause: unknown = parseLoggedError(chainField);
+
+        for (let level = 1; level <= 4; level += 1) {
+            cause = (cause as LoggedError).cause;
+        }
+
+        expect(chainField.length).toBeLessThanOrEqual(3584);
+        expect((cause as LoggedError).message).toBe("level 4");
+        expect((cause as LoggedError).cause).toStrictEqual({ message: "level 5", name: "Error" });
+        expect(many?.errors).toHaveLength(10);
+        expect(many?.errors?.[0]).toMatchObject({ message: "member 0", name: "Error" });
+    });
+
+    it("writes an enriched Error on a metric or span as Name: message, without its stack", () => {
+        expect.assertions(2);
+
+        const { received, sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => {
+            return { failure: new Error("save failed", { cause: new Error("disk full") }) };
+        });
+
+        wrapped.onMetric?.(metric);
+        wrapped.onSpan?.(span);
+
+        expect(received.metrics[0]?.attributes?.failure).toBe("Error: save failed");
+        expect(received.spans[0]?.attributes?.failure).toBe("Error: save failed");
+    });
+
+    it("cuts an Error whose cause is itself to its name and message, and keeps the other fields", () => {
         expect.assertions(3);
 
         const looped = new Error("loop");
@@ -326,7 +390,7 @@ describe("enrichSink", () => {
 
         expect(received.logs[0]?.fields?.jobId).toBe("j1");
         expect(failure.message).toBe("loop");
-        expect(failure.cause).toBeUndefined();
+        expect(failure.cause).toStrictEqual({ message: "loop", name: "Error" });
     });
 
     it("hands the enricher the stack and cause of an Error in the event's args", () => {

@@ -38,8 +38,8 @@ describe("normalizeLogFields", () => {
         normalizeLogFields(flat3, bound);
     });
 
-    bench("an Error with a cause (the logged-error path)", () => {
-        normalizeLogFields(withError);
+    bench("an Error with a cause (the ctx.log path, full encoding)", () => {
+        normalizeLogFields(withError, undefined, "full");
     });
 
     bench("empty bag (early-return fast path)", () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { LoggedError } from "../../../shared/log-fields";
-import { parseLoggedError } from "../../../shared/log-fields";
+import { formatLoggedErrorFields, parseLoggedError, readLogFields } from "../../../shared/log-fields";
 import { parseLogArgs, redactArgs } from "../src/request-log";
 
 /** The `err` field of a structured `ctx.log` call, as normalized. */
@@ -148,5 +148,47 @@ describe("an Error in ctx.log fields", () => {
         expect.assertions(1);
 
         expect(parseLoggedError(loggedField({ message: "m", name: "n" }))).toBeUndefined();
+    });
+});
+
+describe("formatLoggedErrorFields", () => {
+    const detail = (error: Error): string => formatLoggedErrorFields(readLogFields(parseLogArgs(["failed", { err: error }]).fields).errors);
+
+    it("heads each error with its current name, even when the stack was built under another", () => {
+        expect.assertions(1);
+
+        const error = new Error("card declined");
+
+        error.stack = "Error: card declined\n    at charge (pay.ts:3:9)";
+        error.name = "PaymentError";
+
+        expect(detail(error)).toBe(["err: PaymentError: card declined", "    at charge (pay.ts:3:9)"].join("\n"));
+    });
+
+    it("indents frames of a stack in another engine's format, which has no header", () => {
+        expect.assertions(1);
+
+        const cause = new Error("disk full");
+        const error = new Error("save failed", { cause });
+
+        error.stack = "save@orders.ts:4:11\nplace@orders.ts:9:3";
+        cause.stack = "write@store.ts:9:3";
+
+        expect(detail(error)).toBe(
+            ["err: Error: save failed", "    save@orders.ts:4:11", "    place@orders.ts:9:3", "  caused by: Error: disk full", "      write@store.ts:9:3"].join(
+                "\n",
+            ),
+        );
+    });
+
+    it("strips a bare-name header from an Error with an empty message", () => {
+        expect.assertions(1);
+
+        // eslint-disable-next-line unicorn/error-message -- the empty message is the case under test
+        const error = new TypeError("");
+
+        error.stack = "TypeError\n    at run (job.ts:1:1)";
+
+        expect(detail(error)).toBe(["err: TypeError", "    at run (job.ts:1:1)"].join("\n"));
     });
 });

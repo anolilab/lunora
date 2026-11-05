@@ -1,11 +1,11 @@
 import type { PipelineLogCursor, PipelineLogQuery, PipelineLogRow } from "@lunora/client";
 import type { ChangeEvent, ReactElement } from "react";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { LOG_ARCHIVE_NOT_CONFIGURED } from "../../../../../shared/log-archive";
 import type { ContextLogLevel } from "../../../../../shared/log-event";
 import { LOG_LEVEL_ORDER } from "../../../../../shared/log-event";
-import { formatLogFields, formatLoggedError, loggedErrorFields } from "../../../../../shared/log-fields";
+import { readLogFields } from "../../../../../shared/log-fields";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -17,6 +17,7 @@ import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_OBSERVABILITY_URL } from "../../lib/cf-links";
 import { errorCode, errorMessage, fireAndForget } from "../../lib/internal";
 import { LEVEL_VARIANT } from "./log-level-variant";
+import LoggedErrorDetail from "./logged-error-detail";
 
 interface ArchiveFeedProps {
     /** The shard to scope the archive read to (empty = the root shard). Threaded from the Logs panel's shard input. */
@@ -85,9 +86,8 @@ const archiveReducer = (state: ArchiveState, action: ArchiveAction): ArchiveStat
 
 /** One archive row: time · level · path · message (+ fields) · trace · shard · user. */
 const ArchiveRow = ({ row }: { readonly row: PipelineLogRow }): ReactElement => {
-    const t = useT();
-    const fields = formatLogFields(row.fields);
-    const errors = loggedErrorFields(row.fields);
+    // Parsed once: the chip text and the logged Errors come from the same pass.
+    const fields = useMemo(() => readLogFields(row.fields), [row.fields]);
 
     return (
         <TableRow data-testid={`lg-archive-row-${String(row.ts)}`}>
@@ -100,19 +100,12 @@ const ArchiveRow = ({ row }: { readonly row: PipelineLogRow }): ReactElement => 
                 <div className="truncate" title={row.message}>
                     {row.message}
                 </div>
-                {fields !== "" && (
-                    <div className="truncate font-mono text-[11px] text-muted-foreground" title={fields}>
-                        {fields}
+                {fields.text !== "" && (
+                    <div className="truncate font-mono text-[11px] text-muted-foreground" title={fields.text}>
+                        {fields.text}
                     </div>
                 )}
-                {errors.length > 0 && (
-                    <details className="mt-1 text-[11px]" data-testid="lg-archive-error">
-                        <summary className="cursor-pointer text-destructive">{t("Error details")}</summary>
-                        <pre className="mt-1 overflow-x-auto whitespace-pre rounded-md bg-muted/50 p-2 font-mono leading-snug text-muted-foreground">
-                            {errors.map(([key, error]) => `${key}: ${formatLoggedError(error)}`).join("\n\n")}
-                        </pre>
-                    </details>
-                )}
+                {fields.errors.length > 0 && <LoggedErrorDetail errors={fields.errors} />}
             </TableCell>
             <TableCell className="font-mono text-[11px] text-muted-foreground">{row.traceId ?? "—"}</TableCell>
             <TableCell className="font-mono text-[11px] text-muted-foreground">{row.shardKey ?? "—"}</TableCell>

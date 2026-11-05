@@ -104,10 +104,12 @@ const routed = filterSink(
   span and RPC values use credential-only redaction, so ids and URLs survive on
   those signals. Keep personal data out of an enricher for those signals. An
   enricher that throws leaves the event unchanged.
-- An `Error` in an enriched value, or in the event the enricher receives, keeps
-  its `name`, `message`, `stack`, `cause` chain and, for an `AggregateError`, its
-  `errors`. A `cause` that loops back is cut. The stack repeats the message, so it
-  is redacted the same way, and each string is cut to 4 KiB.
+- An `Error` in the event the enricher receives, or in an enriched value for a
+  log line, is written the way a [logged `Error` field](#structured-logging-with-ctxlog) is:
+  `name`, `message`, `stack`, the `cause` chain and, for an `AggregateError`, its
+  `errors`, with the same caps. The stack repeats the message, so it is redacted
+  the same way. On a metric, span or RPC attribute an enriched `Error` is only
+  `Name: message`, with no stack.
 
 ### Other OTLP vendors
 
@@ -408,6 +410,12 @@ An `Error` nested deeper in a field object is written the same way, not as `{}`.
   and `cause` chain are kept.
 - The field is redacted like any other: a credential in the message also appears
   in the stack, and both are masked.
+- Only log lines keep the stack. An `Error` passed as a `ctx.trace` span
+  attribute or a `ctx.metrics` attribute is written as `TypeError: card declined`.
+  Spans ship to third-party collectors, and an attribute value is a grouping key,
+  so a stack there would leak internals and make every value unique. In
+  development (the same switch that keeps raw span error messages) a span
+  attribute keeps the full form; a metric attribute never does.
 
 :::caution[Behavior change]
 A two-argument call whose second argument is a plain object, such as `ctx.log.info("saved", user)`, is now the **structured** form: the message is `"saved"` and `user` becomes `fields`, instead of being rendered into the message as `saved {…}`. Calls with a non-object second argument, or three or more arguments, are unchanged. If you relied on the object being folded into the message text, pass it as a third argument (`ctx.log.info("saved", "-", user)`) or pre-render it.

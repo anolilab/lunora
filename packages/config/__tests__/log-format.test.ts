@@ -69,7 +69,7 @@ describe("formatLunoraEvent", () => {
             expect(
                 formatLunoraEvent(
                     event({
-                        fields: normalizeLogFields({ err: error, orderId: "o-1" }),
+                        fields: normalizeLogFields({ err: error, orderId: "o-1" }, undefined, "full"),
                         function: "orders:place",
                         level: "error",
                         message: "failed",

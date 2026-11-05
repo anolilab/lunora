@@ -20,7 +20,7 @@
  * panel so the `key=value` rendering isn't hand-mirrored), which keeps this
  * module's dependency-free property intact.
  */
-import { formatLogFields, formatLoggedError, loggedErrorFields } from "../../../shared/log-fields";
+import { formatLoggedErrorFields, readLogFields } from "../../../shared/log-fields";
 
 /** Severity a formatted line should be surfaced at, mapped onto the three logger channels. */
 type LunoraLineLevel = "error" | "info" | "warn";
@@ -202,10 +202,10 @@ const formatLunoraEvent = (line: string): LunoraFormattedLine | undefined => {
 
     if (event.type === "log") {
         const parts = [`${labelFor(functionPath, event)}  ${asString(event.message)}`.trimEnd()];
-        const fields = formatLogFields(event.fields);
+        const fields = readLogFields(event.fields);
 
-        if (fields !== "") {
-            parts.push(fields);
+        if (fields.text !== "") {
+            parts.push(fields.text);
         }
 
         // A short trace-id suffix links the line to its RPC span without the noise
@@ -218,9 +218,9 @@ const formatLunoraEvent = (line: string): LunoraFormattedLine | undefined => {
 
         // A logged Error shows as `key=Name: message` in the line above; its stack
         // and cause chain follow on indented lines, one block per error field.
-        const errors = loggedErrorFields(event.fields).map(([key, error]) => `\n  ${key}: ${formatLoggedError(error, "    ")}`);
+        const errors = fields.errors.length === 0 ? "" : `\n${formatLoggedErrorFields(fields.errors, "  ")}`;
 
-        return { kind: "log", level: toLineLevel(asString(event.level)), text: parts.join("  ") + errors.join("") };
+        return { kind: "log", level: toLineLevel(asString(event.level)), text: parts.join("  ") + errors };
     }
 
     if (event.type === "request") {
