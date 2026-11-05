@@ -145,6 +145,9 @@ describe("consumeQueuedSend with a sent-mail store", () => {
     const body = { idempotencyKey: "order-42", subject: "Hi", to: "a@x.test" };
 
     /** A KV-shaped store over a Map, recording every `put`. */
+    /** The sent records a store was given, without the attempt marks kept beside them. */
+    const recordsOf = (puts: { key: string; ttl: number; value: string }[]) => puts.filter((put) => !put.key.endsWith("#attempt"));
+
     const memoryStore = (initial: Record<string, string> = {}) => {
         const entries = new Map(Object.entries(initial));
         const puts: { key: string; ttl: number; value: string }[] = [];
@@ -174,7 +177,10 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         expect(first).toStrictEqual({ deduplicated: false, id: "queued-send" });
         expect(redelivered).toStrictEqual({ deduplicated: true, id: "queued-send" });
         expect(mailer.send).toHaveBeenCalledTimes(1);
-        expect(puts).toStrictEqual([{ key: "order-42", ttl: 86_400, value: "queued-send" }]);
+        expect(puts).toStrictEqual([
+            { key: "order-42#attempt", ttl: 86_400, value: "sending" },
+            { key: "order-42", ttl: 86_400, value: "queued-send" },
+        ]);
     });
 
     it("remembers a key for the configured TTL", async () => {
@@ -239,7 +245,7 @@ describe("consumeQueuedSend with a sent-mail store", () => {
 
         await expect(consumeQueuedSend(mailer, body, { sent: store })).rejects.toBeInstanceOf(MailSendError);
         await expect(consumeQueuedSend(mailer, body, { sent: store })).resolves.toStrictEqual({ deduplicated: false, id: "second-try" });
-        expect(puts).toHaveLength(1);
+        expect(recordsOf(puts)).toHaveLength(1);
     });
 
     it("does not record a retryable timed-out send, so the redelivery re-sends under the same key and is then recorded", async () => {
@@ -260,7 +266,7 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         const timedOut = await consumeQueuedSend(mailer, body, { sent: store }).catch((error: unknown) => error);
 
         expect(isRetryableMailError(timedOut)).toBe(true);
-        expect(puts).toHaveLength(0);
+        expect(recordsOf(puts)).toHaveLength(0);
 
         await expect(consumeQueuedSend(mailer, body, { sent: store })).resolves.toStrictEqual({ deduplicated: false, id: "provider-original" });
         expect(send.mock.calls.map(([options]) => options.idempotencyKey)).toStrictEqual(["order-42", "order-42"]);
@@ -290,8 +296,10 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
         const store: SentMailStore = {
             get: async () => null,
-            put: async () => {
-                throw new Error("KV write failed");
+            put: async (key) => {
+                if (!key.endsWith("#attempt")) {
+                    throw new Error("KV write failed");
+                }
             },
         };
 
@@ -333,10 +341,12 @@ describe("consumeQueuedSend with a sent-mail store", () => {
             const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
             const store: SentMailStore = {
                 get: async () => null,
-                put: async () =>
-                    new Promise<void>(() => {
-                        // never settles, as a stalled store looks
-                    }),
+                put: async (key) =>
+                    key.endsWith("#attempt")
+                        ? undefined
+                        : new Promise<void>(() => {
+                              // never settles, as a stalled store looks
+                          }),
             };
             let result: unknown = "pending";
 
@@ -395,7 +405,7 @@ describe("consumeQueuedSend with a sent-mail store", () => {
 
             await consumeQueuedSend(noopMailer(), body, { sent: store });
 
-            expect(puts).toHaveLength(1);
+            expect(recordsOf(puts)).toHaveLength(1);
             expect(vi.getTimerCount()).toBe(0);
         });
     });
@@ -471,6 +481,74 @@ describe("consumeQueuedSend with a sent-mail store", () => {
             await expect(consumeQueuedSend(noopMailer(), body, { attempts: 3, enqueuedAt: new Date(Date.now() - 22 * HOUR_MS) })).resolves.toMatchObject({
                 id: "queued-send",
             });
+        });
+
+        it("sends an old message whose first delivery failed on the store read, before anything went out", async () => {
+            expect.assertions(3);
+
+            const { entries, store } = memoryStore();
+            const enqueuedAt = new Date(Date.now() - 23 * HOUR_MS);
+            const mailer = noopMailer();
+            const down: SentMailStore = {
+                get: async () => {
+                    throw new Error("KV unavailable");
+                },
+                put: async () => undefined,
+            };
+
+            const first = await consumeQueuedSend(mailer, body, { attempts: 1, enqueuedAt, sent: down }).catch((error: unknown) => error);
+
+            expect(isRetryableMailError(first)).toBe(true);
+            await expect(consumeQueuedSend(mailer, body, { attempts: 2, enqueuedAt, sent: store })).resolves.toStrictEqual({
+                deduplicated: false,
+                id: "queued-send",
+            });
+            expect(entries.get("order-42")).toBe("queued-send");
+        });
+
+        it("refuses an old redelivery whose earlier delivery reached the provider and left no record", async () => {
+            expect.assertions(3);
+
+            const { store } = memoryStore({ "order-42#attempt": "sending" });
+            const mailer = noopMailer();
+
+            const error = await consumeQueuedSend(mailer, body, { attempts: 2, enqueuedAt: new Date(Date.now() - 23 * HOUR_MS), sent: store }).catch(
+                (error_: unknown) => error_,
+            );
+
+            expect(isOutcomeUnknownMailError(error)).toBe(true);
+            expect(isRetryableMailError(error)).toBe(false);
+            expect(mailer.send).not.toHaveBeenCalled();
+        });
+
+        it("sends an old redelivery whose earlier send is known not to have gone out", async () => {
+            expect.assertions(3);
+
+            const { entries, store } = memoryStore();
+            const enqueuedAt = new Date(Date.now() - 23 * HOUR_MS);
+
+            await expect(consumeQueuedSend(failingMailer(new MailSendError({ retryable: true })), body, { enqueuedAt, sent: store })).rejects.toBeInstanceOf(
+                MailSendError,
+            );
+            expect(entries.get("order-42#attempt")).toBe("failed");
+            await expect(consumeQueuedSend(noopMailer(), body, { attempts: 2, enqueuedAt, sent: store })).resolves.toMatchObject({ id: "queued-send" });
+        });
+
+        it("sends nothing when the send cannot be marked first, and fails as retryable", async () => {
+            expect.assertions(2);
+
+            const mailer = noopMailer();
+            const store: SentMailStore = {
+                get: async () => null,
+                put: async () => {
+                    throw new Error("KV write failed");
+                },
+            };
+
+            const error = await consumeQueuedSend(mailer, body, { sent: store }).catch((error_: unknown) => error_);
+
+            expect(isRetryableMailError(error)).toBe(true);
+            expect(mailer.send).not.toHaveBeenCalled();
         });
 
         it("leaves an ordinary retryable failure retryable however old the message is", async () => {

@@ -193,8 +193,11 @@ window; the Cloudflare binding has no such hook. Past that window Resend would
 deliver the repeat, so pass `enqueuedAt: message.timestamp` and
 `attempts: message.attempts` as above: an outcome-unknown failure of a message
 enqueued 23 or more hours ago is then not retryable, and a redelivery that old is
-refused before any request, since an earlier attempt may have landed (a first
-delivery is sent at any age); the consumer acks and reports either. Without
+refused before any request when an earlier delivery may have landed; the consumer
+acks and reports either. With a `sent` store that is decided by an attempt mark
+(`<key>#attempt`) written just before the provider call, so a delivery that failed
+before reaching the provider (a store outage, say) is still sent; without one, any
+redelivery (`attempts` above 1) counts, since each earlier failure was a send. Without
 `enqueuedAt` nothing tracks the message's age, and a send retried for more than a
 day can be delivered twice.
 
