@@ -13,10 +13,11 @@ Resend is a built-in option, and you can pass any transport you wire
 yourself. It renders React Email templates inline and can offload delivery to a
 Cloudflare Queue.
 
-`createMailer` needs `from` plus exactly one transport: `cloudflareSend` (the
-Cloudflare default), `apiKey` (Resend), or an explicit `transport`. Passing none
-throws, unless you pass a `queue`: that builds a producer-only mailer whose
-`queue()` works and whose `send()` rejects.
+`createMailer` needs `from` and a transport: an explicit `transport`, or else
+`cloudflareSend` (the Cloudflare default) or `apiKey` (Resend). When several are
+set, the first one in that order wins. Passing none throws, unless you pass a
+`queue`: that builds a producer-only mailer whose `queue()` works and whose
+`send()` rejects.
 
 ```ts
 import { createMailer } from "@lunora/mail";
@@ -29,8 +30,9 @@ export const mailer = createMailer({
 
 Inside a Worker, prefer `createMailerFromEnv(env)`: it reads `MAIL_FROM`,
 captures every send into the studio's Mail inbox in a dev environment, and
-otherwise delivers via a `SEND_EMAIL` binding (pass `cloudflareSend`; it is
-used only when `env.SEND_EMAIL` is set) or `RESEND_API_KEY`.
+otherwise delivers via `cloudflareSend` (pass it to send through a `SEND_EMAIL`
+binding) or `RESEND_API_KEY`. The mailer uses `cloudflareSend` whenever you pass
+it, so pass it only when the Worker has the binding.
 
 ```ts
 import { createMailerFromEnv } from "@lunora/mail";
@@ -256,14 +258,15 @@ throwing, so it bounces without being queued for a retry that can never succeed.
     body are trivially spoofable), and `dispatchToLunoraFunction` dispatches as a trusted system call, so make the target an `internalMutation` /
     `internalAction`: a **public** `mutation` reachable from inbound mail is equally reachable from any browser client, which can post a forged
     `from`/`to`/`text` straight into your inbox table. The dispatch carries no caller identity, so an `rls()` policy on the target sees an anonymous caller — it
-    is not bypassed; do the authorization in the handler. Never make a trust decision on `email.from`. Gate on the DKIM/SPF/DMARC verdicts in
-    `email.authentication` via the `verify` hook before dispatch, and treat the function input as fully attacker-controlled. A bare `pass` is not enough: SPF
-    vouches for the envelope `MAIL FROM` domain and DKIM for the signing `d=`, both of which the sender picks. `authentication.dkim` / `.spf` / `.dmarc` are
-    **lists** — one header legitimately reports a method more than once (an ESP-relayed message is DKIM-signed twice) — and each entry carries the `domain` it
-    is about. Do not hand-roll that check: pass `verify: authenticatesFrom` and let `@lunora/mail` answer it. It accepts only when ANY entry has `result ===
-    "pass"` **and** a `domain` equal to the `From` address's domain, treating an entry with a `null` domain as unauthenticated and an empty list as "not
-    reported" (a DMARC pass already checked alignment). Every copy of this predicate written by hand has been one `&&` away from accepting a genuine `spf=pass`
-    + `dkim=pass` for the attacker's OWN domain on a message forging someone else's `From`.
+    is not bypassed; do the authorization in the handler. Never make a trust decision on `email.from`. Gate on the DomainKeys Identified Mail (DKIM), Sender
+    Policy Framework (SPF) and Domain-based Message Authentication, Reporting and Conformance (DMARC) verdicts in `email.authentication` via the `verify` hook
+    before dispatch, and treat the function input as fully attacker-controlled. A bare `pass` is not enough: SPF vouches for the envelope `MAIL FROM` domain and
+    DKIM for the signing `d=`, both of which the sender picks. `authentication.dkim` / `.spf` / `.dmarc` are **lists** — one header legitimately reports a
+    method more than once (an ESP-relayed message is DKIM-signed twice) — and each entry carries the `domain` it is about. Do not hand-roll that check: pass
+    `verify: authenticatesFrom` and let `@lunora/mail` answer it. It accepts only when ANY entry has `result === "pass"` **and** a `domain` equal to the `From`
+    address's domain, treating an entry with a `null` domain as unauthenticated and an empty list as "not reported" (a DMARC pass already checked alignment).
+    Every copy of this predicate written by hand has been one `&&` away from accepting a genuine `spf=pass` + `dkim=pass` for the attacker's OWN domain on a
+    message forging someone else's `From`.
 </Callout>
 
 The receiving function is an ordinary internal mutation/action (the default

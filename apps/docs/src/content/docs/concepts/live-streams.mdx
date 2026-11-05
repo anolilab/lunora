@@ -211,7 +211,8 @@ calls carry the same shard, so the subscription lands on the connection's shard.
 
 A connection follows at most 64 topics. A subscribe past that is refused with 429
 `TOO_MANY_LIVE_TOPICS`, which `onError` reports. A shard holds at most 1024 live
-connections, a signed-in caller at most 32, and an anonymous client address at most 32.
+connections, a signed-in caller at most 32, and an anonymous client address at most 32. Anonymous callers with no client
+IP share one bucket of 256 connections.
 A connect past one of those limits is refused with 503 `LIVE_CONNECTION_LIMIT`.
 
 ## Authorization

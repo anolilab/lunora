@@ -1,6 +1,6 @@
 ---
 title: "@lunora/ai"
-description: Workers AI inference from your functions, provider-agnostic, Workers AI by default.
+description: Call Workers AI or any other model provider from your Lunora functions with `@lunora/ai`.
 related:
     - to: /docs/packages/server
       note: "the function primitives whose `ctx.ai` this package backs"
@@ -182,7 +182,7 @@ credential problems keep their own codes (`UNAUTHORIZED`, `FORBIDDEN`,
 failure `SERVICE_UNAVAILABLE`. An unreadable response is `INTERNAL`.
 For agents, `webSearchTool()` from `@lunora/agent` wraps this as a tool.
 
-## RAG — `defineRag` (`@lunora/ai/rag`)
+## Retrieval-augmented generation (RAG) with `defineRag` (`@lunora/ai/rag`)
 
 `defineRag` composes `ctx.ai` (embeddings) with `ctx.vectors` (Vectorize) into a
 declared index → retrieve pipeline: chunk → embed → upsert on the write side,
@@ -222,7 +222,7 @@ What you get beyond the manual loop:
 - **Content-hash short-circuit**: re-indexing an unchanged source skips chunking,
   embedding, and every write (`{ unchanged: true }`), so periodic re-syncs are free.
   The hash covers `text`, `metadata` and `importance` together, so changing a
-  document's tenant or ACL tags over an unchanged body still re-indexes.
+  document's tenant or access control list (ACL) tags over an unchanged body still re-indexes.
 - **Tenant isolation**: thread `namespace` (your shard/tenant key) through both
   sides; a namespace-less call gets a one-time dev warning (Vectorize indexes are
   account-global). Multi-tenant apps should set `requireNamespace: true` to turn
@@ -275,7 +275,7 @@ export const docs = defineRag({
 
 - **`sentenceChunker({ size, overlap })`** — packs whole sentences into
   `size`-bounded windows. The default choice for prose.
-- **`markdownChunker({ size, overlap })`** — splits at ATX headings (code fences
+- **`markdownChunker({ size, overlap })`** — splits at ATX (`#`-prefixed) headings (code fences
   are tracked, so a `#` comment inside a fence never starts a section), then
   packs each section's sentences. Every chunk is prefixed with its **heading
   trail** (`# Guide > ## Auth > ### OAuth`), so a chunk from deep inside a long
@@ -409,8 +409,8 @@ boundary — so the account-global-namespace hazard that Vectorize forces you to
 guard against does not exist here, rather than being filtered away.
 
 **Search is brute force by default.** Every vector in the namespace is read and scored in
-JS; there is no ANN index by default, because SQLite has no vector type and `sqlite-vec` is
-not loadable inside workerd. That is linear in namespace size, so this suits
+JS; there is no approximate nearest-neighbour (ANN) index by default, because SQLite has no vector type and the optional
+`sqlite-vec` index (below) is available only on celld and `node:sqlite`. That is linear in namespace size, so this suits
 **many small per-tenant indexes** — the shape most sharded apps already have —
 and not one large shared corpus. A namespace past `maxScan` (default 50,000)
 throws a named error rather than letting a Worker get killed on CPU with nothing
@@ -426,10 +426,10 @@ sqliteVectorStore({ ann: { dimensions: 768 }, exec });
 
 The store then keeps a `vec0` index (cosine distance, one partition per
 namespace) in `<table>_ann`, backfilled from the table the first time, and an
-unfiltered query is a KNN lookup instead of a scan. A query with a `filter`
+unfiltered query is a k-nearest-neighbour (KNN) lookup instead of a scan. A query with a `filter`
 still scans: `vec0` filters after choosing the `k` nearest, which would return
 a short page. Without the extension the first operation throws naming the
-missing `vec0` module. Workerd cannot load `sqlite-vec`, so this does not apply
+missing `vec0` module. Lunora loads `sqlite-vec` only on those two, so this does not apply
 on Cloudflare.
 
 Limits of the index:
@@ -441,7 +441,7 @@ Limits of the index:
   writes (its `state.storage.sql`), or from `node:sqlite`.
 - **Cosine only**, over one fixed width: `ann.dimensions` is the `vec0` column
   width, so an embedding of another width — or reopening the table with a
-  different `ann.dimensions` — fails with `RAG_DIMENSION_MISMATCH`. Changing the
+  different `ann.dimensions` — fails with [`RAG_DIMENSION_MISMATCH`](/docs/errors#rag_dimension_mismatch). Changing the
   model's width means a new `table`.
 - **An interrupted build is rebuilt, not trusted.** The index counts as built
   only once its backfill finishes, so a build cut off part-way is dropped and
@@ -589,7 +589,7 @@ follow-up ("what about the other one?") carries its meaning in the preceding
 turns, and a short question shares few terms with the long passage answering it.
 
 `transformQuery` rewrites it — or expands it into several, each searched
-independently and fused with RRF, recovering passages any single phrasing would
+independently and fused with Reciprocal Rank Fusion (RRF), recovering passages any single phrasing would
 miss:
 
 ```ts
@@ -613,19 +613,19 @@ export const docs = defineRag({
 
 It receives `conversationId` from the bound context, so a follow-up can be
 rewritten against its thread. Also injected, for the same reason as `rerank`:
-every useful strategy (HyDE, multi-query expansion, follow-up rewriting) needs a
+every useful strategy (hypothetical document embeddings (HyDE), multi-query expansion, follow-up rewriting) needs a
 language model, and this package does not pick one for you. Returning the query
 unchanged — or nothing usable — falls back to the original rather than searching
 for an empty string. Pass `{ transformQuery: false }` to skip it per call.
 
-### RLS-filtered retrieval
+### Row-level security (RLS) filtered retrieval
 
 `rlsFilter` derives a metadata filter from the retrieval identity so per-request
 row-level security applies without every call site remembering to pass it. It
 receives `ctx.auth` (an action's `ctx` satisfies `RagContext.auth` structurally)
 and returns a Vectorize metadata filter, which is merged over any explicit
 `filter` **with the RLS keys winning**, so a caller can never widen past the
-tenant/RBAC scope.
+tenant or role-based access control (RBAC) scope.
 
 ```ts
 export const docs = defineRag({
@@ -767,12 +767,12 @@ rates it unsupported, and codegen omits `ctx.aiSearch` with a
 
 ### AI Search or `defineRag`?
 
-| Choose AI Search when…                                                | Choose `defineRag` when…                                                               |
-| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| the corpus is an R2 bucket or a website you want indexed with no code | the corpus is your app's own rows, indexed as they are written                         |
-| you need OCR for scanned PDFs or the multimodal embedding models      | you need your own chunker, embedder, lexical or graph leg, reranker or query transform |
-| one tenant per instance is fine, or the corpus is shared              | retrieval must be filtered by row-level security across many tenants in one index      |
-| Cloudflare is the only target                                         | the app also runs on `celld` or `node`                                                 |
+| Choose AI Search when…                                                                           | Choose `defineRag` when…                                                               |
+| ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| the corpus is an R2 bucket or a website you want indexed with no code                            | the corpus is your app's own rows, indexed as they are written                         |
+| you need optical character recognition (OCR) for scanned PDFs or the multimodal embedding models | you need your own chunker, embedder, lexical or graph leg, reranker or query transform |
+| one tenant per instance is fine, or the corpus is shared                                         | retrieval must be filtered by row-level security across many tenants in one index      |
+| Cloudflare is the only target                                                                    | the app also runs on `celld` or `node`                                                 |
 
 Two limits decide the tenancy row. An instance has at most **5 custom metadata
 fields**, and a filterable string is indexed only to its first **64 bytes**, so

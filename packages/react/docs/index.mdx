@@ -13,6 +13,8 @@ concurrent React works correctly out of the box. The hooks live in the package
 root (a client boundary); server-side data loading for React Server Components /
 the Next.js App Router lives in [`@lunora/react/server`](#server-components-nextjs-app-router).
 
+The following root component creates a client and mounts the provider around the chat view:
+
 ```tsx
 import { LunoraClient } from "lunorash/client";
 import { LunoraProvider, useMutation, useQuery } from "@lunora/react";
@@ -37,6 +39,8 @@ Subscribes to a query. Returns `T | undefined` (undefined until the first
 response). Pass `"skip"` for `args` to short-circuit (no network call).
 Multiple `useQuery` calls with identical args share a single underlying
 network call via the in-memory cache.
+
+The following calls subscribe to a channel's messages and to the signed-in user's profile:
 
 ```tsx
 const messages = useQuery(api.messages.list, { channelId });
@@ -100,6 +104,8 @@ is never retried: `client.action` has no offline queue and sends no idempotency
 key, so a paused call would fire minutes later on reconnect and a retry could run
 a third-party side effect twice. It fails fast instead and lets you decide.
 
+The following handler runs a verification command and reads its pending state:
+
 ```tsx
 const { call: runVerify, pending } = useAction(api.commands.run);
 await runVerify({ command: "lunora", args: ["verify"] });
@@ -130,6 +136,8 @@ reached — gates as authenticated). Branch on it, never on whether `user` is
 null: `user` is null both when signed out and when a held credential's identity
 has not resolved, so a `user` gate renders the sign-in form to a signed-in user.
 See the [`@lunora/client` reference](/docs/packages/client) for the full table.
+
+The following component renders by `status` and passes `setToken` to the sign-in form:
 
 ```tsx
 const { setToken, status, user } = useAuth();
@@ -291,10 +299,10 @@ End-user file uploads (live progress, pause/resume, large-file resumable and
 per-part retry) are re-exported from `@visulima/storage-client` (Lunora does not
 hand-roll the uploader). `useUpload` speaks the protocol named in `method`; without it, it uses the only
 endpoint given, or picks between several by file size against `tusThreshold`.
-The TUS path survives a pause/resume and a dropped connection.
+The TUS (resumable upload protocol) path survives a pause/resume and a dropped connection.
 Point the endpoint at a route backed by
 [`@lunora/storage/upload`](/docs/packages/storage#end-user-uploads-rls-gated);
-these uploads are gated by _your_ per-user RLS policy, **not** the studio
+these uploads are gated by _your_ per-user row-level security (RLS) policy, **not** the studio
 `adminToken`. [File storage](/docs/concepts/file-storage#resumable-uploads-from-the-browser)
 walks through mounting the handler, authenticating the route, and the size limits.
 
@@ -309,8 +317,8 @@ re-exported and do not work against a Lunora upload route: they read files over
 signed URL.
 
 For resumable uploads use `useTusUpload` (or `useUpload` with TUS).
-`useChunkedRestUpload` sends four chunks in parallel, which the binding-backed
-provider refuses, so it can only upload a file as one chunk; see
+`useChunkedRestUpload` sends one chunk at a time, which the binding-backed
+provider requires; see
 [Chunked REST](/docs/packages/storage#chunked-rest).
 
 ### Drag-and-drop uploader with a progress bar
@@ -384,8 +392,8 @@ is the lower-level hook when you always want the resumable protocol.
 ## Admin auth hooks
 
 Reactive reads over the **admin-gated auth plane** — the `/_lunora/admin/auth/*`
-HTTP endpoints `LunoraClient` exposes as `listAuthUsers`, `listAuthSessions`,
-`listAuthOrganizations`, and `impersonateAuthUser`. They are HTTP-only: unlike
+HTTP endpoints that the admin client exposes as `listAuthUsers`, `listAuthSessions`,
+`listAuthOrganizations`, and `impersonateAuthUser` (`packages/client/src/admin/admin-client.ts`). They are HTTP-only: unlike
 `useQuery` there is no live subscription behind them (the auth-admin surface
 does not ride the WS transport at all), so they are one-shot TanStack reads with
 an explicit `refetch()`. The worker must be built with an `authAdmin` and an
@@ -481,6 +489,8 @@ Durable events come first, oldest first by `seq`, followed by the ephemeral
 durable lifecycle is surfaced. The array is rebuilt on every update — treat it
 as derived, not identity-stable, and key rendered rows on `toolCallId`/`seq`.
 
+The following component renders one thread's tool timeline, keyed by event type:
+
 ```tsx
 import { useAgentToolEvents } from "@lunora/react";
 import { api } from "@/lunora/_generated/api";
@@ -519,6 +529,8 @@ Returns `{ status, connected, transcript, interimTranscript, audioLevel,
 isMuted, error, startCall, endCall, sendText, toggleMute }`. `status` is
 `"idle" | "listening" | "thinking" | "speaking"`.
 
+The following component starts and ends a call from one button:
+
 ```tsx
 import { useVoiceAgent } from "@lunora/react";
 import { api } from "@/lunora/_generated/api";
@@ -556,7 +568,7 @@ The part the type signature does not tell you:
 - **`endCall()` releases everything** — the socket, the microphone tracks, and
   the Web Audio graph — and is idempotent. The hook also tears the call down on
   unmount, so a component that navigates away mid-call leaks nothing.
-- **`audioLevel` is the live input RMS (0–1).** It drives a mic meter, and it is
+- **`audioLevel` is the live input root mean square (RMS, 0–1).** It drives a mic meter, and it is
   also what the heuristics read: `silenceThreshold` + `silenceDurationMs` decide
   when an utterance auto-commits (defaults `0.01` / `1200`ms), and
   `interruptThreshold` + `interruptChunks` decide when the user barges in on the
@@ -567,3 +579,383 @@ The part the type signature does not tell you:
   for tests and non-DOM hosts. The defaults are `getUserMedia` + Web Audio +
   `new WebSocket(url)`, so the primitive is inert (and mockable) anywhere those
   are missing.
+
+## API reference
+
+### Provider
+
+#### `LunoraProvider`
+
+**Type:** `({ children, client, queryClient }: LunoraProviderProps) => ReactElement`
+
+Mounts the shared `LunoraClient` for the subtree. See [the provider section](#lunoraprovider-client).
+
+#### `LunoraProviderProps`
+
+**Type:** `{ children: ReactNode; client: LunoraClient; queryClient?: QueryClient }`
+
+Props for `LunoraProvider`. `queryClient` is optional; the provider creates or reuses a TanStack `QueryClient` when you omit it.
+
+#### `useLunora`
+
+**Type:** `() => LunoraClient`
+
+Returns the `LunoraClient` from the nearest `LunoraProvider`. Use it when a component calls `client.*` methods directly instead of through a hook.
+
+### Queries
+
+#### `useQuery`
+
+**Type:** `<F extends FunctionReference>(function_: F, args: ArgsOf<F> | "skip", options?: UseQueryOptions) => ReturnOf<F> | undefined`
+
+Subscribes to a query and returns its value, or `undefined` until the first response. Pass `"skip"` for `args` to make no network call. See [details](#usequeryfn-args-options).
+
+#### `UseQueryOptions`
+
+**Type:** `{ onError?: SubscriptionErrorCallback; shardKey?: string }`
+
+Options for `useQuery`, `useSubscription` and `useSuspenseQuery`. `onError` receives the server-pushed `SubscriptionError`, and `shardKey` routes the subscription to one shard.
+
+#### `useSuspenseQuery`
+
+**Type:** `<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: UseQueryOptions) => ReturnOf<F>`
+
+Subscribes to a query inside a `<Suspense>` boundary and returns the value directly. The component suspends until the first value arrives, so the return is never `undefined`. There is no `"skip"`; use `useQuery` for a query that may not run.
+
+#### `useSubscription`
+
+**Type:** `<F extends FunctionReference>(function_: F, args: ArgsOf<F> | "skip", options?: UseQueryOptions) => UseSubscriptionResult<ReturnOf<F>>`
+
+Lower-level hook that delivers only server-pushed values, with no initial HTTP fetch. It returns `{ data, error }`, so you can render an error state without extra `useState`.
+
+#### `usePaginatedQuery`
+
+**Type:** `<F extends FunctionReference>(function_: F, args: "skip" | PaginatedArgs<F>, options: UsePaginatedQueryOptions) => UsePaginatedQueryResult<PageItemOf<F>>`
+
+Subscribes to a paginated query and grows the result with `loadMore(numberItems)`. The result is `{ results, status, isLoading, error, loadMore }`, with `results` flattened into one array.
+
+#### `UsePaginatedQueryOptions`
+
+**Type:** `{ initialNumItems: number; onError?: SubscriptionErrorCallback; shardKey?: string }`
+
+Options for `usePaginatedQuery`. `initialNumItems` sets how many rows the first page loads.
+
+#### `useInfiniteQuery`
+
+**Type:** `<F extends FunctionReference>(function_: F, args: "skip" | PaginatedArgs<F>, options: UseInfiniteQueryOptions) => UseInfiniteQueryResult<PageItemOf<F>>`
+
+Subscribes to a paginated query and keeps each page as its own array in `pages`. It adds `fetchNextPage`, `hasNextPage` and `isFetchingNextPage`, so the shape follows TanStack Query.
+
+#### `UseInfiniteQueryOptions`
+
+**Type:** `{ initialNumItems: number; onError?: SubscriptionErrorCallback; shardKey?: string }`
+
+Options for `useInfiniteQuery`. Changing the query, its base `args`, `initialNumItems` or `shardKey` resets the feed to its first page.
+
+#### `useClientQuery`
+
+**Type:** `<T>(ref: ClientQueryRef<T>) => [T, Setter<T>]`
+
+Subscribes to a local-only value made with `createClientQuery` and returns it with a `useState`-style setter. It never touches the network, and every consumer of the same ref shares the value.
+
+### Mutations and actions
+
+#### `useMutation`
+
+**Type:** `<F extends FunctionReference>(function_: F) => MutationHook<F>`
+
+Returns a mutation handle for a server mutation. `mutate` is awaitable, and `pending` stays `true` until the last overlapping call settles. See [details](#usemutationfn).
+
+#### `MutationHook`
+
+**Type:** `MutationHook<F extends FunctionReference> { data: ReturnOf<F> | undefined; error: Error | null; isError: boolean; mutate: (args: ArgsOf<F>, options?) => Promise<ReturnOf<F>>; pending: boolean; reset: () => void; withOptimisticUpdate: (update: OptimisticUpdate<ArgsOf<F>>) => MutationHook<F> }`
+
+The object `useMutation` returns. `withOptimisticUpdate(update)` returns a handle whose `mutate` applies `update` as the optimistic update for every call, unless a call passes its own `optimisticUpdate`.
+
+#### `useMutator`
+
+**Type:** `<TArgs = Record<string, unknown>>(handle: MutatorHandle<TArgs>) => MutatorHook<TArgs>`
+
+Wraps a custom-mutator handle bound with `bindMutators` from `@lunora/db`. It adds React state for the in-flight and error lifecycle. Reads stay on the live query hooks.
+
+#### `MutatorHook`
+
+**Type:** `{ error: Error | undefined; isError: boolean; mutate: (args: TArgs) => Promise<void>; pending: boolean; reset: () => void }`
+
+The object `useMutator` returns. `mutate` resolves once the write is persisted and rejects on failure.
+
+#### `useAction`
+
+**Type:** `<F extends FunctionReference>(function_: F) => ActionHook<F>`
+
+Returns a handle for a server action. `call` fails fast and is never queued or retried. See [details](#useactionfn).
+
+#### `ActionHook`
+
+**Type:** `ActionHook<F extends FunctionReference> { call: (args: ArgsOf<F>, options?: ActionCallOptions) => Promise<ReturnOf<F>>; data: ReturnOf<F> | undefined; error: Error | undefined; pending: boolean; reset: () => void }`
+
+The object `useAction` returns. `ActionCallOptions` comes from `@lunora/client`. `data` and `error` track the latest invocation, not the last one to settle.
+
+### Live data
+
+#### `useLiveTopic`
+
+**Type:** `<Payload>(topic: LiveTopicRef<Payload>, options?: UseLiveTopicOptions<Payload>) => UseLiveTopicResult<Payload>`
+
+Follows one topic of a `defineLiveStream` for the life of the component. It returns `{ lastEvent, error }`, and `lastEvent` is typed by the payload the topic declares.
+
+#### `useStream`
+
+**Type:** `<F extends FunctionReference<"stream">>(function_: F, args: "skip" | ArgsOf<F>, options?: UseStreamOptions) => UseStreamResult<ReturnOf<F>>`
+
+Subscribes to a streaming query and returns the chunks received so far, a `status` and a `cancel` function. Changing the function or `args` cancels the previous stream and starts an empty one.
+
+#### `UseStreamOptions`
+
+**Type:** `{ durable?: boolean; maxBuffer?: number; shardKey?: string }`
+
+Options for `useStream`. Set `durable` to resume the same run after a dropped connection, for streams the server declared `durable`. `maxBuffer` caps the chunk buffer.
+
+#### `usePresence`
+
+**Type:** `<H extends HeartbeatReference, L extends ListPresentReference>(roomId: string, options: UsePresenceOptions<H, L>) => UsePresenceResult<L>`
+
+Joins a presence room and heartbeats the session on an interval. It returns the sessions present, the current `sessionId` and a `setData` setter for this session's data.
+
+#### `useConnectionStatus`
+
+**Type:** `() => ConnectionStatus`
+
+Returns the aggregate live-socket status across all shard connections: `"connected"`, `"connecting"`, `"idle"`, `"offline"` or `"polling"`. Use it to drive a connection indicator.
+
+#### `useRateLimit`
+
+**Type:** `(config: RateLimitConfig, options?: UseRateLimitOptions) => UseRateLimitResult`
+
+Predicts the outcome of a rate-limited action in the browser, using the same math as `@lunora/ratelimit` on the server. The server stays the source of truth. Pass a stable `config` so the returned callbacks keep their identity.
+
+### Authentication
+
+#### `useAuth`
+
+**Type:** `() => UseAuthResult`
+
+Returns `{ status, user, token, setToken }`. Branch on `status`, not on `user`. See [details](#useauth).
+
+#### `UseAuthResult`
+
+**Type:** `{ setToken: (token: string | null) => void; status: AuthStatus; token: string | null; user: User | null }`
+
+The object `useAuth` returns. `status` is `"loading"`, `"authenticated"`, `"unauthenticated"` or `"unreachable"`.
+
+#### `useAuthState`
+
+**Type:** `() => AuthState`
+
+Returns the sign-in state as `{ isAuthenticated, isLoading }`, with no `status` string to branch on.
+
+#### `Authenticated`
+
+**Type:** `({ children }: AuthGateProps) => ReactNode`
+
+Renders `children` only when the session is signed in.
+
+#### `Unauthenticated`
+
+**Type:** `({ children }: AuthGateProps) => ReactNode`
+
+Renders `children` only when no session is signed in.
+
+#### `AuthLoading`
+
+**Type:** `({ children }: AuthGateProps) => ReactNode`
+
+Renders `children` only while the session state is still resolving.
+
+### Admin auth
+
+These hooks read the admin-gated auth plane over HTTP. See [details](#admin-auth-hooks).
+
+#### `useAuthUsers`
+
+**Type:** `(options?: UseAuthUsersOptions) => AdminAuthListResult<AuthUser>`
+
+Lists auth users with search, filter and sort options, one page at a time. Call `loadMore()` to grow the window or `refetch()` after a mutation.
+
+#### `useAuthSessions`
+
+**Type:** `(options?: UseAuthSessionsOptions) => AdminAuthListResult<AuthSession>`
+
+Lists auth sessions. Pass `userId` to scope the list to one user.
+
+#### `useOrganizations`
+
+**Type:** `(options?: UseOrganizationsOptions) => AdminAuthListResult<Record<string, unknown>>`
+
+Lists the auth organizations on the admin plane. It accepts the shared `enabled` and `pageSize` options.
+
+#### `useSignUpInvitations`
+
+**Type:** `(options?: UseSignUpInvitationsOptions) => AdminAuthListResult<Record<string, unknown>>`
+
+Lists sign-up invitations on the admin plane. It accepts the shared `enabled` and `pageSize` options.
+
+#### `useImpersonate`
+
+**Type:** `() => UseImpersonateResult`
+
+Returns `{ data, error, pending, impersonate, reset }`. `impersonate(userId)` mints an impersonation session through `client.impersonateAuthUser` and returns its token. It never calls `client.setAuthToken`, so the admin's own session stays active, and it invalidates no list.
+
+### Agents
+
+#### `useAgent`
+
+**Type:** `(options: UseAgentOptions) => UseAgentResult`
+
+Starts agent turns on one thread with `run` and returns the thread's `status`, `thread` record, `pending` state and `cancel`.
+
+#### `useAgentChat`
+
+**Type:** `(options: UseAgentChatOptions) => UseAgentChatResult`
+
+Renders one thread's transcript. It returns `messages`, `streamingText`, `send`, and the approval actions `approve`, `reject` and `supplySecret`.
+
+#### `useAgentState`
+
+**Type:** `<T extends Record<string, unknown> = Record<string, unknown>>(options: UseAgentStateOptions) => UseAgentStateResult<T>`
+
+Subscribes to one thread's live synced state. It returns `{ state, error }`, with `state` typed by the generic `T`.
+
+#### `useAgentApprovals`
+
+**Type:** `(options: UseAgentApprovalsOptions) => UseAgentApprovalsResult`
+
+Lists the caller's pending human-in-the-loop approvals. Each entry carries what `agentResolveApproval` needs to approve or reject it.
+
+#### `useAgentToolEvents`
+
+**Type:** `(options: UseAgentToolEventsOptions) => UseAgentToolEventsResult`
+
+Returns one thread's tool timeline as `{ events }`, with durable `call`, `result`, `awaiting-approval` and `awaiting-secret` events followed by live `progress` events. See [details](#agent-tool-events--useagenttooleventsoptions).
+
+#### `useVoiceAgent`
+
+**Type:** `(options: UseVoiceAgentOptions) => UseVoiceAgentResult`
+
+Opens a full-duplex voice call against a voice-enabled agent on the same thread as its text turns. `startCall` must run from a user gesture. See [details](#voice-agents--usevoiceagentoptions).
+
+### Flags
+
+#### `useFlag`
+
+**Type:** `<T extends FlagValue>(key: string, defaultValue: T) => T`
+
+Subscribes to one feature flag and returns its live value. It returns `defaultValue` until the first evaluation arrives, and the flag's kind comes from the type of `defaultValue`.
+
+### Payments
+
+These components come from `@lunora/react/payment`.
+
+#### `useCheckout`
+
+**Type:** `(trigger: RedirectTrigger) => UseCheckoutResult`
+
+Runs a redirect trigger and returns `{ checkout, pending, error }`. The trigger resolves to a `RedirectTarget` whose `url` the hook redirects the browser to. It refuses a URL that is not http or https.
+
+#### `CheckoutButton`
+
+**Type:** `({ onCheckout, ...rest }: CheckoutButtonProps) => ReactNode`
+
+Button that runs `onCheckout` on click and then redirects to the URL it returns.
+
+#### `CustomerPortalButton`
+
+**Type:** `({ onPortal, ...rest }: CustomerPortalButtonProps) => ReactNode`
+
+Button that runs `onPortal` on click and then redirects to the billing portal URL it returns.
+
+### Server
+
+These functions come from `@lunora/react/server`. See [the server reference](#lunorareactserver-reference).
+
+#### `fetchQuery`
+
+**Type:** `<F extends FunctionReference>(options: ServerClientOptions, function_: F, args: ArgsOf<F>, callOptions?: ServerCallOptions) => Promise<ReturnOf<F>>`
+
+Runs a query once on the server and returns its result. Errors propagate.
+
+#### `fetchMutation`
+
+**Type:** `<F extends FunctionReference>(options: ServerClientOptions, function_: F, args: ArgsOf<F>, callOptions?: ServerCallOptions) => Promise<ReturnOf<F>>`
+
+Runs a mutation once on the server over HTTP and returns its result. The offline queue and optimistic updates do not apply.
+
+#### `fetchAction`
+
+**Type:** `<F extends FunctionReference>(options: ServerClientOptions, function_: F, args: ArgsOf<F>, callOptions?: ServerCallOptions) => Promise<ReturnOf<F>>`
+
+Runs an action once on the server and returns its result. Errors propagate.
+
+#### `prefetchQuery`
+
+**Type:** `<F extends FunctionReference>(queryClient: QueryClient, client: LunoraClient, function_: F, args: ArgsOf<F>, options?: { shardKey?: string }) => Promise<void>`
+
+Runs a query and seeds `queryClient` under the key the client hooks read. Pair it with `dehydrate` and `HydrationBoundary`.
+
+#### `preloadQuery`
+
+**Type:** `<F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: { shardKey?: string }) => Promise<Preloaded<ReturnOf<F>>>`
+
+Runs a query and returns a serializable `Preloaded` token. Pass the token to `usePreloadedQuery`.
+
+#### `usePreloadedQuery`
+
+**Type:** `<T>(preloaded: Preloaded<T>, options?: { onError?: SubscriptionErrorCallback }) => T | undefined`
+
+Reads a `Preloaded` token from a server component and then the live value. The result is `undefined` after a sign-out or user switch. See [details](#2-preload-an-explicit-token).
+
+#### `hydratePreloaded`
+
+**Type:** `<T>(preloaded: Preloaded<T>, options?: { onError?: SubscriptionErrorCallback }) => T | undefined`
+
+An alias of `usePreloadedQuery` under the name every adapter shares. It is a hook: call it from a component body, following the Rules of Hooks.
+
+### Errors
+
+Use these guards to branch on the error code of a failed call. Each returns `true` only when the error carries the matching code.
+
+#### `isUnauthorizedError`
+
+**Type:** `(error: unknown) => error is Error & { code: "UNAUTHORIZED" }`
+
+Narrows an unknown error to one with the `UNAUTHORIZED` code.
+
+#### `isForbiddenError`
+
+**Type:** `(error: unknown) => error is Error & { code: "FORBIDDEN" }`
+
+Narrows an unknown error to one with the `FORBIDDEN` code.
+
+#### `isConflictError`
+
+**Type:** `(error: unknown) => error is Error & { code: "CONFLICT" }`
+
+Narrows an unknown error to one with the `CONFLICT` code, which the server returns on a write conflict.
+
+#### `isRateLimitedError`
+
+**Type:** `(error: unknown) => error is Error & { code: "TOO_MANY_REQUESTS" }`
+
+Narrows an unknown error to one with the `TOO_MANY_REQUESTS` code.
+
+#### `getErrorCode`
+
+**Type:** `(error: unknown) => LunoraErrorCode | undefined`
+
+Returns the Lunora error code on an error. It returns `undefined` for a non-error, a missing code, or a code outside the known `LunoraErrorCode` set.
+
+#### `getRetryAfterMs`
+
+**Type:** `(error: unknown) => number | undefined`
+
+Returns the retry delay in milliseconds from `data.retryAfterMs` on a rate-limited error, or `undefined` when it is absent or not a finite number.

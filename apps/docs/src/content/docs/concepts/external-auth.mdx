@@ -10,9 +10,9 @@ queries then work exactly as they do with `@lunora/auth`.
 
 [`@lunora/jwt-auth`](/docs/packages/jwt-auth) does the verification. It has
 presets for Clerk, WorkOS, Auth0 and Supabase, and `jwtIdentityResolver` covers
-any other OIDC or JWT issuer.
+any other OpenID Connect (OIDC) or JWT issuer.
 
-## External provider or `@lunora/auth`?
+## External provider or `@lunora/auth`
 
 | Use                                   | When                                                                                                                                         |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -56,7 +56,7 @@ What every resolver from this package does:
   falls back to the `__session` cookie Clerk sets for same-origin requests.
   Override with `token: (request) => …`, or compose
   `firstToken(bearerToken, cookieToken("name"))`.
-- **Verifies it** against the provider's JWKS: signature, `iss`, `aud` when the
+- **Verifies it** against the provider's JSON Web Key Set (JWKS): signature, `iss`, `aud` when the
   provider issues one, `exp` (required) and `nbf`, and that `iat` is at most
   a minute in the future. Algorithms are pinned per provider, so `alg: none` and HMAC
   forgeries never verify. `clockTolerance` allows that much skew, and the

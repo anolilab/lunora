@@ -28,7 +28,7 @@ Router over the History API), so deep links and back/forward work.
 
 ## Running the studio
 
-Three ways, smallest setup first:
+The studio mounts in three ways, starting with the smallest setup:
 
 1. **`lunora dev` (zero config).** The [`@lunora/vite`](/docs/packages/vite) plugin
    serves the studio at **`/__lunora`** during dev and prints the URL on startup.
@@ -39,12 +39,16 @@ Three ways, smallest setup first:
 3. **Embed.** Mount the whole console, or compose individual panels
    under your own `<LunoraProvider>`.
 
+The following call mounts the whole console into the `#root` element:
+
 ```ts
 // mount the whole console into <div id="root">
 import { mountStudio } from "@lunora/studio/mount";
 
 mountStudio({ baseUrl: "https://my-app.workers.dev" });
 ```
+
+To embed the shell or a single panel in your own React app, import the components and render them:
 
 ```tsx
 // or embed the shell / a single panel in your own React app
@@ -59,7 +63,7 @@ The `<Studio>` shell takes a few host-controlled switches worth knowing:
 - `dataEditable`: allow row insert/edit/delete (off by default; the console is
   read-only until the host opts in).
 - `runAsIdentity`: let the function runner execute **as** a chosen authenticated
-  identity, to test auth + RLS. Security-sensitive (it forges identity on an
+  identity, to test auth and row-level security (RLS). Security-sensitive (it forges identity on an
   admin RPC). Only ever enable on a trusted loopback-dev gate, never in
   production.
 - `advisorProcedures`: the host serves `/__lunora/advisor-procedures`, the
@@ -146,8 +150,8 @@ Everything that reads or shapes stored state.
 - **Migrations**: _Review migration status and run them._ Inspect
   data-migration run-state and kick one off.
 - **Vectors**: _Browse Vectorize indexes and run similarity searches._
-- **Time Travel**: _Restore a shard to a point in the last 30 days_ (PITR).
-- **Export / Import**: _Export a shard to NDJSON, or import NDJSON rows, or a CSV file into a table you pick. Rows whose `_id` already exists are left unchanged and counted as conflicts unless you tick "Overwrite"._
+- **Time Travel**: _Restore a shard to a point in the last 30 days_ (point-in-time recovery, PITR).
+- **Export / Import**: _Export a shard to NDJSON, or import NDJSON rows, or a CSV file into a table you pick._ The import mode decides what happens to a row whose `_id` already exists. Append leaves it unchanged and counts it as a conflict. Upsert overwrites it. Replace overwrites it and also deletes the shard's rows in the file's tables that the file lacks. Require empty refuses the import unless the file's tables hold no rows in this shard.
 
 ## Functions
 
@@ -281,6 +285,8 @@ orchestrators mint into their forwarded calls for an Access-only request.
 
 The components issue no credentials of their own. Configure the client's auth
 token at the host.
+
+The following worker entry passes a single admin token, so both planes are gated by it:
 
 ```ts
 // worker entry — token-only, so both planes are gated by adminToken

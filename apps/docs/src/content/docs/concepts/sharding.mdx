@@ -7,15 +7,15 @@ related:
 ---
 
 Lunora scales out, but starts on a single shard. New apps get one Durable
-Object, addressable as `__root__`, that holds every table without an explicit
+Object (DO), addressable as `__root__`, that holds every table without an explicit
 tier modifier. This is the Zeroback shape, and the right answer for the first
 80% of an app's life.
 
 ## When to shard
 
-The per-DO ceiling is **10 GB of SQLite** and roughly 1 000 sustained req/s.
+The per-DO ceiling is **10 GB of SQLite** on Workers Paid (1 GB on the Free plan) and roughly 1 000 sustained req/s.
 When the `__root__` DO crosses 1 GB, the runtime emits a `console.warn` once
-per DO lifetime so you can plan the migration before you hit the wall. The
+per isolate so you can plan the migration before you hit the wall. The
 threshold (`1 073 741 824` bytes) is 10% of the per-DO ceiling, far enough
 below it that a `.shardBy()` migration has runway to land.
 
@@ -134,7 +134,7 @@ strongly consistent, with no routing overhead.
 ## Going global
 
 For cross-tenant data (identities, billing, account-wide audit logs) use
-`.global()`. The table lives in **Cloudflare D1** instead of a DO. Writes go
+`.global()`. The table lives in **Cloudflare D1** by default instead of a DO, or in Postgres or MySQL behind Hyperdrive with `.global({ backend: "hyperdrive" })`. Writes go
 through the primary, and a read by default may be served from any regional
 replica. A request that carries the `x-d1-bookmark` header from an earlier
 response reads at least that far, which gives read-your-writes for a client's
@@ -347,7 +347,7 @@ default shard without a special case because it never looks at the key.
 
 The alternative is `allowUnauthenticatedShardAccess: true`, which opts into
 open shard/fan-out access. Only reach for it when **every** table is protected
-by per-row [RLS](/docs/concepts/rls). The DO address is then no longer a
+by per-row [row-level security (RLS)](/docs/concepts/rls). The DO address is then no longer a
 security boundary; each row authorizes itself. The runtime logs a one-time
 security warning while it is on and no `authorizeShard`/`authorizeFanOut` is
 configured.

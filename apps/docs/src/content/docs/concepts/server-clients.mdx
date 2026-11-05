@@ -57,7 +57,7 @@ same primitives back every framework adapter's loaders.
 
 ## From a script
 
-The same client works in any JavaScript runtime with `fetch`: Node 18+, Bun, or
+The same client works in any JavaScript runtime with `fetch`: Node `^22.15.0 || >=24.11.0` (the `engines` range), Bun, or
 another Worker. Construct it, call `query` / `mutation` / `action`, and skip the
 subscription API entirely:
 

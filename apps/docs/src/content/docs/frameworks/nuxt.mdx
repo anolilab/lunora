@@ -21,13 +21,14 @@ app in-process. One `wrangler.jsonc`, one deploy, a same-origin client.
 Nuxt _is_ Vue, so the reactive layer is [`@lunora/vue`](/docs/frameworks/vue)
 (`useQuery`, `useMutation`, `hydratePreloaded`); `@lunora/nuxt` owns only the
 server-side composition. This is the Nuxt-specific companion to
-[Bring your framework](/docs/frameworks/bring-your-framework) (Nuxt is a
-**class-B** framework there) and
+[Bring your framework](/docs/frameworks/bring-your-framework) (Nuxt is not class B
+there, because Nitro does not expose its handler as an importable module) and
 [Reactive loaders](/docs/frameworks/reactive-loaders); for the full reference
 see [`@lunora/nuxt`](/docs/packages/nuxt).
 
 <Callout type="warn">
-    **Preview.** Class-B single-worker composition is preview maturity; run the [verify before deploy](#verify-before-deploy) checks below before shipping.
+    **Preview.** Single-worker composition through this module is preview maturity; run the [verify before deploy](#verify-before-deploy) checks below before
+    shipping.
 </Callout>
 
 ## Install
@@ -225,8 +226,9 @@ topology choice, not a way to reach an unsupported preset:
   `lunora/server.ts`) owns `/_lunora/*` + `ShardDO`. Keep the Lunora worker on
   the root `wrangler.jsonc` — that is the file `lunora verify|deploy|dev` read,
   and they require the `SHARD` binding.
-- `runtimeConfig.public.lunoraUrl` (`NUXT_PUBLIC_LUNORA_URL`) tells the SSR
-  loader and the browser client where to reach the Lunora worker.
+- `runtimeConfig.public.lunoraUrl` (`NUXT_PUBLIC_LUNORA_URL`) is an app-level
+  convention, not a key `@lunora/nuxt` reads: pass its value as the `url` of the SSR
+  loader and the browser client so both reach the Lunora worker.
 
 This trades the same-origin convenience of the mounted route for two
 independently deployed workers.

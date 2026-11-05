@@ -25,7 +25,7 @@ several; combine them with `combineSinks`.
 | Sink                            | Ships to                                                        |
 | ------------------------------- | --------------------------------------------------------------- |
 | `consoleSink()`                 | `console` (local dev)                                           |
-| `otlpSink({ endpoint })`        | any OTLP-over-HTTP collector                                    |
+| `otlpSink({ endpoint })`        | any OpenTelemetry Protocol (OTLP) collector over HTTP           |
 | `webhookSink({ url })`          | an arbitrary HTTP endpoint (your own JSON shape)                |
 | `analyticsEngineSink({ … })`    | a Cloudflare Analytics Engine dataset                           |
 | `pipelineLogSink({ pipeline })` | a Cloudflare Pipeline → R2 (durable log store, read via R2 SQL) |
@@ -155,6 +155,8 @@ Checklist for a new vendor:
 
 ### `otlpSink`
 
+`otlpSink` takes the following options. Only `endpoint` is required:
+
 ```ts
 otlpSink({
     endpoint: env.LUNORA_OTLP_ENDPOINT, // required — the collector base URL
@@ -173,7 +175,7 @@ registered with `waitUntil` so it outlives the response.
 signal per flush** — whichever of 512 buffered events, a 200 ms window, or the
 invocation boundary comes first. A Worker is capped at 50 (free) / 1000 (paid)
 subrequests per invocation, so a per-event POST is a correctness problem, not
-just an efficiency one. Pass `batch: false` to restore one POST per event, or
+only an efficiency one. Pass `batch: false` to restore one POST per event, or
 `batch: { maxItems, maxDelayMs }` to retune the window.
 
 #### Resource attributes
@@ -424,7 +426,7 @@ don't require. Passing the parent is correct in every case, and visible where it
 happens.
 
 Calling `ctx.trace` inside a body instead of the passed tracer isn't an error;
-that span is just parented to the request rather than the enclosing span.
+that span is parented to the request rather than the enclosing span.
 :::
 
 A span created inside a function invoked via `ctx.runQuery` / `runMutation` /
@@ -587,7 +589,7 @@ The Ray ID is **informational only**. It is never used for authorization or
 routing, it is not echoed onto client-visible responses, and a malformed value
 is dropped rather than logged. It is a Cloudflare-only signal: `wrangler dev`
 (Miniflare) does not set `cf-ray`, and neither does any other host, so locally
-every event simply has no `rayId`. Dispatches that no HTTP request started, such
+every event has no `rayId`. Dispatches that no HTTP request started, such
 as alarms, cron jobs and subscription re-runs, have none either.
 
 The same holds for work dispatched over a WebSocket: a subscription's first
@@ -710,7 +712,7 @@ dispatch answers with a 5xx, whether or not the handler recorded any
 telemetry, and whenever a trigger such as an alarm throws. An RPC that answers
 with a 4xx, such as a validation, auth or not-found error, leaves it unset.
 Both methods are feature-detected, so on a runtime without them the span
-simply carries the error attributes.
+carries the error attributes.
 
 If you run your own Drizzle instance against Hyperdrive **outside** `ctx.sql`,
 Lunora does not see those queries.
@@ -966,7 +968,7 @@ A module-scope instance is right for a one-shot job started with
 `LUNORA_TRACEPARENT`, where the whole process is one unit of work.
 
 With no endpoint resolvable the exporter is a **silent no-op** (`telemetry.enabled
-=== false`): `trace` still runs your work, it just records nothing. The same code
+=== false`): `trace` still runs your work but records nothing. The same code
 runs unchanged locally and in the cloud.
 
 Each POST is bounded by `timeoutMs` (default 10s), so a hung collector aborts

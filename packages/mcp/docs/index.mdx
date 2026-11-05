@@ -80,7 +80,7 @@ Configuration comes from the environment, so the spawn config stays a plain
 - `LUNORA_MCP_ALLOW_WRITES` (optional): set to `1`/`true`/`yes`/`on` to expose
   the mutation/action run tools. Default: **read-only** (writes disabled).
 - `LUNORA_MCP_ALLOW_OBSERVABILITY` (optional): set to `1`/`true`/`yes`/`on` to
-  expose the five `lunora_get_*` observability tools. Default: **disabled**.
+  expose the six `lunora_get_*` observability tools. Default: **disabled**.
   They are read-only, but what they return — production log lines, request
   metadata, grouped error messages — is user data that lands in the model's
   context and therefore at its provider, so holding the admin bearer (which
@@ -120,8 +120,8 @@ Configuration comes from the environment, so the spawn config stays a plain
 Each tool maps onto a method `LunoraClient` already provides.
 `toolDefinitions(allowWrites, allowObservability, allowDataReads)` returns the
 advertised tool surface for a given set of gates (the tiers are also exported on
-their own as `READ_ONLY_TOOL_DEFINITIONS`, `OBSERVABILITY_TOOL_DEFINITIONS`,
-`ROW_READ_TOOL_DEFINITIONS` and `WRITE_TOOL_DEFINITIONS`); `callTool` dispatches
+their own as `READ_ONLY_TOOL_DEFINITIONS`, `OBSERVABILITY_TOOL_DEFINITIONS` and
+`WRITE_TOOL_DEFINITIONS`); `callTool` dispatches
 a call against a client.
 
 | Tool                          | Input                                                                                  | What it does                                                                                                                                                                                          |
@@ -140,12 +140,13 @@ a call against a client.
 | `lunora_get_advisories`       | `limit?`, `shardKey?`                                                                  | Advisor findings for the running deployment. **Requires observability enabled.**                                                                                                                      |
 | `lunora_get_query_insights`   | `limit?`, `range?`, `shardKey?`                                                        | Slow/frequent query insights over a recent window. **Requires observability enabled.**                                                                                                                |
 | `lunora_get_migration_status` | `shardKey?`                                                                            | Applied and pending migrations for a shard. **Requires observability enabled.**                                                                                                                       |
+| `lunora_get_schedule_outbox`  | `limit?`, `cursor?`, `shardKey?`                                                       | Deferred `ctx.scheduler` jobs that the scheduler has not accepted yet, to find out why a scheduled job never ran. **Requires observability enabled.**                                                 |
 | `lunora_find_related`         | `table`, `id`, `depth?`, `direction?`, `edges?`, `limit?`, `cursor?`, `shardKey?`      | Follows the schema's foreign keys out of one row and returns what it is connected to. Reads through the ADMIN writer, so RLS policies and column masks do NOT apply. **Requires data reads enabled.** |
 
 <Callout type="warn">
     The default surface is **read-only and non-privileged**: only the introspection tools, `lunora_run_query` and `lunora_explain_error` are exposed. Three
     separate gates hold the rest back, and each of them both hides the tools from the advertised list *and* refuses them at dispatch. `lunora_run_mutation` and
-    `lunora_run_action` need `LUNORA_MCP_ALLOW_WRITES` (or `allowWrites: true`). The five `lunora_get_*` tools need `LUNORA_MCP_ALLOW_OBSERVABILITY` (or
+    `lunora_run_action` need `LUNORA_MCP_ALLOW_WRITES` (or `allowWrites: true`). The six `lunora_get_*` tools need `LUNORA_MCP_ALLOW_OBSERVABILITY` (or
     `allowObservability: true`) — they are read-only, but they return production log lines, request metadata and grouped error messages, all of which land in
     the model's context and therefore at its provider. `lunora_find_related` has its own gate, `LUNORA_MCP_ALLOW_DATA_READS` (or `allowDataReads: true`),
     deliberately NOT folded into the observability one: it returns raw table rows read through the deployment's admin writer with RLS policies and column masks
@@ -580,6 +581,59 @@ connection to the address it resolved.
     same transport without asking it. Add `jwks_uri` to `originBoundFields`, as above, so the key fetch stays on the allowlisted origin. Metadata is cached per
     isolate, so each new isolate fetches a client's document again on its first authorization.
 </Callout>
+
+## API
+
+The entries below cover the exports this page does not already describe. The full
+list is in `api-snapshots/mcp.api.md`.
+
+### `callTool(client, name, input, allowWrites?, allowObservability?, allowDataReads?)`
+
+**Type:** `(client: LunoraAdminClient, name: string, input: Record<string, unknown>, allowWrites?: boolean, allowObservability?: boolean, allowDataReads?: boolean) => Promise<ToolResult>`
+
+Dispatches one tool call against a `LunoraAdminClient`. A call to a gated tool is
+refused unless its gate is set.
+
+### `createToolServer(info, tools, resources?)`
+
+**Type:** `(info: McpServerInfo, tools: ReadonlyArray<McpTool>, resources?: McpResourceProvider) => Promise<Server>`
+
+Builds an MCP `Server` from a list of tools and an optional resource provider.
+`createLocalMcpServer` and `createDocsMcpServer` use it.
+
+### `createMcpFetchHandler(options)`
+
+**Type:** `(options: McpFetchHandlerOptions) => McpFetchHandler`
+
+Creates a fetch handler for the deployment server. Each request gets a new,
+stateless MCP server.
+
+### `serveStateless(server, request, options?)`
+
+**Type:** `(server: Server, request: Request, options?: ServeStatelessOptions) => Promise<Response>`
+
+Serves one HTTP request with a stateless MCP server. The request body is capped at
+128 KiB (`DEFAULT_MAX_REQUEST_BYTES`) unless `maxRequestBytes` is set.
+
+### `mcpTokenScopes(claims)`
+
+**Type:** `(claims: McpAccessTokenClaims) => ReadonlySet<string>`
+
+Returns the scopes that an OAuth access token carries. The examples use it to check
+for `lunora:write` before they set `allowWrites`.
+
+### `createPaidMcpServer(config)`
+
+**Type:** `(config: PaidMcpServerConfig) => PaidMcpServer`
+
+Creates an MCP server whose tools can charge a price per call through x402.
+
+### `parseAgentsEnv(raw)`
+
+**Type:** `(raw: string | undefined) => McpAgentExposure[]`
+
+Parses the `LUNORA_MCP_AGENTS` value, a `;`-separated list of `name:description`
+pairs, into the agents to expose.
 
 ## Connecting an MCP client
 

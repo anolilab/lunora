@@ -32,7 +32,7 @@ The proxy is same-origin on purpose: the browser talks to the dev server's own
 origin, so `LunoraClient` needs no CORS and the auth cookie stays first-party. It
 carries the WebSocket (`ws: true`), which is what live queries ride — the single
 most expensive thing to get wrong by hand, because without it RPC answers
-normally and subscriptions simply never arrive.
+normally and subscriptions never arrive.
 
 Two starters ship this setup: `lunora init -t rspack-react` (a React SPA the
 Worker serves as static assets) and `lunora init -t tanstack-start-react-rspack`
@@ -66,14 +66,14 @@ peers — the plugin speaks their APIs structurally and never imports them.
 Not in-process. `@cloudflare/vite-plugin` runs the Worker _inside_ the dev server
 using Vite's Environment API: a module runner in workerd pulls each module over
 RPC from Vite. Rspack has no equivalent runner protocol, and the alternative —
-bundling the Worker ourselves and handing it to Miniflare — would mean
+bundling the Worker in the plugin and handing it to Miniflare — would mean
 reimplementing wrangler's `nodejs_compat`, Durable Object migrations, binding
 wiring and local persistence, all of which `wrangler dev` already does correctly.
 
 So the plugin spawns `wrangler dev` and proxies to it. From your seat that is the
 same DX. What differs is that the Worker **restarts** on change rather than
 hot-swapping modules, and a few Vite-plugin features have no counterpart: the
-the browser error overlay, remote-binding dev (`LUNORA_REMOTE`), and class-A
+browser error overlay, remote-binding dev (`LUNORA_REMOTE`), and class-A
 framework worker composition. Use `@lunora/vite` if you need those.
 
 Pass `worker: false` to run the Worker yourself — the proxy is still injected, so

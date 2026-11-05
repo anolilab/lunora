@@ -54,7 +54,7 @@ export default defineSchema({
 
 - _(default)_: table lives in the root `__root__` Durable Object
 - `.shardBy(field)`: one Durable Object per distinct value of `field`
-- `.global()`: table is stored in Cloudflare D1 (cross-tenant reads)
+- `.global()`: table is stored in one replicated backend read from the edge, Cloudflare D1 by default (cross-tenant reads). Pass `.global({ backend: "hyperdrive" })` to store it in a Postgres or MySQL database through Hyperdrive instead.
 
 ## Indexes
 
