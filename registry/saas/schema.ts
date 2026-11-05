@@ -130,9 +130,9 @@ export const saas = definePlugin("saas", {
                 // with and without its plan filter, so a page is an index range
                 // rather than a sort of every tenant.
                 .index("byOrganization", ["organizationId"], { unique: true })
-                .index("byPlanUpdated", ["plan", "updatedAt", "organizationId"])
+                .index("byPlanUpdated", ["plan", "updatedAt"])
                 .index("bySlug", ["slug"], { unique: true })
-                .index("byUpdatedAt", ["updatedAt", "organizationId"])
+                .index("byUpdatedAt", ["updatedAt"])
                 // The list header's totals (`saas.organizationTotals`): a count and a
                 // seat sum per status and plan, kept in step on every write.
                 .aggregateIndex("countByStatusPlan", { by: ["status", "plan"] })
