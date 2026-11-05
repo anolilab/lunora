@@ -16,21 +16,22 @@ const queueNamesIn = (queues: unknown): Set<string> => {
 };
 
 /**
- * The account a scope deploys to: `CLOUDFLARE_ACCOUNT_ID` when set (wrangler lets it override every `account_id`),
- * else its own `account_id`, else the top level's (wrangler inherits it), else unknown.
+ * The account a scope deploys to, as wrangler's `getActiveAccountId` picks it: its own `account_id`, else the top
+ * level's (wrangler inherits it), else `CLOUDFLARE_ACCOUNT_ID`, else unknown. The variable fills in only where the
+ * config names no account; it never overrides one.
  */
-const accountOf = (block: unknown, topLevel: WranglerConfig, override: string | undefined): string | undefined => {
-    if (isNonEmptyString(override)) {
-        return override;
-    }
-
+const accountOf = (block: unknown, topLevel: WranglerConfig, fromEnvironment: string | undefined): string | undefined => {
     const own = isPlainObject(block) ? block.account_id : undefined;
 
     if (isNonEmptyString(own)) {
         return own;
     }
 
-    return isNonEmptyString(topLevel.account_id) ? topLevel.account_id : undefined;
+    if (isNonEmptyString(topLevel.account_id)) {
+        return topLevel.account_id;
+    }
+
+    return isNonEmptyString(fromEnvironment) ? fromEnvironment : undefined;
 };
 
 /**
@@ -40,10 +41,9 @@ const accountOf = (block: unknown, topLevel: WranglerConfig, override: string | 
  * Queue names are unique per Cloudflare account, so two environments deployed
  * to one account that name the same queue share it: staging's producers write
  * into production's queue and the two Workers contend for its one consumer.
- * Two scopes whose `account_id`s are both known and differ cannot share a
- * queue, so they are not compared, unless `CLOUDFLARE_ACCOUNT_ID` deploys them
- * all to one account; an unknown account (set by the login) may be the same
- * one, so it is.
+ * Two scopes whose accounts are both known and differ cannot share a queue, so
+ * they are not compared; `CLOUDFLARE_ACCOUNT_ID` is the account of a scope that
+ * names none. An unknown account (set by the login) may be the same one, so it is.
  * Lunora never writes queue names into an environment block (see
  * `reconcileEnvQueues`), so the names are the user's, and renaming one here
  * would strand the backlog on the old queue — hence a warning, not a rewrite.
@@ -55,7 +55,7 @@ const validateEnvironmentQueueNames = (
     wrangler: WranglerConfig,
     environment: string | undefined,
     warnings: string[],
-    accountOverride: string | undefined = process.env["CLOUDFLARE_ACCOUNT_ID"],
+    accountFromEnvironment: string | undefined = process.env["CLOUDFLARE_ACCOUNT_ID"],
 ): void => {
     if (environment === undefined || !isPlainObject(wrangler.env)) {
         return;
@@ -68,14 +68,14 @@ const validateEnvironmentQueueNames = (
         return;
     }
 
-    const account = accountOf(block, wrangler, accountOverride);
+    const account = accountOf(block, wrangler, accountFromEnvironment);
     const scopes = [
-        { account: accountOf(undefined, wrangler, accountOverride), names: queueNamesIn(wrangler.queues), scope: "the top level" },
+        { account: accountOf(undefined, wrangler, accountFromEnvironment), names: queueNamesIn(wrangler.queues), scope: "the top level" },
         ...Object.entries(wrangler.env)
             .filter(([name]) => name !== environment)
             .map(([name, other]) => {
                 return {
-                    account: accountOf(other, wrangler, accountOverride),
+                    account: accountOf(other, wrangler, accountFromEnvironment),
                     names: queueNamesIn(isPlainObject(other) ? other.queues : undefined),
                     scope: `env.${name}`,
                 };

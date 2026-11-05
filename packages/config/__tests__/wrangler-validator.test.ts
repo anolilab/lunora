@@ -883,16 +883,13 @@ describe("wrangler-validator", () => {
                 ]);
             });
 
-            it("compares every environment when CLOUDFLARE_ACCOUNT_ID deploys them all to one account", () => {
-                expect.assertions(1);
-
-                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account-shared");
+            it("reads CLOUDFLARE_ACCOUNT_ID only for a scope that names no account, as wrangler does", () => {
+                expect.assertions(3);
 
                 const wrangler = topLevel();
 
-                wrangler.account_id = "account-production";
                 wrangler.env = {
-                    preview: { queues: { producers: [{ binding: "EMAILS", queue: "emails" }] } },
+                    preview: { account_id: "account-preview", queues: { producers: [{ binding: "EMAILS", queue: "emails" }] } },
                     staging: {
                         account_id: "account-staging",
                         durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
@@ -900,8 +897,23 @@ describe("wrangler-validator", () => {
                     },
                 };
 
+                // The top level names no account, so the variable is its account: the same as staging's.
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account-staging");
+
                 expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([
-                    expect.stringContaining(`"emails", which the top level and env.preview also name`),
+                    expect.stringContaining(`"emails", which the top level also names`),
+                ]);
+
+                // Another account for the top level; env.preview's own account_id is never overridden.
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account-production");
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([]);
+
+                // Unset, the top level's account is unknown and may be staging's.
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([
+                    expect.stringContaining(`"emails", which the top level also names`),
                 ]);
             });
 
