@@ -279,19 +279,21 @@ const send = async (request: ProbeRequest, fetchImpl: HealthFetch, state: Access
  * answers 200 would read as a healthy deployment. The token is first sent on
  * that `https:` hop, to the host the probe was pointed at.
  */
-const ask = async (url: string, fetchImpl: HealthFetch, state: AccessState): Promise<Answer> => {
+const ask = async (url: string, fetchFor: () => HealthFetch, state: AccessState): Promise<Answer> => {
+    // One fetch per URL, so the https hop runs against the same deadline as the request it follows.
+    const fetchImpl = fetchFor();
     const first = await send({ url }, fetchImpl, state);
 
     return first.outcome?.kind === "https-upgrade" ? send({ from: url, url: first.outcome.location }, fetchImpl, state) : first;
 };
 
 /** Try each path once, in order. A 404 falls through to the next path; anything else is the verdict. */
-const probeOnce = async (baseUrl: string, paths: ReadonlyArray<string>, fetchImpl: HealthFetch, state: AccessState): Promise<HealthProbeResult> => {
+const probeOnce = async (baseUrl: string, paths: ReadonlyArray<string>, fetchFor: () => HealthFetch, state: AccessState): Promise<HealthProbeResult> => {
     let last: HealthProbeResult = { error: `health probe failed: no health path configured for ${baseUrl}`, url: baseUrl };
 
     for (const [index, path] of paths.entries()) {
         // eslint-disable-next-line no-await-in-loop -- sequential fallback: the next path is only tried when this one 404s
-        const { error, outcome, url } = await ask(joinHealthUrl(baseUrl, path), fetchImpl, state);
+        const { error, outcome, url } = await ask(joinHealthUrl(baseUrl, path), fetchFor, state);
 
         last = error === undefined ? { url } : { error, url };
 
@@ -340,16 +342,25 @@ const probeHealth = async ({
     // connection and then goes quiet would hang the probe — and with it
     // `deploy --health-check` — until CI's job timeout killed it. That defeats
     // the whole point of a fixed attempt budget, so bound every attempt. An
-    // abort surfaces as a transport error, which `ask` already reds.
-    const doFetch: HealthFetch = fetchImpl ?? (async (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) }));
+    // abort surfaces as a transport error, which `ask` already reds. The deadline is made per URL asked, and shared by
+    // the https hop it may follow, so one ask never runs past `timeoutMs`.
+    const fetchFor = (): HealthFetch => {
+        if (fetchImpl !== undefined) {
+            return fetchImpl;
+        }
+
+        const signal = AbortSignal.timeout(timeoutMs);
+
+        return async (url, init) => fetch(url, { ...init, signal });
+    };
     const budget = Math.max(1, attempts);
-    let result = await probeOnce(baseUrl, paths, doFetch, state);
+    let result = await probeOnce(baseUrl, paths, fetchFor, state);
 
     for (let attempt = 1; attempt < budget && result.error !== undefined; attempt += 1) {
         // eslint-disable-next-line no-await-in-loop -- a retry is sequential by definition
         await sleep(delayMs);
         // eslint-disable-next-line no-await-in-loop -- same
-        result = await probeOnce(baseUrl, paths, doFetch, state);
+        result = await probeOnce(baseUrl, paths, fetchFor, state);
     }
 
     return result;

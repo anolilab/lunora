@@ -123,6 +123,28 @@ describe("probeHealth", () => {
         }
     });
 
+    it("runs the https hop against the deadline of the request it follows, not a fresh one", async () => {
+        expect.assertions(2);
+
+        const globalFetch = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async (input) =>
+                new Request(input).url.startsWith("http:")
+                    ? new Response(null, { headers: { location: "https://app.example.com/_lunora/health" }, status: 301 })
+                    : new Response("ok"),
+            );
+
+        try {
+            const result = await probeHealth({ baseUrl: "http://app.example.com", sleep: noSleep });
+            const [first, hop] = globalFetch.mock.calls.map(([, init]) => init?.signal);
+
+            expect(result.error).toBeUndefined();
+            expect(hop).toBe(first);
+        } finally {
+            globalFetch.mockRestore();
+        }
+    });
+
     describe("cloudflare Access", () => {
         const accessEnv = { CF_ACCESS_CLIENT_ID: "id.access", CF_ACCESS_CLIENT_SECRET: "secret" };
         const loginRedirect = {
