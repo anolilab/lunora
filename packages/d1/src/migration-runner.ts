@@ -86,8 +86,14 @@ const CREATE_TRIGGER_RE = new RegExp(String.raw`^CREATE${TRIVIA_SOURCE}+(?:TEMP$
 /** Lowercase hex SHA-256 shape guard before inlining the hash into SQL. Hoisted to avoid per-call recompilation. */
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/u;
 
-/** An unquoted SQLite identifier: `$`, ASCII word characters, and every character above U+007F, which SQLite also accepts. */
-const BARE_NAME = String.raw`[$\w\u{80}-\u{10FFFF}]+`;
+/** A character of an unquoted SQLite identifier: `$`, an ASCII word character, or any character above U+007F. */
+const IDENTIFIER_CHAR = String.raw`[$\w\u{80}-\u{10FFFF}]`;
+
+const BARE_NAME = `${IDENTIFIER_CHAR}+`;
+
+/** `phrase` (words joined by whitespace) anywhere in the code, as long as it is not part of a longer identifier. */
+const phraseRe = (phrase: string): RegExp =>
+    new RegExp(String.raw`(?<!${IDENTIFIER_CHAR})${phrase.replaceAll(" ", String.raw`\s+`)}(?!${IDENTIFIER_CHAR})`, "iu");
 
 /**
  * `ALTER TABLE <name> <action>` at the head of {@link scanStatement}'s code, where a quoted name reads as one placeholder
@@ -111,10 +117,10 @@ const DESTRUCTIVE_STATEMENTS: ReadonlyArray<readonly [label: string, pattern: Re
     ["DROP", alterTableRe("DROP")],
     ["RENAME", alterTableRe("RENAME")],
     ["TRUNCATE", /^\s*TRUNCATE\b/iu],
-    ["INSERT OR REPLACE", /(?<![$\w])INSERT\s+OR\s+REPLACE\b/iu],
-    ["REPLACE INTO", /(?<![$\w])REPLACE\s+INTO\b/iu],
-    ["UPDATE OR REPLACE", /(?<![$\w])UPDATE\s+OR\s+REPLACE\b/iu],
-    ["ON CONFLICT REPLACE", /(?<![$\w])ON\s+CONFLICT\s+REPLACE\b/iu],
+    ["INSERT OR REPLACE", phraseRe("INSERT OR REPLACE")],
+    ["REPLACE INTO", phraseRe("REPLACE INTO")],
+    ["UPDATE OR REPLACE", phraseRe("UPDATE OR REPLACE")],
+    ["ON CONFLICT REPLACE", phraseRe("ON CONFLICT REPLACE")],
 ];
 
 /**

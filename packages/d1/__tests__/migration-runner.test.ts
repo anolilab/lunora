@@ -656,6 +656,7 @@ describe("migrationRunner destructive statements", () => {
         ["a table named rename", "ALTER TABLE rename ADD COLUMN x TEXT"],
         ["an added column named drop", `ALTER TABLE t ADD COLUMN "drop" TEXT`],
         ["an identifier ending in $drop", "CREATE VIEW v AS SELECT foo$drop FROM t"],
+        ["a phrase whose ends belong to non-ASCII identifiers", "SELECT préINSERT OR REPLACEé FROM t"],
         ["an upsert", "INSERT INTO notes (id, body) VALUES (1, 'a') ON CONFLICT (id) DO UPDATE SET body = excluded.body"],
     ])("does not read a keyword inside %s as destructive", async (_label, text) => {
         expect.assertions(1);
