@@ -260,4 +260,46 @@ describe("httpRouter behind a single-page app's worker", () => {
         expect(page.status).toBe(200);
         await expect(page.text()).resolves.toBe(shell);
     });
+
+    it("still serves the shell for a page navigation when the app sets its own not-found handler, which answers every other miss", async () => {
+        expect.assertions(4);
+
+        const app = httpRouter();
+
+        app.notFound((c) => c.json({ error: "NOT_FOUND" }, 404));
+        app.get("/api/records/:id", (c) => c.notFound());
+
+        const shell = "<!doctype html><div id=app></div>";
+        const worker = createWorker({
+            httpRouter: app,
+            shardDO: {
+                get: () => {
+                    return { fetch: async () => Response.json({ result: null }) };
+                },
+                idFromName: (name: string) => {
+                    return { __name: name };
+                },
+            },
+            spaAssets: {
+                fetch: async () => new Response(shell, { headers: { "content-type": "text/html", etag: '"shell"' } }),
+            },
+        });
+        const executionContext = { passThroughOnException: () => undefined, waitUntil: () => undefined };
+        const page = await worker.fetch(
+            new Request("https://app.test/settings/profile", { headers: { accept: "text/html", "sec-fetch-mode": "navigate" } }),
+            {},
+            executionContext,
+        );
+        const api = await worker.fetch(new Request("https://app.test/api/typo", { headers: { accept: "application/json" } }), {}, executionContext);
+        const hidden = await worker.fetch(
+            new Request("https://app.test/api/records/1", { headers: { accept: "text/html", "sec-fetch-mode": "navigate" } }),
+            {},
+            executionContext,
+        );
+
+        await expect(page.text()).resolves.toBe(shell);
+        await expect(api.json()).resolves.toStrictEqual({ error: "NOT_FOUND" });
+        expect(hidden.status).toBe(404);
+        await expect(hidden.json()).resolves.toStrictEqual({ error: "NOT_FOUND" });
+    });
 });
