@@ -202,7 +202,9 @@ markers. Cloudflare sends both values when two matching rules set the same
 header (for example `DENY` and `SAMEORIGIN`), and browsers reject that. So:
 
 - A header one of your rules for `/*` sets is left out of the block. Your value
-  applies everywhere.
+  applies everywhere. When that header is `X-Frame-Options`, the block's CSP
+  also drops its `frame-ancestors` directive, which browsers would apply instead
+  of your value.
 - For narrower paths, detach the default first, then set yours, as in the
   popup-callback example above. A detach only removes a header an earlier rule
   added, which is why the block comes first. A narrower rule that sets a managed
@@ -212,6 +214,13 @@ header (for example `DENY` and `SAMEORIGIN`), and browsers reject that. So:
 /embed/*
   ! X-Frame-Options
 ```
+
+Cloudflare applies at most 100 rules from `_headers` and ignores a line longer
+than 2,000 characters. Your rules come first in that count: when the file
+already holds your 100, the block is left out (with a warning) instead of
+pushing one of yours past the cap. A managed header line that would be too long,
+such as a CSP from a long `frameAncestors` list, fails the build, since the
+static pages would otherwise ship without it.
 
 The block is written on a production build for the Cloudflare target, by
 whichever integration produced the output:

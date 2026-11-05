@@ -15,6 +15,8 @@
  */
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
+import { LunoraError } from "@lunora/errors";
+
 import type { SecurityHeadersOptions } from "../../../../shared/security-headers";
 import { resolveSecurityHeaders } from "../../../../shared/security-headers";
 import join from "../path";
@@ -263,20 +265,74 @@ const renderBlock = (rules: ReadonlyArray<HeaderRule>): string[] => [
     END_MARKER,
 ];
 
+const FRAME_ANCESTORS = /^frame-ancestors(?:\s|$)/iu;
+
+/** `policy` without its `frame-ancestors` directive. */
+const withoutFrameAncestors = (policy: string): string =>
+    policy
+        .split(";")
+        .map((directive) => directive.trim())
+        .filter((directive) => directive !== "" && !FRAME_ANCESTORS.test(directive))
+        .join("; ");
+
+/**
+ * The CSP to write when a user rule for `/*` owns `X-Frame-Options` but not the
+ * CSP. Browsers that read `frame-ancestors` ignore `X-Frame-Options`, so the
+ * derived `frame-ancestors 'self'` would override a stricter user `DENY` (or
+ * re-allow framing the user turned off): Lunora's own policy drops the directive
+ * and leaves framing to the user's header. A `csp` the user wrote in
+ * `lunora.config` is theirs and is kept, with a warning when it says
+ * `frame-ancestors`.
+ */
+const cspBesideUserFraming = (value: string, cspIsDerived: boolean, warnings: string[]): string => {
+    if (cspIsDerived) {
+        return withoutFrameAncestors(value);
+    }
+
+    if (value.split(";").some((directive) => FRAME_ANCESTORS.test(directive.trim()))) {
+        warnings.push(
+            "your _headers rule for /* sets X-Frame-Options, but the csp in lunora.config carries a frame-ancestors directive, which browsers apply instead of X-Frame-Options; make the two agree",
+        );
+    }
+
+    return value;
+};
+
+/**
+ * Refuse a header line Cloudflare would not apply. `_headers` drops a line past
+ * its length cap, and a CSP from `frameAncestors` has already dropped
+ * `X-Frame-Options`, so the static pages would ship with no framing protection
+ * at all. The Worker has no such cap, so this is a build error, not a parse one.
+ * @throws LunoraError `INTERNAL` naming the header, its length, and how to shorten it.
+ */
+const assertLineFits = (name: string, value: string): void => {
+    const line = `  ${name}: ${value}`;
+
+    if (line.length > MAX_HEADERS_LINE_LENGTH) {
+        throw new LunoraError(
+            "INTERNAL",
+            `[lunora] the _headers line for ${name} would be ${String(line.length)} characters; Cloudflare ignores a line longer than ${String(MAX_HEADERS_LINE_LENGTH)}, which would leave every static page without it. ` +
+                "Shorten security.headers in lunora.config: list fewer frameAncestors origins (one *.example.com entry covers its subdomains), or a shorter csp.",
+        );
+    }
+};
+
 /**
  * The block's `/*` rule: the security headers minus those a user rule for `/*`
  * sets, with a warning for each narrower user rule that stacks a value on a
- * default instead of detaching it, or a line past Cloudflare's length cap.
+ * default instead of detaching it.
+ * @throws LunoraError `INTERNAL` for a line past Cloudflare's length cap — see {@link assertLineFits}.
  */
 const planSecurityRule = (
     security: ReadonlyArray<readonly [string, string]>,
     use: ReturnType<typeof userHeaderUse>,
+    cspIsDerived: boolean,
 ): { deferred: string[]; rule: HeaderRule | undefined; warnings: string[] } => {
     const deferred: string[] = [];
     const warnings: string[] = [];
     const headers: (readonly [string, string])[] = [];
 
-    for (const [name, value] of security) {
+    for (const [name, written] of security) {
         for (const stacked of use.stacked.filter((entry) => entry.name === name.toLowerCase())) {
             warnings.push(
                 `_headers rule "${stacked.rule}" sets ${name} on top of Lunora's default, so both values are sent; add "! ${name}" above it in that rule to replace the default`,
@@ -285,24 +341,51 @@ const planSecurityRule = (
 
         if (use.taken.has(name.toLowerCase())) {
             deferred.push(name);
-        } else {
-            headers.push([name, value]);
 
-            if (`  ${name}: ${value}`.length > MAX_HEADERS_LINE_LENGTH) {
-                warnings.push(
-                    `_headers line for ${name} is longer than Cloudflare's ${String(MAX_HEADERS_LINE_LENGTH)}-character limit; shorten the value in lunora.config`,
-                );
-            }
+            continue;
         }
+
+        const value = name === "Content-Security-Policy" && use.taken.has("x-frame-options") ? cspBesideUserFraming(written, cspIsDerived, warnings) : written;
+
+        assertLineFits(name, value);
+        headers.push([name, value]);
     }
 
     return { deferred, rule: headers.length === 0 ? undefined : { headers, path: "/*" }, warnings };
 };
 
 /**
+ * The managed rules that fit beside the user's under Cloudflare's rule cap, in
+ * priority order (security before caching). Cloudflare ignores every rule past
+ * the cap, and the block sits first, so a managed rule over it would push one of
+ * the user's out. The user's rules win: a managed rule that does not fit is left
+ * out and named in a warning.
+ */
+const fitRules = (managed: ReadonlyArray<HeaderRule>, userRuleCount: number, warnings: string[]): HeaderRule[] => {
+    const room = Math.max(0, MAX_HEADERS_RULES - userRuleCount);
+    const kept = managed.slice(0, room);
+    const dropped = managed.slice(room);
+
+    if (dropped.length > 0) {
+        warnings.push(
+            `_headers already has ${String(userRuleCount)} of your rules, and Cloudflare applies at most ${String(MAX_HEADERS_RULES)}; Lunora left out its ${dropped
+                .map((rule) => rule.path)
+                .join(", ")} rule so yours still apply. Merge some of your rules to make room`,
+        );
+    }
+
+    if (userRuleCount > MAX_HEADERS_RULES) {
+        warnings.push(`_headers has ${String(userRuleCount)} rules of your own; Cloudflare ignores every rule past the ${String(MAX_HEADERS_RULES)}th`);
+    }
+
+    return kept;
+};
+
+/**
  * Merge the managed block into `existing` (the current `_headers` text, or
  * `undefined` when there is none) and return the new text, or `undefined` when
  * the file should not exist. Pure.
+ * @throws LunoraError `INTERNAL` for a header line Cloudflare would ignore — see {@link assertLineFits}.
  */
 const mergeAssetHeaders = (
     existing: string | undefined,
@@ -324,7 +407,8 @@ const mergeAssetHeaders = (
     const deferred: string[] = [];
     const warnings: string[] = [];
     const rules: HeaderRule[] = [];
-    const security = planSecurityRule(securityHeaderLines(options.headers), userHeaderUse(userRules));
+    const cspIsDerived = typeof options.headers !== "object" || typeof options.headers.csp !== "string";
+    const security = planSecurityRule(securityHeaderLines(options.headers), userHeaderUse(userRules), cspIsDerived);
 
     deferred.push(...security.deferred);
     warnings.push(...security.warnings);
@@ -347,13 +431,8 @@ const mergeAssetHeaders = (
         }
     }
 
-    if (userRules.length + rules.length > MAX_HEADERS_RULES) {
-        warnings.push(
-            `_headers has more than ${String(MAX_HEADERS_RULES)} rules with Lunora's added; Cloudflare ignores every rule past the ${String(MAX_HEADERS_RULES)}th`,
-        );
-    }
-
-    const block = rules.length === 0 ? [] : renderBlock(rules);
+    const fitting = fitRules(rules, userRules.length, warnings);
+    const block = fitting.length === 0 ? [] : renderBlock(fitting);
     const lines = user.length > 0 && block.length > 0 ? [...block, "", ...user] : [...block, ...user];
 
     return { deferred, text: lines.length === 0 ? undefined : `${lines.join("\n")}\n`, warnings };

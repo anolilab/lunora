@@ -62,6 +62,35 @@ describe(mergeAssetHeaders, () => {
         expect(merged.warnings).toEqual([]);
     });
 
+    it("drops frame-ancestors from its own CSP when a user rule for /* takes X-Frame-Options, so a stricter DENY is not overridden", () => {
+        expect.assertions(3);
+
+        const merged = mergeAssetHeaders("/*\n  X-Frame-Options: DENY\n", { headers: true });
+
+        expect(merged.text).toContain("  Content-Security-Policy: base-uri 'none'; object-src 'none'\n");
+        expect(merged.text).not.toContain("frame-ancestors");
+        expect(merged.warnings).toEqual([]);
+    });
+
+    it("keeps a csp written in lunora.config beside a user X-Frame-Options, and warns when it carries frame-ancestors", () => {
+        expect.assertions(2);
+
+        const merged = mergeAssetHeaders("/*\n  X-Frame-Options: DENY\n", { headers: { csp: "default-src 'self'; frame-ancestors 'self'" } });
+
+        expect(merged.text).toContain("  Content-Security-Policy: default-src 'self'; frame-ancestors 'self'\n");
+        expect(merged.warnings.join(" ")).toContain("carries a frame-ancestors directive");
+    });
+
+    it("refuses a header line Cloudflare would ignore instead of shipping static pages without framing protection", () => {
+        expect.assertions(1);
+
+        const frameAncestors = Array.from({ length: 80 }, (_, index) => `https://partner-${String(index)}.example.com`);
+
+        expect(() => mergeAssetHeaders(undefined, { headers: { frameAncestors } })).toThrow(
+            /_headers line for Content-Security-Policy would be \d+ characters; Cloudflare ignores a line longer than 2000/u,
+        );
+    });
+
     it("keeps the default for a narrower rule, which replaces it by detaching first, and warns when it does not", () => {
         expect.assertions(3);
 
@@ -151,12 +180,29 @@ describe(mergeAssetHeaders, () => {
         );
     });
 
-    it("warns when the block pushes the file past Cloudflare's 100-rule cap", () => {
-        expect.assertions(1);
+    it("leaves its rules out rather than push the user's past Cloudflare's 100-rule cap", () => {
+        expect.assertions(3);
 
-        const user = Array.from({ length: 100 }, (_, index) => `/r${String(index)}\n  X-R: ${String(index)}`).join("\n");
+        const user = `${Array.from({ length: 100 }, (_, index) => `/r${String(index)}\n  X-R: ${String(index)}`).join("\n")}\n`;
+        // A block an earlier build wrote, when there was room, goes too.
+        const merged = mergeAssetHeaders(`${BEGIN}: rewritten on every build. Put your own rules outside this block.\n/*\n  X-A: 1\n${END}\n\n${user}`, {
+            headers: true,
+            immutableDirectory: "assets",
+        });
 
-        expect(mergeAssetHeaders(user, { headers: true }).warnings.join(" ")).toContain("more than 100 rules");
+        expect(merged.text).toBe(user);
+        expect(merged.warnings.join(" ")).toContain("Lunora left out its /*, /assets/* rule so yours still apply");
+        expect(merged.warnings.join(" ")).not.toContain("ignores every rule past");
+    });
+
+    it("keeps the security rule and drops the cache rule when only one fits", () => {
+        expect.assertions(2);
+
+        const user = `${Array.from({ length: 99 }, (_, index) => `/r${String(index)}\n  X-R: ${String(index)}`).join("\n")}\n`;
+        const merged = mergeAssetHeaders(user, { headers: true, immutableDirectory: "assets" });
+
+        expect(merged.text).toContain("/*\n  Strict-Transport-Security");
+        expect(merged.text).not.toContain("immutable");
     });
 });
 
