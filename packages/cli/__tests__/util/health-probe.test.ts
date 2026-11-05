@@ -263,6 +263,21 @@ describe("probeHealth", () => {
             expect(result.error).not.toContain("secret");
         });
 
+        it("leaves out a redirect's origin when it echoes the service token, as a reflecting host could", async () => {
+            expect.assertions(2);
+
+            const result = await probeHealth({
+                baseUrl: "https://app.example.com",
+                env: accessEnv,
+                fetchImpl: async () => {
+                    return { headers: new Headers({ location: "https://secret.echo.example.com/" }), ok: false, status: 302 };
+                },
+            });
+
+            expect(result.error).toContain("returned HTTP 302 — the health route does not redirect");
+            expect(result.error).not.toContain("secret.echo");
+        });
+
         it("does not follow an http → https redirect to another port, which would receive the token", async () => {
             expect.assertions(2);
 
