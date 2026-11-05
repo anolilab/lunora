@@ -105,10 +105,20 @@ For the auth flows, `lunora add auth-emails` adds ready-made templates.
 throws `` `queue` binding is required for mailer.queue() ``, except under
 capture, where it sends straight to the capture inbox so dev flows keep working.
 A consumer builds its mailer with `createMailerFromEnv` too, drains the queue
-with `consumeQueuedSend(mailer, message.body)` and then calls `message.ack()`
-for each message. On a throw, branch on `isRetryableMailError(error)`: retry with
+with `consumeQueuedSend(mailer, message.body, { attempts: message.attempts, enqueuedAt: message.timestamp, sent: env.SENT })` and then calls
+`message.ack()` for each message; `sent` (a KV namespace) lets a redelivered message whose key it
+already recorded ack without a second send. That narrows duplicates rather than preventing them: KV
+is eventually consistent, and a crash between the provider accepting the send and the record being
+written resends it. `enqueuedAt` makes a send that may have landed non-retryable once the message is
+23 hours old, since Resend drops a repeated key for only 24 hours, and a redelivery that old whose
+earlier delivery may have landed (the store's per-delivery marks, or `attempts` without a store) is refused
+before it reaches the provider. On a throw, branch on `isRetryableMailError(error)`: retry with
 `message.retry()` when it is true, and ack and log when it is false, since a refused
-address or malformed body never sends and a retry only dead-letters it. With a queue bound in dev, the message still goes through the
+address or malformed body never sends and a retry only dead-letters it. A send
+that timed out or hit Resend's 409 for a key still in flight (`isOutcomeUnknownMailError(error)`)
+may have been delivered: it is retryable only through Resend with an idempotency key (Resend drops
+the repeat), and then retried with `message.retry({ delaySeconds: 180 })` so the first attempt has
+finished; otherwise it is acked and reported instead of resent. With a queue bound in dev, the message still goes through the
 queue and the consumer's mailer captures it into the inbox. Queues deliver at least once: with
 per-message acks a later throw retries only the unacknowledged messages, while
 without them a single throw resends the whole batch. The full wiring is in the "Queueing"

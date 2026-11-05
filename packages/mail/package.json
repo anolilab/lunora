@@ -81,6 +81,7 @@
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
+        "fast-check": "catalog:test",
         "react": "catalog:frontend",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"

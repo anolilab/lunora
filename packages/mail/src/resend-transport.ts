@@ -15,12 +15,16 @@ const createResendTransport = (apiKey: string, defaultFrom: string): MailTranspo
     const provider = resendProvider({ apiKey });
 
     return {
-        send: async (payload: SendPayload) => {
+        dedupesOnIdempotencyKey: true,
+        send: async (payload: SendPayload, options?: { idempotencyKey?: string }) => {
             await provider.initialize();
 
             const { first, list } = requireRecipients(payload.to);
             // Resend accepts a single address or a list; collapse a 1-element list.
-            const result = (await provider.sendEmail(toProviderEmail(payload, defaultFrom, list.length === 1 ? first : list))) as ProviderSendResult;
+            const email = toProviderEmail(payload, defaultFrom, list.length === 1 ? first : list);
+            // Resend sends it as the `Idempotency-Key` request header (and reuses it on the provider client's own
+            // retries), so a repeat of the same send inside Resend's 24-hour window is not delivered twice.
+            const result = (await provider.sendEmail({ ...email, idempotencyKey: options?.idempotencyKey })) as ProviderSendResult;
 
             return interpretSendResult(result);
         },

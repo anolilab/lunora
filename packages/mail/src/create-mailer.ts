@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { randomSessionId } from "../../../shared/random-session-id";
-import { assertSafeAddresses, assertSafeHeaderValue } from "./address";
+import { assertSafeAddresses, assertSafeHeaderValue, assertValidIdempotencyKey } from "./address";
 import { isCaptureTransport } from "./capture-transport";
 import { createCloudflareTransport } from "./cloudflare-transport";
 import { toQueuedPayload } from "./queue";
@@ -9,6 +9,39 @@ import renderEmail from "./render";
 import createResendTransport from "./resend-transport";
 import { MailSendError } from "./send-error";
 import type { LunoraMailOptions, Mailer, MailTransport, SendOptions, SendPayload } from "./types";
+
+const DEFAULT_SEND_TIMEOUT_MS = 60_000;
+
+/** `setTimeout`'s largest delay: anything above it fires at once, failing every send as outcome-unknown. */
+const MAX_SEND_TIMEOUT_MS = 2_147_483_647;
+
+/**
+ * Settle with the transport's answer, or fail as outcome-unknown once the
+ * deadline passes — a hung provider call must not hold a queue message until
+ * the consumer's wall-clock limit, which redelivers a send that may have gone out.
+ * Whether that failure may be retried is decided by `send()`, not here.
+ */
+const withSendDeadline = async <T>(work: Promise<T>, timeoutMs: number): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const deadline = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+            reject(
+                new MailSendError({
+                    message: `@lunora/mail: send timed out after ${String(timeoutMs)}ms, so it may have been delivered`,
+                    outcomeUnknown: true,
+                    retryable: false,
+                }),
+            );
+        }, timeoutMs);
+    });
+
+    try {
+        return await Promise.race([work, deadline]);
+    } finally {
+        clearTimeout(timer);
+    }
+};
 
 /**
  * Pick the default transport when no explicit `transport` is supplied. The
@@ -73,6 +106,12 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
         throw new LunoraError("INTERNAL", "@lunora/mail: `from` is required");
     }
 
+    const sendTimeoutMs = options.sendTimeoutMs ?? DEFAULT_SEND_TIMEOUT_MS;
+
+    if (!Number.isFinite(sendTimeoutMs) || sendTimeoutMs <= 0 || sendTimeoutMs > MAX_SEND_TIMEOUT_MS) {
+        throw new LunoraError("INTERNAL", `@lunora/mail: \`sendTimeoutMs\` must be a positive number of milliseconds, at most ${String(MAX_SEND_TIMEOUT_MS)}`);
+    }
+
     const transport = options.transport ?? buildDefaultTransport(options);
 
     const buildPayload = async (options_: SendOptions): Promise<SendPayload> => {
@@ -90,6 +129,9 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
         // header block, so they need the same CR/LF rejection the address
         // fields get. Validated here so both send() and queue() are covered.
         assertSafeHeaderValue("subject", options_.subject);
+
+        // Checked at enqueue too, so a key the provider would refuse never reaches the consumer.
+        assertValidIdempotencyKey(options_.idempotencyKey);
 
         if (options_.headers) {
             for (const [name, value] of Object.entries(options_.headers)) {
@@ -131,14 +173,28 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
 
     const send = async (options_: SendOptions): Promise<{ id: string }> => {
         const payload = await buildPayload(options_);
+        const { idempotencyKey } = options_;
 
         try {
-            return await transport.send(payload);
+            return await withSendDeadline(transport.send(payload, { idempotencyKey }), sendTimeoutMs);
         } catch (error) {
-            // A custom transport that throws something unclassified is treated as
-            // transient. The message is generic so a provider's raw text never
-            // reaches the caller; the original error stays on `cause`.
-            throw error instanceof MailSendError ? error : new MailSendError({ cause: error, retryable: true });
+            if (!(error instanceof MailSendError)) {
+                // A custom transport that throws something unclassified is treated as
+                // transient. The message is generic so a provider's raw text never
+                // reaches the caller; the original error stays on `cause`.
+                throw new MailSendError({ cause: error, retryable: true });
+            }
+
+            // The one place a send that may have landed is classified, whatever the transport said:
+            // only a provider that dedupes on the key it was given drops the repeat, so only then can
+            // a redelivery not mail twice.
+            const providerDropsRepeat = idempotencyKey !== undefined && transport.dedupesOnIdempotencyKey === true;
+
+            if (error.outcomeUnknown && error.retryable !== providerDropsRepeat) {
+                throw new MailSendError({ cause: error.cause, message: error.message, outcomeUnknown: true, retryable: providerDropsRepeat });
+            }
+
+            throw error;
         }
     };
 
@@ -151,9 +207,8 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
             // studio inbox. Production paths always pass a real `queue` binding
             // and never hit this branch, so real-queue behavior is unchanged.
             if (isCaptureTransport(transport)) {
-                const captured = await buildPayload(options_);
-
-                await transport.send(captured);
+                // Through `send()`, so the capture gets the same deadline and key as a real send.
+                await send(options_);
 
                 return { queued: true };
             }

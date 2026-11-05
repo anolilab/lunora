@@ -94,7 +94,7 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
 
 `queueEmail` decouples the send from the request by pushing it onto a Cloudflare Queue. To enable it:
 
-1. Add a Queue producer + consumer binding to your `wrangler.jsonc`:
+1. Add a Queue producer + consumer binding, and a KV namespace the consumer records sent messages in, to your `wrangler.jsonc`:
 
     ```jsonc
     {
@@ -102,6 +102,7 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
             "producers": [{ "queue": "lunora-mail", "binding": "MAIL_QUEUE" }],
             "consumers": [{ "queue": "lunora-mail" }],
         },
+        "kv_namespaces": [{ "binding": "SENT", "id": "<your KV namespace id>" }],
     }
     ```
 
@@ -121,7 +122,7 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
     `cloudflareSend` in the copied `lunora/mail/index.ts` is module-private and reads that module's `env`, so the handler builds its own from the `env` it is given:
 
     ```ts
-    import { consumeQueuedSend, createMailerFromEnv, isRetryableMailError } from "@lunora/mail";
+    import { consumeQueuedSend, createMailerFromEnv, isOutcomeUnknownMailError, isRetryableMailError } from "@lunora/mail";
 
     export default {
         queue: async (batch, env) => {
@@ -136,17 +137,24 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
 
             for (const message of batch.messages) {
                 try {
-                    await consumeQueuedSend(mailer, message.body);
+                    // A KV namespace bound as `SENT`: a redelivered message already recorded there is acked
+                    // without a second send. KV is eventually consistent and a crash can land between the send
+                    // and the record, so this narrows duplicates rather than preventing them. `enqueuedAt`
+                    // stops a send that may have landed from being retried past Resend's 24-hour dedupe window.
+                    await consumeQueuedSend(mailer, message.body, { enqueuedAt: message.timestamp, sent: env.SENT });
                 } catch (error) {
-                    // A refusal (a rejected address or a malformed body) fails the same way
-                    // on every retry, so ack it and log it rather than filling the dead-letter queue.
-                    if (!isRetryableMailError(error)) {
-                        console.error("mail refused", error);
-                        message.ack();
+                    // Transient, or a send that may have landed with a provider that dedupes on the key (Resend).
+                    if (isRetryableMailError(error)) {
+                        // The first attempt may still be running at the provider (Resend's client keeps a request
+                        // going for about two minutes), so give it time: a repeat inside that window is a 409.
+                        message.retry(isOutcomeUnknownMailError(error) ? { delaySeconds: 180 } : undefined);
                         continue;
                     }
 
-                    message.retry();
+                    // A timeout no provider dedupes may have been delivered, so a retry could send a second
+                    // copy: check the provider's logs. Anything else is a refusal or a malformed body.
+                    console.error(isOutcomeUnknownMailError(error) ? "mail outcome unknown" : "mail refused", error);
+                    message.ack();
                     continue;
                 }
                 // Queues are at-least-once: without a per-message ack a single throw

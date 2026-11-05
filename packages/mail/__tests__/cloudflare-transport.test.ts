@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import createMailer from "../src/create-mailer";
+import { isOutcomeUnknownMailError, isRetryableMailError } from "../src/send-error";
 
 // Drive the Cloudflare transport by faking the underlying @visulima/email
 // provider, exactly like resend-transport.test does for Resend.
@@ -109,5 +110,38 @@ describe("cloudflare transport (default provider)", () => {
 
         await expect(mailer.send({ subject: "Hi", text: "x", to: "user@x.test" })).rejects.toThrow("@lunora/mail: send failed");
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("binding refused"));
+    });
+
+    it("does not retry a timed-out send even with an idempotency key: the binding has no dedupe to drop the repeat", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        sendEmail.mockReturnValue(
+            new Promise(() => {
+                // never settles
+            }),
+        );
+
+        const hung = createMailer({ cloudflareSend: async () => undefined, from: "noreply@x.test", sendTimeoutMs: 1000 })
+            .send({ idempotencyKey: "order-42", subject: "Hi", text: "x", to: "user@x.test" })
+            .catch((error: unknown) => error);
+
+        await vi.advanceTimersByTimeAsync(1000);
+
+        const deadline = await hung;
+
+        vi.useRealTimers();
+
+        sendEmail.mockResolvedValue({ error: Object.assign(new Error("Request timed out"), { code: "ETIMEDOUT" }), success: false });
+
+        const timeout = await createMailer({ cloudflareSend: async () => undefined, from: "noreply@x.test" })
+            .send({ idempotencyKey: "order-42", subject: "Hi", text: "x", to: "user@x.test" })
+            .catch((error: unknown) => error);
+
+        expect(isOutcomeUnknownMailError(deadline)).toBe(true);
+        expect(isRetryableMailError(deadline)).toBe(false);
+        expect(isOutcomeUnknownMailError(timeout)).toBe(true);
+        expect(isRetryableMailError(timeout)).toBe(false);
     });
 });
