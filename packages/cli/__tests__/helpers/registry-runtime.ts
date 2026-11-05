@@ -41,13 +41,15 @@ const compare = (left: unknown, right: unknown): number => {
 };
 
 /**
- * The engine's keyset over `orderBy`: its keys plus a row-id tie-break in the last key's
- * direction, so no two rows share a position.
+ * The engine's keyset over `orderBy`: its keys plus a creation-time, then row-id tie-break in
+ * the last key's direction, so no two rows share a position.
  */
 const keyset = (orderBy: Record<string, "asc" | "desc">[]): { order: (left: unknown[], right: unknown[]) => number; tuple: (row: Row) => unknown[] } => {
     const keys: [string, "asc" | "desc"][] = orderBy.map((entry) => Object.entries(entry)[0]!);
 
-    keys.push(["_id", keys.at(-1)?.[1] ?? "asc"]);
+    const tiebreak = keys.at(-1)?.[1] ?? "asc";
+
+    keys.push(["_creationTime", tiebreak], ["_id", tiebreak]);
 
     return {
         order: (left, right) => {
@@ -225,7 +227,7 @@ const createDatabase = (unique: Record<string, string[][]>): FakeDatabase => {
             insert: async (table: string, document: Row) => {
                 counter += 1;
 
-                const row = { ...document, _id: `${table}:${String(counter)}` };
+                const row = { ...document, _creationTime: counter, _id: `${table}:${String(counter)}` };
 
                 assertUnique(table, row);
                 rows(table).push(row);

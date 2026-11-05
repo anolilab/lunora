@@ -476,10 +476,11 @@ const BOUNDED_PAGE_FACTOR = 4;
 const ORGANIZATION_SEARCH_MAX = 100;
 
 /**
- * The list's order, newest first. `findMany` breaks a tie on its own (the row id),
- * so two tenants updated in the same millisecond keep one order across pages.
- * `byUpdatedAt` and, under the plan filter, `byPlanUpdated` (see `schema.ts`)
- * serve it, scanned backwards.
+ * The list's order, newest first. `findMany` breaks a tie on its own (creation
+ * time, then row id), so two tenants updated in the same millisecond keep one
+ * order across pages. `byUpdatedAt` and, under the plan filter, `byPlanUpdated`
+ * (see `schema.ts`) serve it, scanned backwards: they end in `updatedAt`, so the
+ * tie-break keys the store appends to every index complete the order.
  */
 const LIST_ORDER = [{ updatedAt: "desc" as const }];
 

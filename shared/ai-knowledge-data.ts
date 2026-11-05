@@ -513,6 +513,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "PaginationResult",
             "Paging through a query",
             "Ordering rows that hold NULL",
+            "Paging a findMany",
             "Load more / infinite lists on the client",
             'Total count ("42 of 1,203")',
         ],
