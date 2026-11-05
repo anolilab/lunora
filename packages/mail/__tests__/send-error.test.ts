@@ -57,6 +57,31 @@ describe("mail send classification", () => {
         expect((error as MailSendError).cause).toBe(original);
     });
 
+    it("rethrows a refusal from another copy of the package unchanged rather than re-wrapping it as retryable", async () => {
+        expect.assertions(4);
+
+        vi.resetModules();
+
+        // A fresh module instance stands in for a second installed copy of @lunora/mail.
+        const { MailSendError: ForeignMailSendError } = await import("../src/send-error");
+        const original = new ForeignMailSendError({ message: "@lunora/mail: refused", retryable: false });
+        const mailer = createMailer({
+            from: "noreply@x.test",
+            transport: {
+                send: async () => {
+                    throw original;
+                },
+            },
+        });
+
+        const error = await mailer.send({ subject: "Hi", to: "a@x.test" }).catch((error_: unknown) => error_);
+
+        expect(ForeignMailSendError).not.toBe(MailSendError);
+        expect(original).toBeInstanceOf(MailSendError);
+        expect(error).toBe(original);
+        expect(isRetryableMailError(error)).toBe(false);
+    });
+
     it("treats a malformed queue body as a refusal, not a retry", async () => {
         expect.assertions(2);
 

@@ -1,5 +1,12 @@
 import { LunoraError } from "@lunora/errors";
 
+/**
+ * Cross-copy brand, the same mechanism `LunoraError` uses: `Symbol.for` resolves to one symbol in
+ * every copy of this module, so a transport built against another installed copy of `@lunora/mail`
+ * still throws an error this copy recognises, rather than one `send()` would re-wrap as retryable.
+ */
+const MAIL_SEND_ERROR_BRAND: unique symbol = Symbol.for("@lunora/mail/MailSendError");
+
 /** What a {@link MailSendError} carries on `data`, so a caller can tell a retry from a refusal. */
 interface MailSendErrorData {
     /**
@@ -28,6 +35,10 @@ interface MailSendErrorData {
  * mailing the recipient a second copy.
  */
 class MailSendError extends LunoraError {
+    public static override [Symbol.hasInstance](value: unknown): boolean {
+        return typeof value === "object" && value !== null && (value as Record<symbol, unknown>)[MAIL_SEND_ERROR_BRAND] === true;
+    }
+
     public readonly outcomeUnknown: boolean;
 
     public readonly retryable: boolean;
@@ -37,6 +48,9 @@ class MailSendError extends LunoraError {
         const data: MailSendErrorData = { outcomeUnknown, retryable: options.retryable };
 
         super("INTERNAL", options.message ?? "@lunora/mail: send failed", { cause: options.cause, data, name: "MailSendError" });
+
+        // Non-enumerable, so the brand never rides JSON or the wire codec.
+        Object.defineProperty(this, MAIL_SEND_ERROR_BRAND, { value: true });
 
         this.outcomeUnknown = outcomeUnknown;
         this.retryable = options.retryable;
