@@ -533,7 +533,7 @@ export const normalizeLogFields = (
 /** Logged Errors listed from inside one field, at most; the rest of the field still shows as its text. */
 const MAX_NESTED_LOGGED_ERRORS = 10;
 
-/** A field value as JSON when it is a serialized object or array, else `undefined`. */
+/** A field value parsed when it is a serialized object or array, as it is when it is not a string, else `undefined`. */
 const parsedJson = (value: unknown): unknown => {
     if (typeof value !== "string") {
         return value;
