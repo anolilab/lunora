@@ -260,6 +260,37 @@ const readString = (entry: Record<string, unknown>, keys: ReadonlyArray<string> 
     return value as string | undefined;
 };
 
+/**
+ * The binding name an entry declares under `keys`, or none. A name that is
+ * present but not a string is a mistake in the config, not a missing name, so it
+ * is recorded under `field.key` and answered as `wrongType` — the caller skips
+ * the entry without also reporting it as unnamed.
+ */
+const bindingNameOf = (
+    entry: Record<string, unknown>,
+    keys: ReadonlyArray<string> | string | undefined,
+    field: string,
+    malformed: Set<string>,
+): { name?: string; wrongType: boolean } => {
+    const name = readString(entry, keys);
+
+    if (name !== undefined) {
+        return { name, wrongType: false };
+    }
+
+    const wrongType = (typeof keys === "string" ? [keys] : (keys ?? [])).find((key) => {
+        const value = entry[key];
+
+        return value !== undefined && value !== null && typeof value !== "string";
+    });
+
+    if (wrongType !== undefined) {
+        malformed.add(`${field}.${wrongType}`);
+    }
+
+    return { wrongType: wrongType !== undefined };
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
@@ -340,7 +371,11 @@ const collectArrayBindings = (config: Record<string, unknown>, unnamed: string[]
 
     for (const section of ARRAY_SECTIONS) {
         for (const raw of entriesOf(config[section.field], section.field, malformed)) {
-            const binding = readString(raw, section.bindingKey);
+            const { name: binding, wrongType } = bindingNameOf(raw, section.bindingKey, section.field, malformed);
+
+            if (wrongType) {
+                continue;
+            }
 
             // A section entry with no binding name has nothing a Worker can read
             // off `env`. Emitting `{"binding": ""}` would hand an IaC program a
@@ -375,7 +410,11 @@ const collectDurableObjectBindings = (config: Record<string, unknown>, unnamed: 
     const out: BindingRequirement[] = [];
 
     for (const entry of entriesOf(durableObjects["bindings"], "durable_objects.bindings", malformed)) {
-        const binding = readString(entry, "name");
+        const { name: binding, wrongType } = bindingNameOf(entry, "name", "durable_objects.bindings", malformed);
+
+        if (wrongType) {
+            continue;
+        }
 
         if (binding === undefined) {
             unnamed.push("durable_objects");
@@ -404,7 +443,11 @@ const collectQueueBindings = (config: Record<string, unknown>, unnamed: string[]
     const out: BindingRequirement[] = [];
 
     for (const entry of entriesOf(queues["producers"], "queues.producers", malformed)) {
-        const binding = readString(entry, "binding");
+        const { name: binding, wrongType } = bindingNameOf(entry, "binding", "queues.producers", malformed);
+
+        if (wrongType) {
+            continue;
+        }
 
         if (binding === undefined) {
             unnamed.push("queues.producers");
@@ -417,7 +460,11 @@ const collectQueueBindings = (config: Record<string, unknown>, unnamed: string[]
     // A consumer has no `env` binding — it is a subscription. `binding` carries
     // the queue name so the entry still has a stable identity to sort and diff on.
     for (const entry of entriesOf(queues["consumers"], "queues.consumers", malformed)) {
-        const queue = readString(entry, "queue");
+        const { name: queue, wrongType: queueWrongType } = bindingNameOf(entry, "queue", "queues.consumers", malformed);
+
+        if (queueWrongType) {
+            continue;
+        }
 
         if (queue === undefined) {
             unnamed.push("queues.consumers");

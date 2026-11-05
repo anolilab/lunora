@@ -248,8 +248,12 @@ describe("buildBindingManifest", () => {
         ["a singleton binding that is not a string", { ai: { binding: 5 } }, ["ai.binding"]],
         ["crons given as an object", { triggers: { crons: {} } }, ["triggers.crons"]],
         ["vars given as a list", { vars: ["API_URL"] }, ["vars"]],
+        ["an array-section binding name that is not a string", { r2_buckets: [{ binding: 7 }] }, ["r2_buckets.binding"]],
+        ["a durable object name that is not a string", { durable_objects: { bindings: [{ class_name: "X", name: 7 }] } }, ["durable_objects.bindings.name"]],
+        ["a queue producer binding that is not a string", { queues: { producers: [{ binding: 7 }] } }, ["queues.producers.binding"]],
+        ["a queue consumer queue that is not a string", { queues: { consumers: [{ queue: 7 }] } }, ["queues.consumers.queue"]],
     ])("skips %s and names its key instead of throwing", (_label, section, malformed) => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         // `lunora dev` builds this from a hand-edited config before wrangler has
         // looked at it. A throw here aborted the start; wrangler reports the bad
@@ -259,6 +263,8 @@ describe("buildBindingManifest", () => {
         expect(manifest.malformed).toStrictEqual(malformed);
         expect(manifest.bindings).toStrictEqual([{ binding: "DB", type: "d1" }]);
         expect(manifest.crons).toStrictEqual([]);
+        // A wrong-typed name is a mistake in the config, not a missing one.
+        expect(manifest.unknown).toStrictEqual([]);
     });
 
     it("names a malformed section once however many of its entries are bad", () => {
