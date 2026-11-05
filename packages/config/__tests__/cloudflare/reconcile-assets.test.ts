@@ -1,18 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { planRunWorkerFirst, runWorkerFirstProblems, workerPathRules } from "../../src/cloudflare/reconcile-assets";
+import { planRunWorkerFirst, planSpaRunWorkerFirst, runWorkerFirstProblems, workerPathRules } from "../../src/cloudflare/reconcile-assets";
 
-/** Whether Cloudflare's router sends `pathname` to the Worker for `rules`: its rules engine reads each `*` as `.*`. */
+/** Whether one rule matches `pathname`: Cloudflare's rules engine reads each `*` as `.*`. */
+const ruleMatches = (rule: string, pathname: string): boolean =>
+    new RegExp(
+        `^${rule
+            .split("*")
+            .map((part) => part.replaceAll(/[$()*+./?[\\\]^{|}-]/gu, String.raw`\$&`))
+            .join(".*")}$`,
+        "u",
+    ).test(pathname);
+
+/** Whether Cloudflare's router sends `pathname` to the Worker for `rules`: a matching `!` rule wins over any positive one. */
 const routesToWorker = (rules: ReadonlyArray<string>, pathname: string): boolean =>
-    rules.some((rule) =>
-        new RegExp(
-            `^${rule
-                .split("*")
-                .map((part) => part.replaceAll(/[$()*+./?[\\\]^{|}-]/gu, String.raw`\$&`))
-                .join(".*")}$`,
-            "u",
-        ).test(pathname),
-    );
+    !rules.some((rule) => rule.startsWith("!") && ruleMatches(rule.slice(1), pathname)) &&
+    rules.some((rule) => rule.startsWith("/") && ruleMatches(rule, pathname));
 
 describe(workerPathRules, () => {
     it.each([
@@ -47,6 +50,36 @@ describe(workerPathRules, () => {
         // A deep link into the SPA, and a real file under public/users/, are not the Worker's.
         expect(routesToWorker(rules, "/users/42")).toBe(false);
         expect(routesToWorker(rules, "/users/logo.svg")).toBe(false);
+    });
+});
+
+describe(planSpaRunWorkerFirst, () => {
+    it("sends a path no route names to the Worker, and the static output to the assets", () => {
+        expect.assertions(6);
+
+        const { rules } = planSpaRunWorkerFirst(planRunWorkerFirst(["/api/todos/:id"]).rules, ["/assets/*", "/favicon.ico", "/api/*"]);
+
+        expect(runWorkerFirstProblems(rules)).toStrictEqual([]);
+        // A webhook mounted on a Hono httpRouter, which no route discovery sees.
+        expect(routesToWorker(rules, "/webhooks/github")).toBe(true);
+        expect(routesToWorker(rules, "/_lunora/rpc")).toBe(true);
+        // `/api/*` would take the Worker's `/api/todos/*` back to the assets, so it is not exempted.
+        expect(routesToWorker(rules, "/api/todos/1")).toBe(true);
+        expect(routesToWorker(rules, "/assets/index-3f2a.js")).toBe(false);
+        expect(routesToWorker(rules, "/favicon.ico")).toBe(false);
+    });
+
+    it("stays within Cloudflare's rule cap, and says which exemptions it left to the Worker", () => {
+        expect.assertions(3);
+
+        const plan = planSpaRunWorkerFirst(
+            [],
+            Array.from({ length: 120 }, (_, index) => `/f${String(index).padStart(3, "0")}`),
+        );
+
+        expect(plan.rules).toHaveLength(100);
+        expect(runWorkerFirstProblems(plan.rules)).toStrictEqual([]);
+        expect(plan.warnings.join(" ")).toContain("!/f119");
     });
 });
 

@@ -2,6 +2,7 @@ import { isPlainObject } from "../../../../shared/is-plain-object";
 import { applyModify } from "../jsonc-edit";
 import type { Manifest } from "./lunora-manifest";
 import { recordManifestKey } from "./lunora-manifest";
+import { spaAssetsBinding } from "./spa-assets";
 import type { ReconcileStep, WranglerShape } from "./wrangler-shape";
 
 /**
@@ -19,6 +20,9 @@ const LUNORA_WORKER_FIRST_PATHS: ReadonlyArray<string> = ["/_lunora/*", "/__luno
 
 /** Values earlier Lunora versions and templates wrote, which reconcile still owns: the reserved pair, and `rspack-react`'s `/_lunora/*` alone. */
 const LEGACY_WORKER_FIRST_VALUES: ReadonlyArray<ReadonlyArray<string>> = [LUNORA_WORKER_FIRST_PATHS, ["/_lunora/*"]];
+
+/** The rule an SPA's list starts with: the Worker first for every path its exemptions leave. */
+const SPA_WORKER_FIRST = "/*";
 
 /** Cloudflare's caps on `assets.run_worker_first`: rules per list (duplicates count), and characters per rule. */
 const MAX_RUN_WORKER_FIRST_RULES = 100;
@@ -250,41 +254,54 @@ const readOwnedRunWorkerFirst = (manifest: Manifest | undefined): OwnedRunWorker
 };
 
 /**
- * Why an SPA's absent `run_worker_first` stays absent, and how to opt in. Without
- * a list Cloudflare sends only an unmatched browser navigation to `index.html`
- * (compatibility date 2025-04-01 or later) and every other miss to the Worker; a
- * list turns that detection off, so every path it leaves out, a `fetch` included,
- * gets `index.html`. Lunora cannot see every Worker path (a computed auth
- * `basePath`, a route mounted on a Hono `httpRouter` directly), so it does not
- * trade the first failure for the second on the user's behalf.
+ * The list for an SPA whose Worker can serve the shell (see `spa-assets.ts`): the
+ * Worker first for every path, minus the static output it can name. A negative
+ * rule wins over a positive one, so a static path that overlaps a Worker route
+ * is not exempted; nor is one another exemption already covers, which wrangler
+ * refuses.
  */
-const spaWarning = (label: string, rules: ReadonlyArray<string>): string =>
-    `${label} is not set, and Lunora does not write it under not_found_handling "single-page-application": a list would send every path it leaves out, fetches included, to index.html. ` +
-    `Without one, a browser navigation to a Worker path (an OAuth callback, a link in an email) gets index.html instead of the Worker. ` +
-    `To route those, set it yourself to ${JSON.stringify(rules)} plus any Worker path Lunora cannot see; Lunora then keeps your list and warns about paths it misses`;
+const planSpaRunWorkerFirst = (workerRules: ReadonlyArray<string>, staticPaths: ReadonlyArray<string>): { rules: string[]; warnings: string[] } => {
+    const exempt = [...new Set(staticPaths)].filter(
+        (path) => path.length < MAX_RUN_WORKER_FIRST_RULE_LENGTH && !workerRules.some((rule) => overlaps(path, rule)),
+    );
+    const negatives = exempt
+        .filter((path) => !exempt.some((wider) => coveredBy(path, wider)))
+        .toSorted((a, b) => a.localeCompare(b))
+        .map((path) => `!${path}`);
+    const room = MAX_RUN_WORKER_FIRST_RULES - 1;
+    const warnings =
+        negatives.length > room
+            ? [
+                  `run_worker_first has room for ${String(room)} static exemptions; ${negatives.slice(room).join(", ")} run the Worker, which serves them from the assets binding`,
+              ]
+            : [];
+
+    return { rules: [SPA_WORKER_FIRST, ...negatives.slice(0, room)], warnings };
+};
+
+/** Why an SPA scope keeps the narrow list: the Worker has no binding to serve the shell from. */
+const missingBindingWarning = (scope: string): string =>
+    `${scope} falls back to a single-page app but sets no "binding", so the Worker cannot serve the app shell or a static file; ` +
+    `run_worker_first keeps naming only the routes Lunora can see, and a Worker path it misses (a route on a Hono httpRouter, a computed auth basePath) gets index.html. ` +
+    `Add "binding": "ASSETS" to ${scope}`;
 
 /**
  * What reconcile does with one `assets` block: write or rewrite a
  * `run_worker_first` Lunora owns (absent, the list it recorded, or a value an
  * earlier version or template wrote), or warn about the paths an authored one
- * leaves to the assets. An absent one under the SPA fallback is left absent,
- * with a warning (see {@link spaWarning}).
+ * leaves to the assets (`wanted`, the Worker's own paths).
  */
 const reconcileScope = (
     current: unknown,
-    notFoundHandling: unknown,
     label: string,
     rules: string[],
+    wanted: ReadonlyArray<string>,
     recorded: string[] | undefined,
 ): { change: "added" | "updated" | undefined; owned: boolean; warning: string | undefined } => {
-    if (current === undefined && notFoundHandling === "single-page-application") {
-        return { change: undefined, owned: false, warning: spaWarning(label, rules) };
-    }
-
     const lunoraWrote = current === undefined || sameRules(current, recorded) || LEGACY_WORKER_FIRST_VALUES.some((value) => sameRules(current, value));
 
     if (!lunoraWrote) {
-        return { change: undefined, owned: false, warning: unroutedWarning(current, label, rules) };
+        return { change: undefined, owned: false, warning: unroutedWarning(current, label, wanted) };
     }
 
     if (sameRules(current, rules)) {
@@ -294,27 +311,33 @@ const reconcileScope = (
     return { change: current === undefined ? "added" : "updated", owned: true, warning: undefined };
 };
 
+/** Every `assets` block a deploy may use: the top level and each `env.<name>`, which replaces it whole. */
+const assetScopes = (parsed: WranglerShape): { assets: unknown; path: string[] }[] => [
+    { assets: parsed.assets, path: ["assets"] },
+    ...Object.entries(parsed.env ?? {}).flatMap(([name, block]) => (isPlainObject(block) ? [{ assets: block["assets"], path: ["env", name, "assets"] }] : [])),
+];
+
 /**
  * Route the paths the Worker serves to it ahead of the assets: Lunora's reserved
- * paths plus the app's own routes (`workerRoutes`). Writes
- * `assets.run_worker_first` on every `assets` block (top level and
- * `env.<name>`) that does not set it, unless that block falls back to a single-page
- * app (see {@link spaWarning}), and rewrites a value Lunora wrote itself
- * (recorded in the manifest, or one an earlier version or template wrote) when
- * the routes change. A value the user wrote or edited is never rewritten; when it
- * leaves a path to the assets the step warns instead. The step's `record` stores
- * which values Lunora now owns, once the config is on disk.
+ * paths plus the app's own routes (`workerRoutes`), or, for a single-page app
+ * with an assets binding, every path but the static output (`staticPaths`, see
+ * `spa-assets.ts`). Writes `assets.run_worker_first` on every `assets` block
+ * (top level and `env.<name>`) that does not set it, and rewrites a value Lunora
+ * wrote itself (recorded in the manifest, or one an earlier version or template
+ * wrote) when the routes change. A value the user wrote or edited is never
+ * rewritten; when it leaves a path to the assets the step warns instead. The
+ * step's `record` stores which values Lunora now owns, once the config is on disk.
  */
-const reconcileAssetRouting = (text: string, parsed: WranglerShape, workerRoutes: ReadonlyArray<string>, manifest: Manifest | undefined): ReconcileStep => {
-    const scopes: { assets: unknown; path: string[] }[] = [{ assets: parsed.assets, path: ["assets"] }];
-
-    for (const [name, block] of Object.entries(parsed.env ?? {})) {
-        if (isPlainObject(block)) {
-            scopes.push({ assets: block["assets"], path: ["env", name, "assets"] });
-        }
-    }
-
+const reconcileAssetRouting = (
+    text: string,
+    parsed: WranglerShape,
+    workerRoutes: ReadonlyArray<string>,
+    manifest: Manifest | undefined,
+    staticPaths: ReadonlyArray<string>,
+): ReconcileStep => {
+    const scopes = assetScopes(parsed);
     const plan = planRunWorkerFirst(workerRoutes);
+    const spaPlan = planSpaRunWorkerFirst(plan.rules, staticPaths);
     const recorded = readOwnedRunWorkerFirst(manifest);
     const owned: OwnedRunWorkerFirst = {};
     const step: Required<Omit<ReconcileStep, "record">> = { added: [], text, updated: [], warnings: [] };
@@ -322,11 +345,17 @@ const reconcileAssetRouting = (text: string, parsed: WranglerShape, workerRoutes
     for (const { assets, path } of scopes.filter((scope) => isPlainObject(scope.assets))) {
         const scope = path.join(".");
         const block = assets as Record<string, unknown>;
-        // An env's own `assets` block replaces the top-level one whole, so its fallback is read from the same block.
-        const outcome = reconcileScope(block["run_worker_first"], block["not_found_handling"], `${scope}.run_worker_first`, plan.rules, recorded[scope]);
+        // An env's own `assets` block replaces the top-level one whole, so its fallback and binding are read from the same block.
+        const spa = spaAssetsBinding(block) !== undefined;
+        const rules = spa ? spaPlan.rules : plan.rules;
+        const outcome = reconcileScope(block["run_worker_first"], `${scope}.run_worker_first`, rules, plan.rules, recorded[scope]);
 
         if (outcome.owned) {
-            owned[scope] = plan.rules;
+            owned[scope] = rules;
+        }
+
+        if (outcome.owned && !spa && block["not_found_handling"] === "single-page-application") {
+            step.warnings.push(missingBindingWarning(scope));
         }
 
         if (outcome.warning !== undefined) {
@@ -334,14 +363,14 @@ const reconcileAssetRouting = (text: string, parsed: WranglerShape, workerRoutes
         }
 
         if (outcome.change !== undefined) {
-            step.text = applyModify(step.text, [...path, "run_worker_first"], plan.rules);
+            step.text = applyModify(step.text, [...path, "run_worker_first"], rules);
             step[outcome.change].push(`${scope}.run_worker_first`);
         }
     }
 
     // The plan's own warnings concern `run_worker_first`, so a project with no assets block has nothing to hear.
     if (scopes.some((scope) => isPlainObject(scope.assets))) {
-        step.warnings.unshift(...plan.warnings);
+        step.warnings.unshift(...plan.warnings, ...(scopes.some((scope) => spaAssetsBinding(scope.assets) !== undefined) ? spaPlan.warnings : []));
     }
 
     return {
@@ -362,6 +391,7 @@ export {
     MAX_RUN_WORKER_FIRST_RULE_LENGTH,
     MAX_RUN_WORKER_FIRST_RULES,
     planRunWorkerFirst,
+    planSpaRunWorkerFirst,
     reconcileAssetRouting,
     runWorkerFirstProblems,
     workerPathRules,

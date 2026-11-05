@@ -263,28 +263,61 @@ describe("reconcileWranglerBindings", () => {
             expect(reconcileWranglerBindings(root, baseInferred()).changed).toBe(false);
         });
 
-        it("writes no list for a single-page app, and says how to opt in", () => {
-            expect.assertions(4);
+        it("runs the Worker first for every path of a single-page app with an assets binding, exempting its static output", () => {
+            expect.assertions(3);
 
             writeFileSync(join(root, "package.json"), '{ "name": "app" }\n', "utf8");
+            mkdirSync(join(root, "public", "img"), { recursive: true });
+            writeFileSync(join(root, "public", "favicon.ico"), "", "utf8");
+            writeFileSync(join(root, "public", "_headers"), "", "utf8");
             writeFileSync(
                 join(root, "wrangler.jsonc"),
                 withAssets(
-                    '{ "directory": "./dist/client", "not_found_handling": "single-page-application" }',
+                    '{ "binding": "ASSETS", "directory": "./dist/client", "not_found_handling": "single-page-application" }',
                     '\n    "env": { "staging": { "assets": { "directory": "./dist/staging" } } },',
                 ),
                 "utf8",
             );
 
+            // `/static/:file` is the Worker's, so `/static/*` is not exempted.
+            reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe", "/static/:file"] }));
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/*", "!/_astro/*", "!/assets/*", "!/favicon.ico", "!/img/*"]);
+            // The env block has its own assets without the fallback, so it keeps the named list.
+            expect(readConfig().env.staging.assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/static/*", "/webhooks/stripe"]);
+            // Owned like any list Lunora writes.
+            expect(reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe", "/static/:file"] })).changed).toBe(false);
+        });
+
+        it("rewrites the old rspack-react list to the worker-first form once the SPA has a binding", () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets(
+                    '{ "binding": "ASSETS", "directory": "./dist", "not_found_handling": "single-page-application", "run_worker_first": ["/_lunora/*"] }',
+                ),
+                "utf8",
+            );
+
+            reconcileWranglerBindings(root, baseInferred());
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/*", "!/_astro/*", "!/assets/*", "!/static/*"]);
+        });
+
+        it("keeps the named list for a single-page app without a binding, and says to add one", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets('{ "directory": "./dist/client", "not_found_handling": "single-page-application" }'),
+                "utf8",
+            );
+
             const result = reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe"] }));
 
-            expect((readConfig().assets as { run_worker_first?: unknown }).run_worker_first).toBeUndefined();
-            expect(result.warnings.join(" ")).toContain(
-                'assets.run_worker_first is not set, and Lunora does not write it under not_found_handling "single-page-application"',
-            );
-            expect(result.warnings.join(" ")).toContain('["/_lunora/*","/__lunora/*","/webhooks/stripe"]');
-            // The env block has its own assets without the fallback, so it still gets a list.
-            expect(readConfig().env.staging.assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/webhooks/stripe"]);
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/webhooks/stripe"]);
+            expect(result.warnings.join(" ")).toContain('assets falls back to a single-page app but sets no "binding"');
         });
 
         it("writes an env block's own assets too", () => {
