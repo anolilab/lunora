@@ -15,6 +15,7 @@
  */
 
 export { applyModify } from "../jsonc-edit";
+export { reconcileWranglerBindings } from "./apply-bindings";
 export type { AssertWranglerOptions } from "./assert-wrangler";
 export { assertWranglerSatisfiesSchema } from "./assert-wrangler";
 export type { AssetHeadersOptions, AssetHeadersResult } from "./asset-headers";
@@ -38,7 +39,7 @@ export { HYPERDRIVE_PLACEHOLDER_ID } from "./placeholder-ids";
 export type { AssetHeadersLogger, ProjectAssetHeadersInput, ProjectAssetHeadersOutcome } from "./project-asset-headers";
 export { emitProjectAssetHeaders } from "./project-asset-headers";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
-export { collectExportGaps, reconcileWranglerBindings } from "./reconcile-bindings";
+export { collectExportGaps } from "./reconcile-bindings";
 export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";
 export { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
 export type { ReconcileResult as ReconcileCronsResult } from "./reconcile-crons";

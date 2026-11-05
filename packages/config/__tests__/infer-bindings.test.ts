@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Not part of codegen's public API: only this drift guard needs the whole-project probe.
 import { discoverFeatureUsage } from "../../codegen/src/discover/feature-usage";
-import { reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
+import { reconcileWranglerBindings } from "../src/cloudflare/apply-bindings";
 import { validateWranglerProject } from "../src/cloudflare/wrangler-project";
 import type { InferredBindings } from "../src/infer-bindings";
 import { inferLunoraBindings, secretSourcesFromBindings } from "../src/infer-bindings";

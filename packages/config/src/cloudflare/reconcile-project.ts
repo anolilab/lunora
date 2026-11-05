@@ -12,8 +12,9 @@ import { basename } from "node:path";
 import type { DiscoveryCache } from "../discovery-cache";
 import { inferLunoraBindings } from "../infer-bindings";
 import { LUNORA_TAG } from "../log-line";
+import { applyWranglerBindings } from "./apply-bindings";
 import type { ExportGap, WranglerBindingsPlan } from "./reconcile-bindings";
-import { applyWranglerBindings, planWranglerBindings } from "./reconcile-bindings";
+import { planWranglerBindings } from "./reconcile-bindings";
 import { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
 import { describePreservedCrons, reconcileWranglerCrons } from "./reconcile-crons";
 

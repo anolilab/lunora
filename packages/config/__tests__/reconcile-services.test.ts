@@ -6,7 +6,8 @@ import type { ServiceBindingIR } from "@lunora/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { planWranglerBindings, reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
+import { reconcileWranglerBindings } from "../src/cloudflare/apply-bindings";
+import { planWranglerBindings } from "../src/cloudflare/reconcile-bindings";
 import type { InferredBindings } from "../src/infer-bindings";
 
 const inferred = (services: ServiceBindingIR[] | undefined): InferredBindings => {
