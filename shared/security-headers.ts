@@ -34,8 +34,8 @@ interface SecurityHeadersOptions {
      * 'none'; frame-ancestors …`) — this does NOT set `default-src`/`script-src`,
      * so it never blocks a page's own scripts/styles/images/fetches. Pass a string
      * to apply that exact policy to every response (HTML included); `false` to
-     * never send one. A string cannot be combined with {@link frameAncestors}:
-     * put the `frame-ancestors` directive in it.
+     * never send one. Neither can be combined with {@link frameAncestors}: put the
+     * `frame-ancestors` directive in the string.
      */
     csp?: string | false;
     /**
@@ -43,7 +43,8 @@ interface SecurityHeadersOptions {
      * (e.g. `["https://partner.example"]`). Sets the HTML policy's
      * `frame-ancestors 'self' <origins>` and drops `X-Frame-Options`, which
      * cannot express a list (browsers that understand `frame-ancestors` ignore
-     * it anyway). Cannot be combined with `frameOptions: "DENY"` or a `csp` string.
+     * it anyway). Cannot be combined with `frameOptions: "DENY"`, a `csp` string,
+     * or `csp: false` (which would leave no header restricting framing).
      */
     frameAncestors?: ReadonlyArray<string>;
     /** `X-Frame-Options` (clickjacking). Defaults to `SAMEORIGIN`. `false` omits it. */
@@ -252,6 +253,11 @@ const parseSecurityHeaders = (input: unknown): ParsedSecurityHeaders => {
 
     if (options.frameAncestors !== undefined && options.frameOptions === "DENY") {
         problems.push('security.headers.frameAncestors cannot be combined with frameOptions: "DENY"');
+    }
+
+    // `frameAncestors` drops `X-Frame-Options`, so without a CSP to carry `frame-ancestors` nothing would restrict framing.
+    if (options.frameAncestors !== undefined && options.csp === false) {
+        problems.push("security.headers.frameAncestors needs the Content-Security-Policy that carries it; it cannot be combined with csp: false");
     }
 
     if (problems.length > 0) {

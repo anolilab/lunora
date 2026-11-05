@@ -43,6 +43,14 @@ describe("security.headers in lunora.config", () => {
         expect(readProjectConfigLiterals(projectRoot).security).toStrictEqual(expected);
     });
 
+    it("reads no security.headers from a config that sets none, so LUNORA_SECURITY_HEADERS still decides", () => {
+        expect.assertions(1);
+
+        writeConfig('{ target: "cloudflare" }');
+
+        expect(readProjectSecurityHeaders(join(projectRoot, "lunora"))).toBeUndefined();
+    });
+
     it("reads every section a getter declares as unreadable, services included", () => {
         expect.assertions(1);
 
@@ -67,7 +75,10 @@ describe("security.headers in lunora.config", () => {
         ['{ security: { headers: { hsts: { maxAge: "x" } } } }', "hsts.maxAge must be a whole number"],
         ['{ security: { headers: { frameOptions: "ALLOW" } } }', "frameOptions must be one of"],
         ['{ security: { headers: { frameAncestors: "https://a.example" } } }', "frameAncestors must be an array"],
+        ['{ security: { headers: { csp: false, frameAncestors: ["https://a.example"] } } }', "cannot be combined with csp: false"],
         ["{ security: { headers: [] } }", "must be a boolean or an object"],
+        ["{ ...base, security: { headers: false } }", "is not an object literal codegen can read"],
+        ["makeConfig()", "is not an object literal codegen can read"],
     ])("falls back to the defaults, saying why, for %s", (body, reason) => {
         expect.assertions(2);
 
@@ -75,7 +86,8 @@ describe("security.headers in lunora.config", () => {
 
         writeConfig(body);
 
-        expect(readProjectSecurityHeaders(join(projectRoot, "lunora"))).toBeUndefined();
+        // `true`, not `undefined`: an unset value would let LUNORA_SECURITY_HEADERS turn every header off.
+        expect(readProjectSecurityHeaders(join(projectRoot, "lunora"))).toBe(true);
         expect(warn).toHaveBeenCalledWith(expect.stringContaining(reason));
     });
 });
@@ -104,11 +116,15 @@ describe("emitApp — security.headers", () => {
 
 describe("emitApp — spaAssets", () => {
     it("passes a single-page app's assets binding to the worker, and nothing for any other app", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         expect(emitApp(baseOptions)).not.toContain("spaAssets");
-        expect(emitApp({ ...baseOptions, spaAssetsBinding: "ASSETS" })).toContain(
-            '            spaAssets: (env as Record<string, unknown>)["ASSETS"] as WorkerOptions["spaAssets"],',
+        expect(emitApp({ ...baseOptions, spaAssetsBindings: ["ASSETS"] })).toContain(
+            '            spaAssets: ((env as Record<string, unknown>)["ASSETS"]) as WorkerOptions["spaAssets"],',
+        );
+        // One name per wrangler environment: the deployment uses the first one it has.
+        expect(emitApp({ ...baseOptions, spaAssetsBindings: ["ASSETS", "STATIC"] })).toContain(
+            '            spaAssets: ((env as Record<string, unknown>)["ASSETS"] ?? (env as Record<string, unknown>)["STATIC"]) as WorkerOptions["spaAssets"],',
         );
     });
 });

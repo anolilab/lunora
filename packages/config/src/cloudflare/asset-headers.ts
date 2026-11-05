@@ -22,7 +22,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { LunoraError } from "@lunora/errors";
 
 import type { SecurityHeadersOptions } from "../../../../shared/security-headers";
-import { resolveSecurityHeaders } from "../../../../shared/security-headers";
+import { parseSecurityHeaders, resolveSecurityHeaders } from "../../../../shared/security-headers";
 import join from "../path";
 
 const HEADERS_FILE = "_headers";
@@ -49,7 +49,14 @@ const MAX_HEADERS_LINE_LENGTH = 2000;
  * CORS is left to the Worker; static files are served same-origin.
  */
 const securityHeaderLines = (headers: boolean | SecurityHeadersOptions | undefined): (readonly [string, string])[] => {
-    const resolved = resolveSecurityHeaders(headers);
+    // Parsed as `createWorker` parses it: a value with a line break would otherwise split into extra `_headers` lines.
+    const parsed = parseSecurityHeaders(headers);
+
+    if (!parsed.ok) {
+        throw new LunoraError("CONFIG_INVALID", `[lunora] cannot write _headers: ${parsed.problems.join("; ")}`);
+    }
+
+    const resolved = resolveSecurityHeaders(parsed.value);
 
     if (!resolved.enabled) {
         return [];
@@ -390,6 +397,7 @@ const fitRules = (managed: ReadonlyArray<HeaderRule>, userRuleCount: number, war
  * `undefined` when there is none) and return the new text, or `undefined` when
  * the file should not exist. Pure.
  * @throws LunoraError `INTERNAL` for a header line Cloudflare would ignore — see {@link assertLineFits}.
+ * @throws LunoraError `CONFIG_INVALID` for `headers` that `parseSecurityHeaders` refuses, as `createWorker` would.
  */
 const mergeAssetHeaders = (
     existing: string | undefined,

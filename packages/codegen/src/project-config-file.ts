@@ -803,23 +803,17 @@ const readProjectStudioCompanion = (lunoraDirectory: string): boolean => {
 
 const securityWarnedFor = new Set<string>();
 
-/**
- * `lunora.config`'s `security.headers`, or `undefined` when the config sets none
- * or the value cannot be used. Unreadable or invalid is said out loud and falls
- * back to the defaults: never to "headers off", and never to a value that would
- * fail every request at runtime. The build's `_headers` writer resolves the same
- * way, so the Worker and the static assets keep sending the same headers.
- */
-const readProjectSecurityHeaders = (lunoraDirectory: string): boolean | SecurityHeadersOptions | undefined => {
-    const configPath = findCodegenConfigFile(lunoraDirectory);
-    const { security } = configPath === undefined ? {} : readConfigLiterals(configPath);
-    const parsed = security?.unreadable ? undefined : parseSecurityHeaders(security?.headers);
+/** Say why `security.headers` could not be used, once per config file and reason, and pin the defaults. */
+const warnDefaultSecurityHeaders = (configPath: string | undefined, literals: ProjectConfigLiterals, parsed: { problems: string[] } | undefined): true => {
+    let problems: string[];
 
-    if (parsed?.ok) {
-        return parsed.value;
+    if (parsed !== undefined) {
+        ({ problems } = parsed);
+    } else if (literals.unreadable) {
+        problems = ["is not an object literal codegen can read, so `security.headers` cannot be read either"];
+    } else {
+        problems = ["`security.headers` is not built from literals"];
     }
-
-    const problems = parsed === undefined ? ["`security.headers` is not built from literals"] : parsed.problems;
 
     const key = `${configPath ?? ""}:${problems.join(";")}`;
 
@@ -829,7 +823,25 @@ const readProjectSecurityHeaders = (lunoraDirectory: string): boolean | Security
         console.warn(`@lunora/codegen: lunora.config ${problems.join("; ")}, so the default security headers apply.`);
     }
 
-    return undefined;
+    return true;
+};
+
+/**
+ * `lunora.config`'s `security.headers`, `undefined` when the config sets none,
+ * or `true` (the defaults) when the value cannot be used. Unreadable or invalid,
+ * a whole config codegen cannot read included, is said out loud and pins the
+ * defaults: `undefined` would let `LUNORA_SECURITY_HEADERS` turn every header
+ * off, and an invalid value would fail every request at runtime. The build's
+ * `_headers` writer resolves the same way, so the Worker and the static assets
+ * keep sending the same headers.
+ */
+const readProjectSecurityHeaders = (lunoraDirectory: string): boolean | SecurityHeadersOptions | undefined => {
+    const configPath = findCodegenConfigFile(lunoraDirectory);
+    const literals: ProjectConfigLiterals = configPath === undefined ? {} : readConfigLiterals(configPath);
+    const { security } = literals;
+    const parsed = literals.unreadable || security?.unreadable ? undefined : parseSecurityHeaders(security?.headers);
+
+    return parsed?.ok ? parsed.value : warnDefaultSecurityHeaders(configPath, literals, parsed);
 };
 
 export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral };
