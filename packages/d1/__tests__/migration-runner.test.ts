@@ -601,6 +601,8 @@ describe("migrationRunner destructive statements", () => {
         ["TRUNCATE", "TRUNCATE TABLE users"],
         ["INSERT OR REPLACE", "INSERT OR REPLACE INTO config (k, v) VALUES ('a', 'b')"],
         ["REPLACE INTO", "REPLACE INTO config (k, v) VALUES ('a', 'b')"],
+        ["REPLACE INTO a quoted name it touches", `REPLACE INTO"config" (k, v) VALUES ('a', 'b')`],
+        ["DROP TABLE of a quoted name it touches", `DROP TABLE"legacy_sessions"`],
         ["UPDATE OR REPLACE", "UPDATE OR REPLACE config SET k = 'a' WHERE k = 'b'"],
         ["ON CONFLICT REPLACE", "CREATE TABLE config (k TEXT UNIQUE ON CONFLICT REPLACE, v TEXT)"],
         ["an update or replace in a trigger body", "CREATE TRIGGER t AFTER INSERT ON a BEGIN UPDATE OR REPLACE b SET id = NEW.id; END;"],
@@ -636,8 +638,12 @@ describe("migrationRunner destructive statements", () => {
 
     it.each([
         ["a marker before the statement", "-- lunora:allow-destructive\nDROP TABLE legacy_sessions;"],
-        ["a marker after the statement", "DROP TABLE legacy_sessions; -- lunora:allow-destructive"],
         ["a marker on a CRLF line", "-- lunora:allow-destructive\r\nDROP TABLE legacy_sessions;"],
+        ["an indented marker after a comment line", "-- drop the old sessions\n  -- lunora:allow-destructive\nDROP TABLE legacy_sessions;"],
+        [
+            "a marker before a trigger whose body replaces",
+            "-- lunora:allow-destructive\nCREATE TRIGGER t AFTER INSERT ON a BEGIN INSERT OR REPLACE INTO b (id) VALUES (NEW.id); END;",
+        ],
     ])("applies a destructive statement confirmed by %s", async (_label, text) => {
         expect.assertions(1);
 
@@ -669,6 +675,12 @@ describe("migrationRunner destructive statements", () => {
     it.each([
         ["inside a string literal", "REPLACE INTO config (k, v) VALUES ('note', '\n-- lunora:allow-destructive')"],
         ["with a suffix", "-- lunora:allow-destructive-NOT\nDROP TABLE legacy_sessions;"],
+        ["after the statement", "DROP TABLE legacy_sessions; -- lunora:allow-destructive"],
+        ["after the statement, on a line of its own", "DROP TABLE legacy_sessions;\n-- lunora:allow-destructive"],
+        [
+            "at the end of a line of code before the statement",
+            "CREATE TRIGGER t AFTER INSERT ON a BEGIN -- lunora:allow-destructive\nINSERT OR REPLACE INTO b (id) VALUES (NEW.id); END;",
+        ],
         ["with trailing words", "-- lunora:allow-destructive later, maybe\nDROP TABLE legacy_sessions;"],
     ])("does not take a marker %s as the opt-in", async (_label, text) => {
         expect.assertions(1);

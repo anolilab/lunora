@@ -155,12 +155,17 @@ interface MigrationRunnerResult {
 /** What {@link scanStatement} reads off a migration's SQL. */
 interface StatementScan {
     /**
-     * The SQL with every comment blanked to spaces and every string or quoted identifier to one `_` and spaces, so the
-     * keyword checks see only code and a quoted name still reads as one word.
+     * The SQL with every comment blanked to spaces and every string or quoted identifier to spaces around one `_`, so
+     * the keyword checks see only code and a quoted name still reads as one word, apart from the keyword it touches
+     * (`DROP TABLE"users"`).
      */
     code: string;
-    /** Each `--` comment, from its `--` to the end of its line. */
-    lineComments: string[];
+
+    /**
+     * Each `--` comment, from its `--` to the end of its line, with where it starts in `code` and whether nothing
+     * but whitespace precedes it on its line.
+     */
+    lineComments: { codeIndex: number; ownLine: boolean; text: string }[];
     /** The statement to submit: up to its terminating `;`, trimmed, since D1 rejects anything past the terminator. */
     statementText: string;
 }
@@ -174,6 +179,11 @@ interface PendingMigration {
 
 /** How {@link MigrationRunner} names a migration in a refusal. */
 const describeMigration = (migration: Migration): string => `Migration "${migration.name}" (v${String(migration.version)})`;
+
+/** A `--` comment starting at `codeIndex` of `code`, which holds everything scanned before it. */
+const lineComment = (code: string, codeIndex: number, text: string): StatementScan["lineComments"][number] => {
+    return { codeIndex, ownLine: code.slice(code.lastIndexOf("\n", codeIndex - 1) + 1, codeIndex).trim() === "", text };
+};
 
 /**
  * Read a migration's SQL as one statement, rejecting it when it holds more than one. Quote- and comment-aware, so a
@@ -193,12 +203,13 @@ const describeMigration = (migration: Migration): string => `Migration "${migrat
 // eslint-disable-next-line sonarjs/cognitive-complexity -- a single-pass SQL lexer: its mode branching is the grammar, and split helpers would all share the cursor and mode state
 const scanStatement = (text: string, label: string): StatementScan => {
     const isTrigger = CREATE_TRIGGER_RE.test(text.slice(LEADING_TRIVIA_RE.exec(text)?.[0].length ?? 0));
-    const lineComments: string[] = [];
+    const lineComments: StatementScan["lineComments"] = [];
     let code = "";
     // The character that ends the string or quoted identifier being read, and the comment being read.
     let closer: string | undefined;
     let comment: "block" | "line" | undefined;
     let commentStart = 0;
+    let commentCodeIndex = 0;
     let terminatorIndex: number | undefined;
     // Trigger-body bookkeeping (inert unless `isTrigger`): the word token being
     // accumulated, whether the last token was an `END` that followed a body `;`,
@@ -213,7 +224,7 @@ const scanStatement = (text: string, label: string): StatementScan => {
 
         if (comment === "line") {
             if (character === "\n") {
-                lineComments.push(text.slice(commentStart, index));
+                lineComments.push(lineComment(code, commentCodeIndex, text.slice(commentStart, index)));
                 comment = undefined;
             }
 
@@ -252,6 +263,7 @@ const scanStatement = (text: string, label: string): StatementScan => {
         if ((character === "-" && next === "-") || (character === "/" && next === "*")) {
             comment = character === "-" ? "line" : "block";
             commentStart = index;
+            commentCodeIndex = code.length;
             code += "  ";
             index += 1;
             continue;
@@ -296,7 +308,7 @@ const scanStatement = (text: string, label: string): StatementScan => {
         closer = QUOTE_CLOSERS[character];
 
         if (closer !== undefined) {
-            code += "_";
+            code += " _ ";
             continue;
         }
 
@@ -313,7 +325,7 @@ const scanStatement = (text: string, label: string): StatementScan => {
     }
 
     if (comment === "line") {
-        lineComments.push(text.slice(commentStart));
+        lineComments.push(lineComment(code, commentCodeIndex, text.slice(commentStart)));
     }
 
     return { code, lineComments, statementText: text.slice(0, terminatorIndex ?? text.length).trim() };
@@ -331,16 +343,30 @@ const assertAllowedStatement = (label: string, scan: StatementScan): void => {
         );
     }
 
-    if (scan.lineComments.some((comment) => comment.trimEnd() === ALLOW_DESTRUCTIVE_MARKER)) {
+    // The destructive statement whose keyword comes first, past the whitespace a `^\s*` pattern also matched.
+    let first: { index: number; statement: string } | undefined;
+
+    for (const [statement, pattern] of DESTRUCTIVE_STATEMENTS) {
+        const match = pattern.exec(scan.code);
+        const index = match === null ? undefined : match.index + match[0].length - match[0].trimStart().length;
+
+        if (index !== undefined && (first === undefined || index < first.index)) {
+            first = { index, statement };
+        }
+    }
+
+    if (first === undefined) {
         return;
     }
 
-    const destructive = DESTRUCTIVE_STATEMENTS.find(([, pattern]) => pattern.test(scan.code));
+    const confirmed = scan.lineComments.some(
+        (comment) => comment.ownLine && comment.codeIndex < first.index && comment.text.trimEnd() === ALLOW_DESTRUCTIVE_MARKER,
+    );
 
-    if (destructive !== undefined) {
+    if (!confirmed) {
         throw new LunoraError(
             "MIGRATION_DESTRUCTIVE",
-            `${label} has not run yet and contains a destructive statement (${destructive[0]}). If it is meant to discard data or rename what readers depend on, add a \`${ALLOW_DESTRUCTIVE_MARKER}\` line comment on its own line before the statement. Only pending migrations are checked, so never add it to one that already ran: that changes its hash and is refused as drift.`,
+            `${label} has not run yet and contains a destructive statement (${first.statement}). If it is meant to discard data or rename what readers depend on, add a \`${ALLOW_DESTRUCTIVE_MARKER}\` line comment on its own line before the statement. Only pending migrations are checked, so never add it to one that already ran: that changes its hash and is refused as drift.`,
         );
     }
 };

@@ -118,7 +118,8 @@ full-table `UPDATE` is what every backfill looks like.
 
 To confirm one, put the `-- lunora:allow-destructive` line comment (exported as
 `ALLOW_DESTRUCTIVE_MARKER`) on its own line before the statement. The line must
-be exactly that comment. It confirms the whole migration it is in.
+be exactly that comment. A marker after the statement, or at the end of a line
+of code, confirms nothing.
 `lunora migrate generate` writes it before every `DROP` it emits, so a generated
 file split at each `;` into one entry per statement applies as is.
 
