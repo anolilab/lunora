@@ -185,9 +185,9 @@ const BOUNDED_FIND_MANY_CASES: ReadonlyArray<BoundedCase> = [
         },
     ],
     [
-        "caps a bounded read at limit, and the half past splitCursor recovers the rows the cap held back",
+        "caps a bounded read at limit, says so with splitRequired, and the half past splitCursor recovers the rows the cap held back",
         async (open: OpenTarget): Promise<void> => {
-            expect.assertions(4);
+            expect.assertions(6);
 
             const target = await open("bounded_limit");
             const orderBy: Ordering = [{ seq: "asc" }];
@@ -200,12 +200,21 @@ const BOUNDED_FIND_MANY_CASES: ReadonlyArray<BoundedCase> = [
             const capped = await target.findMany({ endCursor, limit: 4, orderBy });
 
             expect(labelsOf(capped.page)).toStrictEqual(expected.slice(0, 4));
-            expect(capped).toMatchObject({ continueCursor: endCursor, isDone: true });
+            // Cut short, so the client must split it even though 4 rows is within twice a page of 3.
+            expect(capped).toMatchObject({ continueCursor: endCursor, isDone: true, splitRequired: true });
+            // A limit the range fits in cuts nothing.
+            await expect(target.findMany({ endCursor, limit: expected.length, orderBy })).resolves.not.toHaveProperty("splitRequired");
 
             const rest = await target.findMany({ cursor: capped.splitCursor, endCursor, orderBy });
 
             // The midpoint of the 4 rows returned is the 2nd; everything after it comes back.
             expect(labelsOf(rest.page)).toStrictEqual(expected.slice(2));
+
+            // A cut page that kept one row splits right after it, so the rest is still reachable.
+            const one = await target.findMany({ endCursor, limit: 1, orderBy });
+            const afterOne = await target.findMany({ cursor: one.splitCursor, endCursor, orderBy });
+
+            expect(labelsOf(afterOne.page)).toStrictEqual(expected.slice(1));
 
             const empty = await target.findMany({ endCursor, limit: 0, orderBy });
 
@@ -215,7 +224,7 @@ const BOUNDED_FIND_MANY_CASES: ReadonlyArray<BoundedCase> = [
     [
         "refuses a malformed endCursor like a malformed cursor",
         async (open: OpenTarget): Promise<void> => {
-            expect.assertions(4);
+            expect.assertions(6);
 
             const target = await open("bounded_malformed");
             const orderBy: Ordering = [{ seq: "asc" }];
@@ -227,6 +236,12 @@ const BOUNDED_FIND_MANY_CASES: ReadonlyArray<BoundedCase> = [
             // An empty string is a malformed cursor, not an absent one.
             await expect(target.findMany({ endCursor: "", orderBy })).rejects.toMatchObject({ code: "BAD_REQUEST" });
             await expect(target.findMany({ endCursor: "not-a-cursor", limit: 2, orderBy })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+            // The lower cursor is held to the same rule: empty is malformed, not "from the start".
+            const { cursors } = await walk(target, orderBy, PAGE_SIZE);
+
+            await expect(target.findMany({ cursor: "", endCursor: cursors[1], orderBy })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+            await expect(target.findMany({ cursor: "", limit: 2, orderBy })).rejects.toMatchObject({ code: "BAD_REQUEST" });
         },
     ],
 ];

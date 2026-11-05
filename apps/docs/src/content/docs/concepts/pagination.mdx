@@ -138,10 +138,11 @@ page is the fixed range `(cursor, endCursor]` under the call's `orderBy`:
   where this one ends. A row inserted inside the range grows this page and leaves the next one alone.
 - `splitCursor` is the cursor of the range's midpoint row (`null` under two rows). The client splits a
   page holding more than twice its `numItems` into `(cursor, splitCursor]` and `(splitCursor, endCursor]`.
-- `limit` still caps the read. Rows past the cap come back once the client splits at `splitCursor`,
-  which it only does above twice the page size, so give a pinned page a `limit` above `2 * numItems`.
-- On a `.global()` table, a pinned page with no `limit` is capped at 4096 rows. Keep `numItems` under
-  2048 there, or pass a `limit`, so a capped page is still large enough for the client to split.
+- `limit` still caps the read. A range it cuts short answers `splitRequired: true`, and the client
+  splits it at `splitCursor` whatever its size, so the rows past the cap come back in the second half.
+- On a `.global()` table, a pinned page with no `limit` is capped at 4096 rows the same way.
+- A pinned page binds a second cursor seek, so an `orderBy` too wide for both to fit in one statement
+  is refused with `BAD_REQUEST`; order by fewer fields.
 
 ## Load more / infinite lists on the client
 

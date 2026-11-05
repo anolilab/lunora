@@ -1666,6 +1666,7 @@ interface PaginationResult<T = Record<string, unknown>> {
     isDone: boolean;
     page: T[];
     splitCursor?: null | string;
+    splitRequired?: boolean;
 }
 ```
 
@@ -4192,6 +4193,7 @@ interface QueryPage<TDocument> {
     isDone: boolean;
     page: TDocument[];
     splitCursor?: null | string;
+    splitRequired?: boolean;
 }
 ```
 

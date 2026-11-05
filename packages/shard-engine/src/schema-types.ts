@@ -421,6 +421,8 @@ export interface QueryPage {
     isDone: boolean;
     page: Record<string, unknown>[];
     splitCursor?: null | string;
+    /** A bounded read the `limit` cut short: split it at `splitCursor` to reach the rest. */
+    splitRequired?: boolean;
 }
 
 /**

@@ -1756,6 +1756,7 @@ interface QueryPage {
     isDone: boolean;
     page: Record<string, unknown>[];
     splitCursor?: null | string;
+    splitRequired?: boolean;
 }
 ```
 

@@ -202,11 +202,9 @@ export interface QueryArgsOf<DM, REL extends Record<keyof DM, object>, T extends
      * grows this page and the next page (starting at `endCursor`) is unchanged. The result is
      * `isDone: true`, echoes `endCursor` as `continueCursor`, and carries `splitCursor`.
      *
-     * `limit` still caps the read; the rows past the cap come back once the page is split at
-     * `splitCursor`. The client splits a page holding more than twice its page size, so pass a
-     * `limit` above 2x the page size or a capped page never grows large enough to split. On a
-     * `.global()` table a read with no `limit` is capped at 4096 rows, so keep the page size under
-     * 2048 there or pass a `limit`.
+     * `limit` still caps the read. A range it cuts short answers `splitRequired: true`, and the
+     * client splits it at `splitCursor`, so the rows past the cap come back in the second half. On
+     * a `.global()` table a read with no `limit` is capped at 4096 rows the same way.
      */
     endCursor?: null | string;
 
@@ -231,6 +229,12 @@ export interface QueryPage<TDocument> {
      * `(cursor, splitCursor]` and `(splitCursor, endCursor]` reproduces the range in two halves.
      */
     splitCursor?: null | string;
+
+    /**
+     * Only on an `endCursor` read that `limit` (or the global read cap) cut short: the page holds
+     * the first rows of its range, and splitting at `splitCursor` is the way to reach the rest.
+     */
+    splitRequired?: boolean;
 }
 
 /** The nested `with` sub-argument inside a relation's with-value, or `{}`. */

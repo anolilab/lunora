@@ -64,7 +64,7 @@ describe("an unlimited global findMany under the read meter on D1", () => {
         const capped = await writer.findMany(table, { endCursor: head.continueCursor, orderBy });
 
         expect(capped.page.map((row) => row["_id"])).toStrictEqual(ids.slice(0, 4096));
-        expect(capped).toMatchObject({ continueCursor: head.continueCursor, isDone: true });
+        expect(capped).toMatchObject({ continueCursor: head.continueCursor, isDone: true, splitRequired: true });
 
         const rest = await writer.findMany(table, { cursor: capped.splitCursor, endCursor: head.continueCursor, orderBy });
 
