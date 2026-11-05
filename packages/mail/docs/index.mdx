@@ -121,7 +121,8 @@ true. Whether it is retried depends on the provider: Resend receives the send's
 retryable and redelivered; through the Cloudflare binding, or without a key, it is
 not, and the consumer acks and reports it rather than mailing a possible second
 copy. `send()` gives the transport 60 seconds by default (`sendTimeoutMs` on
-`createMailer` / `createMailerFromEnv`), and Resend's own 30-second request timeout
+`createMailer` / `createMailerFromEnv`, at most 2 147 483 647, `setTimeout`'s
+limit), and Resend's own 30-second request timeout
 counts the same way. A 409 from Resend, which means a request under the same key is
 still being processed, is outcome-unknown too and retried the same way.
 
@@ -145,8 +146,9 @@ export default {
 
         for (const message of batch.messages) {
             try {
-                // `env.SENT` is a KV namespace: a redelivered key is acked without a second send.
-                await consumeQueuedSend(mailer, message.body, { sent: env.SENT });
+                // `env.SENT` is a KV namespace: a redelivered key already recorded there is acked without
+                // a second send. KV is eventually consistent, so this narrows duplicates, not prevents them.
+                await consumeQueuedSend(mailer, message.body, { enqueuedAt: message.timestamp, sent: env.SENT });
             } catch (error) {
                 // Transient, or a send that may have landed with a provider that dedupes on the key (Resend).
                 if (isRetryableMailError(error)) {
@@ -169,9 +171,9 @@ export default {
 ```
 
 Each queued send carries a stable `idempotencyKey` — a caller-supplied one (1-256
-visible ASCII characters), or one generated at enqueue time. The `ack` narrows
-retries to the message that actually failed, and the key is what stops a
-redelivery from mailing a second copy. Pass `sent` — a KV namespace, or anything
+visible ASCII characters, other than `.` and `..`), or one generated at enqueue
+time. The `ack` narrows retries to the message that actually failed, and the key
+is what lets a redelivery be recognised and skipped. Pass `sent` — a KV namespace, or anything
 with KV's `get(key)` / `put(key, value, { expirationTtl })` — and
 `consumeQueuedSend` checks it before sending, records the key with the provider's
 message id after a successful send (for `sentTtlSeconds`, default one day; KV needs
@@ -182,13 +184,20 @@ one is `undefined`, which turns dedupe off, so `consumeQueuedSend` logs a warnin
 when `sent` is passed as `undefined`. Only a success is
 recorded, so a failed attempt never blocks the retry. A store it cannot read fails
 the send as retryable, because nothing has gone out; a store it cannot write after
-the send is logged and the send still counts as done. With a `sent` store a body
+the send, or that does not answer within 10 seconds, is logged and the send still
+counts as done. With a `sent` store a body
 without an `idempotencyKey` is refused as malformed. Resend also receives the key
 as its `Idempotency-Key` request header and drops a repeat within its own 24-hour
-window; the Cloudflare binding has no such hook.
+window; the Cloudflare binding has no such hook. Past that window Resend would
+deliver the repeat, so pass `enqueuedAt: message.timestamp` as above: an
+outcome-unknown failure of a message enqueued 23 or more hours ago is then not
+retryable, and the consumer acks and reports it. Without `enqueuedAt` nothing
+tracks the message's age, and a send retried for more than a day can be delivered
+twice.
 
 **Upgrading.** `send()` and `queue()` now validate the key and forward it to
-Resend. A key must be 1-256 visible ASCII characters (no spaces); anything else is
+Resend. A key must be a string of 1-256 visible ASCII characters (no spaces), and
+not `.` or `..`, which Workers KV refuses as key names; anything else is
 refused as a non-retryable `MailSendError`, at enqueue and again in
 `consumeQueuedSend` before the `sent` store is read, so a message an older version
 enqueued with such a key is acked and logged by the consumer above rather than

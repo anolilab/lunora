@@ -137,8 +137,11 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
 
             for (const message of batch.messages) {
                 try {
-                    // A KV namespace bound as `SENT`: a redelivered message is acked without a second send.
-                    await consumeQueuedSend(mailer, message.body, { sent: env.SENT });
+                    // A KV namespace bound as `SENT`: a redelivered message already recorded there is acked
+                    // without a second send. KV is eventually consistent and a crash can land between the send
+                    // and the record, so this narrows duplicates rather than preventing them. `enqueuedAt`
+                    // stops a send that may have landed from being retried past Resend's 24-hour dedupe window.
+                    await consumeQueuedSend(mailer, message.body, { enqueuedAt: message.timestamp, sent: env.SENT });
                 } catch (error) {
                     // Transient, or a send that may have landed with a provider that dedupes on the key (Resend).
                     if (isRetryableMailError(error)) {
