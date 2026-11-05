@@ -43,6 +43,7 @@ import { init as initLexer } from "es-module-lexer";
 import type { SourceFile } from "ts-morph";
 import { Project } from "ts-morph";
 
+import { DEFAULT_AUTH_BASE_PATH } from "../../../shared/auth-base-path";
 import type { AgentIR } from "./agent-info";
 import { discoverAgentInfo } from "./agent-info";
 import type { ContainerIR } from "./container-info";
@@ -399,24 +400,27 @@ interface InferredBindings {
      * each `httpRoute.<verb>(path)` route under `lunora/`, plus `@lunora/auth`'s
      * default base path (`/api/auth/*`) when auth is imported. Reconcile widens them
      * into `assets.run_worker_first` rules. A custom auth `basePath` and routes
-     * added to a Hono `httpRouter` directly are not visible here.
+     * added to a Hono `httpRouter` directly are not visible here. `undefined` when
+     * the files under `lunora/` could not be parsed.
      */
-    workerRoutes: string[];
+    workerRoutes: string[] | undefined;
     /** Workflows declared in `lunora/workflows.ts` (exported or not — see {@link InferredWorkflow.exported}). */
     workflows: InferredWorkflow[];
 }
 
 /**
- * `@lunora/auth`'s default base path, which this package cannot import
- * (`@lunora/auth` depends on it). A test in `@lunora/auth` pins the two together.
+ * See {@link InferredBindings.workerRoutes}: `undefined` when `lunora/` cannot be
+ * parsed, so reconcile leaves `run_worker_first` alone rather than narrowing it
+ * to the reserved paths. Codegen reports the same file.
  */
-const AUTH_ROUTE_BASE_PATH = "/api/auth";
+const discoverWorkerRoutes = (projectRoot: string, schemaDirectory: string, usesAuth: boolean): string[] | undefined => {
+    const { error, value } = discoverIr(projectRoot, schemaDirectory, undefined, discoverHttpRoutes);
 
-/** See {@link InferredBindings.workerRoutes}. A parse failure only narrows `run_worker_first`, so it is not a signal: codegen reports the same file. */
-const discoverWorkerRoutes = (projectRoot: string, schemaDirectory: string, usesAuth: boolean): string[] => {
-    const routes = discoverIr(projectRoot, schemaDirectory, undefined, discoverHttpRoutes).value ?? [];
+    if (error !== undefined) {
+        return undefined;
+    }
 
-    return [...routes.map((route) => route.path), ...(usesAuth ? [`${AUTH_ROUTE_BASE_PATH}/*`] : [])];
+    return [...(value ?? []).map((route) => route.path), ...(usesAuth ? [`${DEFAULT_AUTH_BASE_PATH}/*`] : [])];
 };
 
 /**
@@ -958,4 +962,4 @@ const secretSourcesFromBindings = (bindings: InferredBindings): string[] =>
         .map(([, source]) => source);
 
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow };
-export { AUTH_ROUTE_BASE_PATH, inferLunoraBindings, secretSourcesFromBindings };
+export { inferLunoraBindings, secretSourcesFromBindings };

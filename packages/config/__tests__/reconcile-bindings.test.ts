@@ -307,7 +307,7 @@ describe("reconcileWranglerBindings", () => {
             expect(reconcileWranglerBindings(root, baseInferred()).added).not.toContain("assets.run_worker_first");
         });
 
-        it("adds the app's routes, widened to static prefixes, and rewrites the list it owns when they change", () => {
+        it("adds the app's routes, a parameter becoming a wildcard in place, and rewrites the list it owns when they change", () => {
             expect.assertions(3);
 
             writeFileSync(join(root, "package.json"), '{ "name": "app" }\n', "utf8");
@@ -338,6 +338,30 @@ describe("reconcileWranglerBindings", () => {
 
             expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/webhooks/*"]);
             expect(result.warnings.join(" ")).toContain("does not send /hooks/github to the Worker first");
+        });
+
+        it("owns the /_lunora/* list the old rspack-react template wrote, and adds the rest without a warning", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist", "run_worker_first": ["/_lunora/*"] }'), "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*"]);
+            expect(result.warnings.join(" ")).not.toContain("run_worker_first does not send");
+        });
+
+        it("leaves an owned list as it is when the routes could not be read", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(root, "package.json"), '{ "name": "app" }\n', "utf8");
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client" }'), "utf8");
+            reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe"] }));
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workerRoutes: undefined }));
+
+            expect(result.changed).toBe(false);
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/webhooks/stripe"]);
         });
 
         it.each([["celld"], ["node"]])("leaves assets alone on the %s target", (target) => {

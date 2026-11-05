@@ -102,7 +102,7 @@ export {
 } from "./driver-registry";
 export { default as ensureGitignoreEntries } from "./ensure-gitignore";
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
-export { AUTH_ROUTE_BASE_PATH, inferLunoraBindings, secretSourcesFromBindings } from "./infer-bindings";
+export { inferLunoraBindings, secretSourcesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";
 export { LINKED_PROJECT_DIR, LINKED_PROJECT_FILE, readLinkedProject, writeLinkedProject } from "./linked-project";
 export type { LintIgnoreOutcome, LintIgnoreStatus, LintTool } from "./lint-ignores";

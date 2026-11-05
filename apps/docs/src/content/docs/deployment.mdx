@@ -652,8 +652,10 @@ SSR/API fetch handler still runs underneath:
 
 The validator requires a non-empty `directory` (pointing at the built client
 output), a non-empty `binding` when one is set, an `html_handling` / `not_found_handling` value
-wrangler accepts, and a `run_worker_first` that is a boolean or a list of path
-rules (each starting with `/` or `!/`, at most 100 rules of 100 characters).
+wrangler accepts, and a `run_worker_first` that is a boolean or a list wrangler
+accepts: path rules starting with `/` or `!/`, at least one of them `/`, at most
+100 rules (duplicates included) of 100 characters, none repeated, and none
+already covered by another rule ending in `*`.
 Lunora does **not** auto-inject this block; the output directory is
 framework-adapter-specific, so you declare it.
 
@@ -678,15 +680,22 @@ block) with every path the Worker serves that they can see:
 }
 ```
 
-A rule cannot hold a route parameter, so each route is widened to its static
-prefix: `/api/todos/:id` becomes `/api/todos/*`, and `/files/*` becomes `/files`
-plus `/files/*`. A route whose first segment is a parameter (`/:tenant/api`)
-cannot be narrowed and is reported instead. Rules another rule covers are
-dropped, and the list stays within Cloudflare's limits (100 rules of at most 100
-characters); anything over is reported.
+A rule cannot hold a route parameter, so each parameter becomes a `*` where it
+stands: `/api/todos/:id` becomes `/api/todos/*`, `/users/:id/avatar.png` becomes
+`/users/*/avatar.png` (so the SPA keeps `/users/42`), and `/files/*` becomes
+`/files` plus `/files/*`. A `*` in a rule matches across `/` too, so a route that
+ends in a parameter also takes the deeper paths under it (`/api/todos/1/x`), which
+the Worker answers with its 404. A route whose first segment is a parameter
+(`/:tenant/api`), or the site root `/`, would send every path to the Worker and is
+reported instead. Rules another rule covers are dropped, and the list stays
+within Cloudflare's limits (100 rules of at most 100 characters); anything over
+is reported.
 
 Lunora records the list it wrote under `lunora.runWorkerFirst` in
-`package.json`, and rewrites it when your routes change. A `run_worker_first`
+`package.json`, and rewrites it when your routes change. It also takes over a
+list an earlier version wrote (the reserved pair, or the old `rspack-react`
+template's `["/_lunora/*"]`). When the files under `lunora/` cannot be parsed,
+the list is left as it is until they can. A `run_worker_first`
 you wrote, or edited after Lunora wrote it, is never changed. If it leaves out
 one of the paths above, Lunora warns and names it. Two kinds of route are
 invisible at config time, so add them yourself: a custom auth `basePath`, and

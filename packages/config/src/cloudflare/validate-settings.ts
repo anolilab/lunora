@@ -6,6 +6,7 @@
 
 import { isEnvEnabled } from "../../../../shared/env-flag";
 import { isNonEmptyString, isPlainObject } from "./guards";
+import { runWorkerFirstProblems } from "./reconcile-assets";
 import { objectBindingEntries } from "./validate-bindings";
 import type { TailConsumer, WranglerConfig } from "./wrangler-config";
 
@@ -357,10 +358,6 @@ const HTML_HANDLING = ["auto-trailing-slash", "drop-trailing-slash", "force-trai
 /** The values wrangler accepts for `assets.not_found_handling`. */
 const NOT_FOUND_HANDLING = ["404-page", "none", "single-page-application"];
 
-/** Cloudflare's caps on `assets.run_worker_first`: rules per list, and characters per rule. */
-const MAX_RUN_WORKER_FIRST_RULES = 100;
-const MAX_RUN_WORKER_FIRST_RULE_LENGTH = 100;
-
 const validateEnumSetting = (key: string, value: unknown, allowed: ReadonlyArray<string>, errors: string[]): void => {
     if (value !== undefined && (typeof value !== "string" || !allowed.includes(value))) {
         errors.push(`assets.${key} must be one of ${allowed.map((entry) => `"${entry}"`).join(", ")} (got ${JSON.stringify(value)})`);
@@ -379,19 +376,7 @@ const validateRunWorkerFirst = (value: unknown, errors: string[]): void => {
         return;
     }
 
-    if (value.length > MAX_RUN_WORKER_FIRST_RULES) {
-        errors.push(`assets.run_worker_first has ${String(value.length)} rules; Cloudflare accepts at most ${String(MAX_RUN_WORKER_FIRST_RULES)}`);
-    }
-
-    for (const rule of value as unknown[]) {
-        if (typeof rule !== "string" || !(rule.startsWith("/") || rule.startsWith("!/"))) {
-            errors.push(`assets.run_worker_first entry ${JSON.stringify(rule)} must be a path rule starting with "/" (or "!/" to exempt a path)`);
-        } else if (rule.length > MAX_RUN_WORKER_FIRST_RULE_LENGTH) {
-            errors.push(
-                `assets.run_worker_first entry "${rule}" is ${String(rule.length)} characters; Cloudflare accepts at most ${String(MAX_RUN_WORKER_FIRST_RULE_LENGTH)}`,
-            );
-        }
-    }
+    errors.push(...runWorkerFirstProblems(value as unknown[]));
 };
 
 /**

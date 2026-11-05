@@ -1,3 +1,4 @@
+import { isPlainObject } from "../../../../shared/is-plain-object";
 import { applyModify } from "../jsonc-edit";
 import type { Manifest } from "./lunora-manifest";
 import { recordManifestKey } from "./lunora-manifest";
@@ -16,9 +17,12 @@ import type { ReconcileStep, WranglerShape } from "./wrangler-shape";
  */
 const LUNORA_WORKER_FIRST_PATHS: ReadonlyArray<string> = ["/_lunora/*", "/__lunora/*"];
 
-/** Cloudflare's caps on `assets.run_worker_first`: rules per list, and characters per rule. */
-const MAX_RULES = 100;
-const MAX_RULE_LENGTH = 100;
+/** Values earlier Lunora versions and templates wrote, which reconcile still owns: the reserved pair, and `rspack-react`'s `/_lunora/*` alone. */
+const LEGACY_WORKER_FIRST_VALUES: ReadonlyArray<ReadonlyArray<string>> = [LUNORA_WORKER_FIRST_PATHS, ["/_lunora/*"]];
+
+/** Cloudflare's caps on `assets.run_worker_first`: rules per list (duplicates count), and characters per rule. */
+const MAX_RUN_WORKER_FIRST_RULES = 100;
+const MAX_RUN_WORKER_FIRST_RULE_LENGTH = 100;
 
 /** Where `package.json`'s `lunora` object records the `run_worker_first` values reconcile wrote, by scope. */
 const RUN_WORKER_FIRST_RECORD = "runWorkerFirst";
@@ -29,80 +33,145 @@ type OwnedRunWorkerFirst = Record<string, string[]>;
 /** A path segment that names itself: no `:param`, `*` splat, `{regex}` or `?` optional, and nothing a rule pattern would read. */
 const PLAIN_SEGMENT = /^[\w.~@%+-]+$/u;
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-
 /**
- * The `run_worker_first` rules that send `route` to the Worker, widened to its
- * static prefix the way Void does (`/posts/:slug` → `/posts/*`): a pattern rule
- * cannot express a parameter. A route ending in a splat also keeps its bare
- * prefix (`/files/*` → `/files`, `/files/*`), since `/files/*` does not match
- * `/files`. `undefined` when the route starts with a parameter: its only
- * prefix is `/`, and sending everything to the Worker is not a narrowing.
+ * The `run_worker_first` rules that send `route` to the Worker. A rule is a glob
+ * whose `*` matches any run of characters, `/` included, so each segment that is
+ * not plain (a `:param`, a splat, a regex or optional segment) becomes `*` in
+ * place: the `:id` of `/users/:id/avatar.png` turns into `*`, and the rest of the
+ * path stays. Truncating at the first parameter (`/users/*`) would also take
+ * `/users/42`, an SPA deep link the Worker does not serve, and answer it with the
+ * Worker's 404. A route whose last segment
+ * is a splat or optional also keeps its bare prefix, which `prefix/*` does not
+ * match. `undefined` when the first segment is not plain, or there is none: its
+ * rule would send every path to the Worker.
  */
 const workerPathRules = (route: string): string[] | undefined => {
     const segments = route.split("/").filter((segment) => segment !== "");
-    const dynamic = segments.findIndex((segment) => !PLAIN_SEGMENT.test(segment));
+    const plain = segments.map((segment) => PLAIN_SEGMENT.test(segment));
 
-    if (dynamic === 0 || segments.length === 0) {
+    if (segments.length === 0 || plain[0] === false) {
         return undefined;
     }
 
-    if (dynamic === -1) {
-        return [`/${segments.join("/")}`];
-    }
+    const rule = `/${segments.map((segment, index) => (plain[index] ? segment : "*")).join("/")}`;
+    const last = segments.at(-1) ?? "";
+    const optionalTail = last === "*" || (plain.at(-1) === false && last.endsWith("?"));
 
-    const prefix = `/${segments.slice(0, dynamic).join("/")}`;
-
-    return dynamic === segments.length - 1 && segments[dynamic] === "*" ? [prefix, `${prefix}/*`] : [`${prefix}/*`];
+    return optionalTail ? [`/${segments.slice(0, -1).join("/")}`, rule] : [rule];
 };
 
-/** Whether `rule` is already covered by `wider` (`/api/*` covers `/api/x` and `/api/x/*`). */
-const coveredBy = (rule: string, wider: string): boolean => wider !== rule && wider.endsWith("/*") && rule.startsWith(wider.slice(0, -1));
+/** Whether `rule` is redundant beside `wider`, as wrangler judges it: `wider` ends in `*` and `rule` starts with the rest of it. */
+const coveredBy = (rule: string, wider: string): boolean => wider !== rule && wider.endsWith("*") && rule.startsWith(wider.slice(0, -1));
+
+/** Problems within one group of rules (the positive or the negative ones), as wrangler's `validateStaticRoutingRules` finds them. */
+const groupProblems = (group: ReadonlyArray<string>): string[] =>
+    group.flatMap((rule, index) => {
+        const wider = group.find((other) => coveredBy(rule, other));
+
+        return [
+            ...(rule.length > MAX_RUN_WORKER_FIRST_RULE_LENGTH
+                ? [
+                      `assets.run_worker_first entry "${rule}" is ${String(rule.length)} characters; Cloudflare accepts at most ${String(MAX_RUN_WORKER_FIRST_RULE_LENGTH)}`,
+                  ]
+                : []),
+            ...(group.indexOf(rule) === index ? [] : [`assets.run_worker_first lists "${rule}" twice`]),
+            ...(wider === undefined ? [] : [`assets.run_worker_first entry "${rule}" is already covered by "${wider}", which wrangler refuses`]),
+        ];
+    });
+
+/**
+ * What wrangler's `parseStaticRouting` refuses in a `run_worker_first` list, so
+ * the validator reports it before a deploy does: no rules, more than the cap
+ * (duplicates included), only negative rules, a rule that is not `/…` or `!/…`,
+ * an over-long or duplicate rule, and a rule another one ending in `*` already
+ * covers (checked within the positive and the negative rules separately).
+ */
+const runWorkerFirstProblems = (rules: ReadonlyArray<unknown>): string[] => {
+    if (rules.length === 0) {
+        return ["assets.run_worker_first is an empty list, which wrangler refuses; remove it, or name at least one path"];
+    }
+
+    const problems: string[] = [];
+
+    if (rules.length > MAX_RUN_WORKER_FIRST_RULES) {
+        problems.push(
+            `assets.run_worker_first has ${String(rules.length)} rules; Cloudflare accepts at most ${String(MAX_RUN_WORKER_FIRST_RULES)}, duplicates included`,
+        );
+    }
+
+    const positive: string[] = [];
+    const negative: string[] = [];
+
+    for (const rule of rules) {
+        if (typeof rule === "string" && rule.startsWith("/")) {
+            positive.push(rule);
+        } else if (typeof rule === "string" && rule.startsWith("!/")) {
+            negative.push(rule);
+        } else {
+            problems.push(`assets.run_worker_first entry ${JSON.stringify(rule)} must be a path rule starting with "/" (or "!/" to exempt a path)`);
+        }
+    }
+
+    if (positive.length === 0 && negative.length > 0) {
+        problems.push("assets.run_worker_first has only negative (!/…) rules; wrangler needs at least one path that runs the Worker first");
+    }
+
+    problems.push(...groupProblems(positive), ...groupProblems(negative));
+
+    return problems;
+};
+
+/** Why a route gets no rule, as a warning. */
+const unroutableWarning = (route: string): string =>
+    route.split("/").every((segment) => segment === "")
+        ? `the route "${route}" is the site root; run_worker_first leaves it to the assets (index.html), so add "/" to run_worker_first yourself if the Worker should answer it`
+        : `the route "${route}" starts with a parameter, so no run_worker_first rule names it without sending every path to the Worker; a matching file in the assets directory, or the not_found_handling fallback, answers instead`;
 
 /**
  * The full rule list for `routes`: the reserved paths first, then each route's
- * widened rules, deduplicated, with every rule another one covers dropped, and
- * sorted so the same routes always write the same list. Rules past Cloudflare's
- * caps are dropped and named in `warnings`.
+ * rules, deduplicated, with every rule another one covers dropped (wrangler
+ * refuses those), and sorted so the same routes always write the same list.
+ * Rules past Cloudflare's caps are dropped and named in `warnings`.
  */
 const planRunWorkerFirst = (routes: ReadonlyArray<string>): { rules: string[]; warnings: string[] } => {
     const warnings: string[] = [];
-    const widened = new Set<string>();
+    const routeRules = new Set<string>();
 
     for (const route of routes) {
         const rules = workerPathRules(route);
 
         if (rules === undefined) {
-            warnings.push(
-                `the route "${route}" starts with a parameter, so no run_worker_first rule narrows it; a file in the assets directory at a matching path answers instead of the Worker`,
-            );
+            warnings.push(unroutableWarning(route));
 
             continue;
         }
 
         for (const rule of rules) {
-            if (rule.length > MAX_RULE_LENGTH) {
-                warnings.push(`run_worker_first rule "${rule}" is longer than Cloudflare's ${String(MAX_RULE_LENGTH)} characters and was left out`);
+            if (rule.length > MAX_RUN_WORKER_FIRST_RULE_LENGTH) {
+                warnings.push(
+                    `run_worker_first rule "${rule}" is longer than Cloudflare's ${String(MAX_RUN_WORKER_FIRST_RULE_LENGTH)} characters and was left out`,
+                );
             } else {
-                widened.add(rule);
+                routeRules.add(rule);
             }
         }
     }
 
-    const all = [...LUNORA_WORKER_FIRST_PATHS, ...widened];
-    const kept = [...new Set(all)].filter((rule) => !all.some((wider) => coveredBy(rule, wider)));
-    const routeRules = kept.filter((rule) => !LUNORA_WORKER_FIRST_PATHS.includes(rule)).toSorted((a, b) => a.localeCompare(b));
-    const room = MAX_RULES - LUNORA_WORKER_FIRST_PATHS.length;
+    const all = [...LUNORA_WORKER_FIRST_PATHS, ...routeRules];
+    const kept = [...new Set(all)]
+        .filter((rule) => !all.some((wider) => coveredBy(rule, wider)) && !LUNORA_WORKER_FIRST_PATHS.includes(rule))
+        .toSorted((a, b) => a.localeCompare(b));
+    const room = MAX_RUN_WORKER_FIRST_RULES - LUNORA_WORKER_FIRST_PATHS.length;
 
-    if (routeRules.length > room) {
+    if (kept.length > room) {
         warnings.push(
-            `the routes need ${String(routeRules.length + LUNORA_WORKER_FIRST_PATHS.length)} run_worker_first rules and Cloudflare accepts ${String(MAX_RULES)}; ${routeRules
+            `the routes need ${String(kept.length + LUNORA_WORKER_FIRST_PATHS.length)} run_worker_first rules and Cloudflare accepts ${String(MAX_RUN_WORKER_FIRST_RULES)}; ${kept
                 .slice(room)
                 .join(", ")} were left out`,
         );
     }
 
-    return { rules: [...LUNORA_WORKER_FIRST_PATHS, ...routeRules.slice(0, room)], warnings };
+    return { rules: [...LUNORA_WORKER_FIRST_PATHS, ...kept.slice(0, room)], warnings };
 };
 
 /** Reserved paths an authored `run_worker_first` leaves to the assets, so the caller can say which ones. */
@@ -123,7 +192,7 @@ const sameRules = (left: unknown, right: ReadonlyArray<string> | undefined): boo
 const readOwnedRunWorkerFirst = (manifest: Manifest | undefined): OwnedRunWorkerFirst => {
     const recorded = manifest?.lunora?.[RUN_WORKER_FIRST_RECORD];
 
-    if (!isRecord(recorded)) {
+    if (!isPlainObject(recorded)) {
         return {};
     }
 
@@ -132,83 +201,103 @@ const readOwnedRunWorkerFirst = (manifest: Manifest | undefined): OwnedRunWorker
     );
 };
 
-const recordOwnedRunWorkerFirst = (manifest: Manifest, owned: OwnedRunWorkerFirst): void => {
-    recordManifestKey(manifest, RUN_WORKER_FIRST_RECORD, Object.keys(owned).length === 0 ? undefined : owned);
-};
-
 /**
- * One `assets` block: write or rewrite a `run_worker_first` Lunora owns (absent,
- * the list it recorded, or the reserved pair an earlier version wrote), or warn
- * about the paths an authored one leaves to the assets. Mutates `step`.
+ * What reconcile does with one `assets` block: write or rewrite a
+ * `run_worker_first` Lunora owns (absent, the list it recorded, or a value an
+ * earlier version or template wrote), or warn about the paths an authored one
+ * leaves to the assets.
  */
 const reconcileScope = (
-    step: ReconcileStep & { owned: OwnedRunWorkerFirst },
     current: unknown,
-    path: string[],
+    label: string,
     rules: string[],
-    recorded: OwnedRunWorkerFirst,
-): void => {
-    const scope = path.join(".");
-    const label = `${scope}.run_worker_first`;
+    recorded: string[] | undefined,
+): { change: "added" | "updated" | undefined; owned: boolean; warning: string | undefined } => {
+    const lunoraWrote = current === undefined || sameRules(current, recorded) || LEGACY_WORKER_FIRST_VALUES.some((value) => sameRules(current, value));
 
-    if (current !== undefined && !sameRules(current, recorded[scope]) && !sameRules(current, LUNORA_WORKER_FIRST_PATHS)) {
+    if (!lunoraWrote) {
         const missing = unroutedPaths(current, rules);
+        const warning =
+            missing.length === 0
+                ? undefined
+                : `${label} does not send ${missing.join(", ")} to the Worker first, so a matching file in the assets directory (or the SPA fallback) answers instead of Lunora — add ${missing.map((entry) => `"${entry}"`).join(", ")} to it`;
 
-        if (missing.length > 0) {
-            step.warnings?.push(
-                `${label} does not send ${missing.join(", ")} to the Worker first, so a matching file in the assets directory (or the SPA fallback) answers instead of Lunora — add ${missing.map((entry) => `"${entry}"`).join(", ")} to it`,
-            );
-        }
-
-        return;
+        return { change: undefined, owned: false, warning };
     }
 
-    // eslint-disable-next-line no-param-reassign -- the step is this module's accumulator, built up scope by scope
-    step.owned[scope] = rules;
-
-    if (!sameRules(current, rules)) {
-        // eslint-disable-next-line no-param-reassign -- as above
-        step.text = applyModify(step.text, [...path, "run_worker_first"], rules);
-        (current === undefined ? step.added : (step.updated ?? [])).push(label);
+    if (sameRules(current, rules)) {
+        return { change: undefined, owned: true, warning: undefined };
     }
+
+    return { change: current === undefined ? "added" : "updated", owned: true, warning: undefined };
 };
 
 /**
  * Route the paths the Worker serves to it ahead of the assets: Lunora's reserved
- * paths plus the app's own routes (`workerRoutes`, widened to static prefixes).
- * Writes `assets.run_worker_first` on every `assets` block (top level and
+ * paths plus the app's own routes (`workerRoutes`). Writes
+ * `assets.run_worker_first` on every `assets` block (top level and
  * `env.<name>`) that does not set it, and rewrites a value Lunora wrote itself
- * (recorded in `owned`, or exactly the reserved pair an earlier version wrote)
- * when the routes change. A value the user wrote or edited is never rewritten;
- * when it leaves a path to the assets the step warns instead. Pure.
+ * (recorded in the manifest, or one an earlier version or template wrote) when
+ * the routes change. A value the user wrote or edited is never rewritten; when it
+ * leaves a path to the assets the step warns instead. The step's `record` stores
+ * which values Lunora now owns, once the config is on disk.
  */
-const reconcileAssetRouting = (
-    text: string,
-    parsed: WranglerShape,
-    workerRoutes: ReadonlyArray<string>,
-    recorded: OwnedRunWorkerFirst,
-): ReconcileStep & { owned: OwnedRunWorkerFirst } => {
+const reconcileAssetRouting = (text: string, parsed: WranglerShape, workerRoutes: ReadonlyArray<string>, manifest: Manifest | undefined): ReconcileStep => {
     const scopes: { assets: unknown; path: string[] }[] = [{ assets: parsed.assets, path: ["assets"] }];
 
     for (const [name, block] of Object.entries(parsed.env ?? {})) {
-        if (isRecord(block)) {
+        if (isPlainObject(block)) {
             scopes.push({ assets: block["assets"], path: ["env", name, "assets"] });
         }
     }
 
     const plan = planRunWorkerFirst(workerRoutes);
-    // The plan's own warnings concern `run_worker_first`, so a project with no assets block has nothing to hear.
-    const hasAssets = scopes.some((scope) => isRecord(scope.assets));
-    const step: ReconcileStep & { owned: OwnedRunWorkerFirst } = { added: [], owned: {}, text, updated: [], warnings: hasAssets ? [...plan.warnings] : [] };
+    const recorded = readOwnedRunWorkerFirst(manifest);
+    const owned: OwnedRunWorkerFirst = {};
+    const step: Required<Omit<ReconcileStep, "record">> = { added: [], text, updated: [], warnings: [] };
 
-    for (const { assets, path } of scopes) {
-        if (isRecord(assets)) {
-            reconcileScope(step, assets["run_worker_first"], path, plan.rules, recorded);
+    for (const { assets, path } of scopes.filter((scope) => isPlainObject(scope.assets))) {
+        const scope = path.join(".");
+        const outcome = reconcileScope((assets as Record<string, unknown>)["run_worker_first"], `${scope}.run_worker_first`, plan.rules, recorded[scope]);
+
+        if (outcome.owned) {
+            owned[scope] = plan.rules;
+        }
+
+        if (outcome.warning !== undefined) {
+            step.warnings.push(outcome.warning);
+        }
+
+        if (outcome.change !== undefined) {
+            step.text = applyModify(step.text, [...path, "run_worker_first"], plan.rules);
+            step[outcome.change].push(`${scope}.run_worker_first`);
         }
     }
 
-    return step;
+    // The plan's own warnings concern `run_worker_first`, so a project with no assets block has nothing to hear.
+    if (scopes.some((scope) => isPlainObject(scope.assets))) {
+        step.warnings.unshift(...plan.warnings);
+    }
+
+    return {
+        ...step,
+        record: {
+            consequence: "the next route change leaves run_worker_first as it is",
+            key: RUN_WORKER_FIRST_RECORD,
+            label: "run_worker_first rules",
+            write: (current) => {
+                recordManifestKey(current, RUN_WORKER_FIRST_RECORD, Object.keys(owned).length === 0 ? undefined : owned);
+            },
+        },
+    };
 };
 
-export type { OwnedRunWorkerFirst };
-export { LUNORA_WORKER_FIRST_PATHS, planRunWorkerFirst, readOwnedRunWorkerFirst, reconcileAssetRouting, recordOwnedRunWorkerFirst, workerPathRules };
+export {
+    LUNORA_WORKER_FIRST_PATHS,
+    MAX_RUN_WORKER_FIRST_RULE_LENGTH,
+    MAX_RUN_WORKER_FIRST_RULES,
+    planRunWorkerFirst,
+    reconcileAssetRouting,
+    runWorkerFirstProblems,
+    workerPathRules,
+};

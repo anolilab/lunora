@@ -3389,6 +3389,17 @@ export const schema = defineSchema({
             expect(validateWranglerConfig(assets(Array.from({ length: 101 }, (_, index) => `/r${String(index)}`))).errors.join(" ")).toContain("has 101 rules");
         });
 
+        it("rejects the run_worker_first lists wrangler refuses at deploy", () => {
+            expect.assertions(4);
+
+            const assets = (runWorkerFirst: unknown) => validBase({ assets: { directory: "./dist/client", run_worker_first: runWorkerFirst } as never });
+
+            expect(validateWranglerConfig(assets([])).errors.join(" ")).toContain("empty list");
+            expect(validateWranglerConfig(assets(["!/static/*"])).errors.join(" ")).toContain("only negative");
+            expect(validateWranglerConfig(assets(["/a", "/a"])).errors.join(" ")).toContain('lists "/a" twice');
+            expect(validateWranglerConfig(assets(["/api/*", "/api/users"])).errors.join(" ")).toContain('"/api/users" is already covered by "/api/*"');
+        });
+
         it("accepts a well-formed cache block and rejects bad shapes", () => {
             expect.assertions(5);
 
