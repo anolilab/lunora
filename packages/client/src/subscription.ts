@@ -346,3 +346,14 @@ export const fanSubscriptionError = (callbacks: Iterable<SubscriptionErrorCallba
         }
     }
 };
+
+/**
+ * Report a subscription's failure to its subscribers. A snapshot `resnapshot` was waiting on
+ * will not come now, so a subscriber that joins afterwards is handed the held value again
+ * rather than waiting for nothing.
+ */
+export const failSubscription = (state: SubscriptionState, error: SubscriptionError): void => {
+    // eslint-disable-next-line no-param-reassign -- the flag is the shared subscription's own state
+    state.awaitingSnapshot = false;
+    fanSubscriptionError(state.errorCallbacks, error);
+};

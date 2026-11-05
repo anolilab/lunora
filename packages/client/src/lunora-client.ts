@@ -83,7 +83,7 @@ import { registerSnapshotSource, snapshotSourceOf } from "./snapshot-preconditio
 import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
-import { fanSubscriptionError, releaseSubscribeFrame, setSubscriptionAck, SubscriptionRegistry, wrapSubscriber } from "./subscription";
+import { failSubscription, fanSubscriptionError, releaseSubscribeFrame, setSubscriptionAck, SubscriptionRegistry, wrapSubscriber } from "./subscription";
 import { advanceWatermark, commitDataFrame, fanCheckpoints, isNonFinalRunFrame, isStaleDataFrame, replayableValue } from "./subscription-frames";
 import type { LeaderMirror, TabLeadershipHost } from "./tab-leadership";
 import {
@@ -3284,7 +3284,8 @@ class LunoraClient {
      * rather than a `resume`. Subscribers already holding the value keep it until the snapshot
      * lands; one that joins meanwhile is not handed the stale value and waits for the fresh
      * one. A no-op when nothing subscribes to `(function_, args, shardKey)`. Without an open
-     * socket the snapshot is taken when one opens.
+     * socket (a cross-tab follower, or a dropped connection) the snapshot is taken when one
+     * opens, and joiners are handed the held value meanwhile, since nothing else is coming.
      */
     public resnapshot<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): void {
         this.assertOpen();
@@ -3295,8 +3296,11 @@ class LunoraClient {
             return;
         }
 
-        state.awaitingSnapshot = true;
-        this.resnapshotSubscription(state);
+        // Only a snapshot actually asked for may hold joiners off the stale value. Without an open
+        // socket (a cross-tab follower, or a dropped connection) nothing is coming to replace it.
+        if (this.resnapshotSubscription(state)) {
+            state.awaitingSnapshot = true;
+        }
     }
 
     /**
@@ -5525,7 +5529,7 @@ class LunoraClient {
             } else {
                 // A refusal answers the request, as for a refused slot below.
                 this.markQueryRejected(state, true);
-                fanSubscriptionError(state.errorCallbacks, { code: "WIRE_ENCODE_FAILED", message: "could not encode this subscription's args for a poll" });
+                failSubscription(state, { code: "WIRE_ENCODE_FAILED", message: "could not encode this subscription's args for a poll" });
             }
         }
 
@@ -5574,7 +5578,7 @@ class LunoraClient {
             if (!slot.ok) {
                 // A refusal answers the request: without this a denied query on a polling shard stays pending forever.
                 this.markQueryRejected(state, true);
-                fanSubscriptionError(state.errorCallbacks, {
+                failSubscription(state, {
                     code: slot.error.code,
                     message: slot.error.message,
                 });
@@ -7476,7 +7480,7 @@ class LunoraClient {
             // Marked before fanning, so a callback that resets the session (see above) is not undone by it.
             this.markQueryRejected(state);
 
-            fanSubscriptionError(state.errorCallbacks, subscriptionError);
+            failSubscription(state, subscriptionError);
 
             // Fan it to follower tabs too. `broadcastSubscriptionError` existed
             // with no caller, so the follower error handler wired to it
@@ -7587,7 +7591,7 @@ class LunoraClient {
      * `sendSubscribeIfOpen` put the frame on the wire at all. Mirrors the shape
      * path's re-seed on a diverged base.
      */
-    private resnapshotSubscription(state: SubscriptionState): void {
+    private resnapshotSubscription(state: SubscriptionState): boolean {
         /* eslint-disable no-param-reassign -- reset the shared subscription state in place, as the other recovery paths do */
         setSubscriptionAck(state, "idle");
         state.serverCursor = undefined;
@@ -7595,7 +7599,8 @@ class LunoraClient {
         state.pendingDeltaRun = undefined;
         /* eslint-enable no-param-reassign */
         this.emitSyncStatus();
-        this.sendSubscribeIfOpen(state);
+
+        return this.sendSubscribeIfOpen(state);
     }
 
     /**
@@ -7632,7 +7637,7 @@ class LunoraClient {
             // A run that was partly held can no longer complete on this base: drop it, so a later
             // frame merges onto the committed value and not onto the abandoned partial one.
             state.pendingDeltaRun = undefined;
-            fanSubscriptionError(state.errorCallbacks, {
+            failSubscription(state, {
                 code: "WIRE_DECODE_FAILED",
                 message: `could not decode a server frame for this subscription — ${error instanceof Error ? error.message : String(error)}`,
             });
@@ -8398,7 +8403,7 @@ class LunoraClient {
         if (state) {
             setSubscriptionAck(state, "idle");
             this.emitSyncStatus();
-            fanSubscriptionError(state.errorCallbacks, { code: "SUBSCRIPTION_CANCELLED", message: "subscription was cancelled by the server" });
+            failSubscription(state, { code: "SUBSCRIPTION_CANCELLED", message: "subscription was cancelled by the server" });
         }
     }
 

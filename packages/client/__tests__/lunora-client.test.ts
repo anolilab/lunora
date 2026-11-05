@@ -508,6 +508,63 @@ describe("lunoraClient", () => {
     // --- Subscriptions ----------------------------------------------------------
 
     describe("lunoraClient — subscriptions", () => {
+        it("resnapshot without an open socket still hands a joining subscriber the held value, since no snapshot is coming", () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                reconnect: { initialDelayMs: 60_000, jitter: false, maxDelayMs: 60_000 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("items:list"), { page: 1 }, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+            socket.receive({ cursor: 7, data: { continueCursor: "old" }, id: firstSub(socket).id as string, type: "data" });
+            // The connection drops (or this tab is a cross-tab follower): the request cannot go out.
+            socket.triggerClose();
+            client.resnapshot(fnRef("items:list"), { page: 1 });
+
+            const joined: unknown[] = [];
+
+            client.subscribe(fnRef("items:list"), { page: 1 }, (value) => joined.push(value));
+
+            expect(joined).toStrictEqual([{ continueCursor: "old" }]);
+            expect(wireFrames(socket).filter((frame: { type: string }) => frame.type === "subscribe")).toHaveLength(1);
+        });
+
+        it("a subscription error releases joiners a resnapshot was holding off the stale value", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("items:list"), { page: 1 }, () => undefined, { onError: () => undefined });
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const subId = firstSub(socket).id as string;
+
+            socket.receive({ cursor: 7, data: { continueCursor: "old" }, id: subId, type: "data" });
+            client.resnapshot(fnRef("items:list"), { page: 1 });
+            // The snapshot it asked for never comes: the resubscribe is refused.
+            socket.receive({ code: "FORBIDDEN", error: "denied", id: subId, type: "error" });
+
+            const joined: unknown[] = [];
+
+            client.subscribe(fnRef("items:list"), { page: 1 }, (value) => joined.push(value));
+
+            expect(joined).toStrictEqual([{ continueCursor: "old" }]);
+        });
+
         it("resnapshot asks for a full snapshot and keeps a joining subscriber off the stale value until it lands", () => {
             expect.assertions(5);
 
