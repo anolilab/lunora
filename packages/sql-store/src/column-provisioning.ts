@@ -2,8 +2,8 @@
  * Column provisioning for the `.global()` store: the columns a table is created with, the ones a shipped table is
  * missing, and the `NOT NULL` an existing column should no longer carry.
  *
- * Split out of `ctx-db-migrations.ts`, which imports from here and never the other way. Several isolates can provision
- * one database at once, so adding a column tolerates losing that race ({@link addColumnIfMissing}).
+ * `ctx-db-migrations.ts` imports from here, never the other way. Several isolates can provision one database at once,
+ * so adding a column tolerates losing that race ({@link addColumnIfMissing}).
  */
 
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
