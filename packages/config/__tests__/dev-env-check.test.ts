@@ -168,12 +168,18 @@ describe(checkDevEnv, () => {
         });
     });
 
-    it("answers unloadable, never throws, on bindings it cannot read", async () => {
+    it("still checks the env past a binding section of the wrong shape", async () => {
         expect.assertions(1);
 
-        writeFileSync(join(projectRoot, "wrangler.jsonc"), `{ "name": "app", "kv_namespaces": {} }`);
+        // `kv_namespaces` as an object used to throw out of the binding read, so
+        // the whole check came back unloadable. Wrangler names the bad key itself;
+        // the well-formed sections still count as bindings.
+        writeFileSync(join(projectRoot, "wrangler.jsonc"), `{ "name": "app", "kv_namespaces": {}, "r2_buckets": [{ "binding": "FILES" }] }`);
 
-        await expect(check(requireKeys("API_URL"))).resolves.toMatchObject({ kind: "unloadable" });
+        await expect(check(requireKeys("API_URL", "FILES"))).resolves.toMatchObject({
+            failures: [{ key: "API_URL" }],
+            kind: "invalid",
+        });
     });
 
     it("answers unloadable, never throws, on a .dev.vars it cannot read", async () => {

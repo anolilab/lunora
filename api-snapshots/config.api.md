@@ -2234,6 +2234,7 @@ interface BindingManifest {
     compatibilityDate?: string;
     compatibilityFlags?: ReadonlyArray<string>;
     crons: ReadonlyArray<string>;
+    malformed: ReadonlyArray<string>;
     name?: string;
     unknown: ReadonlyArray<string>;
     vars: ReadonlyArray<string>;

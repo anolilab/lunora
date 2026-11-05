@@ -34,7 +34,6 @@
  * wrangler before it is added here degrades to a name instead of vanishing.
  */
 import type { WranglerConfigShape } from "./wrangler-to-alchemy";
-import { sqliteClasses } from "./wrangler-to-alchemy";
 
 /** Schema version of the emitted document, so a consumer can gate on shape changes. */
 const BINDING_MANIFEST_VERSION = 1;
@@ -100,6 +99,15 @@ interface BindingManifest {
     compatibilityFlags?: ReadonlyArray<string>;
     /** Cron expressions the Worker must be triggered on (`triggers.crons`). */
     crons: ReadonlyArray<string>;
+
+    /**
+     * Config keys whose value is not the shape wrangler expects — `kv_namespaces`
+     * as an object, a `null` entry in `queues.producers` — sorted. Whatever they
+     * held is left out of `bindings`: the builder reads a hand-edited config
+     * during `lunora dev`, where throwing would abort the start, and wrangler
+     * reports the bad key itself when it loads the file.
+     */
+    malformed: ReadonlyArray<string>;
     /** Worker name from `wrangler.jsonc`. */
     name?: string;
 
@@ -252,12 +260,86 @@ const readString = (entry: Record<string, unknown>, keys: ReadonlyArray<string> 
     return value as string | undefined;
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * The object entries of an array-shaped section. A section that is not an array,
+ * or an entry that is not an object, is recorded under `key` and skipped. An
+ * absent (or `null`) section is simply empty.
+ */
+const entriesOf = (value: unknown, key: string, malformed: Set<string>): Record<string, unknown>[] => {
+    if (value === undefined || value === null) {
+        return [];
+    }
+
+    if (!Array.isArray(value)) {
+        malformed.add(key);
+
+        return [];
+    }
+
+    const entries = value.filter((entry) => isRecord(entry));
+
+    if (entries.length !== value.length) {
+        malformed.add(key);
+    }
+
+    return entries;
+};
+
+/** The strings of a list-valued key, recorded and skipped the same way as {@link entriesOf}. */
+const stringsOf = (value: unknown, key: string, malformed: Set<string>): string[] => {
+    if (value === undefined || value === null) {
+        return [];
+    }
+
+    if (!Array.isArray(value)) {
+        malformed.add(key);
+
+        return [];
+    }
+
+    const strings = value.filter((entry): entry is string => typeof entry === "string");
+
+    if (strings.length !== value.length) {
+        malformed.add(key);
+    }
+
+    return strings;
+};
+
+/** An object-shaped section, or `{}` — recording `key` when it is present but not an object. */
+const recordOf = (value: unknown, key: string, malformed: Set<string>): Record<string, unknown> => {
+    if (isRecord(value)) {
+        return value;
+    }
+
+    if (value !== undefined && value !== null) {
+        malformed.add(key);
+    }
+
+    return {};
+};
+
+/** A string-valued top-level setting, recording `key` when it is present but not a string. */
+const stringOf = (value: unknown, key: string, malformed: Set<string>): string | undefined => {
+    if (typeof value === "string") {
+        return value;
+    }
+
+    if (value !== undefined && value !== null) {
+        malformed.add(key);
+    }
+
+    return undefined;
+};
+
 /** The table-driven sections: one binding per array entry. */
-const collectArrayBindings = (config: ManifestConfigShape, unnamed: string[]): BindingRequirement[] => {
+const collectArrayBindings = (config: Record<string, unknown>, unnamed: string[], malformed: Set<string>): BindingRequirement[] => {
     const out: BindingRequirement[] = [];
 
     for (const section of ARRAY_SECTIONS) {
-        for (const raw of (config[section.field] as ReadonlyArray<Record<string, unknown>> | undefined) ?? []) {
+        for (const raw of entriesOf(config[section.field], section.field, malformed)) {
             const binding = readString(raw, section.bindingKey);
 
             // A section entry with no binding name has nothing a Worker can read
@@ -283,23 +365,32 @@ const collectArrayBindings = (config: ManifestConfigShape, unnamed: string[]): B
 };
 
 /** Durable Objects — the only section whose storage mode is declared elsewhere (`migrations`). */
-const collectDurableObjectBindings = (config: ManifestConfigShape, unnamed: string[]): BindingRequirement[] => {
-    const sqlite = sqliteClasses(config);
+const collectDurableObjectBindings = (config: Record<string, unknown>, unnamed: string[], malformed: Set<string>): BindingRequirement[] => {
+    const sqlite = new Set(
+        entriesOf(config["migrations"], "migrations", malformed).flatMap((migration) =>
+            stringsOf(migration["new_sqlite_classes"], "migrations.new_sqlite_classes", malformed),
+        ),
+    );
+    const durableObjects = recordOf(config["durable_objects"], "durable_objects", malformed);
     const out: BindingRequirement[] = [];
 
-    for (const entry of config.durable_objects?.bindings ?? []) {
-        if (entry.name === undefined || entry.name === "") {
+    for (const entry of entriesOf(durableObjects["bindings"], "durable_objects.bindings", malformed)) {
+        const binding = readString(entry, "name");
+
+        if (binding === undefined) {
             unnamed.push("durable_objects");
             continue;
         }
 
+        const className = readString(entry, "class_name");
+
         out.push({
-            binding: entry.name,
-            className: entry.class_name,
+            binding,
+            className,
             // Only meaningful for a class this Worker defines; a `script_name`
             // binding points at another Worker's class, whose storage mode is
             // that Worker's business.
-            sqlite: entry.script_name === undefined && entry.class_name !== undefined ? sqlite.has(entry.class_name) : undefined,
+            sqlite: entry["script_name"] === undefined && className !== undefined ? sqlite.has(className) : undefined,
             type: "durable_object",
         });
     }
@@ -308,27 +399,32 @@ const collectDurableObjectBindings = (config: ManifestConfigShape, unnamed: stri
 };
 
 /** Queues — the one section producing two kinds, only one of which is an `env` binding. */
-const collectQueueBindings = (config: ManifestConfigShape, unnamed: string[]): BindingRequirement[] => {
+const collectQueueBindings = (config: Record<string, unknown>, unnamed: string[], malformed: Set<string>): BindingRequirement[] => {
+    const queues = recordOf(config["queues"], "queues", malformed);
     const out: BindingRequirement[] = [];
 
-    for (const entry of config.queues?.producers ?? []) {
-        if (entry.binding === undefined || entry.binding === "") {
+    for (const entry of entriesOf(queues["producers"], "queues.producers", malformed)) {
+        const binding = readString(entry, "binding");
+
+        if (binding === undefined) {
             unnamed.push("queues.producers");
             continue;
         }
 
-        out.push({ binding: entry.binding, resource: entry.queue, type: "queue_producer" });
+        out.push({ binding, resource: readString(entry, "queue"), type: "queue_producer" });
     }
 
     // A consumer has no `env` binding — it is a subscription. `binding` carries
     // the queue name so the entry still has a stable identity to sort and diff on.
-    for (const entry of config.queues?.consumers ?? []) {
-        if (entry.queue === undefined || entry.queue === "") {
+    for (const entry of entriesOf(queues["consumers"], "queues.consumers", malformed)) {
+        const queue = readString(entry, "queue");
+
+        if (queue === undefined) {
             unnamed.push("queues.consumers");
             continue;
         }
 
-        out.push({ binding: entry.queue, resource: entry.queue, type: "queue_consumer" });
+        out.push({ binding: queue, resource: queue, type: "queue_consumer" });
     }
 
     return out;
@@ -340,25 +436,41 @@ const collectQueueBindings = (config: ManifestConfigShape, unnamed: string[]): B
  * is the class key. Any other export type is not modelled here and is reported
  * in `unknown` rather than dropped.
  */
-const collectWorkflowExports = (config: ManifestConfigShape, unmodelled: string[]): BindingRequirement[] =>
-    Object.entries(config.exports ?? {}).flatMap(([className, entry]) => {
-        if (entry?.type !== "workflow") {
+const collectWorkflowExports = (config: Record<string, unknown>, unmodelled: string[], malformed: Set<string>): BindingRequirement[] =>
+    Object.entries(recordOf(config["exports"], "exports", malformed)).flatMap(([className, entry]) => {
+        if (!isRecord(entry) || entry["type"] !== "workflow") {
             unmodelled.push(`exports.${className}`);
 
             return [];
         }
 
-        return [{ binding: className, className, resource: entry.name, type: "workflow" as const }];
+        return [{ binding: className, className, resource: readString(entry, "name"), type: "workflow" as const }];
     });
 
-const collectBindings = (config: ManifestConfigShape, unnamed: string[], unmodelled: string[]): BindingRequirement[] => [
-    ...collectWorkflowExports(config, unmodelled),
-    ...collectArrayBindings(config, unnamed),
-    ...collectDurableObjectBindings(config, unnamed),
-    ...collectQueueBindings(config, unnamed),
-    ...SINGLETON_SECTIONS.filter((section) => config[section.field]?.binding !== undefined).map((section) => {
-        return { binding: config[section.field]?.binding as string, type: section.type };
-    }),
+/** The `{ binding }` sections; one with a binding that is not a string is malformed rather than a requirement. */
+const collectSingletonBindings = (config: Record<string, unknown>, malformed: Set<string>): BindingRequirement[] =>
+    SINGLETON_SECTIONS.flatMap((section) => {
+        const { binding } = recordOf(config[section.field], section.field, malformed);
+
+        if (binding === undefined) {
+            return [];
+        }
+
+        if (typeof binding !== "string") {
+            malformed.add(`${section.field}.binding`);
+
+            return [];
+        }
+
+        return [{ binding, type: section.type }];
+    });
+
+const collectBindings = (config: Record<string, unknown>, unnamed: string[], unmodelled: string[], malformed: Set<string>): BindingRequirement[] => [
+    ...collectWorkflowExports(config, unmodelled, malformed),
+    ...collectArrayBindings(config, unnamed, malformed),
+    ...collectDurableObjectBindings(config, unnamed, malformed),
+    ...collectQueueBindings(config, unnamed, malformed),
+    ...collectSingletonBindings(config, malformed),
 ];
 
 /**
@@ -366,6 +478,10 @@ const collectBindings = (config: ManifestConfigShape, unnamed: string[], unmodel
  *
  * Pure: reads nothing and writes nothing, so the caller decides where the
  * document lands and the mapping stays testable as a plain object comparison.
+ *
+ * Total over any parsed JSON: the config is user-edited and read on every
+ * `lunora dev` start, so a section of the wrong shape lands in
+ * {@link BindingManifest.malformed} instead of throwing.
  * @param config The parsed, already-reconciled `wrangler.jsonc`.
  * @returns the requirements document.
  */
@@ -375,24 +491,34 @@ const buildBindingManifest = (config: ManifestConfigShape): BindingManifest => {
     // here rather than at runtime.
     const unnamed: string[] = [];
     const unmodelled: string[] = [];
-    const bindings = collectBindings(config, unnamed, unmodelled)
+    const malformed = new Set<string>();
+    const source = recordOf(config, "(wrangler config)", malformed);
+    const bindings = collectBindings(source, unnamed, unmodelled, malformed)
         .map((requirement) => compact(requirement))
         .toSorted((a, b) => a.type.localeCompare(b.type) || a.binding.localeCompare(b.binding));
 
     const unknown = [
-        ...Object.keys(config).filter((field) => !NON_BINDING_FIELDS.has(field) && !KNOWN_BINDING_FIELDS.has(field)),
+        ...Object.keys(source).filter((field) => !NON_BINDING_FIELDS.has(field) && !KNOWN_BINDING_FIELDS.has(field)),
         ...unnamed.map((field) => `${field} (entry with no binding name)`),
         ...unmodelled,
     ].toSorted((a, b) => a.localeCompare(b));
 
+    const compatibilityDate = stringOf(source["compatibility_date"], "compatibility_date", malformed);
+    const flags = source["compatibility_flags"];
+    const compatibilityFlags = flags === undefined || flags === null ? undefined : stringsOf(flags, "compatibility_flags", malformed);
+    const crons = stringsOf(recordOf(source["triggers"], "triggers", malformed)["crons"], "triggers.crons", malformed);
+    const name = stringOf(source["name"], "name", malformed);
+    const variableNames = Object.keys(recordOf(source["vars"], "vars", malformed)).toSorted((a, b) => a.localeCompare(b));
+
     return {
         bindings,
-        ...(config.compatibility_date === undefined ? {} : { compatibilityDate: config.compatibility_date }),
-        ...(config.compatibility_flags === undefined ? {} : { compatibilityFlags: config.compatibility_flags }),
-        crons: config.triggers?.crons ?? [],
-        ...(config.name === undefined ? {} : { name: config.name }),
+        ...(compatibilityDate === undefined ? {} : { compatibilityDate }),
+        ...(compatibilityFlags === undefined ? {} : { compatibilityFlags }),
+        crons,
+        malformed: [...malformed].toSorted((a, b) => a.localeCompare(b)),
+        ...(name === undefined ? {} : { name }),
         unknown,
-        vars: Object.keys(config.vars ?? {}).toSorted((a, b) => a.localeCompare(b)),
+        vars: variableNames,
         version: BINDING_MANIFEST_VERSION,
     };
 };
