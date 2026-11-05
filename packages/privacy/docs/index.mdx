@@ -186,9 +186,13 @@ with `omit` leaves those columns out of the export.
 
 ### `retain`
 
-**Type:** `(rule: string, options?: { from: ... }) => RetentionRule`
+**Type:** `(rule: string, options?: { from?: string }) => RetainDirective`
 
-Declares a retention rule for a table column. The column must hold a `Date` or
+Builds a table's erasure directive that keeps its rows under the named
+retention rule instead of erasing them, for example
+`invoices: { erase: retain("hgb", { from: "issuedAt" }) }`. It returns
+`{ kind: "retain", rule, from? }`, not the `RetentionRule` it names. `from` is
+the column whose date starts the period; that column must hold a `Date` or
 epoch milliseconds, and any other value is refused.
 
 ### `RetentionRule`
