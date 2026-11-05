@@ -981,7 +981,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
                   owned: COMPANION_FILES,
               },
               // The `.json` is the portable artifact for external tooling; the `.ts` (same
-              // document, inlined) is what the worker imports and passes to `createWorker({
+              // document, inlined) is what the worker loads with `import()` behind `createWorker({
               // openApiSpec })`. Both are gated on the same `apiSpec` choice so they regenerate
               // together, and an unselected format is removed rather than left stale.
               { content: wantsOpenApi ? openApiContent : "", kind: "optional", name: "openapi.json" },
@@ -994,7 +994,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               // run writes the marker here too, so the dev host never serves a roster from an
               // earlier run next to this run's (empty) advisories.
               { content: advisorProceduresJson, kind: "optional", name: "advisor-procedures.json" },
-              // Same pairing as the specs: the `.json` for tooling, the `.ts` for `createWorker({ architecture })`,
+              // Same pairing as the specs: the `.json` for tooling, the `.ts` loaded behind `createWorker({ architecture })`,
               // both removed when the last module goes.
               {
                   content: architectureDocument === undefined ? "" : `${JSON.stringify(architectureDocument, undefined, 2)}\n`,

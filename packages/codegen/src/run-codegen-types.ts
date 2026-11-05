@@ -193,7 +193,7 @@ export interface CodegenResult {
 
         /**
          * OpenAPI document as an importable TS module (`_generated/openapi.ts`) —
-         * `export const openApiSpec`, the worker imports it for
+         * `export const openApiSpec`, the worker loads it with `import()` behind
          * `createWorker({ openApiSpec })`. Same document as `openApi`. Written
          * alongside `openapi.json` whenever `apiSpec` includes `openapi`.
          */
@@ -204,7 +204,7 @@ export interface CodegenResult {
 
         /**
          * OpenRPC document as an importable TS module (`_generated/openrpc.ts`) —
-         * `export const openRpcSpec`, for `createWorker({ openRpcSpec })`. Same
+         * `export const openRpcSpec`, loaded behind `createWorker({ openRpcSpec })`. Same
          * document as `openRpc`. Written alongside `openrpc.json` whenever
          * `apiSpec` includes `openrpc`.
          */
