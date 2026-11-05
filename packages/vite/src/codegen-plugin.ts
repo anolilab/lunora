@@ -18,6 +18,7 @@ import type { DiscoveryCache } from "@lunora/config";
 import {
     blockingFindingsMessage,
     CODEGEN_ENV,
+    createDiscoveryCache,
     isCodegenDisabled,
     LUNORA_TAG,
     reportCodegenFindings,
@@ -26,12 +27,13 @@ import {
     writeApiSpecMarker,
 } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
-import { pendingBindingChanges, reconcileBindingsSafely, reconcileWranglerExtras, WRANGLER_FILES, wranglerCodegenInputs } from "@lunora/config/cloudflare";
+import { reconcileBindingsSafely, reconcileWranglerExtras, WRANGLER_FILES, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 import { consumeStudioWrite } from "@lunora/config/studio-host";
 import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
 import { isRunnableDevEnvironment } from "vite";
 
+import { createBindingDriftNotifier } from "./binding-drift";
 import { markBuildStarted, oncePerBuild } from "./build-session";
 import { computeConfigFingerprint } from "./config-fingerprint";
 import configFlipRegenerates from "./config-flip";
@@ -574,11 +576,11 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
             // not on every save: writing wrangler.jsonc restarts the dev server
             // (and every open socket with it), and an autosaved half-typed queue
             // name would be provisioned for good. A save that needs a new binding
-            // gets a restart hint instead — see `warnPendingBindings`. In dev, a
-            // declared-but-not-re-exported container/workflow is raised in the
-            // browser error overlay (Vite buffers it and replays to clients on
-            // connect) so the fix surfaces here rather than at a late `wrangler
-            // deploy` failure.
+            // gets a restart hint instead — see `createBindingDriftNotifier`. In
+            // dev, a declared-but-not-re-exported container/workflow is raised in
+            // the browser error overlay (Vite buffers it and replays to clients
+            // on connect) so the fix surfaces here rather than at a late
+            // `wrangler deploy` failure.
             await oncePerRun(run, "reconcile", async () =>
                 reconcileBindingsSafely({ ...options, cache: discovery }, consoleLogger, (gaps) => {
                     devServer?.hot.send({
@@ -744,36 +746,12 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 return true;
             };
 
-            // Binding changes already announced this server, so each is said once
-            // rather than on every save until the restart that provisions it.
-            const announcedBindings = new Set<string>();
-
-            /**
-             * Warn when the sources now imply a binding the running worker was not
-             * started with. Bindings are provisioned once per start, so without this
-             * a save that declares a queue or reads `ctx.kv` fails at request time on
-             * an undefined binding.
-             */
-            const warnPendingBindings = async (): Promise<void> => {
-                if (restartInFlight) {
-                    return;
-                }
-
-                const changes = await pendingBindingChanges(options);
-                const pending = changes.filter((label) => !announcedBindings.has(label));
-
-                if (pending.length === 0 || closed) {
-                    return;
-                }
-
-                for (const label of pending) {
-                    announcedBindings.add(label);
-                }
-
-                serverLogger.warn(
-                    `${LUNORA_TAG} ${pending.join(", ")} — not in the running worker yet. Restart the dev server to write ${pending.length === 1 ? "it" : "them"} to wrangler.jsonc.`,
-                );
-            };
+            const bindingDrift = createBindingDriftNotifier({
+                cache: discovery ?? createDiscoveryCache(),
+                isSuppressed: () => restartInFlight || closed,
+                project: options,
+                warn: serverLogger.warn,
+            });
 
             /**
              * One debounced regeneration: run codegen, run the project's
@@ -851,7 +829,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                     hadErrorOverlay = false;
 
                     // After the client is told, so the binding scan never delays the reload.
-                    await warnPendingBindings();
+                    bindingDrift.noteSave();
                 } catch (error: unknown) {
                     // Awaiting the hook made this async, which turns what used to be
                     // an uncaught exception into a silent unhandled rejection.
@@ -1148,6 +1126,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 cachedProject = undefined;
 
                 scheduler.dispose();
+                bindingDrift.dispose();
 
                 server.watcher.off("add", onChange);
                 server.watcher.off("change", onChange);
