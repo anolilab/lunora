@@ -107,8 +107,9 @@ means to. These statements count:
 - `DROP TABLE`, `DROP INDEX`, `DROP VIEW` and `DROP TRIGGER`
 - `ALTER TABLE … DROP [COLUMN]` and `ALTER TABLE … RENAME …`
 - `TRUNCATE`
-- `INSERT OR REPLACE` and `REPLACE INTO`, anywhere in the statement, including
-  a trigger body
+- `INSERT OR REPLACE`, `REPLACE INTO`, `UPDATE OR REPLACE` and an
+  `ON CONFLICT REPLACE` constraint clause, anywhere in the statement, including
+  a trigger body. An upsert (`ON CONFLICT … DO UPDATE`) does not count.
 
 They are matched by statement shape, so a column or table named `rename` or
 `replace`, and keywords inside a string, a quoted identifier or a comment, do

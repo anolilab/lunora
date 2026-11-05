@@ -86,18 +86,23 @@ const CREATE_TRIGGER_RE = new RegExp(String.raw`^CREATE${TRIVIA_SOURCE}+(?:TEMP$
 /** Lowercase hex SHA-256 shape guard before inlining the hash into SQL. Hoisted to avoid per-call recompilation. */
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/u;
 
+/** An unquoted SQLite identifier: `$`, ASCII word characters, and every character above U+007F, which SQLite also accepts. */
+const BARE_NAME = String.raw`[$\w\u{80}-\u{10FFFF}]+`;
+
 /**
  * `ALTER TABLE <name> <action>` at the head of {@link scanStatement}'s code, where a quoted name reads as one placeholder
  * word and a schema-qualified one as two joined by `.`.
  */
-const alterTableRe = (action: string): RegExp => new RegExp(String.raw`^\s*ALTER\s+TABLE\s+[$\w]+(?:\s*\.\s*[$\w]+)?\s+${action}\b`, "iu");
+const alterTableRe = (action: string): RegExp => new RegExp(String.raw`^\s*ALTER\s+TABLE\s+${BARE_NAME}(?:\s*\.\s*${BARE_NAME})?\s+${action}\b`, "iu");
 
 /**
  * Statements that discard data, or rename something every reader of the old name breaks on, matched by statement shape
  * against {@link scanStatement}'s code. Shape rather than keyword, because SQLite lets `RENAME` and `REPLACE` name a
  * column or table, and `$` continue an identifier (`foo$drop`). `REPLACE INTO` is SQLite's spelling of
- * `INSERT OR REPLACE`, which deletes the conflicting row before inserting; both are matched anywhere, so a trigger body
- * is covered too. `TRUNCATE` is not SQLite, but a D1-shaped binding over another engine may accept it.
+ * `INSERT OR REPLACE`, which deletes the conflicting row before inserting; `UPDATE OR REPLACE` deletes the row its new
+ * values collide with, and an `ON CONFLICT REPLACE` constraint clause makes every later write to the table do the same.
+ * All of them are matched anywhere, so a trigger body is covered too; an upsert (`ON CONFLICT … DO UPDATE`) is not.
+ * `TRUNCATE` is not SQLite, but a D1-shaped binding over another engine may accept it.
  *
  * A `DELETE` or `UPDATE` without `WHERE` is not checked: a full-table `UPDATE` is what every backfill looks like.
  */
@@ -108,6 +113,8 @@ const DESTRUCTIVE_STATEMENTS: ReadonlyArray<readonly [label: string, pattern: Re
     ["TRUNCATE", /^\s*TRUNCATE\b/iu],
     ["INSERT OR REPLACE", /(?<![$\w])INSERT\s+OR\s+REPLACE\b/iu],
     ["REPLACE INTO", /(?<![$\w])REPLACE\s+INTO\b/iu],
+    ["UPDATE OR REPLACE", /(?<![$\w])UPDATE\s+OR\s+REPLACE\b/iu],
+    ["ON CONFLICT REPLACE", /(?<![$\w])ON\s+CONFLICT\s+REPLACE\b/iu],
 ];
 
 /**
@@ -651,4 +658,4 @@ class MigrationRunner {
 export { MigrationRunner, TRACKING_TABLE_NAME };
 export type { Migration, MigrationRunnerResult };
 
-export {ALLOW_DESTRUCTIVE_MARKER} from "../../../shared/allow-destructive-marker";
+export { ALLOW_DESTRUCTIVE_MARKER } from "../../../shared/allow-destructive-marker";

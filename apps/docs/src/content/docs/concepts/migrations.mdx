@@ -270,8 +270,9 @@ wrangler d1 execute <DB> --remote --file=lunora/migrations/<timestamp>_<slug>.sq
 
 The generator writes a `-- lunora:allow-destructive` comment on its own line
 before every `DROP`. `wrangler` ignores it. It is there for `@lunora/d1`'s
-`MigrationRunner`, which refuses a pending `DROP`, `RENAME`, `TRUNCATE`,
-`INSERT OR REPLACE` or `REPLACE INTO` unless the migration carries that comment.
+`MigrationRunner`, which refuses a pending `DROP`, `RENAME`, `TRUNCATE` or
+replacing write (`INSERT OR REPLACE`, `REPLACE INTO`, `UPDATE OR REPLACE`,
+`ON CONFLICT REPLACE`) unless the migration carries that comment.
 If you split this file at each `;` into runner entries, every `DROP` keeps its
 confirmation. Add the same comment before destructive SQL you write by hand, but
 never to a migration that has already run: that changes its hash and is refused

@@ -601,6 +601,12 @@ describe("migrationRunner destructive statements", () => {
         ["TRUNCATE", "TRUNCATE TABLE users"],
         ["INSERT OR REPLACE", "INSERT OR REPLACE INTO config (k, v) VALUES ('a', 'b')"],
         ["REPLACE INTO", "REPLACE INTO config (k, v) VALUES ('a', 'b')"],
+        ["UPDATE OR REPLACE", "UPDATE OR REPLACE config SET k = 'a' WHERE k = 'b'"],
+        ["ON CONFLICT REPLACE", "CREATE TABLE config (k TEXT UNIQUE ON CONFLICT REPLACE, v TEXT)"],
+        ["an update or replace in a trigger body", "CREATE TRIGGER t AFTER INSERT ON a BEGIN UPDATE OR REPLACE b SET id = NEW.id; END;"],
+        ["DROP COLUMN on a non-ASCII bare table name", "ALTER TABLE café DROP COLUMN x"],
+        ["RENAME on a non-ASCII bare, schema-qualified table name", "ALTER TABLE main.données RENAME TO y"],
+        ["RENAME on an astral bare table name", "ALTER TABLE t𝒜 RENAME TO y"],
         ["a comment before the statement", "/* tidy up */ DROP TABLE legacy_sessions"],
         ["a comment between the keywords", "INSERT /* upsert */ OR REPLACE INTO config (k, v) VALUES ('a', 'b')"],
         ["a replace in a trigger body", "CREATE TRIGGER t AFTER INSERT ON a BEGIN INSERT OR REPLACE INTO b (id) VALUES (NEW.id); END;"],
@@ -650,6 +656,7 @@ describe("migrationRunner destructive statements", () => {
         ["a table named rename", "ALTER TABLE rename ADD COLUMN x TEXT"],
         ["an added column named drop", `ALTER TABLE t ADD COLUMN "drop" TEXT`],
         ["an identifier ending in $drop", "CREATE VIEW v AS SELECT foo$drop FROM t"],
+        ["an upsert", "INSERT INTO notes (id, body) VALUES (1, 'a') ON CONFLICT (id) DO UPDATE SET body = excluded.body"],
     ])("does not read a keyword inside %s as destructive", async (_label, text) => {
         expect.assertions(1);
 
