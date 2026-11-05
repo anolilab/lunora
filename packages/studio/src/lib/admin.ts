@@ -902,6 +902,8 @@ export interface LogEntry {
     /** Structured fields from a `ctx.log.<level>(message, fields)` / `ctx.log.with(fields)` call, when present. */
     fields?: Record<string, unknown>;
     functionPath?: string;
+    /** The line's identity, unique across shards and Durable Object restarts: what a row is keyed by. Absent on a worker predating the field. */
+    id?: string;
     instance?: string;
     level: LogLevel;
     message: string;

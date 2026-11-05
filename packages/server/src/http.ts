@@ -6,9 +6,11 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 
 import type { LiveTopicRef } from "../../../shared/live-stream";
+import { isHeaderName } from "../../../shared/rest-surface";
 import { isSafeHeaderValue, SSE_HEADERS, sseFrame } from "../../../shared/sse";
 import applyOutput from "./apply-output";
 import type { EmptyArgs } from "./builder/index";
+import routeCacheControl from "./cache-control";
 import { parseValidatorMap } from "./functions";
 import type { ActionCtx as ActionContext, ArgsValidator, InferArgs } from "./types";
 
@@ -426,8 +428,20 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
     /**
      * Attach a `Cache-Control` header to the response. Only meaningful when
      * Workers Cache is enabled in `wrangler.jsonc` (`"cache": { "enabled": true }`).
+     *
+     * Sent as written to an anonymous caller. When the request carries a
+     * credential (`Authorization`, `Cookie`, `Cf-Access-Jwt-Assertion`, an x402
+     * payment header, a Cloudflare Access identity, or one of
+     * `options.credentialHeaders`), a value without a bare `private` or
+     * `no-store` is sent as `private`, with `public`, `s-maxage`,
+     * `proxy-revalidate` and a field-qualified `private="…"` removed.
+     *
+     * Only those credentials are recognised. An app that authenticates on
+     * another header (`x-api-key`, a tenant header) must list it in
+     * `options.credentialHeaders`, or its callers read as anonymous and get the
+     * declared value, `public` included.
      */
-    cacheControl: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
+    cacheControl: (value: string, options?: HttpRouteCacheOptions) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
 
     /**
      * Attach a `Cache-Tag` header to the response for tag-based purging via
@@ -474,6 +488,16 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
     vary: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
 }
 
+/** Options for {@link HttpRouteBuilder.cacheControl}. */
+interface HttpRouteCacheOptions {
+    /**
+     * Request headers this app authenticates on beyond the built-in ones, as
+     * `RestCachePolicy.credentialHeaders` declares them for a REST endpoint. A
+     * request carrying one gets the `private` narrowing.
+     */
+    readonly credentialHeaders?: ReadonlyArray<string>;
+}
+
 /** Opens a fresh {@link HttpRouteBuilder}. The `path` documents intent; hono owns the actual routing at mount. */
 type HttpRouteFactory = (path: string) => HttpRouteBuilder<EmptyArgs, EmptyArgs, EmptyArgs>;
 
@@ -493,6 +517,7 @@ interface RouteState {
     body: ArgsValidator;
     cacheControl?: string;
     cacheTag?: string;
+    credentialHeaders?: ReadonlyArray<string>;
     method: HttpMethod;
     output?: Validator;
     params: ArgsValidator;
@@ -684,7 +709,7 @@ const buildRouteHandler =
             const headers: Record<string, string> = {};
 
             if (state.cacheControl) {
-                headers["cache-control"] = state.cacheControl;
+                headers["cache-control"] = routeCacheControl(state, state.cacheControl, c);
             }
 
             if (state.cacheTag) {
@@ -958,10 +983,27 @@ const buildStreamHandler =
         return new Response(stream, { headers: SSE_HEADERS });
     };
 
+/**
+ * `credentialHeaders` as given, refused when a name is not a header name: a typo
+ * would otherwise mean the app's credential header is never seen, and its callers
+ * share a cached response. Said when the route is defined, not on a request.
+ * @throws LunoraError `INTERNAL` naming the entry that is not a header name.
+ */
+const checkedCredentialHeaders = (names: ReadonlyArray<string> | undefined): ReadonlyArray<string> | undefined => {
+    const invalid = names?.find((name) => !isHeaderName(name));
+
+    if (invalid !== undefined) {
+        throw new LunoraError("INTERNAL", `httpRoute .cacheControl(): credentialHeaders entry ${JSON.stringify(invalid)} is not a header name`);
+    }
+
+    return names;
+};
+
 const makeRouteBuilder = (state: RouteState): Record<string, unknown> => {
     return {
         body: (validators: ArgsValidator) => makeRouteBuilder({ ...state, body: { ...state.body, ...validators } }),
-        cacheControl: (value: string) => makeRouteBuilder({ ...state, cacheControl: value }),
+        cacheControl: (value: string, options?: HttpRouteCacheOptions) =>
+            makeRouteBuilder({ ...state, cacheControl: value, credentialHeaders: checkedCredentialHeaders(options?.credentialHeaders) }),
         cacheTag: (value: string) => makeRouteBuilder({ ...state, cacheTag: value }),
         handler: (userHandler: LooseHandler): LunoraRouteHandler => buildRouteHandler(state, userHandler),
         output: (validator: Validator) => makeRouteBuilder({ ...state, output: validator }),
@@ -1026,6 +1068,7 @@ export type {
     HttpMethod,
     HttpRoute,
     HttpRouteBuilder,
+    HttpRouteCacheOptions,
     HttpRouteFactory,
     HttpRouteHandlerOptions,
     HttpRunners,

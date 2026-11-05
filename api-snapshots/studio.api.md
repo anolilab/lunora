@@ -666,6 +666,7 @@ interface LogEntry {
     exitCode?: number;
     fields?: Record<string, unknown>;
     functionPath?: string;
+    id?: string;
     instance?: string;
     level: LogLevel;
     message: string;
@@ -1806,6 +1807,9 @@ const MESSAGE_IDS: readonly [
     "Level",
     "Trace",
     "User",
+    "Error details",
+    "Show the stack and cause of {field}",
+    "Hide the stack and cause of {field}",
     "No migrations have run on this shard.",
     "No objects.",
     "No recent errors.",

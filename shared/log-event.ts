@@ -77,8 +77,9 @@ export interface LogEvent {
     /**
      * Structured fields the caller attached (`ctx.log.info(message, fields)` or a
      * bound `ctx.log.with(fields)` child), already normalized to a fresh bag of
-     * JSON-safe primitives (see `shared/log-fields.ts`). Absent for a plain
-     * console-style call.
+     * JSON-safe primitives (see `shared/log-fields.ts`). An `Error` value arrives
+     * as the JSON of its name, message, stack and cause chain; `parseLoggedError`
+     * reads it back. Absent for a plain console-style call.
      */
     fields?: LogFields;
     /** Function path that emitted the line, e.g. `"messages:list"`. */

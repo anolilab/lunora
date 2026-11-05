@@ -76,6 +76,54 @@ describe("archiveFeed", () => {
         expect(text).toContain("first");
     });
 
+    it("shows a logged Error field as its headline, with its stack and cause behind an Error details disclosure", async () => {
+        expect.assertions(3);
+
+        const err = JSON.stringify({
+            cause: { message: "disk full", name: "Error", stack: "Error: disk full\n    at write (store.ts:9:3)" },
+            message: "save failed",
+            name: "Error",
+            stack: "Error: save failed\n    at save (orders.ts:4:11)",
+        });
+
+        render(renderFeed(createClient({ rows: [ROW({ fields: { err, orderId: "o-1" } })] })));
+
+        fireEvent.click(await screen.findByTestId("lg-error-toggle"));
+
+        const detail = await screen.findByTestId("lg-error-detail");
+
+        expect(screen.getByTestId("lg-archive-table").textContent).toContain("err=Error: save failed orderId=o-1");
+        expect(detail.textContent).toContain("at save (orders.ts:4:11)");
+        expect(detail.textContent).toContain("caused by: Error: disk full");
+    });
+
+    it("closes an opened Error details when a filter change brings another record into the same row", async () => {
+        expect.assertions(2);
+
+        const err = (message: string): string => JSON.stringify({ message, name: "Error", stack: `Error: ${message}\n    at save (orders.ts:4:11)` });
+        // Same time and place in the list, different record: the archive has no id to tell them apart.
+        const pages: PipelineLogPage[] = [
+            { rows: [ROW({ fields: { err: err("first") }, ts: 7 })] },
+            { rows: [ROW({ fields: { err: err("second") }, ts: 7 })] },
+        ];
+        const mock = createMockClient({
+            queryLogArchive: (): PipelineLogPage => pages.shift() ?? { rows: [] },
+        });
+
+        render(renderFeed(mock));
+
+        fireEvent.click(await screen.findByTestId("lg-error-toggle"));
+
+        const opened = await screen.findByTestId("lg-error-detail");
+
+        expect(opened.textContent).toContain("Error: first");
+
+        fireEvent.change(screen.getByTestId("lg-archive-min-level"), { target: { value: "error" } });
+        await screen.findByText(/err=Error: second/u);
+
+        expect(screen.queryByTestId("lg-error-detail")).toBeNull();
+    });
+
     it("renders the empty state when the archive returns no rows", async () => {
         expect.assertions(1);
 

@@ -452,6 +452,10 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     const virtualizer = useVirtualizer({
         count: activeCount,
         estimateSize: () => ROW_HEIGHT,
+        // An Errors-view row is keyed on its line's `id`, not its position: a live push that prepends lines shifts
+        // every index, and a row's state (an opened "Error details") must stay with the line it was opened on.
+        // A worker predating `id` keys by position.
+        getItemKey: (index) => (view === "errors" ? (filtered[index]?.id ?? index) : index),
         getScrollElement: () => scrollRef.current,
         initialRect: { height: SCROLL_HEIGHT, width: 800 },
         observeElementRect: (instance, callback) => flooredRectObserver(instance, callback, SCROLL_HEIGHT),

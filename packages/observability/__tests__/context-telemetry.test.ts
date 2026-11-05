@@ -510,3 +510,55 @@ describe("every telemetry sink drops URL query strings and masks credential attr
         expect(recorded[0]?.attributes).toStrictEqual({ channel: "email", sessionId: "<REDACTED>" });
     });
 });
+
+describe("an Error in span and metric attributes", () => {
+    const failure = (): Error => new Error("charge failed", { cause: new Error("card declined") });
+
+    it("writes Name: message without a stack outside captureRaw, on every span attribute door", async () => {
+        expect.assertions(4);
+
+        const { recorded, trace } = setup();
+        const { collected, handle } = createSpanCollector({ spanId: "span0000span0000", traceId: anchor.traceId });
+
+        await trace("charge", () => undefined, { err: failure() });
+        handle.setAttribute("err", failure());
+        handle.setAttributes({ nested: { err: failure() } });
+        handle.addEvent("retry", { err: failure() });
+
+        expect(recorded[0]?.attributes?.["err"]).toBe("Error: charge failed");
+        expect(collected.attributes["err"]).toBe("Error: charge failed");
+        expect(collected.attributes["nested"]).toBe('{"err":"Error: charge failed"}');
+        expect(collected.events[0]?.attributes?.["err"]).toBe("Error: charge failed");
+    });
+
+    it("keeps the stack and cause under captureRaw", async () => {
+        expect.assertions(3);
+
+        const { recorded, trace } = setup({ captureRaw: true });
+
+        await trace("charge", () => undefined, { err: failure() });
+
+        const logged = JSON.parse(String(recorded[0]?.attributes?.["err"])) as { cause: { message: string }; stack: string };
+
+        expect(logged.stack).toContain("charge failed");
+        expect(logged.cause.message).toBe("card declined");
+        expect(String(recorded[0]?.attributes?.["err"])).toContain("at ");
+    });
+
+    it("writes Name: message on a metric attribute", () => {
+        expect.assertions(1);
+
+        const recorded: MetricEvent[] = [];
+        const metrics = createMetrics({
+            functionPath: "orders:place",
+            record: (event) => {
+                recorded.push(event);
+            },
+            shardKey: undefined,
+        });
+
+        metrics.count("charge.failed", 1, { err: failure() });
+
+        expect(recorded[0]?.attributes?.["err"]).toBe("Error: charge failed");
+    });
+});
