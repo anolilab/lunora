@@ -87,6 +87,20 @@ describe("devVariablesPlugin", () => {
         expect(content).not.toContain("AUTH_SECRET=");
     });
 
+    it("warns once and keeps the dev server starting when .dev.vars is a directory", async () => {
+        expect.assertions(2);
+
+        // No example: `fillDevSecrets` read the directory anyway and threw EISDIR out of `configResolved`.
+        mkdirSync(join(dir, ".dev.vars"));
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        vi.spyOn(console, "info").mockImplementation(() => {});
+
+        await expect(runHooks(devVariablesPlugin(RESOLVED(dir)))).resolves.toBeUndefined();
+        expect(warn.mock.calls.filter(([line]) => String(line).includes("EISDIR"))).toHaveLength(1);
+    });
+
     it("fills an empty feature-scaffolded secret + the admin token on dev (no prompt)", async () => {
         expect.assertions(3);
 

@@ -189,7 +189,14 @@ const prepareDevSession = async (options: ResolvedLunoraRspackOptions): Promise<
         consoleLogger.info(lunoraLine(message));
     };
 
-    await ensureDevVariables({ confirm: createConfirm("[lunora] "), cwd: options.projectRoot, info });
+    await ensureDevVariables({
+        confirm: createConfirm("[lunora] "),
+        cwd: options.projectRoot,
+        info,
+        warn: (message) => {
+            consoleLogger.warn(lunoraLine(message));
+        },
+    });
 
     const secretSources = await secretSourcesOrUndefined(options.projectRoot, options.schemaDir, info);
     fillDevSecrets({ cwd: options.projectRoot, info, secretSources });

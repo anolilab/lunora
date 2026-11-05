@@ -103,7 +103,12 @@ const devVariablesPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 console.info(lunoraLine(message));
             };
 
-            await ensureDevVariables({ confirm: createConfirm("[lunora] "), cwd: options.projectRoot, info });
+            const warn = (message: string): void => {
+                // eslint-disable-next-line no-console -- dev-server startup notice, before Vite's logger is wired up
+                console.warn(lunoraLine(message));
+            };
+
+            await ensureDevVariables({ confirm: createConfirm("[lunora] "), cwd: options.projectRoot, info, warn });
 
             const secretSources = await secretSourcesOrUndefined(options.projectRoot, options.schemaDir, info);
             fillDevSecrets({ cwd: options.projectRoot, info, secretSources });

@@ -688,6 +688,7 @@ interface EnsureDevVariablesDeps {
     cwd: string;
     info: (message: string) => void;
     randomHex?: (bytes: number) => string;
+    warn?: (message: string) => void;
     yes?: boolean;
 }
 ```
@@ -705,7 +706,7 @@ interface EnsureDevVariablesResult {
 ### `EnsureDevVariablesStatus` (type)
 
 ```ts
-type EnsureDevVariablesStatus = "augmented" | "declined" | "exists" | "generated" | "no-example" | "skipped-exists";
+type EnsureDevVariablesStatus = "augmented" | "declined" | "exists" | "generated" | "no-example" | "skipped-exists" | "unreadable";
 ```
 
 ### `EnvKeyFailure` (interface)
