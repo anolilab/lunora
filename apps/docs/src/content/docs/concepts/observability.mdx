@@ -394,7 +394,9 @@ In the console-style form the error renders into the message as
 `TypeError: card declined`. In a fields object it keeps more: the field value is
 the JSON of the error's `name`, `message`, `stack`, its `cause` chain and, for an
 `AggregateError`, up to ten `errors`, plus the error's own enumerable properties.
-An `Error` nested deeper in a field object is written the same way, not as `{}`.
+An `Error` nested in the field's plain objects and arrays (up to eight levels)
+is written the same way, not as `{}`; one inside a `Map` or a class instance is
+still written as `JSON.stringify` writes it.
 
 - The dev terminal prints the field as `err=TypeError: card declined` on the log
   line, then the stack and each `caused by:` level on indented lines below it.
@@ -406,8 +408,9 @@ An `Error` nested deeper in a field object is written the same way, not as `{}`.
   then dropped, to stay under redaction's 4 KiB limit per string. A field still
   over the limit (a very long message, large own properties) is cut by
   redaction and shows as raw text.
-- If the error's own properties hold a cycle, they are left out and the stack
-  and `cause` chain are kept.
+- An own property that cannot be written as JSON (one holding a cycle) is left
+  out; the other properties, the stack and the `cause` chain are kept. A `bigint`
+  property is written as its digits.
 - The field is redacted like any other: a credential in the message also appears
   in the stack, and both are masked.
 - Only log lines keep the stack. An `Error` passed as a `ctx.trace` span
