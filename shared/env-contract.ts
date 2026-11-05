@@ -29,7 +29,7 @@ const envContractOf = (value: unknown): EnvContractCheck | undefined => {
         return undefined;
     }
 
-    const check: unknown = (value as unknown as Record<symbol, unknown>)[ENV_CONTRACT];
+    const check: unknown = Reflect.get(value, ENV_CONTRACT);
 
     return typeof check === "function" ? (check as EnvContractCheck) : undefined;
 };
