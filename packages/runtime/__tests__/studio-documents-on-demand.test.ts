@@ -65,7 +65,7 @@ describe("createWorker — Studio documents load on their route only", () => {
     });
 
     it.each(routes)("loads the $option document on the first request to $path and keeps it", async ({ document, option, path }) => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const load = vi.fn<() => Promise<unknown>>(async () => document);
         const worker = createWorker({
@@ -85,6 +85,8 @@ describe("createWorker — Studio documents load on their route only", () => {
         const third = await worker.fetch(adminGet(path), {}, fakeContext);
 
         expect(load).toHaveBeenCalledTimes(1);
+        // Admin-only: no browser or shared cache may keep it.
+        expect(first.headers.get("cache-control")).toBe("no-store");
         await expect(first.json()).resolves.toStrictEqual(document);
         await expect(second.json()).resolves.toStrictEqual(document);
         await expect(third.json()).resolves.toStrictEqual(document);

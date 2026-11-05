@@ -2282,6 +2282,12 @@ interface StorageObject {
 }
 ```
 
+### `StudioDocumentName` (type)
+
+```ts
+type StudioDocumentName = "architecture" | "openapi" | "openrpc";
+```
+
 ### `TraceSamplingConfig` (interface)
 
 ```ts
@@ -2693,6 +2699,12 @@ const isBackupManifestEntry: (value: unknown) => value is BackupManifestEntry;
 
 ```ts
 const isBackupManifestKey: (key: string) => boolean;
+```
+
+### `loadStudioDocument` (const)
+
+```ts
+const loadStudioDocument: (binding: unknown, name: StudioDocumentName) => Promise<unknown>;
 ```
 
 ### `memoizeIdentity` (const)

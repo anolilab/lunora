@@ -191,6 +191,8 @@ export type {
 export { createShardClient } from "./shard-client";
 export type { AssetsFetcherLike } from "./spa-assets";
 export { STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
+export type { StudioDocumentName } from "./studio-documents";
+export { loadStudioDocument } from "./studio-documents";
 export type { TraceTrustSignal, TrustInboundTraceContext } from "./trace-trust";
 
 export const VERSION: string = "0.0.0";

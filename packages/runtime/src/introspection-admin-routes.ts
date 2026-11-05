@@ -82,7 +82,7 @@ const parseGlobalFilters = (raw: string | undefined): GlobalFilterClause[] | und
 const EMPTY_OPENAPI_DOCUMENT = Object.freeze({
     info: {
         description:
-            'No OpenAPI spec is configured on this worker. Run `lunora codegen`, then hand `createWorker` a loader for the generated module: `openApiSpec: () => import("./lunora/_generated/openapi").then((m) => m.openApiSpec)`.',
+            'No OpenAPI spec is configured on this worker. Run `lunora codegen`, then hand `createWorker` a loader for the generated module: `openApiSpec: () => import("./lunora/_generated/openapi").then((m) => m.openApiSpec)`. A worker that ships it as a Workers Static Asset reads `/_lunora/studio/openapi.json` through its assets binding; if that file is missing, deploy again with `lunora deploy`.',
         title: "Lunora API",
         version: "0.0.0",
     },
@@ -94,13 +94,16 @@ const EMPTY_OPENAPI_DOCUMENT = Object.freeze({
 const EMPTY_OPENRPC_DOCUMENT = Object.freeze({
     info: {
         description:
-            'No OpenRPC spec is configured on this worker. Run `lunora codegen --api-spec openrpc` (or `both`), then hand `createWorker` a loader for the generated module: `openRpcSpec: () => import("./lunora/_generated/openrpc").then((m) => m.openRpcSpec)`.',
+            'No OpenRPC spec is configured on this worker. Run `lunora codegen --api-spec openrpc` (or `both`), then hand `createWorker` a loader for the generated module: `openRpcSpec: () => import("./lunora/_generated/openrpc").then((m) => m.openRpcSpec)`. A worker that ships it as a Workers Static Asset reads `/_lunora/studio/openrpc.json` through its assets binding; if that file is missing, deploy again with `lunora deploy`.',
         title: "Lunora RPC",
         version: "0.0.0",
     },
     methods: [],
     openrpc: "1.3.2",
 });
+
+/** Admin-only documents: never stored by a browser or a shared cache. */
+const DOCUMENT_RESPONSE: ResponseInit = { headers: { "cache-control": "no-store", "content-type": "application/json" }, status: 200 };
 
 /** Loads one of Studio's generated documents (architecture manifest, OpenAPI or OpenRPC spec) on demand. */
 type DocumentLoader = () => Promise<unknown>;
@@ -217,7 +220,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
 
         // Codegen emits the manifest only once the app declares a module; until
         // then answer an empty-but-valid one so the studio shows how to opt in.
-        return Response.json((await loadArchitecture()) ?? EMPTY_ARCHITECTURE, { headers: { "content-type": "application/json" }, status: 200 });
+        return Response.json((await loadArchitecture()) ?? EMPTY_ARCHITECTURE, DOCUMENT_RESPONSE);
     };
 
     const handleOpenApi = async (request: Request): Promise<Response> => {
@@ -227,7 +230,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
 
         // Serve the injected spec verbatim; with none configured, answer 200 with an
         // empty-but-valid document so the studio renders a clean "not configured" state.
-        return Response.json((await loadOpenApiSpec()) ?? EMPTY_OPENAPI_DOCUMENT, { headers: { "content-type": "application/json" }, status: 200 });
+        return Response.json((await loadOpenApiSpec()) ?? EMPTY_OPENAPI_DOCUMENT, DOCUMENT_RESPONSE);
     };
 
     const handleOpenRpc = async (request: Request): Promise<Response> => {
@@ -235,7 +238,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
 
         assertAdmin(request);
 
-        return Response.json((await loadOpenRpcSpec()) ?? EMPTY_OPENRPC_DOCUMENT, { headers: { "content-type": "application/json" }, status: 200 });
+        return Response.json((await loadOpenRpcSpec()) ?? EMPTY_OPENRPC_DOCUMENT, DOCUMENT_RESPONSE);
     };
 
     const handleGlobalTables = async (request: Request): Promise<Response> => {
