@@ -59,7 +59,9 @@ compete for its one consumer. Give each environment's queues their own names
 (`"emails-staging"`). Lunora does not write an environment block's queue names,
 because renaming a deployed queue leaves its backlog on the old one, so
 `lunora deploy --env <name>` and `lunora verify --env <name>` warn when the
-block names a queue the top level or another environment also names.
+block names a queue the top level or another environment also names. An
+environment with its own `account_id` is compared only with the scopes that
+deploy to the same account, since queues on different accounts never meet.
 
 ## Linking a checkout to a deployment
 
