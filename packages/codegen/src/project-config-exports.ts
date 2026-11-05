@@ -7,7 +7,7 @@
 import type { SourceFile } from "ts-morph";
 import { Node as TsNode } from "ts-morph";
 
-import { unwrapLiteral } from "./project-config-shape";
+import { constInitializer, unwrapLiteral } from "./project-config-shape";
 
 /** Whether `declaration` declares only a type: an interface, a type alias, or an `export type { … }` specifier. */
 const isTypeOnly = (declaration: TsNode): boolean =>
@@ -51,7 +51,7 @@ const namedOnlyExportsProblem = (
 
     const keys = named.filter((name) => configKeys.has(name));
     const objects = named.filter((name) => {
-        const initializer = unwrapLiteral(sourceFile.getVariableDeclaration(name)?.getInitializer());
+        const initializer = unwrapLiteral(constInitializer(sourceFile, name));
 
         return !configKeys.has(name) && initializer !== undefined && TsNode.isObjectLiteralExpression(initializer);
     });

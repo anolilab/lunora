@@ -133,6 +133,16 @@ describe("lunora.config validation", () => {
         expect(projectConfigProblems(configPath)).toStrictEqual(["unknown key `durableObjects.toString`. Valid keys of `durableObjects`: merge."]);
     });
 
+    it("does not judge a reassigned let by its first value, nor read that value as the setting", () => {
+        expect.assertions(2);
+
+        writeConfig("let app = 'placeholder';\napp = (builder) => builder;\nlet target = 'celld';\ntarget = 'cloudflare';\nexport default { app, target };\n");
+
+        expect(projectConfigProblems(configPath)).toStrictEqual([]);
+        // The parse cannot prove which value `target` holds, so it reads it as unreadable rather than as "celld".
+        expect(readProjectConfigLiterals(projectRoot).target).toBeUndefined();
+    });
+
     it("follows a const to the value it names", () => {
         expect.assertions(1);
 

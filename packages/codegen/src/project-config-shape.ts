@@ -13,7 +13,7 @@
  * getter or setter computes its value, so only its name is.
  */
 import type { ObjectLiteralExpression, SourceFile } from "ts-morph";
-import { Node as TsNode } from "ts-morph";
+import { Node as TsNode, VariableDeclarationKind } from "ts-morph";
 
 import type { SecurityHeadersOptions } from "../../../shared/security-headers";
 import { HSTS_KEYS, SECURITY_HEADER_KEYS } from "../../../shared/security-headers";
@@ -87,11 +87,21 @@ const unwrapLiteral = (value: TsNode | undefined): TsNode | undefined => {
     return inner;
 };
 
-/** `node` unwrapped, and followed when it names a variable in the same file. A method is its own value. */
+/**
+ * The initializer of the `const` named `name` in this file, or `undefined`. Only a `const` is followed: a `let` or
+ * `var` may be reassigned before the config is exported, so its initializer is not the value that is read.
+ */
+const constInitializer = (sourceFile: SourceFile, name: string): TsNode | undefined => {
+    const declaration = sourceFile.getVariableDeclaration(name);
+
+    return declaration?.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const ? declaration.getInitializer() : undefined;
+};
+
+/** `node` unwrapped, and followed when it names a `const` in the same file. A method is its own value. */
 const resolveValue = (node: TsNode | undefined, sourceFile: SourceFile): TsNode | undefined => {
     const value = unwrapLiteral(node);
 
-    return value !== undefined && TsNode.isIdentifier(value) ? unwrapLiteral(sourceFile.getVariableDeclaration(value.getText())?.getInitializer()) : value;
+    return value !== undefined && TsNode.isIdentifier(value) ? unwrapLiteral(constInitializer(sourceFile, value.getText())) : value;
 };
 
 /** The literal kind of a resolved value; `undefined` when a parse cannot tell. */
@@ -229,4 +239,4 @@ const objectProblems = (object: ObjectLiteralExpression, shape: FieldShape, path
 };
 
 export type { FieldShape };
-export { BOOLEAN, FUNCTION, objectOf, objectProblems, SECURITY_HEADERS, STRING, STRING_ARRAY, unwrapLiteral };
+export { BOOLEAN, constInitializer, FUNCTION, objectOf, objectProblems, SECURITY_HEADERS, STRING, STRING_ARRAY, unwrapLiteral };

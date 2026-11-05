@@ -55,7 +55,7 @@ import { propertyKeyName } from "./discover/property-name";
 import namedOnlyExportsProblem from "./project-config-exports";
 import { findCodegenConfigFile, findProjectConfigFile } from "./project-config-path";
 import type { FieldShape } from "./project-config-shape";
-import { BOOLEAN, FUNCTION, objectOf, objectProblems, SECURITY_HEADERS, STRING, STRING_ARRAY, unwrapLiteral } from "./project-config-shape";
+import { BOOLEAN, constInitializer, FUNCTION, objectOf, objectProblems, SECURITY_HEADERS, STRING, STRING_ARRAY, unwrapLiteral } from "./project-config-shape";
 import { literalOf, NOT_LITERAL } from "./static-literal";
 
 /**
@@ -175,9 +175,7 @@ const defaultExportExpression = (sourceFile: SourceFile): TsNode | undefined => 
     const expression: TsNode | undefined = unwrapLiteral(assignment?.getExpression());
 
     // `export default config` names a `const`; its initializer unwraps the same way, parentheses included.
-    return expression !== undefined && TsNode.isIdentifier(expression)
-        ? unwrapLiteral(sourceFile.getVariableDeclaration(expression.getText())?.getInitializer())
-        : expression;
+    return expression !== undefined && TsNode.isIdentifier(expression) ? unwrapLiteral(constInitializer(sourceFile, expression.getText())) : expression;
 };
 
 /** The object literal the default export resolves to, or `undefined` when it does not resolve to one. */
@@ -223,7 +221,7 @@ const propertyLiteral = (property: PropertyAssignment | ShorthandPropertyAssignm
         return property.getInitializer();
     }
 
-    return sourceFile.getVariableDeclaration(propertyKeyName(property))?.getInitializer();
+    return constInitializer(sourceFile, propertyKeyName(property));
 };
 
 /**
