@@ -171,9 +171,11 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     // binding provisioning, the wrangler validator, container logs and
     // `buildStart`'s reconcile instead of each parsing the project again.
     const discovery = createDiscoveryCache();
-    // What `remoteBindingsPlugin` left out of this session, read by the env check.
-    // Its `config` hook runs before any `configResolved`, so the check sees it.
+    // What `remoteBindingsPlugin` and `localAiBinding` left out of this session,
+    // read by the env check. Both decide in a `config` hook, which runs before any
+    // `configResolved`, so the check sees them.
     let withheld: ReadonlyArray<string> = [];
+    let withheldLocally: ReadonlyArray<string> = [];
     // `devVariablesPlugin` is `enforce: "pre"` + `apply: "serve"`: it offers to
     // scaffold `.dev.vars` before `@cloudflare/vite-plugin` boots the worker.
     // The framework-detect plugin runs early (its `config` hook) so the
@@ -192,7 +194,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         frameworkComposePlugin(resolved, context),
         devVariablesPlugin(resolved, {
             configPath: resolved.cloudflare === false ? undefined : cloudflareConfigPath(resolved.cloudflare, resolved.projectRoot),
-            withheld: () => withheld,
+            withheld: () => [...new Set([...withheld, ...withheldLocally])],
         }),
         // Writes the bindings the code implies into `wrangler.jsonc` from its
         // `config` hook — before `@cloudflare/vite-plugin` parses that file and
@@ -286,7 +288,12 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
             ...withoutDevWhen(
                 [
                     localHyperdrive({ projectRoot: resolved.projectRoot, wranglerConfigPath: cloudflareConfigPath(cloudflareOptions, resolved.projectRoot) }),
-                    localAiBinding(cloudflareOptions, { projectRoot: resolved.projectRoot }),
+                    localAiBinding(cloudflareOptions, {
+                        onWithheld: (bindings) => {
+                            withheldLocally = bindings;
+                        },
+                        projectRoot: resolved.projectRoot,
+                    }),
                     ...withWorkerStartupHint(cloudflare(cloudflareOptions)),
                 ],
                 onCelld,

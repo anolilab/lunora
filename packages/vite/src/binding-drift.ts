@@ -37,6 +37,8 @@ interface BindingDriftNotifier {
     check: () => Promise<void>;
     /** Cancel a scan the last save scheduled. */
     dispose: () => void;
+    /** A save arrived that will call `noteSave` once it settles: drop what an earlier one scheduled, or is scanning. */
+    invalidate: () => void;
     /** A save landed: restart the settle window. */
     noteSave: () => void;
 }
@@ -98,6 +100,13 @@ const createBindingDriftNotifier = (options: BindingDriftNotifierOptions): Bindi
         );
     };
 
+    const invalidate = (): void => {
+        generation += 1;
+        options.cache.clear();
+        cancel?.();
+        cancel = undefined;
+    };
+
     return {
         check,
         dispose: () => {
@@ -105,10 +114,9 @@ const createBindingDriftNotifier = (options: BindingDriftNotifierOptions): Bindi
             cancel?.();
             cancel = undefined;
         },
+        invalidate,
         noteSave: () => {
-            generation += 1;
-            options.cache.clear();
-            cancel?.();
+            invalidate();
             // `check` never rejects: `pendingBindingChanges` answers `[]` on any failure.
             cancel = schedule(check, BINDING_DRIFT_SETTLE_MS);
         },

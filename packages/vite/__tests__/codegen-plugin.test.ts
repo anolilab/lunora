@@ -913,6 +913,82 @@ export const schema = defineSchema({
             expect(warn).toHaveBeenCalledWith(expect.stringContaining("DB (D1 database) — not in the running worker yet"));
         });
 
+        it("says nothing about binding drift for a worker that runs a custom configPath", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin({ ...makeOptions(workdir), cloudflare: { configPath: "wrangler.custom.jsonc" } });
+            const { server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValue(["DB (D1 database)"]);
+
+            wireServer(plugin, server);
+
+            for (const [event, listener] of (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls as [string, (file: string) => void][]) {
+                if (event === "change") {
+                    listener(join(workdir, "src", "worker.ts"));
+                }
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("not in the running worker yet"));
+        });
+
+        it("checks a save the restart window suppressed once the restart ends", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+
+            const wranglerPath = join(workdir, "wrangler.jsonc");
+
+            writeFileSync(wranglerPath, '{ "name": "app" }\n', "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { restart, server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+            let finishRestart: (() => void) | undefined;
+
+            restart.mockImplementation(async () => {
+                await new Promise<void>((resolve) => {
+                    finishRestart = resolve;
+                });
+            });
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValue(["DB (D1 database)"]);
+
+            wireServer(plugin, server);
+            await settleConfigBaseline(plugin);
+
+            const changeListeners = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls
+                .filter((args) => args[0] === "change")
+                .map((args) => args[1] as (file: string) => void);
+
+            writeFileSync(wranglerPath, '{ "name": "app", "d1_databases": [{ "binding": "DB", "database_name": "app" }] }\n', "utf8");
+            changeListeners.at(-1)?.(wranglerPath);
+
+            expect(restart).toHaveBeenCalledTimes(1);
+
+            // A source save lands while the restart is still running: its scan is suppressed.
+            for (const listener of changeListeners.slice(0, -1)) {
+                listener(join(workdir, "src", "worker.ts"));
+            }
+
+            await vi.runAllTimersAsync();
+
+            const hints = (): unknown[] => warn.mock.calls.filter(([message]) => message.includes("not in the running worker yet"));
+
+            expect(hints()).toHaveLength(0);
+
+            finishRestart?.();
+            await vi.runAllTimersAsync();
+
+            expect(hints()).toHaveLength(1);
+        });
+
         it("failure then success → recovery reloads the client once (clears overlay), still evicts the worker", async () => {
             expect.assertions(6);
 

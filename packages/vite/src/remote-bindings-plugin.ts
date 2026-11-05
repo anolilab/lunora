@@ -185,14 +185,20 @@ const remoteBindingsPlugin = (
             // plan without disposing would orphan the previous temp file.
             plan.cleanup();
             plan = planViteRemoteBindings(planOptions);
-            onPlan?.(plan);
 
-            for (const binding of plan.withheld) {
-                // eslint-disable-next-line no-console -- surface the withholding; the dev server's logger isn't available in the `config` hook.
-                console.warn(lunoraLine(describeWithheld(binding)));
-            }
+            /** Report what the plan withholds — only when its temp config is what the worker runs. */
+            const report = (runs: boolean): void => {
+                onPlan?.(runs ? plan : { ...plan, withheld: [] });
+
+                for (const binding of runs ? plan.withheld : []) {
+                    // eslint-disable-next-line no-console -- surface the withholding; the dev server's logger isn't available in the `config` hook.
+                    console.warn(lunoraLine(describeWithheld(binding)));
+                }
+            };
 
             if (options === undefined) {
+                // The project wires the printed path into its own plugin, so the plan is what it runs.
+                report(true);
                 announceUnwired(plan);
 
                 return;
@@ -210,8 +216,12 @@ const remoteBindingsPlugin = (
             }
 
             const merged = withRemoteBindings(options, plan) as RemoteCloudflareOptions;
+            const injecting = merged.configPath !== undefined && target.configPath === undefined;
 
-            if (merged.configPath !== undefined && target.configPath === undefined) {
+            // A user-supplied `configPath` runs their file, which withholds nothing of the plan's.
+            report(injecting);
+
+            if (injecting) {
                 target.configPath = merged.configPath;
                 injected = merged.configPath;
 

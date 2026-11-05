@@ -53,6 +53,33 @@ const setup = (scan: NonNullable<BindingDriftNotifierOptions["pending"]>, isSupp
 };
 
 describe(createBindingDriftNotifier, () => {
+    it("lets a save that has not settled yet cancel the scan an earlier one scheduled, and drop the one it is running", async () => {
+        expect.assertions(2);
+
+        const answers: ((labels: string[]) => void)[] = [];
+        const { notifier, settle, warn } = setup(
+            async () =>
+                await new Promise<string[]>((resolve) => {
+                    answers.push(resolve);
+                }),
+        );
+
+        notifier.noteSave();
+        const running = settle();
+
+        notifier.noteSave();
+        // A later save arrives; codegen will call noteSave once it settles.
+        notifier.invalidate();
+        await settle();
+
+        answers[0]?.(["QUEUE_ORDERS (Queue)"]);
+        await running;
+
+        // The second save's scan never started, and the first one's answer was dropped.
+        expect(answers).toHaveLength(1);
+        expect(warn).not.toHaveBeenCalled();
+    });
+
     it("drops a scan that a later save overtook, so a removed binding is never announced", async () => {
         expect.assertions(2);
 

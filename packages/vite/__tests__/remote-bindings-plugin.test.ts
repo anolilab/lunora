@@ -230,10 +230,11 @@ describe("remoteBindingsPlugin", () => {
         expect.assertions(1);
 
         const onPlan = vi.fn<(plan: RemotePlan) => void>();
+        // Withholding only happens in the temp config the plan writes, so it carries one.
         const plugin = remoteBindingsPlugin(
             {},
             remoteOnOptions(() => {
-                return { cleanup: (): void => {}, remoteBindings: [], withheld: [{ binding: "AI", kind: "ai" }] };
+                return { cleanup: (): void => {}, configPath: "/work/wrangler.remote.jsonc", remoteBindings: [], withheld: [{ binding: "AI", kind: "ai" }] };
             }),
             onPlan,
         );
@@ -242,6 +243,27 @@ describe("remoteBindingsPlugin", () => {
         callConfig(plugin, "serve");
 
         expect(onPlan).toHaveBeenCalledWith(expect.objectContaining({ withheld: [{ binding: "AI", kind: "ai" }] }));
+    });
+
+    it("withholds nothing for the env check, and warns of nothing, when the user's configPath runs instead of the plan's", () => {
+        expect.assertions(2);
+
+        const onPlan = vi.fn<(plan: RemotePlan) => void>();
+        const plugin = remoteBindingsPlugin(
+            { configPath: "wrangler.custom.jsonc" },
+            remoteOnOptions(() => {
+                return { cleanup: (): void => {}, configPath: "/work/wrangler.remote.jsonc", remoteBindings: [], withheld: [{ binding: "AI", kind: "ai" }] };
+            }),
+            onPlan,
+        );
+        // `mockClear`: the spy is shared with earlier tests in this file, which this one must not count.
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        warn.mockClear();
+        callConfig(plugin, "serve");
+
+        expect(onPlan).toHaveBeenCalledWith(expect.objectContaining({ withheld: [] }));
+        expect(warn).not.toHaveBeenCalled();
     });
 
     it("injects configPath into the shared options object during serve (deferred to hook time)", () => {

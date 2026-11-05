@@ -344,6 +344,9 @@ const oncePerRun = async <T>(run: CodegenSafelyResult, step: string, perform: ()
  */
 const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: DiscoveryCache): Plugin => {
     const absoluteSchemaDirectory = resolve(options.projectRoot, options.schemaDir);
+    // Read at construction, before the remote-bindings plugin can inject its temp
+    // copy of the project's config into the same options object.
+    const customWorkerConfig = options.cloudflare !== false && typeof (options.cloudflare as { configPath?: unknown }).configPath === "string";
 
     // Read once, at construction: the env cannot change under a running server,
     // and both consumers below (the dev-only `buildStart` skip and the watcher
@@ -394,6 +397,10 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
     let configFingerprint: string | undefined;
     let configBaselineSettled = false;
     let restartInFlight = false;
+    // A binding scan the restart window suppressed, and the running server's way
+    // to schedule it again — so a save that landed mid-restart is still checked.
+    let driftSkippedForRestart = false;
+    let rearmDrift: (() => void) | undefined;
 
     // Captured via the `config` hook (fires before `buildStart`), same idiom as
     // `createCommandProbe` in `dev-worker-env.ts`. `buildStart` runs for BOTH
@@ -751,10 +758,20 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
 
             const bindingDrift = createBindingDriftNotifier({
                 cache: discovery ?? createDiscoveryCache(),
-                isSuppressed: () => restartInFlight || closed,
+                isSuppressed: () => {
+                    if (restartInFlight) {
+                        driftSkippedForRestart = true;
+                    }
+
+                    // The scan plans against the project's own wrangler config, which a
+                    // custom `configPath` worker does not run: it would say the wrong thing.
+                    return restartInFlight || closed || customWorkerConfig;
+                },
                 project: options,
                 warn: serverLogger.warn,
             });
+
+            rearmDrift = bindingDrift.noteSave;
 
             /**
              * One debounced regeneration: run codegen, run the project's
@@ -982,6 +999,9 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                     return;
                 }
 
+                // `regenerate` schedules the binding scan once this save settles; one an
+                // earlier save scheduled would read the disk mid-edit.
+                bindingDrift.invalidate();
                 scheduler.onSave(normalized);
             };
 
@@ -1121,6 +1141,12 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 Promise.resolve(server.restart())
                     .finally(() => {
                         restartInFlight = false;
+
+                        // On whichever server now runs: the restarted one, or the old one when the restart failed.
+                        if (driftSkippedForRestart) {
+                            driftSkippedForRestart = false;
+                            rearmDrift?.();
+                        }
                     })
                     .catch((error: unknown) => {
                         const message = error instanceof Error ? error.message : String(error);
