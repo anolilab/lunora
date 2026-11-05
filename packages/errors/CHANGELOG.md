@@ -1,3 +1,7 @@
+## @lunora/errors [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.88...@lunora/errors@1.0.0-alpha.89) (2026-11-05)
+
+- feat(d1): refuse unconfirmed destructive migration sql; fix the add-column race (#1489)
+
 ## @lunora/errors [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.87...@lunora/errors@1.0.0-alpha.88) (2026-11-05)
 
 - feat(codegen): validate lunora.config; Access-aware health probe; env queue warning (#1492)
