@@ -201,8 +201,44 @@
     {
       "at": "2026-11-05T07:07:19.340Z",
       "key": "@lunora/errors@1.0.0-alpha.86"
+    },
+    {
+      "at": "2026-11-05T09:28:50.234Z",
+      "key": "@lunora/errors@1.0.0-alpha.87"
+    },
+    {
+      "at": "2026-11-05T09:28:50.234Z",
+      "key": "@lunora/client@1.0.0-alpha.288"
+    },
+    {
+      "at": "2026-11-05T09:28:50.234Z",
+      "key": "@lunora/angular@1.0.0-alpha.269"
+    },
+    {
+      "at": "2026-11-05T09:28:50.234Z",
+      "key": "@lunora/shard-engine@1.0.0-alpha.192"
+    },
+    {
+      "at": "2026-11-05T09:28:50.234Z",
+      "key": "@lunora/codegen@1.0.0-alpha.401"
+    },
+    {
+      "at": "2026-11-05T09:28:50.234Z",
+      "key": "@lunora/react@1.0.0-alpha.297"
+    },
+    {
+      "at": "2026-11-05T09:28:50.234Z",
+      "key": "@lunora/solid@1.0.0-alpha.290"
+    },
+    {
+      "at": "2026-11-05T09:28:50.234Z",
+      "key": "@lunora/svelte@1.0.0-alpha.319"
+    },
+    {
+      "at": "2026-11-05T09:28:50.234Z",
+      "key": "@lunora/vue@1.0.0-alpha.320"
     }
   ],
-  "updatedAt": "2026-11-05T07:07:19.340Z",
+  "updatedAt": "2026-11-05T09:28:50.234Z",
   "version": 1
 }
