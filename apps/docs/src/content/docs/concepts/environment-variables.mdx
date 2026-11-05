@@ -62,6 +62,42 @@ lunora env doctor                        # check .dev.vars against its example
 extras, and exits non-zero when anything is actionable, so it works as a CI
 gate or a pre-`dev` sanity check.
 
+### Which file wins
+
+The dev worker gets its env the way `wrangler dev` builds it, and Lunora's dev
+checks read it the same way:
+
+1. The `vars` in `wrangler.jsonc`. With `CLOUDFLARE_ENV` set, only that
+   `env.<name>` block's own `vars`, because `vars` is not inherited.
+2. `.dev.vars.<env>` (with `CLOUDFLARE_ENV`), else `.dev.vars`. Values here
+   override a `var` of the same name.
+3. Only when there is no `.dev.vars`: `.env`, `.env.local`, then `.env.<env>`
+   and `.env.<env>.local`. Later files win and `${OTHER}` references expand.
+   `CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false` skips these files. The shell
+   environment joins them only with `CLOUDFLARE_INCLUDE_PROCESS_ENV=true`, or
+   when `wrangler.jsonc` declares a `secrets` block.
+4. With a `secrets` block, the worker keeps only the keys that are a `var` or
+   listed in `secrets.required`.
+
+Your shell environment never reaches the worker otherwise. Exporting a key in
+the terminal that runs `lunora dev` does not set it for the worker.
+
+### Checking `lunora/env.ts` at dev start
+
+If the app declares a `defineEnv` contract in `lunora/env.ts`, `lunora dev` and
+the Vite plugin check every key in it against that env when the dev server
+starts. `defineEnv` normally validates a key on its first read, so a missing
+key would otherwise show up as a 500 from whichever request reads it first. The
+check prints a warning instead and never stops the server. The Vite plugin runs
+the check again each time you save `env.ts`. A `.dev.vars`, `.env` or
+`wrangler.jsonc` edit restarts the dev server, and the restart runs it too.
+
+`env.ts` runs **in Node**, through [jiti](https://github.com/unjs/jiti), on
+every check, and so do the modules it imports. Keep it to `defineEnv` and the
+validators. A module the Workers runtime provides (a `cloudflare:` import) or a
+tsconfig path alias jiti cannot resolve makes the check report that it could
+not run. Keys are then validated on first read, as before.
+
 ## In production: secrets and vars
 
 Set **secrets** with `wrangler secret put` (you'll be prompted for the value;
@@ -97,10 +133,9 @@ change: set `LUNORA_ALLOWED_ORIGINS` as a `var` and the worker picks it up at
 request time (see [Security](/docs/concepts/security)).
 
 <Callout type="warn">
-    Lunora never logs secret values. Nothing warns at build time about a missing secret — there is no "required secret" declaration for a validator to check
-    against. What catches a forgotten `wrangler secret put` is `lunora deploy`'s remote-secret gate, and it is best-effort: a first deploy or an
-    unauthenticated wrangler cannot be queried, so it is skipped. Run `lunora env diff --env <name>` against the target to compare local and deployed secret
-    names before shipping.
+    Lunora never logs secret values. The `lunora/env.ts` check above covers only the local dev env. A forgotten `wrangler secret put` is caught by the
+    remote-secret gate in `lunora deploy`, and it is best-effort: it skips a first deploy, or a wrangler that is not logged in, because it cannot query
+    either. Run `lunora env diff --env <name>` against the target to compare local and deployed secret names before shipping.
 </Callout>
 
 ## Accessing `env` inside your app
