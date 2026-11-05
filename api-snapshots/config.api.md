@@ -39,12 +39,6 @@ const AGENT_RULES_HINT = "Lunora AI rules not installed — run `lunora rules in
 const AGENT_RULES_HINT_ENV = "LUNORA_RULES_HINT_SHOWN";
 ```
 
-### `AUTH_ROUTE_BASE_PATH` (const)
-
-```ts
-const AUTH_ROUTE_BASE_PATH = "/api/auth";
-```
-
 ### `AddIndexEdit` (interface)
 
 ```ts
@@ -816,7 +810,7 @@ interface InferredBindings {
     usesWorkerLoader: boolean;
     usesX402: boolean;
     usesX402Charge: boolean;
-    workerRoutes: string[];
+    workerRoutes: string[] | undefined;
     workflows: InferredWorkflow[];
 }
 ```
@@ -2093,11 +2087,20 @@ interface AssertWranglerOptions {
 }
 ```
 
+### `AssetHeadersLogger` (interface)
+
+```ts
+interface AssetHeadersLogger {
+    info: (message: string) => void;
+    warn: (message: string) => void;
+}
+```
+
 ### `AssetHeadersOptions` (interface)
 
 ```ts
 interface AssetHeadersOptions {
-    headers: boolean | SecurityHeadersOptions;
+    headers: boolean | SecurityHeadersOptions | undefined;
     immutableDirectory?: string;
 }
 ```
@@ -2377,8 +2380,8 @@ interface ProjectAssetHeadersInput {
     projectRoot: string;
     publicDirectory?: string;
     requireAssetsDirectory: boolean;
-    schemaDir: string;
-    target: string;
+    schemaDir?: string;
+    target?: string;
 }
 ```
 
@@ -2386,11 +2389,11 @@ interface ProjectAssetHeadersInput {
 
 ```ts
 type ProjectAssetHeadersOutcome = {
-    result: AssetHeadersResult;
-    written: true;
-} | {
     reason: string;
     written: false;
+} | {
+    result: AssetHeadersResult;
+    written: true;
 };
 ```
 
@@ -3007,6 +3010,12 @@ const describeWithheld: ({ binding, kind }: WithheldBinding) => string;
 const detectCloudflareCliConfig: (projectRoot: string) => CloudflareCliConfigFinding | undefined;
 ```
 
+### `emitProjectAssetHeaders` (const)
+
+```ts
+const emitProjectAssetHeaders: (input: ProjectAssetHeadersInput, logger: AssetHeadersLogger) => ProjectAssetHeadersOutcome;
+```
+
 ### `findWranglerFile` (const)
 
 ```ts
@@ -3112,15 +3121,6 @@ const reconcileWranglerExtras: (projectRoot: string, cronTriggers: ReadonlyArray
 const recordManifestKey: (manifest: Manifest, key: string, value: unknown) => void;
 ```
 
-### `reportAssetHeaders` (const)
-
-```ts
-const reportAssetHeaders: (outcome: ProjectAssetHeadersOutcome, logger: {
-    info: (message: string) => void;
-    warn: (message: string) => void;
-}) => void;
-```
-
 ### `resolveObservabilitySampling` (const)
 
 ```ts
@@ -3128,12 +3128,6 @@ const resolveObservabilitySampling: (block: WranglerObservability | undefined) =
     logs: ObservabilitySignalSampling;
     traces: ObservabilitySignalSampling;
 };
-```
-
-### `resolveProjectSecurityHeaders` (const)
-
-```ts
-const resolveProjectSecurityHeaders: (lunoraDirectory: string, wrangler: unknown, environment?: string) => boolean | SecurityHeadersOptions;
 ```
 
 ### `resolveRemoteEnabled` (const)
@@ -3206,12 +3200,6 @@ const wranglerToAlchemy: (config: WranglerConfigShape) => AlchemyTranslation;
 
 ```ts
 const writeAssetHeaders: (directory: string, options: AssetHeadersOptions) => AssetHeadersResult;
-```
-
-### `writeProjectAssetHeaders` (const)
-
-```ts
-const writeProjectAssetHeaders: (input: ProjectAssetHeadersInput) => ProjectAssetHeadersOutcome;
 ```
 
 ## `@lunora/config/studio-host`

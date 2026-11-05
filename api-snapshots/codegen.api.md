@@ -756,7 +756,7 @@ interface ProjectConfigLiterals {
     };
     remote?: boolean;
     security?: {
-        headers?: boolean | Record<string, unknown>;
+        headers?: unknown;
         unreadable?: true;
     };
     services?: {

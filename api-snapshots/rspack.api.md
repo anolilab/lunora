@@ -68,10 +68,12 @@ const lunoraRspack: (options?: LunoraRspackOptions) => LunoraRspackPlugin;
 ```ts
 interface BuildEnvironmentLike {
     config: {
+        mode?: string;
         output: {
             distPath: Record<string, unknown>;
             filename?: Record<string, unknown>;
             filenameHash?: unknown;
+            target?: unknown;
         };
         server?: {
             publicDir?: unknown;
