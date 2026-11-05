@@ -12,6 +12,8 @@ separate API service, no platform sign-up.
 
 ## `wrangler.jsonc`
 
+The following `wrangler.jsonc` declares the Worker, its Durable Object classes, the D1 database and the R2 bucket:
+
 ```jsonc
 {
     "$schema": "node_modules/wrangler/config-schema.json",
@@ -33,7 +35,7 @@ separate API service, no platform sign-up.
     ],
     "d1_databases": [{ "binding": "DB", "database_name": "my-lunora-app", "database_id": "<from-wrangler-d1-create>" }],
     "r2_buckets": [{ "binding": "FILES", "bucket_name": "my-lunora-files" }],
-    // Required whenever a SchedulerDO is declared. The DO reads its dispatch
+    // Required whenever a SchedulerDO is declared. The Durable Object (DO) reads its dispatch
     // target from this binding on its own env — never off the schedule request,
     // which would let a caller steer the callback — and refuses to enqueue
     // without it, failing every ctx.scheduler.runAfter/runAt.
@@ -286,6 +288,8 @@ Container egress is billed separately from Workers. See [Limits](/docs/limits).
 
 ## Deploy
 
+Deploy the Worker from the project root:
+
 ```bash
 pnpm lunora deploy
 ```
@@ -463,13 +467,13 @@ pnpm lunora build --format json | jq .data.bundle
 
 Only the uploaded files are counted: the sourcemap and the esbuild metafile
 sitting in the same out-dir are not part of the script, and counting them would
-roughly triple the number. Compare `rawBytes` against the 64 MiB limit; a bundle
+inflate the number. Compare `rawBytes` against the 64 MiB limit; a bundle
 over it is reported as a warning. `gzipBytes` matches the `gzip:` figure in
 wrangler's `Total Upload: … / gzip: …` line and is useful for tracking what
 crosses the wire, but Cloudflare does not limit it.
 
-A starter app is around **1.7 MiB raw**, so most projects have a lot of room.
-Bundle size still affects cold-start time, so if yours is growing:
+A starter app is small next to that limit, so most projects have a lot of room.
+A large bundle can also add to startup time, so if yours is growing:
 
 - **Drop add-ons you no longer import.** Every `@lunora/*` add-on your Worker
   entry reaches is bundled, whether or not a request ever uses it.
@@ -480,7 +484,7 @@ Bundle size still affects cold-start time, so if yours is growing:
   prints the largest modules, which is usually enough to name the culprit.
 
 Size is not the only upload check. A Worker whose global scope takes more than
-1 s of CPU to evaluate is rejected with error 10021 however small it is; see
+1 second to evaluate is rejected with error 10021 however small it is; see
 [Worker startup CPU limit](/docs/startup-cpu-limit).
 
 ## Streaming logs
@@ -516,7 +520,7 @@ and the wrangler validator flags any `tail_consumers` entry missing its
 
 ### Logpush
 
-To ship logs to a retention/SIEM sink (R2, HTTP, Splunk, Datadog, S3) without a
+To ship logs to a retention or security information and event management (SIEM) sink (R2, HTTP, Splunk, Datadog, S3) without a
 consumer Worker, enable [Cloudflare
 Logpush](https://developers.cloudflare.com/workers/observability/logs/logpush/)
 with a single flag:
@@ -557,8 +561,10 @@ regional database, instead of close to the user. Opt in with:
 }
 ```
 
-`"smart"` is the only supported mode. The validator rejects any other value (a
-typo like `"fast"`) and a non-object `placement`.
+`"smart"` opts into Smart Placement, `"targeted"` pins the Worker to a region, host
+or hostname, and `"off"` disables placement for a Worker that inherits an account
+default. The validator rejects any other value (a typo like `"fast"`) and a
+non-object `placement`.
 
 ### mTLS client certificates
 
@@ -654,8 +660,8 @@ A couple of Cloudflare products are deliberately **not** wired into Lunora:
 - **Cloudflare Pages.** The Lunora Worker is the deploy unit; there is no second
   Pages artifact. Serve your client build from the same Worker with the
   [Static assets](#static-assets) block above instead.
-- **Pub/Sub (MQTT).** Realtime fan-out is handled by Durable-Object-hibernated
+- **Pub/Sub (MQTT, Message Queuing Telemetry Transport).** Realtime fan-out is handled by Durable-Object-hibernated
   WebSocket subscriptions (see [Real-time](/docs/concepts/realtime)), which need
-  no external broker. Cloudflare Pub/Sub is a beta MQTT broker with no Worker
-  binding; the only thing it adds is native-MQTT device ingest, a narrow case
-  we'll revisit if it reaches GA and a concrete need appears.
+  no external broker. Cloudflare Pub/Sub, an MQTT broker, never shipped a Worker
+  binding and no longer has a page in Cloudflare's docs; the only thing it would
+  add is native-MQTT device ingest, a narrow case.

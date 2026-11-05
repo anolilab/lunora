@@ -49,12 +49,12 @@ describe("createQueues", () => {
         const email = fakeBinding();
         const queues = createQueues({ bindings: { emailQueue: email } });
 
-        // 43_200 is the ceiling itself — accepted.
-        await queues.emailQueue.send({}, { delaySeconds: 43_200 });
+        // 86_400 is the ceiling itself — accepted.
+        await queues.emailQueue.send({}, { delaySeconds: 86_400 });
 
-        await expect(queues.emailQueue.send({}, { delaySeconds: 43_201 })).rejects.toThrow(/43201.*ceiling of 43200 \(12 hours\)/su);
-        await expect(queues.emailQueue.sendBatch([{ body: 1 }], { delaySeconds: 64_800 })).rejects.toThrow(/ceiling of 43200/u);
-        await expect(queues.emailQueue.sendBatch([{ body: 1 }, { body: 2, delaySeconds: 86_400 }])).rejects.toThrow(/message 1 delaySeconds is 86400/u);
+        await expect(queues.emailQueue.send({}, { delaySeconds: 86_401 })).rejects.toThrow(/86401.*ceiling of 86400 \(24 hours\)/su);
+        await expect(queues.emailQueue.sendBatch([{ body: 1 }], { delaySeconds: 90_000 })).rejects.toThrow(/ceiling of 86400/u);
+        await expect(queues.emailQueue.sendBatch([{ body: 1 }, { body: 2, delaySeconds: 90_000 }])).rejects.toThrow(/message 1 delaySeconds is 90000/u);
 
         expect(email.batches).toHaveLength(0);
     });

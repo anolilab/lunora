@@ -181,6 +181,10 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Subscription persist failed";
     };
+    readonly SUBSCRIPTION_SEED_FAILED: {
+        readonly status: 500;
+        readonly title: "Subscription seed failed";
+    };
     readonly TOO_MANY_SUBSCRIPTIONS: {
         readonly status: 429;
         readonly title: "Too many subscriptions";
@@ -192,6 +196,10 @@ const ERROR_CATALOG: {
     readonly OFFLINE_IDENTITY_CHANGED: {
         readonly status: 409;
         readonly title: "Offline identity changed";
+    };
+    readonly OFFLINE_QUEUE_OVERFLOW: {
+        readonly status: 503;
+        readonly title: "Offline queue full, oldest write dropped";
     };
     readonly OFFLINE_NOT_QUEUED: {
         readonly status: 503;

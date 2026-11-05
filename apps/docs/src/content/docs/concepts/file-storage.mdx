@@ -103,7 +103,7 @@ await ctx.storage.store(key, body, { allowedContentTypes: ["image/png", "image/j
 When you want the bytes off the Worker's CPU and bandwidth budget entirely —
 large objects, no per-request app logic — use a **native S3 presigned URL**
 instead: `@lunora/storage`'s `getPresignedUrl(key, { method: "PUT" })` signs a
-SigV4 URL that the client sends directly to R2's S3 endpoint. It needs R2 S3 API
+AWS Signature Version 4 (SigV4) URL that the client sends directly to R2's S3 endpoint. It needs R2 S3 API
 credentials (`s3: { accountId, accessKeyId, secretAccessKey, bucket }`) on the
 storage instance; without them the call throws. Because such a URL is a
 self-contained bearer credential that never touches your Worker, it cannot be

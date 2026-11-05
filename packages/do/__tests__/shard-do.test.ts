@@ -2067,4 +2067,39 @@ describe("shardDO operator-only error.internal never reaches a client", () => {
         expect(frames).toContain("stale");
         expect(frames).not.toContain(SENTINEL);
     });
+
+    it("redacts an unhandled seed failure for the client and logs the real error server-side", async () => {
+        expect.assertions(3);
+
+        const sensitive = "column secret_token does not exist";
+        const thrown = new Error(sensitive);
+
+        class SeedFailShard extends ReexecShard {
+            protected override async executeSubscription(): Promise<SubscriptionOutcome | null> {
+                this.execCount += 1;
+                await Promise.resolve();
+
+                throw thrown;
+            }
+        }
+
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const shard = new SeedFailShard(createFakeState(), {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        await shard.driveMessage(ws, {
+            id: "sub-1",
+            query: { args: { roomId: "lobby" }, functionPath: "cursors:listCursors", table: "cursors" },
+            type: "subscribe",
+        });
+
+        const frames = ws.sent.join("\n");
+
+        expect(frames).toContain("SUBSCRIPTION_SEED_FAILED");
+        expect(frames).not.toContain(sensitive);
+        expect(errorSpy).toHaveBeenCalledWith("[@lunora/do] subscription seed failed for cursors:listCursors:", thrown);
+
+        errorSpy.mockRestore();
+    });
 });

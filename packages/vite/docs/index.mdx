@@ -1,6 +1,6 @@
 ---
 title: "@lunora/vite"
-description: The recommended dev-time experience — codegen, HMR, overlay.
+description: Set up the `@lunora/vite` plugin, which runs codegen, validates wrangler config, and serves the error overlay and Studio during `vite dev`.
 related:
     - to: /docs/packages/cli
     - to: /docs/getting-started
@@ -9,6 +9,20 @@ related:
 `@lunora/vite` is a Vite plugin factory. A single `lunora()` call wires up
 codegen, wrangler validation, the error overlay, and the Cloudflare Vite
 plugin so `vite dev` runs your Worker locally with full HMR.
+
+## Installation
+
+Run the following command in the app root:
+
+```bash
+pnpm add -D @lunora/vite
+```
+
+The plugin declares `vite` (`^6.1.0 || ^7.0.0 || ^8.0.0`) and `@lunora/studio` as peer dependencies, so install them in the app as well.
+
+## Usage
+
+Add `lunora()` to the `plugins` array in `vite.config.ts`:
 
 ```ts
 // vite.config.ts
@@ -95,6 +109,7 @@ framework-specific failures and render a fix hint in the overlay:
 - an invalid `.jurisdiction(...)` value
 - a non-literal `unique` index flag
 - a container/workflow class that isn't re-exported by your worker entry
+- a row that exceeds the storage engine's size limit (`lunora-row-too-big`)
 - runtime unique-constraint and optimistic-concurrency (`ConflictError`) conflicts
 
 Pass an options object to forward overlay configuration, including your own
@@ -126,3 +141,81 @@ When an AI agent is detected (or `LUNORA_LOG_JSON=1` is set), the worker's
 structured log events pass through as raw single-line JSON instead of the
 pretty `[lunora]` terminal rendering, so machine consumers can parse them
 directly. Set `LUNORA_AGENT_MODE=0` to opt out of agent detection.
+
+## API
+
+### `lunora(options?)`
+
+**Type:** `(options?: LunoraPluginOptions) => LunoraPlugins`
+
+Returns the flat array of Vite plugins described above. Pass the options from the [Options](#options) table. Throws when `lazyFunctions` is passed (set `codegen.lazyFunctions` in `lunora.config` instead) or when the resolved `target` has no command-line toolchain, such as `node`.
+
+### `LunoraPluginOptions`
+
+**Type:** `interface`
+
+The object accepted by `lunora()`. Each field is listed in the [Options](#options) table.
+
+### `LunoraShardConfig`
+
+**Type:** `interface`
+
+The `shard` option. Fields are `cdc?: boolean`, `reactiveCache?: boolean | { maxEntries?: number; maxBytes?: number }`, `maxRelationKeys?: number`, and `relationExistsPushDown?: "always" | "auto" | "never"`. Applies only to class-A apps; see [`shard`](#shard--class-a-only).
+
+### `CloudflarePluginOptions`
+
+**Type:** `Record<string, unknown>`
+
+Options forwarded to `@cloudflare/vite-plugin`. Passed as the `cloudflare` option.
+
+### `OverlayPluginOptions`
+
+**Type:** `NonNullable<Parameters<typeof errorOverlayPlugin>[0]>`
+
+Options forwarded to `@visulima/vite-overlay`. Passed as the `overlay` option. Lunora prepends its own solution finders to `solutionFinders`.
+
+### `lunoraSolutionFinder` and `lunoraSolutionFinders`
+
+**Type:** `SolutionFinder` and `ReadonlyArray<SolutionFinder>`
+
+The solution finders that cover the failures listed in [Error overlay](#error-overlay). `lunoraSolutionFinder` is the single finder with priority `100`. `lunoraSolutionFinders` is the array the plugin registers.
+
+### `SolutionFinder` and `Solution`
+
+**Type:** `type`
+
+`SolutionFinder` is one entry of the overlay's `solutionFinders` array. `Solution` is the value a finder's `handle` method resolves to.
+
+### `STUDIO_PATH` and `buildStudioUrl`
+
+**Type:** `const`
+
+`STUDIO_PATH` is the mount path of the Studio, `/__lunora`. `buildStudioUrl({ address?, base?, resolvedLocal? })` returns the full Studio URL for a running dev server.
+
+### `withWorkerStartupHint`, `WORKER_STARTUP_HINT`, and `augmentWorkerStartupError`
+
+**Type:** `(plugins) => Plugin[]`, `string`, and `(error: unknown) => unknown`
+
+The helpers `lunora()` uses to add the Worker-entry startup hint to the Cloudflare plugin hooks. Call them only when you compose the Cloudflare plugin yourself with `cloudflare: false`.
+
+### `LUNORA_API_UPDATED_EVENT`
+
+**Type:** `const` (`"lunora:api-updated"`)
+
+The custom HMR event codegen sends on the client environment's hot channel after a successful run.
+
+### `LUNORA_WORKER_VIRTUAL_ID`
+
+**Type:** `const` (`string`)
+
+The virtual module id of the composed Worker entry for class-A frameworks. A template points its `wrangler.jsonc` `main` at it.
+
+### `VERSION`
+
+**Type:** `const` (`string`)
+
+The `@lunora/vite` version read from the package manifest.
+
+### Plugin factories
+
+The other exports, such as `codegenPlugin`, `devStatePlugin`, `studioPlugin`, and `wranglerValidatorPlugin`, are the plugins that `lunora()` returns. Call `lunora()` rather than composing them yourself.

@@ -10,8 +10,7 @@ related:
 
 `@lunora/replica` provides a local-first replica runtime and local SQLite mirror for
 Lunora. It combines an append-only event log, a type-safe reducer-based state
-derivation engine (`EventSource`), a typed `EventEmitter`, a `Durable
-Object`-backed event log for persistence in the Cloudflare environment, and a
+derivation engine (`EventSource`), a typed `EventEmitter`, a Durable Object (DO)-backed event log for persistence in the Cloudflare environment, and a
 local SQLite mirror (`LocalMirror`) that applies typed row-level diffs in
 browser/Node.js.
 
@@ -88,7 +87,7 @@ source.emitter.on("state-changed", ({ entry, state }) => {
 const entry = source.applyEvent("item-created", { id: "abc", name: "foo" });
 
 // Replay from a persisted log on startup:
-await source.replayFromLog(persistedLog);
+source.replayFromLog(persistedLog);
 
 // Reset and re-replay from a snapshot:
 source.reset(snapshotState);
@@ -119,7 +118,7 @@ interface MyEvents {
 const emitter = new EventEmitter<MyEvents>();
 
 // `on` is keyed to the map, so an unknown event name is a compile error.
-// It returns an unsubscribe function; `off(event, handler)` is the same thing.
+// It returns an unsubscribe function; `off(event, handler)` removes a handler explicitly.
 const unsubscribe = emitter.on("data", (payload) => console.log(payload.id));
 
 emitter.emit("data", { id: "abc", value: 42 });

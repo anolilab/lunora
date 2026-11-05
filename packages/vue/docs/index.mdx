@@ -221,8 +221,7 @@ const { call, pending, error } = useAction(api.commands.run);
 Per-call options are `{ shardKey }` only. Unlike `useMutation` there are no
 `optimistic` / `optimisticUpdate` options: an optimistic update patches the
 subscription cache on the assumption a write will land, and an action is not a
-write — it runs in the Worker, may call a third party, and has no declared
-effect on any query.
+write. It may call a third party and has no declared effect on any query.
 
 ## Reactive loaders — `hydratePreloaded`
 
@@ -400,3 +399,88 @@ The part the type signature does not tell you:
   for tests and non-DOM hosts. The defaults are `getUserMedia` + Web Audio +
   `new WebSocket(url)`, so the primitive is inert (and mockable) anywhere those
   are missing.
+
+## Other exports
+
+The composables below are exported from `@lunora/vue` and have no section above.
+
+### `useSubscription(fn, args, options?)`
+
+**Type:** `(function_, args, options?) => { data, error }`
+
+Subscribes to a server push stream. `data` and `error` are refs that update when the
+server emits a value. Pass `"skip"` as `args` to open no subscription.
+
+### `useStream(fn, args, options?)`
+
+Subscribes to a streaming query (a `FunctionReference<"stream">`). It returns the
+`chunks` received so far, `status` (typed `UseStreamStatus`), `error` and `cancel`.
+
+### `usePaginatedQuery(fn, args, options)` and `useInfiniteQuery(fn, args, options)`
+
+Subscribe to a query that takes a `paginationOpts` argument and returns a
+`PaginationResult`. `usePaginatedQuery` exposes one page at a time.
+`useInfiniteQuery` grows the feed page by page and keeps every loaded page live.
+
+### `useFlag(key, defaultValue)` and `useFlags(flags)`
+
+Live feature flags over the WebSocket. `useFlag` returns a readonly ref holding
+`defaultValue` until the first evaluation arrives. The value's type comes from
+`defaultValue`, so `useFlag("dark", false)` is a boolean. `useFlags` takes an object of
+defaults and returns a readonly ref of the same shape.
+
+### `useConnectionStatus()`
+
+**Type:** `() => Readonly<Ref<ConnectionStatus>>`
+
+A readonly ref with the aggregate live-socket status across every shard connection.
+
+### `useAuth()`
+
+Returns a `token` ref and a `user` ref. `user` resolves from `getCurrentUser()` whenever
+the token changes. Call `setToken(jwt)` after sign-in so later RPC calls carry the
+`Authorization` header. Instances in the same effect scope share one identity store.
+
+### `useLiveTopic(topic, options?)`
+
+Subscribes to a live topic declared with `defineLiveStream`. It returns `lastEvent` and `error` refs.
+
+### `usePresence(roomId, options)`
+
+The client half of the `definePresence` preset: it sends heartbeats and lists the
+people present in a room.
+
+### `useRateLimit(config, options?)`
+
+A client-side mirror of a rate limit, for instant UX such as a disabled button or a
+countdown. It runs the same math as `@lunora/ratelimit`, but the server stays the source
+of truth.
+
+### `useMutator(handle)`
+
+Wraps a bound custom-mutator handle from `@lunora/db` and returns
+`{ mutate, pending, error, isError, reset }`. The optimistic overlay and the server push
+belong to the bound handle.
+
+### `useAgent(options)`, `useAgentChat(options)` and `useAgentState(options)`
+
+Agent-thread composables. `useAgent` returns the `thread` and `status` computed refs for one
+agent thread, plus `run(input)`, `cancel()`, `pending` and `error`. `useAgentChat` returns the
+thread's `messages`, `approvalGrants` and `status`, with `send`, `approve`, `reject`,
+`approveForThread`, `revokeGrant`, `declineSecret` and `cancel`. `useAgentState` returns the
+thread's synced `state` as a computed ref. [`useAgentToolEvents`](#agent-tool-events--useagenttooleventsoptions)
+and [`useVoiceAgent`](#voice-agents--usevoiceagentoptions) have their own sections above.
+
+### `Authenticated`, `Unauthenticated` and `AuthLoading`
+
+Gate components. `Authenticated` renders its default slot only once a credential is held and
+nothing has contradicted it. `Unauthenticated` and `AuthLoading` render for the other two
+auth states.
+
+### `@lunora/vue/upload`
+
+Upload composables that re-export `@visulima/storage-client`. `useUpload` picks TUS,
+chunked REST or multipart by file size. The other composables are `useTusUpload`,
+`useChunkedRestUpload`, `useMultipartUpload`, `useFileInput` and `usePasteUpload`. Point
+the endpoint at a route backed by the `@lunora/storage/upload` handler. The upload
+composables keep their own state and need no `@tanstack/vue-query` provider.

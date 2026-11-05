@@ -535,8 +535,8 @@ With it, each `--allow-mail` value is passed to cloudflared as
 the flag repeats). Values are trimmed and empty ones dropped, so
 `--allow-mail ""` does not count as protection; an entry without an `@` is
 refused. A visitor then proves one of those addresses with a one-time
-PIN sent to the inbox before any request reaches the dev server. Their session
-lasts up to four hours, and access ends for everyone when `lunora dev` stops.
+PIN sent to the inbox before any request reaches the dev server. Access ends
+for everyone when `lunora dev` stops.
 PIN sign-in needs a browser, so a webhook sender or other non-interactive
 client cannot get through a protected tunnel. Use a public one for that, and
 stop it when you are done.
@@ -1507,7 +1507,7 @@ lunora env doctor            # validate .dev.vars against .dev.vars.example
 
 `generate` mints cryptographically-strong values (32-byte hex). With no key it
 mints every secret this project can generate locally (`AUTH_SECRET`, …); name
-one to mint just that. By default it **prints** `KEY=value` lines on stdout — so
+one to mint only that. By default it **prints** `KEY=value` lines on stdout — so
 you can pipe them into `wrangler secret put` — and `--set` writes them into
 `.dev.vars` instead. Minting replaces a value irreversibly, so `--set` refuses
 to overwrite a key that already holds a live (non-placeholder) secret unless you
@@ -1862,7 +1862,7 @@ the two (Zed has no project config, VS Code no global one), it falls back rather
 than skipping the client.
 
 `lunora mcp uninstall` removes both again, from both scopes and every client by
-default. It touches only the two entries we wrote, leaving the rest of the file
+default. It touches only the two entries Lunora wrote, leaving the rest of the file
 and its comments alone. It knows each client's own
 config file, top-level key, and entry shape, so you don't have to remember that
 VS Code says `servers` where Cursor says `mcpServers`:
@@ -1884,7 +1884,7 @@ overwritten.
 `lunora mcp serve` is the stdio server those entries spawn; you rarely run it
 by hand. It takes no required configuration: the dev server's URL comes from
 `.lunora/dev.json` and the admin token from `.dev.vars`, both re-read per tool
-call, so starting `lunora dev` after your editor is already open just works. It
+call, so starting `lunora dev` after your editor is already open works without a restart. It
 exposes the documentation tools, `lunora_dev_status` / `lunora_dev_logs`, and the
 read-only deployment tools; `--allow-writes` adds the mutation and action tools.
 
@@ -1949,3 +1949,31 @@ loop.
 These files are deterministic, so commit them. Nothing checks the committed
 copy for you — `verify` runs codegen as a dry run and `prepare` overwrites it —
 so gate it explicitly: `lunora codegen && git diff --exit-code lunora/_generated`.
+
+## API reference
+
+The package also exports these for scripts and tests. The `lunora` binary does not
+need them.
+
+### `runCli(options?)`
+
+**Type:** `(options?: RunCliOptions) => Promise<number>`. Runs the `lunora` command
+set against `options.argv` and resolves to the process exit code. Import it from
+`@lunora/cli`.
+
+### `RunCliOptions`
+
+**Type:** `interface`. `argv` is the command-line arguments to parse, `cwd` is the
+project directory, and `logger` is a `Console`-compatible sink for output.
+
+### `EXIT_CODE`
+
+**Type:** `const`. The exit codes `lunora` returns: `SUCCESS` (0), `FAILURE` (1),
+`USAGE` (2), `AUTH` (3), `PERMISSION` (4), `NOT_FOUND` (5), `CONFLICT` (6),
+`RATE_LIMITED` (7), `UNAVAILABLE` (8), `MISSING_DEPENDENCY` (9) and `CANCELLED`
+(130). See [Exit codes](/docs/exit-codes) for when each one applies.
+
+### `exitCodeForCode(code)`
+
+**Type:** `(code: string) => ExitCode`. Maps a Lunora error code to the exit code
+`lunora` returns for it.

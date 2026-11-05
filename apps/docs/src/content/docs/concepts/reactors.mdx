@@ -66,7 +66,7 @@ empty one that stops changing.
 
 A reactor that does _not_ converge — whose handler always changes what its own
 read returns — would spin the shard forever. The framework bounds that rather
-than trusting it: a reactor that runs more than a fixed number of times within
+than trusting it: a reactor that runs more than eight times (`ShardDO.MAX_REACTOR_RUNS_PER_DRAIN`) within
 one refresh drain is stopped for the rest of that drain, and the failure is named
 in the logs and the Studio panel.
 
@@ -92,9 +92,9 @@ A reactor is an internal mutation. Its writes are transactional, and it dispatch
 with **no request identity**.
 
 <Callout type="warn">
-    A reactor runs **system-trusted**: `ctx.auth` is anonymous and RLS does not apply, even under `.rls("required")`. RLS scopes rows to a user, and a reactor
-    has no user — it fires because data moved. That means your `select` sees **every row in the table**. Scope it yourself, by shard key, tenant column, or an
-    explicit predicate, exactly as you would in a migration or a cron job.
+    A reactor runs **system-trusted**: `ctx.auth` is anonymous and row-level security (RLS) does not apply, even under `.rls("required")`. RLS scopes rows to a
+    user, and a reactor has no user — it fires because data moved. That means your `select` sees **every row in the table**. Scope it yourself, by shard key,
+    tenant column, or an explicit predicate, exactly as you would in a migration or a cron job.
 </Callout>
 
 A reactor's **first** run always fires, with whatever the read returns — often an
@@ -125,7 +125,7 @@ updated and does not is stale indefinitely, not merely late.
 ## Watching them work
 
 Reactors are the one reactive surface with no client on the other end, which
-makes them easy to misdiagnose: a reactor that never fires and a reactor that
+makes them hard to diagnose: a reactor that never fires and a reactor that
 fires and does nothing look identical from outside.
 
 The Studio's **Reactors** panel (under Observability) separates them. Each

@@ -29,7 +29,7 @@ Three consequences follow, and all three are load-bearing:
 - **Eventually consistent.** Each call issues a fresh read. A job a mutation just
   scheduled may not be visible yet; a job that just fired may still look pending.
 - **Not part of the transaction snapshot.** Reading a system table inside a
-  mutation does not pin it. There is no OCC guard and no subscription dependency
+  mutation does not pin it. There is no optimistic concurrency control (OCC) guard and no subscription dependency
   is recorded, so a live query does **not** re-run when a system table changes.
 - **Read-only.** There is no `insert`, `patch`, or `delete`. Change scheduled
   jobs through `ctx.scheduler` and stored objects through `ctx.storage`.
@@ -59,19 +59,20 @@ the job id for `_scheduled_functions`, and the object key for `_storage`.
 
 One row per pending invocation:
 
-| Field          | Type                      | Meaning                                                                          |
-| -------------- | ------------------------- | -------------------------------------------------------------------------------- |
-| `id`           | `string`                  | The job id                                                                       |
-| `functionPath` | `string \| undefined`     | Fully-qualified function to invoke; absent when the row targets a workflow/agent |
-| `workflow`     | `string \| undefined`     | The `WORKFLOW_*` / `AGENT_*` binding started instead of `functionPath`           |
-| `args`         | `Record<string, unknown>` | Arguments it will be dispatched with                                             |
-| `scheduledFor` | `number`                  | When it fires (epoch ms)                                                         |
-| `enqueuedAt`   | `number`                  | When it was enqueued (epoch ms)                                                  |
-| `attempts`     | `number \| undefined`     | Dispatch attempts so far; absent until a retry                                   |
-| `shardKey`     | `string \| undefined`     | Routing hint so dispatch lands on the right shard                                |
-| `state`        | `string \| undefined`     | `get()` only: `pending`, `running`, `succeeded`, `failed` or `canceled`          |
-| `completedAt`  | `number \| undefined`     | `get()` only: when a finished job ended (epoch ms)                               |
-| `error`        | `string \| undefined`     | `get()` only: why a `failed` job was dead-lettered                               |
+| Field          | Type                      | Meaning                                                                                       |
+| -------------- | ------------------------- | --------------------------------------------------------------------------------------------- |
+| `id`           | `string`                  | The job id                                                                                    |
+| `functionPath` | `string \| undefined`     | Fully-qualified function to invoke; absent when the row targets a workflow/agent              |
+| `workflow`     | `string \| undefined`     | The `WORKFLOW_*` / `AGENT_*` binding started instead of `functionPath`                        |
+| `args`         | `Record<string, unknown>` | Arguments it will be dispatched with                                                          |
+| `scheduledFor` | `number`                  | When it fires (epoch ms)                                                                      |
+| `enqueuedAt`   | `number`                  | When it was enqueued (epoch ms)                                                               |
+| `attempts`     | `number \| undefined`     | Dispatch attempts so far; absent until a retry                                                |
+| `shardKey`     | `string \| undefined`     | Routing hint so dispatch lands on the right shard                                             |
+| `pool`         | `string \| undefined`     | Logical workpool that gates the job's concurrency; absent for plain `runAfter` / `runAt` jobs |
+| `state`        | `string \| undefined`     | `get()` only: `pending`, `running`, `succeeded`, `failed` or `canceled`                       |
+| `completedAt`  | `number \| undefined`     | `get()` only: when a finished job ended (epoch ms)                                            |
+| `error`        | `string \| undefined`     | `get()` only: why a `failed` job was dead-lettered                                            |
 
 `query().collect()` lists pending jobs. `get(table, id)` also answers for a job
 that finished within the last seven days, with its outcome in `state`.

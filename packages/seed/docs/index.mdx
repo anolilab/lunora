@@ -7,7 +7,7 @@ description: "Deterministic, schema-driven seeding: realistic fake data generate
 
 Generated addresses always sit on the RFC 2606 reserved domain `example.com`, which accepts no mail — a seeded row can never turn into real email to a real stranger when a welcome job, a digest or an auth verification runs over it. Override the column when you need a domain of your own.
 
-Generation is deterministic. Generation is deterministic in `seed` alone for every column except the time-valued ones: a `number` column named like a timestamp (`createdAt`, `expiresAt`, …) is generated relative to the wall clock, so two runs with the same `seed` differ unless you also pin `now` (`--now` on the CLI). Ids are unaffected. Pin the `(seed, now)` pair and a plan is byte-identical across runs and machines. It is built on a vendored, input-hashed generator (a rebuilt [`copycat`](https://github.com/supabase-community/copycat)) over [`@faker-js/faker`](https://fakerjs.dev).
+Generation is deterministic in `seed` alone for every column except the time-valued ones: a `number` column named like a timestamp (`createdAt`, `expiresAt`, …) is generated relative to the wall clock, so two runs with the same `seed` differ unless you also pin `now` (`--now` on the CLI). Ids are unaffected. Pin the `(seed, now)` pair and a plan is byte-identical across runs and machines. It is built on a vendored, input-hashed generator (a rebuilt [`copycat`](https://github.com/supabase-community/copycat)) over [`@faker-js/faker`](https://fakerjs.dev).
 
 ## Install
 
@@ -15,9 +15,9 @@ Generation is deterministic. Generation is deterministic in `seed` alone for eve
 pnpm add @lunora/seed
 ```
 
-`@lunora/server` and `@lunora/values` are peer dependencies (you already have them in a Lunora app).
+`@lunora/server`, `@lunora/testing`, and `@lunora/values` are peer dependencies. A Lunora app already has `@lunora/server` and `@lunora/values`. Add `@lunora/testing` when you use the `@lunora/seed/testing` entry point.
 
-## Three ways to seed
+## Ways to seed
 
 | You want to…                                 | Use                                                            |
 | -------------------------------------------- | -------------------------------------------------------------- |

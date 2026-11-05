@@ -39,6 +39,8 @@ the schema does not define.
 
 ## Branching on one
 
+The following shell script handles the codes a CI step usually needs to tell apart:
+
 ```bash
 lunora deploy --format json > deploy.json
 case $? in

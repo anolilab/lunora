@@ -59,7 +59,8 @@ required to build or use it.
 The table above lists the core handful. The package also exports the live
 stores covered under [Additional stores](#additional-stores): `subscription`,
 `paginatedQuery`, `infiniteQuery`, `presence`, `liveTopic`, `rateLimit`, `auth`,
-and `connectionStatus`.
+`connectionStatus`, `stream`, `mutator`, `flag`, and `flags`. The agent helpers
+are covered under [Agent threads](#agent-threads).
 
 Re-exported types from `@lunora/client`: `ArgsOf`, `ConnectionStatus`,
 `FunctionReference`, `LunoraClient`, `MutationCallOptions`, `Preloaded`,
@@ -88,7 +89,7 @@ dereference. Most code never calls it directly; `query` / `mutation` /
 ## `query(fn, args, options?)`
 
 Opens a live query as a Svelte **readable store**. Read it with the `$store`
-idiom and it stays current: a WS subscription attaches the moment the store
+idiom and it stays current: a WebSocket subscription attaches the moment the store
 gains its first subscriber, and the value re-emits on every server delta. The
 store holds `undefined` until the first response lands. This is the Svelte
 equivalent of React's `useQuery`.
@@ -223,7 +224,7 @@ effect on any query.
 
 ## Reactive loaders — `hydratePreloaded`
 
-The SSR-seed-to-live-store handoff, the Svelte equivalent of React's
+The server-side rendering (SSR) seed-to-live-store handoff, the Svelte equivalent of React's
 `usePreloadedQuery`. Run the query on the server with `preloadQuery` (from
 `@lunora/svelte/server`) in a SvelteKit `+page.ts` / `+layout.ts` `load`, hand the
 serializable `Preloaded` token to the client, and `hydratePreloaded` seeds the
@@ -242,7 +243,7 @@ typed `Readable<T | undefined>` for that reason, like `query`.
 
 Pass `{ onError }` as the third argument (after the optional `client`) to observe
 a subscription-scoped error the server pushes after hydration (a session expiry,
-an RLS denial). Without it such an error is dropped and the store keeps
+a row-level security (RLS) denial). Without it such an error is dropped and the store keeps
 rendering the SSR snapshot as if it were live.
 
 ```svelte
@@ -429,6 +430,32 @@ is read at call time and does not resubscribe.
 {#if $comments.lastEvent !== undefined}<p>New comment</p>{/if}
 ```
 
+### `stream(fn, args, options?)`
+
+A streaming query. It returns three readable stores, `chunks`, `status` and
+`error`, plus a `cancel()` function. `chunks` holds every chunk the server pushes
+so far, in arrival order, and it is the store that drives the stream: the stream
+opens on the first subscriber to `chunks` and is cancelled when the last one
+leaves. Subscribing only to `status` or `error` does not open it, so subscribe to
+`chunks` (for example `$chunks` in the template) even when you only show the
+status. Pass `"skip"` as
+`args` to keep the stores connected but leave the stream dormant. `fn` must be a
+stream reference, not a query.
+
+### `mutator(handle)`
+
+Wraps a bound custom-mutator handle from `@lunora/db`'s `bindMutators` as
+`{ mutate, pending, error, isError, reset }` stores. `pending` is ref-counted
+across overlapping calls to the same handle. Optimistic state is owned by the
+bound handle, not by this wrapper.
+
+### `flag(key, defaultValue)` and `flags(defaults)`
+
+`flag` returns a readable store of one feature flag, and `flags` returns a store
+of an object of flags. Evaluation uses the caller's verified identity and never throws.
+A provider error resolves the default. Pass an explicit `client` as the first
+argument to override the ambient one.
+
 ### `rateLimit(config, options?)`
 
 A client-side mirror of a server rate limit for instant UX: disable a button or
@@ -479,6 +506,20 @@ same `status`, when a boolean is all a template needs.
 {#if $authStatus === "loading"}Checking…{:else if $authStatus === "unauthenticated"}Signed out{:else}Signed in as {$user?.name}{/if}
 <span data-status={$connection}>{$connection}</span>
 ```
+
+## Agent threads
+
+Each helper takes an optional leading `client`, like the stores above.
+
+- `agent(options)` returns an `AgentHandle` for one agent thread. It exposes
+  `run(input)` to start a turn, `cancel()` to stop it, and the readable stores
+  `pending` and `status`.
+- `agentChat(options)` returns an `AgentChatHandle` for the thread's chat. It
+  exposes the approval controls, such as `approve(toolCallId, note?)`, and the
+  live `approvalGrants` store. Pass the same app stream reference as `stream` to
+  receive live token deltas.
+- `agentState<T>(options)` returns `{ state, error }` stores for the thread's live
+  synced state. The caller declares the type `T`.
 
 ## Agent tool events — `agentToolEvents(options)`
 
@@ -578,7 +619,7 @@ The part the type signature does not tell you:
   the Web Audio graph — and is idempotent. **Svelte has no auto-dispose here.**
   Unlike the other adapters nothing tears the call down for you, so call it
   yourself: `onDestroy(call.endCall)`.
-- **`audioLevel` is the live input RMS (0–1).** It drives a mic meter, and it is
+- **`audioLevel` is the live input root mean square (RMS, 0–1).** It drives a mic meter, and it is
   also what the heuristics read: `silenceThreshold` + `silenceDurationMs` decide
   when an utterance auto-commits (defaults `0.01` / `1200`ms), and
   `interruptThreshold` + `interruptChunks` decide when the user barges in on the

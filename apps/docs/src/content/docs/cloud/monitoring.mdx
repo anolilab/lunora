@@ -27,7 +27,7 @@ Your app reads the first two in the usual sink wiring, with no cloud-specific
 code:
 
 ```ts
-import { analyticsEngineSink, combineSinks, otlpSink } from "@lunora/runtime";
+import { combineSinks, createWorker, otlpSink } from "@lunora/runtime";
 
 export default createWorker({
     // …schema, functions…
@@ -36,7 +36,7 @@ export default createWorker({
 ```
 
 Everything the framework emits flows over the
-[standard OTLP contract](/docs/concepts/observability#the-wire-contract) to the
+[standard OpenTelemetry Protocol (OTLP) contract](/docs/concepts/observability#the-wire-contract) to the
 cloud: one `SERVER` span per RPC, nested
 [`ctx.trace`](/docs/concepts/observability#tracing-sub-operations-with-ctxtrace)
 spans, [`ctx.log`](/docs/concepts/observability#structured-logging-with-ctxlog)
@@ -65,11 +65,8 @@ tokens, and (when the emitter opted in) the recorded input/output. See
 ## Issues
 
 Error spans (`status.code === 2`) are grouped into **Issues** by a deterministic
-[fingerprint](/docs/concepts/error-handling): one row per distinct
-`(function, error, message)`, with a count, first/last-seen, and a sample message.
-Container crashes additionally open **Incidents**. Alert rules deliver a matching
-issue/incident to email or a webhook when it crosses a threshold, and an on-demand
-AI-triage action summarizes an issue for you.
+[fingerprint](/docs/concepts/error-handling), with a count, first/last-seen,
+and a sample message. Container crashes additionally open **Incidents**.
 
 ## Logs
 
@@ -81,8 +78,7 @@ exactly the lines for one dispatch and link a line back to its trace.
 
 ## Metrics
 
-`ctx.metrics.*` measurements POST to `/v1/metrics` and land in an Analytics Engine
-dataset, queryable over its SQL API. Keep attributes low-cardinality; see the
+`ctx.metrics.*` measurements POST to `/v1/metrics`. Keep attributes low-cardinality; see the
 [metrics guidance](/docs/concepts/observability#application-metrics-with-ctxmetrics).
 
 ## Scoped ingest keys
@@ -95,8 +91,7 @@ Deploy keys have a **capability**:
   code.
 
 The platform mints one ingest key per org and injects it as `LUNORA_OTLP_TOKEN` at
-deploy time (its plaintext is stored envelope-encrypted so it re-injects on every
-deploy without re-minting). You never handle it directly for your own apps.
+deploy time. You never handle it directly for your own apps.
 
 ## Bring your own OpenTelemetry
 
@@ -110,15 +105,11 @@ key and point your exporter at the cell's base URL:
 | `/v1/logs`    | logs    |
 | `/v1/metrics` | metrics |
 
-Both **JSON** and **protobuf** (`application/x-protobuf`, what most Collectors
-default to) are accepted, with optional **gzip**; a capped batch returns OTLP
-`partialSuccess` with the rejected count. Authenticate with
-`Authorization: Bearer <ingest-key>`.
+Lunora's own sinks send JSON, gzipped once the body is large enough.
+Authenticate with `Authorization: Bearer <ingest-key>`.
 
-## Retention & scale
+## Retention and redaction
 
-The hot store keeps recent traces/logs in D1 (48 h) for the dashboard; spans are
-additionally tiered to a columnar archive (Cloudflare Pipeline → R2) so history
-scales past the hot window. Metrics live in Analytics Engine. Sensitive attribute
-and log-field values (anything keyed like a credential: `authorization`, `token`,
-`api_key`, …) are redacted at ingest before storage.
+The dashboard reads recent traces and logs from the cloud's hot store. Sensitive
+attribute and log-field values (anything keyed like a credential) are redacted by
+the sink in your Worker before they are sent.
