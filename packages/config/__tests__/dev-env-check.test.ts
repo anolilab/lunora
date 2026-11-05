@@ -222,7 +222,7 @@ describe(checkDevEnv, () => {
         expect(message).toContain("postgres://app:[redacted]@db.local/app");
     });
 
-    it("keeps a plain value, and the options an enum lists, readable", async () => {
+    it("masks a plain value where it stands alone, and keeps the options an enum lists readable", async () => {
         expect.assertions(1);
 
         writeFileSync(join(projectRoot, ".dev.vars"), "WORKER_ENV=prod\n");
@@ -232,9 +232,19 @@ describe(checkDevEnv, () => {
         );
 
         expect(result).toMatchObject({
-            failures: [{ key: "WORKER_ENV", message: 'expected one of "production" | "development", received "prod"' }],
+            failures: [{ key: "WORKER_ENV", message: 'expected one of "production" | "development", received "[redacted]"' }],
             kind: "invalid",
         });
+    });
+
+    it("masks a short secret under a plain name, which no name or shape rule catches", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(projectRoot, ".dev.vars"), "UPSTREAM=p4ss!\n");
+
+        const result = await check(accessorWith(() => [{ key: "UPSTREAM", message: "not a URL: p4ss!" }]));
+
+        expect(result).toMatchObject({ failures: [{ key: "UPSTREAM", message: "not a URL: [redacted]" }], kind: "invalid" });
     });
 
     it("masks the whole value of a secret-named key", async () => {

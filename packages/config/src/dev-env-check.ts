@@ -92,17 +92,44 @@ const defaultLoad = async (path: string): Promise<unknown> => {
 /** Below this length a value is too likely to occur by chance in the message's own words to be masked by text. */
 const MIN_MASKED_LENGTH = 3;
 
+/** Whether `character` would continue a word, so a match beside it is part of a longer token. */
+const WORD_CHARACTER = /[\w-]/u;
+
+/** `message` with each occurrence of `text` that stands as its own token replaced; one inside a longer word is left. */
+const replaceToken = (message: string, text: string, replacement: string): string => {
+    let out = "";
+    let from = 0;
+    let at = message.indexOf(text);
+
+    while (at !== -1) {
+        const before = message.charAt(at - 1);
+        const after = message.charAt(at + text.length);
+        const standsAlone = !WORD_CHARACTER.test(before) && !WORD_CHARACTER.test(after);
+
+        out += message.slice(from, at) + (standsAlone ? replacement : text);
+        from = at + text.length;
+        at = message.indexOf(text, from);
+    }
+
+    return out + message.slice(from);
+};
+
 /**
- * What to mask in a message about `key`, as `[text, replacement]` pairs, longest
- * first. The whole value only when it is a secret, by name or by shape: a plain
- * `WORKER_ENV=prod` stays readable, and so do the `production` an enum lists.
- * For a URL, its password wherever it appears — `redactSecrets` keys off
- * secret-looking names and shapes, so a short one in a `DATABASE_URL` slips past
- * it — with the rest of the URL kept.
+ * A failure's message with the key's own value masked, whatever the key is
+ * named: `redactSecrets` keys off secret-looking names and shapes, so a short
+ * secret under a plain name, or a password in a `DATABASE_URL`, slips past it.
+ *
+ * Fail closed. The value is masked wherever it stands as a token, so a plain
+ * `received "prod"` is masked while the `"production"` an enum lists stays
+ * readable. A value that is a secret by name or shape, and a URL's password,
+ * are masked even inside a longer word. A URL with a password keeps the rest of
+ * itself. The result goes through `redactSecrets` as well.
  */
-const maskingOf = (key: string, value: unknown): [string, string][] => {
+const maskOwnValue = (failure: EnvKeyFailure, env: Record<string, unknown>): EnvKeyFailure => {
+    const value = env[failure.key];
+
     if (typeof value !== "string") {
-        return [];
+        return { ...failure, message: redactSecrets(failure.message) };
     }
 
     const passwords: string[] = [];
@@ -126,26 +153,20 @@ const maskingOf = (key: string, value: unknown): [string, string][] => {
         masked = masked.replace(`:${part}@`, `:${REDACTED}@`);
     }
 
-    // Judged with the password already out, so a URL that holds one keeps its host readable.
-    const secret = isSecretKeyName(key) || redactSecrets(masked) !== masked;
-    const pairs: [string, string][] = passwords.map((part) => [part, REDACTED]);
-
-    if (secret || masked !== value) {
-        pairs.push([value, secret ? REDACTED : masked]);
-    }
-
-    return pairs.filter(([text]) => text.length >= MIN_MASKED_LENGTH).toSorted(([a], [b]) => b.length - a.length);
-};
-
-/** A failure's message with the key's own value masked where it is a secret or holds one. */
-const maskOwnValue = (failure: EnvKeyFailure, env: Record<string, unknown>): EnvKeyFailure => {
+    const secret = isSecretKeyName(failure.key) || redactSecrets(value) !== value;
     let { message } = failure;
 
-    for (const [text, replacement] of maskingOf(failure.key, env[failure.key])) {
-        message = message.replaceAll(text, replacement);
+    if (masked !== value) {
+        message = message.replaceAll(value, masked);
+    } else if (value.length >= MIN_MASKED_LENGTH) {
+        message = secret ? message.replaceAll(value, REDACTED) : replaceToken(message, value, REDACTED);
     }
 
-    return { ...failure, message };
+    for (const part of passwords.filter((candidate) => candidate.length >= MIN_MASKED_LENGTH).toSorted((a, b) => b.length - a.length)) {
+        message = message.replaceAll(part, REDACTED);
+    }
+
+    return { ...failure, message: redactSecrets(message) };
 };
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
