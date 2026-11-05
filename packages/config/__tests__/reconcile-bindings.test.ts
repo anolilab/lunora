@@ -6,7 +6,7 @@ import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { HYPERDRIVE_PLACEHOLDER_ID } from "../src/cloudflare/placeholder-ids";
-import { reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
+import { planWranglerBindings, reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
 import type { InferredBindings } from "../src/infer-bindings";
 import type { DurableObjectSpec } from "../src/worker-entry";
 
@@ -1786,7 +1786,7 @@ describe("reconcileWranglerBindings", () => {
             expect(readConfig().queues.consumers).toHaveLength(1);
         });
 
-        it("reports a dry run's additions and retunes without writing the config or the ownership record", () => {
+        it("plans additions and retunes without writing the config or the ownership record", () => {
             expect.assertions(4);
 
             seedConsumer(`{ "queue": "receipt-queue", "max_retries": 3 }`);
@@ -1797,9 +1797,9 @@ describe("reconcileWranglerBindings", () => {
 
             const wrangler = readFileSync(join(root, "wrangler.jsonc"), "utf8");
             const inferred = baseInferred({ needsD1: true, queues: [receiptQueue({ maxRetries: 5 })] });
-            const result = reconcileWranglerBindings(root, inferred, { dryRun: true });
+            const plan = planWranglerBindings(root, inferred);
 
-            expect({ added: result.added, changed: result.changed, updated: result.updated }).toStrictEqual({
+            expect({ added: plan.added, changed: plan.edit?.text !== plan.edit?.original, updated: plan.updated }).toStrictEqual({
                 added: ["DB (D1)"],
                 changed: true,
                 updated: ["queues.consumers/receipt-queue (max_retries)"],
@@ -1807,7 +1807,7 @@ describe("reconcileWranglerBindings", () => {
             expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toBe(wrangler);
             expect(readFileSync(join(root, "package.json"), "utf8")).toBe(manifest);
 
-            // The same pass for real writes both — the dry run is what kept them untouched.
+            // Applying the same plan writes both — planning alone is what kept them untouched.
             reconcileWranglerBindings(root, inferred);
 
             expect(readFileSync(join(root, "package.json"), "utf8")).not.toBe(manifest);

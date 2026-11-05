@@ -9,7 +9,7 @@
  * hand-written and never touched — one that claims a declared service's
  * binding is reported, not overwritten.
  */
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 
 import type { ServiceBindingIR } from "@lunora/codegen";
 
@@ -166,18 +166,26 @@ const reconcileServices = (
     return step;
 };
 
+/** The planned rewrite of the project's {@link DEV_CONFIG}: `text` is what it should hold, `original` what it holds now. */
+interface DevConfigServicesPlan {
+    added: string[];
+    original: string;
+    owned: OwnedServices;
+    path: string;
+    text: string;
+    updated: string[];
+    warnings: string[];
+}
+
 /**
- * Bring the top-level `services[]` of the project's {@link DEV_CONFIG}, when it
- * has one, in line with `declared`, writing the file itself. Returns the labels
- * and the ownership to merge into the record (empty when there is no such file).
+ * Plan the top-level `services[]` of the project's {@link DEV_CONFIG}, when it
+ * has one, in line with `declared`. Writes nothing: the caller writes `text`
+ * once it differs from `original`. Returns the labels and the ownership to merge
+ * into the record (empty when there is no such file).
  */
-const reconcileDevConfigServices = (
-    projectRoot: string,
-    declared: ReadonlyArray<ServiceBindingIR>,
-    recorded: OwnedServices,
-): { added: string[]; owned: OwnedServices; path: string; updated: string[]; warnings: string[] } => {
+const planDevConfigServices = (projectRoot: string, declared: ReadonlyArray<ServiceBindingIR>, recorded: OwnedServices): DevConfigServicesPlan => {
     const path = join(projectRoot, DEV_CONFIG);
-    const unchanged = { added: [], path, updated: [], warnings: [] };
+    const unchanged = { added: [], original: "", path, text: "", updated: [], warnings: [] };
 
     // Nothing declared and nothing of ours to remove.
     if (declared.length === 0 && recorded[DEV_CONFIG_SCOPE] === undefined) {
@@ -195,14 +203,12 @@ const reconcileDevConfigServices = (
 
     const step = reconcileScope(text, ["services"], parsed.services ?? [], declared, new Set(recorded[DEV_CONFIG_SCOPE]), undefined, new Map());
 
-    if (step.text !== text) {
-        writeFileSync(path, step.text, "utf8");
-    }
-
     return {
         added: step.added,
+        original: text,
         owned: step.owned.length > 0 ? { [DEV_CONFIG_SCOPE]: step.owned } : {},
         path,
+        text: step.text,
         updated: step.updated ?? [],
         warnings: (step.warnings ?? []).map((entry) => `${DEV_CONFIG} ${entry}`),
     };
@@ -213,5 +219,5 @@ const recordOwnedServices = (manifest: Manifest, owned: OwnedServices): void => 
     recordManifestKey(manifest, SERVICES_RECORD, Object.keys(owned).length === 0 ? undefined : owned);
 };
 
-export type { OwnedServices };
-export { ownedServiceBindings, readOwnedServices, reconcileDevConfigServices, reconcileServices, recordOwnedServices };
+export type { DevConfigServicesPlan, OwnedServices };
+export { ownedServiceBindings, planDevConfigServices, readOwnedServices, reconcileServices, recordOwnedServices };

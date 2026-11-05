@@ -10,8 +10,8 @@
 import type { DiscoveryCache } from "../discovery-cache";
 import { inferLunoraBindings } from "../infer-bindings";
 import { LUNORA_TAG } from "../log-line";
-import type { ExportGap } from "./reconcile-bindings";
-import { reconcileWranglerBindings } from "./reconcile-bindings";
+import type { ExportGap, WranglerBindingsPlan } from "./reconcile-bindings";
+import { applyWranglerBindings, planWranglerBindings } from "./reconcile-bindings";
 import { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
 import { describePreservedCrons, reconcileWranglerCrons } from "./reconcile-crons";
 
@@ -36,13 +36,23 @@ interface ReconcileLogger {
     warn: (message: string) => void;
 }
 
+/** Infer the project's bindings and plan their reconcile, writing nothing. */
+const planProjectBindings = async (options: ReconcileProject): Promise<WranglerBindingsPlan> =>
+    planWranglerBindings(
+        options.projectRoot,
+        await inferLunoraBindings({ cache: options.cache, projectRoot: options.projectRoot, schemaDir: options.schemaDir }),
+        {
+            target: options.target,
+        },
+    );
+
 /**
  * Infer the Cloudflare bindings the project's code implies and reconcile them
  * into `wrangler.jsonc` (Durable Objects, their migration classes, and the
- * `DB` D1 binding for `.global()` schemas). Best-effort and idempotent — runs
- * at dev startup (and on every `@lunora/rspack` pass) so the user never
- * hand-writes binding boilerplate. A failure
- * here must never abort codegen; the wrangler validator reports real problems.
+ * `DB` D1 binding for `.global()` schemas). Best-effort and idempotent — runs at
+ * dev startup (and on every `@lunora/rspack` pass) so the user never hand-writes
+ * binding boilerplate. A failure here must never abort codegen; the wrangler
+ * validator reports real problems.
  *
  * `onExportGaps` (dev only) is invoked when a declared container/workflow isn't
  * re-exported by the worker entry, so the caller can raise it in the browser
@@ -54,9 +64,7 @@ const reconcileBindingsSafely = async (
     onExportGaps?: (gaps: ReadonlyArray<ExportGap>) => void,
 ): Promise<void> => {
     try {
-        const inferred = await inferLunoraBindings({ cache: options.cache, projectRoot: options.projectRoot, schemaDir: options.schemaDir });
-        const reconciled = reconcileWranglerBindings(options.projectRoot, inferred, { target: options.target });
-
+        const reconciled = applyWranglerBindings(options.projectRoot, await planProjectBindings(options));
         const target = reconciled.wranglerPath ?? "wrangler.jsonc";
 
         if (reconciled.added.length > 0) {
@@ -89,18 +97,21 @@ const reconcileBindingsSafely = async (
 
 /**
  * The bindings a {@link reconcileBindingsSafely} pass would add or retune right
- * now, as its log labels — without writing anything. For a dev server that
- * provisions only at startup: a save that declares a queue, reads `ctx.kv` or
- * exports a workflow leaves the running worker without that binding until the
- * server restarts, and this is how the watcher finds out. Empty when the config
- * is in sync or the scan fails (a half-typed source must not read as a change).
+ * now, as its log labels, dev sidecar included — from the same plan, written
+ * nowhere. For a dev server that provisions only at startup: a save that
+ * declares a queue, reads `ctx.kv` or exports a workflow leaves the running
+ * worker without that binding until the server restarts, and this is how the
+ * watcher finds out. Empty when the config is in sync or the scan fails (a
+ * half-typed source must not read as a change).
+ *
+ * `cache` is required: a watcher calls this on every save, and clears it when
+ * the sources move.
  */
-const pendingBindingChanges = async (options: ReconcileProject): Promise<string[]> => {
+const pendingBindingChanges = async (options: ReconcileProject & { cache: DiscoveryCache }): Promise<string[]> => {
     try {
-        const inferred = await inferLunoraBindings({ cache: options.cache, projectRoot: options.projectRoot, schemaDir: options.schemaDir });
-        const { added, updated } = reconcileWranglerBindings(options.projectRoot, inferred, { dryRun: true, target: options.target });
+        const { added, devConfig, updated } = await planProjectBindings(options);
 
-        return [...added, ...updated];
+        return [...new Set([...added, ...updated, ...(devConfig?.added ?? []), ...(devConfig?.updated ?? [])])];
     } catch {
         return [];
     }

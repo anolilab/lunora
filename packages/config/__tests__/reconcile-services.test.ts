@@ -6,7 +6,7 @@ import type { ServiceBindingIR } from "@lunora/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
+import { planWranglerBindings, reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
 import type { InferredBindings } from "../src/infer-bindings";
 
 const inferred = (services: ServiceBindingIR[] | undefined): InferredBindings => {
@@ -245,5 +245,24 @@ describe("reconcileServices", () => {
         reconcileWranglerBindings(root, inferred([parser]));
 
         expect((lunora() as { services: Record<string, unknown> }).services["dev:services"]).toStrictEqual(["SERVICE_PARSER"]);
+    });
+
+    it("plans the dev sidecar's bindings without writing wrangler.jsonc, wrangler.dev.jsonc or the record", () => {
+        expect.assertions(4);
+
+        const sidecar = `{ "name": "app-dev", "main": "lunora/server.ts" }\n`;
+
+        writeFileSync(join(root, "wrangler.dev.jsonc"), sidecar, "utf8");
+
+        const files = ["wrangler.jsonc", "wrangler.dev.jsonc", "package.json"].map((file) => readFileSync(join(root, file), "utf8"));
+        const plan = planWranglerBindings(root, inferred([parser]));
+
+        expect(plan.devConfig?.added).toStrictEqual(["services/SERVICE_PARSER → neore-parser"]);
+        expect(plan.devConfig?.text).not.toBe(sidecar);
+        expect(["wrangler.jsonc", "wrangler.dev.jsonc", "package.json"].map((file) => readFileSync(join(root, file), "utf8"))).toStrictEqual(files);
+
+        reconcileWranglerBindings(root, inferred([parser]));
+
+        expect(readFileSync(join(root, "wrangler.dev.jsonc"), "utf8")).not.toBe(sidecar);
     });
 });
