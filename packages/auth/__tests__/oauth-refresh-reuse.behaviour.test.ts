@@ -2,14 +2,15 @@ import { createHash, randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
 import { memoryAdapter } from "better-auth/adapters/memory";
-import { getAuthTables } from "better-auth/db";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lunoraAuthAdapter } from "../src/adapter";
 import type { LunoraAuth, LunoraAuthOptions } from "../src/create-auth";
-import { createAuth, resolveAuthOptions } from "../src/create-auth";
+import { createAuth } from "../src/create-auth";
 import { jwt, oauthProvider } from "../src/plugins";
 import { createSqlAuthStore } from "../src/sql-store";
+import signInAndCookie from "./_helpers/auth-session";
+import memoryTables from "./helpers/memory-tables";
 import { executorFor, materialiseAuthSchema } from "./helpers/sqlite-auth-db";
 
 /**
@@ -33,20 +34,11 @@ import { executorFor, materialiseAuthSchema } from "./helpers/sqlite-auth-db";
 
 const ORIGIN = "https://app.example.com";
 const ISSUER = `${ORIGIN}/api/auth`;
+const CONSENT_PAGE = "/consent";
 const REDIRECT_URI = "https://client.example.com/callback";
-// test-only credential for an in-memory better-auth instance — never a real secret
-const PASSWORD = "correct horse battery staple"; // secret-scanner:allow
+const PASSWORD = "correct horse battery staple"; // secret-scanner:allow -- test-only credential for an in-memory instance
 
 type ProviderOptions = NonNullable<Parameters<typeof oauthProvider>[0]>;
-
-/** `LunoraAuth`'s `api` is typed from the base options and does not see the provider's endpoints. */
-type ProviderAuth = Omit<LunoraAuth, "api"> & {
-    api: {
-        adminCreateOAuthClient: (input: { body: Record<string, unknown>; headers: Headers }) => Promise<{ client_id: string; client_secret: string }>;
-        signInEmail: (input: { body: { email: string; password: string }; returnHeaders: true }) => Promise<{ headers: Headers }>;
-        signUpEmail: (input: { body: { email: string; name: string; password: string } }) => Promise<unknown>;
-    };
-};
 
 interface Client {
     id: string;
@@ -60,21 +52,14 @@ interface Tokens {
 
 interface Backend {
     close: () => void;
-    database: LunoraAuthOptions["database"];
-    materialise: (options: LunoraAuthOptions) => void;
+    /** Creates the tables the options need and returns the adapter over them. */
+    connect: (options: LunoraAuthOptions) => LunoraAuthOptions["database"];
 }
 
 const memoryBackend = (): Backend => {
-    const tables: Record<string, unknown[]> = {};
-
     return {
         close: () => {},
-        database: memoryAdapter(tables),
-        materialise: (options) => {
-            for (const table of Object.values(getAuthTables(resolveAuthOptions(options)))) {
-                tables[table.modelName] = [];
-            }
-        },
+        connect: (options) => memoryAdapter(memoryTables(options)),
     };
 };
 
@@ -85,9 +70,10 @@ const sqliteBackend = (): Backend => {
         close: () => {
             database.close();
         },
-        database: lunoraAuthAdapter(createSqlAuthStore(executorFor(database))),
-        materialise: (options) => {
+        connect: (options) => {
             materialiseAuthSchema(database, options);
+
+            return lunoraAuthAdapter(createSqlAuthStore(executorFor(database)));
         },
     };
 };
@@ -104,6 +90,130 @@ const form = (path: string, body: Record<string, string>): Request =>
         method: "POST",
     });
 
+/** A JSON POST as the signed-in browser makes it; better-auth checks `origin` on cookie-bearing requests. */
+const postAsUser = (path: string, session: Headers, body: Record<string, unknown>): Request =>
+    new Request(`${ISSUER}${path}`, {
+        body: JSON.stringify(body),
+        headers: { "content-type": "application/json", cookie: session.get("cookie") ?? "", origin: ORIGIN },
+        method: "POST",
+    });
+
+/** Signs a user up and returns the session cookie the authorize endpoint reads. */
+const signIn = async (auth: LunoraAuth, email: string): Promise<Headers> => {
+    await auth.api.signUpEmail({ body: { email, name: email, password: PASSWORD } });
+
+    return signInAndCookie(auth, email, PASSWORD);
+};
+
+/** A confidential client registered by the signed-in user. */
+const registerClient = async (auth: LunoraAuth, session: Headers): Promise<Client> => {
+    const response = await auth.handler(
+        postAsUser("/oauth2/create-client", session, {
+            grant_types: ["authorization_code", "refresh_token"],
+            redirect_uris: [REDIRECT_URI],
+            token_endpoint_auth_method: "client_secret_post",
+        }),
+    );
+    const body: { client_id?: string; client_secret?: string } = await response.json();
+
+    if (response.status !== 201 || body.client_id === undefined || body.client_secret === undefined) {
+        throw new Error(`client registration failed with ${String(response.status)}: ${JSON.stringify(body)}`);
+    }
+
+    return { id: body.client_id, secret: body.client_secret };
+};
+
+const readTokens = async (response: Response): Promise<Tokens> => {
+    const body: { access_token?: string; refresh_token?: string } = await response.json();
+
+    if (response.status !== 200 || body.access_token === undefined || body.refresh_token === undefined) {
+        throw new Error(`token request failed with ${String(response.status)}: ${JSON.stringify(body)}`);
+    }
+
+    return { access: body.access_token, refresh: body.refresh_token };
+};
+
+/** The `code` on the redirect back to the client, accepting consent first when the provider asks for it. */
+const authorizationCode = async (auth: LunoraAuth, session: Headers, url: URL): Promise<string | null> => {
+    const redirect = await auth.handler(new Request(url, { headers: session }));
+    const location = redirect.headers.get("location");
+
+    if (location === null) {
+        throw new Error(`authorize did not redirect (status ${String(redirect.status)})`);
+    }
+
+    let target = new URL(location, ORIGIN);
+
+    if (target.pathname === CONSENT_PAGE) {
+        const consent = await auth.handler(postAsUser("/oauth2/consent", session, { accept: true, oauth_query: target.search.slice(1) }));
+        const body: { url?: string } = await consent.json();
+
+        if (body.url === undefined) {
+            throw new Error(`consent failed with ${String(consent.status)}: ${JSON.stringify(body)}`);
+        }
+
+        target = new URL(body.url, ORIGIN);
+    }
+
+    return target.searchParams.get("code");
+};
+
+/** One full authorization-code grant with PKCE and `offline_access`. */
+const authorize = async (auth: LunoraAuth, client: Client, session: Headers): Promise<Tokens> => {
+    const verifier = randomBytes(32).toString("base64url");
+    const url = new URL(`${ISSUER}/oauth2/authorize`);
+
+    url.search = new URLSearchParams({
+        client_id: client.id,
+        code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+        code_challenge_method: "S256",
+        redirect_uri: REDIRECT_URI,
+        response_type: "code",
+        scope: "openid offline_access",
+        state: "state",
+    }).toString();
+
+    const code = await authorizationCode(auth, session, url);
+
+    if (code === null) {
+        throw new Error("authorize did not issue a code");
+    }
+
+    const response = await auth.handler(
+        form("/oauth2/token", {
+            client_id: client.id,
+            client_secret: client.secret,
+            code,
+            code_verifier: verifier,
+            grant_type: "authorization_code",
+            redirect_uri: REDIRECT_URI,
+        }),
+    );
+
+    return readTokens(response);
+};
+
+const refresh = (auth: LunoraAuth, client: Client, refreshToken: string): Promise<Response> =>
+    auth.handler(form("/oauth2/token", { client_id: client.id, client_secret: client.secret, grant_type: "refresh_token", refresh_token: refreshToken }));
+
+const isActive = async (auth: LunoraAuth, client: Client, token: string, hint: "access_token" | "refresh_token"): Promise<boolean> => {
+    const response = await auth.handler(form("/oauth2/introspect", { client_id: client.id, client_secret: client.secret, token, token_type_hint: hint }));
+    const body: { active?: boolean } = await response.json();
+
+    // A failed introspection must not pass as "revoked".
+    if (response.status !== 200) {
+        throw new Error(`introspection failed with ${String(response.status)}: ${JSON.stringify(body)}`);
+    }
+
+    return body.active === true;
+};
+
+/** Two assertions: the token endpoint refused the grant as `invalid_grant`. */
+const expectInvalidGrant = async (response: Response): Promise<void> => {
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "invalid_grant" });
+};
+
 describe.each(backends)("oauthProvider refresh-token reuse over %s", (_name, makeBackend) => {
     let backend: Backend | undefined;
 
@@ -113,108 +223,22 @@ describe.each(backends)("oauthProvider refresh-token reuse over %s", (_name, mak
         backend = undefined;
     });
 
-    const deploy = (providerOptions: Partial<ProviderOptions> = {}): ProviderAuth => {
+    const deploy = (providerOptions: Partial<ProviderOptions> = {}): LunoraAuth => {
         backend = makeBackend();
 
         const options: LunoraAuthOptions = {
             baseURL: ORIGIN,
-            database: backend.database,
             emailAndPassword: { enabled: true },
-            plugins: [jwt(), oauthProvider({ consentPage: "/consent", loginPage: "/login", ...providerOptions })],
+            plugins: [jwt(), oauthProvider({ consentPage: CONSENT_PAGE, loginPage: "/login", ...providerOptions })],
             rateLimit: { enabled: false },
             secret: "x".repeat(32),
         };
 
-        backend.materialise(options);
-
-        return createAuth(options) as unknown as ProviderAuth;
-    };
-
-    /** Signs a user in and returns the session cookie the authorize endpoint reads. */
-    const signIn = async (auth: ProviderAuth, email: string): Promise<Headers> => {
-        await auth.api.signUpEmail({ body: { email, name: email, password: PASSWORD } });
-
-        const { headers } = await auth.api.signInEmail({ body: { email, password: PASSWORD }, returnHeaders: true });
-
-        return new Headers({ cookie: headers.get("set-cookie") ?? "" });
-    };
-
-    /** A confidential client that skips consent, so the code flow needs no consent page. */
-    const registerClient = async (auth: ProviderAuth, session: Headers): Promise<Client> => {
-        const created = await auth.api.adminCreateOAuthClient({
-            body: {
-                grant_types: ["authorization_code", "refresh_token"],
-                redirect_uris: [REDIRECT_URI],
-                skip_consent: true,
-                token_endpoint_auth_method: "client_secret_post",
-            },
-            headers: session,
-        });
-
-        return { id: created.client_id, secret: created.client_secret };
-    };
-
-    const readTokens = async (response: Response): Promise<Tokens> => {
-        const body: { access_token?: string; refresh_token?: string } = await response.json();
-
-        if (response.status !== 200 || body.access_token === undefined || body.refresh_token === undefined) {
-            throw new Error(`token request failed with ${String(response.status)}: ${JSON.stringify(body)}`);
-        }
-
-        return { access: body.access_token, refresh: body.refresh_token };
-    };
-
-    /** One full authorization-code grant with PKCE and `offline_access`. */
-    const authorize = async (auth: ProviderAuth, client: Client, session: Headers): Promise<Tokens> => {
-        const verifier = randomBytes(32).toString("base64url");
-        const url = new URL(`${ISSUER}/oauth2/authorize`);
-
-        url.search = new URLSearchParams({
-            client_id: client.id,
-            code_challenge: createHash("sha256").update(verifier).digest("base64url"),
-            code_challenge_method: "S256",
-            redirect_uri: REDIRECT_URI,
-            response_type: "code",
-            scope: "openid offline_access",
-            state: "state",
-        }).toString();
-
-        const redirect = await auth.handler(new Request(url, { headers: session }));
-        const location = redirect.headers.get("location");
-        const code = location === null ? null : new URL(location).searchParams.get("code");
-
-        if (code === null) {
-            throw new Error(`authorize did not issue a code (status ${String(redirect.status)}, location ${String(location)})`);
-        }
-
-        const response = await auth.handler(
-            form("/oauth2/token", {
-                client_id: client.id,
-                client_secret: client.secret,
-                code,
-                code_verifier: verifier,
-                grant_type: "authorization_code",
-                redirect_uri: REDIRECT_URI,
-            }),
-        );
-
-        return readTokens(response);
-    };
-
-    const refresh = async (auth: ProviderAuth, client: Client, refreshToken: string): Promise<Response> =>
-        await auth.handler(
-            form("/oauth2/token", { client_id: client.id, client_secret: client.secret, grant_type: "refresh_token", refresh_token: refreshToken }),
-        );
-
-    const isActive = async (auth: ProviderAuth, client: Client, token: string, hint: "access_token" | "refresh_token"): Promise<boolean> => {
-        const response = await auth.handler(form("/oauth2/introspect", { client_id: client.id, client_secret: client.secret, token, token_type_hint: hint }));
-        const body: { active?: boolean } = await response.json();
-
-        return body.active === true;
+        return createAuth({ ...options, database: backend.connect(options) });
     };
 
     it("revokes the whole (client, user) family when a rotated refresh token is replayed", async () => {
-        expect.assertions(12);
+        expect.assertions(13);
 
         const auth = deploy();
         const session = await signIn(auth, "ada@example.com");
@@ -227,16 +251,11 @@ describe.each(backends)("oauthProvider refresh-token reuse over %s", (_name, mak
         await expect(isActive(auth, client, rotated.access, "access_token")).resolves.toBe(true);
         await expect(isActive(auth, client, sibling.refresh, "refresh_token")).resolves.toBe(true);
 
-        const replay = await refresh(auth, client, first.refresh);
-
-        expect(replay.status).toBe(400);
-        await expect(replay.json()).resolves.toMatchObject({ error: "invalid_grant" });
+        await expectInvalidGrant(await refresh(auth, client, first.refresh));
 
         // The token the attacker (or the victim) rotated to is dead too…
-        const descendant = await refresh(auth, client, rotated.refresh);
+        await expectInvalidGrant(await refresh(auth, client, rotated.refresh));
 
-        expect(descendant.status).toBe(400);
-        await expect(descendant.json()).resolves.toMatchObject({ error: "invalid_grant" });
         await expect(isActive(auth, client, rotated.access, "access_token")).resolves.toBe(false);
         await expect(isActive(auth, client, first.access, "access_token")).resolves.toBe(false);
         await expect(isActive(auth, client, rotated.refresh, "refresh_token")).resolves.toBe(false);
@@ -245,31 +264,49 @@ describe.each(backends)("oauthProvider refresh-token reuse over %s", (_name, mak
         await expect(isActive(auth, client, sibling.access, "access_token")).resolves.toBe(false);
         await expect(isActive(auth, client, sibling.refresh, "refresh_token")).resolves.toBe(false);
 
-        const siblingRefresh = await refresh(auth, client, sibling.refresh);
-
-        expect(siblingRefresh.status).toBe(400);
+        await expectInvalidGrant(await refresh(auth, client, sibling.refresh));
     });
 
     it("leaves another user's grant to the same client alive", async () => {
-        expect.assertions(3);
+        expect.assertions(6);
 
         const auth = deploy();
         const adaSession = await signIn(auth, "ada@example.com");
         const client = await registerClient(auth, adaSession);
         const grace = await authorize(auth, client, await signIn(auth, "grace@example.com"));
         const ada = await authorize(auth, client, adaSession);
+        const adaRotated = await readTokens(await refresh(auth, client, ada.refresh));
 
-        await readTokens(await refresh(auth, client, ada.refresh));
+        await expectInvalidGrant(await refresh(auth, client, ada.refresh));
 
-        const replay = await refresh(auth, client, ada.refresh);
+        await expect(isActive(auth, client, adaRotated.refresh, "refresh_token")).resolves.toBe(false);
+        await expect(isActive(auth, client, adaRotated.access, "access_token")).resolves.toBe(false);
 
-        expect(replay.status).toBe(400);
         await expect(isActive(auth, client, grace.access, "access_token")).resolves.toBe(true);
         await expect(readTokens(await refresh(auth, client, grace.refresh))).resolves.toMatchObject({ refresh: expect.any(String) });
     });
 
-    it("answers a retry inside refreshTokenReuseInterval with the same tokens, and revokes after it", async () => {
+    it("leaves the same user's grant to another client alive", async () => {
         expect.assertions(5);
+
+        const auth = deploy();
+        const session = await signIn(auth, "ada@example.com");
+        const client = await registerClient(auth, session);
+        const otherClient = await registerClient(auth, session);
+        const other = await authorize(auth, otherClient, session);
+        const first = await authorize(auth, client, session);
+        const rotated = await readTokens(await refresh(auth, client, first.refresh));
+
+        await expectInvalidGrant(await refresh(auth, client, first.refresh));
+
+        await expect(isActive(auth, client, rotated.refresh, "refresh_token")).resolves.toBe(false);
+
+        await expect(isActive(auth, otherClient, other.access, "access_token")).resolves.toBe(true);
+        await expect(readTokens(await refresh(auth, otherClient, other.refresh))).resolves.toMatchObject({ refresh: expect.any(String) });
+    });
+
+    it("answers a retry inside refreshTokenReuseInterval with the same tokens, and revokes after it", async () => {
+        expect.assertions(6);
 
         vi.useFakeTimers({ now: new Date("2026-01-01T00:00:00Z"), toFake: ["Date"] });
 
@@ -286,16 +323,15 @@ describe.each(backends)("oauthProvider refresh-token reuse over %s", (_name, mak
 
         vi.advanceTimersByTime(61_000);
 
-        const late = await refresh(auth, client, first.refresh);
+        await expectInvalidGrant(await refresh(auth, client, first.refresh));
 
-        expect(late.status).toBe(400);
         await expect(isActive(auth, client, rotated.refresh, "refresh_token")).resolves.toBe(false);
     });
 
     // Each rotation restarts `refreshTokenExpiresIn`, so the lifetime slides: a
     // client that keeps refreshing never hits it, one that goes quiet does.
-    it("expires a refresh token refreshTokenExpiresIn after it was issued, counted from the last rotation", async () => {
-        expect.assertions(3);
+    it("expires a refresh token refreshTokenExpiresIn after its last rotation, without revoking the family", async () => {
+        expect.assertions(6);
 
         vi.useFakeTimers({ now: new Date("2026-01-01T00:00:00Z"), toFake: ["Date"] });
 
@@ -315,11 +351,17 @@ describe.each(backends)("oauthProvider refresh-token reuse over %s", (_name, mak
 
         expect(kept.refresh).not.toBe(rotated.refresh);
 
-        vi.advanceTimersByTime(61_000);
+        // A sibling grant from the same family, issued late enough to outlive `kept`.
+        vi.advanceTimersByTime(30_000);
 
-        const expired = await refresh(auth, client, kept.refresh);
+        const sibling = await authorize(auth, client, session);
 
-        expect(expired.status).toBe(400);
-        await expect(expired.json()).resolves.toMatchObject({ error: "invalid_grant" });
+        vi.advanceTimersByTime(31_000);
+
+        await expectInvalidGrant(await refresh(auth, client, kept.refresh));
+
+        await expect(isActive(auth, client, sibling.access, "access_token")).resolves.toBe(true);
+        await expect(isActive(auth, client, sibling.refresh, "refresh_token")).resolves.toBe(true);
+        await expect(readTokens(await refresh(auth, client, sibling.refresh))).resolves.toMatchObject({ refresh: expect.any(String) });
     });
 });
