@@ -47,20 +47,12 @@ const DEV_SIDECAR_CONFIG = "wrangler.dev.jsonc";
 /** The frameworks whose worker `lunora dev` runs in that sidecar, beside the framework's own dev server. */
 const SIDECAR_FRAMEWORKS = new Set(["nuxt", "sveltekit"]);
 
-interface DevWorkerConfig {
-    /** The wrangler config the Cloudflare plugin runs, when it is not the project's own. */
-    configPath?: string;
-
-    /** The bindings the remote-bindings plugin left out of this session. */
-    withheld: ReadonlyArray<string>;
-}
-
 /**
  * What the env contract is checked against: the config the dev worker runs. That
  * is the sidecar's only on a framework that runs one — a `wrangler.dev.jsonc`
  * left in any other project is not what its worker boots with.
  */
-const devEnvCheckOptions = (options: ResolvedLunoraPluginOptions, worker: DevWorkerConfig): DevEnvCheckOptions => {
+const devEnvCheckOptions = (options: ResolvedLunoraPluginOptions, worker: { configPath?: string; withheld: ReadonlyArray<string> }): DevEnvCheckOptions => {
     const sidecar = resolve(options.projectRoot, DEV_SIDECAR_CONFIG);
     const base = { projectRoot: options.projectRoot, schemaDirectory: options.schemaDir };
 
