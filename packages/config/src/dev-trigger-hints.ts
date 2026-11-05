@@ -9,7 +9,7 @@
  * reconcile writes `queues.*` before the worker starts.
  */
 import type { WranglerConfig } from "./cloudflare/wrangler-config";
-import { findWranglerFile, readWranglerJsonc } from "./cloudflare/wrangler-path";
+import { readProjectWrangler } from "./cloudflare/wrangler-path";
 
 /** How many queue names a hint lists before it summarizes the rest. */
 const LISTED_QUEUES = 3;
@@ -28,7 +28,7 @@ interface DevTriggerHintOptions {
     studioUrl?: string;
 }
 
-/** One hint row; each dev banner formats the label its own way. */
+/** One hint row; each dev banner lays it out with {@link formatDevBannerRow}. */
 interface DevTriggerHint {
     label: "Crons" | "Queues";
     text: string;
@@ -39,39 +39,16 @@ type TriggerShape = Pick<WranglerConfig, "queues"> & { triggers?: { crons?: unkn
 const stringsOf = (values: unknown): string[] =>
     Array.isArray(values) ? values.filter((value): value is string => typeof value === "string" && value !== "") : [];
 
-const readTriggerShape = (projectRoot: string): TriggerShape | undefined => {
-    const wranglerPath = findWranglerFile(projectRoot);
-
-    if (wranglerPath === undefined) {
-        return undefined;
-    }
-
-    try {
-        return readWranglerJsonc<TriggerShape>(wranglerPath).parsed;
-    } catch {
-        return undefined;
-    }
-};
-
 /** A cron expression as a `?cron=` value: spaces become `+`, as Cloudflare's own examples write it. */
 const cronQuery = (cron: string): string => encodeURIComponent(cron).replaceAll("%20", "+");
 
-const cronHint = (crons: ReadonlyArray<string>, options: DevTriggerHintOptions): DevTriggerHint | undefined => {
-    const ways: string[] = [];
+const cronHint = (count: number, first: string, options: DevTriggerHintOptions): DevTriggerHint | undefined => {
+    const ways = [
+        options.studioUrl === undefined ? undefined : `run one now in ${options.studioUrl}/schedule`,
+        options.scheduledUrl === undefined ? undefined : `curl "${options.scheduledUrl}?cron=${cronQuery(first)}"`,
+    ].filter((way) => way !== undefined);
 
-    if (options.studioUrl !== undefined) {
-        ways.push(`run one now in ${options.studioUrl}/schedule`);
-    }
-
-    if (options.scheduledUrl !== undefined) {
-        ways.push(`curl "${options.scheduledUrl}?cron=${cronQuery(crons[0] as string)}"`);
-    }
-
-    if (ways.length === 0) {
-        return undefined;
-    }
-
-    return { label: "Crons", text: `${String(crons.length)} scheduled → ${ways.join(", or ")}` };
+    return ways.length === 0 ? undefined : { label: "Crons", text: `${String(count)} scheduled → ${ways.join(", or ")}` };
 };
 
 const queueHint = (queues: ReadonlyArray<string>, studioUrl: string | undefined): DevTriggerHint | undefined => {
@@ -91,7 +68,7 @@ const queueHint = (queues: ReadonlyArray<string>, studioUrl: string | undefined)
  * surface to point at. Never throws: it only decorates a startup banner.
  */
 const devTriggerHints = (options: DevTriggerHintOptions): DevTriggerHint[] => {
-    const parsed = readTriggerShape(options.projectRoot);
+    const parsed = readProjectWrangler<TriggerShape>(options.projectRoot)?.parsed;
 
     if (parsed === undefined) {
         return [];
@@ -100,20 +77,31 @@ const devTriggerHints = (options: DevTriggerHintOptions): DevTriggerHint[] => {
     const crons = [...new Set(stringsOf(parsed.triggers?.crons))];
     const queueEntries = [...(parsed.queues?.producers ?? []), ...(parsed.queues?.consumers ?? [])];
     const queues = [...new Set(stringsOf(queueEntries.map((entry) => entry?.queue)))];
-    const hints: DevTriggerHint[] = [];
-    const cron = crons.length > 0 ? cronHint(crons, options) : undefined;
-    const queue = queues.length > 0 ? queueHint(queues, options.studioUrl) : undefined;
+    const [firstCron] = crons;
 
-    if (cron !== undefined) {
-        hints.push(cron);
-    }
+    return [
+        firstCron === undefined ? undefined : cronHint(crons.length, firstCron, options),
+        queues.length === 0 ? undefined : queueHint(queues, options.studioUrl),
+    ].filter((hint) => hint !== undefined);
+};
 
-    if (queue !== undefined) {
-        hints.push(queue);
-    }
+/**
+ * One `  ➜  Label:  value` banner row, the label padded to `width` (colon
+ * included) so the values line up. `style` decorates the arrow and the label
+ * after padding, so escape codes never count toward the width — Vite's banner
+ * colours both, `lunora dev`'s colours neither. A label wider than `width` gets
+ * no padding rather than an error.
+ */
+const formatDevBannerRow = (
+    label: string,
+    value: string,
+    width: number,
+    style: { arrow?: (text: string) => string; label?: (text: string) => string } = {},
+): string => {
+    const padding = `${label}:`.padEnd(width).slice(label.length);
 
-    return hints;
+    return `  ${style.arrow?.("➜") ?? "➜"}  ${style.label?.(label) ?? label}${padding}${value}`;
 };
 
 export type { DevTriggerHint, DevTriggerHintOptions };
-export { devTriggerHints };
+export { devTriggerHints, formatDevBannerRow };

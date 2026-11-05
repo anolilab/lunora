@@ -21,6 +21,7 @@ import {
     ensureDevVariables,
     ensureDevVarsExample,
     fillDevSecrets,
+    formatDevBannerRow,
     inferLunoraBindings,
     isInteractive,
     readLiveDevServerState,
@@ -76,7 +77,7 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, cwd: string, studioUr
     // Studio pointers only: `wrangler dev` already prints the `curl` for its
     // `/cdn-cgi/local/scheduled` route when the config declares crons.
     for (const { label, text } of devTriggerHints({ projectRoot: cwd, studioUrl })) {
-        logger.info(`  ➜  ${`${label}:`.padEnd(12)}${text}`);
+        logger.info(formatDevBannerRow(label, text, 12));
     }
 
     // The two files a task runner reads. The manifest is written whether or not

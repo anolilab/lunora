@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { devTriggerHints } from "../src/dev-trigger-hints";
+import { devTriggerHints, formatDevBannerRow } from "../src/dev-trigger-hints";
 
 const ORIGIN = "http://localhost:5173";
 const STUDIO = `${ORIGIN}/__lunora`;
@@ -91,5 +91,28 @@ describe(devTriggerHints, () => {
         writeFileSync(join(projectRoot, "wrangler.jsonc"), "{ not json");
 
         expect(devTriggerHints({ projectRoot, studioUrl: STUDIO })).toStrictEqual([]);
+    });
+});
+
+describe(formatDevBannerRow, () => {
+    it("pads the label column so values line up", () => {
+        expect.assertions(2);
+
+        expect(formatDevBannerRow("Crons", "1 scheduled", 12)).toBe("  ➜  Crons:      1 scheduled");
+        expect(formatDevBannerRow("Queues", "emails", 12)).toBe("  ➜  Queues:     emails");
+    });
+
+    it("styles the arrow and label after padding, so escape codes never count toward the width", () => {
+        expect.assertions(1);
+
+        const bold = (text: string): string => `<b>${text}</b>`;
+
+        expect(formatDevBannerRow("Lunora", "url", 9, { arrow: bold, label: bold })).toBe("  <b>➜</b>  <b>Lunora</b>:  url");
+    });
+
+    it("gives a label wider than the column no padding instead of throwing", () => {
+        expect.assertions(1);
+
+        expect(formatDevBannerRow("Workflows", "3", 9)).toBe("  ➜  Workflows:3");
     });
 });

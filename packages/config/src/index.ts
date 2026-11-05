@@ -81,7 +81,7 @@ export {
     writeDevServerState,
 } from "./dev-server-state";
 export type { DevTriggerHint, DevTriggerHintOptions } from "./dev-trigger-hints";
-export { devTriggerHints } from "./dev-trigger-hints";
+export { devTriggerHints, formatDevBannerRow } from "./dev-trigger-hints";
 export {
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
