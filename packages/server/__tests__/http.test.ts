@@ -262,7 +262,7 @@ describe("httpRouter behind a single-page app's worker", () => {
     });
 
     it("serves the shell for a navigation no route matches even behind a blanket auth middleware, which still guards every route", async () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         const app = httpRouter();
 
@@ -289,19 +289,25 @@ describe("httpRouter behind a single-page app's worker", () => {
                 },
             },
             spaAssets: {
-                fetch: async () => new Response(shell, { headers: { "content-type": "text/html", etag: '"shell"' } }),
+                fetch: async (request: Request) =>
+                    new URL(request.url).pathname === "/reports/q3.pdf"
+                        ? new Response("secret", { headers: { "content-type": "application/pdf", etag: '"q3"' } })
+                        : new Response(shell, { headers: { "content-type": "text/html", etag: '"shell"' } }),
             },
         });
         const navigate = (path: string): Request => new Request(`https://app.test${path}`, { headers: { accept: "text/html", "sec-fetch-mode": "navigate" } });
         const executionContext = { passThroughOnException: () => undefined, waitUntil: () => undefined };
 
         const page = await worker.fetch(navigate("/dashboard"), {}, executionContext);
+        // A real file behind the gate: the navigation headers come from the client, so they must not skip the middleware.
+        const report = await worker.fetch(navigate("/reports/q3.pdf"), {}, executionContext);
         const guarded = await worker.fetch(navigate("/api/me"), {}, executionContext);
         const fetched = await worker.fetch(new Request("https://app.test/dashboard", { headers: { accept: "application/json" } }), {}, executionContext);
 
         expect(page.status).toBe(200);
         await expect(page.text()).resolves.toBe(shell);
         // A real route keeps its guard, and a non-navigation miss still runs the middleware.
+        expect(report.status).toBe(401);
         expect(guarded.status).toBe(401);
         expect(fetched.status).toBe(401);
         await expect(fetched.json()).resolves.toStrictEqual({ error: "UNAUTHENTICATED" });

@@ -87,8 +87,29 @@ const serveSpaAsset = async (assets: AssetsFetcherLike, request: Request): Promi
     return undefined;
 };
 
-/** A `GET` / `HEAD` page load, which a route-less path answers with the shell. */
-const isShellNavigation = (request: Request): boolean => (request.method === "GET" || request.method === "HEAD") && isNavigation(request);
+/**
+ * The binding's answer for a `GET` / `HEAD` page load when that answer is the app
+ * shell, else `undefined`. Only then may an `httpRouter()` skip the app's
+ * middleware for it: the shell is what every client-side route gets, while a real
+ * file at the path (a report behind an auth gate) must still pass the middleware.
+ * `Sec-Fetch-Mode` comes from the client, so it never decides that on its own.
+ */
+const serveSpaShell = async (assets: AssetsFetcherLike, request: Request): Promise<Response | undefined> => {
+    if ((request.method !== "GET" && request.method !== "HEAD") || !isNavigation(request)) {
+        return undefined;
+    }
+
+    const response = await assets.fetch(request);
+    const tag = response.ok ? (response.headers.get("ETag") ?? undefined) : undefined;
+
+    if (tag !== undefined && tag === (await shellETag(assets, request))) {
+        return response;
+    }
+
+    await response.body?.cancel();
+
+    return undefined;
+};
 
 export type { AssetsFetcherLike };
-export { isShellNavigation, serveSpaAsset };
+export { serveSpaAsset, serveSpaShell };

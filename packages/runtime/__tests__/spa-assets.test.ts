@@ -164,16 +164,15 @@ describe("createWorker — a single-page app's assets behind `/*`", () => {
     it.each([
         ["/api/missing-row", 404],
         ["/api/secret", 403],
-    ])("keeps the %s a handler answered for a page navigation, without asking the assets", async (path, status) => {
+    ])("keeps the %s a handler answered for a page navigation, not the shell", async (path, status) => {
         expect.assertions(3);
 
-        const assets = spaAssets();
-        const worker = createWorker({ httpRouter: router, shardDO: shardNamespace(), spaAssets: assets });
+        const worker = createWorker({ httpRouter: router, shardDO: shardNamespace(), spaAssets: spaAssets() });
         const response = await worker.fetch(navigate(path), {}, fakeContext);
 
         expect(response.status).toBe(status);
         expect(response.headers.get("content-type")).toContain("application/json");
-        expect(assets.requests).toHaveLength(0);
+        await expect(response.text()).resolves.not.toBe(SHELL);
     });
 
     it("passes the request through unchanged, and reads the shell from the origin's root alone", async () => {
@@ -202,15 +201,36 @@ describe("createWorker — a single-page app's assets behind `/*`", () => {
         expect(response.status).toBe(404);
     });
 
-    it("never consults the assets for a router that does not say a miss is unrouted, as a framework host does", async () => {
-        expect.assertions(2);
+    it("never serves the assets for a router that does not say a miss is unrouted, as a framework host does", async () => {
+        expect.assertions(1);
 
-        const assets = spaAssets();
         const host: HttpRouterLike = { fetch: () => new Response("host 404", { status: 404 }) };
-        const worker = createWorker({ httpRouter: host, shardDO: shardNamespace(), spaAssets: assets });
+        const worker = createWorker({ httpRouter: host, shardDO: shardNamespace(), spaAssets: spaAssets() });
         const response = await worker.fetch(navigate("/settings"), {}, fakeContext);
 
         await expect(response.text()).resolves.toBe("host 404");
-        expect(assets.requests).toHaveLength(0);
+    });
+
+    it("tells the router a navigation may skip its middleware only when the binding answers it with the shell", async () => {
+        expect.assertions(2);
+
+        const seen: unknown[] = [];
+        const spy: HttpRouterLike = {
+            fetch: (request: Request, env: unknown) => {
+                const { __lunoraShellFirst: shellFirst } = env as { __lunoraShellFirst?: boolean };
+
+                seen.push(shellFirst);
+
+                return router.fetch(request, env, fakeContext);
+            },
+        };
+        const worker = createWorker({ httpRouter: spy, shardDO: shardNamespace(), spaAssets: spaAssets() });
+
+        await worker.fetch(navigate("/settings/profile"), {}, fakeContext);
+        // A real file: its navigation headers come from the client, so they must not get it past the app's middleware.
+        await worker.fetch(navigate("/privacy.html"), {}, fakeContext);
+
+        expect(seen[0]).toBe(true);
+        expect(seen[1]).toBe(false);
     });
 });

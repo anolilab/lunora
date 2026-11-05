@@ -100,7 +100,7 @@ import { runScheduledBackup } from "./scheduled-backup";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 import type { AssetsFetcherLike } from "./spa-assets";
-import { isShellNavigation, serveSpaAsset } from "./spa-assets";
+import { serveSpaAsset, serveSpaShell } from "./spa-assets";
 import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
 import { buildTenantFanoutRoutes, QUEUE_DISPATCH_MAX_BODY_BYTES, QUEUE_DISPATCH_PATH } from "./tenant-fanout-routes";
 import type { TrustInboundTraceContext } from "./trace-trust";
@@ -4985,11 +4985,48 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         return assetResponse;
     };
 
-    /** The router's answer, and whether no route matched: no router at all, or its own not-found handler ran. */
+    /**
+     * What a request the router answered with a 404 (or no router at all) gets: the auth discovery documents, else
+     * the shell read up front when no route matched, else {@link answerMiss}.
+     */
+    const answerRouterMiss = async (
+        request: Request,
+        routerResponse: Response | undefined,
+        unrouted: boolean,
+        shell: Response | undefined,
+    ): Promise<Response> => {
+        // Only a 404 — the router's own, or none at all — leaves room for the auth
+        // discovery documents, so an app route at the same path always wins.
+        const discoveryResponse = await options.authDiscoveryHandler?.(request);
+
+        if (discoveryResponse) {
+            await Promise.all([routerResponse?.body?.cancel(), shell?.body?.cancel()]);
+
+            return discoveryResponse;
+        }
+
+        if (shell !== undefined && unrouted) {
+            await routerResponse?.body?.cancel();
+            servedAssets.add(shell);
+
+            return shell;
+        }
+
+        await shell?.body?.cancel();
+
+        return answerMiss(request, routerResponse ?? new Response("Not found", { status: 404 }), unrouted);
+    };
+
+    /**
+     * The router's answer, and whether no route matched: no router at all, or its own not-found handler ran.
+     * `shellFirst` lets an `httpRouter()` skip the app's middleware for a path no route matches; pass it only when the
+     * assets binding answers the request with the app shell.
+     */
     const dispatchHttpRoute = async (
         request: Request,
         env: unknown,
         context: ExecutionContextLike,
+        shellFirst: boolean,
     ): Promise<{ response: Response | undefined; unrouted: boolean }> => {
         if (!options.httpRouter) {
             return { response: undefined, unrouted: true };
@@ -5029,8 +5066,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // leaves queries / mutations / subscriptions (`/_lunora/rpc`, `/_lunora/ws`)
         // fully serviceable.
         try {
-            // `__lunoraShellFirst` lets an `httpRouter()` skip the app's middleware for a navigation no route matches.
-            const shellFirst = options.spaAssets !== undefined && isShellNavigation(request);
             const response = await options.httpRouter.fetch(
                 request,
                 { ...(env as object), __lunoraCtx: httpContext, __lunoraShellFirst: shellFirst, __lunoraUnrouted: markUnrouted },
@@ -6814,23 +6849,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // HTTP actions are the lowest-priority app matcher: explicit routes and the
         // internal `/_lunora/*` endpoints above always win. Once the request
         // reaches the router, hono owns routing.
-        const { response: httpRouteResponse, unrouted } = await dispatchHttpRoute(request, env, context);
+        // A single-page app's shell is read first for a page load, so the router may skip the app's middleware only
+        // for a path the binding answers with the shell, never for a real file the middleware guards.
+        const shell = options.spaAssets === undefined || !options.httpRouter ? undefined : await serveSpaShell(options.spaAssets, request);
+        const { response: httpRouteResponse, unrouted } = await dispatchHttpRoute(request, env, context, shell !== undefined);
 
         if (httpRouteResponse && httpRouteResponse.status !== 404) {
+            await shell?.body?.cancel();
+
             return httpRouteResponse;
         }
 
-        // Only a 404 — the router's own, or none at all — leaves room for the auth
-        // discovery documents, so an app route at the same path always wins.
-        const discoveryResponse = await options.authDiscoveryHandler?.(request);
-
-        if (discoveryResponse) {
-            await httpRouteResponse?.body?.cancel();
-
-            return discoveryResponse;
-        }
-
-        return answerMiss(request, httpRouteResponse ?? new Response("Not found", { status: 404 }), unrouted);
+        return answerRouterMiss(request, httpRouteResponse, unrouted, shell);
     };
 
     return {

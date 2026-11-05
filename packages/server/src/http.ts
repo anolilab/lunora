@@ -165,8 +165,8 @@ interface LunoraHttpEnv {
     /**
      * `__lunoraUnrouted` is how the runtime learns that no route matched (rather than a handler answering 404 on
      * purpose): only the router's own not-found handler calls it. `__lunoraShellFirst` marks a page navigation the
-     * runtime can answer with a single-page app's shell: when no route matches it, the router says so before any
-     * app middleware runs, so a blanket auth gate cannot turn a deep link into its 401.
+     * single-page app's assets binding answers with its shell (never a real file): when no route matches it, the
+     * router says so before any app middleware runs, so a blanket auth gate cannot turn a deep link into its 401.
      */
     Bindings: Record<string, unknown> & { __lunoraCtx?: HttpActionCtx; __lunoraShellFirst?: boolean; __lunoraUnrouted?: () => void };
     Variables: { lunora: HttpActionCtx };
