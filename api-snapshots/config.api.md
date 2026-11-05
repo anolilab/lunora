@@ -2813,7 +2813,7 @@ interface WranglerConfig {
         outbound?: unknown;
     } | null | undefined>;
     durable_objects?: {
-        bindings?: ReadonlyArray<WranglerDurableObjectBinding>;
+        bindings?: ReadonlyArray<WranglerDurableObjectBinding$1>;
     };
     env?: Record<string, WranglerConfig>;
     exports?: Record<string, {
@@ -2940,7 +2940,7 @@ interface WranglerConfigShape {
         database_name?: string;
     }>;
     durable_objects?: {
-        bindings?: ReadonlyArray<WranglerDurableObjectBinding$1>;
+        bindings?: ReadonlyArray<WranglerDurableObjectBinding>;
     };
     kv_namespaces?: ReadonlyArray<{
         binding?: string;
