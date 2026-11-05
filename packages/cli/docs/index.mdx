@@ -742,7 +742,7 @@ Access application allows. The probe sends them as `CF-Access-Client-Id` /
 `CF-Access-Client-Secret` on each `https://` request, and
 `lunora verify --health-url` does the same. The token goes only to the probed
 host and never over plain `http://`. The one redirect the probe follows is an
-`http://` URL redirected to the same host over `https://` (Cloudflare's "Always
+`http://` URL redirected to the same URL over `https://` (Cloudflare's "Always
 Use HTTPS"), and the token is sent on that hop. Any other redirect fails the
 probe. A redirect to the Access login page is reported as Access, with what to
 set, rather than as a deployment that did not answer. A token value with a line

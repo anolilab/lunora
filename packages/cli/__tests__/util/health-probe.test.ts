@@ -233,6 +233,21 @@ describe("probeHealth", () => {
             expect(elsewhere.error).toContain("redirecting to https://other.example.com/_lunora/health — the health route does not redirect");
         });
 
+        it("does not follow an https redirect to another path on the same host, whose page would answer 200", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = vi.fn<HealthFetch>(async (url) =>
+                url.startsWith("http:")
+                    ? { headers: new Headers({ location: "https://app.example.com/" }), ok: false, status: 301 }
+                    : { headers: new Headers(), ok: true, status: 200 },
+            );
+
+            const result = await probeHealth({ baseUrl: "http://app.example.com", env: {}, fetchImpl });
+
+            expect(fetchImpl).toHaveBeenCalledTimes(1);
+            expect(result.error).toContain("returned HTTP 301 redirecting to https://app.example.com/ — the health route does not redirect");
+        });
+
         it("never sends the token over http, and says so when Access asks for it", async () => {
             expect.assertions(2);
 

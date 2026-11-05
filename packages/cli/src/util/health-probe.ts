@@ -172,10 +172,15 @@ const classify = (url: string, response: HealthResponse): Outcome => {
         return { kind: "access-login" };
     }
 
-    // "Always Use HTTPS" answers an `http:` probe with a redirect to the same host over `https:`.
+    // "Always Use HTTPS" answers an `http:` probe with the same URL over `https:`. Anything else (another host, or the same
+    // host's `/`, whose 200 would read as healthy) is not the health route answering.
     const source = new URL(url);
 
-    return source.protocol === "http:" && target.protocol === "https:" && target.hostname === source.hostname
+    return source.protocol === "http:" &&
+        target.protocol === "https:" &&
+        target.hostname === source.hostname &&
+        target.pathname === source.pathname &&
+        target.search === source.search
         ? { kind: "https-upgrade", location: target.href }
         : { kind: "redirect", location };
 };
@@ -258,7 +263,7 @@ const send = async (request: ProbeRequest, fetchImpl: HealthFetch, state: Access
 };
 
 /**
- * Ask one URL. A same-host `http:` → `https:` redirect ("Always Use HTTPS") is
+ * Ask one URL. A redirect to the same URL over `https:` ("Always Use HTTPS") is
  * followed once, by hand: fetch's own redirect handling would forward the
  * Access headers to wherever a redirect points, and an Access login page that
  * answers 200 would read as a healthy deployment. The token is first sent on
