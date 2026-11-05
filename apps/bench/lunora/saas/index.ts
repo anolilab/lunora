@@ -184,6 +184,15 @@ const requireWriter = async (ctx: MutationCtx): Promise<{ organizationId: string
     return { organizationId, userId };
 };
 
+/** One page of `findMany` — with `endCursor`, a fixed range, plus the midpoint to split it at. */
+interface OrganizationsPage {
+    continueCursor: string | null;
+    isDone: boolean;
+    page: Doc<"saas_organizations">[];
+    splitCursor?: string | null;
+    splitRequired?: boolean;
+}
+
 /**
  * The `saas_organizations` reader. The table is `.global()`, so it is served
  * from D1, whose backend has no `query().withIndex()` reader — a call through
@@ -200,10 +209,12 @@ interface OrganizationsReader {
     count: (where: OrganizationsWhere) => Promise<number>;
     findFirst: (args: { where: { organizationId: string } }) => Promise<Doc<"saas_organizations"> | null>;
     findMany: (args: {
+        cursor?: string | null;
+        endCursor?: string | null;
         limit?: number;
-        orderBy?: Partial<Record<"organizationId" | "updatedAt", "asc" | "desc">>[];
+        orderBy?: Partial<Record<"updatedAt", "asc" | "desc">>[];
         where: OrganizationsWhere;
-    }) => Promise<{ isDone: boolean; page: Doc<"saas_organizations">[] }>;
+    }) => Promise<OrganizationsPage>;
     groupBy: (args: {
         agg: { field?: "seats"; op: "count" | "sum" };
         by: ["status", "plan"];
@@ -455,10 +466,9 @@ const requirePlatformAdmin = async (ctx: QueryCtx): Promise<void> => {
 const ORGANIZATIONS_PAGE_MAX = 100;
 
 /**
- * How far past its `numItems` a re-read page may run before the read stops. The
- * client splits a page once it holds more than twice its `numItems`, at the
- * `splitCursor` it is handed, so a page cut here is always split, and the rows
- * past the cut come back in the upper half.
+ * How far past its `numItems` a re-read page may run before the read stops. A
+ * page cut here answers `splitRequired`, and the client splits it at the
+ * `splitCursor` it is handed, so the rows past the cut come back in the upper half.
  */
 const BOUNDED_PAGE_FACTOR = 4;
 
@@ -466,14 +476,13 @@ const BOUNDED_PAGE_FACTOR = 4;
 const ORGANIZATION_SEARCH_MAX = 100;
 
 /**
- * The list's order, newest first, as a key tuple. It ends in `organizationId`,
- * which is unique and never changes, so the tuple names exactly one row — the
- * property the keyset cursor below depends on; two tenants updated in the same
- * millisecond would otherwise straddle a page boundary in an order the database
- * is free to change. `byUpdatedAt` and, under the plan filter, `byPlanUpdated`
- * (see `schema.ts`) serve it, scanned backwards.
+ * The list's order, newest first. `findMany` breaks a tie on its own (creation
+ * time, then row id), so two tenants updated in the same millisecond keep one
+ * order across pages. `byUpdatedAt` and, under the plan filter, `byPlanUpdated`
+ * (see `schema.ts`) serve it, scanned backwards: they end in `updatedAt`, so the
+ * tie-break keys the store appends to every index complete the order.
  */
-const LIST_ORDER = ["updatedAt", "organizationId"] as const;
+const LIST_ORDER = [{ updatedAt: "desc" as const }];
 
 /** The filters the list and its totals share, so the header always counts the rows the table pages through. */
 const organizationFilterArgs = {
@@ -505,30 +514,6 @@ const organizationFilter = ({ plan, search }: { plan?: string; search?: string }
     return { AND: clauses };
 };
 
-const encodeCursor = (row: Doc<"saas_organizations">): string => JSON.stringify(LIST_ORDER.map((field) => row[field]));
-
-/** A cursor's key values. A cursor is client-held, so it is input. */
-const decodeCursor = (cursor: string): [number, string] => {
-    let values: unknown;
-
-    try {
-        values = JSON.parse(cursor) as unknown;
-    } catch {
-        values = undefined;
-    }
-
-    if (!Array.isArray(values) || values.length !== 2 || typeof values[0] !== "number" || typeof values[1] !== "string") {
-        throw new LunoraError("VALIDATION_ERROR", "invalid organization cursor");
-    }
-
-    return [values[0], values[1]];
-};
-
-/** Rows strictly after `[updatedAt, organizationId]` in the list's order: older, or as old with a lower id. */
-const after = ([updatedAt, organizationId]: [number, string]): OrganizationsWhere => {
-    return { OR: [{ updatedAt: { lt: updatedAt } }, { AND: [{ updatedAt }, { organizationId: { lt: organizationId } }] }] };
-};
-
 const pageCursor = v.optional(v.union(v.string(), v.null()));
 
 /**
@@ -544,10 +529,10 @@ const pageCursor = v.optional(v.union(v.string(), v.null()));
  *
  * Paged for `usePaginatedQuery`, which re-reads each loaded page as the fixed
  * range `(cursor, endCursor]` so a live insert grows one page instead of
- * shifting a row across a boundary. `findMany` on D1 has no `endCursor`, so the
- * cursor is minted here: the order's key tuple of the last row, bounded in
- * `where`. `numItems` is at most 100, and a re-read page at most four times
- * its `numItems`, so no caller can read the whole table in one page.
+ * shifting a row across a boundary; `findMany` takes both cursors and answers
+ * with the `splitCursor` the client splits a grown page at. `numItems` is at
+ * most 100, and a re-read page at most four times its `numItems`, so no caller
+ * can read the whole table in one page.
  *
  * Platform-admin only, on better-auth's `admin()` role. Note what it does NOT
  * do: it never reaches into a tenant's shard. An admin who needs one
@@ -556,53 +541,26 @@ const pageCursor = v.optional(v.union(v.string(), v.null()));
  */
 export const listOrganizations = query
     .input({ ...organizationFilterArgs, paginationOpts: v.object({ cursor: pageCursor, endCursor: pageCursor, numItems: v.number() }) })
-    .query(
-        async ({
-            args: { paginationOpts, ...filter },
-            ctx,
-        }): Promise<{ continueCursor: string | null; isDone: boolean; page: Doc<"saas_organizations">[]; splitCursor?: string | null }> => {
-            await requirePlatformAdmin(ctx);
+    .query(async ({ args: { paginationOpts, ...filter }, ctx }): Promise<OrganizationsPage> => {
+        await requirePlatformAdmin(ctx);
 
-            const { cursor, endCursor, numItems } = paginationOpts;
+        const { cursor, endCursor, numItems } = paginationOpts;
 
-            // Refused rather than clamped: the client splits a page at twice the
-            // `numItems` IT asked for, so a larger request than this serves would
-            // never split, and rows past the bounded-page cap would never appear.
-            if (!Number.isInteger(numItems) || numItems < 1 || numItems > ORGANIZATIONS_PAGE_MAX) {
-                throw new LunoraError("VALIDATION_ERROR", `numItems must be a whole number from 1 to ${String(ORGANIZATIONS_PAGE_MAX)}`);
-            }
+        // Refused rather than clamped: the client splits a page at twice the
+        // `numItems` IT asked for, so a larger request than this serves would
+        // never split, and rows past the bounded-page cap would never appear.
+        if (!Number.isInteger(numItems) || numItems < 1 || numItems > ORGANIZATIONS_PAGE_MAX) {
+            throw new LunoraError("VALIDATION_ERROR", `numItems must be a whole number from 1 to ${String(ORGANIZATIONS_PAGE_MAX)}`);
+        }
 
-            const clauses = [organizationFilter(filter)];
-
-            if (cursor) {
-                clauses.push(after(decodeCursor(cursor)));
-            }
-
-            if (endCursor) {
-                clauses.push({ NOT: after(decodeCursor(endCursor)) });
-            }
-
-            const where = { AND: clauses };
-            const orderBy = LIST_ORDER.map((field) => {
-                return { [field]: "desc" as const };
-            });
-
-            if (endCursor) {
-                // A bounded page is its whole range, up to a cap: a range that grew
-                // past it returns its first rows and a midpoint among them, which
-                // the client splits on, so no read holds more than the cap.
-                const { page } = await organizations(ctx).findMany({ limit: BOUNDED_PAGE_FACTOR * numItems, orderBy, where });
-                const middle = page.length >= 2 ? page[Math.floor(page.length / 2) - 1] : undefined;
-
-                return { continueCursor: endCursor, isDone: true, page, splitCursor: middle ? encodeCursor(middle) : null };
-            }
-
-            const { isDone, page } = await organizations(ctx).findMany({ limit: numItems, orderBy, where });
-            const last = page.at(-1);
-
-            return { continueCursor: isDone || !last ? null : encodeCursor(last), isDone, page };
-        },
-    );
+        return organizations(ctx).findMany({
+            cursor,
+            endCursor,
+            limit: endCursor ? BOUNDED_PAGE_FACTOR * numItems : numItems,
+            orderBy: LIST_ORDER,
+            where: organizationFilter(filter),
+        });
+    });
 
 /**
  * The organisation list's header figures over the same filter as
