@@ -617,15 +617,33 @@ transport that has them:
 dev and small deployments. It drives better-auth's own migrator, which speaks
 **only** Kysely — so it takes the raw D1 binding as `database` and throws
 (`AUTH_MIGRATOR_UNSUPPORTED`, see [errors](/docs/errors)) on `lunoraD1Adapter`. Build a second,
-migration-only instance for it; the adapter stays on the one serving requests:
+migration-only instance for it; the adapter stays on the one serving requests.
+Build both from one options function, so the plugins and every other
+schema-affecting option match. Only `database` may differ: a migration schema
+built from a different plugin list omits the tables and columns those plugins
+need.
 
-```ts
-// src/server/index.ts
-import { handleAuthRequest } from "@lunora/auth";
+```ts title="lunora/auth.ts"
+import { createAuth, lunoraD1Adapter, type LunoraAuthOptions } from "@lunora/auth";
 import { admin, organization } from "@lunora/auth/plugins";
+
+// Everything except `database`, shared by the serving and the migration instance.
+export const authOptions = (env: Env): Omit<LunoraAuthOptions, "database"> => ({
+    emailAndPassword: { enabled: true },
+    plugins: [organization({ allowUserToCreateOrganization: true }), admin({ defaultRole: "user" })],
+    secret: env.AUTH_SECRET,
+});
+
+export const buildAuth = (env: Env) => createAuth({ ...authOptions(env), database: lunoraD1Adapter(env.DB) });
+```
+
+The worker entry then runs the migration from the same options:
+
+```ts title="src/server/index.ts"
+import { handleAuthRequest } from "@lunora/auth";
 import { createMigrationAuth, ensureMigrated } from "@lunora/auth/migrate";
 
-import { buildAuth } from "../../lunora/auth.js";
+import { authOptions, buildAuth } from "../../lunora/auth";
 
 // Per isolate, not per request: better-auth's migrator emits a bare
 // `CREATE TABLE`, so two concurrent runs against a fresh database leave the
@@ -638,14 +656,8 @@ export default {
     async fetch(request, env, ctx) {
         const auth = buildAuth(env);
 
-        migrated ??= ensureMigrated(
-            createMigrationAuth({
-                database: env.DB,
-                emailAndPassword: { enabled: true },
-                plugins: [organization({ allowUserToCreateOrganization: true }), admin({ defaultRole: "user" })],
-                secret: env.AUTH_SECRET,
-            }),
-        ).catch((error) => {
+        // Raw D1 for the migrator; every other option is the serving instance's.
+        migrated ??= ensureMigrated(createMigrationAuth({ ...authOptions(env), database: env.DB })).catch((error) => {
             migrated = null;
             throw error;
         });

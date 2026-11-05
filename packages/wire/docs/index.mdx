@@ -60,8 +60,9 @@ Tagged values are JSON arrays whose first element is the sentinel
 sentinel is escaped, so it cannot be mistaken for a tag.
 
 <Callout type="warn">
-    The codec rejects values it cannot round-trip instead of writing `{}`: functions, cyclic graphs, and any non-plain object (a `RegExp`, `Headers`, a class
-    instance, an object with a `toJSON()`) throw a `TypeError`. Nesting deeper than 64 levels throws a `RangeError`.
+    A non-plain object (a `RegExp`, `Headers`, a class instance, an object with a `toJSON()`) throws a `TypeError` instead of encoding to `{}`. Nesting deeper
+    than 64 levels throws a `RangeError`, and so does a cyclic graph, which recurses until it hits that limit. Functions and symbols are **not** rejected:
+    `encodeWire` returns them unchanged, and `JSON.stringify` then drops them from an object or writes `null` in an array. Strip them before encoding.
 </Callout>
 
 ## API
@@ -72,8 +73,9 @@ sentinel is escaped, so it cannot be mistaken for a tag.
 
 Returns a JSON-safe tree for `value`, with every non-JSON leaf replaced by its
 tagged form. Pass the result to `JSON.stringify`. Throws a `TypeError` on a
-value the codec refuses and a `RangeError` past 64 levels of nesting or on a
-`bigint` longer than 1024 digits.
+non-plain object and a `RangeError` past 64 levels of nesting (a cyclic graph
+included) or on a `bigint` longer than 1024 digits. Functions and symbols are
+returned unchanged.
 
 ### `decodeWire(value, depth?)`
 
@@ -117,7 +119,7 @@ error as `cause`. Every Lunora producer of a call envelope encodes through it.
 
 Returns `true` when `value` must go through `encodeWire`: it holds at least
 one leaf that `encodeWire` would tag, or it is a value `encodeWire` rejects (a
-cyclic graph, nesting past the cap), so the real error is thrown there. When it
+cyclic graph or nesting past the cap), so the real error is thrown there. When it
 returns `false`, `JSON.stringify(encodeWire(value))` equals
 `JSON.stringify(value)`, so the encode step can be skipped.
 
