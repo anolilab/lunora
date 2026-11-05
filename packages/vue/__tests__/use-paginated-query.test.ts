@@ -268,6 +268,35 @@ describe("usePaginatedQuery (Vue)", () => {
         scope.stop();
     });
 
+    it("reports a second cursor refusal instead of restarting again, when nothing past the head loaded in between", async () => {
+        const fake = createFakeClient();
+        const errors: SubscriptionError[] = [];
+        const scope = effectScope();
+        const result = scope.run(() => fake.provide(() => usePaginatedQuery(fn, {}, { initialNumItems: NUM_ITEMS, onError: (error) => errors.push(error) })))!;
+        const stale = { code: "INVALID_CURSOR", message: "invalid cursor" };
+        const loadTailThenRefuse = async (): Promise<void> => {
+            fake.subscribeCalls.at(-1)?.callback({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+            await flushAsync();
+            result.loadMore(NUM_ITEMS);
+            await flushAsync();
+            // The server refuses the cursor it has just minted.
+            fake.subscribeCalls.findLast((call) => (call.args["paginationOpts"] as { cursor: unknown }).cursor === "cur-1")?.options.onError?.(stale);
+            await flushAsync();
+        };
+
+        await loadTailThenRefuse();
+
+        expect(errors).toStrictEqual([]);
+        expect(result.status.value).toBe("LoadingFirstPage");
+
+        await loadTailThenRefuse();
+
+        expect(errors).toStrictEqual([stale]);
+        expect(result.error.value).toStrictEqual(stale);
+
+        scope.stop();
+    });
+
     it("skip short-circuits and sets status to LoadingFirstPage", async () => {
         const fake = createFakeClient();
 

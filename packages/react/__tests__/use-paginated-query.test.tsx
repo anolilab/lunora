@@ -198,6 +198,118 @@ describe("usePaginatedQuery", () => {
         expect(onError).toHaveBeenCalledExactlyOnceWith(stale);
     });
 
+    it("reports a second cursor refusal instead of restarting again, when nothing past the head loaded in between", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
+        const onError = vi.fn<SubscriptionErrorCallback>();
+        const stale = { code: "INVALID_CURSOR", message: "invalid cursor" };
+        const isTail = (args: unknown): boolean => (args as { paginationOpts: { cursor: null | string } }).paginationOpts.cursor === "2";
+
+        let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Harness
+                    onError={onError}
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback used once to capture the hook's `loadMore`.
+                    onLoadMore={(next) => {
+                        loadMore = next;
+                    }}
+                />
+            </LunoraProvider>,
+        );
+
+        const loadTailThenRefuse = async (): Promise<void> => {
+            await waitFor(() => {
+                expect(screen.getByTestId("status").textContent).toBe("CanLoadMore");
+            });
+
+            act(() => {
+                loadMore(2);
+            });
+
+            // The server refuses the cursor it has just minted, before the tail's first frame lands.
+            act(() => {
+                mock.emitError("items:list", stale, isTail);
+            });
+        };
+
+        await loadTailThenRefuse();
+
+        expect(onError).not.toHaveBeenCalled();
+
+        await loadTailThenRefuse();
+
+        await waitFor(() => {
+            expect(screen.getByTestId("error").textContent).toBe("invalid cursor");
+        });
+
+        expect(onError).toHaveBeenCalledExactlyOnceWith(stale);
+    });
+
+    it("lets a page from before a page-size change fail without restarting the new feed", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
+        const stale = { code: "INVALID_CURSOR", message: "invalid cursor" };
+        const sink: { current?: SubscriptionErrorCallback } = {};
+        // Renders after the hook, in the same pass: the hook has reset for the new page size, but its
+        // effects (which detach the old subscriptions) have not run yet.
+        const LateFailure = ({ fire }: { fire: boolean }): null => {
+            if (fire) {
+                sink.current?.(stale);
+            }
+
+            return null;
+        };
+        let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
+        const view = (initialNumItems: number, fire: boolean): ReactElement => (
+            <LunoraProvider client={mock.asClient}>
+                <Harness
+                    initialNumItems={initialNumItems}
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback used to capture the hook's `loadMore`.
+                    onLoadMore={(next) => {
+                        loadMore = next;
+                    }}
+                />
+                <LateFailure fire={fire} />
+            </LunoraProvider>
+        );
+        const { rerender } = render(view(2, false));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("results").textContent).toBe("a,b");
+        });
+
+        act(() => {
+            loadMore(2);
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("results").textContent).toBe("a,b,c,d");
+        });
+
+        // The bounded first page `(null, "2"]`, which carries a cursor and so would restart the feed.
+        sink.current = (mock.subscribe.mock.calls as [unknown, unknown, unknown, { onError?: SubscriptionErrorCallback } | undefined][]).findLast(
+            ([, args]) => {
+                const opts = (args as { paginationOpts: { cursor: null | string; endCursor: null | string } }).paginationOpts;
+
+                return opts.cursor === null && opts.endCursor === "2";
+            },
+        )?.[3]?.onError;
+
+        expect(sink.current).toBeDefined();
+
+        rerender(view(3, true));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("results").textContent).toBe("a,b,c");
+        });
+
+        expect(screen.getByTestId("error").textContent).toBe("");
+    });
+
     it("loads the first page and reports CanLoadMore when more remain", async () => {
         expect.hasAssertions();
 

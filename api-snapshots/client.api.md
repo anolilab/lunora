@@ -2294,7 +2294,7 @@ const applyLoadMore: (pages: Page[], cursor: null | string | undefined, numberIt
 ```ts
 const classifyPageFailure: (pages: Page[], isFailedPage: (page: Page) => boolean, error: {
     code?: string;
-}) => PageFailure;
+}, restartedSinceLoad: boolean) => PageFailure;
 ```
 
 ### `derivePaginationStatus` (const)
@@ -2310,6 +2310,12 @@ const derivePaginationStatus: <T>(skipped: boolean, pageResults: (PaginationResu
 
 ```ts
 const initialPages: (numberItems: number) => Page[];
+```
+
+### `isHeadPage` (const)
+
+```ts
+const isHeadPage: (page: Page) => boolean;
 ```
 
 ### `rebalance` (const)

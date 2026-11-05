@@ -397,26 +397,33 @@ describe(classifyPageFailure, () => {
     it("restarts the feed when a page that carries a cursor fails with INVALID_CURSOR", () => {
         expect.assertions(2);
 
-        expect(classifyPageFailure(pages, (page) => page.upper === "b", stale)).toBe("restart");
-        expect(classifyPageFailure(pages, (page) => page.lower === "b", stale)).toBe("restart");
+        expect(classifyPageFailure(pages, (page) => page.upper === "b", stale, false)).toBe("restart");
+        expect(classifyPageFailure(pages, (page) => page.lower === "b", stale, false)).toBe("restart");
     });
 
     it("ignores INVALID_CURSOR from a page the feed no longer holds", () => {
         expect.assertions(1);
 
-        expect(classifyPageFailure(pages, () => false, stale)).toBe("ignore");
+        expect(classifyPageFailure(pages, () => false, stale, false)).toBe("ignore");
     });
 
     it("surfaces INVALID_CURSOR from the head page, which has no cursor to restart past", () => {
         expect.assertions(1);
 
-        expect(classifyPageFailure(initialPages(2), () => true, stale)).toBe("surface");
+        expect(classifyPageFailure(initialPages(2), () => true, stale, false)).toBe("surface");
+    });
+
+    it("surfaces INVALID_CURSOR right after a restart, before any page past the head loaded", () => {
+        expect.assertions(1);
+
+        // The server refusing the cursors it mints now: a second restart would repeat on every loadMore.
+        expect(classifyPageFailure(pages, (page) => page.lower === "b", stale, true)).toBe("surface");
     });
 
     it("surfaces every other failure, held page or not", () => {
         expect.assertions(2);
 
-        expect(classifyPageFailure(pages, () => true, { code: "BAD_REQUEST" })).toBe("surface");
-        expect(classifyPageFailure(pages, () => false, {})).toBe("surface");
+        expect(classifyPageFailure(pages, () => true, { code: "BAD_REQUEST" }, false)).toBe("surface");
+        expect(classifyPageFailure(pages, () => false, {}, false)).toBe("surface");
     });
 });

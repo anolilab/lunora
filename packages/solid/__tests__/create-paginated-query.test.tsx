@@ -247,6 +247,43 @@ describe("createPaginatedQuery page errors", () => {
         expect(errors).toStrictEqual([{ code: "INVALID_CURSOR", message: "invalid cursor" }]);
         expect(fake.subscriptions).toHaveLength(before + 1);
     });
+
+    it("reports a second cursor refusal instead of restarting again, when nothing past the head loaded in between", async () => {
+        const fake = createFakeClient();
+        const errors: SubscriptionError[] = [];
+        let api: ReturnType<typeof createPaginatedQuery> | undefined;
+
+        render(
+            () => {
+                api = createPaginatedQuery(fn, {}, { initialNumItems: NUM_ITEMS, onError: (error) => errors.push(error) });
+
+                return <pre>{api.status()}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        const loadTailThenRefuse = async (): Promise<void> => {
+            fake.subscriptions.at(-1)?.push({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+            await flushAsync();
+            api!.loadMore(NUM_ITEMS);
+            await flushAsync();
+            // The server refuses the cursor it has just minted.
+            fake.subscriptions
+                .findLast((s) => (s.args["paginationOpts"] as { cursor: unknown }).cursor === "cur-1")
+                ?.error({ code: "INVALID_CURSOR", message: "invalid cursor" });
+            await flushAsync();
+        };
+
+        await loadTailThenRefuse();
+
+        expect(errors).toStrictEqual([]);
+        expect(api!.status()).toBe("LoadingFirstPage");
+
+        await loadTailThenRefuse();
+
+        expect(errors).toStrictEqual([{ code: "INVALID_CURSOR", message: "invalid cursor" }]);
+        expect(api!.error()).toStrictEqual({ code: "INVALID_CURSOR", message: "invalid cursor" });
+    });
 });
 
 describe("createPaginatedQuery pending-page rebalance guard (BUG 2 regression)", () => {

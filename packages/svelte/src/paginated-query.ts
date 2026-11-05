@@ -1,6 +1,6 @@
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
-import { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, isHeadPage, rebalance } from "@lunora/client/pagination";
 import { stableWireKey } from "@lunora/wire";
 import type { Readable } from "svelte/store";
 import { derived, get, readable, writable } from "svelte/store";
@@ -111,6 +111,9 @@ const createPaginatedEngine = <T>(
 
     const pagesStore = writable<Page[]>(initialPages(initialNumItems));
     const errorStore = writable<SubscriptionError | undefined>();
+
+    /** Set by a silent `INVALID_CURSOR` restart, cleared by the next frame for a page past the head. */
+    let restartedSinceLoad = false;
     // pageResultsStore is a writable used as the source; pageResults is the
     // public Readable that the lazy start/stop callback wires up.
     const pageResultsInternal = writable<(PaginationResult<T> | undefined)[]>([]);
@@ -258,6 +261,10 @@ const createPaginatedEngine = <T>(
                 (value) => {
                     resultsByKey.set(key, value as PaginationResult<T>);
 
+                    if (restartedSinceLoad && get(pagesStore).some((candidate) => !isHeadPage(candidate) && pageKeyOf(candidate, baseArgsRecord) === key)) {
+                        restartedSinceLoad = false;
+                    }
+
                     // This page has resolved; remove from the pending set.
                     pendingPageKeys.delete(key);
                     errorStore.set(undefined);
@@ -288,11 +295,17 @@ const createPaginatedEngine = <T>(
                     onError: (subscriptionError) => {
                         pendingPageKeys.delete(key);
 
-                        const failure = classifyPageFailure(get(pagesStore), (candidate) => pageKeyOf(candidate, baseArgsRecord) === key, subscriptionError);
+                        const failure = classifyPageFailure(
+                            get(pagesStore),
+                            (candidate) => pageKeyOf(candidate, baseArgsRecord) === key,
+                            subscriptionError,
+                            restartedSinceLoad,
+                        );
 
                         if (failure === "restart") {
                             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after restart is defined
                             restart();
+                            restartedSinceLoad = true;
                         }
 
                         if (failure !== "surface") {
@@ -408,6 +421,7 @@ const createPaginatedEngine = <T>(
                 teardownAll();
                 pagesStore.set(initialPages(initialNumItems));
                 errorStore.set(undefined);
+                restartedSinceLoad = false;
             };
         });
 

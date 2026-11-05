@@ -1,6 +1,6 @@
 import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
-import { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, isHeadPage, rebalance } from "@lunora/client/pagination";
 import { stableWireKey } from "@lunora/wire";
 import type { Accessor } from "solid-js";
 import { createMemo, createSignal } from "solid-js";
@@ -108,6 +108,9 @@ const createPaginatedCore = <T>(
 
     const [pageResults, setPageResults] = createSignal<(PaginationResult<T> | undefined)[]>([]);
     const [error, setError] = createSignal<SubscriptionError | undefined>(undefined);
+
+    /** Set by a silent `INVALID_CURSOR` restart, cleared by the next frame for a page past the head. */
+    let restartedSinceLoad = false;
 
     // Active subscriptions keyed by pageKey.
     const activeSubs = new Map<string, Unsubscribe>();
@@ -220,6 +223,10 @@ const createPaginatedCore = <T>(
                 (value) => {
                     resultsByKey.set(key, value as PaginationResult<T>);
 
+                    if (restartedSinceLoad && pages().some((candidate) => !isHeadPage(candidate) && pageKeyOf(candidate, baseArgs) === key)) {
+                        restartedSinceLoad = false;
+                    }
+
                     // This page has resolved; remove from the pending set.
                     pendingPageKeys.delete(key);
                     setError(undefined);
@@ -254,11 +261,17 @@ const createPaginatedCore = <T>(
                     onError: (subscriptionError) => {
                         pendingPageKeys.delete(key);
 
-                        const failure = classifyPageFailure(pages(), (candidate) => pageKeyOf(candidate, baseArgs) === key, subscriptionError);
+                        const failure = classifyPageFailure(
+                            pages(),
+                            (candidate) => pageKeyOf(candidate, baseArgs) === key,
+                            subscriptionError,
+                            restartedSinceLoad,
+                        );
 
                         if (failure === "restart") {
                             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after restart is defined
                             restart(baseArgs);
+                            restartedSinceLoad = true;
                         }
 
                         if (failure !== "surface") {
@@ -350,6 +363,7 @@ const createPaginatedCore = <T>(
 
     /** Drop every page and subscribe to the first page again. */
     const restart = (current: "skip" | Record<string, unknown>): void => {
+        restartedSinceLoad = false;
         teardownAll();
         setPages(initialPages(initialNumItems));
         setPageResults([]);

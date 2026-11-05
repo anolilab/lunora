@@ -2477,6 +2477,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `isHeadPage` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `rebalance` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.

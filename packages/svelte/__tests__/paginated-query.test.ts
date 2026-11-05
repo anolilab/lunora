@@ -299,6 +299,52 @@ describe("paginatedQuery page errors", () => {
             stop();
         }
     });
+
+    it("reports a second cursor refusal instead of restarting again, when nothing past the head loaded in between", async () => {
+        const subscribeCalls: { args: Record<string, unknown>; callback: (data: unknown) => void; onError?: (error: SubscriptionError) => void }[] = [];
+
+        const client = {
+            subscribe: (
+                _fn: FunctionReference,
+                args: Record<string, unknown>,
+                callback: (data: unknown) => void,
+                options?: { onError?: (error: SubscriptionError) => void },
+            ) => {
+                subscribeCalls.push({ args, callback, onError: options?.onError });
+
+                return () => undefined;
+            },
+        } as unknown as LunoraClient;
+
+        const errors: SubscriptionError[] = [];
+        const { error, loadMore, results, status } = paginatedQuery(client, fn, {}, { initialNumItems: NUM_ITEMS, onError: (e) => errors.push(e) });
+        const stops = [results.subscribe(() => {}), status.subscribe(() => {}), error.subscribe(() => {})];
+        const loadTailThenRefuse = async (): Promise<void> => {
+            subscribeCalls.at(-1)?.callback({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+            await flushAsync();
+            loadMore(NUM_ITEMS);
+            await flushAsync();
+            // The server refuses the cursor it has just minted.
+            subscribeCalls
+                .findLast((c) => (c.args["paginationOpts"] as { cursor: unknown }).cursor === "cur-1")
+                ?.onError?.({ code: "INVALID_CURSOR", message: "invalid cursor" });
+            await flushAsync();
+        };
+
+        await loadTailThenRefuse();
+
+        expect(errors).toStrictEqual([]);
+        expect(get(status)).toBe("LoadingFirstPage");
+
+        await loadTailThenRefuse();
+
+        expect(errors).toStrictEqual([{ code: "INVALID_CURSOR", message: "invalid cursor" }]);
+        expect(get(error)).toStrictEqual({ code: "INVALID_CURSOR", message: "invalid cursor" });
+
+        for (const stop of stops) {
+            stop();
+        }
+    });
 });
 
 describe("paginatedQuery teardown (BUG 1 regression)", () => {

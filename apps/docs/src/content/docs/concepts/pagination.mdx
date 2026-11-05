@@ -179,9 +179,11 @@ client without re-fetching the whole list.
 A cursor is only valid against the build that minted it. After a deploy that
 changes a query's order, or how the engine encodes cursors, a page a client
 still holds is refused with `INVALID_CURSOR`. The adapters restart the feed from
-its first page on that code, without reporting it through `onError`. A
-hand-written loop like the one above should do the same: reset `pages` and
-`cursor` and load again, rather than retrying the cursor.
+its first page on that code, without reporting it through `onError`. A second
+refusal before any page past the first has loaded is reported, because then the
+server is refusing the cursors it has just minted. A hand-written loop like the
+one above should do the same: reset `pages` and `cursor` and load again, rather
+than retrying the cursor.
 
 ## Total count ("42 of 1,203")
 

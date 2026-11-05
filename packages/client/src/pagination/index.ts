@@ -194,13 +194,19 @@ const applyLoadMore = (pages: Page[], cursor: null | string | undefined, numberI
  */
 type PageFailure = "ignore" | "restart" | "surface";
 
+/** The feed's first page before any `loadMore`: `(null, null]`, the one page that carries no cursor. */
+const isHeadPage = (page: Page): boolean => page.lower === null && page.upper === null;
+
 /**
  * Classify a page failure. Only `INVALID_CURSOR` changes the answer: the server refuses a cursor
  * minted by an older build (a deploy changed the query's order or the engine's cursor encoding), and
- * every bounded page the feed holds carries one, so the only way forward is page one. The head page
- * has no cursor to be stale, so its failure is surfaced, which is also what stops a restart looping.
+ * every bounded page the feed holds carries one, so the only way forward is page one.
+ *
+ * Two cases surface it instead. The head page has no cursor to be stale. And `restartedSinceLoad`
+ * (the feed restarted, and no page past the head has had a frame since) means the server is refusing
+ * the cursors it mints now, which a second restart would only repeat on every `loadMore`.
  */
-const classifyPageFailure = (pages: Page[], isFailedPage: (page: Page) => boolean, error: { code?: string }): PageFailure => {
+const classifyPageFailure = (pages: Page[], isFailedPage: (page: Page) => boolean, error: { code?: string }, restartedSinceLoad: boolean): PageFailure => {
     if (error.code !== "INVALID_CURSOR") {
         return "surface";
     }
@@ -211,8 +217,8 @@ const classifyPageFailure = (pages: Page[], isFailedPage: (page: Page) => boolea
         return "ignore";
     }
 
-    return page.lower === null && page.upper === null ? "surface" : "restart";
+    return isHeadPage(page) || restartedSinceLoad ? "surface" : "restart";
 };
 
 export type { Page, PageFailure, PaginatedCoreResult, PaginationResult, PaginationStatus };
-export { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, JOIN_FACTOR, rebalance, SPLIT_FACTOR };
+export { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, isHeadPage, JOIN_FACTOR, rebalance, SPLIT_FACTOR };

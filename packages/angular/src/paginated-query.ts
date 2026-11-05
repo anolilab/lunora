@@ -2,7 +2,7 @@ import type { Injector, Signal } from "@angular/core";
 import { computed, DestroyRef, inject, signal } from "@angular/core";
 import type { FunctionReference, LunoraClient, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
-import { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, isHeadPage, rebalance } from "@lunora/client/pagination";
 import { stableWireKey } from "@lunora/wire";
 
 import { resolveLunoraClient } from "./client";
@@ -77,6 +77,9 @@ const usePaginatedCore = <F extends FunctionReference>(
     const pageResults = signal<(PaginationResult<PageItemOf<F>> | undefined)[]>([]);
     const status = signal<PaginationStatus>("LoadingFirstPage");
     const error = signal<SubscriptionError | undefined>(undefined);
+
+    /** Set by a silent `INVALID_CURSOR` restart, cleared by the next frame for a page past the head. */
+    let restartedSinceLoad = false;
 
     /**
      * Each active subscription entry, keyed in `activeSubs` by the page key it
@@ -188,6 +191,11 @@ const usePaginatedCore = <F extends FunctionReference>(
                 pageArgs as never,
                 (value) => {
                     resultsByKey.set(entry.currentKey, value as PaginationResult<PageItemOf<F>>);
+
+                    if (restartedSinceLoad && pages().some((candidate) => !isHeadPage(candidate) && pageKeyOf(candidate) === entry.currentKey)) {
+                        restartedSinceLoad = false;
+                    }
+
                     pendingPageKeys.delete(entry.currentKey);
                     error.set(undefined);
 
@@ -211,11 +219,12 @@ const usePaginatedCore = <F extends FunctionReference>(
                     onError: (subscriptionError) => {
                         pendingPageKeys.delete(key);
 
-                        const failure = classifyPageFailure(pages(), (candidate) => pageKeyOf(candidate) === key, subscriptionError);
+                        const failure = classifyPageFailure(pages(), (candidate) => pageKeyOf(candidate) === key, subscriptionError, restartedSinceLoad);
 
                         if (failure === "restart") {
                             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after restart is defined
                             restart();
+                            restartedSinceLoad = true;
                         }
 
                         if (failure !== "surface") {

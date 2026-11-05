@@ -2,7 +2,7 @@
 
 import type { FunctionReference, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import type { Page, PaginatedCoreResult, PaginationResult } from "@lunora/client/pagination";
-import { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { applyLoadMore, classifyPageFailure, derivePaginationStatus, initialPages, isHeadPage, rebalance } from "@lunora/client/pagination";
 import type { QueryKey } from "@tanstack/react-query";
 import { CancelledError, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
@@ -107,10 +107,15 @@ const usePaginatedCore = function <T>(
     const resetKey = `${serializeQueryKey(lunoraQueryKey(function_, baseArgs, shardKey))}::${String(initialNumItems)}`;
     const resetKeyRef = useRef(resetKey);
 
+    /** Set by a silent `INVALID_CURSOR` restart, cleared by the next frame for a page past the head. */
+    const restartedSinceLoadRef = useRef(false);
+
     // react-doctor-disable-next-line react-hooks-js/refs -- intentional: React's sanctioned "reset state when an input changes" pattern — compare a render-phase ref to the current reset key and set state during render, guarded so it runs once per change (see comment above).
     if (resetKeyRef.current !== resetKey) {
         // react-doctor-disable-next-line react-hooks-js/refs -- intentional: writing the ref guard here is what makes the render-phase reset fire exactly once per input change (see above).
         resetKeyRef.current = resetKey;
+        // react-doctor-disable-next-line react-hooks-js/refs -- intentional: part of the same render-phase reset, guarded to run once per input change.
+        restartedSinceLoadRef.current = false;
         setPages(initialPages(initialNumItems));
         setError(undefined);
     }
@@ -175,6 +180,13 @@ const usePaginatedCore = function <T>(
      * computed from the same fn/args the subscription was opened with.
      */
     const failPage = (hash: string, queryKey: QueryKey, pageError: SubscriptionError): void => {
+        // The subscription was opened under this render's `resetKey`. Once the args, shard or page
+        // size moved, the feed was reset and this page is on its way out: its failure, a restart in
+        // particular, must not touch the new generation, nor restart it at this render's page size.
+        if (resetKeyRef.current !== resetKey) {
+            return;
+        }
+
         const desired = desiredRef.current;
         const hashOf = (page: Page): string =>
             serializeQueryKey(
@@ -184,9 +196,10 @@ const usePaginatedCore = function <T>(
                     desired.shardKey,
                 ),
             );
-        const failure = classifyPageFailure(desired.pages, (page) => hashOf(page) === hash, pageError);
+        const failure = classifyPageFailure(desired.pages, (page) => hashOf(page) === hash, pageError, restartedSinceLoadRef.current);
 
         if (failure === "restart") {
+            restartedSinceLoadRef.current = true;
             setPages(initialPages(initialNumItems));
             setError(undefined);
         }
@@ -386,6 +399,7 @@ const usePaginatedCore = function <T>(
     useEffect(() => {
         const cache = queryClient.getQueryCache();
         const pageHashes = new Set(pageEntries.map(({ hash }) => hash));
+        const pastHeadHashes = new Set(pageEntries.filter((_, index) => pages[index] !== undefined && !isHeadPage(pages[index])).map(({ hash }) => hash));
         const pageFunctionRef = function_.__lunoraRef;
         const unsubscribe = cache.subscribe((event) => {
             // The registry pushes page data via `setQueryData`, which emits an
@@ -411,6 +425,10 @@ const usePaginatedCore = function <T>(
 
             if (pageHashes.has(hash)) {
                 // A frame for one of our pages landed — the feed is healthy again.
+                if (pastHeadHashes.has(hash)) {
+                    restartedSinceLoadRef.current = false;
+                }
+
                 setError(undefined);
                 forceRender();
             }
