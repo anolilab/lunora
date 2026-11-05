@@ -1,3 +1,7 @@
+## @lunora/shard-engine [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.191...@lunora/shard-engine@1.0.0-alpha.192) (2026-11-05)
+
+- fix(client): restart a paginated feed when the server refuses its cursor (#1496)
+
 ## @lunora/shard-engine [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.190...@lunora/shard-engine@1.0.0-alpha.191) (2026-11-05)
 
 - feat(shard-engine): accept endCursor on findMany for reactive pages (#1485)
