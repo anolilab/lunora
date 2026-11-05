@@ -161,7 +161,7 @@ const delayMs = (delaySeconds: number | undefined): number => {
         return 0;
     }
 
-    return Math.min(Math.max(0, Math.floor(delaySeconds)), MAX_DELAY_SECONDS) * 1000;
+    return Math.min(Math.max(0, Math.ceil(delaySeconds)), MAX_DELAY_SECONDS) * 1000;
 };
 
 /** One declared queue, resolved from its `defineQueue` result. */

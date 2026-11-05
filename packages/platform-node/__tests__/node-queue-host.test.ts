@@ -373,7 +373,21 @@ describe("createNodeQueueHost", () => {
         expect(() => createNodeQueueHost(freshDatabase(), { onBatch: () => undefined, queues: { nowhere } })).toThrow(/no declared queue provides/);
     });
 
-    it("clamps a delay beyond the 12-hour ceiling and rejects a mistyped body", async () => {
+    it("rounds a fractional delay up, so a message is never delivered before its delay", async () => {
+        expect.hasAssertions();
+
+        const typed = defineQueue({ handler: () => undefined, maxBatchTimeout: 0 });
+        const now = Date.now();
+        const host = createNodeQueueHost(freshDatabase(), { now: () => now, onBatch: () => undefined, queues: { typed } });
+
+        await host.bindings.typed.send("soon", { delaySeconds: 1.5 });
+
+        // 1.5 s is due at 2 s, not at the 1 s a floor would make it.
+        await expect(host.poll(now + 1999)).resolves.toBe(0);
+        await expect(host.poll(now + 2000)).resolves.toBe(1);
+    });
+
+    it("clamps a delay beyond the 24-hour ceiling and rejects a mistyped body", async () => {
         expect.hasAssertions();
 
         const typed = defineQueue({ handler: () => undefined, maxBatchTimeout: 0 });
