@@ -268,12 +268,14 @@ per environment, before the deploy that depends on them:
 wrangler d1 execute <DB> --remote --file=lunora/migrations/<timestamp>_<slug>.sql
 ```
 
-Every `DROP` the generator writes ends in a `-- lunora:allow-destructive`
-comment. `wrangler` ignores it; it is there for `@lunora/d1`'s `MigrationRunner`,
-which refuses any `DROP`, `RENAME`, `TRUNCATE` or `INSERT OR REPLACE` it has not
-been told is intended, so a statement you move from this file into a runner
-entry keeps its confirmation. Add the same comment to destructive SQL you write
-by hand, or set `allowDestructive: true` on the entry. See
+The generator writes a `-- lunora:allow-destructive` comment on its own line
+before every `DROP`. `wrangler` ignores it. It is there for `@lunora/d1`'s
+`MigrationRunner`, which refuses a pending `DROP`, `RENAME`, `TRUNCATE`,
+`INSERT OR REPLACE` or `REPLACE INTO` unless the migration carries that comment.
+If you split this file at each `;` into runner entries, every `DROP` keeps its
+confirmation. Add the same comment before destructive SQL you write by hand, but
+never to a migration that has already run: that changes its hash and is refused
+as drift. See
 [`MigrationRunner`](/docs/packages/d1#destructive-statements-need-an-opt-in).
 
 ### Relaxing NOT NULL on a D1 table

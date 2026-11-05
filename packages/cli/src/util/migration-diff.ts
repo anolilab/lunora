@@ -28,6 +28,7 @@
  * auto-provision.
  */
 import type { FieldSnapshot } from "@lunora/codegen";
+import { ALLOW_DESTRUCTIVE_MARKER } from "@lunora/d1";
 import {
     columnRef,
     frameworkColumnDdl,
@@ -149,12 +150,11 @@ const renderCreateTable = (table: TableSnapshot): string => {
 };
 
 /**
- * The opt-in `@lunora/d1`'s `MigrationRunner` requires on a destructive statement, written on the statement's own line so
- * it travels with it when the file is split into one runner entry per statement.
+ * `wrangler d1 execute` ignores the marker; it matters only to a user who splits the file at each `;` into
+ * `MigrationRunner` entries by hand. On the line before the statement, so the split keeps it with its `DROP` rather than
+ * handing it to the next statement.
  */
-const ALLOW_DESTRUCTIVE = "-- lunora:allow-destructive";
-
-const renderDropTable = (tableName: string): string => `DROP TABLE IF EXISTS ${quoteIdentifier(tableName)}; ${ALLOW_DESTRUCTIVE}`;
+const renderDropTable = (tableName: string): string => `${ALLOW_DESTRUCTIVE_MARKER}\nDROP TABLE IF EXISTS ${quoteIdentifier(tableName)};`;
 
 /**
  * `ALTER TABLE … ADD COLUMN`, always nullable. SQLite rejects `ADD COLUMN … NOT NULL` without a default on a table
@@ -181,8 +181,9 @@ const renderCreateIndex = (tableName: string, index: IndexSnapshot): string => {
     return `CREATE ${uniqueClause}INDEX IF NOT EXISTS ${physicalIndexName(tableName, index.name)} ON ${quoteIdentifier(tableName)} (${fields});`;
 };
 
+/** Confirmed for `MigrationRunner` the same way as {@link renderDropTable}. */
 const renderDropIndex = (tableName: string, indexName: string): string =>
-    `DROP INDEX IF EXISTS ${physicalIndexName(tableName, indexName)}; ${ALLOW_DESTRUCTIVE}`;
+    `${ALLOW_DESTRUCTIVE_MARKER}\nDROP INDEX IF EXISTS ${physicalIndexName(tableName, indexName)};`;
 
 /**
  * The column's shape with `optional` stripped — that flag is the same fact as
