@@ -1,3 +1,7 @@
+## @lunora/sql-store [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.234...@lunora/sql-store@1.0.0-alpha.235) (2026-11-05)
+
+- feat(shard-engine): accept endCursor on findMany for reactive pages (#1485)
+
 ## @lunora/sql-store [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.233...@lunora/sql-store@1.0.0-alpha.234) (2026-11-03)
 
 - fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
