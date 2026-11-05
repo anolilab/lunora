@@ -1,3 +1,7 @@
+## @lunora/runtime [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.280...@lunora/runtime@1.0.0-alpha.281) (2026-11-05)
+
+- fix(observability): bound logged Errors further and never call their toString (#1501)
+
 ## @lunora/runtime [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.279...@lunora/runtime@1.0.0-alpha.280) (2026-11-05)
 
 - fix(server): guard httpRoute cache headers and keep error causes in logs (#1488)

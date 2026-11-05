@@ -111,6 +111,11 @@ export const ERROR_CATALOG = {
         status: 409,
         title: "Migration drift",
     },
+    /** `@lunora/d1`'s `MigrationRunner` refused a pending migration that drops, renames, truncates or replaces without the opt-in comment. */
+    MIGRATION_DESTRUCTIVE: {
+        status: 409,
+        title: "Destructive migration not confirmed",
+    },
 
     /**
      * A UNIQUE index cannot be built because existing rows already share its key. The shard refuses user traffic until a later

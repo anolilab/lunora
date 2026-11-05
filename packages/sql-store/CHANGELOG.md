@@ -1,3 +1,7 @@
+## @lunora/sql-store [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.235...@lunora/sql-store@1.0.0-alpha.236) (2026-11-05)
+
+- feat(d1): refuse unconfirmed destructive migration sql; fix the add-column race (#1489)
+
 ## @lunora/sql-store [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.234...@lunora/sql-store@1.0.0-alpha.235) (2026-11-05)
 
 - feat(shard-engine): accept endCursor on findMany for reactive pages (#1485)

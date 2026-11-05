@@ -325,8 +325,32 @@
     {
       "at": "2026-11-05T17:36:50.706Z",
       "key": "@lunora/do@1.0.0-alpha.283"
+    },
+    {
+      "at": "2026-11-05T18:15:42.353Z",
+      "key": "@lunora/observability@1.0.0-alpha.203"
+    },
+    {
+      "at": "2026-11-05T18:15:42.353Z",
+      "key": "@lunora/runtime@1.0.0-alpha.281"
+    },
+    {
+      "at": "2026-11-05T20:08:12.673Z",
+      "key": "@lunora/errors@1.0.0-alpha.89"
+    },
+    {
+      "at": "2026-11-05T20:08:12.673Z",
+      "key": "@lunora/sql-store@1.0.0-alpha.236"
+    },
+    {
+      "at": "2026-11-05T20:08:12.673Z",
+      "key": "@lunora/d1@1.0.0-alpha.234"
+    },
+    {
+      "at": "2026-11-05T20:08:12.673Z",
+      "key": "@lunora/cli@1.0.0-alpha.488"
     }
   ],
-  "updatedAt": "2026-11-05T17:36:50.706Z",
+  "updatedAt": "2026-11-05T20:08:12.673Z",
   "version": 1
 }

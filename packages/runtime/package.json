@@ -1,6 +1,6 @@
 {
     "name": "@lunora/runtime",
-    "version": "1.0.0-alpha.280",
+    "version": "1.0.0-alpha.281",
     "description": "Lunora Worker runtime: the RPC router, shard resolver, and query coordinator",
     "keywords": [
         "cloudflare",
@@ -61,7 +61,7 @@
     "dependencies": {
         "@lunora/bindings": "1.0.0-alpha.151",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/observability": "^1.0.0-alpha.202",
+        "@lunora/observability": "^1.0.0-alpha.203",
         "@lunora/platform": "1.0.0-alpha.80",
         "@lunora/wire": "1.0.0-alpha.6"
     },

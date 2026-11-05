@@ -76,9 +76,9 @@ recorded in the `__drizzle_migrations` table, so an applied migration is skipped
 by its version and re-running is a no-op.
 
 ```ts
-import { MigrationRunner } from "@lunora/d1";
+import { ALLOW_DESTRUCTIVE_MARKER, MigrationRunner } from "@lunora/d1";
 
-const runner = new MigrationRunner(env.DB, [{ version: 1, name: "drop_legacy_sessions", sql: "DROP TABLE legacy_sessions" }]);
+const runner = new MigrationRunner(env.DB, [{ version: 1, name: "drop_legacy_sessions", sql: `${ALLOW_DESTRUCTIVE_MARKER}\nDROP TABLE legacy_sessions` }]);
 
 const { applied, skipped } = await runner.run();
 ```
@@ -97,6 +97,40 @@ it into one entry per statement to get the runner's hash tracking. Most schema
 changes need neither: the worker provisions every `.global()` table on first
 use, additively and idempotently — what it never does is drop or retype, which
 is what a hand-written `Migration` is for.
+
+### Destructive statements need an opt-in
+
+A pending migration that discards data, or renames something every reader of
+the old name breaks on, is refused with `MIGRATION_DESTRUCTIVE` unless it says it
+means to. These statements count:
+
+- `DROP TABLE`, `DROP INDEX`, `DROP VIEW` and `DROP TRIGGER`
+- `ALTER TABLE … DROP [COLUMN]` and `ALTER TABLE … RENAME …`
+- `TRUNCATE`
+- `INSERT OR REPLACE`, `REPLACE INTO`, `UPDATE OR REPLACE` and an
+  `ON CONFLICT REPLACE` constraint clause, anywhere in the statement, including
+  a trigger body. An upsert (`ON CONFLICT … DO UPDATE`) does not count.
+
+They are matched by statement shape, so a column or table named `rename` or
+`replace`, and keywords inside a string, a quoted identifier or a comment, do
+not count. A `DELETE` or `UPDATE` without a `WHERE` is **not** checked: a
+full-table `UPDATE` is what every backfill looks like.
+
+To confirm one, put the `-- lunora:allow-destructive` line comment (exported as
+`ALLOW_DESTRUCTIVE_MARKER`) on its own line before the statement. The line must
+be exactly that comment. A marker after the statement, or at the end of a line
+of code, confirms nothing.
+`lunora migrate generate` writes it before every `DROP` it emits, so a generated
+file split at each `;` into one entry per statement applies as is.
+
+Only migrations that have not run yet are checked, so one applied before this
+check existed keeps being skipped. Never add the marker to an applied migration:
+it changes the migration's hash, and the run refuses that as drift. Every
+pending migration is checked before the first one is applied, so a refused one
+late in the list leaves the earlier ones unapplied too. Transaction control
+(`BEGIN`, `COMMIT`, `END`, `ROLLBACK`, `SAVEPOINT`, `RELEASE`) is refused the same
+way: each migration already commits atomically with its tracking row, and D1
+rejects those statements itself.
 
 ### When a run refuses with `MIGRATION_DRIFT`
 
