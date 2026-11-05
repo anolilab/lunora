@@ -34,29 +34,36 @@ const globalColumnAffinity = (validator: ValidatorLike, dialect: SqlDialect, ind
  */
 const reportedRelaxations = new Set<string>();
 
-/** Warn once per isolate for `key`. The only channel a provisioning pass has. */
-const warnOnce = (key: string, message: string): void => {
+/** Is this the first report for `key` in this isolate? Records it either way. */
+const firstReport = (key: string): boolean => {
     if (reportedRelaxations.has(key)) {
-        return;
+        return false;
     }
 
     reportedRelaxations.add(key);
+
+    return true;
+};
+
+/** Warn once per isolate for `key`. The only channel a provisioning pass has. */
+const warnOnce = (key: string, message: string): void => {
+    if (!firstReport(key)) {
+        return;
+    }
+
     // eslint-disable-next-line no-console -- the only channel a provisioning pass has; deduplicated per isolate above.
     console.warn(`[@lunora/sql-store] ${message}`);
 };
 
 /**
- * Report a failed backfill once per isolate for `key`, at error level and with the table, column and cause as fields,
+ * Report a failed backfill once per isolate, at error level and with the table, column and cause as fields,
  * so monitoring that filters on errors sees a column left unfilled.
  */
 const reportBackfillFailure = (tableName: string, column: string, message: string, error: unknown): void => {
-    const key = `backfill:${tableName}.${column}`;
-
-    if (reportedRelaxations.has(key)) {
+    if (!firstReport(`backfill:${tableName}.${column}`)) {
         return;
     }
 
-    reportedRelaxations.add(key);
     // eslint-disable-next-line no-console -- the only channel a provisioning pass has; deduplicated per isolate above.
     console.error(`[@lunora/sql-store] ${message}`, { column, error, table: tableName });
 };
