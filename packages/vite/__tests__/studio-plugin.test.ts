@@ -143,6 +143,68 @@ describe("studioPlugin", () => {
         expect(server.config.logger.info).toHaveBeenCalledWith(expect.stringContaining("/__lunora"));
     });
 
+    const announcedLines = (projectRoot: string, target = "cloudflare", cloudflare: ResolvedLunoraPluginOptions["cloudflare"] = {}): string[] => {
+        const info = vi.fn<(message: string) => void>();
+        const server = {
+            config: { base: "/", logger: { info } },
+            httpServer: { address: () => undefined, listening: true, once: vi.fn<() => void>() },
+            middlewares: { use: vi.fn<() => void>() },
+            resolvedUrls: { local: ["http://localhost:5173/"], network: [] },
+        } as unknown as ViteDevServer;
+
+        (studioPlugin(makeOptions({ cloudflare, projectRoot, target })).configureServer as (s: ViteDevServer) => () => void)(server)();
+
+        return info.mock.calls.map(([line]) => line);
+    };
+
+    it("points a project's crons and queues at their manual triggers under the studio line", () => {
+        expect.assertions(3);
+
+        const projectRoot = mkdtempSync(join(tmpdir(), "lunora-studio-triggers-"));
+
+        writeFileSync(
+            join(projectRoot, "wrangler.jsonc"),
+            JSON.stringify({ name: "app", queues: { producers: [{ binding: "QUEUE_EMAILS", queue: "emails" }] }, triggers: { crons: ["0 * * * *"] } }),
+        );
+        mkdirSync(join(projectRoot, "lunora"));
+        writeFileSync(
+            join(projectRoot, "lunora", "queues.ts"),
+            `import { defineQueue } from "@lunora/queue";\n\nexport const emails = defineQueue({ handler: async () => {} });\n`,
+        );
+
+        const lines = announcedLines(projectRoot);
+        const origin = "http://localhost:5173";
+        const scheduled = `${origin}/cdn-cgi/local/scheduled`;
+
+        expect(lines).toHaveLength(3);
+        expect(lines[1]).toContain(`run one now in ${origin}/__lunora/schedule, or curl "${scheduled}?cron=0+*+*+*+*"`);
+        expect(lines[2]).toContain(`emails → send a test message in ${origin}/__lunora/queues`);
+    });
+
+    it("offers no curl for a cron when the project brings its own Cloudflare plugin", () => {
+        expect.assertions(2);
+
+        const projectRoot = mkdtempSync(join(tmpdir(), "lunora-studio-triggers-"));
+
+        writeFileSync(join(projectRoot, "wrangler.jsonc"), JSON.stringify({ name: "app", triggers: { crons: ["0 * * * *"] } }));
+
+        // `cloudflare: false`: Lunora added no plugin that forwards `/cdn-cgi/local/scheduled`.
+        const lines = announcedLines(projectRoot, "cloudflare", false);
+
+        expect(lines[1]).toContain("http://localhost:5173/__lunora/schedule");
+        expect(lines[1]).not.toContain("cdn-cgi");
+    });
+
+    it("prints only the studio line for a project with no crons or queues", () => {
+        expect.assertions(1);
+
+        const projectRoot = mkdtempSync(join(tmpdir(), "lunora-studio-triggers-"));
+
+        writeFileSync(join(projectRoot, "wrangler.jsonc"), JSON.stringify({ name: "app" }));
+
+        expect(announcedLines(projectRoot)).toHaveLength(1);
+    });
+
     const installMiddleware = (
         configuredHost: unknown,
         base = "/",

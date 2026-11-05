@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 // internal `@lunora/config` layer, so the studio is the same app at the same URL
 // under either bundler. The heavy `@lunora/studio` SPA it hosts stays an
 // optional peer — resolved lazily, degrading gracefully when it isn't installed.
+import { devTriggerHints, formatDevBannerRow, targetRunsOwnDevServer } from "@lunora/config";
 import { createStudioMiddleware, isNonLoopbackHost, STUDIO_PATH, studioMountPath } from "@lunora/config/studio-host";
 import type { Plugin, ViteDevServer } from "vite";
 
@@ -33,6 +34,30 @@ const buildStudioUrl = (input: { address?: AddressInfo | string; base?: string; 
     const bracketed = host.includes(":") ? `[${host}]` : host;
 
     return `http://${bracketed}:${String(input.address.port)}${mount}`;
+};
+
+/** Vite's own banner styling (green arrow, bold label, 9-wide label column), so Lunora's rows read as part of it. */
+const VITE_ROW_STYLE = {
+    arrow: (text: string): string => `\u001B[32m${text}\u001B[39m`,
+    label: (text: string): string => `\u001B[1m${text}\u001B[22m`,
+};
+
+const VITE_LABEL_WIDTH = 9;
+
+/**
+ * The banner rows pointing at the manual triggers for the project's crons and
+ * queues. `@cloudflare/vite-plugin` forwards `/cdn-cgi/local/scheduled` to
+ * Miniflare, so a cron also gets a `curl` — except where Lunora did not add
+ * that plugin: on a target whose own dev server runs the Worker, and under
+ * `cloudflare: false`, where whatever the project brings may not serve the route.
+ */
+const triggerHintLines = (options: ResolvedLunoraPluginOptions, studioUrl: string): string[] => {
+    const servesScheduled = options.cloudflare !== false && !targetRunsOwnDevServer(options.target);
+    const scheduledUrl = servesScheduled ? `${new URL(studioUrl).origin}/cdn-cgi/local/scheduled` : undefined;
+
+    return devTriggerHints({ projectRoot: options.projectRoot, scheduledUrl, schemaDirectory: options.schemaDir, studioUrl }).map(({ label, text }) =>
+        formatDevBannerRow(label, text, VITE_LABEL_WIDTH, VITE_ROW_STYLE),
+    );
 };
 
 /**
@@ -82,7 +107,11 @@ const studioPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
 
                     // Match Vite's banner format so the line slots in beneath the
                     // Local/Network URLs (`Lunora:` padded to align the colons).
-                    server.config.logger.info(`  [32m➜[39m  [1mLunora[22m:  [36m${url}[39m`);
+                    server.config.logger.info(formatDevBannerRow("Lunora", `\u001B[36m${url}\u001B[39m`, VITE_LABEL_WIDTH, VITE_ROW_STYLE));
+
+                    for (const line of triggerHintLines(options, url)) {
+                        server.config.logger.info(line);
+                    }
                 };
 
                 // Preferred: splice the line into Vite's startup banner by

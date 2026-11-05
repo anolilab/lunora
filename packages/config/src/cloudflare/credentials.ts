@@ -22,10 +22,11 @@
  * being offline, a timeout, or a missing wrangler all still count as logged in.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 
+import { readDevVariablesRecord, wranglerDotenvFiles } from "../dev-variables-format";
 import join from "../path";
 
 /** Inputs, injectable so tests never read the real home directory or env. */
@@ -36,20 +37,20 @@ interface CloudflareCredentialProbe {
     projectRoot?: string;
 }
 
-/** The `.env` files wrangler loads in dev. */
-const DOTENV_FILES = [".env", ".env.local", ".env.development", ".env.development.local"] as const;
+/**
+ * The `.env` files a dev session can take credentials from: the ones wrangler
+ * loads into its own environment, plus Vite's development-mode pair, whose
+ * `CLOUDFLARE_*` values `@cloudflare/vite-plugin` copies into `process.env`
+ * (`vite.loadEnv(mode, root, "CLOUDFLARE_")`). A superset on purpose: the check
+ * is one-sided.
+ */
+const DOTENV_FILES: ReadonlyArray<string> = [...wranglerDotenvFiles(), ".env.development", ".env.development.local"];
 
 const TOKEN_KEYS = ["CLOUDFLARE_API_TOKEN", "CF_API_TOKEN"] as const;
 const GLOBAL_KEY_KEYS = ["CLOUDFLARE_API_KEY", "CF_API_KEY"] as const;
 const EMAIL_KEYS = ["CLOUDFLARE_EMAIL", "CF_EMAIL"] as const;
 
 const CREDENTIAL_KEYS: ReadonlySet<string> = new Set([...TOKEN_KEYS, ...GLOBAL_KEY_KEYS, ...EMAIL_KEYS]);
-
-/** A leading `export ` on a `.env` line. */
-const EXPORT_PREFIX = /^export\s+/u;
-
-/** A `.env` file's line break. */
-const LINE_BREAK = /\r?\n/u;
 
 /** What `wrangler whoami --json` prints when no usable login exists. */
 const LOGGED_OUT = /"loggedIn"\s*:\s*false/u;
@@ -59,9 +60,6 @@ const LOGGED_OUT_TTL_MS = 10_000;
 
 /** Per project, the last answer from `wrangler whoami`. */
 const answers = new Map<string, { at: number; loggedOut: boolean }>();
-
-/** A value wrapped in matching single or double quotes. */
-const QUOTED_VALUE = /^(["'])(.*)\1$/u;
 
 const isSet = (value: string | undefined): boolean => value !== undefined && value.trim() !== "";
 
@@ -141,38 +139,20 @@ const wranglerSaysLoggedOut = (projectRoot: string, env: Record<string, string |
     return loggedOut;
 };
 
-/**
- * The credential variables that a `.env` file sets to a non-empty value. A plain
- * `KEY=value` reader: an optional `export ` prefix and surrounding quotes are
- * stripped, and comments and blank lines are skipped. An unreadable file counts as
- * empty.
- */
+/** The credential variables the `.env` files set to a non-empty value. An unreadable file counts as empty. */
 const dotenvCredentialKeys = (projectRoot: string): Set<string> => {
     const keys = new Set<string>();
 
     for (const file of DOTENV_FILES) {
-        let text: string;
+        let values: Record<string, string> | undefined;
 
         try {
-            text = readFileSync(join(projectRoot, file), "utf8");
+            values = readDevVariablesRecord(join(projectRoot, file));
         } catch {
             continue;
         }
 
-        for (const raw of text.split(LINE_BREAK)) {
-            const line = raw.trim().replace(EXPORT_PREFIX, "");
-            const equals = line.indexOf("=");
-
-            if (line.startsWith("#") || equals === -1) {
-                continue;
-            }
-
-            const key = line.slice(0, equals).trim();
-            const value = line
-                .slice(equals + 1)
-                .trim()
-                .replace(QUOTED_VALUE, "$2");
-
+        for (const [key, value] of Object.entries(values ?? {})) {
             if (CREDENTIAL_KEYS.has(key) && isSet(value)) {
                 keys.add(key);
             }

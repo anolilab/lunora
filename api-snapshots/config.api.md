@@ -461,6 +461,38 @@ interface DestructivePolicyEdit {
 type DetectedFramework = "astro" | "none" | "nuxt" | "react-router" | "solid-start" | "sveltekit" | "tanstack-start" | "tanstack-start-solid" | "vinext";
 ```
 
+### `DevEnvCheck` (type)
+
+```ts
+type DevEnvCheck = {
+    error: string;
+    kind: "unloadable";
+} | {
+    failures: EnvKeyFailure[];
+    kind: "invalid";
+    sources: string[];
+} | {
+    kind: "absent";
+} | {
+    kind: "valid";
+};
+```
+
+### `DevEnvCheckOptions` (interface)
+
+```ts
+interface DevEnvCheckOptions {
+    configPath?: string;
+    environment?: string;
+    load?: (path: string) => Promise<unknown>;
+    processEnv?: Record<string, string | undefined>;
+    projectRoot: string;
+    schemaDirectory: string;
+    vars?: Readonly<Record<string, string>>;
+    withheld?: ReadonlyArray<string>;
+}
+```
+
 ### `DevProcess` (interface)
 
 ```ts
@@ -536,6 +568,27 @@ interface DevServerState {
     studioUrl?: string;
     tunnelUrl?: string;
     url: string;
+}
+```
+
+### `DevTriggerHint` (interface)
+
+```ts
+interface DevTriggerHint {
+    label: "Crons" | "Queues";
+    text: string;
+}
+```
+
+### `DevTriggerHintOptions` (interface)
+
+```ts
+interface DevTriggerHintOptions {
+    environment?: string;
+    projectRoot: string;
+    scheduledUrl?: string;
+    schemaDirectory: string;
+    studioUrl?: string;
 }
 ```
 
@@ -628,6 +681,10 @@ interface DriverToolchain {
 }
 ```
 
+### `ENV_FILENAME` (const)
+
+Re-exported from `@lunora/codegen` — signature tracked at its source.
+
 ### `EnsureDevVariablesDeps` (interface)
 
 ```ts
@@ -636,6 +693,7 @@ interface EnsureDevVariablesDeps {
     cwd: string;
     info: (message: string) => void;
     randomHex?: (bytes: number) => string;
+    warn?: (message: string) => void;
     yes?: boolean;
 }
 ```
@@ -653,7 +711,16 @@ interface EnsureDevVariablesResult {
 ### `EnsureDevVariablesStatus` (type)
 
 ```ts
-type EnsureDevVariablesStatus = "augmented" | "declined" | "exists" | "generated" | "no-example" | "skipped-exists";
+type EnsureDevVariablesStatus = "augmented" | "declined" | "exists" | "generated" | "no-example" | "skipped-exists" | "unreadable";
+```
+
+### `EnvKeyFailure` (interface)
+
+```ts
+interface EnvKeyFailure {
+    key: string;
+    message: string;
+}
 ```
 
 ### `FillDevSecretsResult` (interface)
@@ -1342,6 +1409,12 @@ const buildPackageSecretsBlock: (packageNames: ReadonlyArray<string>, existingKe
 const canonicalPath: (path: string) => string;
 ```
 
+### `checkDevEnv` (const)
+
+```ts
+const checkDevEnv: (options: DevEnvCheckOptions) => Promise<DevEnvCheck>;
+```
+
 ### `claimAgentRulesHint` (const)
 
 ```ts
@@ -1398,6 +1471,17 @@ const createDiscoveryCache: () => DiscoveryCache;
 const deployTargetIds: () => ReadonlyArray<string>;
 ```
 
+### `describeDevEnvCheck` (const)
+
+```ts
+const describeDevEnvCheck: (check: DevEnvCheck, schemaDirectory: string, { wasInvalid }?: {
+    wasInvalid?: boolean;
+}) => undefined | {
+    level: "info" | "warn";
+    message: string;
+};
+```
+
 ### `detectAgentRules` (const)
 
 ```ts
@@ -1432,6 +1516,12 @@ const detectLintTools: (projectRoot: string) => LintTool[];
 
 ```ts
 const detectPackageManager: (startDirectory: string) => PackageManager;
+```
+
+### `devTriggerHints` (const)
+
+```ts
+const devTriggerHints: (options: DevTriggerHintOptions) => DevTriggerHint[];
 ```
 
 ### `discoverAgentInfo` (const)
@@ -1506,6 +1596,15 @@ const fillDevSecrets: (deps: {
     randomHex?: (bytes: number) => string;
     secretSources?: ReadonlyArray<string>;
 }) => FillDevSecretsResult;
+```
+
+### `formatDevBannerRow` (const)
+
+```ts
+const formatDevBannerRow: (label: string, value: string, width: number, style?: {
+    arrow?: (text: string) => string;
+    label?: (text: string) => string;
+}) => string;
 ```
 
 ### `formatLunoraEvent` (const)
@@ -1744,6 +1843,12 @@ const readApiSpecMarker: (projectRoot: string) => MarkedApiSpec | undefined;
 const readDevServerState: (projectRoot: string) => DevServerState | undefined;
 ```
 
+### `readDevVariablesRecord` (const)
+
+```ts
+const readDevVariablesRecord: (path: string) => Record<string, string> | undefined;
+```
+
 ### `readLinkedProject` (const)
 
 ```ts
@@ -1943,6 +2048,12 @@ const upsertDevVariableLine: (content: string, key: string, value: string) => st
 const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit, serverModule: string) => WireResult;
 ```
 
+### `wranglerDotenvFiles` (const)
+
+```ts
+const wranglerDotenvFiles: (environment?: string) => string[];
+```
+
 ### `writeApiSpecMarker` (const)
 
 ```ts
@@ -2129,6 +2240,7 @@ interface BindingManifest {
     compatibilityDate?: string;
     compatibilityFlags?: ReadonlyArray<string>;
     crons: ReadonlyArray<string>;
+    malformed: ReadonlyArray<string>;
     name?: string;
     unknown: ReadonlyArray<string>;
     vars: ReadonlyArray<string>;
@@ -2541,6 +2653,19 @@ interface RemoteEnableInputs {
 }
 ```
 
+### `RemotePlan` (interface)
+
+```ts
+interface RemotePlan {
+    bindings: string[];
+    cleanup: () => void;
+    configPath?: string;
+    enabled: boolean;
+    reason?: string;
+    withheld: WithheldBinding[];
+}
+```
+
 ### `RemoteWranglerShape` (interface)
 
 ```ts
@@ -2695,7 +2820,7 @@ interface WranglerConfig {
         outbound?: unknown;
     } | null | undefined>;
     durable_objects?: {
-        bindings?: ReadonlyArray<WranglerDurableObjectBinding>;
+        bindings?: ReadonlyArray<WranglerDurableObjectBinding$1>;
     };
     env?: Record<string, WranglerConfig>;
     exports?: Record<string, {
@@ -2822,7 +2947,7 @@ interface WranglerConfigShape {
         database_name?: string;
     }>;
     durable_objects?: {
-        bindings?: ReadonlyArray<WranglerDurableObjectBinding$1>;
+        bindings?: ReadonlyArray<WranglerDurableObjectBinding>;
     };
     kv_namespaces?: ReadonlyArray<{
         binding?: string;
@@ -3067,6 +3192,14 @@ const materializeServiceDevConfigs: (wranglerPaths: ReadonlyArray<string>, optio
 const mergeWranglerEnvironment: (wrangler: WranglerConfig, environment: string | undefined) => WranglerEnvironmentMerge;
 ```
 
+### `pendingBindingChanges` (const)
+
+```ts
+const pendingBindingChanges: (options: ReconcileProject & {
+    cache: DiscoveryCache;
+}) => Promise<string[]>;
+```
+
 ### `planRemoteBindings` (const)
 
 ```ts
@@ -3094,7 +3227,7 @@ const reconcileBindingsSafely: (options: ReconcileProject, logger: ReconcileLogg
 ### `reconcileWranglerBindings` (const)
 
 ```ts
-const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings, { environment, target }?: {
+const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings, options?: {
     environment?: string;
     target?: string;
 }) => ReconcileBindingsResult;
@@ -3149,6 +3282,12 @@ const scanWranglerVariablesForSecrets: (variables: Record<string, unknown> | und
 
 ```ts
 const startLocalHyperdrive: (options: StartLocalHyperdriveOptions) => Promise<LocalHyperdrive | undefined>;
+```
+
+### `toRemotePlan` (const)
+
+```ts
+const toRemotePlan: (result: MaterializeDevResult, enabled: boolean) => RemotePlan;
 ```
 
 ### `validateWrangler` (const)

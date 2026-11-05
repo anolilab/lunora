@@ -12,6 +12,8 @@
  * key against {@link DEV_VARS_KEY_PATTERN}, so what we generate stays boring
  * and unambiguous under that same parser.
  */
+import { readFileSync } from "node:fs";
+
 // eslint-disable-next-line e18e/ban-dependencies -- the native replacements are not equivalent here: `process.loadEnvFile` mutates `process.env` from a path (we parse content), and `node:util`'s `parseEnv` drops the `KEY: value` form dotenv accepts, so it would reintroduce the very disagreement with wrangler this module exists to remove.
 import { parse } from "dotenv";
 
@@ -55,6 +57,33 @@ const parseDevVariableEntries = (content: string): { key: string; value: string 
     Object.entries(parse(content)).map(([key, value]) => {
         return { key, value };
     });
+
+/**
+ * A dotenv-format file (`.dev.vars`, `.env`, …) as a record, through
+ * {@link parseDevVariableEntries} — or `undefined` when the file does not exist.
+ * Any other read failure (a directory, no permission) throws, as it makes
+ * `wrangler dev` refuse a `.dev.vars`; a caller that reads a broken file as
+ * unset catches it.
+ */
+const readDevVariablesRecord = (path: string): Record<string, string> | undefined => {
+    let content: string;
+
+    try {
+        content = readFileSync(path, "utf8");
+    } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            return undefined;
+        }
+
+        throw error;
+    }
+
+    return Object.fromEntries(parseDevVariableEntries(content).map(({ key, value }) => [key, value]));
+};
+
+/** The `.env` files `wrangler dev` reads for `environment`, in load order (later wins) — its `getDefaultEnvFiles`. */
+const wranglerDotenvFiles = (environment?: string): string[] =>
+    environment === undefined ? [".env", ".env.local"] : [".env", ".env.local", `.env.${environment}`, `.env.${environment}.local`];
 
 /**
  * The single `{ key, value }` a one-line `.dev.vars` fragment defines, or
@@ -182,6 +211,8 @@ export {
     escapeRegExp,
     parseDevVariableEntries,
     parseDevVariableLine,
+    readDevVariablesRecord,
     removeDevVariableLine,
     upsertDevVariableLine,
+    wranglerDotenvFiles,
 };

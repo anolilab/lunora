@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createCodegenProject, findTsconfig, PROJECT_CONFIG_FILENAMES, runCodegen } from "@lunora/codegen";
 import type { DiscoveryCache } from "@lunora/config";
 import { createDiscoveryCache, runPostCodegenHook } from "@lunora/config";
+import { pendingBindingChanges } from "@lunora/config/cloudflare";
 import { consumeStudioWrite } from "@lunora/config/studio-host";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
@@ -46,6 +47,14 @@ vi.mock(import("@lunora/config"), async (importOriginal) => {
     const actual = await importOriginal();
 
     return { ...actual, runPostCodegenHook: vi.fn<typeof actual.runPostCodegenHook>(actual.runPostCodegenHook) };
+});
+
+// What the binding scan answers is `@lunora/config`'s to test; here a test only
+// says which pending changes a save finds. Defaults to the real scan.
+vi.mock(import("@lunora/config/cloudflare"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, pendingBindingChanges: vi.fn<typeof actual.pendingBindingChanges>(actual.pendingBindingChanges) };
 });
 
 const CRONS_SOURCE = `import { cronJobs } from "@lunora/scheduler";
@@ -250,9 +259,10 @@ describe("codegen-plugin", () => {
             (plugin.configureServer as (this: unknown, s: unknown) => void).call(undefined, server);
 
             // The config-drift watcher (wrangler.jsonc / lunora.json → restart) is a
-            // separate registration further down `configureServer` and must survive:
-            // only the codegen handlers go. Enabled, "change" is registered twice.
-            expect(handlers.filter((event) => event === "change")).toHaveLength(1);
+            // separate registration further down `configureServer` and must survive,
+            // beside the binding-drift listener that replaces codegen's. Only the
+            // codegen handlers go: enabled, "unlink" also carries the tsconfig one.
+            expect(handlers.filter((event) => event === "unlink")).toHaveLength(2);
             expect(logged.join(" ")).toContain("codegen watch disabled");
 
             // Positive control: with codegen on, the same call registers the codegen
@@ -271,7 +281,7 @@ describe("codegen-plugin", () => {
                 },
             });
 
-            expect(enabledHandlers.filter((event) => event === "change")).toHaveLength(2);
+            expect(enabledHandlers.filter((event) => event === "unlink")).toHaveLength(4);
         });
 
         it("build: LUNORA_CODEGEN=0 is ignored, so the ERROR-advisory gate still fails the build", async () => {
@@ -547,7 +557,8 @@ describe("codegen-plugin", () => {
     const getConfigChangeListener = (server: import("vite").ViteDevServer): ((file: string) => void) => {
         const changeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.filter((args) => args[0] === "change");
 
-        return changeCalls[1]?.[1] as (file: string) => void;
+        // Registered last, after codegen's and the binding-drift one.
+        return changeCalls.at(-1)?.[1] as (file: string) => void;
     };
 
     /**
@@ -617,8 +628,9 @@ describe("codegen-plugin", () => {
             // `server.close()`, regardless of middleware mode.
             (plugin.buildEnd as (this: { environment: unknown }) => void).call({ environment: server.environments.client });
 
+            // Every listener `configureServer` registered comes off again, the binding-drift ones included.
             // eslint-disable-next-line @typescript-eslint/unbound-method -- vi.fn mock on the fake server's watcher; no `this` binding to lose
-            expect(server.watcher.off).toHaveBeenCalledTimes(7);
+            expect(server.watcher.off).toHaveBeenCalledTimes((server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.length);
 
             // The pending debounce fires after close but must no-op (closed guard).
             await vi.runAllTimersAsync();
@@ -658,8 +670,9 @@ describe("codegen-plugin", () => {
             closeListeners[0]?.();
             closeListeners[0]?.();
 
+            // Every listener `configureServer` registered comes off again, the binding-drift ones included.
             // eslint-disable-next-line @typescript-eslint/unbound-method -- vi.fn mock on the fake server's watcher; no `this` binding to lose
-            expect(server.watcher.off).toHaveBeenCalledTimes(7);
+            expect(server.watcher.off).toHaveBeenCalledTimes((server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.length);
         });
     });
 
@@ -803,6 +816,228 @@ export const schema = defineSchema({
 
             // The old blanket browser `full-reload` on the server-level channel is gone.
             expect(send.mock.calls.some((call) => (call[0] as { type?: string }).type === "full-reload")).toBe(false);
+        });
+
+        it("a save that needs a binding the worker was not started with says so once, after the client is told", async () => {
+            expect.assertions(4);
+
+            writeFixture(workdir);
+
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            const restartHints = (): string[] =>
+                warn.mock.calls.map(([message]) => message).filter((message) => message.includes("not in the running worker yet"));
+
+            vi.mocked(pendingBindingChanges)
+                .mockResolvedValueOnce(["QUEUE_EMAILS (Queue)"])
+                .mockResolvedValueOnce(["QUEUE_EMAILS (Queue)", "KV (KV namespace)"]);
+
+            wireServer(plugin, server);
+
+            const changeListener = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.find((args) => args[0] === "change")?.[1] as (
+                file: string,
+            ) => void;
+
+            changeListener(schemaPath);
+            await vi.runAllTimersAsync();
+
+            expect(clientSend).toHaveBeenCalledTimes(1);
+            expect(restartHints()).toStrictEqual([
+                expect.stringContaining("QUEUE_EMAILS (Queue) — not in the running worker yet. Restart the dev server to write it"),
+            ]);
+
+            // The second save finds the queue again plus a new KV binding: only the KV one is news.
+            changeListener(schemaPath);
+            await vi.runAllTimersAsync();
+
+            expect(restartHints()).toHaveLength(2);
+            expect(restartHints()[1]).toMatch(/KV \(KV namespace\) — not in the running worker yet/u);
+        });
+
+        it("with codegen watch off, a save that needs a new binding still says so, without regenerating", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+            vi.stubEnv("LUNORA_CODEGEN", "0");
+
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValueOnce(["QUEUE_EMAILS (Queue)"]);
+
+            wireServer(plugin, server);
+
+            for (const [event, listener] of (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls as [string, (file: string) => void][]) {
+                if (event === "change") {
+                    listener(schemaPath);
+                }
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(clientSend).not.toHaveBeenCalled();
+            expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining("QUEUE_EMAILS (Queue) — not in the running worker yet"));
+        });
+
+        it("a src/ save that needs a new binding says so, without regenerating", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValueOnce(["DB (D1 database)"]);
+
+            wireServer(plugin, server);
+
+            for (const [event, listener] of (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls as [string, (file: string) => void][]) {
+                if (event === "change") {
+                    listener(join(workdir, "src", "worker.ts"));
+                }
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(clientSend).not.toHaveBeenCalled();
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining("DB (D1 database) — not in the running worker yet"));
+        });
+
+        it("gives a non-.ts schema source, which codegen does not regenerate from, the restart hint", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValueOnce(["DB (D1 database)"]);
+
+            wireServer(plugin, server);
+
+            for (const [event, listener] of (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls as [string, (file: string) => void][]) {
+                if (event === "change") {
+                    listener(join(workdir, "lunora", "helpers.js"));
+                }
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(clientSend).not.toHaveBeenCalled();
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining("DB (D1 database) — not in the running worker yet"));
+        });
+
+        it("says nothing about binding drift for a worker that runs a custom configPath", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin({ ...makeOptions(workdir), cloudflare: { configPath: "wrangler.custom.jsonc" } });
+            const { server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValue(["DB (D1 database)"]);
+
+            wireServer(plugin, server);
+
+            for (const [event, listener] of (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls as [string, (file: string) => void][]) {
+                if (event === "change") {
+                    listener(join(workdir, "src", "worker.ts"));
+                }
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("not in the running worker yet"));
+        });
+
+        it("still gives the drift hint when configPath names the project's own wrangler.jsonc", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin({ ...makeOptions(workdir), cloudflare: { configPath: "./wrangler.jsonc" } });
+            const { server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValue(["DB (D1 database)"]);
+
+            wireServer(plugin, server);
+
+            for (const [event, listener] of (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls as [string, (file: string) => void][]) {
+                if (event === "change") {
+                    listener(join(workdir, "src", "worker.ts"));
+                }
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining("DB (D1 database) — not in the running worker yet"));
+        });
+
+        it("checks a save the restart window suppressed once the restart ends", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+
+            const wranglerPath = join(workdir, "wrangler.jsonc");
+
+            writeFileSync(wranglerPath, '{ "name": "app" }\n', "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { restart, server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+            let finishRestart: (() => void) | undefined;
+
+            restart.mockImplementation(async () => {
+                await new Promise<void>((resolve) => {
+                    finishRestart = resolve;
+                });
+            });
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValue(["DB (D1 database)"]);
+
+            wireServer(plugin, server);
+            await settleConfigBaseline(plugin);
+
+            const changeListeners = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls
+                .filter((args) => args[0] === "change")
+                .map((args) => args[1] as (file: string) => void);
+
+            writeFileSync(wranglerPath, '{ "name": "app", "d1_databases": [{ "binding": "DB", "database_name": "app" }] }\n', "utf8");
+            changeListeners.at(-1)?.(wranglerPath);
+
+            expect(restart).toHaveBeenCalledTimes(1);
+
+            // A source save lands while the restart is still running: its scan is suppressed.
+            for (const listener of changeListeners.slice(0, -1)) {
+                listener(join(workdir, "src", "worker.ts"));
+            }
+
+            await vi.runAllTimersAsync();
+
+            const hints = (): unknown[] => warn.mock.calls.filter(([message]) => message.includes("not in the running worker yet"));
+
+            expect(hints()).toHaveLength(0);
+
+            finishRestart?.();
+            await vi.runAllTimersAsync();
+
+            expect(hints()).toHaveLength(1);
         });
 
         it("failure then success → recovery reloads the client once (clears overlay), still evicts the worker", async () => {

@@ -57,6 +57,8 @@ export type {
 } from "./deploy-driver";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
 export { detectFramework, projectUsesUmbrella } from "./detect-framework";
+export type { DevEnvCheck, DevEnvCheckOptions, EnvKeyFailure } from "./dev-env-check";
+export { checkDevEnv, describeDevEnvCheck, ENV_FILENAME } from "./dev-env-check";
 export type { DevProcess, DevProcessOptions, DevProcessSpawner } from "./dev-process";
 export { acceptsConnection, startDevProcess } from "./dev-process";
 export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from "./dev-server-state";
@@ -78,14 +80,18 @@ export {
     updateDevServerState,
     writeDevServerState,
 } from "./dev-server-state";
+export type { DevTriggerHint, DevTriggerHintOptions } from "./dev-trigger-hints";
+export { devTriggerHints, formatDevBannerRow } from "./dev-trigger-hints";
 export {
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
     DEV_VARS_KEY_PATTERN,
     escapeRegExp,
     parseDevVariableEntries,
+    readDevVariablesRecord,
     removeDevVariableLine,
     upsertDevVariableLine,
+    wranglerDotenvFiles,
 } from "./dev-variables-format";
 export { DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, ensureDevWorkerEnv } from "./dev-worker-env";
 export type { DiscoveryCache } from "./discovery-cache";

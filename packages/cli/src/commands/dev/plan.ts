@@ -3,21 +3,21 @@
  * `--remote` resolution, the framework sidecar, and the per-flavor plan.
  * Pure apart from the port probes, so it is unit-testable.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { readDevServiceBindings } from "@lunora/codegen";
 import {
     detectFramework,
     DEV_VARS_FILE,
-    parseDevVariableEntries,
+    readDevVariablesRecord,
     resolveDeployDriver,
     resolveProjectTarget,
     resolveSchemaDirectory,
     targetRunsOwnDevServer,
 } from "@lunora/config";
-import type { WithheldBinding } from "@lunora/config/cloudflare";
-import { findWranglerFile, materializeDevWranglerConfig, materializeServiceDevConfigs, readWranglerJsonc } from "@lunora/config/cloudflare";
+import type { RemotePlan, WithheldBinding } from "@lunora/config/cloudflare";
+import { findWranglerFile, materializeDevWranglerConfig, materializeServiceDevConfigs, readWranglerJsonc, toRemotePlan } from "@lunora/config/cloudflare";
 
 import { detectPackageManager, execArgsFor, runScriptCommand, toolchainExecArgs } from "../../util/detect-package-manager";
 import { findAvailablePort } from "../../util/free-port";
@@ -25,7 +25,7 @@ import { hasIpv6Loopback } from "../../util/loopback";
 import type { SpawnDescriptor } from "../../util/spawn";
 import { codegenRequested, detectDevFlavor, viteDevCommand, withViteChildEnv } from "./lifecycle";
 import { planOwnDevServer } from "./own-dev-server";
-import type { DevCommandOptions, DevCommandPlan, DevRemotePlan } from "./types";
+import type { DevCommandOptions, DevCommandPlan } from "./types";
 
 /**
  * The dev-only wrangler config the `framework-worker` sidecar runs (`wrangler dev
@@ -59,7 +59,7 @@ const noopCleanup = (): void => {};
  * wrangler has no Cloudflare login, since that binding's remote proxy session
  * would otherwise stop `wrangler dev` from booting.
  */
-const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: string[]; plan: DevRemotePlan } => {
+const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: string[]; plan: RemotePlan } => {
     // `--local` starts wrangler with no remote proxy session, so the `ai` binding
     // can't take the session down and no temp config is needed.
     if (!options.remote && options.local === true) {
@@ -67,17 +67,9 @@ const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: str
     }
 
     const materialize = options.materializeDev ?? materializeDevWranglerConfig;
-    const result = materialize({ projectRoot: cwd, remote: options.remote === true });
-    const bindings = result.remoteBindings.map((binding) => `${binding.binding} (${binding.kind})`);
-    const plan: DevRemotePlan = {
-        bindings,
-        cleanup: result.cleanup,
-        enabled: options.remote === true,
-        reason: result.reason,
-        withheld: result.withheld,
-    };
+    const plan = toRemotePlan(materialize({ projectRoot: cwd, remote: options.remote === true }), options.remote === true);
 
-    return { args: result.configPath === undefined ? [] : ["--config", result.configPath], plan };
+    return { args: plan.configPath === undefined ? [] : ["--config", plan.configPath], plan };
 };
 
 /**
@@ -170,28 +162,28 @@ const LOOPBACK_ORIGIN_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1", 
  * `http://localhost:8787` by the scaffolds.
  */
 const devVariablesPinningPort = (cwd: string, port: number): string[] => {
-    let content: string;
+    let values: Record<string, string> | undefined;
 
     try {
-        content = readFileSync(join(cwd, DEV_VARS_FILE), "utf8");
+        values = readDevVariablesRecord(join(cwd, DEV_VARS_FILE));
     } catch {
-        // No `.dev.vars` (or unreadable) — nothing is pinned.
+        // Unreadable `.dev.vars` — nothing is pinned.
         return [];
     }
 
     const pinned: string[] = [];
 
-    for (const entry of parseDevVariableEntries(content)) {
+    for (const [key, value] of Object.entries(values ?? {})) {
         let parsed: URL;
 
         try {
-            parsed = new URL(entry.value);
+            parsed = new URL(value);
         } catch {
             continue;
         }
 
         if (LOOPBACK_ORIGIN_HOSTS.has(parsed.hostname) && parsed.port === String(port)) {
-            pinned.push(entry.key);
+            pinned.push(key);
         }
     }
 

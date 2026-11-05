@@ -18,6 +18,7 @@ import type { DiscoveryCache } from "@lunora/config";
 import {
     blockingFindingsMessage,
     CODEGEN_ENV,
+    createDiscoveryCache,
     isCodegenDisabled,
     LUNORA_TAG,
     reportCodegenFindings,
@@ -32,6 +33,7 @@ import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
 import { isRunnableDevEnvironment } from "vite";
 
+import { createBindingDriftNotifier } from "./binding-drift";
 import { markBuildStarted, oncePerBuild } from "./build-session";
 import { computeConfigFingerprint } from "./config-fingerprint";
 import configFlipRegenerates from "./config-flip";
@@ -43,6 +45,9 @@ import type { ResolvedLunoraPluginOptions } from "./types";
 
 /** Matches a project-variant tsconfig filename (`tsconfig.build.json`, …). */
 const TSCONFIG_VARIANT_RE = /[/\\]tsconfig\..+\.json$/u;
+
+/** A source binding inference scans: it reads `.ts`, `.tsx`, `.js` and their module variants. */
+const BINDING_SOURCE_RE = /\.[cm]?[jt]sx?$/u;
 
 /** An input of an RPC service's declaration snapshot: a source (`.js` too, under `allowJs`) or a tsconfig. */
 const SERVICE_SOURCE_RE = /(?:\.[cm]?[jt]sx?|(?:^|[/\\])tsconfig(?:\..+)?\.json)$/u;
@@ -339,6 +344,15 @@ const oncePerRun = async <T>(run: CodegenSafelyResult, step: string, perform: ()
  */
 const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: DiscoveryCache): Plugin => {
     const absoluteSchemaDirectory = resolve(options.projectRoot, options.schemaDir);
+    // Read at construction, before the remote-bindings plugin can inject its temp
+    // copy of the project's config into the same options object. Resolved against
+    // the project as the Cloudflare plugin resolves it, so a `configPath` that
+    // names the project's own `wrangler.jsonc` is not counted as custom.
+    const workerConfigPath = options.cloudflare === false ? undefined : (options.cloudflare as { configPath?: unknown }).configPath;
+    const customWorkerConfig =
+        typeof workerConfigPath === "string" &&
+        workerConfigPath !== "" &&
+        !WRANGLER_FILES.some((file) => resolve(options.projectRoot, file) === resolve(options.projectRoot, workerConfigPath));
 
     // Read once, at construction: the env cannot change under a running server,
     // and both consumers below (the dev-only `buildStart` skip and the watcher
@@ -389,6 +403,10 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
     let configFingerprint: string | undefined;
     let configBaselineSettled = false;
     let restartInFlight = false;
+    // A binding scan the restart window suppressed, and the running server's way
+    // to schedule it again — so a save that landed mid-restart is still checked.
+    let driftSkippedForRestart = false;
+    let rearmDrift: (() => void) | undefined;
 
     // Captured via the `config` hook (fires before `buildStart`), same idiom as
     // `createCommandProbe` in `dev-worker-env.ts`. `buildStart` runs for BOTH
@@ -570,12 +588,15 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 this.error(blockingMessage);
             }
 
-            // Auto-provision the bindings the code implies. Done once at startup
-            // (not on every schema edit): bindings change rarely and a restart
-            // picks up a newly-added capability. In dev, a declared-but-not-
-            // re-exported container/workflow is raised in the browser error
-            // overlay (Vite buffers it and replays to clients on connect) so the
-            // fix surfaces here rather than at a late `wrangler deploy` failure.
+            // Auto-provision the bindings the code implies. Done once per start,
+            // not on every save: writing wrangler.jsonc restarts the dev server
+            // (and every open socket with it), and an autosaved half-typed queue
+            // name would be provisioned for good. A save that needs a new binding
+            // gets a restart hint instead — see `createBindingDriftNotifier`. In
+            // dev, a declared-but-not-re-exported container/workflow is raised in
+            // the browser error overlay (Vite buffers it and replays to clients
+            // on connect) so the fix surfaces here rather than at a late
+            // `wrangler deploy` failure.
             await oncePerRun(run, "reconcile", async () =>
                 reconcileBindingsSafely({ ...options, cache: discovery }, consoleLogger, (gaps) => {
                     devServer?.hot.send({
@@ -741,6 +762,23 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 return true;
             };
 
+            const bindingDrift = createBindingDriftNotifier({
+                cache: discovery ?? createDiscoveryCache(),
+                isSuppressed: () => {
+                    if (restartInFlight) {
+                        driftSkippedForRestart = true;
+                    }
+
+                    // The scan plans against the project's own wrangler config, which a
+                    // custom `configPath` worker does not run: it would say the wrong thing.
+                    return restartInFlight || closed || customWorkerConfig;
+                },
+                project: options,
+                warn: serverLogger.warn,
+            });
+
+            rearmDrift = bindingDrift.noteSave;
+
             /**
              * One debounced regeneration: run codegen, run the project's
              * `postcodegen`, then tell the client. `codegen: false` is the event of
@@ -815,6 +853,9 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                     // reload — unless we're recovering from an error overlay.
                     notifyEnvironmentsAfterCodegen(server, changedFile, hadErrorOverlay);
                     hadErrorOverlay = false;
+
+                    // After the client is told, so the binding scan never delays the reload.
+                    bindingDrift.noteSave();
                 } catch (error: unknown) {
                     // Awaiting the hook made this async, which turns what used to be
                     // an uncaught exception into a silent unhandled rejection.
@@ -964,7 +1005,31 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                     return;
                 }
 
+                // `regenerate` schedules the binding scan once this save settles; one an
+                // earlier save scheduled would read the disk mid-edit.
+                bindingDrift.invalidate();
                 scheduler.onSave(normalized);
+            };
+
+            // Binding inference scans `src/` as well as the schema directory, and
+            // `regenerate` schedules the scan only for a codegen input it ran on. So
+            // this covers `src/` always, and in the schema directory every source
+            // codegen does not regenerate from: all of them with codegen watch off,
+            // and the non-`.ts` ones (`.js`, `.tsx`, …) with it on.
+            const sourceDirectory = resolve(options.projectRoot, "src");
+            const isUnder = (file: string, directory: string): boolean => file.startsWith(`${directory}${sep}`);
+            const onDriftSource = (file: string): void => {
+                const normalized = resolve(file);
+
+                if (!BINDING_SOURCE_RE.test(normalized) || isUnder(normalized, absoluteGeneratedDirectory)) {
+                    return;
+                }
+
+                const regenerates = !codegenDisabled && normalized.endsWith(".ts");
+
+                if (isUnder(normalized, sourceDirectory) || (!regenerates && isUnder(normalized, absoluteSchemaDirectory))) {
+                    bindingDrift.noteSave();
+                }
             };
 
             // A tsconfig DELETION can't be caught by the `normalized === findTsconfig(...)`
@@ -1003,6 +1068,12 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 server.watcher.on("unlink", onChange);
                 server.watcher.on("unlink", onConfigFileRemoved);
             }
+
+            // Like the schema directory, `src/` may sit outside the Vite root.
+            server.watcher.add(sourceDirectory);
+            server.watcher.on("add", onDriftSource);
+            server.watcher.on("change", onDriftSource);
+            server.watcher.on("unlink", onDriftSource);
 
             // The config files whose binding-relevant drift restarts the dev server
             // in place. Both wrangler candidate names are watched (even if absent
@@ -1079,6 +1150,12 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 Promise.resolve(server.restart())
                     .finally(() => {
                         restartInFlight = false;
+
+                        // On whichever server now runs: the restarted one, or the old one when the restart failed.
+                        if (driftSkippedForRestart) {
+                            driftSkippedForRestart = false;
+                            rearmDrift?.();
+                        }
                     })
                     .catch((error: unknown) => {
                         const message = error instanceof Error ? error.message : String(error);
@@ -1111,11 +1188,17 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions, discovery?: Discove
                 cachedProject = undefined;
 
                 scheduler.dispose();
+                bindingDrift.dispose();
 
-                server.watcher.off("add", onChange);
-                server.watcher.off("change", onChange);
-                server.watcher.off("unlink", onChange);
-                server.watcher.off("unlink", onConfigFileRemoved);
+                if (!codegenDisabled) {
+                    server.watcher.off("add", onChange);
+                    server.watcher.off("change", onChange);
+                    server.watcher.off("unlink", onChange);
+                    server.watcher.off("unlink", onConfigFileRemoved);
+                }
+                server.watcher.off("add", onDriftSource);
+                server.watcher.off("change", onDriftSource);
+                server.watcher.off("unlink", onDriftSource);
                 server.watcher.off("add", onConfigChange);
                 server.watcher.off("change", onConfigChange);
                 server.watcher.off("unlink", onConfigChange);

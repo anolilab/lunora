@@ -120,6 +120,10 @@ interface PlanViteRemoteOptions {
 
 Re-exported from `@lunora/config` — signature tracked at its source.
 
+### `RemotePlan` (interface)
+
+Re-exported from `@lunora/config` — signature tracked at its source.
+
 ### `ResolvedLunoraPluginOptions` (interface)
 
 ```ts
@@ -159,18 +163,6 @@ type SolutionFinder = NonNullable<OverlayPluginOptions["solutionFinders"]>[numbe
 
 ```ts
 const VERSION: string;
-```
-
-### `ViteRemotePlan` (interface)
-
-```ts
-interface ViteRemotePlan {
-    cleanup: () => void;
-    configPath?: string;
-    enabled: boolean;
-    reason?: string;
-    withheld: WithheldBinding[];
-}
 ```
 
 ### `WORKER_STARTUP_HINT` (const)
@@ -244,7 +236,10 @@ const devStatePlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
 ### `devVariablesPlugin` (const)
 
 ```ts
-const devVariablesPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
+const devVariablesPlugin: (options: ResolvedLunoraPluginOptions, { configPath, withheld }?: {
+    configPath?: string;
+    withheld?: () => ReadonlyArray<string>;
+}) => Plugin;
 ```
 
 ### `frameworkComposePlugin` (const)
@@ -292,7 +287,7 @@ const lunoraSolutionFinders: ReadonlyArray<SolutionFinder>;
 ### `planViteRemoteBindings` (const)
 
 ```ts
-const planViteRemoteBindings: (options: PlanViteRemoteOptions) => ViteRemotePlan;
+const planViteRemoteBindings: (options: PlanViteRemoteOptions) => RemotePlan;
 ```
 
 ### `proxyCheckPlugin` (const)
@@ -308,7 +303,7 @@ Re-exported from `@lunora/config` — signature tracked at its source.
 ### `remoteBindingsPlugin` (const)
 
 ```ts
-const remoteBindingsPlugin: (options: CloudflarePluginOptions | undefined, planOptions: PlanViteRemoteOptions) => Plugin;
+const remoteBindingsPlugin: (options: CloudflarePluginOptions | undefined, planOptions: PlanViteRemoteOptions, onPlan?: (plan: RemotePlan) => void) => Plugin;
 ```
 
 ### `resolveOverlayOption` (const)
@@ -326,7 +321,7 @@ const studioPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
 ### `withRemoteBindings` (const)
 
 ```ts
-const withRemoteBindings: (options: CloudflarePluginOptions, plan: ViteRemotePlan) => CloudflarePluginOptions;
+const withRemoteBindings: (options: CloudflarePluginOptions, plan: RemotePlan) => CloudflarePluginOptions;
 ```
 
 ### `withWorkerStartupHint` (const)

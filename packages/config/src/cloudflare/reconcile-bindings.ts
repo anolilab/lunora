@@ -14,7 +14,6 @@
  * exported — are returned as warnings rather than written, since a binding
  * referencing an unexported class would make `wrangler deploy` fail.
  */
-import { writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 
@@ -26,13 +25,14 @@ import celldBindingId from "../celld/celld-binding-id";
 import type { InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "../infer-bindings";
 import { applyModify } from "../jsonc-edit";
 import type { DurableObjectSpec, GeneratedClassModule } from "../worker-entry";
+import type { Manifest } from "./lunora-manifest";
 import { readManifest } from "./lunora-manifest";
 import { D1_PLACEHOLDER_ID, HYPERDRIVE_PLACEHOLDER_ID } from "./placeholder-ids";
 import { reconcileAssetRouting } from "./reconcile-assets";
 import type { OwnedTuning } from "./reconcile-queues";
 import { readOwnedTuning, reconcileEnvQueues, reconcileQueues, recordOwnedTuning } from "./reconcile-queues";
-import type { OwnedServices } from "./reconcile-services";
-import { readOwnedServices, reconcileDevConfigServices, reconcileServices, recordOwnedServices } from "./reconcile-services";
+import type { DevConfigServicesPlan, OwnedServices } from "./reconcile-services";
+import { planDevConfigServices, readOwnedServices, reconcileServices, recordOwnedServices } from "./reconcile-services";
 import collectWarnings from "./reconcile-warnings";
 import { spaStaticPaths } from "./spa-assets";
 import { objectBindingEntries, stringEntries } from "./validate-bindings";
@@ -95,6 +95,23 @@ interface ReconcileBindingsResult {
 }
 
 /**
+ * What a {@link planWranglerBindings} pass would change, before anything is
+ * written. `edit` is absent when there is no readable wrangler config to edit.
+ */
+interface WranglerBindingsPlan extends Omit<ReconcileBindingsResult, "changed" | "devConfig"> {
+    /** The dev sidecar's planned config, when the project declares services. */
+    devConfig?: DevConfigServicesPlan;
+
+    edit?: {
+        manifest: Manifest | undefined;
+        original: string;
+        /** The ownership each step claims, written once the config is. */
+        records: OwnershipRecord[];
+        text: string;
+    };
+}
+
+/**
  * The declared-but-not-re-exported containers and workflows, as structured
  * {@link ExportGap}s. The same gaps `collectWarnings` renders into prose — kept
  * here as data so the Vite plugin can raise them in the error overlay with a
@@ -102,7 +119,7 @@ interface ReconcileBindingsResult {
  *
  * Exported because reconciliation is not the only caller that needs the answer:
  * `lunora codegen` and `lunora doctor` both want the gaps WITHOUT rewriting
- * `wrangler.jsonc`, which is the rest of what {@link reconcileWranglerBindings}
+ * `wrangler.jsonc`, which is the rest of what `reconcileWranglerBindings` (`apply-bindings.ts`)
  * does. Deriving them again from `inferred.{containers,workflows,agents}` at each
  * call site is how one kind ends up silently uncovered.
  */
@@ -922,19 +939,24 @@ const reconcileWorkflows = (
  * steps below reads AND writes the top-level path) that this fix does not
  * attempt — `lunora deploy --env <name>` now VALIDATES the env-scoped view
  * (closing the reported gap), it just doesn't yet auto-provision it.
+ *
+ * Writes nothing — not `wrangler.jsonc`, not the ownership records in the
+ * manifest, not the dev sidecar's config: `applyWranglerBindings` (`apply-bindings.ts`) does.
+ * The split lets a watcher ask what a pass would change (see
+ * `pendingBindingChanges`) from exactly the steps a real pass runs.
  */
-const reconcileWranglerBindings = (
+const planWranglerBindings = (
     projectRoot: string,
     inferred: InferredBindings,
     { environment, target }: { environment?: string; target?: string } = {},
-): ReconcileBindingsResult => {
+): WranglerBindingsPlan => {
     const wranglerPath = findWranglerFile(projectRoot);
 
     const exportGaps = collectExportGaps(inferred);
 
     if (!wranglerPath) {
         // No config to inspect — emit the raw capability hints unfiltered.
-        return { added: [], changed: false, exportGaps, reason: "wrangler.jsonc not found", updated: [], warnings: collectWarnings(inferred, projectRoot) };
+        return { added: [], exportGaps, reason: "wrangler.jsonc not found", updated: [], warnings: collectWarnings(inferred, projectRoot) };
     }
 
     const { parsed, text: original } = readWranglerJsonc<WranglerShape>(wranglerPath);
@@ -942,7 +964,6 @@ const reconcileWranglerBindings = (
     if (parsed === undefined) {
         return {
             added: [],
-            changed: false,
             exportGaps,
             reason: `failed to parse ${wranglerPath} as JSONC`,
             updated: [],
@@ -1011,6 +1032,8 @@ const reconcileWranglerBindings = (
     const ownedScopes: Record<string, OwnedTuning> = {};
     const ownedServicesRecord = readOwnedServices(manifest);
     let ownedServices: OwnedServices | undefined;
+    // The dev config's share of the services record, by whether its write lands.
+    let devOwned: Record<"unwritten" | "written", OwnedServices> = { unwritten: {}, written: {} };
 
     // The reconcile pipeline: each enabled step rewrites `text` but reads the
     // original `parsed`. This is only safe because the steps touch disjoint
@@ -1111,13 +1134,13 @@ const reconcileWranglerBindings = (
 
                 ownedServices = step.owned;
 
-                // Written after the dev config step below has added what it owns to `ownedServices`.
+                // Written after the dev config step below has planned what it owns.
                 const record: OwnershipRecord = {
                     consequence: "a service removed from lunora.config stays bound",
                     key: "services",
                     label: "service bindings",
-                    write: (current) => {
-                        recordOwnedServices(current, ownedServices ?? step.owned);
+                    write: (current, { devConfigWritten }) => {
+                        recordOwnedServices(current, { ...ownedServices, ...(devConfigWritten ? devOwned.written : devOwned.unwritten) });
                     },
                 };
 
@@ -1160,40 +1183,18 @@ const reconcileWranglerBindings = (
         records.push(...[result.record].filter((record) => record !== undefined));
     }
 
-    // Ownership is recorded only once the config it describes is on disk, never
-    // before: a record ahead of the file would let the next pass remove a field
-    // this one never managed to write.
-    const recordOwnership = (wranglerWritten: boolean): void => {
-        if (manifest === undefined) {
-            return;
-        }
-
-        for (const record of records) {
-            // Its own failure, not the caller's "binding inference skipped": the
-            // config change it describes may already be on disk.
-            try {
-                // Re-read per record: each write starts from the file as the last
-                // one left it, or the second would drop the key the first wrote.
-                record.write(readManifest(projectRoot) ?? manifest);
-            } catch (error: unknown) {
-                warnings.push(
-                    `${wranglerWritten ? "wrangler.jsonc was updated, but " : ""}recording the ${record.label} reconcile owns in ${manifest.path} (lunora.${record.key}) failed: ${error instanceof Error ? error.message : String(error)}. Until it is recorded, ${record.consequence}.`,
-                );
-            }
-        }
-    };
-
     // The SvelteKit / Nuxt dev sidecar runs its own `wrangler.dev.jsonc`; its
     // worker hosts the actions, so it gets the same service bindings. Same
-    // skip-when-unreadable rule as the step above.
-    let devConfig: ReconcileBindingsResult["devConfig"];
+    // skip-when-unreadable rule as the services step. Planned before the
+    // records are returned: the services record's `write` reads `ownedServices`.
+    let devConfig: WranglerBindingsPlan["devConfig"];
 
     if (inferred.services !== undefined) {
-        const devStep = reconcileDevConfigServices(projectRoot, inferred.services, ownedServicesRecord);
+        const devStep = planDevConfigServices(projectRoot, inferred.services, ownedServicesRecord);
 
         warnings.push(...devStep.warnings);
-        ownedServices = { ...ownedServices, ...devStep.owned };
-        devConfig = devStep.added.length > 0 || devStep.updated.length > 0 ? { added: devStep.added, path: devStep.path, updated: devStep.updated } : undefined;
+        devOwned = { unwritten: devStep.previouslyOwned, written: devStep.owned };
+        devConfig = devStep;
     }
 
     // A freshly-written DB binding carries a placeholder id; surface it so the
@@ -1202,17 +1203,8 @@ const reconcileWranglerBindings = (
     // only step that emits this label.
     warnings.push(...placeholderWarnings(added, target));
 
-    if (text === original) {
-        recordOwnership(false);
-
-        return { added, changed: false, devConfig, exportGaps, reason: "bindings already in sync", updated, warnings, wranglerPath };
-    }
-
-    writeFileSync(wranglerPath, text, "utf8");
-    recordOwnership(true);
-
-    return { added, changed: true, devConfig, exportGaps, updated, warnings, wranglerPath };
+    return { added, devConfig, edit: { manifest, original, records, text }, exportGaps, updated, warnings, wranglerPath };
 };
 
-export type { ExportGap, ReconcileBindingsResult };
-export { collectExportGaps, reconcileWranglerBindings };
+export type { ExportGap, ReconcileBindingsResult, WranglerBindingsPlan };
+export { collectExportGaps, planWranglerBindings };
