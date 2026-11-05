@@ -93,6 +93,19 @@ describe("createWorker — a single-page app's assets behind `/*`", () => {
         expect(head.status).toBe(200);
     });
 
+    it("adds only the security headers the binding's response lacks, so a value from _headers wins", async () => {
+        expect.assertions(2);
+
+        const assets: AssetsFetcherLike = {
+            fetch: async () => new Response(SHELL, { headers: { "content-type": "text/html", etag: '"shell"', "x-frame-options": "DENY" } }),
+        };
+        const worker = createWorker({ httpRouter: router, shardDO: shardNamespace(), spaAssets: assets });
+        const page = await worker.fetch(navigate("/embed/widget"), {}, fakeContext);
+
+        expect(page.headers.get("x-frame-options")).toBe("DENY");
+        expect(page.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+    });
+
     it("keeps the 404 for a fetch no route serves, where the binding could only answer with the shell", async () => {
         expect.assertions(2);
 

@@ -215,6 +215,10 @@ header (for example `DENY` and `SAMEORIGIN`), and browsers reject that. So:
   ! X-Frame-Options
 ```
 
+A detach alone does not hold on a [single-page app](/docs/deployment#single-page-apps)
+whose Worker serves its files, because the Worker adds a missing security header
+back. There, detach and set the value you want in the same rule.
+
 Cloudflare applies at most 100 rules from `_headers` and ignores a line longer
 than 2,000 characters. Your rules come first in that count: when the file
 already holds your 100, the block is left out (with a warning) instead of

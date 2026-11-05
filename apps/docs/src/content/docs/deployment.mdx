@@ -742,10 +742,17 @@ The generated Worker then answers what no route serves from that binding:
 
 Only a request no route matched falls back. A 404 or 403 that one of your
 handlers returns stays as it is, and a `POST`, `PUT`, `PATCH` or `DELETE` that
-misses keeps its 404. A router you give `notFound` yourself owns its misses, and
-nothing falls back for it. The shell goes through the Worker, so it carries the
-Worker's security headers, and your `_headers` rules still apply to it:
-Cloudflare applies them to responses from the binding too.
+misses keeps its 404. That holds for a not-found handler you set on an
+`httpRouter()` with `app.notFound(…)`: it still answers every miss that is not a
+page load. A router that is not built by `httpRouter()` (a plain `new Hono()`)
+never reports a miss, so its deep links keep the 404.
+
+Files served this way go through the Worker. Cloudflare applies your `_headers`
+rules to responses from the binding too, and the Worker then adds each of its
+security headers the response does not already carry. A value your `_headers`
+sets wins, but a rule that only detaches a header (`! X-Frame-Options`) is
+undone on these responses, since the Worker adds the default back. Set the value
+you want instead, or change it in `security.headers`.
 
 Without a `binding`, the Worker cannot reach the shell, so Lunora keeps the list
 of routes it can see and warns: add `"binding": "ASSETS"` to the block. The

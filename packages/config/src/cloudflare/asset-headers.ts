@@ -5,7 +5,11 @@
  * shell) without running the Worker, so `@lunora/runtime`'s `decorateResponse`
  * never sees it. `_headers` is the only place those responses get headers from,
  * and it applies ONLY to them: a Worker-produced response ignores it. So the two
- * layers never stack on one response.
+ * layers never stack on one response. The exception is a single-page app whose
+ * Worker runs first and serves files through the assets binding (`spaAssets` in
+ * `@lunora/runtime`): Cloudflare applies `_headers` there too, and the Worker then
+ * adds only the security headers the response lacks. A value set here wins, but a
+ * `! Header` that only detaches a default is undone on those responses.
  *
  * The block sits between two marker lines at the top of the file and is
  * rewritten on every build; everything outside it is the user's and is kept as
