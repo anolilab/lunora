@@ -683,9 +683,9 @@ block) with every path the Worker serves that they can see:
 A rule cannot hold a route parameter, so each parameter becomes a `*` where it
 stands: `/api/todos/:id` becomes `/api/todos/*`, `/users/:id/avatar.png` becomes
 `/users/*/avatar.png` (so the SPA keeps `/users/42`), and `/files/*` becomes
-`/files` plus `/files/*`. A `*` in a rule matches across `/` too, so a route that
-ends in a parameter also takes the deeper paths under it (`/api/todos/1/x`), which
-the Worker answers with its 404. A route whose first segment is a parameter
+`/files` plus `/files/*`. A `*` in a rule matches across `/` too, so a rule also
+takes deeper paths in the parameter's place (`/api/todos/1/x`,
+`/users/a/b/avatar.png`), which the Worker answers with its 404. A route whose first segment is a parameter
 (`/:tenant/api`), or the site root `/`, would send every path to the Worker and is
 reported instead. Rules another rule covers are dropped, and the list stays
 within Cloudflare's limits (100 rules of at most 100 characters); anything over
@@ -700,6 +700,14 @@ you wrote, or edited after Lunora wrote it, is never changed. If it leaves out
 one of the paths above, Lunora warns and names it. Two kinds of route are
 invisible at config time, so add them yourself: a custom auth `basePath`, and
 routes you add to a Hono `httpRouter()` directly rather than with `httpRoute`.
+
+:::caution[A single-page app answers every unlisted path]
+Once `run_worker_first` is a list, Cloudflare applies `not_found_handling:
+"single-page-application"` to every request no rule names, not only to browser
+navigations. A Worker path missing from the list, including a `fetch` to it or
+to a mistyped API path, gets `index.html` with a `200` instead of the Worker's
+response. Add every such path to the list.
+:::
 
 Because an asset hit never runs the Worker, it also skips the Worker's security
 headers. The production build writes them into the assets' `_headers` file
