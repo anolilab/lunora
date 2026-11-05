@@ -18,7 +18,7 @@ import { ENV_FILENAME } from "@lunora/codegen";
 
 import type { EnvKeyFailure } from "../../../shared/env-contract";
 import { envContractOf } from "../../../shared/env-contract";
-import { redactSecrets } from "../../../shared/redact-secrets";
+import { REDACTED, redactSecrets } from "../../../shared/redact-secrets";
 import type { ManifestConfigShape } from "./cloudflare/binding-manifest";
 import { buildBindingManifest } from "./cloudflare/binding-manifest";
 import { readProjectWrangler, readWranglerJsonc } from "./cloudflare/wrangler-path";
@@ -88,6 +88,47 @@ const defaultLoad = async (path: string): Promise<unknown> => {
     return createJiti(path, { interopDefault: false, moduleCache: false }).import(path);
 };
 
+/** Below this length a value is too likely to occur by chance in the message's own words to be masked by text. */
+const MIN_MASKED_LENGTH = 3;
+
+/**
+ * The parts of `value` a validator message could quote: the value itself and,
+ * for a URL, its password. `redactSecrets` keys off secret-looking names and
+ * shapes, so a short password in a `DATABASE_URL` slips past it.
+ */
+const quotablePartsOf = (value: unknown): string[] => {
+    if (typeof value !== "string") {
+        return [];
+    }
+
+    const parts = [value];
+
+    if (URL.canParse(value)) {
+        const { password } = new URL(value);
+
+        parts.push(password);
+
+        try {
+            parts.push(decodeURIComponent(password));
+        } catch {
+            // A stray `%` the URL parser kept as is: the encoded form above is all there is.
+        }
+    }
+
+    return parts.filter((part) => part.length >= MIN_MASKED_LENGTH).toSorted((a, b) => b.length - a.length);
+};
+
+/** A failure's message with the key's own value masked, whatever the key is named. */
+const maskOwnValue = (failure: EnvKeyFailure, env: Record<string, unknown>): EnvKeyFailure => {
+    let { message } = failure;
+
+    for (const part of quotablePartsOf(env[failure.key])) {
+        message = message.replaceAll(part, REDACTED);
+    }
+
+    return message === failure.message ? failure : { ...failure, message };
+};
+
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const runCheck = async (options: DevEnvCheckOptions): Promise<DevEnvCheck> => {
@@ -134,7 +175,9 @@ const runCheck = async (options: DevEnvCheckOptions): Promise<DevEnvCheck> => {
                   .bindings.map((requirement) => requirement.binding)
                   .filter((binding) => !withheld.has(binding)),
     );
-    const failures = check(env).filter((failure) => !bindingNames.has(failure.key));
+    const failures = check(env)
+        .filter((failure) => !bindingNames.has(failure.key))
+        .map((failure) => maskOwnValue(failure, env));
 
     return failures.length === 0 ? { kind: "valid" } : { failures, kind: "invalid", sources: resolved.sources };
 };

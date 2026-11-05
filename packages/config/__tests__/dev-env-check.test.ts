@@ -205,6 +205,23 @@ describe(checkDevEnv, () => {
         expect(JSON.stringify(result)).not.toContain(secret);
     });
 
+    it("masks the key's own value in a validator message, whatever the key is named", async () => {
+        expect.assertions(3);
+
+        writeFileSync(join(projectRoot, ".dev.vars"), "DATABASE_URL=postgres://app:p@ss!@db.local/app\n");
+
+        const result = await check(
+            accessorWith((env) => [{ key: "DATABASE_URL", message: `bad host in ${String(env["DATABASE_URL"])} (password p@ss! rejected)` }]),
+        );
+
+        expect(result).toMatchObject({ kind: "invalid" });
+
+        const message = result.kind === "invalid" ? (result.failures[0]?.message ?? "") : "";
+
+        expect(message).not.toContain("p@ss!");
+        expect(message).toContain("[redacted]");
+    });
+
     it("ignores an export that only looks like an accessor", async () => {
         expect.assertions(1);
 
