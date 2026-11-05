@@ -30,6 +30,7 @@
         "apps/bench/lunora/presence/**",
         "apps/bench/lunora/ratelimit/**",
         "apps/bench/lunora/saas/**",
+        "apps/bench/lunora/seats.ts",
         "apps/bench/lunora/storage/**",
         "apps/bench/lunora/domains/**",
         "apps/bench/.bench/**",

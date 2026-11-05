@@ -544,8 +544,8 @@ bound on what all first calls together would pay.
 ## 19. Defects in the registry and template copies the bench mirrors (medium)
 
 PR review on #1420 turned these up. The bench keeps its copies identical to
-`registry/*` and `templates/saas`, so they are fixed upstream in #1481 and reach
-the bench when its copies are next resynced.
+`registry/*` and `templates/saas`, so they were fixed upstream in #1481, and the
+bench's copies are resynced with that fix.
 
 - **`mail` (and `auth`, `auth-otp`, `auth-magic-link`): a Resend-only deployment
   cannot send.** The items passed `cloudflareSend` to `createMailerFromEnv`

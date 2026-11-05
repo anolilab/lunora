@@ -1,4 +1,4 @@
-import { webhookResponse } from "@lunora/payment";
+import { readWebhookBody, webhookResponse } from "@lunora/payment";
 import { env as workerEnv } from "cloudflare:workers";
 import { httpAction, httpRouter } from "lunorash/server";
 
@@ -41,7 +41,10 @@ app.post(
             }
         }
 
-        const result = await ctx.runAction(internal.payment.processWebhook, { body: await request.text(), headers });
+        // Capped (413 past 1 MiB): the route is public and the body is read before its signature can be checked.
+        const body = await readWebhookBody(request);
+
+        const result = await ctx.runAction(internal.payment.processWebhook, { body, headers });
 
         return webhookResponse(result);
     }),

@@ -18,6 +18,10 @@
         "enabled": true,
         "head_sampling_rate": 1,
     },
+    // Deploy attribution and REST edge-cache scoping: the runtime stamps the
+    // version onto every request-log row, and keys stored REST responses by it so
+    // a deploy never serves the previous code's answers.
+    "version_metadata": { "binding": "CF_VERSION_METADATA" },
     "d1_databases": [
         {
             "binding": "DB",

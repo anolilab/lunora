@@ -21,11 +21,14 @@
 import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, isDevEnvironment, lunoraD1Adapter } from "@lunora/auth";
 import { admin, organization, passkey, twoFactor, uiConfig } from "@lunora/auth/plugins";
+import { isLunoraError } from "@lunora/errors";
 import { createMailerFromEnv } from "@lunora/mail";
+import { APIError } from "better-auth/api";
 import type { ShardNamespaceLike } from "lunorash/runtime";
 import { createShardClient } from "lunorash/runtime";
 
 import { internal } from "../_generated/internal.js";
+import { INVITATION_EXPIRES_SECONDS } from "../seats.js";
 
 /**
  * The Worker env bindings this module needs. Lunora generates a richer `Env`
@@ -179,6 +182,64 @@ const projectOrganization = async (env: AuthEnv, organization: OrganizationRecor
 };
 
 /**
+ * The organisation's seat cap. better-auth's `membershipLimit` checks it when a
+ * member is added or an invitation is accepted, and {@link holdInvitationSeat}
+ * when one is sent. The plan comes from billing on the root shard
+ * (`payment:seatAllowance`); an unmetered plan has no cap. A failed lookup
+ * throws, so the addition is refused rather than let through unchecked.
+ */
+const seatLimit = async (env: AuthEnv, organizationId: string): Promise<number> => {
+    const allowance = await createShardClient(env.SHARD, { shardKey: "__root__" }).call(internal.payment.seatAllowance, { referenceId: organizationId });
+
+    return allowance ?? Number.POSITIVE_INFINITY;
+};
+
+/**
+ * Reserve the seat an invitation to `email` would take, or refuse it. better-auth
+ * checks `membershipLimit` only when an invitation is accepted, so without this an
+ * owner could send invitations every invitee would then fail to accept. The hold
+ * is taken in a mutation (`seats:holdInvitationSeat`), which is what keeps two
+ * invitations racing for the last seat from both getting it.
+ */
+const holdInvitationSeat = async (env: AuthEnv, organizationId: string, email: string): Promise<void> => {
+    const { adapter } = await getAuth(env).$context;
+    const [limit, members] = await Promise.all([
+        seatLimit(env, organizationId),
+        adapter.count({ model: "member", where: [{ field: "organizationId", value: organizationId }] }),
+    ]);
+
+    try {
+        await createShardClient(env.SHARD, { shardKey: "__root__" }).call(internal.seats.holdInvitationSeat, {
+            email,
+            limit: Number.isFinite(limit) ? limit : null,
+            members,
+            organizationId,
+        });
+    } catch (error) {
+        // Structural: the shard client rebuilds the refusal from its wire form, not as this module's class.
+        if (isLunoraError(error) && error.code === "FORBIDDEN") {
+            throw new APIError("FORBIDDEN", { message: error.message });
+        }
+
+        throw error;
+    }
+};
+
+/**
+ * Give back an invitation's seat once it is accepted (the member now counts),
+ * rejected or cancelled. Best-effort: better-auth has already committed the
+ * change, and a hold that is not released lapses with its invitation.
+ */
+const releaseInvitationSeat = async (env: AuthEnv, organizationId: string, email: string): Promise<void> => {
+    try {
+        await createShardClient(env.SHARD, { shardKey: "__root__" }).call(internal.seats.releaseInvitationSeat, { email, organizationId });
+    } catch (error) {
+        // eslint-disable-next-line no-console -- a stuck hold lapses with its invitation; surface it in Worker logs
+        console.error("[saas] could not release an invitation's seat", { error, organizationId });
+    }
+};
+
+/**
  * The better-auth options. Edit freely — add `socialProviders`, `plugins` (from
  * `@lunora/auth/plugins`), or a `session` policy (`sessionPresets` from
  * `@lunora/auth`). The `auth-clerk` / `auth-auth0` registry items scaffold
@@ -230,9 +291,18 @@ export const authOptions = (env: AuthEnv): LunoraAuthOptions => {
              * `resolveIdentity` in `lunora/server.ts`.
              */
             organization({
+                // The seat hold an invitation takes (`lunora/seats.ts`) lapses with it, so both come from one constant.
+                invitationExpiresIn: INVITATION_EXPIRES_SECONDS,
+                membershipLimit: async (_user, record) => seatLimit(env, record.id),
                 // Keep the admin projection in step with the records it mirrors.
                 organizationHooks: {
-                    afterAcceptInvitation: async ({ organization: record }) => projectOrganization(env, record),
+                    beforeCreateInvitation: async ({ invitation, organization: record }) => holdInvitationSeat(env, record.id, invitation.email),
+                    afterAcceptInvitation: async ({ invitation, organization: record }) => {
+                        await releaseInvitationSeat(env, record.id, invitation.email);
+                        await projectOrganization(env, record);
+                    },
+                    afterCancelInvitation: async ({ invitation, organization: record }) => releaseInvitationSeat(env, record.id, invitation.email),
+                    afterRejectInvitation: async ({ invitation, organization: record }) => releaseInvitationSeat(env, record.id, invitation.email),
                     afterAddMember: async ({ organization: record }) => projectOrganization(env, record),
                     afterCreateOrganization: async ({ organization: record }) => projectOrganization(env, record),
                     afterDeleteOrganization: async ({ organization: record }) => projectOrganization(env, record, { status: "deleted" }),

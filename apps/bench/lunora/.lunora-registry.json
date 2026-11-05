@@ -13,12 +13,12 @@
         "saas": {
             "files": {
                 "lunora/identity.ts": "edc458c3bbbbfb369a3ec5f0aa422bf8aed1bb9089221617b5ef767541f5d8e8",
-                "lunora/saas/index.ts": "eb786532165ef9670b9f5381d523751c5a15ce1e16043d7b42140d30f0b33098"
+                "lunora/saas/index.ts": "0731726289e7867d8095169a695e0f06ccfc29948b6fdc25b297b66d5f2ca983"
             }
         },
         "payment": {
             "files": {
-                "lunora/payment/index.ts": "34fee106a713e7436aa745e9c0f6d3eaea3d7509860d8d63f84fb8065bbb6447"
+                "lunora/payment/index.ts": "5b1ac07ad363ecf3d299bb545d0ea35daa8ed4733ca6e4a899f219d1474c97d0"
             }
         },
         "presence": {
@@ -28,7 +28,7 @@
         },
         "ai": {
             "files": {
-                "lunora/ai/index.ts": "260f17bd36904ea3133e8e73a957c5d143baab80497e0a57fca2c47d0ddff447"
+                "lunora/ai/index.ts": "5db9e10528619a6b82f86515988d7a5bc41ff756328156622d88f6eef3aa2284"
             }
         },
         "flags": {
@@ -38,7 +38,7 @@
         },
         "mail": {
             "files": {
-                "lunora/mail/index.ts": "9a5c9888991e7aa0a4391343c49adaec5c2ee05425d548debcd9ba2d4e3fedcb"
+                "lunora/mail/index.ts": "9bcf7316ca1b4a43598273b5bf61514a50b60afd0ab40ba8e0eb9b19ef5b76b0"
             }
         },
         "storage": {

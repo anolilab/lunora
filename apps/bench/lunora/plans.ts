@@ -41,17 +41,14 @@ interface CatalogPlan {
 
     /**
      * Maximum members. `undefined` means unmetered. Shown on the billing page's seat
-     * meter and handed to the payment entitlements; nothing here stops an invitation
-     * at the limit. `saas_organizations.plan` is not yet synced from the
-     * subscription, so a cap keyed on it would hold paying organisations to the
-     * free allowance — sync the plan first, then enforce in better-auth's
-     * `membershipLimit`.
+     * meter, and enforced by better-auth's `membershipLimit` in `lunora/auth/index.ts`
+     * against the organisation's active subscription (`payment:seatAllowance`).
      */
     seats?: number;
 }
 
 export const PLANS: ReadonlyArray<CatalogPlan> = [
-    { apiCalls: 0, blurb: "One member, to try it out", currency: "USD", features: [], id: "free", name: "Free", priceMinor: 0, seats: 1 },
+    { apiCalls: 0, blurb: "A small team, to try it out", currency: "USD", features: [], id: "free", name: "Free", priceMinor: 0, seats: 3 },
     {
         apiCalls: 10_000,
         blurb: "Your whole team, unlimited projects",
