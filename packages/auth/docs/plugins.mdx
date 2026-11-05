@@ -134,9 +134,11 @@ When your app is the OAuth provider, every `refresh_token` grant rotates the
 refresh token: the client gets a new one and the old one is marked used.
 Presenting a used refresh token again is treated as theft, as RFC 9700 §4.14.2
 recommends. The request fails with `invalid_grant`, and every refresh token
-and opaque access token that **user** holds for that **client** is revoked,
-including the newer token it was rotated into. The user has to authorize
-the client again. better-auth implements this; Lunora pins it with a test
+that **user** holds for that **client** is revoked, including the newer token
+it was rotated into, together with every opaque access token issued alongside
+one of them. An access token from a grant without `offline_access` has no
+refresh token, so it is not revoked and lives until it expires. The user has
+to authorize the client again. better-auth implements this; Lunora pins it with a test
 against its own SQL store.
 
 Four details decide how it behaves in practice:
@@ -145,7 +147,8 @@ Four details decide how it behaves in practice:
   one device also signs that user's other devices out of the same client. Other
   users' grants, and the user's grants to other clients, are left alone.
 - **JWT access tokens survive.** When a grant carries a `resource`, the
-  provider issues JWT access tokens, and a JWT cannot be revoked. It stays
+  provider issues JWT access tokens (unless you set `disableJwtPlugin`), and a
+  JWT cannot be revoked. It stays
   valid until it expires, so keep access-token lifetimes short when resources
   are in play. Opaque access tokens, issued when no `resource` is requested,
   are revoked immediately.
@@ -156,12 +159,21 @@ Four details decide how it behaves in practice:
 - **Retries are refused by default.** `refreshTokenReuseInterval` is `0`, so a
   client that retries a refresh after losing the response (a timeout, two tabs
   racing) trips the reuse detection and loses its grant. Setting it to a few
-  seconds makes a retry inside that window return the same response instead.
-  A replay after the window still revokes the family.
+  seconds makes a retry inside that window, with the same scopes, resources
+  and DPoP key, get the response of that rotation back instead. The window
+  cannot tell a retry from a stolen token: a replay inside it also receives
+  the tokens that rotation issued, and nothing is revoked. Keep it short. A
+  replay after the window still revokes the family.
 
-`mcp()` is `oauthProvider` underneath and behaves the same, except that it
-defaults `refreshTokenReuseInterval` to 30 seconds. Both options go on
-`oauthProvider({ … })` or `mcp({ … })`:
+`mcp()` is `oauthProvider` underneath, with two differences that weaken this
+protection. It defaults `refreshTokenReuseInterval` to 30 seconds, so a replay
+within 30 seconds of a rotation is answered, not detected. And MCP clients send
+its `resource` when they authorize, as the MCP authorization spec requires, and
+the refresh token keeps it, so the access tokens are JWTs that outlive the
+revocation. Give `mcp()` a short
+`accessTokenExpiresIn` (seconds, one hour by default), and lower
+`refreshTokenReuseInterval` unless your clients need the retry window. These
+options go on `oauthProvider({ … })` or `mcp({ … })`:
 
 ```ts
 oauthProvider({
