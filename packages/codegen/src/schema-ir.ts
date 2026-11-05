@@ -164,6 +164,7 @@ const LUNORA_ERROR_CODES: ReadonlyArray<string> = [
     "UNPROCESSABLE",
     "VALIDATION_ERROR",
     "UNIQUE_INDEX_DUPLICATES",
+    "INVALID_CURSOR",
 ];
 
 export { acceptsAbsentIr, literalConst, LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema };

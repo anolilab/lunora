@@ -512,6 +512,19 @@ class LunoraSubscriptionRegistry {
         };
     }
 
+    /**
+     * Make `queryKey`'s next {@link liveValue} wait for a fresh push instead of returning the one it
+     * holds: for a value the caller knows is stale and has asked the client to replace with a new
+     * snapshot (`LunoraClient.resnapshot`).
+     */
+    public awaitFreshPush(queryKey: QueryKey): void {
+        const live = this.live.get(keyHash(queryKey));
+
+        if (live?.state.status === "pushed") {
+            live.state = IDLE;
+        }
+    }
+
     private liveFor(key: string): LiveValue {
         let live = this.live.get(key);
 

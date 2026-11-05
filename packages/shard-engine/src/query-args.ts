@@ -418,19 +418,21 @@ const encodeCursor = (record: Record<string, unknown>, keys: OrderKey[]): string
 
 /**
  * The cursor is client-supplied, so any decode failure is a bad request, not
- * a server fault. Returns a `LunoraError`-shaped error the runtime's error
- * mapper renders as a 400 (a raw `TypeError`/`SyntaxError` would fall through
- * to a generic 500).
+ * a server fault: `INVALID_CURSOR`, a 400 (a raw `TypeError`/`SyntaxError`
+ * would fall through to a generic 500). Its own code rather than
+ * `BAD_REQUEST`, because a paginated feed restarts from page one on it and on
+ * nothing else.
  */
-const invalidCursor = (): LunoraError => new LunoraError("BAD_REQUEST", "invalid cursor");
+const invalidCursor = (): LunoraError => new LunoraError("INVALID_CURSOR", "invalid cursor");
 
 /** Decode a cursor back into its ordered sort-key values (orderBy fields, then id). */
 const decodeCursor = (cursor: string): unknown[] => {
     // Refuse an unprefixed cursor rather than seek with it. It was minted by a
     // build whose tiebreak ran the other way, so reading it here returns rows
     // from the wrong side of the tie group — silently, and looking exactly like
-    // a correct page. A typed 400 is recoverable (the client resets the feed);
-    // wrong rows presented as right ones are not.
+    // a correct page. A typed 400 is recoverable (a paginated feed restarts
+    // from page one on `INVALID_CURSOR`); wrong rows presented as right ones
+    // are not.
     if (!cursor.startsWith(CURSOR_PREFIX)) {
         throw invalidCursor();
     }

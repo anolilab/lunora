@@ -116,13 +116,13 @@ describe("encodeCursor / decodeCursor", () => {
         expect(() => decodeCursor(bogus)).toThrow("invalid cursor");
     });
 
-    it("rejects a cursor with no format marker", () => {
+    it("rejects a cursor with no format marker as INVALID_CURSOR, the code a paginated feed restarts on", () => {
         expect.assertions(1);
 
         // A cursor minted before the tiebreak direction changed. Its bytes are a
         // perfectly good payload; only the seek's reading of them moved, so the
         // marker is the sole thing that can tell the two apart.
-        expect(() => decodeCursor(btoa(JSON.stringify([1, "row-1"])))).toThrow("invalid cursor");
+        expect(() => decodeCursor(btoa(JSON.stringify([1, "row-1"])))).toThrow(expect.objectContaining({ code: "INVALID_CURSOR", message: "invalid cursor" }));
     });
 });
 

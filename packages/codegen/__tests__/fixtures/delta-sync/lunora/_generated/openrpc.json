@@ -119,6 +119,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "notes:add",
@@ -272,6 +279,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "notes:list",
@@ -421,6 +435,13 @@
             "code": "UNIQUE_INDEX_DUPLICATES"
           },
           "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "notes:summary",

@@ -675,6 +675,9 @@ class LunoraClient {
         queued: number;
     }>;
     subscribeScheduledJobs(onJobs: (jobs: ScheduleRecord[]) => void): Unsubscribe;
+    resnapshot<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: {
+        shardKey?: string;
+    }): void;
     subscribe<F extends FunctionReference>(function_: F, args: ArgsOf<F>, callback: (data: ReturnOf<F>) => void, options?: {
         onCheckpoint?: (watermark: SyncWatermark) => void;
         onError?: SubscriptionErrorCallback;
@@ -1371,6 +1374,7 @@ interface SubscriptionState {
     ack: "acked" | "idle" | "inflight";
     readonly args: Record<string, unknown>;
     readonly argsKey: string;
+    awaitingSnapshot?: boolean;
     readonly callbacks: Set<SubscriptionCallback>;
     readonly checkpointCallbacks: Set<(watermark: SyncWatermark) => void>;
     readonly errorCallbacks: Set<SubscriptionErrorCallback>;
@@ -2243,6 +2247,12 @@ interface Page {
 }
 ```
 
+### `PageFailure` (type)
+
+```ts
+type PageFailure = "ignore" | "restart" | "surface";
+```
+
 ### `PaginatedCoreResult` (interface)
 
 ```ts
@@ -2283,6 +2293,14 @@ const SPLIT_FACTOR = 2;
 const applyLoadMore: (pages: Page[], cursor: null | string | undefined, numberItems: number) => Page[] | undefined;
 ```
 
+### `classifyPageFailure` (const)
+
+```ts
+const classifyPageFailure: (pages: Page[], isFailedPage: (page: Page) => boolean, error: {
+    code?: string;
+}, restartedSinceLoad: boolean) => PageFailure;
+```
+
 ### `derivePaginationStatus` (const)
 
 ```ts
@@ -2292,10 +2310,22 @@ const derivePaginationStatus: <T>(skipped: boolean, pageResults: (PaginationResu
 };
 ```
 
+### `headPage` (const)
+
+```ts
+const headPage: (numberItems: number) => Page;
+```
+
 ### `initialPages` (const)
 
 ```ts
 const initialPages: (numberItems: number) => Page[];
+```
+
+### `isHeadPage` (const)
+
+```ts
+const isHeadPage: (page: Page) => boolean;
 ```
 
 ### `rebalance` (const)
