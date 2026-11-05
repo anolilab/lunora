@@ -10,8 +10,9 @@ optimistic updates and live subscriptions over WebSocket.
 - The full client pipeline: `useQuery` for live data, `useMutation` with the
   `optimistic` callback for zero-latency UI
 - A minimal Worker entry: `createWorker({ openApiSpec, shardDO: ... })`, where
-  `openApiSpec` is imported from `lunora/_generated/openapi` so the studio's
-  API-reference tab stays in sync on every `lunora/` change
+  `openApiSpec` loads `lunora/_generated/openapi` with `import()` so the studio's
+  API-reference tab stays in sync on every `lunora/` change, and only that tab's
+  route evaluates the spec
 
 ## Run it
 

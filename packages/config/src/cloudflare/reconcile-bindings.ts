@@ -35,6 +35,7 @@ import type { OwnedServices } from "./reconcile-services";
 import { readOwnedServices, reconcileDevConfigServices, reconcileServices, recordOwnedServices } from "./reconcile-services";
 import collectWarnings from "./reconcile-warnings";
 import { spaStaticPaths } from "./spa-assets";
+import { studioAssetsPlan } from "./studio-assets";
 import { objectBindingEntries, stringEntries } from "./validate-bindings";
 import { scanAppChains } from "./worker-entry-checks";
 import { settingLeaf, WORKFLOW_SETTING_KEYS, WORKFLOW_SETTINGS, workflowSettingsFor } from "./workflow-settings";
@@ -1074,7 +1075,15 @@ const reconcileWranglerBindings = (
         // Cloudflare-only (a Workers Static Assets key). Skipped when the routes could not be read: it would cut an owned list to the reserved pair.
         {
             enabled: (target === undefined || target === "cloudflare") && inferred.workerRoutes !== undefined,
-            run: (text) => reconcileAssetRouting(text, parsed, inferred.workerRoutes ?? [], manifest, spaStaticPaths(projectRoot)),
+            run: (text) =>
+                reconcileAssetRouting(
+                    text,
+                    parsed,
+                    inferred.workerRoutes ?? [],
+                    manifest,
+                    spaStaticPaths(projectRoot),
+                    studioAssetsPlan(projectRoot, parsed, target),
+                ),
         },
         { enabled: exportedContainers.length > 0, run: (text) => reconcileContainers(text, parsed, exportedContainers) },
         {

@@ -48,6 +48,11 @@ export default defineConfig({
                       ],
                       test: { name: "workerd", include: ["__tests__/workerd/**/*.test.ts"] },
                   },
+                  // Boots a Worker through wrangler's real asset routing, so it needs the same loopback the workerd project does.
+                  {
+                      extends: true,
+                      test: { name: "studio-assets", environment: "node", include: ["__tests__/studio-assets/**/*.test.ts"] },
+                  },
               ]
             : [
                   {

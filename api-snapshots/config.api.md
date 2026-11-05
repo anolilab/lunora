@@ -2630,6 +2630,10 @@ interface WranglerCacheShape {
 ```ts
 interface WranglerCodegenInputs {
     spaAssetsBindings?: string[];
+    studioAssets?: {
+        binding: string;
+        directory: string;
+    };
     wranglerQueueProducers: WranglerQueueProducerIR[];
     wranglerVariables: WranglerVariableIR[];
 }
@@ -3041,6 +3045,12 @@ const injectRemoteFlags: (text: string, plans: ReadonlyArray<RemoteBindingPlan>)
 
 ```ts
 const isCacheEnabled: (parsed: WranglerCacheShape | null | undefined) => boolean;
+```
+
+### `isOwnedStudioAssets` (const)
+
+```ts
+const isOwnedStudioAssets: (assets: unknown) => boolean;
 ```
 
 ### `isRemoteEnvEnabled` (const)

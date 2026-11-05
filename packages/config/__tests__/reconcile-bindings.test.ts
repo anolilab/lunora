@@ -1867,8 +1867,13 @@ describe("reconcileWranglerBindings", () => {
         // no longer declares. Whether it goes depends on the ownership record in
         // package.json: only a field reconcile wrote, still at the value it wrote, is removed.
         describe("an option removed from defineQueue", () => {
+            // A Vite project: wrangler bundling one would also get the Studio documents' `assets` block, which is not what these test.
             const seedManifest = (lunora?: Record<string, unknown>): void => {
-                writeFileSync(join(root, "package.json"), `${JSON.stringify({ name: "app", ...(lunora === undefined ? {} : { lunora }) }, null, 4)}\n`, "utf8");
+                writeFileSync(
+                    join(root, "package.json"),
+                    `${JSON.stringify({ devDependencies: { "@lunora/vite": "*" }, name: "app", ...(lunora === undefined ? {} : { lunora }) }, null, 4)}\n`,
+                    "utf8",
+                );
             };
 
             const readManifest = (): Record<string, unknown> => JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as Record<string, unknown>;

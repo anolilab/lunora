@@ -2282,6 +2282,12 @@ interface StorageObject {
 }
 ```
 
+### `StudioDocumentName` (type)
+
+```ts
+type StudioDocumentName = "architecture" | "openapi" | "openrpc";
+```
+
 ### `TraceSamplingConfig` (interface)
 
 ```ts
@@ -2381,7 +2387,7 @@ interface WorkerOptions {
     aiOptInLevel?: AiOptInLevel;
     allowUnauthenticatedShardAccess?: boolean;
     applyGlobals?: GlobalCdcApplyFunction;
-    architecture?: unknown;
+    architecture?: () => Promise<unknown>;
     authAdmin?: AuthAdmin;
     authAuditReader?: AuthAuditReader;
     authBasePath?: string;
@@ -2418,8 +2424,8 @@ interface WorkerOptions {
     logArchive?: LogArchiveConfig;
     notifySubscriptionStore?: NotifySubscriptionStoreLike;
     observability?: ObservabilitySink;
-    openApiSpec?: unknown;
-    openRpcSpec?: unknown;
+    openApiSpec?: () => Promise<unknown>;
+    openRpcSpec?: () => Promise<unknown>;
     passThroughOnException?: boolean;
     queryCoordinator?: QueryCoordinator;
     queue?: QueueConsumerHandler;
@@ -2693,6 +2699,12 @@ const isBackupManifestEntry: (value: unknown) => value is BackupManifestEntry;
 
 ```ts
 const isBackupManifestKey: (key: string) => boolean;
+```
+
+### `loadStudioDocument` (const)
+
+```ts
+const loadStudioDocument: (binding: unknown, name: StudioDocumentName) => Promise<unknown>;
 ```
 
 ### `memoizeIdentity` (const)

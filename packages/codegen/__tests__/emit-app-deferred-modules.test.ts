@@ -12,8 +12,9 @@ import { emitApp } from "../src/emit-app";
 import baseOptions from "./emit-app-options";
 
 /**
- * `@lunora/auth` and the spec documents load on the first event, not when the
- * isolate evaluates the script (Cloudflare's 1 s startup CPU limit). Bundled the
+ * `@lunora/auth` loads on the first event, not when the isolate evaluates the
+ * script (Cloudflare's 1 s startup CPU limit), and Studio's documents load only
+ * when the worker calls their loader on an admin route. Bundled the
  * way wrangler bundles a Worker (one esbuild file, `import()` kept in-bundle), with
  * the generated app's imports replaced by recording stubs, so the assertions cover
  * evaluation order rather than text.
@@ -119,17 +120,29 @@ describe("emitApp — modules deferred past isolate startup", () => {
         expect(source).toContain('auth: await import("./authModule.js"),');
     });
 
+    it("hands the worker a loader per Studio document instead of loading it with auth", () => {
+        expect.assertions(4);
+
+        const source = emitApp({ ...baseOptions, hasAuth: true, wantsArchitecture: true, wantsOpenApi: true, wantsOpenRpc: true });
+        const deferredBlock = source.slice(source.indexOf("interface DeferredModules"), source.indexOf("})());"));
+
+        expect(deferredBlock).not.toMatch(/openapi|openrpc|architecture/iu);
+        expect(source).toContain('architecture: () => import("./architecture.js").then((module) => module.architecture),');
+        expect(source).toContain('openApiSpec: () => import("./openapi.js").then((module) => module.openApiSpec),');
+        expect(source).toContain('openRpcSpec: () => import("./openrpc.js").then((module) => module.openRpcSpec),');
+    });
+
     it("emits no deferred loader when there is nothing to defer", () => {
         expect.assertions(2);
 
-        const source = emitApp({ ...baseOptions });
+        const source = emitApp({ ...baseOptions, wantsArchitecture: true, wantsOpenApi: true, wantsOpenRpc: true });
 
         expect(source).not.toContain("loadDeferredModules");
         expect(source).toContain("const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => null));");
     });
 
     it("evaluates neither module at startup, and wires DO-backed auth when `scheduled` is the first event", async () => {
-        expect.assertions(6);
+        expect.assertions(8);
 
         const { defineApp, trace } = await load(emitApp({ ...baseOptions, hasAuth: true, wantsOpenApi: true }));
         const app = defineApp()
@@ -151,11 +164,14 @@ describe("emitApp — modules deferred past isolate startup", () => {
 
         expect(trace.authEvaluated).toBe(true);
         expect(trace.wiring).toHaveLength(1);
-        expect(trace.workerOptions[0]).toMatchObject({ authHandler: "handler", openApiSpec: { openapi: "3.1.0" } });
+        expect(trace.workerOptions[0]).toMatchObject({ authHandler: "handler" });
 
         await app.fetch(new Request("https://app.example/_lunora/rpc"), {}, { waitUntil: () => {} });
 
         expect(trace.workerOptions).toHaveLength(1);
+        // Building the worker and serving a request leave the spec unevaluated; only its loader does.
+        expect(trace.openApiEvaluated).toBe(false);
+        await expect((trace.workerOptions[0]?.openApiSpec as () => Promise<unknown>)()).resolves.toStrictEqual({ openapi: "3.1.0" });
     });
 
     it("builds the worker once when cold requests arrive together", async () => {
@@ -173,6 +189,6 @@ describe("emitApp — modules deferred past isolate startup", () => {
         ]);
 
         expect(trace.workerOptions).toHaveLength(1);
-        expect(trace.workerOptions[0]?.openApiSpec).toStrictEqual({ openapi: "3.1.0" });
+        expect(trace.openApiEvaluated).toBe(false);
     });
 });

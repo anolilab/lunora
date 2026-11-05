@@ -1,8 +1,10 @@
 import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
 import { createWorker } from "lunorash/runtime";
 
-import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";
+
+// A loader, not the document: only Studio's API route reads it, so no ordinary request evaluates it.
+const openApiSpec = (): Promise<unknown> => import("../../lunora/_generated/openapi.js").then((module) => module.openApiSpec);
 
 // Records revoked named admin tokens where a restore of the shard cannot rewind them.
 export { AdminRevocationDO } from "../../lunora/_generated/adminRevocations.js";
