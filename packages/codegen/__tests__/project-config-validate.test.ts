@@ -238,8 +238,24 @@ describe("lunora.config validation", () => {
         writeConfig('export * from "./settings";\n');
 
         expect(projectConfigProblems(configPath)).toStrictEqual([
-            'lunora.config.ts has no default export, so none of its settings are read (it only re-exports `./settings` with `export *`, which never forwards a default). Lunora reads only the default export: `export { default } from "./settings"`, or `export default { … } satisfies LunoraConfig`.',
+            "lunora.config.ts has no default export, so none of its settings are read (it only re-exports `./settings` with `export *`, which never forwards a default). Lunora reads only the default export, and codegen reads its settings from this file without loading the modules it imports: move them here as `export default { … } satisfies LunoraConfig`.",
         ]);
+    });
+
+    it("reads a minifier's !0 / !1 as the booleans the validator accepted them as", () => {
+        expect.assertions(1);
+
+        writeConfig(
+            "export default { codegen: { lazyFunctions: !0 }, durableObjects: { merge: !0 }, remote: !1, security: { headers: { csp: !1 } }, studio: { companion: !0 } };\n",
+        );
+
+        expect(readProjectConfigLiterals(projectRoot)).toStrictEqual({
+            codegen: { lazyFunctions: true },
+            durableObjects: { merge: true },
+            remote: false,
+            security: { headers: { csp: false } },
+            studio: { companion: true },
+        });
     });
 
     it("reads `remote: null` as no preference, not as a config it cannot read", () => {

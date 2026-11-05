@@ -54,7 +54,7 @@ const namedOnlyExportsProblem = (
     }
 
     if (named.length === 0) {
-        return `${fileName} has no default export, so none of its settings are read (it only re-exports ${forwarded.map((module) => `\`${module}\``).join(", ")} with \`export *\`, which never forwards a default). Lunora reads only the default export: \`export { default } from "${String(forwarded[0])}"\`, or \`export default { … } satisfies LunoraConfig\`.`;
+        return `${fileName} has no default export, so none of its settings are read (it only re-exports ${forwarded.map((module) => `\`${module}\``).join(", ")} with \`export *\`, which never forwards a default). Lunora reads only the default export, and codegen reads its settings from this file without loading the modules it imports: move them here as \`export default { … } satisfies LunoraConfig\`.`;
     }
 
     const keys = named.filter((name) => configKeys.has(name));
