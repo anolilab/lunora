@@ -3,7 +3,7 @@ import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import createMailer from "../src/create-mailer";
 import type { SentMailStore } from "../src/queue";
 import { consumeQueuedSend } from "../src/queue";
-import { isRetryableMailError, MailSendError } from "../src/send-error";
+import { isOutcomeUnknownMailError, isRetryableMailError, MailSendError } from "../src/send-error";
 import type { Mailer, MailTransport, SendPayload } from "../src/types";
 
 const captureTransport = (): { sent: SendPayload[]; transport: MailTransport } => {
@@ -361,6 +361,66 @@ describe("consumeQueuedSend with a sent-mail store", () => {
 
             expect(puts).toHaveLength(1);
             expect(vi.getTimerCount()).toBe(0);
+        });
+    });
+
+    describe("a send that may have landed, against the provider's 24-hour dedupe window", () => {
+        const HOUR_MS = 60 * 60 * 1000;
+
+        const failingMailer = (error: MailSendError): Mailer => {
+            return {
+                queue: async () => {
+                    return { queued: true };
+                },
+                send: vi.fn<Mailer["send"]>(async () => {
+                    throw error;
+                }),
+            };
+        };
+
+        const deduped = (): MailSendError => new MailSendError({ outcomeUnknown: true, retryable: true });
+
+        it.each([
+            ["with a store", true],
+            ["without a store", false],
+        ])("is not retried %s once the message is 23 hours old: the provider may no longer drop the repeat", async (_label, withStore) => {
+            expect.assertions(2);
+
+            const { store } = memoryStore();
+            const enqueuedAt = new Date(Date.now() - 23 * HOUR_MS);
+
+            const error = await consumeQueuedSend(failingMailer(deduped()), body, { enqueuedAt, ...(withStore ? { sent: store } : {}) }).catch(
+                (error_: unknown) => error_,
+            );
+
+            expect(isOutcomeUnknownMailError(error)).toBe(true);
+            expect(isRetryableMailError(error)).toBe(false);
+        });
+
+        it("is not retried when the enqueue time is not a valid date", async () => {
+            expect.assertions(1);
+
+            const error = await consumeQueuedSend(failingMailer(deduped()), body, { enqueuedAt: new Date(Number.NaN) }).catch((error_: unknown) => error_);
+
+            expect(isRetryableMailError(error)).toBe(false);
+        });
+
+        it("is still retried inside the window, and without an enqueue time", async () => {
+            expect.assertions(2);
+
+            const original = deduped();
+            const recent = new Date(Date.now() - 22 * HOUR_MS);
+
+            await expect(consumeQueuedSend(failingMailer(original), body, { enqueuedAt: recent })).rejects.toBe(original);
+            await expect(consumeQueuedSend(failingMailer(original), body)).rejects.toBe(original);
+        });
+
+        it("leaves an ordinary retryable failure retryable however old the message is", async () => {
+            expect.assertions(1);
+
+            const original = new MailSendError({ retryable: true });
+
+            await expect(consumeQueuedSend(failingMailer(original), body, { enqueuedAt: new Date(0) })).rejects.toBe(original);
         });
     });
 

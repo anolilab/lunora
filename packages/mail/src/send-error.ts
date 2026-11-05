@@ -14,7 +14,8 @@ interface MailSendErrorData {
      * provider's own request timeout), or the provider is still processing an earlier send under
      * the same idempotency key (Resend's 409), so it may have been delivered. `retryable` is then true
      * only when the send carried an idempotency key and its transport's provider dedupes on it
-     * (`MailTransport.dedupesOnIdempotencyKey`), so a repeat cannot mail a second copy.
+     * (`MailTransport.dedupesOnIdempotencyKey`), so a repeat cannot mail a second copy, and
+     * `consumeQueuedSend` clears it again for a message older than that provider's dedupe window.
      */
     outcomeUnknown: boolean;
     /** Whether repeating the same message may succeed. A refused address or malformed message never will. */
