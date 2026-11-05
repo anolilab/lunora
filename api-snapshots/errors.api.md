@@ -149,6 +149,10 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "Migration drift";
     };
+    readonly MIGRATION_DESTRUCTIVE: {
+        readonly status: 409;
+        readonly title: "Destructive migration not confirmed";
+    };
     readonly UNIQUE_INDEX_DUPLICATES: {
         readonly status: 503;
         readonly title: "Unique index blocked by duplicate rows";
