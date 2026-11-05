@@ -222,6 +222,9 @@ const httpAction =
         }
     };
 
+/** Requests whose handler or middleware called `c.notFound()` itself, which is never "no route matched". */
+const deliberateNotFound = new WeakSet<object>();
+
 /** Apps built by {@link httpRouter}: the only Hono apps known to lift `__lunoraCtx` into `c.var.lunora`. */
 const httpRouters = new WeakSet<object>();
 
@@ -240,6 +243,10 @@ const isHttpRouter = (app: object): boolean => httpRouters.has(app);
  * app.get("/users/:id", getUser);
  * export default createWorker({ httpRouter: app, ... });
  * ```
+ *
+ * A request no route matched answers Hono's plain 404 and tells the runtime, which
+ * may serve a single-page app's shell for it (`spaAssets` in `@lunora/runtime`).
+ * A `c.notFound()` a handler or middleware returns stays a real 404.
  *
  * The lifting middleware throws if the context is absent. `createWorker` injects
  * it on every request the router sees, so this only trips when the app is run
@@ -263,16 +270,30 @@ const httpRouter = (): LunoraHttpApp => {
 
         c.set("lunora", injected);
 
+        // A handler or middleware that calls `c.notFound()` answers 404 on purpose (a denial, a hidden record). Hono
+        // reaches the app's not-found handler through this field only from such a call; when no route matched it
+        // calls the handler directly, so wrapping the field tells the two apart.
+        const deliberate = c.notFound;
+
+        // eslint-disable-next-line no-param-reassign -- Hono reads `notFound` off this request's context; replacing it is the only hook on a deliberate call
+        c.notFound = () => {
+            deliberateNotFound.add(c);
+
+            return deliberate();
+        };
+
         await next();
     });
 
     // Hono's own not-found answer, plus the signal that no route matched. The runtime serves a single-page app's
-    // shell only on that signal, never on a status: a 404 a handler returns stays a 404. An app that sets its own
-    // `notFound` replaces this, and its misses are then its own.
+    // shell only on that signal, never on a status: a 404 a handler returns, `c.notFound()` included, stays a 404.
+    // An app that sets its own `notFound` replaces this, and its misses are then its own.
     app.notFound((c) => {
         const { __lunoraUnrouted: markUnrouted } = c.env;
 
-        markUnrouted?.();
+        if (!deliberateNotFound.has(c)) {
+            markUnrouted?.();
+        }
 
         return c.text("404 Not Found", 404);
     });
