@@ -65,6 +65,14 @@ const devEnvCheckOptions = (options: ResolvedLunoraPluginOptions, worker: { conf
 };
 
 /**
+ * Whether each project's env last failed its contract. Module scope because a
+ * `.dev.vars`, `.env` or wrangler config edit restarts Vite, which runs the
+ * config again and builds a new plugin; the restart's check needs the answer
+ * the old one had to say the fix took.
+ */
+const lastEnvInvalid = new Map<string, boolean>();
+
+/**
  * Log what a check found through `log`, and answer whether the env is still
  * known to fail the contract, which the next run passes back so an edit that
  * fixes it says so. A contract that could not be loaded says nothing about the
@@ -117,7 +125,7 @@ const devVariablesPlugin = (
     { configPath, withheld = () => [] }: { configPath?: string; withheld?: () => ReadonlyArray<string> } = {},
 ): Plugin => {
     let isPreview = false;
-    let envInvalid = false;
+    let envInvalid = lastEnvInvalid.get(options.projectRoot) ?? false;
     // Bumped per check, so a check an `env.ts` save overtook neither logs nor sets `envInvalid`.
     let generation = 0;
 
@@ -129,6 +137,7 @@ const devVariablesPlugin = (
 
         if (started === generation) {
             envInvalid = reportDevEnv(check, options.schemaDir, log, envInvalid);
+            lastEnvInvalid.set(options.projectRoot, envInvalid);
         }
     };
 

@@ -252,6 +252,22 @@ export const env = Object.defineProperty((value: unknown) => value, Symbol.for("
 
     const missing: DevEnvCheck = { failures: [{ key: "STRIPE_KEY", message: "Expected string" }], kind: "invalid", sources: [".dev.vars"] };
 
+    it("confirms a .dev.vars fix on the restart it causes, which builds a new plugin", async () => {
+        expect.assertions(1);
+
+        writeEnvContract(["STRIPE_KEY"]);
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+        await runHooks(devVariablesPlugin(RESOLVED(dir)));
+
+        writeFileSync(join(dir, ".dev.vars"), "STRIPE_KEY=sk_test_1\n", "utf8");
+        await runHooks(devVariablesPlugin(RESOLVED(dir)));
+
+        expect(info.mock.calls.map(([line]) => String(line))).toContainEqual(expect.stringMatching(/the dev env satisfies the contract again/u));
+    });
+
     it("drops a check that a later env.ts save overtook", async () => {
         expect.assertions(2);
 
