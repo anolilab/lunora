@@ -191,6 +191,30 @@ describe("send deadline", () => {
         expect(isRetryableMailError(await unknown(false, "order-42"))).toBe(false);
     });
 
+    it("does not retry an outcome-unknown failure the transport itself marked retryable unless the provider dedupes the key", async () => {
+        expect.assertions(4);
+
+        const original = new MailSendError({ message: "@lunora/mail: provider timed out", outcomeUnknown: true, retryable: true });
+        const unknown = async (dedupes: boolean, idempotencyKey?: string): Promise<unknown> =>
+            createMailer({
+                from: "noreply@x.test",
+                transport: {
+                    dedupesOnIdempotencyKey: dedupes,
+                    send: async () => {
+                        throw original;
+                    },
+                },
+            })
+                .send({ idempotencyKey, subject: "Hi", to: "a@x.test" })
+                .catch((error: unknown) => error);
+
+        expect(isRetryableMailError(await unknown(false, "order-42"))).toBe(false);
+        expect(isRetryableMailError(await unknown(true))).toBe(false);
+        expect(isOutcomeUnknownMailError(await unknown(false))).toBe(true);
+        // Already classified the way send() would: rethrown as is.
+        await expect(unknown(true, "order-42")).resolves.toBe(original);
+    });
+
     it("waits 60 seconds by default", async () => {
         expect.assertions(2);
 

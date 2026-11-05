@@ -182,10 +182,13 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
                 throw new MailSendError({ cause: error, retryable: true });
             }
 
-            // The one place a send that may have landed is made retryable: only a provider that
-            // dedupes on the key it was given drops the repeat, so a redelivery cannot mail twice.
-            if (error.outcomeUnknown && !error.retryable && idempotencyKey !== undefined && transport.dedupesOnIdempotencyKey === true) {
-                throw new MailSendError({ cause: error.cause, message: error.message, outcomeUnknown: true, retryable: true });
+            // The one place a send that may have landed is classified, whatever the transport said:
+            // only a provider that dedupes on the key it was given drops the repeat, so only then can
+            // a redelivery not mail twice.
+            const providerDropsRepeat = idempotencyKey !== undefined && transport.dedupesOnIdempotencyKey === true;
+
+            if (error.outcomeUnknown && error.retryable !== providerDropsRepeat) {
+                throw new MailSendError({ cause: error.cause, message: error.message, outcomeUnknown: true, retryable: providerDropsRepeat });
             }
 
             throw error;

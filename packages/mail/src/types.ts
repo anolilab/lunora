@@ -23,7 +23,8 @@ export interface MailTransport {
      * A transport reports a send that may have landed by throwing
      * `MailSendError({ outcomeUnknown: true, retryable: false })` and leaves the
      * retry decision to `createMailer`'s `send()`, which makes it retryable when this
-     * flag is set and the send had a key.
+     * flag is set and the send had a key, and not retryable otherwise, whatever the
+     * transport said.
      */
     dedupesOnIdempotencyKey?: boolean;
 

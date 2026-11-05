@@ -5,6 +5,7 @@ import createMailer from "../src/create-mailer";
 import type { SentMailStore } from "../src/queue";
 import { consumeQueuedSend } from "../src/queue";
 import { isRetryableMailError, MailSendError } from "../src/send-error";
+import type { MailTransport } from "../src/types";
 
 /**
  * Model-based checks over random Cloudflare Queues delivery histories. Each step
@@ -74,40 +75,39 @@ const replay = async (steps: ReadonlyArray<Step>): Promise<Replay> => {
     const store = expiringStore(() => now);
     let neverDoubled = true;
 
-    const mailer = createMailer({
-        from: "noreply@x.test",
-        transport: {
-            send: async (_payload, options) => {
-                const key = options?.idempotencyKey ?? "";
+    const transport: MailTransport = {
+        send: async (_payload, options) => {
+            const key = options?.idempotencyKey ?? "";
 
-                if (outcome === "retryable") {
-                    throw new MailSendError({ retryable: true });
-                }
+            if (outcome === "retryable") {
+                throw new MailSendError({ retryable: true });
+            }
 
-                if (outcome === "permanent") {
-                    throw new MailSendError({ retryable: false });
-                }
+            if (outcome === "permanent") {
+                throw new MailSendError({ retryable: false });
+            }
 
-                // The provider drops a repeat of a key it accepted under its dedupe and answers with the original.
-                if (!providerDeduped.has(key)) {
-                    // An outcome-unknown send is counted as delivered: the worst case for duplicates.
-                    delivered.set(key, (delivered.get(key) ?? 0) + 1);
-                }
+            // The provider drops a repeat of a key it accepted under its dedupe and answers with the original.
+            if (!providerDeduped.has(key)) {
+                // An outcome-unknown send is counted as delivered: the worst case for duplicates.
+                delivered.set(key, (delivered.get(key) ?? 0) + 1);
+            }
 
-                if (outcome === "unknown") {
-                    throw new MailSendError({ outcomeUnknown: true, retryable: false });
-                }
+            if (outcome === "unknown") {
+                throw new MailSendError({ outcomeUnknown: true, retryable: false });
+            }
 
-                if (outcome === "unknownDeduped") {
-                    providerDeduped.add(key);
+            if (outcome === "unknownDeduped") {
+                providerDeduped.add(key);
 
-                    throw new MailSendError({ outcomeUnknown: true, retryable: true });
-                }
+                // Reported the way a real transport reports it; `send()` makes it retryable.
+                throw new MailSendError({ outcomeUnknown: true, retryable: false });
+            }
 
-                return { id: `id-${key}` };
-            },
+            return { id: `id-${key}` };
         },
-    });
+    };
+    const mailer = createMailer({ from: "noreply@x.test", transport });
 
     for (const step of steps) {
         now += step.advance;
@@ -120,6 +120,8 @@ const replay = async (steps: ReadonlyArray<Step>): Promise<Replay> => {
         }
 
         outcome = step.outcome;
+        // Which provider this delivery reaches: only one that dedupes on the key may have its timeout retried.
+        transport.dedupesOnIdempotencyKey = outcome === "unknownDeduped";
 
         try {
             // eslint-disable-next-line no-await-in-loop -- deliveries are sequential by construction: each depends on the store the last one left
