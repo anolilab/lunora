@@ -52,7 +52,10 @@ import type { SecurityHeadersOptions } from "../../../shared/security-headers";
 import { parseSecurityHeaders } from "../../../shared/security-headers";
 import type { AcceptedFinding } from "./advisor-accept";
 import { propertyKeyName } from "./discover/property-name";
+import namedOnlyExportsProblem from "./project-config-exports";
 import { findCodegenConfigFile, findProjectConfigFile } from "./project-config-path";
+import type { FieldShape } from "./project-config-shape";
+import { BOOLEAN, FUNCTION, objectOf, objectProblems, SECURITY_HEADERS, STRING, STRING_ARRAY, unwrapLiteral } from "./project-config-shape";
 import { literalOf, NOT_LITERAL } from "./static-literal";
 
 /**
@@ -128,7 +131,7 @@ interface ServiceLiteral {
     rpc?: false;
 }
 
-/** The structural slice of `lunora.config.*` Lunora reads. The loader does not validate it; `runCodegen` does, by parsing (`project-config-validate.ts`). */
+/** The structural slice of `lunora.config.*` Lunora reads. The loader does not validate it; `runCodegen` does, by parsing (see {@link projectConfigProblems}). */
 interface LunoraProjectConfig {
     /** Advisor settings for codegen (`minSeverity`). Read by `runCodegen` through {@link readProjectConfigLiterals}. */
     advisor?: unknown;
@@ -157,89 +160,6 @@ interface LoadedProjectConfig {
      */
     error?: string;
 }
-
-/** A module namespace's export names, minus the interop marker a transpiled module carries. */
-const namedExportNames = (namespace: object): string[] => Object.keys(namespace).filter((name) => name !== "default" && name !== "__esModule");
-
-/** Why a config that exports only named bindings is not read — shared by the evaluating loader and the codegen validator. */
-const noDefaultExportMessage = (fileName: string, named: ReadonlyArray<string>): string =>
-    `${fileName} has no default export, so none of its settings are read (it exports ${named.map((name) => `\`${name}\``).join(", ")}). Lunora reads only the default export: \`export default { ${named.join(", ")} } satisfies LunoraConfig\`.`;
-
-/**
- * Memoized per path, keyed on mtime + size so an edit is picked up and a
- * short-lived process transpiles once. One entry per path, replaced rather than
- * accumulated: a long dev session edits the file many times.
- */
-const cache = new Map<string, { key: string; value: Promise<LoadedProjectConfig> }>();
-
-/**
- * Load `lunora.config.*`, or `{}` when the project ships none.
- *
- * `moduleCache: false` is load-bearing, not a tuning knob: `jiti`'s module cache
- * lives on `globalThis`, so a NEW instance still hands back the module it
- * compiled the first time. Without it a config edit was never picked up in a
- * long-lived dev server — the watcher fired, the server restarted, and the hook
- * stayed as it was when the process started.
- *
- * `interopDefault` is off so the namespace is not collapsed onto its default
- * export: the hook has to come from `default` specifically, because that is what
- * the emitted worker entry imports (see the module header).
- */
-const loadProjectConfig = async (projectRoot: string): Promise<LoadedProjectConfig> => {
-    const configPath = findProjectConfigFile(projectRoot);
-
-    if (configPath === undefined) {
-        return {};
-    }
-
-    let key: string;
-
-    try {
-        const stats = statSync(configPath);
-
-        key = `${String(stats.mtimeMs)}:${String(stats.size)}`;
-    } catch {
-        return {};
-    }
-
-    const cached = cache.get(configPath);
-
-    if (cached?.key === key) {
-        return cached.value;
-    }
-
-    const pending = (async (): Promise<LoadedProjectConfig> => {
-        try {
-            const namespace: unknown = await createJiti(configPath, { interopDefault: false, moduleCache: false }).import(configPath);
-            const value = (namespace as { default?: unknown } | undefined)?.default;
-            const named = value === undefined && namespace !== null && typeof namespace === "object" ? namedExportNames(namespace) : [];
-
-            // Only named exports: every setting in the file is ignored, the `app` hook included, so say so rather than read it as "no config".
-            if (named.length > 0) {
-                return { error: noDefaultExportMessage(basename(configPath), named) };
-            }
-
-            return { config: value !== null && typeof value === "object" ? value : undefined };
-        } catch (error: unknown) {
-            return { error: error instanceof Error ? error.message : String(error) };
-        }
-    })();
-
-    cache.set(configPath, { key, value: pending });
-
-    return pending;
-};
-
-/** `value` with any `satisfies`, `as` or parenthesised wrapper peeled off. */
-const unwrapLiteral = (value: TsNode | undefined): TsNode | undefined => {
-    let inner = value;
-
-    while (inner !== undefined && (TsNode.isSatisfiesExpression(inner) || TsNode.isAsExpression(inner) || TsNode.isParenthesizedExpression(inner))) {
-        inner = inner.getExpression();
-    }
-
-    return inner;
-};
 
 /**
  * The object literal the default export resolves to, or `undefined` when it does
@@ -271,8 +191,6 @@ const propertyLiteral = (property: PropertyAssignment | ShorthandPropertyAssignm
 
     return sourceFile.getVariableDeclaration(propertyKeyName(property))?.getInitializer();
 };
-
-/** `value` with any `satisfies` / `as` / parentheses around it peeled off. */
 
 /**
  * The literal under `key` in the plain object literal `declared`, `absent`
@@ -609,6 +527,8 @@ type ConfigProperty = PropertyAssignment | ShorthandPropertyAssignment;
 
 interface ConfigSection {
     read: (property: ConfigProperty, sourceFile: SourceFile) => ProjectConfigLiterals;
+    /** What `runCodegen` refuses the value for not being: an unknown key or a literal of the wrong kind (see `project-config-shape.ts`). */
+    shape: FieldShape;
     unreadable: ProjectConfigLiterals;
 }
 
@@ -619,12 +539,17 @@ const readTarget = (property: ConfigProperty, sourceFile: SourceFile): ProjectCo
     return value !== undefined && TsNode.isStringLiteral(value) ? { target: value.getLiteralValue() } : { unreadable: true };
 };
 
-/** `remote`: a boolean literal, or the object form, which is a reserved opt-in meaning "on". */
+/** `remote`: a boolean literal, `null` for no preference, or the object form, which is a reserved opt-in meaning "on". */
 const readRemote = (property: ConfigProperty, sourceFile: SourceFile): ProjectConfigLiterals => {
-    const value = propertyLiteral(property, sourceFile);
+    const value = unwrapLiteral(propertyLiteral(property, sourceFile));
 
     if (value !== undefined && (TsNode.isTrueLiteral(value) || TsNode.isFalseLiteral(value))) {
         return { remote: value.getLiteralValue() };
+    }
+
+    // `interpretRemote` reads an evaluated `null` as "no preference", so the parse does too rather than doubt the target.
+    if (value !== undefined && TsNode.isNullLiteral(value)) {
+        return {};
     }
 
     // Reading only the booleans turned a documented config into "no preference" without a word.
@@ -642,13 +567,32 @@ const readRemote = (property: ConfigProperty, sourceFile: SourceFile): ProjectCo
 const SECTIONS: ReadonlyMap<string, ConfigSection> = new Map<string, ConfigSection>([
     [
         "advisor",
-        { read: (property, sourceFile) => readAdvisor(propertyLiteral(property, sourceFile), sourceFile), unreadable: { advisor: { unreadable: true } } },
+        {
+            read: (property, sourceFile) => readAdvisor(propertyLiteral(property, sourceFile), sourceFile),
+            shape: objectOf({
+                accept: { ...STRING_ARRAY, expected: "an array of objects", items: objectOf(Object.fromEntries(ACCEPT_KEYS.map((key) => [key, STRING]))) },
+                minSeverity: STRING,
+            }),
+            unreadable: { advisor: { unreadable: true } },
+        },
+    ],
+    // `@lunora/vite` evaluates the hook; the parse only checks it is a function.
+    [
+        "app",
+        {
+            read: () => {
+                return {};
+            },
+            shape: FUNCTION,
+            unreadable: {},
+        },
     ],
     // Shorthand `{ codegen }` names the value: its identifier is what readCodegen resolves, whether the name is imported or a const here.
     [
         "codegen",
         {
             read: (property, sourceFile) => readCodegen(codegenValueOf(property, sourceFile), sourceFile),
+            shape: objectOf({ exclude: STRING_ARRAY, lazyFunctions: BOOLEAN }),
             unreadable: { codegen: { lazyFunctionsUnreadable: true, unreadable: true } },
         },
     ],
@@ -656,17 +600,46 @@ const SECTIONS: ReadonlyMap<string, ConfigSection> = new Map<string, ConfigSecti
         "durableObjects",
         {
             read: (property, sourceFile) => readDurableObjects(propertyLiteral(property, sourceFile), sourceFile),
+            shape: objectOf({ merge: BOOLEAN }),
             unreadable: { durableObjects: { unreadable: true } },
         },
     ],
-    ["remote", { read: readRemote, unreadable: { unreadable: true } }],
+    // The object form is a reserved opt-in, read as "on" (see `interpretRemote`).
+    ["remote", { read: readRemote, shape: { accepts: ["boolean", "null", "object"], expected: "a boolean" }, unreadable: { unreadable: true } }],
     [
         "security",
-        { read: (property, sourceFile) => readSecurity(propertyLiteral(property, sourceFile), sourceFile), unreadable: { security: { unreadable: true } } },
+        {
+            read: (property, sourceFile) => readSecurity(propertyLiteral(property, sourceFile), sourceFile),
+            shape: objectOf({ headers: SECURITY_HEADERS }),
+            unreadable: { security: { unreadable: true } },
+        },
     ],
-    ["services", { read: (property, sourceFile) => readServices(propertyLiteral(property, sourceFile)), unreadable: { services: { unreadable: true } } }],
-    ["studio", { read: (property, sourceFile) => readStudio(propertyLiteral(property, sourceFile), sourceFile), unreadable: { studio: { unreadable: true } } }],
-    ["target", { read: readTarget, unreadable: { unreadable: true } }],
+    [
+        "services",
+        {
+            read: (property, sourceFile) => readServices(propertyLiteral(property, sourceFile)),
+            shape: {
+                accepts: ["object"],
+                entries: objectOf({
+                    dir: STRING,
+                    entrypoint: STRING,
+                    // `true` is the default, never written: only `false` changes anything.
+                    rpc: { accepts: ["boolean"], expected: "`false`", hint: "Leave it out for an RPC binding.", literal: false },
+                }),
+                expected: "an object",
+            },
+            unreadable: { services: { unreadable: true } },
+        },
+    ],
+    [
+        "studio",
+        {
+            read: (property, sourceFile) => readStudio(propertyLiteral(property, sourceFile), sourceFile),
+            shape: objectOf({ companion: BOOLEAN }),
+            unreadable: { studio: { unreadable: true } },
+        },
+    ],
+    ["target", { read: readTarget, shape: STRING, unreadable: { unreadable: true } }],
 ]);
 
 /** What one property of the config object contributes. */
@@ -703,20 +676,8 @@ const parseConfigSource = (configPath: string): SourceFile | undefined => {
     return project.createSourceFile(basename(configPath), source, { overwrite: true });
 };
 
-/** The literals of one config file, read the same way whichever way the file was found. */
-const readConfigLiterals = (configPath: string): ProjectConfigLiterals => {
-    const sourceFile = parseConfigSource(configPath);
-
-    if (sourceFile === undefined) {
-        return { unreadable: true };
-    }
-
-    const object = defaultExportObject(sourceFile);
-
-    if (object === undefined) {
-        return { unreadable: true };
-    }
-
+/** The literals of a default-exported config object, read the same way whichever way the file was found. */
+const readConfigObject = (object: ObjectLiteralExpression, sourceFile: SourceFile): ProjectConfigLiterals => {
     // A spread can SHADOW a literal later in the object, so the literal this
     // reader sees is not necessarily the value that wins. Reporting it anyway is
     // the one case where this reader would be actively wrong rather than merely
@@ -746,6 +707,133 @@ const readConfigLiterals = (configPath: string): ProjectConfigLiterals => {
 
     return literals;
 };
+
+/** Everything one parse of a config file tells: the literals the readers use, and every problem `runCodegen` refuses it for. */
+interface ConfigFileAnalysis {
+    literals: ProjectConfigLiterals;
+    /** Set when the file has no default export but named value exports, which is also one of the `problems`. */
+    namedOnly?: string;
+    problems: string[];
+}
+
+const analyze = (configPath: string): ConfigFileAnalysis => {
+    const sourceFile = parseConfigSource(configPath);
+
+    if (sourceFile === undefined) {
+        return { literals: { unreadable: true }, problems: [] };
+    }
+
+    const object = defaultExportObject(sourceFile);
+
+    if (object === undefined) {
+        const namedOnly = namedOnlyExportsProblem(basename(configPath), sourceFile, SECTIONS);
+
+        return { literals: { unreadable: true }, namedOnly, problems: namedOnly === undefined ? [] : [namedOnly] };
+    }
+
+    const shape = objectOf(Object.fromEntries([...SECTIONS].map(([key, section]) => [key, section.shape])));
+
+    return { literals: readConfigObject(object, sourceFile), problems: objectProblems(object, shape, "", sourceFile) };
+};
+
+/**
+ * One analysis per file version, keyed on mtime + size like {@link loadProjectConfig}: a codegen run asks the
+ * validator and several readers about the same file, and one parse answers them all.
+ */
+const analysisCache = new Map<string, { key: string; value: ConfigFileAnalysis }>();
+
+const analyzeConfigFile = (configPath: string): ConfigFileAnalysis => {
+    const stats = statSync(configPath, { throwIfNoEntry: false });
+    const key = stats === undefined ? "" : `${String(stats.mtimeMs)}:${String(stats.size)}`;
+    const cached = analysisCache.get(configPath);
+
+    if (cached?.key === key && key !== "") {
+        return cached.value;
+    }
+
+    const value = analyze(configPath);
+
+    analysisCache.set(configPath, { key, value });
+
+    return value;
+};
+
+/**
+ * Memoized per path, keyed on mtime + size so an edit is picked up and a
+ * short-lived process transpiles once. One entry per path, replaced rather than
+ * accumulated: a long dev session edits the file many times.
+ */
+const cache = new Map<string, { key: string; value: Promise<LoadedProjectConfig> }>();
+
+/**
+ * Load `lunora.config.*`, or `{}` when the project ships none.
+ *
+ * `moduleCache: false` is load-bearing, not a tuning knob: `jiti`'s module cache
+ * lives on `globalThis`, so a NEW instance still hands back the module it
+ * compiled the first time. Without it a config edit was never picked up in a
+ * long-lived dev server — the watcher fired, the server restarted, and the hook
+ * stayed as it was when the process started.
+ *
+ * `interopDefault` is off so the namespace is not collapsed onto its default
+ * export: the hook has to come from `default` specifically, because that is what
+ * the emitted worker entry imports (see the module header).
+ */
+const loadProjectConfig = async (projectRoot: string): Promise<LoadedProjectConfig> => {
+    const configPath = findProjectConfigFile(projectRoot);
+
+    if (configPath === undefined) {
+        return {};
+    }
+
+    let key: string;
+
+    try {
+        const stats = statSync(configPath);
+
+        key = `${String(stats.mtimeMs)}:${String(stats.size)}`;
+    } catch {
+        return {};
+    }
+
+    const cached = cache.get(configPath);
+
+    if (cached?.key === key) {
+        return cached.value;
+    }
+
+    const pending = (async (): Promise<LoadedProjectConfig> => {
+        try {
+            const namespace: unknown = await createJiti(configPath, { interopDefault: false, moduleCache: false }).import(configPath);
+            const value = (namespace as { default?: unknown } | undefined)?.default;
+            // Only named exports: every setting in the file is ignored, the `app` hook included. Codegen refuses such a file too, but
+            // `@lunora/vite` loads it to compose the worker whether or not codegen ran first, so this path says so on its own rather
+            // than read it as "no config". The parse decides, so both paths name the same exports and give the same fix.
+            const namedOnly = value === undefined ? analyzeConfigFile(configPath).namedOnly : undefined;
+
+            if (namedOnly !== undefined) {
+                return { error: namedOnly };
+            }
+
+            return { config: value !== null && typeof value === "object" ? value : undefined };
+        } catch (error: unknown) {
+            return { error: error instanceof Error ? error.message : String(error) };
+        }
+    })();
+
+    cache.set(configPath, { key, value: pending });
+
+    return pending;
+};
+
+const readConfigLiterals = (configPath: string): ProjectConfigLiterals => analyzeConfigFile(configPath).literals;
+
+/**
+ * Every problem in one config file: an unknown key, a literal of the wrong kind,
+ * or only named exports. Empty when it is valid or cannot be read (the readers
+ * report that case). A computed value is not judged: the readers already report
+ * the ones they cannot see.
+ */
+const projectConfigProblems = (configPath: string): ReadonlyArray<string> => analyzeConfigFile(configPath).problems;
 
 /**
  * The `target`, `remote`, `advisor.minSeverity`, `codegen.exclude`,
@@ -873,14 +961,11 @@ const readProjectSecurityHeaders = (lunoraDirectory: string): boolean | Security
 export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral };
 export { findProjectConfigFile, PROJECT_CONFIG_FILENAMES } from "./project-config-path";
 export {
-    defaultExportObject,
     loadProjectConfig,
-    noDefaultExportMessage,
-    parseConfigSource,
+    projectConfigProblems,
     readMergeDurableObjects,
     readProjectConfigLiterals,
     readProjectLazyFunctions,
     readProjectSecurityHeaders,
     readProjectStudioCompanion,
-    unwrapLiteral,
 };

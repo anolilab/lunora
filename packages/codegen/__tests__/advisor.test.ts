@@ -528,7 +528,6 @@ export const schema = defineSchema({
         it.each([
             ["an empty reason", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "" }`],
             ["a computed reason", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: ["x"].join("") }`],
-            ["an unknown key", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "x", note: "y" }`],
             ["a spread entry", `{ ...base }`],
         ])("ignores the whole list for %s and keeps every ERROR", (_label, entry) => {
             expect.assertions(3);
@@ -544,6 +543,19 @@ export const schema = defineSchema({
             expect(levels(advisories)["ERROR"]).toBe(levels(before)["ERROR"]);
             expect(advisories.filter((advisory) => advisory.name === "advisor_accept_invalid")).toHaveLength(1);
             expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(0);
+        });
+
+        // The parse refuses it before the advisor runs, so a misspelt key never reads as an entry that matched nothing.
+        it("stops codegen on an unknown key in an entry", () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `export default { advisor: { accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "x", note: "y" }] } };\n`,
+                "utf8",
+            );
+
+            expect(() => runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/unknown key `advisor\.accept\[0\]\.note`/u);
         });
 
         // A floor of "error" must not hide what the accept list did: the demoted finding and the stale warning both stay.
