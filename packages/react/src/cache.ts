@@ -564,5 +564,5 @@ const getSubscriptionRegistry = (client: LunoraClient): LunoraSubscriptionRegist
     return registry;
 };
 
-export { blankQuery, getSubscriptionRegistry, LunoraSubscriptionRegistry };
+export { getSubscriptionRegistry, LunoraSubscriptionRegistry };
 export { lunoraQueryKey, lunoraQueryKeyFromArgsKey, serializeQueryKey } from "./query-key";

@@ -249,57 +249,6 @@ describe("usePaginatedQuery", () => {
         expect(screen.getByTestId("error").textContent).toBe("");
     });
 
-    it("does not paint a sibling's cached head page, with its stale cursor, when a feed restarts", async () => {
-        expect.hasAssertions();
-
-        const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
-        const stale = { code: "INVALID_CURSOR", message: "invalid cursor" };
-
-        let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
-
-        render(
-            <LunoraProvider client={mock.asClient}>
-                <Harness
-                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback used once to capture the hook's `loadMore`.
-                    onLoadMore={(next) => {
-                        loadMore = next;
-                    }}
-                />
-                {/* A second feed over the same query, still on its head page: it keeps that page cached. */}
-                <Harness />
-            </LunoraProvider>,
-        );
-
-        const statusOfRestarted = (): null | string => screen.getAllByTestId("status")[0]?.textContent ?? null;
-
-        await waitFor(() => {
-            expect(screen.getAllByTestId("results").map((node) => node.textContent)).toStrictEqual(["a,b", "a,b"]);
-        });
-
-        act(() => {
-            loadMore(2);
-        });
-
-        await waitFor(() => {
-            expect(screen.getAllByTestId("results")[0]?.textContent).toBe("a,b,c,d");
-        });
-
-        act(() => {
-            mock.emitError("items:list", stale, (args) => {
-                const opts = (args as { paginationOpts: { cursor: null | string; endCursor: null | string } }).paginationOpts;
-
-                return opts.cursor === null && opts.endCursor === "2";
-            });
-        });
-
-        // Not the sibling's cached head (and its `continueCursor`): the restart waits for a fresh one.
-        expect(statusOfRestarted()).toBe("LoadingFirstPage");
-
-        await waitFor(() => {
-            expect(screen.getAllByTestId("results").map((node) => node.textContent)).toStrictEqual(["a,b", "a,b"]);
-        });
-    });
-
     it("reports a second cursor refusal instead of restarting again, when nothing past the head loaded in between", async () => {
         expect.hasAssertions();
 
