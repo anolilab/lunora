@@ -47,11 +47,13 @@ const VITE_LABEL_WIDTH = 9;
 /**
  * The banner rows pointing at the manual triggers for the project's crons and
  * queues. `@cloudflare/vite-plugin` forwards `/cdn-cgi/local/scheduled` to
- * Miniflare, so a cron also gets a `curl` — except on a target whose own dev
- * server runs the Worker, where that route does not exist.
+ * Miniflare, so a cron also gets a `curl` — except where Lunora did not add
+ * that plugin: on a target whose own dev server runs the Worker, and under
+ * `cloudflare: false`, where whatever the project brings may not serve the route.
  */
 const triggerHintLines = (options: ResolvedLunoraPluginOptions, studioUrl: string): string[] => {
-    const scheduledUrl = targetRunsOwnDevServer(options.target) ? undefined : `${new URL(studioUrl).origin}/cdn-cgi/local/scheduled`;
+    const servesScheduled = options.cloudflare !== false && !targetRunsOwnDevServer(options.target);
+    const scheduledUrl = servesScheduled ? `${new URL(studioUrl).origin}/cdn-cgi/local/scheduled` : undefined;
 
     return devTriggerHints({ projectRoot: options.projectRoot, scheduledUrl, studioUrl }).map(({ label, text }) =>
         formatDevBannerRow(label, text, VITE_LABEL_WIDTH, VITE_ROW_STYLE),
