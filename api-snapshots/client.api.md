@@ -1374,13 +1374,13 @@ interface SubscriptionState {
     ack: "acked" | "idle" | "inflight";
     readonly args: Record<string, unknown>;
     readonly argsKey: string;
+    awaitingSnapshot?: boolean;
     readonly callbacks: Set<SubscriptionCallback>;
     readonly checkpointCallbacks: Set<(watermark: SyncWatermark) => void>;
     readonly errorCallbacks: Set<SubscriptionErrorCallback>;
     readonly fn: FunctionReference;
     readonly id: string;
     lastMutationId?: number;
-    awaitingSnapshot?: boolean;
     lastValue: unknown;
     optimisticLayers: OptimisticLayer[];
     pendingDeltaRun?: {
