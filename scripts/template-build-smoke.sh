@@ -190,6 +190,9 @@ is_skipped() {
 #
 #   TYPECHECK_DEP   — devDependency the scaffold needs for the checker (empty
 #                     when the template already ships the binary)
+#   TYPECHECK_OVERRIDES — pnpm override lines (`  "sel": "ver"`) the checker needs
+#                     to load at all, added under `overrides:` in the scaffold's
+#                     pnpm-workspace.yaml (empty when it needs none)
 #   TYPECHECK_PREP  — argv run first, to generate the framework's own tsconfig
 #                     and ambient types (empty when there is nothing to generate)
 #   TYPECHECK_CMD   — the checker itself
@@ -212,6 +215,7 @@ is_skipped() {
 # ---------------------------------------------------------------------------
 set_typecheck() {
     TYPECHECK_DEP=""
+    TYPECHECK_OVERRIDES=""
     TYPECHECK_PREP=()
     # TypeScript's own format, shared by `tsc` and `vue-tsc`.
     FILE_RE='\([0-9]+,[0-9]+\): error TS'
@@ -226,6 +230,13 @@ set_typecheck() {
             # `formatDiagnosticsWithColorAndContext` — which always colours, hence
             # the ANSI strip at the call site — and rewrites `TS1234` to `ts(1234)`.
             TYPECHECK_DEP="@astrojs/check@^0.9.10"
+            # @astrojs/astro2tsx pins @emnapi/core 1.x but leaves @emnapi/runtime to
+            # the peer range of its @napi-rs/wasm-runtime 1.2.4 (`^1.7.1 ||
+            # ^2.0.0-alpha.4`). pnpm fills that peer from the graph, and astro's
+            # rolldown (1.3.0+) pins runtime 2.0.0-beta.2, so the checker loads a 2.x
+            # runtime against a 1.x core and throws `setLastError is not a function`
+            # on import. astro reports that as "@astrojs/check is not installed".
+            TYPECHECK_OVERRIDES='  "@napi-rs/wasm-runtime@1.2.4>@emnapi/runtime": "1.11.3"'
             TYPECHECK_CMD=(pnpm exec astro check)
             AUTHUI_RE='^lunora/auth-ui/.*error ts\('
             ERROR_RE='error ts\('
@@ -975,6 +986,15 @@ for tname in "${TEMPLATES[@]}"; do
     if [[ -n "$TYPECHECK_DEP" ]]; then
         echo "  ==> injecting typechecker $TYPECHECK_DEP"
         inject_typecheck_dep "$scaffold_dir" "$TYPECHECK_DEP"
+    fi
+    if [[ -n "$TYPECHECK_OVERRIDES" ]]; then
+        TYPECHECK_OVERRIDES="$TYPECHECK_OVERRIDES" node -e "
+const fs = require('fs');
+const file = '$scaffold_dir/pnpm-workspace.yaml';
+const text = fs.readFileSync(file, 'utf8');
+if (!text.includes('\\noverrides:\\n')) { throw new Error('no overrides: block in ' + file); }
+fs.writeFileSync(file, text.replace('\\noverrides:\\n', '\\noverrides:\\n' + process.env.TYPECHECK_OVERRIDES + '\\n'));
+"
     fi
 
     # -- pnpm install -------------------------------------------------------
