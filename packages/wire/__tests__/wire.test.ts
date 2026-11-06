@@ -408,19 +408,30 @@ describe("built-in contents read natively", () => {
 
 describe("brands under a polluted root prototype", () => {
     it("ignores an href accessor added to Object.prototype", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const expected = encodeWire(new Map([["a", 1]]));
+        const expectedUrl = encodeWire(new URL("https://example.test/a"));
 
-        // A polluted root must not become the deepest `href` and brand every object as a URL.
+        // A polluted root must not become the deepest `href` and brand every object as a URL. The setter keeps plain
+        // assignment working: newer Node builds assign `ctx.href` inside `new URL()`, which the module runner calls to
+        // load `../src`, so a getter-only accessor would throw there before the module is ever evaluated.
         // eslint-disable-next-line no-extend-native -- the pollution under test; removed again in `finally`
-        Object.defineProperty(Object.prototype, "href", { configurable: true, get: () => "https://polluted.test/" });
+        Object.defineProperty(Object.prototype, "href", {
+            configurable: true,
+            get: () => "https://polluted.test/",
+            set(this: object, value: unknown) {
+                Object.defineProperty(this, "href", { configurable: true, enumerable: true, value, writable: true });
+            },
+        });
         vi.resetModules();
 
         try {
             const fresh = await import("../src");
 
             expect(fresh.encodeWire(new Map([["a", 1]]))).toStrictEqual(expected);
+            // A real URL would still pass the ancestry check, so only reading its own `href` getter keeps it intact.
+            expect(fresh.encodeWire(new URL("https://example.test/a"))).toStrictEqual(expectedUrl);
         } finally {
             Reflect.deleteProperty(Object.prototype, "href");
             vi.resetModules();
