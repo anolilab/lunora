@@ -11,7 +11,9 @@ import { createNodeProfiler, parseNodeProfileRequest } from "../src/node-profile
  * it can inline this function into its caller, and every sample is then
  * attributed to the caller, which is `(anonymous)` or the test body. Measured:
  * the frame was missing in roughly three of four runs with optimisation on.
- * The CPU test therefore turns optimisation off for the duration (see there).
+ * Both optimising tiers inline: `--no-opt` stops only TurboFan, and Maglev
+ * inlined it too, mostly under CPU load, where the frame was missing in about
+ * one run in four. The CPU test therefore turns both off for the duration.
  */
 const busyLoopForProfiler = (untilMs: number): number => {
     let total = 0;
@@ -102,8 +104,9 @@ describe("createNodeProfiler", () => {
     it("captures a CPU profile of a busy function from the real inspector", async () => {
         expect.assertions(3);
 
-        // Keep the busy frame unoptimised while this capture runs, so V8 cannot inline it into its caller.
+        // Keep the busy frame unoptimised while this capture runs, so neither TurboFan nor Maglev can inline it.
         setFlagsFromString("--no-opt");
+        setFlagsFromString("--no-maglev");
 
         try {
             const capture = createNodeProfiler().capture({ durationMs: 1000, profileType: "cpu" });
@@ -121,6 +124,7 @@ describe("createNodeProfiler", () => {
             expect(functionNames(profile)).toContain("busyLoopForProfiler");
         } finally {
             setFlagsFromString("--opt");
+            setFlagsFromString("--maglev");
         }
     }, 20_000);
 

@@ -20,6 +20,13 @@ const DOM_TESTS = ["__tests__/**/*.dom.test.ts"];
 export default getVitestConfig(
     {
         test: {
+            // The jsdom project below sets `extends: true` so its workers get the
+            // shared options (notably `execArgv`, which keeps jsdom's Storage on
+            // Node 25+); inline projects inherit nothing otherwise. Extending also
+            // merges the root `include` (vitest's default glob from getVitestConfig)
+            // into the project's own, so it would run every test file. Clearing it
+            // leaves the project's own `include` as its only selector.
+            include: [],
             projects: [
                 {
                     test: {
@@ -36,6 +43,7 @@ export default getVitestConfig(
                     },
                 },
                 {
+                    extends: true,
                     test: {
                         environment: "jsdom",
                         include: DOM_TESTS,
