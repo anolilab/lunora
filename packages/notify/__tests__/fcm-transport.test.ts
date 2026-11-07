@@ -153,13 +153,18 @@ describe("createFcmTransport", () => {
     it("does not retry a timed-out topic send, because the audience may already have it", async () => {
         expect.hasAssertions();
 
-        const fetchMock = vi.fn(async () => {
+        const signals: unknown[] = [];
+        const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+            signals.push(init?.signal);
+
             throw new Error("The operation was aborted due to timeout");
         });
         const transport = createFcmTransport(config, { fetch: fetchMock as unknown as typeof fetch, retryBaseDelay: 0 });
 
         await expect(transport.sendTo({ topic: "news" }, { body: "hi" })).rejects.toThrow(/timeout/u);
         expect(fetchMock).toHaveBeenCalledTimes(1);
+        // The request is bounded by a timeout signal. This runs under Node; the Workers runtime is not exercised by this suite.
+        expect(signals[0]).toBeInstanceOf(AbortSignal);
     });
 
     it("gives up after the retry budget on a persistent 429 of a direct topic send", async () => {
@@ -608,5 +613,24 @@ describe("createFcmTransport", () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it("applies the Retry-After limit to a throttled response whose body cannot be read", async () => {
+        expect.hasAssertions();
+
+        const unreadable = () =>
+            new Response(
+                new ReadableStream({
+                    start(controller) {
+                        controller.error(new Error("connection reset"));
+                    },
+                }),
+                { headers: { "retry-after": "3600" }, status: 429 },
+            );
+        const fetchMock = vi.fn(async () => unreadable());
+        const transport = createFcmTransport(config, { fetch: fetchMock as unknown as typeof fetch, retryBaseDelay: 0 });
+
+        await expect(transport.sendTo({ topic: "news" }, { body: "x" })).rejects.toThrow(/wait limit/u);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 });

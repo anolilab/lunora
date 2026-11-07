@@ -347,22 +347,41 @@ type Attempt = { kind: "done"; messageName: string } | { error: Error; kind: "fi
 const mayRetry = (status: number, fanOut: boolean): boolean => (fanOut ? status === 429 : retryable(status));
 
 /** Read a response and classify it. A retryable status is retried even when its body is unreadable; the status decides. */
+
+/**
+ * The verdict on a refused response. Whether its body could be read changes the message, never the rule: a
+ * status that may be retried is retried for the `Retry-After` it asked, unless that is longer than we will hold a
+ * send open. That case is final, and its message says so, so the engine's policy (which sees only the message) agrees.
+ */
+const refusalVerdict = (error: Error, status: number, fanOut: boolean, retryAfterMs: number | undefined): Attempt => {
+    if (!mayRetry(status, fanOut)) {
+        return { error, kind: "final" };
+    }
+
+    if (retryAfterMs !== undefined && retryAfterMs > MAX_RETRY_AFTER_MS) {
+        return { error: new Error(`${error.message} (Retry-After exceeds the ${String(MAX_RETRY_AFTER_MS / 1000)}s wait limit)`), kind: "final" };
+    }
+
+    return { error, kind: "retry", retryAfterMs };
+};
+
+/** Read a response and classify it. The status decides retry; an unreadable body changes only the message. */
 const classify = async (response: Response, fanOut: boolean): Promise<Attempt> => {
+    const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
     let text: string;
 
     try {
         text = await readCappedBody(response);
     } catch (error) {
-        // The status is kept in the message: the engine's policy classifies on text, and an oversized 400 or 404 must stay final.
         const readError = toError(error);
 
         if (response.ok) {
+            // A 2xx we cannot read is probably an acceptance FCM already made: final, and marked so the engine does not re-send it.
             return { error: new Error(`FCM ${String(response.status)} ACCEPTED_UNREADABLE: ${readError.message}`), kind: "final" };
         }
 
-        const unreadable = new Error(`FCM ${String(response.status)} ERROR: ${readError.message}`);
-
-        return mayRetry(response.status, fanOut) ? { error: unreadable, kind: "retry" } : { error: unreadable, kind: "final" };
+        // The status stays in the message: the engine's policy classifies on text, and an oversized 400 or 404 must stay final.
+        return refusalVerdict(new Error(`FCM ${String(response.status)} ERROR: ${readError.message}`), response.status, fanOut, retryAfterMs);
     }
 
     if (response.ok) {
@@ -374,21 +393,7 @@ const classify = async (response: Response, fanOut: boolean): Promise<Attempt> =
             : { error: new Error("FCM 200 ACCEPTED_NO_NAME: the request was accepted but returned no message name"), kind: "final" };
     }
 
-    const error = new Error(failureMessage(response.status, parseBody(text)));
-
-    if (!mayRetry(response.status, fanOut)) {
-        return { error, kind: "final" };
-    }
-
-    const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
-
-    // A `Retry-After` longer than we will hold a send open is final. Its message says so, so the engine's
-    // retry policy (which only sees the message) also treats it as permanent rather than re-POSTing.
-    if (retryAfterMs !== undefined && retryAfterMs > MAX_RETRY_AFTER_MS) {
-        return { error: new Error(`${error.message} (Retry-After exceeds the ${String(MAX_RETRY_AFTER_MS / 1000)}s wait limit)`), kind: "final" };
-    }
-
-    return { error, kind: "retry", retryAfterMs };
+    return refusalVerdict(new Error(failureMessage(response.status, parseBody(text))), response.status, fanOut, retryAfterMs);
 };
 
 /**
