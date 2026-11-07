@@ -312,6 +312,16 @@ const isPermanentFailure = (error: unknown): boolean => {
     return isGoneError(text) || (text !== undefined && FCM_PERMANENT_FAILURE.test(text));
 };
 
+/** FCM refusals of one request: the token is bad or gone, or the payload is too large. Not a service outage. */
+const FCM_REQUEST_REFUSAL = /\bFCM (?:400|404|413) /u;
+
+/** Whether a failure is about this one request, so the circuit should not count it. */
+const isRequestRefusal = (error: unknown): boolean => {
+    const text = failureText(error);
+
+    return isGoneError(text) || (text !== undefined && FCM_REQUEST_REFUSAL.test(text));
+};
+
 /** Consecutive non-permanent failures on one transport before its circuit opens. */
 const CIRCUIT_THRESHOLD = 5;
 
@@ -460,7 +470,9 @@ const perTransportCircuitBreaker = (): Middleware => {
             for (const state of entries) {
                 state.failures = 0;
             }
-        } else if (!isPermanentFailure(result.error)) {
+        } else if (!isRequestRefusal(result.error)) {
+            // A refusal of this one request (a bad or gone token) says nothing about the service. Throttling,
+            // revoked credentials and a wrong project do, so those still count toward the circuit.
             chargeFailure(result.error, keys, entries);
         }
 

@@ -2022,4 +2022,55 @@ describe("ctx.push topics and conditions", () => {
 
         await expect(push.broadcast({ body: "x" })).resolves.toBeDefined();
     });
+
+    it("opens the FCM circuit on repeated 401s, so later sends stop reaching FCM", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () => Response.json({ error: { message: "credentials revoked", status: "UNAUTHENTICATED" } }, { status: 401 }));
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+
+        for (let index = 0; index < 6; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sends are sequential so the circuit sees each failure in order
+            const stored = await push.register({ kind: "fcm", token: `device-${String(index)}` });
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await push.send(stored.id, { body: "x" });
+        }
+
+        expect(fetchSpy).toHaveBeenCalledTimes(5);
+    });
+
+    it("does not open the FCM circuit on per-request 400s", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () => Response.json({ error: { message: "bad request", status: "INVALID_ARGUMENT" } }, { status: 400 }));
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+
+        for (let index = 0; index < 6; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sends are sequential so each failure is seen in order
+            const stored = await push.register({ kind: "fcm", token: `bad-${String(index)}` });
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await push.send(stored.id, { body: "x" });
+        }
+
+        expect(fetchSpy).toHaveBeenCalledTimes(6);
+    });
+
+    it("refuses an invalid TTL before reading the subscription store", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const get = vi.spyOn(store, "get");
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.send("missing-id", { body: "x", ttl: -1 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(get).not.toHaveBeenCalled();
+    });
 });

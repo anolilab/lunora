@@ -690,9 +690,17 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             return subscriptionStore.put(normalizeRegisterInput(input, undefined, { allowedPushOrigins: definition.allowedPushOrigins }));
         },
         send: async (target: StoredSubscription | string, payload: PushContent): Promise<Receipt> => {
+            // The checks that need no store run first, so a bad TTL, urgency or size costs no read. The size check
+            // runs again once the kind is known, for the FCM overrides only an FCM target carries.
+            checkPushTtl(payload.ttl);
+            checkPushUrgency(payload.urgency);
+            assertPushPayloadFits(payload, { fcm: false });
+
             const subscription = await resolveSubscription(target);
 
-            checkPushPayload(payload, { fcm: subscription.kind === "fcm" });
+            if (subscription.kind === "fcm") {
+                assertPushPayloadFits(payload, { fcm: true });
+            }
 
             const { error, receipt } = await deliver(subscription, payload, { countInline: true, deferStatus: false });
 
