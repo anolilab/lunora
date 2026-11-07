@@ -1834,6 +1834,15 @@ describe("ctx.push topics and conditions", () => {
         expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
 
+    it("refuses a blank condition as BAD_REQUEST, before any send is counted", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.sendToCondition("   ", { body: "x" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
     it("refuses a malformed topic as BAD_REQUEST, before any request", async () => {
         expect.hasAssertions();
 

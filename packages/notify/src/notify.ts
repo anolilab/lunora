@@ -659,6 +659,11 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
 
             return { channel: "push", messageId: messageName, provider: "fcm", successful: true, timestamp: new Date() };
         } catch (error) {
+            // A typed LunoraError is a classified rejection (a bad target is BAD_REQUEST), not a transport failure: pass it through.
+            if (error instanceof LunoraError) {
+                throw error;
+            }
+
             const message = error instanceof Error ? error.message : String(error);
 
             countSend("push", "fcm", "failed");
