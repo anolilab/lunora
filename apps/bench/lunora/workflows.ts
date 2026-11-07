@@ -35,6 +35,15 @@ export const onboarding = defineWorkflow<{ email: string; organizationId: string
         const { email, organizationId, userId } = ctx.params;
         const instanceKey = `onboarding-${organizationId}`;
 
+        // A starter removed from the organisation before it starts gets no seed and no mail.
+        const { member: startedAsMember } = (await ctx.step.do("member at start", () =>
+            ctx.run(internal.membership.isMember, { organizationId, userId }, { shardKey: "__root__" }),
+        )) as { member: boolean };
+
+        if (!startedAsMember) {
+            return { nudged: false };
+        }
+
         await ctx.step.do("seed", () => ctx.run(internal.onboarding.seedOrganization, { organizationId, userId }, { shardKey: organizationId }));
 
         const { claimed: welcomed } = (await ctx.step.do("claim welcome", () =>
