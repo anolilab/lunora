@@ -43,6 +43,36 @@ const statusVariant = (status: string | undefined): "destructive" | "secondary" 
 const deviceTarget = (device: PushSubscriptionDevice): string => device.endpoint ?? device.id;
 
 /**
+ * One pass over the rows: the kind and search scope, the failing devices within it, and the list the
+ * panel shows (the failing-only view when enabled). Kept out of the component so the component stays simple.
+ */
+const partitionDevices = (
+    devices: PushSubscriptionDevice[],
+    kind: KindFilter,
+    search: string,
+    failingOnly: boolean,
+): { failing: PushSubscriptionDevice[]; filtered: PushSubscriptionDevice[] } => {
+    const needle = search.trim().toLowerCase();
+    const scoped: PushSubscriptionDevice[] = [];
+    const failing: PushSubscriptionDevice[] = [];
+
+    for (const device of devices) {
+        const kindMatches = kind === "all" || device.kind === kind;
+        const searchMatches = needle === "" || `${deviceTarget(device)} ${device.userId ?? ""}`.toLowerCase().includes(needle);
+
+        if (kindMatches && searchMatches) {
+            scoped.push(device);
+
+            if (device.lastStatus === "failed") {
+                failing.push(device);
+            }
+        }
+    }
+
+    return { failing, filtered: failingOnly ? failing : scoped };
+};
+
+/**
  * The Notifications inspector — the app's registered `@lunora/notify` push
  * devices, read through the gated `__lunora_admin__:listPushSubscriptions` admin
  * RPC (`useAdminQuery`; gated by the server's `LUNORA_ADMIN_TOKEN`). Each row is
@@ -78,35 +108,9 @@ const NotificationsPanel = (): ReactElement => {
     // Client-side kind + substring filter over the already-fetched devices — never
     // triggers a refetch. The substring matches the target endpoint/id and owner.
     // (React Compiler memoizes this derivation — no useMemo.)
-    const needle = search.trim().toLowerCase();
-    const inScope = (device: PushSubscriptionDevice): boolean => {
-        if (kind !== "all" && device.kind !== kind) {
-            return false;
-        }
-
-        if (needle === "") {
-            return true;
-        }
-
-        return `${deviceTarget(device)} ${device.userId ?? ""}`.toLowerCase().includes(needle);
-    };
     // The failing count is taken over the kind and search scope, so it matches what the button reveals.
-    // One pass over the rows: the scope, the failing count and the failing-only list come out together.
-    const scoped: PushSubscriptionDevice[] = [];
-    const failing: PushSubscriptionDevice[] = [];
-
-    for (const device of devices) {
-        if (inScope(device)) {
-            scoped.push(device);
-
-            if (device.lastStatus === "failed") {
-                failing.push(device);
-            }
-        }
-    }
-
+    const { failing, filtered } = partitionDevices(devices, kind, search, failingOnly);
     const failingCount = failing.length;
-    const filtered: PushSubscriptionDevice[] = failingOnly ? failing : scoped;
 
     const onSearchChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setSearch(event.target.value);
