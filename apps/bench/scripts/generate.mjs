@@ -678,7 +678,7 @@ export const importMany = orgBulkMutation
                 throw new LunoraError("UNPROCESSABLE", "a ${key} holds at most ${MAX_LINES_PER_RECORD} lines");
             }
 
-            const id = await ctx.db.insert("dom_${key}Records", { ...draft, amount: price?.amount ?? draft.amount, currency: price?.currency, createdAt: now, createdBy: userId, organizationId, state: "draft", updatedAt: now });
+            const id = await ctx.db.insert("dom_${key}Records", { ...draft, amount: price?.amount ?? draft.amount, currency: price?.currency ?? draft.currency, createdAt: now, createdBy: userId, organizationId, state: "draft", updatedAt: now });
 
             // Numbered from 1, as \`lines.add\` numbers them, so a record holds at most ${MAX_LINES_PER_RECORD} positions.
             for (const [index, item] of items.entries()) {
