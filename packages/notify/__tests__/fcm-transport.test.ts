@@ -351,4 +351,159 @@ describe("createFcmTransport", () => {
         ).rejects.toThrow(/RESOURCE_EXHAUSTED/u);
         expect(fetchMock).toHaveBeenCalledTimes(2);
     });
+
+    it("names a non-JSON error body by its status, without an error code", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn(async () => new Response("<html>gateway</html>", { status: 400 }));
+        const result = await createFcmTransport(config, { fetch: fetchMock as unknown as typeof fetch }).provider.send({ body: "hi", to: "token" });
+
+        expect(result.success).toBe(false);
+        expect(result.success ? "" : (result.error as Error).message).toBe("FCM 400 ERROR: request failed");
+    });
+
+    it("reads a response with no body as an empty failure", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn(async () => new Response(null, { status: 400 }));
+        const result = await createFcmTransport(config, { fetch: fetchMock as unknown as typeof fetch }).provider.send({ body: "hi", to: "token" });
+
+        expect(result.success).toBe(false);
+    });
+
+    it("retries a 429 with no Retry-After header on the backoff alone", async () => {
+        expect.hasAssertions();
+
+        const { fetchMock } = scriptedFetch(
+            { body: { error: { message: "quota", status: "RESOURCE_EXHAUSTED" } }, status: 429 },
+            { body: { name: "projects/demo-project/messages/30" }, status: 200 },
+        );
+
+        await expect(createFcmTransport(config, { fetch: fetchMock, retryBaseDelay: 0 }).sendTo({ topic: "news" }, { body: "x" })).resolves.toBe(
+            "projects/demo-project/messages/30",
+        );
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("treats a Retry-After HTTP date far in the future as too long to hold open", async () => {
+        expect.hasAssertions();
+
+        const later = new Date(Date.now() + 3_600_000).toUTCString();
+        const { fetchMock } = scriptedFetch({
+            body: { error: { message: "later", status: "RESOURCE_EXHAUSTED" } },
+            headers: { "retry-after": later },
+            status: 429,
+        });
+
+        await expect(createFcmTransport(config, { fetch: fetchMock, retryBaseDelay: 0 }).sendTo({ topic: "news" }, { body: "x" })).rejects.toThrow(
+            /wait limit/u,
+        );
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries when a Retry-After HTTP date has already passed", async () => {
+        expect.hasAssertions();
+
+        const past = new Date(Date.now() - 60_000).toUTCString();
+        const { fetchMock } = scriptedFetch(
+            { body: { error: { message: "quota", status: "RESOURCE_EXHAUSTED" } }, headers: { "retry-after": past }, status: 429 },
+            { body: { name: "projects/demo-project/messages/31" }, status: 200 },
+        );
+
+        await expect(createFcmTransport(config, { fetch: fetchMock, retryBaseDelay: 0 }).sendTo({ topic: "news" }, { body: "x" })).resolves.toBe(
+            "projects/demo-project/messages/31",
+        );
+    });
+
+    it("ignores an unreadable Retry-After and retries on the backoff", async () => {
+        expect.hasAssertions();
+
+        const { fetchMock } = scriptedFetch(
+            { body: { error: { message: "quota", status: "RESOURCE_EXHAUSTED" } }, headers: { "retry-after": "soon" }, status: 429 },
+            { body: { name: "projects/demo-project/messages/32" }, status: 200 },
+        );
+
+        await expect(createFcmTransport(config, { fetch: fetchMock, retryBaseDelay: 0 }).sendTo({ topic: "news" }, { body: "x" })).resolves.toBe(
+            "projects/demo-project/messages/32",
+        );
+    });
+
+    it("fails a device send after one connection error, leaving the retry to the engine", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn(async () => {
+            throw new Error("connection reset");
+        });
+        const result = await createFcmTransport(config, { fetch: fetchMock as unknown as typeof fetch, retryBaseDelay: 0 }).provider.send({
+            body: "x",
+            to: "token",
+        });
+
+        expect(result.success).toBe(false);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects a send with no project id before any request", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn();
+        const transport = createFcmTransport({ accessToken: "access-token", projectId: "" }, { fetch: fetchMock as unknown as typeof fetch });
+
+        await expect(transport.sendTo({ topic: "news" }, { body: "x" })).rejects.toThrow(/projectId/u);
+
+        const result = await transport.provider.send({ body: "x", to: "token" });
+
+        expect(result.success).toBe(false);
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("sends with the token from getAccessToken", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn(async () => Response.json({ name: "projects/demo-project/messages/34" }));
+        const transport = createFcmTransport(
+            { getAccessToken: async () => "callback-credential", projectId: "demo-project" },
+            { fetch: fetchMock as unknown as typeof fetch },
+        );
+
+        await transport.sendTo({ topic: "news" }, { body: "x" });
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({ headers: expect.objectContaining({ Authorization: expect.stringMatching(/callback-credential$/u) }) }),
+        );
+    });
+
+    it("refuses a send with no credential, and reports availability from the credential", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn();
+        const bare = createFcmTransport({ projectId: "demo-project" }, { fetch: fetchMock as unknown as typeof fetch });
+
+        await expect(bare.sendTo({ topic: "news" }, { body: "x" })).rejects.toThrow(/access token/u);
+        expect(bare.provider.isAvailable()).toBe(false);
+        expect(createFcmTransport(config).provider.isAvailable()).toBe(true);
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("maps a low urgency to normal Android priority and APNs priority 5", () => {
+        expect.hasAssertions();
+
+        const message = buildFcmMessage({ body: "x", ttl: 10, urgency: "low" }, { token: "t" });
+
+        expect(message).toMatchObject({ android: { priority: "normal" }, apns: { headers: { "apns-priority": "5" } } });
+    });
+
+    it("sends each token of a multi-token payload as its own message", async () => {
+        expect.hasAssertions();
+
+        const { fetchMock } = scriptedFetch(
+            { body: { name: "projects/demo-project/messages/35" }, status: 200 },
+            { body: { name: "projects/demo-project/messages/36" }, status: 200 },
+        );
+        const result = await createFcmTransport(config, { fetch: fetchMock }).provider.send({ body: "x", to: ["token-a", "token-b"] });
+
+        expect(result.success).toBe(true);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
 });

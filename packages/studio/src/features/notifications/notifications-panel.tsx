@@ -13,9 +13,10 @@ import { useT } from "../../i18n/i18n-context";
 import type { PushSubscriptionDevice, PushSubscriptionsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { formatTimestamp } from "../../lib/internal";
+import type { KindFilter } from "./notifications-filter";
+import { deviceTarget, partitionDevices } from "./notifications-filter";
 
 /** The three kind filters the toolbar toggles between (`"all"` clears the filter). */
-type KindFilter = "all" | "fcm" | "web-push";
 
 /** Map a device's last-send status to a semantic badge variant. */
 const statusVariant = (status: string | undefined): "destructive" | "secondary" | "success" | "warning" => {
@@ -40,37 +41,6 @@ const statusVariant = (status: string | undefined): "destructive" | "secondary" 
  * `token`) are stripped server-side, so a device is only ever identified by its
  * endpoint / id here — never by a credential.
  */
-const deviceTarget = (device: PushSubscriptionDevice): string => device.endpoint ?? device.id;
-
-/**
- * One pass over the rows: the kind and search scope, the failing devices within it, and the list the
- * panel shows (the failing-only view when enabled). Kept out of the component so the component stays simple.
- */
-const partitionDevices = (
-    devices: PushSubscriptionDevice[],
-    kind: KindFilter,
-    search: string,
-    failingOnly: boolean,
-): { failing: PushSubscriptionDevice[]; filtered: PushSubscriptionDevice[] } => {
-    const needle = search.trim().toLowerCase();
-    const scoped: PushSubscriptionDevice[] = [];
-    const failing: PushSubscriptionDevice[] = [];
-
-    for (const device of devices) {
-        const kindMatches = kind === "all" || device.kind === kind;
-        const searchMatches = needle === "" || `${deviceTarget(device)} ${device.userId ?? ""}`.toLowerCase().includes(needle);
-
-        if (kindMatches && searchMatches) {
-            scoped.push(device);
-
-            if (device.lastStatus === "failed") {
-                failing.push(device);
-            }
-        }
-    }
-
-    return { failing, filtered: failingOnly ? failing : scoped };
-};
 
 /**
  * The Notifications inspector — the app's registered `@lunora/notify` push

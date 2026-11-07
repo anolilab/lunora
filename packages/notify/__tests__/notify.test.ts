@@ -1912,4 +1912,113 @@ describe("ctx.push topics and conditions", () => {
 
         await expect(push.broadcast({ body: "x" })).resolves.toBeDefined();
     });
+
+    it("accepts a stored subscription object as the send target", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+        const stored = await push.register({ subscription: okSub });
+
+        await expect(push.send(stored, { body: "x" })).resolves.toMatchObject({ successful: true });
+    });
+
+    it("reports a push provider that throws as a failed receipt, not a success", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: mockThrowingPushProvider().provider }), silent: true });
+        const stored = await push.register({ kind: "fcm", token: "throw-device" });
+
+        await expect(push.send(stored.id, { body: "x" })).resolves.toMatchObject({ successful: false });
+    });
+
+    it("logs a status that cannot be recorded on a single send", async () => {
+        expect.hasAssertions();
+
+        const warn = vi.fn();
+        const store = memorySubscriptionStore();
+        const failingStore: SubscriptionStore = {
+            ...store,
+            markStatus: async () => {
+                throw new Error("disk full");
+            },
+        };
+        const { push } = createNotify(
+            baseDefinition(failingStore),
+            {},
+            { engine: mockEngine({ push: mockPushProvider().provider }), log: { warn }, silent: true },
+        );
+        const stored = await push.register({ subscription: okSub });
+
+        await push.send(stored.id, { body: "x" });
+
+        expect(warn).toHaveBeenCalledWith("@lunora/notify: delivery status could not be recorded", expect.objectContaining({ error: "disk full" }));
+    });
+
+    it("logs a page of statuses that cannot be recorded on a broadcast", async () => {
+        expect.hasAssertions();
+
+        const warn = vi.fn();
+        const store = memorySubscriptionStore();
+        const failingStore: SubscriptionStore = {
+            ...store,
+            applyOutcomes: async () => {
+                throw new Error("disk full");
+            },
+        };
+        const { push } = createNotify(
+            baseDefinition(failingStore),
+            {},
+            { engine: mockEngine({ push: mockPushProvider().provider }), log: { warn }, silent: true },
+        );
+        await push.register({ subscription: okSub });
+
+        await push.broadcast({ body: "x" });
+
+        expect(warn).toHaveBeenCalledWith("@lunora/notify: page delivery statuses could not be recorded", expect.objectContaining({ error: "disk full" }));
+    });
+
+    it("logs a failed channel receipt from a multi-channel send", async () => {
+        expect.hasAssertions();
+
+        const warn = vi.fn();
+        const alwaysFails: Provider<unknown, PushPayload> = {
+            channel: "push",
+            id: "always-fails",
+            initialize: () => undefined,
+            isAvailable: () => true,
+            send: () => {
+                return { error: new Error("upstream refused"), success: false };
+            },
+        };
+        const store = memorySubscriptionStore();
+        const { notify } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: alwaysFails }), log: { warn }, silent: true });
+
+        const receipts = await notify.send({ push: { body: "x", to: "device-1" } });
+
+        expect(receipts.every((receipt) => !receipt.successful)).toBe(true);
+        expect(warn).toHaveBeenCalledWith();
+    });
+
+    it("maps a topic transport rejection to INTERNAL and keeps the FCM detail out of the classification", async () => {
+        expect.hasAssertions();
+
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+            Response.json({ error: { message: "bad topic", status: "INVALID_ARGUMENT" } }, { status: 400 }),
+        );
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+
+        await expect(push.sendToTopic("news", { body: "x" })).rejects.toMatchObject({ code: "INTERNAL" });
+    });
+
+    it("sends a broadcast through the FCM channel when no engine is injected", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+
+        await expect(push.broadcast({ body: "x" })).resolves.toBeDefined();
+    });
 });
