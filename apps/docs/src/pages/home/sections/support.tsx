@@ -111,7 +111,7 @@ const SupportSection: FC = () => (
                     </dl>
 
                     <div className="mt-6 border-t border-hairline pt-5">
-                        <Kicker size="micro">Apache-2.0 from day one</Kicker>
+                        <Kicker size="micro">Apache-2.0 from this release</Kicker>
                         <p className="mt-2 font-sans text-blurb text-ink-muted">
                             The framework has no conversion date to wait for. It is Apache-2.0 today, so adopting it is not a bet on us staying friendly.
                         </p>
