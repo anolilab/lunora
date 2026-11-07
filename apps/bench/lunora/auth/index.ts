@@ -23,7 +23,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, isDevEnvironment, lunoraD1Adapter } from "@lunora/auth";
 import { admin, organization, passkey, twoFactor, uiConfig } from "@lunora/auth/plugins";
-import { isLunoraError } from "@lunora/errors";
+import { isLunoraError, LunoraError } from "@lunora/errors";
 import { createMailerFromEnv } from "@lunora/mail";
 import { APIError } from "better-auth/api";
 import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
@@ -127,6 +127,8 @@ let cached: LunoraAuth | undefined;
  * per isolate. Drop it if `.auth()` ever hands its instance to `.extend()`.
  */
 export const getAuth = (env: AuthEnv): LunoraAuth => {
+    // authOptions is defined below because its hooks reach getAuth; this call runs after the module has evaluated.
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- authOptions and getAuth are mutually reachable, so one reference must precede its definition
     cached ??= createAuth({ ...authOptions(env), database: lunoraD1Adapter(env.DB as never) });
 
     return cached;
@@ -162,31 +164,33 @@ const MAX_PROJECTION_ROUNDS = 3;
  * so failing the request would tell the user their organisation was not created
  * when it was. The next event for that organisation re-projects the whole row.
  */
-const projectOrganization = async (env: AuthEnv, organization: OrganizationRecord, fields: { status?: string } = {}): Promise<void> => {
+const projectOrganization = async (env: AuthEnv, record: OrganizationRecord, fields: { status?: string } = {}): Promise<void> => {
     try {
         const { adapter } = await getAuth(env).$context;
         const shard = createShardClient(env.SHARD, { shardKey: "__root__" });
         let written: number | undefined;
 
         for (let round = 0; round < MAX_PROJECTION_ROUNDS; round += 1) {
-            const seats = await adapter.count({ model: "member", where: [{ field: "organizationId", value: organization.id }] });
+            // eslint-disable-next-line no-await-in-loop -- each round recounts what the previous write left, so the rounds must run in order
+            const seats = await adapter.count({ model: "member", where: [{ field: "organizationId", value: record.id }] });
 
             if (seats === written) {
                 break;
             }
 
+            // eslint-disable-next-line no-await-in-loop -- each write must land before the next recount, so the rounds cannot overlap
             await shard.call(internal.saas.syncOrganization, {
-                name: organization.name,
-                organizationId: organization.id,
+                name: record.name,
+                organizationId: record.id,
                 seats,
-                slug: organization.slug,
+                slug: record.slug,
                 ...fields,
             });
             written = seats;
         }
     } catch (error) {
         // eslint-disable-next-line no-console -- the admin projection is best-effort; surface the drift in Worker logs
-        console.error("[saas] could not project organization", { error, organizationId: organization.id });
+        console.error("[saas] could not project organization", { error, organizationId: record.id });
     }
 };
 
@@ -216,14 +220,30 @@ const holdInvitationSeat = async (env: AuthEnv, organizationId: string, email: s
         seatLimit(env, organizationId),
         adapter.count({ model: "member", where: [{ field: "organizationId", value: organizationId }] }),
     ]);
+    const root = createShardClient(env.SHARD, { shardKey: "__root__" });
 
     try {
-        await createShardClient(env.SHARD, { shardKey: "__root__" }).call(internal.seats.holdInvitationSeat, {
+        const liveAfter = await root.call(internal.seats.holdInvitationSeat, {
             email,
+            // The seats mutation takes `null` for an uncapped plan (`v.union(v.number(), v.null())`): a wire value, not a missing one.
+            // eslint-disable-next-line unicorn/no-null -- the holdInvitationSeat argument is typed `number | null` on the shard RPC
             limit: Number.isFinite(limit) ? limit : null,
             members,
             organizationId,
         });
+
+        // The count above is read before the serialised mutation, so a member added in between is missed there. Counting
+        // again after the hold lands narrows that window; it cannot close it, since a member added after this read
+        // is only caught when the invitation is accepted.
+        if (liveAfter !== null) {
+            const membersNow = await adapter.count({ model: "member", where: [{ field: "organizationId", value: organizationId }] });
+
+            if (membersNow + liveAfter > limit) {
+                await root.call(internal.seats.releaseInvitationSeat, { email, organizationId });
+
+                throw new LunoraError("FORBIDDEN", "every seat on this plan is taken or invited — upgrade the plan to invite more");
+            }
+        }
     } catch (error) {
         // Structural: the shard client rebuilds the refusal from its wire form, not as this module's class.
         if (isLunoraError(error) && error.code === "FORBIDDEN") {
@@ -276,6 +296,23 @@ const cancelOrganizationSubscriptions = async (env: AuthEnv, organizationId: str
  */
 const releaseInvitationSeat = async (env: AuthEnv, organizationId: string, email: string): Promise<void> => {
     try {
+        // The hold is keyed by address, not by invitation: an older invitation to the same address that ends while a
+        // newer one is pending must not free the seat that one still holds.
+        const { adapter } = await getAuth(env).$context;
+        const pending = await adapter.findMany({
+            limit: 1,
+            model: "invitation",
+            where: [
+                { field: "organizationId", value: organizationId },
+                { field: "email", value: email.trim().toLowerCase() },
+                { field: "status", value: "pending" },
+            ],
+        });
+
+        if (pending.length > 0) {
+            return;
+        }
+
         await createShardClient(env.SHARD, { shardKey: "__root__" }).call(internal.seats.releaseInvitationSeat, { email, organizationId });
     } catch (error) {
         // eslint-disable-next-line no-console -- a stuck hold lapses with its invitation; surface it in Worker logs
