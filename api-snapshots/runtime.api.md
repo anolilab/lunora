@@ -3374,6 +3374,7 @@ interface SchedulerRunOptions {
         maxAttempts?: number;
         maxMs?: number;
     };
+    shardKey?: string;
 }
 ```
 

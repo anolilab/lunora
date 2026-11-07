@@ -2318,8 +2318,8 @@ interface RunQueryOptions {
 
 ```ts
 interface ScheduleRunOptions {
-    shardKey?: string;
     retry?: RetryPolicy;
+    shardKey?: string;
 }
 ```
 
