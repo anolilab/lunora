@@ -206,7 +206,7 @@ const CreateOrganization = (): ReactElement => {
     );
 };
 
-const Tasks = ({ organizationId }: { organizationId: string }): ReactElement => {
+const Tasks = ({ canWrite, organizationId }: { canWrite: boolean; organizationId: string }): ReactElement => {
     // Every org-scoped call names the tenant's shard; `authorizeShard` refuses any other.
     const shard = { shardKey: organizationId };
     const tasks = useQuery(api.tasks.list, {}, shard);
@@ -223,18 +223,20 @@ const Tasks = ({ organizationId }: { organizationId: string }): ReactElement => 
 
     return (
         <main>
-            <form action={submit}>
-                <label htmlFor="task-title">
-                    New task
-                    <input id="task-title" name="title" required />
-                </label>
-                <button type="submit">Add</button>
-            </form>
+            {canWrite ? (
+                <form action={submit}>
+                    <label htmlFor="task-title">
+                        New task
+                        <input id="task-title" name="title" required />
+                    </label>
+                    <button type="submit">Add</button>
+                </form>
+            ) : undefined}
             <ul>
                 {(tasks?.page ?? []).map((task) => (
                     <li key={task._id}>
                         {task.title} — {task.status}{" "}
-                        {task.status === "done" ? undefined : (
+                        {task.status === "done" || !canWrite ? undefined : (
                             <button
                                 onClick={() => {
                                     complete(task._id);
@@ -339,5 +341,8 @@ export const App = (): ReactElement => {
         return <CreateOrganization />;
     }
 
-    return <Tasks organizationId={me.organizationId} />;
+    // Creating and completing tasks is the admin and owner role (`requireWriter` in lunora/lib/crpc.ts); a member sees the list only.
+    const canWrite = (me.orgRole ?? "").split(",").some((role) => role.trim() === "admin" || role.trim() === "owner");
+
+    return <Tasks canWrite={canWrite} organizationId={me.organizationId} />;
 };

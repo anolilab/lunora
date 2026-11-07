@@ -18,13 +18,16 @@ export default defineConfig(({ command, mode }) => {
         process.stdout.write(`[bench] ${describeDevPorts(ports)}\n`);
 
         const devVars = existsSync(".dev.vars") ? readFileSync(".dev.vars", "utf8") : "";
-        const stale = staleDevOrigin(devVars, servedPlaygroundPort(ports, env));
+        const port = servedPlaygroundPort(ports, env);
+        // Invitation links are built from BETTER_AUTH_URL, so a stale one sends invitees to another checkout too.
+        const authOrigin = /^\s*BETTER_AUTH_URL\s*=\s*["']?([^"'\s#]+)/mu.exec(devVars)?.[1];
+        const stale = staleDevOrigin(devVars, port) ?? (authOrigin === undefined ? undefined : staleDevOrigin(`LUNORA_ORIGIN_URL=${authOrigin}`, port));
 
         // Refused, not warned: workflow, scheduler and agent callbacks dispatch to this
         // origin, and a stale one sends them to whichever server holds that port.
         if (stale !== undefined) {
             throw new Error(
-                `[bench] .dev.vars sets LUNORA_ORIGIN_URL="${stale}" but this checkout serves :${String(ports.playground)}; set it (and BETTER_AUTH_URL / APP_BASE_URL) to http://localhost:${String(ports.playground)}.`,
+                `[bench] .dev.vars names the origin "${stale}" but this checkout serves :${String(ports.playground)}; set LUNORA_ORIGIN_URL, BETTER_AUTH_URL and APP_BASE_URL to http://localhost:${String(ports.playground)}.`,
             );
         }
     }
