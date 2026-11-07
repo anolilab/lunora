@@ -1,3 +1,7 @@
+## @lunora/notify [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.112...@lunora/notify@1.0.0-alpha.113) (2026-11-07)
+
+- feat(notify): forward FCM platform fields, add topic sends (#1505)
+
 ## @lunora/notify [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.111...@lunora/notify@1.0.0-alpha.112) (2026-11-04)
 
 - feat(config): ask an fcm channel with its own token only for FCM_PROJECT_ID (#1479)

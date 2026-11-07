@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.405](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.404...@lunora/codegen@1.0.0-alpha.405) (2026-11-07)
+
+- feat(notify): forward FCM platform fields, add topic sends (#1505)
+
 ## @lunora/codegen [1.0.0-alpha.404](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.403...@lunora/codegen@1.0.0-alpha.404) (2026-11-05)
 
 - feat(vite): dev-loop hints, binding-drift notice and env.ts check (#1494)

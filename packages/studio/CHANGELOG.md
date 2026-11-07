@@ -1,3 +1,7 @@
+## @lunora/studio [1.0.0-alpha.379](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.378...@lunora/studio@1.0.0-alpha.379) (2026-11-07)
+
+- feat(notify): forward FCM platform fields, add topic sends (#1505)
+
 ## @lunora/studio [1.0.0-alpha.378](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.377...@lunora/studio@1.0.0-alpha.378) (2026-11-05)
 
 - fix(server): guard httpRoute cache headers and keep error causes in logs (#1488)
