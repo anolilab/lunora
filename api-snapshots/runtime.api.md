@@ -1960,6 +1960,7 @@ type ShardCallReturn<F> = F extends ShardFunctionReference<infer _A, infer R> ? 
 
 ```ts
 interface ShardCaller {
+    functionPath?: string;
     identity: ResolvedIdentity | null;
     shardKey: string;
 }

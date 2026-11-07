@@ -967,6 +967,12 @@ interface NotifySubscriptionFilter {
  * unauthenticated end user.
  */
 interface ShardCaller {
+    /**
+     * The function the caller's RPC envelope names. Set only on the single-call RPC
+     * path; a transport that names no function leaves it unset, so a gate keyed on
+     * it refuses those callers.
+     */
+    functionPath?: string;
     /** The identity `resolveIdentity` produced for this request, or `null` when the caller is unauthenticated. */
     identity: ResolvedIdentity | null;
     /** The shard the caller named (the default shard when the request named none). */
@@ -3595,7 +3601,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * end user and denies. The reserved-name refusal below is NOT skipped: an
      * admin credential does not make `foo::relay::0` a well-formed shard key.
      */
-    const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string, isAdmin = false): Promise<void> => {
+    const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string, isAdmin = false, functionPath?: string): Promise<void> => {
         // `::relay::` / `::replica::` are RESERVED: only the runtime mints those
         // names, and a DO reads its own name to learn its role. A client-supplied
         // key carrying either infix therefore addresses a DO that believes it is
@@ -3612,7 +3618,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         if (options.authorizeShard) {
-            const allowed = await grants(options.authorizeShard({ identity, shardKey }));
+            const allowed = await grants(options.authorizeShard({ functionPath, identity, shardKey }));
 
             if (!allowed) {
                 throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
@@ -4649,7 +4655,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * the dispatch — and answers `ORIGIN_NOT_CONFIGURED` when it is unset. So
      * nothing origin-shaped is sent from here.
      */
-    const buildHttpScheduler = (namespace: ShardNamespaceLike): SchedulerContext => {
+    const buildHttpScheduler = (namespace: ShardNamespaceLike, identity: ResolvedIdentity | null): SchedulerContext => {
         /** Undo `schedule`'s encode on a record read back out of the DO — the mirror of `@lunora/scheduler`'s `decodeRecordArgs`. Identity for pure-JSON args. */
         const decodeRecordArgs = (record: Record<string, unknown>): Record<string, unknown> =>
             "args" in record ? { ...record, args: decodeWire(record["args"]) } : record;
@@ -4739,6 +4745,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             runOptions?: SchedulerRunOptions,
         ): Promise<string> => {
             const fields = targetFields(target);
+
+            // The record names the shard its job runs on, and the dispatch that fires it trusts
+            // the record's HMAC rather than a caller, so the tenant check has to run here, while
+            // the caller's identity is still known. Same gate and default as the `ctx.run*` path.
+            const jobShardKey = runOptions?.shardKey;
+
+            if (jobShardKey !== undefined && jobShardKey.length > 0 && jobShardKey !== defaultShard) {
+                await assertShardAuthorized(identity, jobShardKey);
+            }
 
             const { id } = await post<{ id: string }>("/schedule", {
                 args: encodeArgsOrThrow("ctx.scheduler", String(fields["functionPath"] ?? fields["workflow"]), args),
@@ -4952,7 +4967,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             runAction: run,
             runMutation: run,
             runQuery: run,
-            ...(schedulerDO === undefined ? {} : { scheduler: buildHttpScheduler(schedulerDO) }),
+            ...(schedulerDO === undefined ? {} : { scheduler: buildHttpScheduler(schedulerDO, identity) }),
             // Bound to the execution context so a handler — or a wrapper reading
             // it structurally, e.g. `@lunora/x402`'s `withX402` receipt sink —
             // can outlive the response. Omitted entirely when the host supplied
@@ -5459,7 +5474,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // No per-shard gate and the caller named a non-default shard:
         // default-denied unless unauthenticated shard access is opted in.
-        await assertShardAuthorized(identity, envelope.shardKey ?? defaultShard);
+        await assertShardAuthorized(identity, envelope.shardKey ?? defaultShard, false, envelope.functionPath);
     };
 
     /**
