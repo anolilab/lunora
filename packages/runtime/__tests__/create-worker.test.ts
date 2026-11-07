@@ -2268,6 +2268,42 @@ describe("createWorker — HTTP actions", () => {
         expect(bodies[0]?.["retry"]).toStrictEqual({ forever: true, maxMs: 60_000 });
     });
 
+    it("forwards a runAfter shardKey to the SchedulerDO's /schedule so the job runs on that shard", async () => {
+        expect.assertions(1);
+
+        const bodies: Record<string, unknown>[] = [];
+        const schedulerNamespace: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        const body: Record<string, unknown> = await request.json();
+
+                        bodies.push(body);
+
+                        return Response.json({ id: "job-2", scheduledFor: body["scheduledFor"] });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/jobs", async (c) =>
+                    Response.json(await c.var.lunora.scheduler?.runAfter(0, { __lunoraRef: "jobs:recount" }, {}, { shardKey: "org_1" })),
+                ),
+            ),
+            schedulerDO: schedulerNamespace,
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/jobs", { method: "POST" }), {}, fakeContext);
+
+        expect(bodies[0]?.["shardKey"]).toBe("org_1");
+    });
+
     // The two `ctx.scheduler` implementations write to and read from the SAME
     // SchedulerDO record: `@lunora/scheduler`'s `createScheduler` (from a shard)
     // and this one (from an httpAction). `createScheduler` encodes on `runAt` and

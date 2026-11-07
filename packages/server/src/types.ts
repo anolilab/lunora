@@ -1708,6 +1708,12 @@ type SchedulableTarget = FunctionHandle<"action" | "mutation", unknown, unknown>
 interface ScheduleRunOptions {
     /** Retry policy for this job; the scheduler's defaults apply when omitted. */
     retry?: RetryPolicy;
+
+    /**
+     * The shard the job runs on when it fires. Omitted, the job runs on the default
+     * shard, which holds none of a tenant's `.shardBy()` rows.
+     */
+    shardKey?: string;
 }
 
 interface Scheduler {

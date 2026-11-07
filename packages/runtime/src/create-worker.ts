@@ -241,6 +241,7 @@ interface SchedulerRunOptions {
         maxAttempts?: number;
         maxMs?: number;
     };
+    shardKey?: string;
 }
 
 /**
@@ -4747,6 +4748,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 scheduledFor: Math.ceil(scheduledFor),
                 // The SchedulerDO sanitizes the policy (`normalizeRetry`), so it is forwarded as given.
                 retry: runOptions?.retry,
+                shardKey: runOptions?.shardKey,
                 ...fields,
             });
 
