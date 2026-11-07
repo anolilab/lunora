@@ -27,9 +27,10 @@ const assertPushPayloadFits = (payload: Omit<PushPayload, "to"> & { fcmOverrides
 
     // `fcmOverrides` only reaches FCM. A send that targets Web Push alone is not measured against
     // FCM's per-platform fields, so an FCM-only block cannot reject a Web Push send.
-    const size = new TextEncoder().encode(
-        JSON.stringify({ body: payload.body, data, fcmOverrides: fcm ? payload.fcmOverrides : undefined, image: payload.imageUrl, title: payload.title }),
-    ).length;
+    // `clickAction`, `sound` and `badge` are written into the FCM message's platform blocks, so they count for an FCM target only.
+    const fcmOnly = fcm ? { badge: payload.badge, clickAction: payload.clickAction, fcmOverrides: payload.fcmOverrides, sound: payload.sound } : {};
+
+    const size = new TextEncoder().encode(JSON.stringify({ body: payload.body, data, image: payload.imageUrl, title: payload.title, ...fcmOnly })).length;
 
     if (size > PUSH_PAYLOAD_LIMIT_BYTES) {
         throw new LunoraError(
