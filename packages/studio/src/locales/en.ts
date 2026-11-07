@@ -968,6 +968,8 @@ const MESSAGE_IDS = [
     "{count} devices",
     "{count} failing",
     "{count}+ failing",
+    "No matching devices.",
+    "No device matches the current kind, search or failing filter.",
     "endpoint",
     "last seen",
     "n/a",

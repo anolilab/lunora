@@ -1,4 +1,12 @@
-import type { ChatPayload, InAppPayload, NotificationMessage, PushPayload, Receipt, SuccessReceipt, WebhookPayload } from "@visulima/notification";
+import type {
+    ChatPayload,
+    InAppPayload,
+    NotificationMessage as ChannelNotificationMessage,
+    PushPayload,
+    Receipt,
+    SuccessReceipt,
+    WebhookPayload,
+} from "@visulima/notification";
 import type { FcmConfig } from "@visulima/notification/providers/fcm";
 import type { PushSubscriptionLike, WebPushConfig } from "@visulima/notification/providers/web-push";
 
@@ -539,6 +547,12 @@ export interface NotifyDefinition extends NotifyConfig {
 // Re-export the engine payload/config types an app touches when authoring
 // `defineNotify` or a send, so consumers don't need a direct dependency on
 // `@visulima/notification` just for typing.
-export type { ChatPayload, InAppPayload, NotificationMessage, PushPayload, Receipt, WebhookPayload } from "@visulima/notification";
+export type { ChatPayload, InAppPayload, PushPayload, Receipt, WebhookPayload } from "@visulima/notification";
+
+/** A push payload that may carry FCM per-platform overrides. The overrides reach only FCM targets. */
+export type PushMessage = PushPayload & { fcmOverrides?: FcmPlatformConfig };
+
+/** A multi-channel message whose `push` entry accepts `fcmOverrides`. */
+export type NotificationMessage = Omit<ChannelNotificationMessage, "push"> & { push?: PushMessage };
 export type { FcmConfig } from "@visulima/notification/providers/fcm";
 export type { PushSubscriptionLike, WebPushConfig } from "@visulima/notification/providers/web-push";

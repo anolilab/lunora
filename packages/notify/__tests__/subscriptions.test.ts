@@ -312,11 +312,14 @@ describe("targetOf / ids / isGoneError", () => {
         expect(isGoneError("HTTP 403: sender not registered for this endpoint", "web-push")).toBe(false);
         expect(isGoneError("HTTP 400: UNREGISTERED sender id", "web-push")).toBe(false);
 
-        // The FCM codes still prune an FCM device, and the shared HTTP 404/410
-        // status still prunes either kind (FCM HTTP v1 answers 404 for a dead token).
+        // An FCM device is pruned only on the transport's own dead-token report. Neither
+        // an HTTP status, a legacy code nor upstream prose prunes it: FCM and its gateways
+        // use the same words for failures that do not mean the token is dead.
         expect(isGoneError("FCM 404 UNREGISTERED: Requested entity was not found.", "fcm")).toBe(true);
-        expect(isGoneError("NotRegistered", "fcm")).toBe(true);
-        expect(isGoneError("HTTP 404: Not Found", "fcm")).toBe(true);
+        expect(isGoneError("NotRegistered", "fcm")).toBe(false);
+        expect(isGoneError("HTTP 404: Not Found", "fcm")).toBe(false);
+        expect(isGoneError("FCM access token unavailable: Google token exchange failed with HTTP 404 UNREGISTERED", "fcm")).toBe(false);
+        expect(isGoneError("FCM projectId rejected: project is not registered", "fcm")).toBe(false);
 
         // A transient 5xx whose prose says "not found" must not delete a live browser subscription.
         expect(isGoneError("HTTP 502: upstream route was not found", "web-push")).toBe(false);

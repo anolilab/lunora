@@ -13,20 +13,22 @@ const stringifyValue = (value: unknown): string => (typeof value === "string" ? 
 /**
  * Reject an oversize push before any transport is contacted.
  *
- * The size is measured over the fields the FCM transport serialises (`data` with non-string
- * values JSON-encoded, `title`, `body`, `imageUrl`, and the per-platform `fcmOverrides`), so
- * it tracks what would be sent.
+ * The size is measured over the fields the transport serialises (`data` with non-string
+ * values JSON-encoded, `title`, `body`, `imageUrl`), plus the per-platform `fcmOverrides` when
+ * `fcm` is set, so it tracks what would be sent to each transport it reaches.
  * The device token and the fixed envelope are not counted. The check exists to fail the
  * caller's own oversize message clearly and cheaply, not to replace the provider's answer.
  *
  * `PAYLOAD_TOO_LARGE` is thrown, not reported per device, so callers see one rejection
  * instead of a failed row for every recipient.
  */
-const assertPushPayloadFits = (payload: Omit<PushPayload, "to"> & { fcmOverrides?: unknown }): void => {
+const assertPushPayloadFits = (payload: Omit<PushPayload, "to"> & { fcmOverrides?: unknown }, { fcm = false }: { fcm?: boolean } = {}): void => {
     const data = payload.data === undefined ? undefined : Object.fromEntries(Object.entries(payload.data).map(([key, value]) => [key, stringifyValue(value)]));
 
+    // `fcmOverrides` only reaches FCM. A send that targets Web Push alone is not measured against
+    // FCM's per-platform fields, so an FCM-only block cannot reject a Web Push send.
     const size = new TextEncoder().encode(
-        JSON.stringify({ body: payload.body, data, fcmOverrides: payload.fcmOverrides, image: payload.imageUrl, title: payload.title }),
+        JSON.stringify({ body: payload.body, data, fcmOverrides: fcm ? payload.fcmOverrides : undefined, image: payload.imageUrl, title: payload.title }),
     ).length;
 
     if (size > PUSH_PAYLOAD_LIMIT_BYTES) {

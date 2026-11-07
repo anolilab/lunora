@@ -77,11 +77,14 @@ const mapWithConcurrency = async <T, R>(items: ReadonlyArray<T>, limit: number, 
     return results;
 };
 
-/** Every push-level check a send runs before anything is resolved, stored or contacted. */
-const checkPushPayload = (payload: PushContent): void => {
+/**
+ * Every push-level check a send runs before anything is resolved, stored or contacted.
+ * `fcm` says whether the send can reach FCM, which decides whether `fcmOverrides` count toward the size.
+ */
+const checkPushPayload = (payload: PushContent, { fcm }: { fcm: boolean }): void => {
     checkPushTtl(payload.ttl);
     checkPushUrgency(payload.urgency);
-    assertPushPayloadFits(payload);
+    assertPushPayloadFits(payload, { fcm });
 };
 
 /** Resolve the (possibly env-thunked) channel configs into a ready-to-wire set. */
@@ -210,19 +213,29 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
 
     // Resolved once per isolate: the engine's FCM provider and the topic path must
     // share one config, or a factory returning fresh objects could split them.
-    runtime.resolved ??= resolveProviders(definition, env);
+    const resolvedProviders = (): ResolvedProviders => {
+        runtime.resolved ??= resolveProviders(definition, env);
 
-    if (runtime.fcm === undefined) {
-        const fcmConfig = runtime.resolved.fcm;
+        return runtime.resolved;
+    };
 
-        runtime.fcm = fcmConfig === undefined ? null : createFcmTransport(fcmConfig);
-    }
+    // Resolved on first use, not at facade creation: an injected engine that never sends to a
+    // topic must not depend on the FCM factory succeeding.
+    const fcmTransport = (): FcmTransport | null => {
+        if (runtime.fcm === undefined) {
+            const fcmConfig = resolvedProviders().fcm;
+
+            runtime.fcm = fcmConfig === undefined ? null : createFcmTransport(fcmConfig);
+        }
+
+        return runtime.fcm;
+    };
 
     let engine: Notification;
 
     if (options.engine === undefined) {
         // Build once per isolate; the `options.engine` override seam bypasses it.
-        runtime.engine ??= buildEngine(runtime.resolved, runtime.fcm ?? undefined);
+        runtime.engine ??= buildEngine(resolvedProviders(), fcmTransport() ?? undefined);
         engine = runtime.engine;
     } else {
         engine = options.engine;
@@ -258,7 +271,6 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
 
     // Topic and condition sends bypass the engine (they have no subscription rows to
     // route over), so the facade holds the same transport the engine's FCM provider wraps.
-    const fcmTransport = runtime.fcm ?? null;
     // `definition` before the defaults, `options` before both: the app's
     // `defineNotify` is the only seam an app has (codegen's call passes just
     // `{ log, metrics }`), while `options` stays the test/tuning override.
@@ -389,10 +401,15 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
                 } else {
                     await subscriptionStore.markStatus(subscription.id, "failed", error);
                 }
-            } catch {
+            } catch (statusError) {
                 // The store lifecycle write is best-effort: a failing markStatus/delete
                 // (e.g. a transient D1 error) must not abort the fan-out. The send
-                // outcome above still stands; the status just went unrecorded.
+                // outcome above still stands, but the unrecorded status is logged so an
+                // operator can see that the Studio status is stale.
+                log?.warn("@lunora/notify: delivery status could not be recorded", {
+                    error: statusError instanceof Error ? statusError.message : String(statusError),
+                    subscriptionId: subscription.id,
+                });
             }
         }
 
@@ -449,8 +466,13 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             } else {
                 await subscriptionStore.applyOutcomes(outcomesToApply);
             }
-        } catch {
-            // The status just went unrecorded for the failed part.
+        } catch (statusError) {
+            // The status just went unrecorded for the failed part; say so, so it is not silently stale.
+            log?.warn("@lunora/notify: page delivery statuses could not be recorded", {
+                error: statusError instanceof Error ? statusError.message : String(statusError),
+                failed: outcomesToApply.failed.length,
+                ok: outcomesToApply.ok.length,
+            });
         }
 
         // Fold the per-recipient statuses into one metric count per (kind,
@@ -520,7 +542,8 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
      * audience cap, so its zero-floor is zero deliveries, not an unbounded page.
      */
     const broadcastPage = async (payload: PushContent, filter?: SubscriptionFilter): Promise<BroadcastPageResult> => {
-        checkPushPayload(payload);
+        // The audience is not known until its rows are read, so an FCM channel counts the overrides for every page.
+        checkPushPayload(payload, { fcm: fcmTransport() !== null });
 
         // A non-positive `limit` means "deliver to nobody" at this (audience-cap)
         // layer — NOT "no cap", which is the store layer's convention for the same
@@ -617,18 +640,20 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
     };
 
     const sendFcmTarget = async (target: { condition: string } | { topic: string }, payload: PushContent): Promise<SuccessReceipt> => {
-        checkPushPayload(payload);
+        checkPushPayload(payload, { fcm: true });
         // A malformed topic or condition is the caller's input error: refuse it before any send is counted or logged as a failure.
         assertFcmTarget(target);
 
-        if (fcmTransport === null) {
+        const transport = fcmTransport();
+
+        if (transport === null) {
             observeSkip("push", "channel-not-configured");
 
             throw new LunoraError("BAD_REQUEST", "@lunora/notify: FCM topics and conditions need the `fcm` channel configured in defineNotify(...)");
         }
 
         try {
-            const messageName = await fcmTransport.sendTo(target, payload);
+            const messageName = await transport.sendTo(target, payload);
 
             countSend("push", "fcm", "accepted");
 
@@ -658,9 +683,11 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             return subscriptionStore.put(normalizeRegisterInput(input, undefined, { allowedPushOrigins: definition.allowedPushOrigins }));
         },
         send: async (target: StoredSubscription | string, payload: PushContent): Promise<Receipt> => {
-            checkPushPayload(payload);
+            const subscription = await resolveSubscription(target);
 
-            const { error, receipt } = await deliver(await resolveSubscription(target), payload, { countInline: true, deferStatus: false });
+            checkPushPayload(payload, { fcm: subscription.kind === "fcm" });
+
+            const { error, receipt } = await deliver(subscription, payload, { countInline: true, deferStatus: false });
 
             if (receipt === undefined) {
                 // A targeted single send is not a fan-out: when the provider throws

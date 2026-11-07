@@ -1,19 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createFcmTransport } from "../src/fcm-transport";
+import { buildFcmMessage, createFcmTransport } from "../src/fcm-transport";
 import { isGoneError } from "../src/subscriptions/normalize";
 
 const config = { accessToken: "access-token", projectId: "demo-project" };
 
 /** A fetch double that answers each call with the next queued response, and records the bodies sent. */
-const scriptedFetch = (...responses: { body: unknown; status: number }[]) => {
+const scriptedFetch = (...responses: { body: unknown; headers?: Record<string, string>; status: number }[]) => {
     const bodies: { message: Record<string, unknown> }[] = [];
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
         bodies.push(JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { message: Record<string, unknown> });
 
         const next = responses.shift() ?? { body: {}, status: 200 };
 
-        return Response.json(next.body, { headers: { "Content-Type": "application/json" }, status: next.status });
+        return Response.json(next.body, { headers: { "Content-Type": "application/json", ...next.headers }, status: next.status });
     });
 
     return { bodies, fetchMock };
@@ -228,5 +228,107 @@ describe("createFcmTransport", () => {
         await expect(transport.sendTo({ topic: "bad topic!" }, { body: "x" })).rejects.toThrow(/FCM topic/u);
         await expect(transport.sendTo({ condition: "  " }, { body: "x" })).rejects.toThrow(/non-empty/u);
         expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves data-only pushes free of an empty Android notification and an empty aps", () => {
+        expect.hasAssertions();
+
+        // Assert on the wire body: an absent block is an undefined key in memory and is dropped by JSON.
+        // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON drops undefined keys, which is the wire behaviour under test
+        const wire = JSON.parse(JSON.stringify(buildFcmMessage({ body: "", data: { sync: "1" }, ttl: 60 }, { token: "t" }))) as Record<string, unknown>;
+
+        expect(wire).not.toHaveProperty("notification");
+        expect(wire).toMatchObject({ android: { ttl: "60s" } });
+        expect(wire.android).not.toHaveProperty("notification");
+        // The TTL still sets the APNs expiry header, which is delivery policy. No APNs payload (the alert) is sent.
+        expect(wire).toMatchObject({ apns: { headers: { "apns-expiration": expect.any(String) } } });
+        expect(wire.apns).not.toHaveProperty("payload");
+    });
+
+    it("sends TTL and urgency to APNs and Web Push as well as Android", () => {
+        expect.hasAssertions();
+
+        const message = buildFcmMessage({ body: "x", ttl: 90, urgency: "high" }, { token: "t" });
+
+        expect(message).toMatchObject({
+            android: { priority: "high", ttl: "90s" },
+            apns: { headers: { "apns-priority": "10" } },
+            webpush: { headers: { TTL: "90", Urgency: "high" } },
+        });
+        expect((message.apns as { headers: Record<string, string> }).headers["apns-expiration"]).toMatch(/^\d+$/u);
+    });
+
+    it("lets fcmOverrides win over the headers derived from ttl and urgency", () => {
+        expect.hasAssertions();
+
+        const message = buildFcmMessage({ body: "x", fcmOverrides: { webpush: { headers: { TTL: "5" } } }, ttl: 90 }, { token: "t" });
+
+        expect(message).toMatchObject({ webpush: { headers: { TTL: "5" } } });
+    });
+
+    it("honours a short Retry-After before the next attempt", async () => {
+        expect.hasAssertions();
+
+        const { fetchMock } = scriptedFetch(
+            { body: { error: { message: "slow down", status: "RESOURCE_EXHAUSTED" } }, headers: { "retry-after": "0" }, status: 429 },
+            { body: { name: "projects/demo-project/messages/20" }, status: 200 },
+        );
+
+        await expect(createFcmTransport(config, { fetch: fetchMock, retryBaseDelay: 0 }).sendTo({ topic: "news" }, { body: "x" })).resolves.toBe(
+            "projects/demo-project/messages/20",
+        );
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("fails rather than wait out a Retry-After longer than the transport will hold open", async () => {
+        expect.hasAssertions();
+
+        const { fetchMock } = scriptedFetch({
+            body: { error: { message: "later", status: "RESOURCE_EXHAUSTED" } },
+            headers: { "retry-after": "3600" },
+            status: 429,
+        });
+
+        await expect(createFcmTransport(config, { fetch: fetchMock, retryBaseDelay: 0 }).sendTo({ topic: "news" }, { body: "x" })).rejects.toThrow(
+            /RESOURCE_EXHAUSTED/u,
+        );
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries a retryable status whose body cannot be read", async () => {
+        expect.hasAssertions();
+
+        const unreadable = () =>
+            new Response(
+                new ReadableStream({
+                    start(controller) {
+                        controller.error(new Error("connection reset"));
+                    },
+                }),
+                { status: 503 },
+            );
+        const fetchMock = vi
+            .fn()
+            .mockImplementationOnce(async () => unreadable())
+            .mockImplementationOnce(async () => Response.json({ name: "projects/demo-project/messages/21" }));
+
+        await expect(
+            createFcmTransport(config, { fetch: fetchMock as unknown as typeof fetch, retryBaseDelay: 0 }).sendTo({ topic: "news" }, { body: "x" }),
+        ).resolves.toBe("projects/demo-project/messages/21");
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("honours the FcmConfig retries and timeout when they are set", async () => {
+        expect.hasAssertions();
+
+        const { fetchMock } = scriptedFetch(
+            { body: { error: { message: "down", status: "UNAVAILABLE" } }, status: 503 },
+            { body: { error: { message: "down", status: "UNAVAILABLE" } }, status: 503 },
+        );
+
+        await expect(
+            createFcmTransport({ ...config, retries: 1 }, { fetch: fetchMock, retryBaseDelay: 0 }).sendTo({ topic: "news" }, { body: "x" }),
+        ).rejects.toThrow();
+        expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 });

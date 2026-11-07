@@ -1844,4 +1844,30 @@ describe("ctx.push topics and conditions", () => {
         await expect(push.sendToTopic("/topics/news", { body: "x" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
         expect(fetchSpy).not.toHaveBeenCalled();
     });
+
+    it("does not resolve the FCM factory for an injected engine that never sends to a topic", () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const definition: NotifyDefinition = {
+            ...baseDefinition(store),
+            fcm: () => {
+                throw new Error("fcm factory failed");
+            },
+        };
+
+        expect(() => createNotify(definition, {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true })).not.toThrow();
+    });
+
+    it("does not reject a Web Push send for FCM-only overrides it cannot carry", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+        const stored = await push.register({ subscription: okSub });
+
+        await expect(push.send(stored.id, { body: "x", fcmOverrides: { android: { data: { blob: "x".repeat(5000) } } } })).resolves.toMatchObject({
+            successful: true,
+        });
+    });
 });

@@ -637,7 +637,7 @@ export const routingPushProvider = (options: RoutingPushOptions): Provider<unkno
             // Before any group is sent: a mixed `to` must not deliver one transport and then
             // reject the other for an oversize body. Applies to every target, Web Push included,
             // so `notify.send()` cannot skip the guard that `push.send` and `broadcast` enforce.
-            assertPushPayloadFits(payload);
+            assertPushPayloadFits(payload, { fcm: targets.some((entry) => webPushEndpoint(entry) === undefined) });
 
             const endpoints = targets.map((entry) => webPushEndpoint(entry));
 

@@ -408,6 +408,9 @@ const WEB_PUSH_GONE_PATTERN = /\bhttp\s*4(?:04|10)\b/iu;
  * the push service's response body into `HTTP ${status}: ${body}`, where "not
  * registered" can be ordinary prose.
  */
+/** The dead-token report `fcm-transport` writes when FCM's `error.details` carries `UNREGISTERED`. */
+const FCM_DEAD_TOKEN_REPORT = /\bFCM 404 UNREGISTERED\b/u;
+
 const FCM_GONE_PATTERN = /\b(?:unregistered|not[\s-]?registered|registration-token-not-registered)\b/iu;
 
 /**
@@ -442,6 +445,13 @@ const GONE_TEXT_FALLBACK = /\bsubscription (?:is )?(?:gone|expired|no longer val
 const isGoneError = (message: string | undefined, kind?: StoredSubscription["kind"]): boolean => {
     if (message === undefined) {
         return false;
+    }
+
+    // An FCM device is pruned only on the dead-token report `fcm-transport` writes from
+    // `error.details[].errorCode`. Upstream prose, an HTTP status, or the word alone never
+    // prunes: a project error, a token-exchange failure or a gateway page can contain any of them.
+    if (kind === "fcm") {
+        return FCM_DEAD_TOKEN_REPORT.test(message);
     }
 
     if (WEB_PUSH_GONE_PATTERN.test(message) || GONE_TEXT_FALLBACK.test(message)) {

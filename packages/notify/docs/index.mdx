@@ -68,7 +68,14 @@ rather than retried forever.
 (`android`, `apns`, `webpush`, `fcm_options`). It is forwarded to the message as
 sent and merged over what the common fields produce, so it wins on a clash. Web
 Push ignores it. `clickAction` maps to `android.notification.click_action`, and
-`sound` and `badge` to their Android and APNs slots.
+`sound` and `badge` to their Android and APNs slots. `ttl` and `urgency` apply on
+every FCM target: Android `ttl`/`priority`, APNs `apns-expiration`/`apns-priority`,
+and Web Push `TTL`/`Urgency`. A block with nothing in it is left out, so a data-only
+send carries no notification.
+
+FCM's own `retries` and `timeout` fields are honoured for topic and condition
+sends. A `Retry-After` up to 10 seconds is waited out; a longer one fails the send.
+A device send makes one POST per engine attempt, so the engine's retries apply once.
 
 `ctx.push.sendToTopic(topic, payload)` and `sendToCondition(expression, payload)`
 send one FCM message to every device subscribed to a topic, or matching a condition

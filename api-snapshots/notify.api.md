@@ -234,7 +234,11 @@ interface LunoraPush {
 
 ### `NotificationMessage` (type)
 
-Re-exported from `@visulima/notification` — signature tracked at its source.
+```ts
+type NotificationMessage = Omit<NotificationMessage$1, "push"> & {
+    push?: PushMessage;
+};
+```
 
 ### `NotifyConfig` (interface)
 
@@ -709,6 +713,14 @@ interface NormalizeOptions {
 
 ```ts
 type PushContent = Omit<PushPayload, "to"> & {
+    fcmOverrides?: FcmPlatformConfig;
+};
+```
+
+### `PushMessage` (type)
+
+```ts
+type PushMessage = PushPayload & {
     fcmOverrides?: FcmPlatformConfig;
 };
 ```

@@ -71,7 +71,6 @@ const NotificationsPanel = (): ReactElement => {
     const { data, error, errorSource, isLoading, refetch } = useAdminQuery<PushSubscriptionsResult>(ADMIN_FUNCTIONS.listPushSubscriptions, {});
 
     const devices: PushSubscriptionDevice[] = data?.subscriptions ?? [];
-    const failingCount = devices.filter((device) => device.lastStatus === "failed").length;
     // The admin read is capped server-side at 1000 rows and does not say it was cut, so a full page
     // means the failing count may be short. Say so instead of presenting it as exact.
     const mayBeTruncated = devices.length >= 1000;
@@ -80,12 +79,8 @@ const NotificationsPanel = (): ReactElement => {
     // triggers a refetch. The substring matches the target endpoint/id and owner.
     // (React Compiler memoizes this derivation — no useMemo.)
     const needle = search.trim().toLowerCase();
-    const filtered: PushSubscriptionDevice[] = devices.filter((device) => {
+    const inScope = (device: PushSubscriptionDevice): boolean => {
         if (kind !== "all" && device.kind !== kind) {
-            return false;
-        }
-
-        if (failingOnly && device.lastStatus !== "failed") {
             return false;
         }
 
@@ -94,7 +89,11 @@ const NotificationsPanel = (): ReactElement => {
         }
 
         return `${deviceTarget(device)} ${device.userId ?? ""}`.toLowerCase().includes(needle);
-    });
+    };
+    // The failing count is taken over the kind and search scope, so it matches what the button reveals.
+    const scoped: PushSubscriptionDevice[] = devices.filter((device) => inScope(device));
+    const failingCount = scoped.filter((device) => device.lastStatus === "failed").length;
+    const filtered: PushSubscriptionDevice[] = failingOnly ? scoped.filter((device) => device.lastStatus === "failed") : scoped;
 
     const onSearchChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setSearch(event.target.value);
@@ -127,18 +126,21 @@ const NotificationsPanel = (): ReactElement => {
                         </Button>
                     ))}
                 </div>
-                <Button
-                    aria-pressed={failingOnly}
-                    data-testid="nt-failing-filter"
-                    onClick={(): void => {
-                        setFailingOnly(!failingOnly);
-                    }}
-                    size="sm"
-                    type="button"
-                    variant={failingOnly ? "secondary" : "ghost"}
-                >
-                    {mayBeTruncated ? t("{count}+ failing", { count: failingCount }) : t("{count} failing", { count: failingCount })}
-                </Button>
+                {data !== undefined && (
+                    <Button
+                        aria-pressed={failingOnly}
+                        data-testid="nt-failing-filter"
+                        onClick={(): void => {
+                            // Functional update: two toggles queued before a render must both apply.
+                            setFailingOnly((current) => !current);
+                        }}
+                        size="sm"
+                        type="button"
+                        variant={failingOnly ? "secondary" : "ghost"}
+                    >
+                        {mayBeTruncated ? t("{count}+ failing", { count: failingCount }) : t("{count} failing", { count: failingCount })}
+                    </Button>
+                )}
                 <Input
                     aria-label={t("Filter devices")}
                     className="h-8 w-56"
@@ -161,9 +163,13 @@ const NotificationsPanel = (): ReactElement => {
 
             {error === null && !isLoading && filtered.length === 0 && (
                 <EmptyState
-                    description={t(
-                        "Registered Web Push / FCM devices appear here. Configure lunora/notify.ts with defineNotify({ store }) and register a device with ctx.push.register(...).",
-                    )}
+                    description={
+                        devices.length > 0
+                            ? t("No device matches the current kind, search or failing filter.")
+                            : t(
+                                  "Registered Web Push / FCM devices appear here. Configure lunora/notify.ts with defineNotify({ store }) and register a device with ctx.push.register(...).",
+                              )
+                    }
                     icon={
                         <svg
                             aria-hidden="true"
@@ -178,7 +184,7 @@ const NotificationsPanel = (): ReactElement => {
                         </svg>
                     }
                     testId="nt-empty"
-                    title={t("No registered devices.")}
+                    title={devices.length > 0 ? t("No matching devices.") : t("No registered devices.")}
                 />
             )}
 

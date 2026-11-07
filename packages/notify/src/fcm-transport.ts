@@ -95,6 +95,14 @@ interface FcmTransportOptions {
     retryBaseDelay?: number;
 }
 
+/** The visulima FCM config plus the request knobs this transport honours when they are set. */
+type FcmTransportConfig = FcmConfig & {
+    /** Retries for a direct topic or condition send, after the first attempt. The engine's device path does not use it. */
+    retries?: number;
+    /** Per-request timeout in milliseconds. */
+    timeout?: number;
+};
+
 const DEFAULT_ENDPOINT = "https://fcm.googleapis.com";
 
 /**
@@ -198,113 +206,181 @@ const toWireData = (data: Record<string, unknown> | undefined): Record<string, s
         ? undefined
         : Object.fromEntries(Object.entries(data).map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)]));
 
+const androidPriorityOf = (urgency: string): "high" | "normal" => (urgency === "high" ? "high" : "normal");
+
+const apnsPriorityOf = (urgency: string): "10" | "5" => (urgency === "high" ? "10" : "5");
+
+/** An object with no defined value is left out of the wire body entirely. */
+const definedOnly = <T extends Record<string, unknown>>(value: T): T | undefined =>
+    Object.values(value).some((entry) => entry !== undefined) ? value : undefined;
+
 /**
  * The FCM v1 `message` for one target. `title`/`body`/`imageUrl`/`data` map to the
- * shared notification, `ttl`/`urgency`/`clickAction`/`sound`/`badge` to their
- * platform fields, and `fcmOverrides` is merged over the top so an app can always override
- * what the common fields produce. Empty blocks are left out of the wire body.
+ * shared notification. `ttl` and `urgency` map to every platform's expiry and priority
+ * (Android `ttl`/`priority`, APNs `apns-expiration`/`apns-priority`, Web Push `TTL`/`Urgency`),
+ * and `clickAction`/`sound`/`badge` to their Android and APNs slots. `fcmOverrides` is
+ * merged over all of it, so an app can always override what the common fields produce.
+ * A block with nothing in it is left out, so a data-only send carries no notification.
  */
 const buildFcmMessage = (payload: FcmPayload, target: FcmTarget): Record<string, unknown> => {
     const overrides = payload.fcmOverrides;
     const hasNotification = nonEmpty(payload.title) || nonEmpty(payload.body) || nonEmpty(payload.imageUrl);
-    const hasAndroid =
-        payload.ttl !== undefined ||
-        payload.urgency !== undefined ||
-        payload.clickAction !== undefined ||
-        payload.sound !== undefined ||
-        overrides?.android !== undefined;
-    const hasApns = payload.badge !== undefined || payload.sound !== undefined || overrides?.apns !== undefined;
+    const ttlSeconds = payload.ttl === undefined ? undefined : String(payload.ttl);
+    const expiresAt = payload.ttl === undefined ? undefined : String(Math.floor(Date.now() / 1000) + payload.ttl);
+    const androidPriority = payload.urgency === undefined ? undefined : androidPriorityOf(payload.urgency);
+    const apnsPriority = payload.urgency === undefined ? undefined : apnsPriorityOf(payload.urgency);
+
+    const androidNotification = definedOnly({ click_action: payload.clickAction, sound: payload.sound, ...overrides?.android?.notification });
+    const android = definedOnly({
+        ttl: payload.ttl === undefined ? undefined : `${String(payload.ttl)}s`,
+        priority: androidPriority,
+        ...overrides?.android,
+        notification: androidNotification,
+    });
+
+    const aps = definedOnly({ badge: payload.badge, sound: payload.sound, ...overrides?.apns?.payload?.aps });
+    const apns = definedOnly({
+        ...overrides?.apns,
+        headers: definedOnly({ "apns-expiration": expiresAt, "apns-priority": apnsPriority, ...overrides?.apns?.headers }),
+        payload: definedOnly({ ...overrides?.apns?.payload, aps }),
+    });
+
+    const webpush = definedOnly({
+        ...overrides?.webpush,
+        headers: definedOnly({ TTL: ttlSeconds, Urgency: payload.urgency, ...overrides?.webpush?.headers }),
+    });
 
     return {
         ...target,
-        apns: hasApns
-            ? {
-                  ...overrides?.apns,
-                  payload: {
-                      ...overrides?.apns?.payload,
-                      aps: { badge: payload.badge, sound: payload.sound, ...overrides?.apns?.payload?.aps },
-                  },
-              }
-            : undefined,
-        android: hasAndroid
-            ? {
-                  ...(payload.ttl === undefined ? {} : { ttl: `${String(payload.ttl)}s` }),
-                  ...(payload.urgency === undefined ? {} : { priority: payload.urgency === "high" ? "high" : "normal" }),
-                  ...overrides?.android,
-                  notification: { click_action: payload.clickAction, sound: payload.sound, ...overrides?.android?.notification },
-              }
-            : undefined,
+        android,
+        apns,
         data: toWireData(payload.data),
         fcm_options: overrides?.fcm_options,
         notification: hasNotification ? { body: payload.body, image: payload.imageUrl, title: payload.title } : undefined,
-        webpush: overrides?.webpush,
+        webpush,
     };
 };
 
 const retryable = (status: number): boolean => status === 408 || status === 429 || status >= 500;
 
+/** Longest `Retry-After` the transport will wait out. A longer one fails the send rather than hold a Worker. */
+const MAX_RETRY_AFTER_MS = 10_000;
+
+/** `Retry-After` is either delay-seconds or an HTTP date. Returns milliseconds to wait, or undefined when absent or unreadable. */
+const parseRetryAfter = (value: string | null): number | undefined => {
+    if (value === null || value.trim() === "") {
+        return undefined;
+    }
+
+    const seconds = Number(value);
+
+    if (Number.isFinite(seconds)) {
+        return Math.max(0, seconds * 1000);
+    }
+
+    const date = Date.parse(value);
+
+    return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
+};
+
+const toError = (error: unknown): Error => (error instanceof Error ? error : new Error(String(error)));
+
+/** Outcome of one POST: done, worth another attempt, or final. */
+type Attempt = { kind: "done"; messageName: string } | { error: Error; kind: "final" } | { error: Error; kind: "retry"; retryAfterMs?: number };
+
+/** Read a response and classify it. A retryable status is retried even when its body is unreadable; the status decides. */
+const classify = async (response: Response): Promise<Attempt> => {
+    let text: string;
+
+    try {
+        text = await readCappedBody(response);
+    } catch (error) {
+        return retryable(response.status) ? { error: toError(error), kind: "retry" } : { error: toError(error), kind: "final" };
+    }
+
+    if (response.ok) {
+        // A 2xx without a message name is not a delivery we can account for, so it fails rather than reporting an empty id.
+        const name = (parseBody(text) as { name?: unknown } | null | undefined)?.name;
+
+        return typeof name === "string" && name !== ""
+            ? { kind: "done", messageName: name }
+            : { error: new Error("FCM accepted the request but returned no message name"), kind: "final" };
+    }
+
+    const error = new Error(failureMessage(response.status, parseBody(text)));
+
+    if (!retryable(response.status)) {
+        return { error, kind: "final" };
+    }
+
+    const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
+
+    // A `Retry-After` longer than we will hold a send open is reported now, for the caller to decide.
+    return retryAfterMs !== undefined && retryAfterMs > MAX_RETRY_AFTER_MS ? { error, kind: "final" } : { error, kind: "retry", retryAfterMs };
+};
+
+/** One POST. A transport error is a retry; a response is classified by {@link classify}. */
+const sendOnce = async (url: string, body: string, token: string, timeoutMs: number, fetchImpl: typeof fetch): Promise<Attempt> => {
+    try {
+        const response = await fetchImpl(url, {
+            body,
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            method: "POST",
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+
+        return await classify(response);
+    } catch (error) {
+        return { error: toError(error), kind: "retry" };
+    }
+};
+
 /**
- * POST one message, retrying transport errors and 408/429/5xx with jittered
- * exponential backoff. Any other failure is final on the first response.
+ * POST one message, retrying transport errors and 408/429/5xx with jittered exponential
+ * backoff, raised to any `Retry-After` the service sends. Anything else is final on the
+ * first response.
  */
 const postMessage = async (
-    config: FcmConfig,
+    config: FcmTransportConfig,
     token: string,
     message: Record<string, unknown>,
     attempts: number,
     options: FcmTransportOptions,
 ): Promise<string> => {
-    const fetchImpl = options.fetch ?? fetch;
     const url = `${config.endpoint ?? DEFAULT_ENDPOINT}/v1/projects/${config.projectId}/messages:send`;
     const body = JSON.stringify({ message });
     const baseDelay = options.retryBaseDelay ?? 250;
+    const timeoutMs = config.timeout ?? REQUEST_TIMEOUT_MS;
     let lastError: Error = new Error("FCM send failed");
+    let retryAfterMs: number | undefined;
 
     for (let attempt = 0; attempt < attempts; attempt += 1) {
         if (attempt > 0) {
+            // Jitter spreads retries out; it is not a security input.
+            // eslint-disable-next-line sonarjs/pseudo-random -- retry jitter, not a secret
+            const jitterMs = Math.floor(Math.random() * baseDelay);
+            const backoffMs = baseDelay * 2 ** (attempt - 1) + jitterMs;
+
             // eslint-disable-next-line no-await-in-loop -- retries are sequential by definition: each waits out the last
             await new Promise((resolve) => {
-                // Jitter spreads retries out; it is not a security input.
-                // eslint-disable-next-line sonarjs/pseudo-random -- retry jitter, not a secret
-                setTimeout(resolve, baseDelay * 2 ** (attempt - 1) + Math.floor(Math.random() * baseDelay));
+                setTimeout(resolve, Math.max(backoffMs, retryAfterMs ?? 0));
             });
         }
 
-        let response: Response;
+        // eslint-disable-next-line no-await-in-loop -- one attempt at a time; a parallel retry would double-send
+        const outcome = await sendOnce(url, body, token, timeoutMs, options.fetch ?? fetch);
 
-        try {
-            // eslint-disable-next-line no-await-in-loop -- one attempt at a time; a parallel retry would double-send
-            response = await fetchImpl(url, {
-                body,
-                headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-                method: "POST",
-                signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-            });
-        } catch (error) {
-            lastError = error instanceof Error ? error : new Error(String(error));
-
-            continue;
+        if (outcome.kind === "done") {
+            return outcome.messageName;
         }
 
-        // eslint-disable-next-line no-await-in-loop -- the body must be read before the next attempt is decided
-        const text = await readCappedBody(response);
+        lastError = outcome.error;
 
-        if (response.ok) {
-            // A 2xx without a message name is not a delivery we can account for, so it fails rather than reporting an empty id.
-            const name = (parseBody(text) as { name?: unknown } | null | undefined)?.name;
-
-            if (typeof name !== "string" || name === "") {
-                throw new Error("FCM accepted the request but returned no message name");
-            }
-
-            return name;
-        }
-
-        lastError = new Error(failureMessage(response.status, parseBody(text)));
-
-        if (!retryable(response.status)) {
+        if (outcome.kind === "final") {
             throw lastError;
         }
+
+        retryAfterMs = outcome.retryAfterMs;
     }
 
     throw lastError;
@@ -330,7 +406,7 @@ const assertFcmTarget = (target: FcmTarget): void => {
  * error text of a failed request. This one forwards the per-platform overrides and
  * the structured error code, so a dead token is recognised by `UNREGISTERED` alone.
  */
-const createFcmTransport = (config: FcmConfig, options: FcmTransportOptions = {}): FcmTransport => {
+const createFcmTransport = (config: FcmTransportConfig, options: FcmTransportOptions = {}): FcmTransport => {
     // Checked at send time, not at construction: a throw from the engine's provider would take every channel down with it.
     const requireConfigured = (): void => {
         if (!config.projectId) {
@@ -350,7 +426,9 @@ const createFcmTransport = (config: FcmConfig, options: FcmTransportOptions = {}
         throw new Error("FCM has no access token: set FCM_SERVICE_ACCOUNT, or pass getAccessToken to the fcm channel");
     };
 
-    const sendAttempts = options.maxAttempts ?? MAX_ATTEMPTS;
+    // `retries` is the FcmConfig's own knob: it sets how many attempts a direct topic or condition send makes.
+    // The engine's device path stays one POST per attempt, so its retries are not governed by this field.
+    const sendAttempts = options.maxAttempts ?? (config.retries === undefined ? MAX_ATTEMPTS : Math.max(1, config.retries + 1));
 
     const sendTo: FcmTransport["sendTo"] = async (target, payload) => {
         assertFcmTarget(target);
