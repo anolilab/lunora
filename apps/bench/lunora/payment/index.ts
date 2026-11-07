@@ -260,6 +260,9 @@ const CHECKOUT_SESSION_MS = 35 * 60_000;
  */
 const CHECKOUT_HOLD_MARGIN_MS = 60_000;
 
+/** The provider refuses a session whose expires_at is less than 30 minutes away. */
+const CHECKOUT_MIN_SESSION_MS = 30 * 60_000;
+
 /**
  * Reserve the organisation's one in-flight checkout. The subscription check in
  * `checkout` cannot see a purchase whose webhook has not landed yet, so two
@@ -283,19 +286,26 @@ export const holdCheckout = internalMutation
             }
 
             const url = hold["url"] as string | undefined;
+            // The session's own deadline is the hold less its margin, and it is stable: a retry reuses it as the
+            // provider's expires_at rather than extending it.
+            const sessionEnds = (hold["expiresAt"] as number) - CHECKOUT_HOLD_MARGIN_MS;
 
-            // The session's own deadline is the hold less its margin: a URL past it is a session the provider has expired.
-            if (url !== undefined && (hold["expiresAt"] as number) - CHECKOUT_HOLD_MARGIN_MS > ctx.now) {
+            if (url !== undefined && sessionEnds > ctx.now) {
                 return { url };
             }
 
-            if (url === undefined) {
-                // Not started, or not known to be: retry under the same hold so the provider replays any session it
-                // created, with the session's deadline counted from now rather than from the first attempt.
-                await ctx.db.patch("checkout_holds", hold["_id"] as never, { expiresAt: sessionExpiresAt + CHECKOUT_HOLD_MARGIN_MS });
+            if (url === undefined && sessionEnds > ctx.now) {
+                // Not started, or not known to be: the provider may already hold a session under this hold, still payable
+                // until `sessionEnds`. Retry under the same hold with the same deadline, or wait for it to lapse; never open
+                // a second session beside a payable one.
+                if (sessionEnds - ctx.now >= CHECKOUT_MIN_SESSION_MS) {
+                    return { holdId: hold["_id"] as Id<"checkout_holds">, sessionExpiresAt: sessionEnds };
+                }
 
-                return { holdId: hold["_id"] as Id<"checkout_holds">, sessionExpiresAt };
+                throw new LunoraError("CONFLICT", "a checkout for this organization is still settling — retry once it has lapsed");
             }
+
+            // A started session past its deadline is expired at the provider, so a fresh hold below is safe.
         }
 
         // A fresh row rather than a patch: an expired session's `url` must not be handed to the next caller.

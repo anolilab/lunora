@@ -215,13 +215,26 @@ const Tasks = ({ organizationId }: { organizationId: string }): ReactElement => 
 };
 
 /**
- * The landing page of an invitation email. The organisation plugin accepts the
- * invitation for the signed-in user, who must be the invited address; the link
- * carries the invitation id in `id`.
+ * The landing page of an invitation email, shown to a signed-in user. Accepting
+ * joins the organisation, and the page navigates home only once it is active; if
+ * activation fails, the accepted organisation is kept so activation can be retried.
  */
 const AcceptInvitation = (): ReactElement => {
+    const [organizationId, setOrganizationId] = useState<string | undefined>(undefined);
     const [error, setError] = useState<string | undefined>(undefined);
     const invitationId = new URLSearchParams(globalThis.location.search).get("id");
+
+    const activate = async (id: string): Promise<void> => {
+        const activated = await authClient.organization.setActive({ organizationId: id });
+
+        if (activated.error) {
+            setError(activated.error.message ?? "The organisation could not be made active. Try again.");
+
+            return;
+        }
+
+        globalThis.location.assign("/");
+    };
 
     const accept = async (): Promise<void> => {
         if (invitationId === null) {
@@ -231,30 +244,36 @@ const AcceptInvitation = (): ReactElement => {
         }
 
         const accepted = await authClient.organization.acceptInvitation({ invitationId });
-        const organizationId = accepted.data?.member.organizationId;
+        const accepting = accepted.data?.member.organizationId;
 
-        if (accepted.error || organizationId === undefined) {
+        if (accepted.error || accepting === undefined) {
             setError(accepted.error?.message ?? "The invitation could not be accepted. Sign in with the invited address, then try again.");
 
             return;
         }
 
-        await authClient.organization.setActive({ organizationId });
-        globalThis.location.assign("/");
+        setOrganizationId(accepting);
+        await activate(accepting);
     };
 
     return (
         <main>
             <h1>Accept invitation</h1>
-            <button type="button" onClick={() => void accept()}>
-                Accept
-            </button>
+            {organizationId === undefined ? (
+                <button type="button" onClick={() => void accept()}>
+                    Accept
+                </button>
+            ) : (
+                <button type="button" onClick={() => void activate(organizationId)}>
+                    Open the organisation
+                </button>
+            )}
             {error === undefined ? undefined : <p role="alert">{error}</p>}
         </main>
     );
 };
 
-const Session = (): ReactElement => {
+export const App = (): ReactElement => {
     const [signedOut, setSignedOut] = useState(false);
     const me = useQuery(
         api.saas.me,
@@ -274,11 +293,14 @@ const Session = (): ReactElement => {
         return <SignIn />;
     }
 
+    // Signed out, an invitation opens the sign-in above; sign-in reloads this path, so the invitation resumes here.
+    if (globalThis.location.pathname === "/accept-invitation") {
+        return <AcceptInvitation />;
+    }
+
     if (!me.organizationId) {
         return <CreateOrganization />;
     }
 
     return <Tasks organizationId={me.organizationId} />;
 };
-
-export const App = (): ReactElement => (globalThis.location.pathname === "/accept-invitation" ? <AcceptInvitation /> : <Session />);

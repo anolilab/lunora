@@ -214,7 +214,7 @@ export const ${key}Draft = z.object({
 
 export const ${key}Patch = ${key}Draft.partial().extend({ state: z.enum(["draft", "open", "closed", "void"]).optional() });
 
-export const ${key}Line = z.object({ label: z.string().min(1).max(120), quantity: z.number().int().positive().max(100_000), unitPrice: z.number().nonnegative().max(1_000_000_000) });
+export const ${key}Line = z.object({ label: z.string().min(1).max(120), quantity: z.number().int().positive().max(100_000), unitPrice: z.number().nonnegative().max(1_000_000) });
 
 export const ${key}Import = z.array(${key}Draft.extend({ lines: z.array(${key}Line).max(50).optional(), price: moneySchema.optional() })).max(200);
 `;
@@ -645,6 +645,27 @@ export const importMany = orgBulkMutation
         const { organizationId, userId } = await requireWriter(ctx);
         const now = Date.now();
         let lines = 0;
+
+        // A total is one number, so an import is in one currency, and not in a different one from what the domain holds.
+        // Records without a currency count as a different one. The check reads the newest 200 records of the organisation.
+        const currencies = new Set(args.rows.flatMap((row) => (row.price === undefined ? [] : [row.price.currency])));
+
+        if (currencies.size > 1) {
+            throw new LunoraError("UNPROCESSABLE", "an import is in one currency: split the rows by currency");
+        }
+
+        const [currency] = currencies;
+
+        if (currency !== undefined) {
+            const held = await ctx.db
+                .query("dom_${key}Records")
+                .withIndex("byOrgCode", (q) => q.eq("organizationId", organizationId))
+                .take(200);
+
+            if (held.some((record) => record.currency !== currency)) {
+                throw new LunoraError("UNPROCESSABLE", "this domain holds records in another currency or without one: totals would mix units");
+            }
+        }
 
         for (const { lines: items = [], price, ...draft } of args.rows) {
             if (items.length > ${MAX_LINES_PER_RECORD}) {
