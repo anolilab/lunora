@@ -204,6 +204,7 @@ export const ${key}Code = z.string().regex(/^[A-Z]{2,4}-\\d{1,8}$/u);
 
 export const ${key}Draft = z.object({
     amount: z.number().nonnegative().max(1_000_000_000).optional(),
+    currency: z.string().length(3).optional(),
     code: ${key}Code,
     meta: z.record(z.string(), z.unknown()).optional(),
     ownerId: z.string().max(64).optional(),
