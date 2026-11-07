@@ -72,6 +72,8 @@ export default defineSchema({
     })
         .shardBy("organizationId")
         .index("byOrgStatus", ["organizationId", "status", "updatedAt"])
+        // The unfiltered list: newest first across every status, which byOrgStatus cannot give.
+        .index("byOrgUpdated", ["organizationId", "updatedAt"])
         .index("byOrgAssignee", ["organizationId", "assigneeId", "dueAt"])
         .index("byOrgProject", ["organizationId", "projectId", "createdAt"])
         .searchIndex("search_title", { filterFields: ["organizationId", "status"], field: "title" })

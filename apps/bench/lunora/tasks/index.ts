@@ -19,13 +19,22 @@ export const list = orgQuery
     .query(async ({ args, ctx }): Promise<PaginationResult<Doc<"tasks">>> => {
         const { organizationId } = await requireOrg(ctx);
 
+        const paging = { cursor: args.cursor, numItems: args.limit ?? 50 };
+
+        // Without a status, newest first across every status; byOrgStatus would page through one status at a time.
+        if (args.status === undefined) {
+            return ctx.db
+                .query("tasks")
+                .withIndex("byOrgUpdated", (q) => q.eq("organizationId", organizationId))
+                .order("desc")
+                .paginate(paging);
+        }
+
         return ctx.db
             .query("tasks")
-            .withIndex("byOrgStatus", (q) =>
-                args.status === undefined ? q.eq("organizationId", organizationId) : q.eq("organizationId", organizationId).eq("status", args.status),
-            )
+            .withIndex("byOrgStatus", (q) => q.eq("organizationId", organizationId).eq("status", args.status))
             .order("desc")
-            .paginate({ cursor: args.cursor, numItems: args.limit ?? 50 });
+            .paginate(paging);
     });
 
 export const mine = orgQuery
