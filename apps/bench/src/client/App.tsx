@@ -212,13 +212,25 @@ const Tasks = ({ canWrite, organizationId }: { canWrite: boolean; organizationId
     const tasks = useQuery(api.tasks.list, {}, shard);
     const { mutate: create } = useMutation(api.tasks.create);
     const { mutate: update } = useMutation(api.tasks.update);
+    const [error, setError] = useState<string | undefined>(undefined);
 
+    // `mutate` rejects when the write is refused; without the catch the failure would vanish.
     const submit = async (form: FormData): Promise<void> => {
-        await create({ labels: [], title: field(form, "title") }, shard);
+        try {
+            await create({ labels: [], title: field(form, "title") }, shard);
+            setError(undefined);
+        } catch (error_) {
+            setError(error_ instanceof Error ? error_.message : "The task could not be created. Try again.");
+        }
     };
 
-    const complete = (id: Id<"tasks">): void => {
-        void update({ id, status: "done" }, shard);
+    const complete = async (id: Id<"tasks">): Promise<void> => {
+        try {
+            await update({ id, status: "done" }, shard);
+            setError(undefined);
+        } catch (error_) {
+            setError(error_ instanceof Error ? error_.message : "The task could not be updated. Try again.");
+        }
     };
 
     return (
@@ -232,6 +244,7 @@ const Tasks = ({ canWrite, organizationId }: { canWrite: boolean; organizationId
                     <button type="submit">Add</button>
                 </form>
             ) : undefined}
+            {error === undefined ? undefined : <p role="alert">{error}</p>}
             <ul>
                 {(tasks?.page ?? []).map((task) => (
                     <li key={task._id}>
@@ -239,7 +252,7 @@ const Tasks = ({ canWrite, organizationId }: { canWrite: boolean; organizationId
                         {task.status === "done" || !canWrite ? undefined : (
                             <button
                                 onClick={() => {
-                                    complete(task._id);
+                                    void complete(task._id);
                                 }}
                                 type="button"
                             >

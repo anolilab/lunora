@@ -54,6 +54,13 @@ const telemetry = (env: Env) =>
 
 const BEARER = /^Bearer\s+/iu;
 
+/**
+ * The longest a resolved identity is trusted before the caller re-resolves. The
+ * shard drops a socket at its credential expiry and the client reconnects, so this
+ * bounds how long a removed member's open subscription keeps receiving tenant rows.
+ */
+const MEMBERSHIP_RECHECK_MS = 5 * 60_000;
+
 /** The `event.type`s that need an operator: a failed charge, a lapsed subscription, a sweep that could not repair a row, a metered forward that never reached the provider. */
 const PAYMENT_FAILURE_EVENTS: ReadonlySet<string> = new Set(["payment.failed", "reconcile.error", "subscription.past_due", "usage.report_failed"]);
 
@@ -165,9 +172,10 @@ const resolveIdentity = async (env: Env, request: Request): Promise<{ [claim: st
         activeOrganizationId: member ? activeOrganizationId : undefined,
         appRole: role ?? undefined,
         email: session.user.email || undefined,
-        // The socket credential expiry: without it a signed-out user keeps an
-        // already-open WebSocket streaming their tenant's rows.
-        ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
+        // The socket credential expiry, capped at the membership re-check: without it a
+        // signed-out or removed user keeps an already-open WebSocket streaming their
+        // tenant's rows. The reconnect after the drop re-runs the membership lookup above.
+        expiresAtMs: Math.min(expiresAt instanceof Date ? expiresAt.getTime() : Number.POSITIVE_INFINITY, Date.now() + MEMBERSHIP_RECHECK_MS),
         name: session.user.name || undefined,
         // The same membership-checked tenant under the claim name `lunora/presence`
         // scopes its rooms by; without it every organisation shares one room.
@@ -270,10 +278,12 @@ const app = defineApp<Env>()
              * the rate-limit buckets are per organisation: a function running on a
              * tenant's shard counts against that tenant's copy.)
              *
-             * Anonymous callers get nothing. The scheduler and queue consumers are
-             * exempt from this callback by the runtime (they authenticate first and
-             * carry no end-user identity), so an `identity: null` here is always a
-             * real anonymous end user.
+             * Anonymous callers get nothing but `public_api:planMix` on the root shard,
+             * the x402 feed: it is paid per call and aggregate only. The function is
+             * named by the RPC envelope, so no other anonymous call reaches a shard.
+             * The scheduler and queue consumers are exempt from this callback by the
+             * runtime (they authenticate first and carry no end-user identity), so an
+             * `identity: null` here is always a real anonymous end user.
              *
              * Fan-out is denied by default once this is set, and that is correct for
              * this app: it runs no cross-shard table query. The admin's only
@@ -281,9 +291,9 @@ const app = defineApp<Env>()
              * served from D1 — a different path entirely. Add `authorizeFanOut` if
              * you introduce one, and think hard about who may trigger it.
              */
-            authorizeShard: ({ identity, shardKey }) => {
+            authorizeShard: ({ functionPath, identity, shardKey }) => {
                 if (!identity?.userId) {
-                    return false;
+                    return shardKey === "__root__" && functionPath === "public_api:planMix";
                 }
 
                 return shardKey === "__root__" || identity.activeOrganizationId === shardKey;

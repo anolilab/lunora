@@ -12,11 +12,18 @@
 import { query } from "../_generated/server";
 import { PLANS } from "../plans";
 
-/** One `COUNT` per catalog plan, so the work is the catalog's size, not the tenant count. */
+/**
+ * Reads the `countByStatusPlan` aggregate (see `lunora/saas/schema.ts`): one row per
+ * status and plan, so the work is the status and plan count, not the tenant count.
+ */
 export const planMix = query.x402({ price: "$0.001" }).query(async ({ ctx }): Promise<{ byPlan: Record<string, number>; organizations: number }> => {
-    const counts = await Promise.all(
-        PLANS.map(async (plan) => [plan.id, await ctx.db.saas_organizations.count({ plan: plan.id, status: { ne: "deleted" } })] as const),
+    const groups = await ctx.db.saas_organizations.groupBy({ agg: { op: "count" }, by: ["status", "plan"] });
+    const byPlan = Object.fromEntries(
+        PLANS.map((plan) => [
+            plan.id,
+            groups.filter(({ key }) => key.plan === plan.id && key.status !== "deleted").reduce((sum, { value }) => sum + (value ?? 0), 0),
+        ]),
     );
 
-    return { byPlan: Object.fromEntries(counts), organizations: counts.reduce((sum, [, count]) => sum + count, 0) };
+    return { byPlan, organizations: Object.values(byPlan).reduce((sum, count) => sum + count, 0) };
 });
