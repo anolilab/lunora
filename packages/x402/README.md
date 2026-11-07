@@ -77,4 +77,4 @@ before any signer is resolved.
 
 ## License
 
-FSL-1.1-Apache-2.0 © [Daniel Bannert](https://github.com/prisis)
+Apache-2.0 © [Daniel Bannert](https://github.com/prisis)

@@ -272,4 +272,4 @@ A complete Expo chat app (auth + live messages + offline queue) lives at
 
 ## License
 
-FSL-1.1-Apache-2.0 — see [LICENSE.md](./LICENSE.md).
+Apache-2.0 — see [LICENSE.md](./LICENSE.md).

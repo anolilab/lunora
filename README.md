@@ -9,7 +9,7 @@
 <br />
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![Status][status-badge]][status]
 [![Node][node-badge]][node]
 [![pnpm][pnpm-badge]][pnpm]
@@ -351,7 +351,9 @@ For security reports, see [`SECURITY.md`](./SECURITY.md). For community guidelin
 
 ## License
 
-[FSL-1.1-Apache-2.0](./LICENSE.md) © 2026 anolilab and contributors. The source is available now, and each release becomes Apache-2.0 two years after it ships.
+Lunora is [Apache-2.0](./LICENSE.md) © 2026 anolilab and contributors.
+
+The Lunora Cloud service in [`apps/cloud/`](./apps/cloud) is licensed under [FSL-1.1-Apache-2.0](./apps/cloud/LICENSE.md): source-available now, and each release becomes Apache-2.0 two years after it ships.
 
 <!-- badges -->
 
@@ -359,7 +361,7 @@ For security reports, see [`SECURITY.md`](./SECURITY.md). For community guidelin
 [typescript-url]: https://www.typescriptlang.org/
 [scorecard-badge]: https://api.scorecard.dev/projects/github.com/anolilab/lunora/badge?style=for-the-badge
 [scorecard]: https://scorecard.dev/viewer/?uri=github.com/anolilab/lunora
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
 [license]: ./LICENSE.md
 [status-badge]: https://img.shields.io/badge/status-alpha-blueviolet.svg?style=for-the-badge
 [status]: #status

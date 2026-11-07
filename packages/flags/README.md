@@ -98,4 +98,4 @@ any per-call context, and identical evaluations within one request are memoized.
 
 ## License
 
-[FSL-1.1-Apache-2.0](./LICENSE.md)
+[Apache-2.0](./LICENSE.md)

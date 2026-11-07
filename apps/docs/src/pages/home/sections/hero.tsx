@@ -17,7 +17,7 @@ import { siteConfig } from "~/site.config";
  */
 
 const PROMISES = [
-    { label: "Open source", text: "FSL-1.1-Apache-2.0, deployed to your own Cloudflare account." },
+    { label: "Open source", text: "Apache-2.0, deployed to your own Cloudflare account." },
     { label: "Realtime", text: "Every query is a subscription; mutations push to all clients." },
     { label: "Typed end to end", text: "Codegen keeps server and client in lockstep, or it stops compiling." },
     { label: "Edge native", text: "SQLite-backed Durable Objects, shardable by user, tenant, or room." },
@@ -34,7 +34,7 @@ const Hero: FC = () => (
 
         <PageHeader>
             <div className="mb-5 flex items-center justify-between gap-4">
-                <Kicker>Open source / FSL-1.1-Apache-2.0</Kicker>
+                <Kicker>Open source / Apache-2.0</Kicker>
                 <Kicker>Alpha</Kicker>
             </div>
 

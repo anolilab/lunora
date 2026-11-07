@@ -24,7 +24,7 @@ Build a standalone **`@lunora/stream`** package that **mirrors how `@lunora/stor
     - `signed-url.ts` (lines 109-246) for the signed-URL **shape and security posture** — TTL ceiling, host-bound canonical, `verify` returning `{ valid, reason? }` without leaking a signing oracle (lines 157-162). Stream's signed playback **token** is a different algorithm (a JWT signed with a Stream signing key) but the same "mint short-lived, app-gated, fail-closed" discipline applies.
     - `presigned-url.ts` (lines 119-157) for the **WebCrypto-only, no-SDK** signing style (SigV4 there; for Stream we hand-roll the JWT with `crypto.subtle` the same way — no bundled `jsonwebtoken`).
     - `create-storage.ts` for the factory/helper-object shape and `validateKey`-style input guarding; `types.ts` for structural `...Like` doubles + `R2S3Credentials`-style credential interfaces (lines 119-153).
-    - `package.json`/`project.json` for package shape (`category:add-on`, FSL-1.1-Apache-2.0, catalog deps, `exports`).
+    - `package.json`/`project.json` for package shape (`category:add-on`, Apache-2.0, catalog deps, `exports`).
 - **ctx-augmentation seam**: `emitAiFragments` (`packages/codegen/src/emit.ts:1248-1296`), `ActionCtx extends Omit<...>` (`emit.ts:864`), feature detection `PROBES` (`packages/codegen/src/discover-feature-usage.ts:50-58`). `ctx.ai` is ActionCtx-only because non-deterministic (`emit.ts:765-767`).
 - **Determinism contract**: `packages/advisor/src/lints/static/nondeterministic-query-mutation.ts` — Stream REST calls are `fetch`-class I/O, so they belong in actions.
 - **Missing**: the entire package + the `ctx.stream` codegen wiring on ActionCtx. (No config-layer work.)
@@ -33,7 +33,7 @@ Build a standalone **`@lunora/stream`** package that **mirrors how `@lunora/stor
 
 - [ ] **Item 1: scaffold `@lunora/stream` package skeleton** (own PR)
     - `vis generate lunora-package --name=stream --description='Cloudflare Stream for Lunora: ctx.stream video uploads (tus), signed playback URLs, and management'`, then conform to the storage template.
-    - Files: `packages/stream/package.json` (clone `packages/storage/package.json`; FSL-1.1-Apache-2.0, `type:module`, `sideEffects:false`, catalog deps, `exports` `"."` + `"./package.json"`; keywords `lunora`/`cloudflare`/`stream`/`video`/`tus`/`signed-url`); `packages/stream/project.json` (`{ "name": "stream", "tags": ["type:package", "category:add-on"] }`); `tsconfig.json`, `vitest.config.ts`, `.releaserc.json`, `README.md`, `LICENSE.md`.
+    - Files: `packages/stream/package.json` (clone `packages/storage/package.json`; Apache-2.0, `type:module`, `sideEffects:false`, catalog deps, `exports` `"."` + `"./package.json"`; keywords `lunora`/`cloudflare`/`stream`/`video`/`tus`/`signed-url`); `packages/stream/project.json` (`{ "name": "stream", "tags": ["type:package", "category:add-on"] }`); `tsconfig.json`, `vitest.config.ts`, `.releaserc.json`, `README.md`, `LICENSE.md`.
     - **Test**: `pnpm --filter "@lunora/stream" run lint:types` passes on empty `src/index.ts`.
 
 - [ ] **Item 2: REST client + credential types** (own PR)
