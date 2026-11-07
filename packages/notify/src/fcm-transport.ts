@@ -344,6 +344,12 @@ const parseRetryAfter = (value: string | null): number | undefined => {
     return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
 };
 
+/**
+ * The per-request timeout. AbortSignal.timeout throws for a non-finite or non-positive duration, which would
+ * fail every request before it is made, so an invalid configured value falls back to the default.
+ */
+const requestTimeout = (value: number | undefined): number => (value !== undefined && Number.isFinite(value) && value > 0 ? value : REQUEST_TIMEOUT_MS);
+
 /** A whole attempt count from a configured value. A non-finite value falls back to the default. */
 const attemptCount = (value: number | undefined, fallback: number): number =>
     value !== undefined && Number.isFinite(value) ? Math.max(1, Math.trunc(value)) : fallback;
@@ -456,7 +462,7 @@ const postMessage = async (
     const url = `${base}/v1/projects/${config.projectId}/messages:send`;
     const body = JSON.stringify({ message });
     const baseDelay = options.retryBaseDelay ?? 250;
-    const timeoutMs = config.timeout ?? REQUEST_TIMEOUT_MS;
+    const timeoutMs = requestTimeout(config.timeout);
     let lastError: Error = new Error("FCM send failed");
     let retryAfterMs: number | undefined;
 

@@ -694,4 +694,14 @@ describe("createFcmTransport", () => {
         expect(result.success).toBe(false);
         expect(result.success ? "" : (result.error as Error).message).toContain("FCM 503");
     });
+
+    it("falls back to the default request timeout when the configured one is not a usable duration", async () => {
+        expect.hasAssertions();
+
+        const { fetchMock } = scriptedFetch({ body: { name: "projects/demo-project/messages/60" }, status: 200 });
+        const transport = createFcmTransport({ ...config, timeout: Number.NaN }, { fetch: fetchMock });
+
+        await expect(transport.sendTo({ topic: "news" }, { body: "x" })).resolves.toBe("projects/demo-project/messages/60");
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
 });
