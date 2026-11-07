@@ -4748,11 +4748,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             // The record names the shard its job runs on, and the dispatch that fires it trusts
             // the record's HMAC rather than a caller, so the tenant check has to run here, while
-            // the caller's identity is still known. Same gate and default as the `ctx.run*` path.
+            // the caller's identity is still known. The gate also gets the job's function, so a
+            // policy that admits a shard only for a named function sees the function being scheduled.
             const jobShardKey = runOptions?.shardKey;
 
             if (jobShardKey !== undefined && jobShardKey.length > 0 && jobShardKey !== defaultShard) {
-                await assertShardAuthorized(identity, jobShardKey);
+                const jobFunctionPath = typeof fields["functionPath"] === "string" ? fields["functionPath"] : undefined;
+
+                await assertShardAuthorized(identity, jobShardKey, false, jobFunctionPath);
             }
 
             const { id } = await post<{ id: string }>("/schedule", {

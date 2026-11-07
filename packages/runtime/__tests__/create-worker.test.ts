@@ -2269,7 +2269,7 @@ describe("createWorker — HTTP actions", () => {
     });
 
     it("forwards a runAfter shardKey to the SchedulerDO's /schedule so the job runs on that shard", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const bodies: Record<string, unknown>[] = [];
         const schedulerNamespace: ShardNamespaceLike = {
@@ -2289,7 +2289,9 @@ describe("createWorker — HTTP actions", () => {
             },
         };
 
+        const authorizeShard = vi.fn<(caller: { functionPath?: string; identity: unknown; shardKey: string }) => boolean>(() => true);
         const worker = createWorker({
+            authorizeShard,
             httpRouter: honoApp((app) =>
                 app.post("/jobs", async (c) =>
                     Response.json(await c.var.lunora.scheduler?.runAfter(0, { __lunoraRef: "jobs:recount" }, {}, { shardKey: "org_1" })),
@@ -2301,7 +2303,44 @@ describe("createWorker — HTTP actions", () => {
 
         await worker.fetch(new Request("https://app.example/jobs", { method: "POST" }), {}, fakeContext);
 
+        expect(authorizeShard).toHaveBeenCalledWith({ functionPath: "jobs:recount", identity: null, shardKey: "org_1" });
         expect(bodies[0]?.["shardKey"]).toBe("org_1");
+    });
+
+    it("refuses a runAfter shardKey the caller may not reach, before the job is queued", async () => {
+        expect.assertions(2);
+
+        const bodies: Record<string, unknown>[] = [];
+        const schedulerNamespace: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        bodies.push(await request.json());
+
+                        return Response.json({ id: "job-3" });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+
+        const worker = createWorker({
+            authorizeShard: () => false,
+            httpRouter: honoApp((app) =>
+                app.post("/jobs", async (c) =>
+                    Response.json(await c.var.lunora.scheduler?.runAfter(0, { __lunoraRef: "jobs:recount" }, {}, { shardKey: "org_1" })),
+                ),
+            ),
+            schedulerDO: schedulerNamespace,
+            shardDO: shard.namespace,
+        });
+
+        const response = await worker.fetch(new Request("https://app.example/jobs", { method: "POST" }), {}, fakeContext);
+
+        expect(response.ok).toBe(false);
+        expect(bodies).toHaveLength(0);
     });
 
     // The two `ctx.scheduler` implementations write to and read from the SAME
