@@ -214,7 +214,7 @@ export const ${key}Draft = z.object({
 
 export const ${key}Patch = ${key}Draft.partial().extend({ state: z.enum(["draft", "open", "closed", "void"]).optional() });
 
-export const ${key}Line = z.object({ label: z.string().min(1).max(120), quantity: z.number().int().positive().max(100_000), unitPrice: z.number().nonnegative() });
+export const ${key}Line = z.object({ label: z.string().min(1).max(120), quantity: z.number().int().positive().max(100_000), unitPrice: z.number().nonnegative().max(1_000_000_000) });
 
 export const ${key}Import = z.array(${key}Draft.extend({ lines: z.array(${key}Line).max(50).optional(), price: moneySchema.optional() })).max(200);
 `;
@@ -593,7 +593,10 @@ export const sweepVoid = internalMutation.input({ before: v.number(), organizati
         .take(200);
 
     for (const row of rows) {
-        await ctx.db.patch("dom_${key}Records", row._id, { archivedAt: Date.now() });
+        // updatedAt moves with archivedAt: the sweep reads rows by their old updatedAt, so a swept row must leave that range.
+        const now = Date.now();
+
+        await ctx.db.patch("dom_${key}Records", row._id, { archivedAt: now, updatedAt: now });
     }
 
     return { swept: rows.length };
