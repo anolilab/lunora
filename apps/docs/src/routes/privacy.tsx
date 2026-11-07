@@ -6,6 +6,7 @@ import { createSeoHead } from "@/lib/seo";
 const RouteComponent = () => (
     <ContentPage>
         <h1>Privacy Policy</h1>
+        <p>Last updated: 2026-11-07</p>
 
         <h2>1. An overview of data protection</h2>
 
@@ -288,15 +289,65 @@ const RouteComponent = () => (
 
         <h3>Consent record</h3>
         <p>
-            When you make a selection in the consent banner on this website, we store that selection on your device, in the local storage of your browser, so
-            that you are not asked again on every page. The record contains your selection and the time it was made. It is not transmitted to a server and is
-            not merged with other data.
+            When you make a selection in the consent banner on this website, we store that selection on your device, so that you are not asked again on every
+            page. The record is kept in a cookie named <code>c15t</code> and in the local storage of your browser. It contains your selection, the time it was
+            made, and a random identifier for the consent record. It is not transmitted to a server and is not merged with other data.
         </p>
         <p>
             Storing this record is technically necessary in order to honor the decision you made, which is why it is set on the basis of Art. 6(1)(f) GDPR and
             &sect; 25 (2) no. 2 TDDDG and does not itself require consent. You can delete it at any time by clearing the site data in your browser; the banner
-            will then be displayed again on your next visit.
+            will then be displayed again on your next visit. You can also change your choice at any time through the &ldquo;Cookie settings&rdquo; link in the
+            footer.
         </p>
+
+        <h3>Cookies and browser storage set by this website</h3>
+        <p>The table lists every cookie and local storage entry that this website sets, and when.</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Where</th>
+                    <th>Set when</th>
+                    <th>Purpose</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>
+                        <code>c15t</code>
+                    </td>
+                    <td>Cookie and local storage</td>
+                    <td>You make a choice in the consent banner or in Cookie settings</td>
+                    <td>Remembers your choice (see Consent record above). Necessary.</td>
+                </tr>
+                <tr>
+                    <td>
+                        <code>locale</code>
+                    </td>
+                    <td>Cookie</td>
+                    <td>The consent banner loads</td>
+                    <td>Remembers the language of the banner. Necessary.</td>
+                </tr>
+                <tr>
+                    <td>
+                        <code>ph_&lt;project&gt;_posthog</code>
+                    </td>
+                    <td>Cookie and local storage</td>
+                    <td>You accept analytics</td>
+                    <td>PostHog&rsquo;s random identifiers for your browser and session. Removed when you decline or withdraw.</td>
+                </tr>
+                <tr>
+                    <td>
+                        <code>__ph_opt_in_out_&lt;project&gt;</code>
+                    </td>
+                    <td>Local storage</td>
+                    <td>You make an analytics choice</td>
+                    <td>
+                        Records your analytics choice: <code>1</code> if you accepted, <code>0</code> if you declined. Holds no identifier.
+                    </td>
+                </tr>
+            </tbody>
+        </table>
 
         <h3>Waitlist and forms</h3>
         <p>
@@ -353,9 +404,17 @@ const RouteComponent = () => (
         <p>
             The use of PostHog is based exclusively on your consent (Art. 6(1)(a) GDPR and &sect; 25 (1) TDDDG). You give this consent via the consent banner
             displayed on this website and can revoke it at any time with effect for the future by changing your selection via the consent settings link in the
-            footer of this website. Until you consent, and if you decline or later revoke your consent, PostHog neither stores information on your device nor
-            reads information from it; in that case no analysis data is transmitted at all.
+            footer of this website. Until you accept, PostHog stores nothing on your device and sends no analysis data. If you decline, PostHog sends no
+            analysis data either. In both cases PostHog keeps one entry in your browser (<code>__ph_opt_in_out_&lt;project&gt;</code>, see the table above) that
+            records your choice so it is applied on your next visit. If you later withdraw an accepted choice, PostHog&rsquo;s identifiers are deleted from your
+            browser and no further data is sent.
         </p>
+        <p>
+            Analysis data is not linked to your name, your email address or any account. PostHog stores only the random identifiers listed above for your
+            browser. We cannot find the data for your browser without its identifier. If you want us to look for or delete it, send us the value of the{" "}
+            <code>ph_&lt;project&gt;_posthog</code> cookie from your browser and we will act on it.
+        </p>
+        <p>If your browser sends the Do Not Track signal, analytics stays off for you even if you accept.</p>
         <p>
             The data is collected via our own domain (a so-called reverse proxy) and processed in PostHog&rsquo;s European infrastructure. PostHog acts as a
             processor for us on the basis of a data processing agreement (Art. 28 GDPR). Insofar as data is nevertheless accessed from the USA, the transfer is

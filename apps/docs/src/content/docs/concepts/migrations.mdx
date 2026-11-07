@@ -54,7 +54,7 @@ To fix:
 
   • If the stored rows already fit the new schema, `lunora deploy` goes ahead on its own: it reads the rows of each affected table from the deployed worker (`--migrate-url` or the project link, plus `LUNORA_ADMIN_TOKEN`) and names any row that does not fit.
   • For backward-compatible changes (e.g. adding an optional field): pass `--allow-schema-drift` to skip the block.
-Docs: https://lunora.dev/docs/migrations
+Docs: https://lunora.sh/docs/concepts/migrations
 ```
 
 The scaffolded `up` is `(document) => document`, an identity transform. A

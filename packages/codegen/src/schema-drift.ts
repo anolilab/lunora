@@ -553,7 +553,7 @@ const blockedReason = (
         `${command ?? "deploy"} blocked: ${String(uncovered.length)} unresolved breaking schema change(s) since the last blessed schema baseline:`,
         summarize(uncovered),
         "",
-        `To fix:\n${fixLines.join("")}Docs: https://lunora.dev/docs/migrations`,
+        `To fix:\n${fixLines.join("")}Docs: https://lunora.sh/docs/concepts/migrations`,
     ].join("\n");
 };
 

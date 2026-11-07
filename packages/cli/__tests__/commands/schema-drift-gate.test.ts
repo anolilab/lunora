@@ -259,7 +259,7 @@ describe("schema-drift gate", () => {
             expect(blocked).toContain("--allow-schema-drift");
             expect(blocked).toContain("defineMigration");
             expect(blocked).toContain("lunora migrate");
-            expect(blocked).toContain("lunora.dev");
+            expect(blocked).toContain("https://lunora.sh/docs/concepts/migrations");
         });
 
         it("passes the same breaking change once a new migration id is added", async () => {

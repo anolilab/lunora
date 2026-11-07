@@ -2,6 +2,8 @@
     "title": "Lunora",
     "pages": [
         "overview",
+        "choosing-lunora",
+        "faq",
         "getting-started",
         "quickstarts",
         "---Concepts---",
@@ -101,6 +103,7 @@
         "concepts/environments",
         "production-checklist",
         "runaway-bill",
+        "cost",
         "concepts/observability",
         "concepts/error-tracking",
         "architecture",

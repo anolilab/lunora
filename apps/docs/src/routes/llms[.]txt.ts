@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { llms } from "fumadocs-core/source";
 
 import { source } from "@/lib/docs-source";
+import { COMPARISONS } from "@/pages/compare/data";
 import { siteConfig } from "~/site.config";
 
 /**
@@ -27,6 +28,18 @@ search returns the relevant sections directly.
 
 Or run \`lunora mcp install\` inside a project to wire it into your editor
 alongside that project's own Lunora server.`;
+
+/**
+ * The comparison pages are routes, not docs, so fumadocs' index never lists them.
+ * An agent asked "Lunora vs X" would otherwise have no link to the honest answer.
+ */
+const COMPARISON_SECTION = [
+    "## Comparisons",
+    "",
+    ...Object.values(COMPARISONS).map(
+        (comparison) => `- [Lunora vs ${comparison.name}](${siteConfig.brand.url}/vs/${comparison.slug}): ${comparison.description}`,
+    ),
+].join("\n");
 
 /** The spec asks for a one or two sentence blockquote directly under the H1. */
 const SUMMARY = `> ${siteConfig.brand.description} Open source, and currently alpha.`;
@@ -59,7 +72,7 @@ export const Route = createFileRoute("/llms.txt")({
                 // fumadocs emits, so the file reads title → summary → sections.
                 const index = normalise(await llms(source).index()).replace(LEADING_HEADING, `$1\n${SUMMARY}\n\n${MCP_NOTICE}\n`);
 
-                return new Response(index, {
+                return new Response(`${index.trimEnd()}\n\n${COMPARISON_SECTION}\n`, {
                     headers: { "Content-Type": "text/plain; charset=utf-8" },
                 });
             },
