@@ -506,4 +506,52 @@ describe("createFcmTransport", () => {
         expect(result.success).toBe(true);
         expect(fetchMock).toHaveBeenCalledTimes(2);
     });
+
+    it("waits out a device refusal's Retry-After before reporting the failure", async () => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers();
+
+        try {
+            const { fetchMock } = scriptedFetch({
+                body: { error: { message: "quota", status: "RESOURCE_EXHAUSTED" } },
+                headers: { "retry-after": "1" },
+                status: 429,
+            });
+            let settled = false;
+            const pending = Promise.resolve(createFcmTransport(config, { fetch: fetchMock }).provider.send({ body: "x", to: "token" }));
+
+            const observed = pending.then((result) => {
+                settled = true;
+
+                return result;
+            });
+
+            await vi.advanceTimersByTimeAsync(999);
+
+            expect(settled).toBe(false);
+
+            await vi.advanceTimersByTimeAsync(1);
+
+            expect(settled).toBe(true);
+
+            const result = await observed;
+
+            expect(result.success).toBe(false);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("sends a topic when the configured retry count is not a number", async () => {
+        expect.hasAssertions();
+
+        const { fetchMock } = scriptedFetch({ body: { name: "projects/demo-project/messages/40" }, status: 200 });
+
+        await expect(createFcmTransport({ ...config, retries: Number.NaN }, { fetch: fetchMock }).sendTo({ topic: "news" }, { body: "x" })).resolves.toBe(
+            "projects/demo-project/messages/40",
+        );
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
 });

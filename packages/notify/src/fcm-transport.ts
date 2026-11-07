@@ -283,6 +283,10 @@ const parseRetryAfter = (value: string | null): number | undefined => {
     return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
 };
 
+/** A whole attempt count from a configured value. A non-finite value falls back to the default. */
+const attemptCount = (value: number | undefined, fallback: number): number =>
+    value !== undefined && Number.isFinite(value) ? Math.max(1, Math.trunc(value)) : fallback;
+
 const toError = (error: unknown): Error => (error instanceof Error ? error : new Error(String(error)));
 
 /** Outcome of one POST: done, worth another attempt, or final. */
@@ -399,6 +403,14 @@ const postMessage = async (
         retryAfterMs = outcome.retryAfterMs;
     }
 
+    // The last attempt was refused with a Retry-After. The caller's own retry (the engine's, for a device send) starts
+    // on its short backoff, so the requested interval is waited out here, before the failure is reported.
+    if (retryAfterMs !== undefined && retryAfterMs > 0) {
+        await new Promise((resolve) => {
+            setTimeout(resolve, retryAfterMs);
+        });
+    }
+
     throw lastError;
 };
 
@@ -444,7 +456,8 @@ const createFcmTransport = (config: FcmTransportConfig, options: FcmTransportOpt
 
     // `retries` is the FcmConfig's own knob: it sets how many attempts a direct topic or condition send makes.
     // The engine's device path stays one POST per attempt, so its retries are not governed by this field.
-    const sendAttempts = options.maxAttempts ?? (config.retries === undefined ? MAX_ATTEMPTS : Math.max(1, config.retries + 1));
+    // A non-finite or fractional count would make the loop run zero times or unevenly, so it is clamped to a whole number of attempts.
+    const sendAttempts = attemptCount(options.maxAttempts ?? (config.retries === undefined ? undefined : config.retries + 1), MAX_ATTEMPTS);
 
     const sendTo: FcmTransport["sendTo"] = async (target, payload) => {
         assertFcmTarget(target);

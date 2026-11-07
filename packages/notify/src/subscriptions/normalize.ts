@@ -397,12 +397,12 @@ const targetOf = (subscription: StoredSubscription): string => {
 const WEB_PUSH_GONE_PATTERN = /\bhttp\s*4(?:04|10)\b/iu;
 
 /**
- * "Permanently gone" signal from FCM: the `UNREGISTERED` code (HTTP v1, read from
- * `error.details[].errorCode` by `fcm-transport`) or the legacy `NotRegistered` /
- * `registration-token-not-registered` codes. Nothing else: an HTTP 404 with the
- * generic `NOT_FOUND` status is not a dead token. FCM answers a request it cannot
- * route (a wrong project id, for one) with that same 404, and matching its prose
- * pruned every device in the audience for a configuration fault.
+ * "Permanently gone" signal for an FCM device of unknown kind: the `UNREGISTERED` code,
+ * or the legacy `NotRegistered` / `registration-token-not-registered` codes. For a known
+ * FCM device {@link isGoneError} uses only `FCM 404 UNREGISTERED`, the report `fcm-transport`
+ * writes from `error.details[].errorCode`: an HTTP 404 with the generic `NOT_FOUND` status is
+ * not a dead token, since FCM answers a request it cannot route (a wrong project id, for one)
+ * with that same 404. Callers without a kind keep this wider match.
  *
  * Scoped to FCM by {@link isGoneError}'s `kind`, because the web-push provider echoes
  * the push service's response body into `HTTP ${status}: ${body}`, where "not

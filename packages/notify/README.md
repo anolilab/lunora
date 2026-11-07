@@ -139,7 +139,7 @@ export const announce = action.input({ title: v.string(), body: v.string() }).ac
 });
 ```
 
-`broadcast` reuses the engine's retry + circuit-breaker middleware and prunes subscriptions the push service reports as gone (Web Push HTTP 404/410; FCM's `UNREGISTERED` code for a dead token, plus the `NotRegistered` code a legacy transport sends). A single targeted send:
+`broadcast` reuses the engine's retry + circuit-breaker middleware and prunes subscriptions the push service reports as gone (Web Push HTTP 404/410; for an FCM device, only FCM's `UNREGISTERED` code, so a bare `NOT_FOUND` or a message that merely says "not registered" never prunes). A single targeted send:
 
 ```ts
 await ctx.push.send(subscriptionId, { title: "Hi", body: "…" });
