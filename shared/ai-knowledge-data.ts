@@ -34,6 +34,12 @@ export const DOC_TOPICS: ReadonlyArray<{
         title: "Architecture",
     },
     {
+        headings: ["Choose Lunora when", "Choose something else when", "Against each alternative", "Check these before you commit"],
+        id: "choosing-lunora",
+        summary: "A decision guide for choosing Lunora over Convex, Supabase, Firebase, Appwrite, or raw Cloudflare, including the cases where Lunora is the…",
+        title: "Is Lunora the right backend?",
+    },
+    {
         headings: [
             "How telemetry reaches the cloud",
             "Traces",
@@ -758,6 +764,17 @@ export const DOC_TOPICS: ReadonlyArray<{
         title: "Wire protocol",
     },
     {
+        headings: [
+            "Idle and small apps: the free plan",
+            "Past the free plan: Workers Paid",
+            "Which meters grow with your app",
+            "Choosing where the cost lands",
+        ],
+        id: "cost",
+        summary: "What a self-hosted Lunora app costs on Cloudflare, what the free plan covers, and which meters grow with traffic.",
+        title: "What Lunora costs to run",
+    },
+    {
         headings: ["wrangler.jsonc", "lunora.config.ts", "Secrets", "Containers", "Deploy", "Durable Object class limit", "Worker size", "Streaming logs"],
         id: "deployment",
         summary: "Wrangler bindings, secrets, and the deploy flow.",
@@ -774,6 +791,19 @@ export const DOC_TOPICS: ReadonlyArray<{
         id: "exit-codes",
         summary: "The exit code every lunora command terminates with — what each number means, and how it is derived from the error catalog.",
         title: "CLI exit codes",
+    },
+    {
+        headings: [
+            "Is Lunora open source?",
+            "Can I run Lunora on my own Cloudflare account?",
+            "Is Lunora production-ready?",
+            "Does Lunora run on Cloudflare's free plan?",
+            "Can one app scale past a single Durable Object?",
+            "How do I move an existing app to Lunora?",
+        ],
+        id: "faq",
+        summary: "Short answers to the questions people ask before adopting Lunora, with links to the pages that go deeper.",
+        title: "FAQ",
     },
     {
         headings: ["Install", "Provide the client", "Live queries", "Mutations", "Connection status", "Reactive loaders"],
