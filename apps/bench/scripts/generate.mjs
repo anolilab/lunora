@@ -214,7 +214,8 @@ export const ${key}Draft = z.object({
 
 export const ${key}Patch = ${key}Draft.partial().extend({ state: z.enum(["draft", "open", "closed", "void"]).optional() });
 
-export const ${key}Line = z.object({ label: z.string().min(1).max(120), quantity: z.number().int().positive().max(100_000), unitPrice: z.number().nonnegative().max(1_000_000) });
+// Unit prices are whole minor units (cents), so a total is an exact integer: fractions would make the sum inexact.
+export const ${key}Line = z.object({ label: z.string().min(1).max(120), quantity: z.number().int().positive().max(100_000), unitPrice: z.number().int().nonnegative().max(1_000_000) });
 
 export const ${key}Import = z.array(${key}Draft.extend({ lines: z.array(${key}Line).max(50).optional(), price: moneySchema.optional() })).max(200);
 `;
