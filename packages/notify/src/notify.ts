@@ -223,7 +223,8 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
     // topic must not depend on the FCM factory succeeding.
     const fcmTransport = (): FcmTransport | null => {
         if (runtime.fcm === undefined) {
-            const fcmConfig = resolvedProviders().fcm;
+            // With an injected engine only the FCM factory is needed: any other channel's factory that throws must not fail a topic send.
+            const fcmConfig = options.engine === undefined ? resolvedProviders().fcm : resolveMaybeFactory(definition.fcm, env);
 
             runtime.fcm = fcmConfig === undefined ? null : createFcmTransport(fcmConfig);
         }

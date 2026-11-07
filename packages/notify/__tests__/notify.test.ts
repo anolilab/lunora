@@ -2199,4 +2199,21 @@ describe("ctx.push topics and conditions", () => {
             push.broadcast({ body: "x", fcmOverrides: { android: { data: { blob: "x".repeat(5000) } } } }, { kind: "web-push" }),
         ).resolves.toBeDefined();
     });
+
+    it("sends a topic even when another channel's factory throws, with an injected engine", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ name: "projects/demo-project/messages/70" }));
+        const store = memorySubscriptionStore();
+        const definition: NotifyDefinition = {
+            ...fcmDefinition(store),
+            chat: () => {
+                throw new Error("chat secrets missing");
+            },
+        };
+        const { push } = createNotify(definition, {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.sendToTopic("news", { body: "x" })).resolves.toMatchObject({ successful: true });
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
 });
