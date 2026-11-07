@@ -2099,4 +2099,29 @@ describe("ctx.push topics and conditions", () => {
 
         expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
+
+    it("does not open the FCM circuit on a token's SENDER_ID_MISMATCH", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () =>
+                Response.json(
+                    { error: { details: [{ errorCode: "SENDER_ID_MISMATCH" }], message: "token belongs to another sender", status: "PERMISSION_DENIED" } },
+                    { status: 403 },
+                ),
+            );
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+
+        for (let index = 0; index < 6; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sends are sequential so the circuit sees each failure in order
+            const stored = await push.register({ kind: "fcm", token: `other-sender-${String(index)}` });
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await push.send(stored.id, { body: "x" });
+        }
+
+        expect(fetchSpy).toHaveBeenCalledTimes(6);
+    });
 });

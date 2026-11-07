@@ -138,6 +138,36 @@ interface FcmErrorBody {
  * word itself, and no `HTTP 404` appears, so the subscription classifier in
  * `subscriptions/normalize` reads a dead token as gone and nothing else as gone.
  */
+/** The `errorCode` of one detail entry, read without trusting its shape. */
+const detailErrorCode = (detail: unknown): string | undefined => {
+    if (typeof detail !== "object" || detail === null || !("errorCode" in detail)) {
+        return undefined;
+    }
+
+    const code: unknown = detail.errorCode;
+
+    return typeof code === "string" ? code : undefined;
+};
+
+const UPPER_CASE_CODE = /^[A-Z_]+$/u;
+
+/** The first structured `errorCode` in the details, when there is one and it is a plain upper-case token. */
+const firstDetailCode = (details: unknown): string | undefined => {
+    if (!Array.isArray(details)) {
+        return undefined;
+    }
+
+    for (const detail of details as ReadonlyArray<unknown>) {
+        const code = detailErrorCode(detail);
+
+        if (code !== undefined && UPPER_CASE_CODE.test(code)) {
+            return code;
+        }
+    }
+
+    return undefined;
+};
+
 /** The body is untrusted: a retryable status can arrive with a differently shaped error, so the shape is checked, not assumed. */
 const hasUnregisteredCode = (details: unknown): boolean =>
     Array.isArray(details) &&
@@ -147,7 +177,9 @@ const failureMessage = (status: number, body: unknown): string => {
     const error = (body as FcmErrorBody | null | undefined)?.error;
     // The status is a fallback name only: a body whose status reads UNREGISTERED but whose details do not is not a dead-token report.
     const fallback = error?.status !== undefined && error.status !== "UNREGISTERED" ? error.status : "ERROR";
-    const code = hasUnregisteredCode(error?.details) ? "UNREGISTERED" : fallback;
+    // A structured code from the details names the refusal (SENDER_ID_MISMATCH, for one) more precisely than the HTTP status.
+    const detailed = firstDetailCode(error?.details);
+    const code = hasUnregisteredCode(error?.details) ? "UNREGISTERED" : (detailed ?? fallback);
 
     return `FCM ${String(status)} ${code}: ${error?.message ?? "request failed"}`;
 };
