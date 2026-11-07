@@ -73,7 +73,7 @@ describe("notificationsPanel", () => {
 
         fireEvent.change(await screen.findByTestId("nt-search"), { target: { value: "nobody-by-this-name" } });
 
-        await expect(screen.findByText("No matching devices.")).resolves.toBe(true);
+        await expect(screen.findByText("No matching devices.")).resolves.toBeDefined();
     });
 
     it("shows the registration guidance for an empty registry", async () => {
@@ -81,6 +81,6 @@ describe("notificationsPanel", () => {
 
         render(renderPanel(clientWith({ subscriptions: [] })));
 
-        await expect(screen.findByText("No registered devices.")).resolves.toBe(true);
+        await expect(screen.findByText("No registered devices.")).resolves.toBeDefined();
     });
 });
