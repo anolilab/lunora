@@ -543,7 +543,9 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
      */
     const broadcastPage = async (payload: PushContent, filter?: SubscriptionFilter): Promise<BroadcastPageResult> => {
         // The audience is not known until its rows are read, so an FCM channel counts the overrides for every page.
-        checkPushPayload(payload, { fcm: fcmTransport() !== null });
+        // An injected engine owns its own channels, so the FCM factory is not read for it: a broken FCM factory
+        // must not block a Web Push broadcast. The overrides are then counted, which is the conservative choice.
+        checkPushPayload(payload, { fcm: options.engine !== undefined || fcmTransport() !== null });
 
         // A non-positive `limit` means "deliver to nobody" at this (audience-cap)
         // layer — NOT "no cap", which is the store layer's convention for the same

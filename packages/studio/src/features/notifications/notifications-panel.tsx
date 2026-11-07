@@ -91,9 +91,22 @@ const NotificationsPanel = (): ReactElement => {
         return `${deviceTarget(device)} ${device.userId ?? ""}`.toLowerCase().includes(needle);
     };
     // The failing count is taken over the kind and search scope, so it matches what the button reveals.
-    const scoped: PushSubscriptionDevice[] = devices.filter((device) => inScope(device));
-    const failingCount = scoped.filter((device) => device.lastStatus === "failed").length;
-    const filtered: PushSubscriptionDevice[] = failingOnly ? scoped.filter((device) => device.lastStatus === "failed") : scoped;
+    // One pass over the rows: the scope, the failing count and the failing-only list come out together.
+    const scoped: PushSubscriptionDevice[] = [];
+    const failing: PushSubscriptionDevice[] = [];
+
+    for (const device of devices) {
+        if (inScope(device)) {
+            scoped.push(device);
+
+            if (device.lastStatus === "failed") {
+                failing.push(device);
+            }
+        }
+    }
+
+    const failingCount = failing.length;
+    const filtered: PushSubscriptionDevice[] = failingOnly ? failing : scoped;
 
     const onSearchChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setSearch(event.target.value);

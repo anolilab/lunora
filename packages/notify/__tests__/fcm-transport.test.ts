@@ -348,7 +348,7 @@ describe("createFcmTransport", () => {
 
         await expect(
             createFcmTransport({ ...config, retries: 1 }, { fetch: fetchMock, retryBaseDelay: 0 }).sendTo({ topic: "news" }, { body: "x" }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(/RESOURCE_EXHAUSTED/u);
         expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 });

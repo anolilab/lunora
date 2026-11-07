@@ -279,6 +279,9 @@ const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<Noti
     return data === undefined ? { success: true } : { data, success: true };
 };
 
+/** FCM answers that re-sending cannot fix: a bad request (400), auth (401/403), not found (404), too large (413), or a refusal with a long Retry-After. */
+const FCM_PERMANENT_FAILURE = /\bFCM (?:400|401|403|404|413) |\bRetry-After exceeds the \d+s wait limit\b/u;
+
 /**
  * Whether a failed send can never succeed for this recipient — the device
  * unsubscribed or its token was revoked. The facade is about to DELETE the
@@ -301,7 +304,13 @@ const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<Noti
  * dropped row; the cost of the alternative was every dead device spending four
  * POSTs and ~2.2 s before the very next line deleted it.
  */
-const isPermanentFailure = (error: unknown): boolean => isGoneError(failureText(error));
+const isPermanentFailure = (error: unknown): boolean => {
+    const text = failureText(error);
+
+    // FCM's own final answers: a malformed or unauthorised request, or a 429 whose Retry-After we will not hold open.
+    // The transport reports them as text, so the match is on the message, which the engine keeps.
+    return isGoneError(text) || (text !== undefined && FCM_PERMANENT_FAILURE.test(text));
+};
 
 /** Consecutive non-permanent failures on one transport before its circuit opens. */
 const CIRCUIT_THRESHOLD = 5;

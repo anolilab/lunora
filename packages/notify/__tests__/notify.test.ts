@@ -1879,4 +1879,37 @@ describe("ctx.push topics and conditions", () => {
             successful: true,
         });
     });
+
+    it("sends a final FCM refusal once through the production engine, not once per retry layer", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () =>
+                Response.json({ error: { message: "The registration token is malformed.", status: "INVALID_ARGUMENT" } }, { status: 400 }),
+            );
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+        const stored = await push.register({ kind: "fcm", token: "malformed-token" });
+
+        const receipt = await push.send(stored.id, { body: "x" });
+
+        expect(receipt.successful).toBe(false);
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not read the FCM factory for a broadcast through an injected engine", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const definition: NotifyDefinition = {
+            ...baseDefinition(store),
+            fcm: () => {
+                throw new Error("fcm factory failed");
+            },
+        };
+        const { push } = createNotify(definition, {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.broadcast({ body: "x" })).resolves.toBeDefined();
+    });
 });

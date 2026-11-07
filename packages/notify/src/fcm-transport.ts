@@ -322,8 +322,13 @@ const classify = async (response: Response, fanOut: boolean): Promise<Attempt> =
 
     const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
 
-    // A `Retry-After` longer than we will hold a send open is reported now, for the caller to decide.
-    return retryAfterMs !== undefined && retryAfterMs > MAX_RETRY_AFTER_MS ? { error, kind: "final" } : { error, kind: "retry", retryAfterMs };
+    // A `Retry-After` longer than we will hold a send open is final. Its message says so, so the engine's
+    // retry policy (which only sees the message) also treats it as permanent rather than re-POSTing.
+    if (retryAfterMs !== undefined && retryAfterMs > MAX_RETRY_AFTER_MS) {
+        return { error: new Error(`${error.message} (Retry-After exceeds the ${String(MAX_RETRY_AFTER_MS / 1000)}s wait limit)`), kind: "final" };
+    }
+
+    return { error, kind: "retry", retryAfterMs };
 };
 
 /**
