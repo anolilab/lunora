@@ -550,7 +550,9 @@ const createFcmTransport = (config: FcmTransportConfig, options: FcmTransportOpt
         features: { batchSending: false, media: true, richContent: true },
         id: "fcm",
         initialize: () => {},
-        isAvailable: () => Boolean(config.projectId && (config.accessToken ?? config.getAccessToken)),
+        // The same rule accessToken() applies: an empty accessToken is no token, a getAccessToken is one.
+        isAvailable: () =>
+            Boolean(config.projectId && (config.getAccessToken !== undefined || (config.accessToken !== undefined && config.accessToken !== ""))),
         options: config,
         send: async (payload): Promise<Result<NotificationResult>> => {
             // Same rule the previous provider applied: a bad TTL fails the send before a credential or a request is used.

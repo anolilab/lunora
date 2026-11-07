@@ -669,4 +669,11 @@ describe("createFcmTransport", () => {
             timers.mockRestore();
         }
     });
+
+    it("reports no provider available for an empty access token", () => {
+        expect.hasAssertions();
+
+        expect(createFcmTransport({ accessToken: "", projectId: "demo-project" }).provider.isAvailable()).toBe(false);
+        expect(createFcmTransport({ getAccessToken: async () => "callback-credential", projectId: "demo-project" }).provider.isAvailable()).toBe(true);
+    });
 });

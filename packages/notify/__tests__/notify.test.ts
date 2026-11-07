@@ -2185,4 +2185,15 @@ describe("ctx.push topics and conditions", () => {
 
         expect(fetchSpy).toHaveBeenCalledTimes(5);
     });
+
+    it("does not count FCM-only overrides for a broadcast filtered to Web Push", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+
+        await expect(
+            push.broadcast({ body: "x", fcmOverrides: { android: { data: { blob: "x".repeat(5000) } } } }, { kind: "web-push" }),
+        ).resolves.toBeDefined();
+    });
 });
