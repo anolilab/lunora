@@ -92,7 +92,7 @@ const profile = (bundle, name) => {
     try {
         return { ms: startupActiveMs(appDirectory, { profile: join(benchDirectory, `chunked-${name}.cpuprofile`), wrangler, workerBundle: bundle }) };
     } catch (error) {
-        const detail = String(error.stderr ?? error.message).replaceAll(/\u001B\[[\d;]*m/gu, "");
+        const detail = String(error.stderr || error.message).replaceAll(/\u001B\[[\d;]*m/gu, "");
 
         // wrangler's message goes on to list bindings it cannot reproduce, which is not the cause; the cause is only in `wrangler dev`.
         return { error: (/ERROR\]\s*(.+?)(?: The upload contains|$)/mu.exec(detail)?.[1] ?? detail).slice(0, 120) };

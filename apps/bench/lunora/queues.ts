@@ -47,7 +47,7 @@ export const events = defineQueue<z.infer<typeof domainEventSchema>>({
 });
 
 /** Outbound mail, so a slow provider never holds a mutation open. */
-export const mail = defineQueue<{ subject: string; text: string; to: string }>({
+export const mail = defineQueue<{ idempotencyKey?: string; subject: string; text: string; to: string }>({
     handler: async (_context, batch) => {
         for (const message of batch.messages) {
             // eslint-disable-next-line no-await-in-loop -- one send at a time: a provider rate limit must not fail the whole batch

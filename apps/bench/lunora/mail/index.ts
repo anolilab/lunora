@@ -114,6 +114,7 @@ const mailer = (): Mailer => {
  */
 const emailArgs = {
     from: v.optional(v.string()),
+    idempotencyKey: v.optional(v.string().max(256)),
     headers: v.optional(v.record(v.string(), v.string())),
     html: v.optional(v.string()),
     replyTo: v.optional(v.string()),
@@ -131,12 +132,14 @@ const toSendOptions = (args: {
     from?: string;
     headers?: Record<string, string>;
     html?: string;
+    idempotencyKey?: string;
     replyTo?: string;
     subject: string;
     text?: string;
     to: string;
 }): SendOptions => ({
     from: args.from,
+    idempotencyKey: args.idempotencyKey,
     headers: args.headers,
     html: args.html,
     replyTo: args.replyTo,

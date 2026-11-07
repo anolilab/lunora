@@ -139,9 +139,16 @@ const SignIn = (): ReactElement => {
 };
 
 const CreateOrganization = (): ReactElement => {
+    const [error, setError] = useState<string | undefined>(undefined);
     const submit = async (form: FormData): Promise<void> => {
         const name = field(form, "name");
         const created = await authClient.organization.create({ name, slug: name.toLowerCase().replaceAll(/[^a-z0-9]+/gu, "-") });
+
+        if (created.error) {
+            setError(created.error.message ?? "The organization could not be created. Try again.");
+
+            return;
+        }
 
         if (created.data) {
             await authClient.organization.setActive({ organizationId: created.data.id });
@@ -157,6 +164,7 @@ const CreateOrganization = (): ReactElement => {
                 <input id="organization-name" name="name" placeholder="Acme" required />
             </label>
             <button type="submit">Create</button>
+            {error === undefined ? undefined : <p role="alert">{error}</p>}
         </form>
     );
 };

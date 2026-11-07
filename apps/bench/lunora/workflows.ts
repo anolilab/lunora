@@ -16,9 +16,18 @@ export const onboarding = defineWorkflow<{ email: string; organizationId: string
     handler: async (ctx) => {
         // `email` is the starter's verified address from their identity, never from the request; see `lunora/onboarding.ts`.
         const { email, organizationId, userId } = ctx.params;
+        const instanceKey = `onboarding-${organizationId}`;
 
         await ctx.step.do("seed", () => ctx.run(internal.onboarding.seedOrganization, { organizationId, userId }, { shardKey: organizationId }));
-        await ctx.step.do("welcome", () => ctx.run(internal.mail.sendEmail, { subject: "Welcome to the bench", text: "Your workspace is ready.", to: email }));
+        // A stable key per mail: a restarted instance replays these steps, and the provider drops a repeat of the same key.
+        await ctx.step.do("welcome", () =>
+            ctx.run(internal.mail.sendEmail, {
+                idempotencyKey: `${instanceKey}:welcome`,
+                subject: "Welcome to the bench",
+                text: "Your workspace is ready.",
+                to: email,
+            }),
+        );
         await ctx.step.sleep("settle", "1 day");
 
         // `ctx.run` resolves to `unknown` whatever the reference returns (FINDINGS.md), so the shape is restated here.
@@ -40,7 +49,12 @@ export const onboarding = defineWorkflow<{ email: string; organizationId: string
         }
 
         await ctx.step.do("nudge", () =>
-            ctx.run(internal.mail.sendEmail, { subject: "Your first task is waiting", text: "Create a task to get going.", to: email }),
+            ctx.run(internal.mail.sendEmail, {
+                idempotencyKey: `${instanceKey}:nudge`,
+                subject: "Your first task is waiting",
+                text: "Create a task to get going.",
+                to: email,
+            }),
         );
 
         return { nudged: true };

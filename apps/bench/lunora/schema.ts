@@ -119,6 +119,6 @@ export default defineSchema({
     // lunora:add:saas:end
     // lunora:add:presence:start
     .extend(presence.extension)
+    // lunora:add:presence:end
     // The generated bench domains (empty in the committed, core-only state).
     .extend(domains.extension);
-// lunora:add:presence:end

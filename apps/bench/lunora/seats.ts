@@ -34,13 +34,13 @@ export const holdInvitationSeat = internalMutation
         const address = email.trim().toLowerCase();
         const holds = await holdsOf(ctx, organizationId);
         const expiresAt = ctx.now + INVITATION_EXPIRES_SECONDS * 1000;
-        const existing = holds.find((hold) => hold.email === address);
+        const live = holds.filter((hold) => hold.expiresAt > ctx.now);
+        // Only an unexpired hold is renewed. A lapsed one for the same address goes through the seat check below like a new invitation.
+        const existing = live.find((hold) => hold.email === address);
 
         // An organisation's holds are bounded by its seats, so clearing its lapsed ones here
         // keeps the table from growing without a sweep.
-        await Promise.all(
-            holds.filter((hold) => hold.expiresAt <= ctx.now && hold !== existing).map(async (hold) => ctx.db.delete("invitation_holds", hold._id)),
-        );
+        await Promise.all(holds.filter((hold) => hold.expiresAt <= ctx.now).map(async (hold) => ctx.db.delete("invitation_holds", hold._id)));
 
         if (existing !== undefined) {
             await ctx.db.patch("invitation_holds", existing._id, { expiresAt });
@@ -48,9 +48,7 @@ export const holdInvitationSeat = internalMutation
             return;
         }
 
-        const live = holds.filter((hold) => hold.expiresAt > ctx.now).length;
-
-        if (limit !== null && members + live >= limit) {
+        if (limit !== null && members + live.length >= limit) {
             throw new LunoraError("FORBIDDEN", "every seat on this plan is taken or invited — upgrade the plan to invite more");
         }
 

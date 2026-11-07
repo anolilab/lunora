@@ -61,6 +61,12 @@ cp apps/bench/.dev.vars.example apps/bench/.dev.vars   # then set the origins to
 pnpm --filter @lunora/bench dev
 ```
 
+Sign-in needs a verified email (`requireEmailVerification` is on). A new account
+therefore cannot sign in until its verification link is followed: in dev, that
+mail is captured rather than delivered. Open the studio (the `dev ports` line
+prints its port), choose the Mail tab, open the verification email, and follow
+its link; then sign in.
+
 The dev server serves on the playground's per-checkout port, which it prints as
 `dev ports: playground :N`. `vite.config.ts` refuses to start when
 `LUNORA_ORIGIN_URL` names a different port, because workflow, scheduler and agent
@@ -171,10 +177,12 @@ build` bundle) and waits on its `ready` promise;
 4. calls each sampled function once (cold), in a shuffled order;
 5. calls each again `--warm` times.
 
-The sample has, per domain, `queries:list` and `admin:exportSummary` (which also
-loads `jobs` and `validators`), plus the offline action of every heavy domain's
-integration module: 4–5 of a domain's 6–8 modules, 94 functions at the customer
-preset. `lines`, `notes`, `mutations` and `catalog` are not sampled. Each isolate signs in
+The sample has, per domain, `queries:list`, plus `admin:exportSummary` (which also
+loads `jobs` and `validators`) except for the AI-hook domains: every seventh domain
+(`index % 7 === 4`), six of the 40 at the customer preset. Their summary calls the
+model, so it is not sampled and their `admin:exportSummary` load is not measured.
+The sample also includes the offline action of every heavy domain's integration
+module: 4–5 of a domain's 6–8 modules, 94 functions at the customer preset. `lines`, `notes`, `mutations` and `catalog` are not sampled. Each isolate signs in
 as its own verified owner of its own organisation. The app's `read` rate limit
 (200 per 10 s per caller) is persisted, so a shared caller would be refused
 after the first isolate. The same limit caps `--warm`: each isolate makes
