@@ -8,6 +8,29 @@ import { verifySignedUrl } from "@lunora/storage";
 /** Cap what a single signed PUT may store. */
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
+/**
+ * Errors the body once it carries more bytes than `limit`, so a request cannot store more than the length it declared.
+ */
+const capBytes = (body: ReadableStream<Uint8Array>, limit: number): ReadableStream<Uint8Array> => {
+    let seen = 0;
+
+    return body.pipeThrough(
+        new TransformStream<Uint8Array, Uint8Array>({
+            transform(chunk, controller) {
+                seen += chunk.byteLength;
+
+                if (seen > limit) {
+                    controller.error(new Error("body exceeds its declared length"));
+
+                    return;
+                }
+
+                controller.enqueue(chunk);
+            },
+        }),
+    );
+};
+
 /** The floor `lunora/storage` enforces when it signs; a shorter secret is brute-forceable, so nothing it "signed" is trusted. */
 const MIN_SIGNING_SECRET_LENGTH = 32;
 
@@ -46,7 +69,16 @@ export const serveStorage = async (request: Request, env: { STORAGE_SIGNING_SECR
             return new Response("bad upload", { status: 400 });
         }
 
-        await env.UPLOADS.put(result.key, request.body, { httpMetadata: { contentType: result.contentType } });
+        if (request.body === null) {
+            return new Response("bad upload", { status: 400 });
+        }
+
+        try {
+            await env.UPLOADS.put(result.key, capBytes(request.body, length), { httpMetadata: { contentType: result.contentType } });
+        } catch {
+            // The stream errors once it carries more bytes than its declared length; nothing partial is kept.
+            return new Response("upload exceeds its declared length", { status: 413 });
+        }
 
         // eslint-disable-next-line unicorn/no-null -- a 204 must carry no body, and `Response` takes `null` for that
         return new Response(null, { status: 204 });
