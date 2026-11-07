@@ -296,8 +296,17 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
      * "failed"` guard, so its fields object is built only on a failure — never on
      * the (hot, O(N)) success path of a broadcast.
      */
+    // A logger is an app seam, and it must not fail the send it describes: a throwing logger is dropped, not propagated.
+    const warnSafely = (message: string, fields: Record<string, unknown>): void => {
+        try {
+            log?.warn(message, fields);
+        } catch {
+            // Dropped on purpose; see above.
+        }
+    };
+
     const warnFailedSend = (channel: string, provider: string | undefined, fields: Record<string, unknown>): void => {
-        log?.warn(`notify ${channel} delivery failed`, { channel, provider: provider ?? channel, status: "failed", ...fields });
+        warnSafely(`notify ${channel} delivery failed`, { channel, provider: provider ?? channel, status: "failed", ...fields });
     };
 
     /** Emit a `notify.skipped` count for a send that reached no recipient (the "sent 0 because…" signal). */
@@ -406,7 +415,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
                 // (e.g. a transient D1 error) must not abort the fan-out. The send
                 // outcome above still stands, but the unrecorded status is logged so an
                 // operator can see that the Studio status is stale.
-                log?.warn("@lunora/notify: delivery status could not be recorded", {
+                warnSafely("@lunora/notify: delivery status could not be recorded", {
                     error: statusError instanceof Error ? statusError.message : String(statusError),
                     subscriptionId: subscription.id,
                 });
@@ -468,7 +477,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             }
         } catch (statusError) {
             // The status just went unrecorded for the failed part; say so, so it is not silently stale.
-            log?.warn("@lunora/notify: page delivery statuses could not be recorded", {
+            warnSafely("@lunora/notify: page delivery statuses could not be recorded", {
                 error: statusError instanceof Error ? statusError.message : String(statusError),
                 failed: outcomesToApply.failed.length,
                 ok: outcomesToApply.ok.length,

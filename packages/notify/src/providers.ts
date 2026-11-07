@@ -314,7 +314,9 @@ const isPermanentFailure = (error: unknown): boolean => {
 
 /** FCM refusals of one request: the token is bad or gone, or the payload is too large. Not a service outage. */
 // `SENDER_ID_MISMATCH` (403) is one token's sender, not a fault of the whole service; it is excluded with the per-request refusals.
-const FCM_REQUEST_REFUSAL = /\bFCM (?:400|404|413) |\bFCM 403 SENDER_ID_MISMATCH\b/u;
+// A bare 404 NOT_FOUND is not here: FCM answers a wrong project id with it too, so it is a service-level failure the circuit must count.
+// The dead-token 404 (UNREGISTERED) is caught by isGoneError; the 400, 413 and one-token SENDER_ID_MISMATCH refusals are listed here.
+const FCM_REQUEST_REFUSAL = /\bFCM (?:400|413) |\bFCM 403 SENDER_ID_MISMATCH\b/u;
 
 /** Whether a failure is about this one request, so the circuit should not count it. */
 const isRequestRefusal = (error: unknown): boolean => {

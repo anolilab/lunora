@@ -583,4 +583,30 @@ describe("createFcmTransport", () => {
         expect(message).toBe("FCM 400 ERROR: request failed");
         expect(message).not.toContain("[object Object]");
     });
+
+    it("does not hold a topic send open for a Retry-After it will not retry", async () => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers();
+
+        try {
+            const { fetchMock } = scriptedFetch({
+                body: { error: { message: "quota", status: "RESOURCE_EXHAUSTED" } },
+                headers: { "retry-after": "1" },
+                status: 429,
+            });
+            const transport = createFcmTransport({ ...config, retries: 0 }, { fetch: fetchMock });
+            const outcome = transport.sendTo({ topic: "news" }, { body: "x" }).then(
+                () => "resolved",
+                () => "rejected",
+            );
+
+            // No timer is advanced: a failure that waited for the Retry-After would still be pending here.
+            await vi.advanceTimersByTimeAsync(0);
+
+            await expect(outcome).resolves.toBe("rejected");
+        } finally {
+            vi.useRealTimers();
+        }
+    });
 });

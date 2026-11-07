@@ -461,7 +461,7 @@ const postMessage = async (
 
     // The last attempt was refused with a Retry-After. The caller's own retry (the engine's, for a device send) starts
     // on its short backoff, so the requested interval is waited out here, before the failure is reported.
-    if (retryAfterMs !== undefined && retryAfterMs > 0) {
+    if (!fanOut && retryAfterMs !== undefined && retryAfterMs > 0) {
         await new Promise((resolve) => {
             setTimeout(resolve, retryAfterMs);
         });

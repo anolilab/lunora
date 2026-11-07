@@ -2142,4 +2142,47 @@ describe("ctx.push topics and conditions", () => {
 
         await expect(store.get(stored.id)).resolves.toBeUndefined();
     });
+
+    it("does not fail a send because its logger throws", async () => {
+        expect.hasAssertions();
+
+        const alwaysFails: Provider<unknown, PushPayload> = {
+            channel: "push",
+            id: "always-fails-logged",
+            initialize: () => undefined,
+            isAvailable: () => true,
+            send: () => {
+                return { error: new Error("upstream refused"), success: false };
+            },
+        };
+        const store = memorySubscriptionStore();
+        const log = {
+            warn: () => {
+                throw new Error("logger is down");
+            },
+        };
+        const { notify } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: alwaysFails }), log, silent: true });
+
+        await expect(notify.send({ push: { body: "x", to: "device-1" } })).resolves.toHaveLength(1);
+    });
+
+    it("opens the FCM circuit on a bare 404 NOT_FOUND, which a wrong project id also produces", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () => Response.json({ error: { message: "Requested entity was not found.", status: "NOT_FOUND" } }, { status: 404 }));
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+
+        for (let index = 0; index < 6; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sends are sequential so the circuit sees each failure in order
+            const stored = await push.register({ kind: "fcm", token: `unknown-project-${String(index)}` });
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await push.send(stored.id, { body: "x" });
+        }
+
+        expect(fetchSpy).toHaveBeenCalledTimes(5);
+    });
 });
