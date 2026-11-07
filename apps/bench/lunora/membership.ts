@@ -7,9 +7,9 @@
  */
 import { env as workerEnv } from "cloudflare:workers";
 
-import { internalAction, v } from "./_generated/server";
 import { getAuth } from "./auth";
 import type { AuthEnv } from "./auth";
+import { internalAction, v } from "./_generated/server";
 
 export const isMember = internalAction.input({ organizationId: v.string(), userId: v.string() }).action(async ({ args }): Promise<{ member: boolean }> => {
     const { adapter } = await getAuth(workerEnv as unknown as AuthEnv).$context;

@@ -297,11 +297,11 @@ const AcceptInvitation = (): ReactElement => {
         <main>
             <h1>Accept invitation</h1>
             {organizationId === undefined ? (
-                <button type="button" onClick={() => void accept()}>
+                <button onClick={() => void accept()} type="button">
                     Accept
                 </button>
             ) : (
-                <button type="button" onClick={() => void activate(organizationId)}>
+                <button onClick={() => void activate(organizationId)} type="button">
                     Open the organisation
                 </button>
             )}
