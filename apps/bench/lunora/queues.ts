@@ -45,6 +45,7 @@ export const events = defineQueue<z.infer<typeof domainEventSchema>>({
             message.ack();
         }
     },
+    deadLetterQueue: "events-dlq",
     maxRetries: 3,
 });
 
@@ -63,5 +64,6 @@ export const mail = defineQueue({
             message.ack();
         }
     },
+    deadLetterQueue: "mail-dlq",
     maxRetries: 5,
 });

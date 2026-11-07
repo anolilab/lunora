@@ -18,10 +18,11 @@ import { generateText } from "@lunora/ai";
 import { LunoraError } from "@lunora/errors";
 
 import { action, v } from "#lunora/_generated/server.js";
+
 import { spendRootBudget } from "../ratelimit/root";
 
 /** The caller's id, or a clear failure — metered inference is never anonymous here. */
-const requireUser = (userId: string | null): string => {
+const requireUser = (userId: string | null | undefined): string => {
     if (userId === null || userId === undefined) {
         // Coded, not a bare `Error`: an uncoded throw is redacted to a generic
         // 500, so the caller sees a server fault instead of "sign in first".
@@ -68,6 +69,7 @@ type Sentiment = (typeof SENTIMENTS)[number];
 /** The model's one word, checked: a reply that is not one of the labels fails rather than reaching the caller as one. */
 const toSentiment = (reply: string): Sentiment => {
     // Quotes, a full stop or whitespace around the word still leave the label; a digit does not.
+    // eslint-disable-next-line sonarjs/slow-regex -- the reply is capped at maxOutputTokens: 10, so the backtracking runs over a few dozen characters
     const word = reply.toLowerCase().replaceAll(/^[\s.!?,;:'"*]+|[\s.!?,;:'"*]+$/gu, "");
     const sentiment = SENTIMENTS.find((label) => label === word);
 

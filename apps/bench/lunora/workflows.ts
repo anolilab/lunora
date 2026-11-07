@@ -35,6 +35,13 @@ export const onboarding = defineWorkflow<{ email: string; organizationId: string
         const { email, organizationId, userId } = ctx.params;
         const instanceKey = `onboarding-${organizationId}`;
 
+        // Read inside each step that writes or sends, so a removal after the start check is seen before the side effect.
+        const starterIsMember = async (): Promise<boolean> => {
+            const { member } = (await ctx.run(internal.membership.isMember, { organizationId, userId }, { shardKey: "__root__" })) as { member: boolean };
+
+            return member;
+        };
+
         // A starter removed from the organisation before it starts gets no seed and no mail.
         const { member: startedAsMember } = (await ctx.step.do("member at start", () =>
             ctx.run(internal.membership.isMember, { organizationId, userId }, { shardKey: "__root__" }),
@@ -44,7 +51,19 @@ export const onboarding = defineWorkflow<{ email: string; organizationId: string
             return { nudged: false };
         }
 
-        await ctx.step.do("seed", () => ctx.run(internal.onboarding.seedOrganization, { organizationId, userId }, { shardKey: organizationId }));
+        const { seeded } = await ctx.step.do("seed", async () => {
+            if (!(await starterIsMember())) {
+                return { seeded: false };
+            }
+
+            await ctx.run(internal.onboarding.seedOrganization, { organizationId, userId }, { shardKey: organizationId });
+
+            return { seeded: true };
+        });
+
+        if (!seeded) {
+            return { nudged: false };
+        }
 
         const { claimed: welcomed } = (await ctx.step.do("claim welcome", () =>
             ctx.run(internal.saas.claimMail, { kind: "welcome", organizationId }, { shardKey: "__root__" }),
@@ -54,14 +73,18 @@ export const onboarding = defineWorkflow<{ email: string; organizationId: string
             await sendOrRelease(
                 () => ctx.step.do("release welcome", () => ctx.run(internal.saas.releaseMail, { kind: "welcome", organizationId }, { shardKey: "__root__" })),
                 () =>
-                    ctx.step.do("welcome", () =>
-                        ctx.run(internal.mail.sendEmail, {
+                    ctx.step.do("welcome", async () => {
+                        if (!(await starterIsMember())) {
+                            return;
+                        }
+
+                        await ctx.run(internal.mail.sendEmail, {
                             idempotencyKey: `${instanceKey}:welcome`,
                             subject: "Welcome to the bench",
                             text: "Your workspace is ready.",
                             to: email,
-                        }),
-                    ),
+                        });
+                    }),
             );
         }
 

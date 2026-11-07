@@ -42,14 +42,14 @@
  *                                     the request reached your Worker on
  *                                     (`ctx.origin`).
  */
-import { env as workerEnv } from "cloudflare:workers";
-
 import { LunoraError } from "@lunora/errors";
-import { RateLimiter, rateLimit, createMemoryStore } from "lunorash/ratelimit";
-import { createStorage, scopeKey } from "@lunora/storage";
 import type { Storage } from "@lunora/storage";
-import { action, mutation, v } from "#lunora/_generated/server.js";
+import { createStorage, scopeKey } from "@lunora/storage";
+import { env as workerEnv } from "cloudflare:workers";
+import { createMemoryStore, rateLimit, RateLimiter } from "lunorash/ratelimit";
+
 import type { CloudflareBindings } from "#lunora/_generated/server.js";
+import { action, mutation, v } from "#lunora/_generated/server.js";
 
 /**
  * The Worker's bindings, narrowed so they can be looked up by name.
@@ -198,7 +198,7 @@ const makeStorage = (publicBaseUrl?: string): Storage => {
  * separate, read-only public path — never wire `deleteObject` /
  * `generateUploadUrl` to a shared anonymous prefix.
  */
-const requireOwner = (userId: string | null): string => {
+const requireOwner = (userId: string | null | undefined): string => {
     if (userId === null || userId === undefined) {
         // Coded, not a bare `Error`: an uncoded throw is redacted to a generic
         // 500, so the caller sees a server fault instead of "sign in first".

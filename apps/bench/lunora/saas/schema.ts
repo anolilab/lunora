@@ -121,6 +121,7 @@ export const saas = definePlugin("saas", {
                 name: v.string(),
                 organizationId: v.string(),
                 plan: v.string(),
+
                 /**
                  * The billing version `plan` was derived at (see `syncOrganizationPlan`),
                  * so an older derivation landing late cannot replace a newer plan.

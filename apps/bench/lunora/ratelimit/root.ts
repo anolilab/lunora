@@ -4,8 +4,8 @@
  * caller reached; the root's bucket is the one budget all shards share.
  */
 import { env as workerEnv } from "cloudflare:workers";
-import { createShardClient } from "lunorash/runtime";
 import type { ShardNamespaceLike } from "lunorash/runtime";
+import { createShardClient } from "lunorash/runtime";
 
 import { internal } from "../_generated/internal";
 import type { LimitName } from "./schema";

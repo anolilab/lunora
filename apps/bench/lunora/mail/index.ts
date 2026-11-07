@@ -40,7 +40,7 @@
  * transport: every send is intercepted and persisted to the studio's Mail inbox
  * instead of going out — including `@lunora/auth`'s verification /
  * forgot-password mail. Capture is on in a dev environment (`lunora dev` sets
- * `WORKER_ENV=development`) or when `LUNORA_MAIL_CAPTURE` is set; production
+ * `WORKER_ENV` set to `development`) or when `LUNORA_MAIL_CAPTURE` is set; production
  * always delivers (and fails loudly if `SEND_EMAIL` is missing rather than
  * silently capturing).
  *
@@ -65,7 +65,7 @@ import { mailer } from "./transport";
  * them here would fail only at send time in production. Fan out one call per
  * recipient instead.
  */
-const emailArgs = {
+const emailArguments = {
     from: v.optional(v.string()),
     idempotencyKey: v.optional(v.string().max(256)),
     headers: v.optional(v.record(v.string(), v.string())),
@@ -90,16 +90,18 @@ const toSendOptions = (args: {
     subject: string;
     text?: string;
     to: string;
-}): SendOptions => ({
-    from: args.from,
-    idempotencyKey: args.idempotencyKey,
-    headers: args.headers,
-    html: args.html,
-    replyTo: args.replyTo,
-    subject: args.subject,
-    text: args.text,
-    to: args.to,
-});
+}): SendOptions => {
+    return {
+        from: args.from,
+        idempotencyKey: args.idempotencyKey,
+        headers: args.headers,
+        html: args.html,
+        replyTo: args.replyTo,
+        subject: args.subject,
+        text: args.text,
+        to: args.to,
+    };
+};
 
 /**
  * Render (if needed) and deliver an email synchronously. Returns the message
@@ -107,7 +109,7 @@ const toSendOptions = (args: {
  * rejects (the raw provider error is logged server-side only). In dev the send
  * is captured into the studio Mail inbox instead of delivered.
  */
-export const sendEmail = internalAction.input(emailArgs).action(async ({ args }): Promise<{ id: string }> => mailer().send(toSendOptions(args)));
+export const sendEmail = internalAction.input(emailArguments).action(async ({ args }): Promise<{ id: string }> => mailer().send(toSendOptions(args)));
 
 /**
  * Enqueue an email onto a Cloudflare Queue and return immediately, so the caller
@@ -117,4 +119,4 @@ export const sendEmail = internalAction.input(emailArgs).action(async ({ args })
  * Your queue consumer Worker should call `consumeQueuedSend(mailer, message.body)`
  * (from `@lunora/mail`) for each message — see the README.
  */
-export const queueEmail = internalAction.input(emailArgs).action(async ({ args }): Promise<{ queued: true }> => mailer().queue(toSendOptions(args)));
+export const queueEmail = internalAction.input(emailArguments).action(async ({ args }): Promise<{ queued: true }> => mailer().queue(toSendOptions(args)));

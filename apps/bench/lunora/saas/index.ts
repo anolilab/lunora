@@ -19,7 +19,7 @@
  *      none.
  */
 import { LunoraError } from "@lunora/errors";
-import { RateLimiter, createDbStore, rateLimit } from "lunorash/ratelimit";
+import { createDbStore, rateLimit, RateLimiter } from "lunorash/ratelimit";
 
 import type { Doc, Id, MutationCtx, QueryCtx, TableReaderFacade } from "#lunora/_generated/server.js";
 import { internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
@@ -46,7 +46,7 @@ const saasLimits = {
 const limiter = (ctx: MutationCtx): RateLimiter<keyof typeof saasLimits> =>
     new RateLimiter<keyof typeof saasLimits>({
         config: saasLimits,
-        store: createDbStore({ db: ctx.db as never, table: "ratelimit_buckets" }),
+        store: createDbStore({ db: ctx.db, table: "ratelimit_buckets" }),
     });
 
 /**
@@ -60,7 +60,8 @@ const limiter = (ctx: MutationCtx): RateLimiter<keyof typeof saasLimits> =>
  * middleware degrades to `unknown`. Taking only the two fields the key reads keeps
  * the helper shared across query and mutation without pinning anything.
  */
-const byCaller = <TContext extends { auth: { userId?: string | null }; ip?: string | undefined }>(ctx: TContext): string => ctx.auth.userId ?? ctx.ip ?? "anon";
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- the generic is the point: a concrete parameter type would pin rateLimit's inferred Context (see above)
+const byCaller = <TContext extends { auth: { userId?: string | null }; ip?: string }>(ctx: TContext): string => ctx.auth.userId ?? ctx.ip ?? "anon";
 
 /*
  * Table names appear as literals in every TYPE position below, never as
@@ -120,11 +121,11 @@ interface Caller {
  * `ctx.auth.activeOrganizationId` does not compile, which is the type system
  * keeping the trust boundary honest.
  */
-const readCaller = async (ctx: MutationCtx | QueryCtx): Promise<Caller | null> => {
+const readCaller = async (ctx: MutationCtx | QueryCtx): Promise<Caller | undefined> => {
     const { userId } = ctx.auth;
 
     if (!userId) {
-        return null;
+        return undefined;
     }
 
     const identity: Record<string, unknown> = (await ctx.auth.getIdentity()) ?? {};
@@ -138,11 +139,11 @@ const readCaller = async (ctx: MutationCtx | QueryCtx): Promise<Caller | null> =
     };
 };
 
-/** {@link readCaller}, throwing `UNAUTHORIZED` for an anonymous caller. */
+/** The caller {@link readCaller} resolves, or `UNAUTHORIZED` for an anonymous one. */
 const requireCaller = async (ctx: MutationCtx | QueryCtx): Promise<Caller> => {
     const caller = await readCaller(ctx);
 
-    if (caller === null) {
+    if (caller === undefined) {
         throw new LunoraError("UNAUTHORIZED", "not signed in");
     }
 
@@ -225,7 +226,9 @@ const activityRow = (
         subjectId?: string;
         subjectType: string;
     },
-): Record<string, unknown> => ({ ...entry, createdAt: now });
+): Record<string, unknown> => {
+    return { ...entry, createdAt: now };
+};
 
 /** Joins an archived project's slug to its id, freeing the slug. `~` never survives {@link toSlug}. */
 const ARCHIVED_SLUG_MARK = "~archived~";
@@ -235,14 +238,19 @@ const DELETED_SLUG_PREFIX = "~deleted~";
 
 const SLUG_MAX_LENGTH = 60;
 
+/** `words` never holds two dashes in a row (a run of separators is collapsed), so one trailing dash is the whole run. */
+const TRAILING_DASH = /-$/u;
+
 /** 32-bit FNV-1a, base 36, fixed width — a short stable tag, not a security boundary. */
 const slugTag = (text: string): string => {
     let hash = 0x81_1c_9d_c5;
 
     for (let index = 0; index < text.length; index += 1) {
+        // eslint-disable-next-line no-bitwise -- FNV-1a's XOR step over 32-bit state
         hash = Math.imul(hash ^ (text.codePointAt(index) ?? 0), 0x01_00_01_93);
     }
 
+    // eslint-disable-next-line no-bitwise -- coerces the signed Math.imul result to an unsigned 32-bit value before base-36
     return (hash >>> 0).toString(36).padStart(7, "0");
 };
 
@@ -260,7 +268,7 @@ const slugTag = (text: string): string => {
  */
 const toSlug = (name: string): string => {
     const folded = name.normalize("NFKC").toLowerCase().trim();
-    const words = folded.replaceAll(/[^\p{L}\p{M}\p{N}]+/gu, "-").replaceAll(/(?:^-|-$)/gu, "");
+    const words = folded.replaceAll(/[^\p{L}\p{M}\p{N}]+/gu, "-").replaceAll(/^-|-$/gu, "");
 
     if (folded === "") {
         return "";
@@ -270,6 +278,8 @@ const toSlug = (name: string): string => {
         return `project-${slugTag(folded)}`;
     }
 
+    // Code points, not graphemes: the cap counts code points and the words are already reduced to letters, marks and digits.
+    // eslint-disable-next-line @typescript-eslint/no-misused-spread -- deliberate code-point split; grapheme segmentation would change the cap
     const characters = [...words];
 
     if (characters.length <= SLUG_MAX_LENGTH) {
@@ -281,7 +291,7 @@ const toSlug = (name: string): string => {
     return `${characters
         .slice(0, SLUG_MAX_LENGTH - tag.length - 1)
         .join("")
-        .replace(/-+$/u, "")}-${tag}`;
+        .replace(TRAILING_DASH, "")}-${tag}`;
 };
 
 /**
@@ -302,12 +312,14 @@ const toSlug = (name: string): string => {
 export const me = query.query(async ({ ctx }): Promise<{ name?: string; organizationId?: string; orgRole?: string; seats?: number; userId: string } | null> => {
     const caller = await readCaller(ctx);
 
-    if (caller === null) {
+    if (caller === undefined) {
+        // `null` is the signed-out answer the client reads, and is part of this query's declared return type.
+        // eslint-disable-next-line unicorn/no-null -- the query's `| null` return is the signed-out state on the wire
         return null;
     }
 
     const { name, organizationId, orgRole, userId } = caller;
-    const organization = organizationId === undefined ? null : await organizations(ctx).findFirst({ where: { organizationId } });
+    const organization = organizationId === undefined ? undefined : await organizations(ctx).findFirst({ where: { organizationId } });
     const seats = organization?.["seats"];
 
     return { name, organizationId, orgRole, seats: typeof seats === "number" ? seats : undefined, userId };
@@ -364,7 +376,7 @@ export const createProject = mutation
         // archived project would hold its name for good. Archiving releases it:
         // the old row keeps its data under a slug nothing can type.
         if (clash) {
-            const clashId = clash["_id"] as Id<"saas_projects">;
+            const clashId = clash["_id"];
 
             await ctx.db.patch(SAAS_PROJECTS_TABLE, clashId, { slug: `${slug}${ARCHIVED_SLUG_MARK}${String(clashId)}` });
         }
@@ -402,7 +414,7 @@ export const archiveProject = mutation
         // The shard gate already confines this call to the caller's own tenant;
         // the explicit check is what makes that a guarantee rather than an
         // assumption about the client having passed the right `shardKey`.
-        if (!project || project.organizationId !== organizationId) {
+        if (project?.organizationId !== organizationId) {
             throw new LunoraError("NOT_FOUND", "project not found");
         }
 
@@ -426,7 +438,7 @@ export const archiveProject = mutation
         ctx.log.info("project.archived", { organizationId, project: String(projectId) });
     });
 
-/** {@link requireCaller}, and additionally that the caller holds better-auth's platform admin role. */
+/** The caller {@link requireCaller} resolves, who must also hold better-auth's platform admin role. */
 const requirePlatformAdmin = async (ctx: QueryCtx): Promise<void> => {
     const { appRole } = await requireCaller(ctx);
 
@@ -458,7 +470,7 @@ const ORGANIZATION_SEARCH_MAX = 100;
 const LIST_ORDER = [{ updatedAt: "desc" as const }];
 
 /** The filters the list and its totals share, so the header always counts the rows the table pages through. */
-const organizationFilterArgs = {
+const organizationFilterArguments = {
     /** Exact plan id; every plan when omitted. Bounded like any id a client sends, generously for a catalog's. */
     plan: v.optional(v.string().max(256)),
     /** Substring of the name or slug. */
@@ -513,7 +525,7 @@ const pageCursor = v.optional(v.union(v.string(), v.null()));
  * keeps every tenant read on the same authorised path as the tenant's own.
  */
 export const listOrganizations = query
-    .input({ ...organizationFilterArgs, paginationOpts: v.object({ cursor: pageCursor, endCursor: pageCursor, numItems: v.number() }) })
+    .input({ ...organizationFilterArguments, paginationOpts: v.object({ cursor: pageCursor, endCursor: pageCursor, numItems: v.number() }) })
     .query(async ({ args: { paginationOpts, ...filter }, ctx }): Promise<OrganizationsPage> => {
         await requirePlatformAdmin(ctx);
 
@@ -549,7 +561,7 @@ export const listOrganizations = query
  * them from different moments; that write also re-runs this live query, which
  * then returns a matching pair.
  */
-export const organizationTotals = query.input(organizationFilterArgs).query(async ({ args, ctx }): Promise<{ organizations: number; seats: number }> => {
+export const organizationTotals = query.input(organizationFilterArguments).query(async ({ args, ctx }): Promise<{ organizations: number; seats: number }> => {
     await requirePlatformAdmin(ctx);
 
     const reader = organizations(ctx);
@@ -610,13 +622,19 @@ export const syncOrganization = internalMutation
         }
 
         if (status === "deleted") {
-            const slug = `${DELETED_SLUG_PREFIX}${organizationId}`;
+            const tombstoneSlug = `${DELETED_SLUG_PREFIX}${organizationId}`;
 
-            if (existing) {
-                await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"] as Id<"saas_organizations">, { slug, status, updatedAt });
-            } else {
-                await ctx.db.insert("saas_organizations", { name, organizationId, plan: plan ?? "free", seats: seats ?? 0, slug, status, updatedAt });
-            }
+            await (existing
+                ? ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"], { slug: tombstoneSlug, status, updatedAt })
+                : ctx.db.insert("saas_organizations", {
+                      name,
+                      organizationId,
+                      plan: plan ?? "free",
+                      seats: seats ?? 0,
+                      slug: tombstoneSlug,
+                      status,
+                      updatedAt,
+                  }));
 
             return;
         }
@@ -626,7 +644,7 @@ export const syncOrganization = internalMutation
             // read from `ctx.db` is `Doc<"saas_organizations">` in your project,
             // where this cast is the identity. The item itself compiles against the
             // base, table-generic context, which cannot know that.
-            await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"] as Id<"saas_organizations">, {
+            await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"], {
                 name,
                 slug,
                 updatedAt,
@@ -672,11 +690,7 @@ export const claimMail = internalMutation
             return { claimed: false };
         }
 
-        await ctx.db.patch(
-            SAAS_ORGANIZATIONS_TABLE,
-            existing["_id"] as Id<"saas_organizations">,
-            kind === "welcome" ? { welcomedAt: ctx.now } : { nudgedAt: ctx.now },
-        );
+        await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"], kind === "welcome" ? { welcomedAt: ctx.now } : { nudgedAt: ctx.now });
 
         return { claimed: true };
     });
@@ -694,7 +708,7 @@ export const releaseMail = internalMutation
             return;
         }
 
-        await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"] as Id<"saas_organizations">, kind === "welcome" ? { welcomedAt: 0 } : { nudgedAt: 0 });
+        await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"], kind === "welcome" ? { welcomedAt: 0 } : { nudgedAt: 0 });
     });
 
 /**
@@ -734,5 +748,5 @@ export const syncOrganizationPlan = internalMutation
             return;
         }
 
-        await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"] as Id<"saas_organizations">, { plan, planAsOf: asOf, updatedAt: ctx.now });
+        await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"], { plan, planAsOf: asOf, updatedAt: ctx.now });
     });

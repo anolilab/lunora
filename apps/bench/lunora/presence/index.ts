@@ -12,7 +12,7 @@
  *
  *   - **heartbeat** (mutation) — upsert the caller's presence row for a room and
  *     stamp `lastSeen = now`. Keyed by `(tenant, roomId, sessionId)`, so a re-heartbeat
- *     *patches* the existing row: subscribers receive a single-row delta, not an
+ *     patches* the existing row: subscribers receive a single-row delta, not an
  *     insert/delete churn that would re-send the whole present list. A session
  *     that joins the room also reclaims a batch of its tenant's expired rows in that
  *     room, so closed tabs cannot pile up between sweeps nobody scheduled.
@@ -31,7 +31,7 @@
  * on an interval and subscribes to `listPresent`.
  */
 import { LunoraError } from "@lunora/errors";
-import { RateLimiter, rateLimit, createMemoryStore } from "lunorash/ratelimit";
+import { createMemoryStore, rateLimit, RateLimiter } from "lunorash/ratelimit";
 
 import type { MutationCtx } from "#lunora/_generated/server.js";
 import { internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
@@ -121,7 +121,7 @@ const deleteExpired = async (ctx: MutationCtx, tenantId: string, roomId: string,
     const expired = ctx.db
         .query(PRESENCE_TABLE)
         .withIndex("byTenantRoomSession", (q) => q.eq("tenantId", tenantId).eq("roomId", roomId))
-        .filter((row) => (row["lastSeen"] as number) <= cutoff);
+        .filter((row) => row["lastSeen"] <= cutoff);
     const stale = limit === undefined ? await expired.collect() : await expired.take(limit);
 
     await Promise.all(stale.map((row) => ctx.db.delete(PRESENCE_TABLE, row["_id"] as never)));
@@ -179,7 +179,7 @@ export const heartbeat = mutation
         // presence row. Reject a heartbeat that targets a row owned by a
         // *different* authenticated user; an anonymous caller (no `userId`)
         // likewise may not patch a row that belongs to an authenticated user.
-        if (existing && existing["userId"] !== undefined && existing["userId"] !== userId) {
+        if (existing?.["userId"] !== undefined && existing["userId"] !== userId) {
             // Coded, not a bare `Error`: an uncoded throw is redacted to a
             // generic 500, so the caller sees a server fault instead of the
             // ownership refusal.
@@ -201,7 +201,7 @@ export const heartbeat = mutation
         if (existing) {
             // A replace, not a patch: a heartbeat without `data` clears it, and a
             // patch can only leave an omitted field as it was.
-            await ctx.db.replace(PRESENCE_TABLE, existing["_id"] as never, row);
+            await ctx.db.replace(PRESENCE_TABLE, existing["_id"], row);
         } else {
             // A new session is the one moment the room grows, and the only write
             // that is certain to happen: reclaim what the room has outgrown first.
@@ -213,8 +213,16 @@ export const heartbeat = mutation
     });
 
 /**
+ * Most members {@link listPresent} returns. There is no index on `lastSeen`, so the
+ * expiry filter scans the room and stops at this many live rows: a room over the
+ * cap shows its first members in session order, not the newest, until it is swept.
+ */
+const PRESENCE_LIST_MAX = 100;
+
+/**
  * Live query: the non-expired members of `roomId` in the caller's tenant, newest
- * heartbeat first. Subscribe to it for a reactive present-list.
+ * heartbeat first, up to {@link PRESENCE_LIST_MAX}. Subscribe to it for a reactive
+ * present-list.
  */
 export const listPresent = query.input({ roomId: v.string().max(256) }).query(async ({ args: { roomId }, ctx }): Promise<PresenceMember[]> => {
     const cutoff = ctx.now - PRESENCE_TTL_MS;
@@ -223,23 +231,23 @@ export const listPresent = query.input({ roomId: v.string().max(256) }).query(as
     const rows = await ctx.db
         .query(PRESENCE_TABLE)
         .withIndex("byTenantRoomSession", (q) => q.eq("tenantId", tenantId).eq("roomId", roomId))
-        .collect();
+        .filter((row) => row["lastSeen"] > cutoff)
+        .take(PRESENCE_LIST_MAX);
 
     return rows
-        .filter((row) => (row["lastSeen"] as number) > cutoff)
         .map((row) => {
             const member: PresenceMember = {
-                lastSeen: row["lastSeen"] as number,
-                roomId: row["roomId"] as string,
-                sessionId: row["sessionId"] as string,
+                lastSeen: row["lastSeen"],
+                roomId: row["roomId"],
+                sessionId: row["sessionId"],
             };
 
             if (row["userId"] !== undefined) {
-                member.userId = row["userId"] as string;
+                member.userId = row["userId"];
             }
 
             if (row["data"] !== undefined) {
-                member.data = row["data"] as Record<string, unknown>;
+                member.data = row["data"];
             }
 
             return member;
@@ -283,7 +291,7 @@ export const sweep = internalMutation
 
         const stale = await ctx.db
             .query(PRESENCE_TABLE)
-            .filter((row) => (row["lastSeen"] as number) <= cutoff && (roomId === undefined || row["roomId"] === roomId))
+            .filter((row) => row["lastSeen"] <= cutoff && (roomId === undefined || row["roomId"] === roomId))
             .take(SWEEP_BATCH);
 
         await Promise.all(stale.map((row) => ctx.db.delete(PRESENCE_TABLE, row["_id"] as never)));

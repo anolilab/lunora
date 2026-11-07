@@ -22,11 +22,13 @@ export const list = orgQuery
         const paging = { cursor: args.cursor, numItems: args.limit ?? 50 };
 
         // Without a status, newest first across every status; byOrgStatus would page through one status at a time.
+        // Archived tasks are left out of the working list; asking for `archived` by name still returns them.
         if (args.status === undefined) {
             return ctx.db
                 .query("tasks")
                 .withIndex("byOrgUpdated", (q) => q.eq("organizationId", organizationId))
                 .order("desc")
+                .filter((row) => row.status !== "archived")
                 .paginate(paging);
         }
 

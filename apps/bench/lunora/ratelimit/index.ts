@@ -12,7 +12,7 @@
  * mutations (they persist token state); `check` is a query (read-only peek).
  *
  * **These are `internal*` procedures, not public RPC, on purpose.** They are the
- * *management plane* of your limiter, and every one of them takes the bucket
+ * management plane* of your limiter, and every one of them takes the bucket
  * `key` from the caller. Exposed as public RPC:
  *
  *   - `reset` lets anyone clear any bucket, which nullifies every limit the app
