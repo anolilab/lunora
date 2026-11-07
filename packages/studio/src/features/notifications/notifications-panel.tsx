@@ -60,6 +60,7 @@ const NotificationsPanel = (): ReactElement => {
 
     const [kind, setKind] = useState<KindFilter>("all");
     const [search, setSearch] = useState<string>("");
+    const [failingOnly, setFailingOnly] = useState<boolean>(false);
 
     // One-shot admin read (no shard, no live subscription): the store is a worker
     // option, so there is no per-shard write-flush to stream. `refetch` backs the
@@ -70,6 +71,7 @@ const NotificationsPanel = (): ReactElement => {
     const { data, error, errorSource, isLoading, refetch } = useAdminQuery<PushSubscriptionsResult>(ADMIN_FUNCTIONS.listPushSubscriptions, {});
 
     const devices: PushSubscriptionDevice[] = data?.subscriptions ?? [];
+    const failingCount = devices.filter((device) => device.lastStatus === "failed").length;
 
     // Client-side kind + substring filter over the already-fetched devices — never
     // triggers a refetch. The substring matches the target endpoint/id and owner.
@@ -77,6 +79,10 @@ const NotificationsPanel = (): ReactElement => {
     const needle = search.trim().toLowerCase();
     const filtered: PushSubscriptionDevice[] = devices.filter((device) => {
         if (kind !== "all" && device.kind !== kind) {
+            return false;
+        }
+
+        if (failingOnly && device.lastStatus !== "failed") {
             return false;
         }
 
@@ -118,6 +124,18 @@ const NotificationsPanel = (): ReactElement => {
                         </Button>
                     ))}
                 </div>
+                <Button
+                    aria-pressed={failingOnly}
+                    data-testid="nt-failing-filter"
+                    onClick={(): void => {
+                        setFailingOnly(!failingOnly);
+                    }}
+                    size="sm"
+                    type="button"
+                    variant={failingOnly ? "secondary" : "ghost"}
+                >
+                    {t("{count} failing", { count: failingCount })}
+                </Button>
                 <Input
                     aria-label={t("Filter devices")}
                     className="h-8 w-56"

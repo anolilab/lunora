@@ -38,8 +38,8 @@ const NOTIFY_FILENAME = "notify.ts";
 /** `ctx.notify.<method>` sends the `notify_send_outside_action` lint records (single-channel + multi-channel senders). */
 const NOTIFY_SEND_METHODS = new Set(["chat", "inApp", "send", "webhook"]);
 
-/** `ctx.push.<method>` sends the lint records — the two device-push delivery calls (register/list/unregister are store ops, not sends). */
-const PUSH_SEND_METHODS = new Set(["broadcast", "send"]);
+/** `ctx.push.<method>` sends the lint records: the device-push delivery calls (register/list/unregister are store ops, not sends). */
+const PUSH_SEND_METHODS = new Set(["broadcast", "send", "sendToCondition", "sendToTopic"]);
 
 /** One resolved handler with its attribution (kind kept broad so the push-usage scan can include actions). */
 interface ResolvedProcedure {

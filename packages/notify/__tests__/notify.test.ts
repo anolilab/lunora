@@ -98,14 +98,12 @@ describe("ctx.push lifecycle", () => {
         await expect(store.get(stored.id)).resolves.toBeUndefined();
     });
 
-    it("prunes an FCM device the way FCM actually reports one — a NOT_FOUND message, no code", async () => {
+    it("prunes an FCM device on the UNREGISTERED code FCM reports for it", async () => {
         expect.hasAssertions();
 
-        // The FCM provider forwards `body.error.message` and drops
-        // `error.details[].errorCode`, so `UNREGISTERED` never reaches us — the
-        // NOT_FOUND prose is the whole signal (see `FCM_DEAD_TOKEN_ERROR`). This
-        // is the pruning the README, the docs and `LunoraPush.broadcast`'s JSDoc
-        // all promise for FCM.
+        // `fcm-transport` reads the code from `error.details[].errorCode`; the
+        // message it produces (see `FCM_DEAD_TOKEN_ERROR`) carries that code. This is
+        // the pruning the README, the docs and `LunoraPush.broadcast`'s JSDoc promise.
         const { push, store } = setup();
         const stored = await push.register({ kind: "fcm", token: "gone-device-token" });
         const receipt = await push.send(stored.id, { body: "hi" });
@@ -1727,5 +1725,93 @@ describe("push router payload size", () => {
         });
         expect(webPush.sends).toHaveLength(0);
         expect(fcm.sends).toHaveLength(0);
+    });
+});
+
+describe("ctx.push topics and conditions", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    const fcmDefinition = (store: SubscriptionStore): NotifyDefinition => {
+        return {
+            ...baseDefinition(store),
+            fcm: { accessToken: "access-token", projectId: "demo-project" },
+        };
+    };
+
+    it("sends to a topic and returns a success receipt with the FCM message id", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ name: "projects/demo-project/messages/9" }, { status: 200 }));
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.sendToTopic("news", { body: "Breaking", title: "News" })).resolves.toMatchObject({
+            messageId: "projects/demo-project/messages/9",
+            successful: true,
+        });
+
+        const requestBody = fetchSpy.mock.calls[0]?.[1]?.body;
+
+        const sent = JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as { message: Record<string, unknown> };
+
+        expect(sent.message).toMatchObject({ notification: { body: "Breaking", title: "News" }, topic: "news" });
+    });
+
+    it("sends to a condition", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ name: "projects/demo-project/messages/10" }, { status: 200 }));
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.sendToCondition("'sports' in topics", { body: "Score" })).resolves.toMatchObject({
+            messageId: "projects/demo-project/messages/10",
+            successful: true,
+        });
+
+        const requestBody = fetchSpy.mock.calls[0]?.[1]?.body;
+
+        const sent = JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as { message: Record<string, unknown> };
+
+        expect(sent.message).toMatchObject({ condition: "'sports' in topics" });
+    });
+
+    it("forwards per-platform overrides through the real engine on a token send", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ name: "projects/demo-project/messages/11" }));
+        const store = memorySubscriptionStore();
+        // No `engine` override: this runs the production engine, router and FCM transport.
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+        const stored = await push.register({ kind: "fcm", token: "live-device-token" });
+
+        await expect(
+            push.send(stored.id, {
+                body: "Match starts now",
+                clickAction: "OPEN_MATCH",
+                fcmOverrides: { android: { notification: { channel_id: "live-scores" } } },
+                title: "Kickoff",
+            }),
+        ).resolves.toMatchObject({ successful: true });
+
+        const requestBody = fetchSpy.mock.calls[0]?.[1]?.body;
+        const sent = JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as { message: Record<string, unknown> };
+
+        expect(sent.message).toMatchObject({
+            android: { notification: { channel_id: "live-scores", click_action: "OPEN_MATCH" } },
+            notification: { body: "Match starts now", title: "Kickoff" },
+            token: "live-device-token",
+        });
+    });
+
+    it("refuses a topic send when no fcm channel is configured", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.sendToTopic("news", { body: "x" })).rejects.toThrow(/need the `fcm` channel/u);
     });
 });

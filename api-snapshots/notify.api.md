@@ -88,6 +88,64 @@ const FCM_ENV_KEYS: {
 };
 ```
 
+### `FcmAndroidConfig` (interface)
+
+```ts
+interface FcmAndroidConfig {
+    collapse_key?: string;
+    data?: Record<string, string>;
+    fcm_options?: {
+        analytics_label?: string;
+    };
+    notification?: {
+        body?: string;
+        channel_id?: string;
+        click_action?: string;
+        color?: string;
+        icon?: string;
+        image?: string;
+        sound?: string;
+        tag?: string;
+        title?: string;
+    };
+    priority?: "normal" | "high";
+    ttl?: string;
+}
+```
+
+### `FcmApnsConfig` (interface)
+
+```ts
+interface FcmApnsConfig {
+    fcm_options?: {
+        analytics_label?: string;
+        image?: string;
+    };
+    headers?: Record<string, string>;
+    payload?: {
+        [key: string]: unknown;
+        aps?: {
+            alert?: {
+                body?: string;
+                subtitle?: string;
+                title?: string;
+            };
+            badge?: number;
+            category?: string;
+            "content-available"?: 0 | 1;
+            "interruption-level"?: "passive" | "active" | "time-sensitive" | "critical";
+            "mutable-content"?: 0 | 1;
+            sound?: string | {
+                critical?: 0 | 1;
+                name?: string;
+                volume?: number;
+            };
+            "thread-id"?: string;
+        };
+    };
+}
+```
+
 ### `FcmConfig` (interface)
 
 Re-exported from `@visulima/notification` — signature tracked at its source.
@@ -96,6 +154,51 @@ Re-exported from `@visulima/notification` — signature tracked at its source.
 
 ```ts
 type FcmConfigFactory = (env: NotifyEnv) => FcmConfig | undefined;
+```
+
+### `FcmPlatformConfig` (interface)
+
+```ts
+interface FcmPlatformConfig {
+    android?: FcmAndroidConfig;
+    apns?: FcmApnsConfig;
+    fcm_options?: {
+        analytics_label?: string;
+    };
+    webpush?: FcmWebpushConfig;
+}
+```
+
+### `FcmWebpushConfig` (interface)
+
+```ts
+interface FcmWebpushConfig {
+    data?: Record<string, string>;
+    fcm_options?: {
+        analytics_label?: string;
+        link?: string;
+    };
+    headers?: Record<string, string>;
+    notification?: {
+        actions?: ReadonlyArray<{
+            action: string;
+            icon?: string;
+            title: string;
+        }>;
+        badge?: string;
+        body?: string;
+        dir?: "auto" | "ltr" | "rtl";
+        icon?: string;
+        image?: string;
+        lang?: string;
+        renotify?: boolean;
+        requireInteraction?: boolean;
+        silent?: boolean;
+        tag?: string;
+        title?: string;
+        vibrate?: number[];
+    };
+}
 ```
 
 ### `InAppPayload` (interface)
@@ -123,6 +226,8 @@ interface LunoraPush {
     list: (filter?: SubscriptionFilter) => Promise<PushSubscriptionDevice[]>;
     register: (input: RegisterInput) => Promise<StoredSubscription>;
     send: (target: StoredSubscription | string, payload: PushContent) => Promise<Receipt>;
+    sendToCondition: (condition: string, payload: PushContent) => Promise<SuccessReceipt>;
+    sendToTopic: (topic: string, payload: PushContent) => Promise<SuccessReceipt>;
     unregister: (id: string, owner: PushOwner) => Promise<void>;
 }
 ```
@@ -570,5 +675,7 @@ interface NormalizeOptions {
 ### `PushContent` (type)
 
 ```ts
-type PushContent = Omit<PushPayload, "to">;
+type PushContent = Omit<PushPayload, "to"> & {
+    fcmOverrides?: FcmPlatformConfig;
+};
 ```

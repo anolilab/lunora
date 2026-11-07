@@ -966,6 +966,7 @@ const MESSAGE_IDS = [
     "Filter devices",
     "filter endpoint, user",
     "{count} devices",
+    "{count} failing",
     "endpoint",
     "last seen",
     "n/a",

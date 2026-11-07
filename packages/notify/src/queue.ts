@@ -272,7 +272,7 @@ const runRetryIds = async (push: LunoraPush, payload: PushContent, ids: Readonly
  * receipt, or an id whose row no longer exists at all — counts as `pruned` here
  * too, never as a failure: there is nothing left to redeliver to, so retrying it
  * could only burn the queue's budget and dead-letter an unsubscribe.
- * - Gone subscriptions (Web Push 404/410, FCM's `NOT_FOUND` for a dead token) are pruned by the page and
+ * - Gone subscriptions (Web Push 404/410, FCM's `UNREGISTERED` for a dead token) are pruned by the page and
  * never appear in `failedIds` — an all-`pruned` page is a success, not a
  * failure, as is an empty page.
  */

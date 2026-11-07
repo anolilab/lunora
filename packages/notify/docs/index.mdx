@@ -58,9 +58,24 @@ inside the isolate. `broadcast` pages through the whole audience with keyset pag
 reaches everyone matched. A `limit` on the filter caps the total across all pages.
 
 Dead subscriptions prune themselves: an endpoint the push service reports as gone
-(Web Push HTTP 404/410, or FCM's `NOT_FOUND` answer for a dead token) is
+(Web Push HTTP 404/410, or FCM's `UNREGISTERED` code for a dead token) is
 detected by `isGoneError` and dropped
 rather than retried forever.
+
+## FCM platform fields, topics and conditions
+
+`ctx.push.send` and `broadcast` take an `fcmOverrides` block for per-platform FCM fields
+(`android`, `apns`, `webpush`, `fcm_options`). It is forwarded to the message as
+sent and merged over what the common fields produce, so it wins on a clash. Web
+Push ignores it. `clickAction` maps to `android.notification.click_action`, and
+`sound` and `badge` to their Android and APNs slots.
+
+`ctx.push.sendToTopic(topic, payload)` and `sendToCondition(expression, payload)`
+send one FCM message to every device subscribed to a topic, or matching a condition
+such as `"'sports' in topics"`. Lunora does not manage topic membership; subscribe
+devices with the Firebase client SDK or the Admin API. These sends have no
+subscription rows, so they resolve to a success receipt carrying the FCM message id, and a failure throws.
+They need the `fcm` channel.
 
 ## What is deliberately not on the edge
 
@@ -108,7 +123,7 @@ Read the channel configuration from the environment variables in the table above
 **Type:** `(message: string | undefined, kind?: StoredSubscription["kind"]) => boolean`
 
 Returns `true` when a push error message means the subscription is gone (Web Push
-HTTP 404 or 410, or FCM `NOT_FOUND`).
+HTTP 404 or 410, or FCM `UNREGISTERED`).
 
 ### `enqueuePushBroadcast(queue, job)` and `runPushBroadcastPage(push, job)`
 
@@ -117,6 +132,14 @@ and `(push: LunoraPush, job: PushBroadcastJob) => Promise<PushBroadcastPageOutco
 
 `enqueuePushBroadcast` hands a broadcast job to a queue. `runPushBroadcastPage`
 delivers one page of that job and returns the outcome.
+
+### `ctx.push.sendToTopic(topic, payload)` and `ctx.push.sendToCondition(expression, payload)`
+
+**Type:** `(topic: string, payload: PushContent) => Promise<string>` and
+`(expression: string, payload: PushContent) => Promise<string>`
+
+Send one FCM message to a topic or condition. Resolves to a success receipt whose `messageId` is the FCM message name.
+See [FCM platform fields, topics and conditions](#fcm-platform-fields-topics-and-conditions).
 
 ### `WEB_PUSH_ENV_KEYS` and `FCM_ENV_KEYS`
 

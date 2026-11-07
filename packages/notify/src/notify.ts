@@ -1,6 +1,8 @@
 import { LunoraError } from "@lunora/errors";
-import type { Notification, Provider, Receipt } from "@visulima/notification";
+import type { Notification, Provider, Receipt, SuccessReceipt } from "@visulima/notification";
 
+import type { FcmTransport } from "./fcm-transport";
+import { createFcmTransport } from "./fcm-transport";
 import { assertPushPayloadFits } from "./payload-size";
 import type { ResolvedProviders } from "./providers";
 import { buildEngine, checkPushTtl, checkPushUrgency } from "./providers";
@@ -44,7 +46,7 @@ const receiptError = (receipt: Receipt): string | undefined => (receipt.successf
 /**
  * Map a push send's receipt to the observability {@link NotifyDeliveryStatus}:
  * `accepted` on success, `gone` when the endpoint is unregistered (Web Push
- * 404/410, or FCM's `NOT_FOUND` answer for a dead token — the subscription is
+ * 404/410, or FCM's `UNREGISTERED` code for a dead token — the subscription is
  * pruned), else `failed`.
  */
 const pushDeliveryStatus = (receipt: Receipt, error: string | undefined, kind: StoredSubscription["kind"]): NotifyDeliveryStatus => {
@@ -108,6 +110,8 @@ const resolveProviders = (definition: NotifyDefinition, env: NotifyEnv): Resolve
 interface NotifyRuntime {
     engine?: Notification;
     fallbackStore?: SubscriptionStore;
+    /** The FCM transport behind `sendToTopic` / `sendToCondition`; `null` when `fcm` is not configured. */
+    fcm?: FcmTransport | null;
     store?: SubscriptionStore;
     warnedNoPushOriginAllowlist: boolean;
     warnedNoStore: boolean;
@@ -239,6 +243,16 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
     }
 
     const subscriptionStore = store;
+
+    // Topic and condition sends bypass the engine (they have no subscription rows to
+    // route over), so the facade holds the same transport the engine's FCM provider wraps.
+    if (runtime.fcm === undefined) {
+        const fcmConfig = resolveMaybeFactory(definition.fcm, env);
+
+        runtime.fcm = fcmConfig === undefined ? null : createFcmTransport(fcmConfig);
+    }
+
+    const fcmTransport = runtime.fcm;
     // `definition` before the defaults, `options` before both: the app's
     // `defineNotify` is the only seam an app has (codegen's call passes just
     // `{ log, metrics }`), while `options` stays the test/tuning override.
@@ -596,6 +610,31 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         return aggregate;
     };
 
+    const sendFcmTarget = async (target: { condition: string } | { topic: string }, payload: PushContent): Promise<SuccessReceipt> => {
+        checkPushPayload(payload);
+
+        if (fcmTransport === null) {
+            observeSkip("push", "channel-not-configured");
+
+            throw new LunoraError("BAD_REQUEST", "@lunora/notify: FCM topics and conditions need the `fcm` channel configured in defineNotify(...)");
+        }
+
+        try {
+            const messageName = await fcmTransport.sendTo(target, payload);
+
+            countSend("push", "fcm", "accepted");
+
+            return { channel: "push", messageId: messageName, provider: "fcm", successful: true, timestamp: new Date() };
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+
+            countSend("push", "fcm", "failed");
+            warnFailedSend("push", "fcm", { error: message });
+
+            throw new LunoraError("INTERNAL", `@lunora/notify: FCM send failed: ${message}`);
+        }
+    };
+
     const push: LunoraPush = {
         broadcast,
         broadcastPage,
@@ -624,6 +663,8 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
 
             return receipt;
         },
+        sendToCondition: (condition: string, payload: PushContent): Promise<SuccessReceipt> => sendFcmTarget({ condition }, payload),
+        sendToTopic: (topic: string, payload: PushContent): Promise<SuccessReceipt> => sendFcmTarget({ topic }, payload),
         unregister: async (id: string, owner: PushOwner): Promise<void> => {
             // Ownership is checked HERE rather than pushed into the store: the
             // store is an app-implementable interface, and a scope parameter an

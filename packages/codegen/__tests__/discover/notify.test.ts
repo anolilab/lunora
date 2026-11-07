@@ -96,6 +96,28 @@ describe("discoverNotifyCalls", () => {
         expect(calls[0]).toMatchObject({ callee: "ctx.push.broadcast", exportName: "fanout", file: "fanout", kind: "query" });
     });
 
+    it("records a ctx.push.sendToTopic inside a query as a device-push send", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "lunora", "news.ts"),
+            `
+    import { query } from "@lunora/server";
+
+    export const headlines = query({
+        args: {},
+        handler: async (ctx) => ctx.push.sendToTopic("news", { title: "news" }),
+    });
+`,
+            "utf8",
+        );
+
+        const calls = discoverNotifyCalls(project, lunoraDirectory());
+
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).toMatchObject({ callee: "ctx.push.sendToTopic", exportName: "headlines", kind: "query" });
+    });
+
     it("records a ctx.notify.send multi-channel send inside a mutation", () => {
         expect.assertions(2);
 
