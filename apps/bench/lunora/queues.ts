@@ -53,7 +53,7 @@ export const events = defineQueue<z.infer<typeof domainEventSchema>>({
  * `queueEmail` enqueued (`toQueuedPayload`), consumed by the mail package, which
  * skips a send that already reached the provider and tells a redelivery apart.
  */
-export const mail = defineQueue<unknown>({
+export const mail = defineQueue({
     handler: async (_context, batch) => {
         const transport = mailer();
 
