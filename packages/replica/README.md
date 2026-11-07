@@ -17,7 +17,7 @@
 <div align="center">
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
@@ -256,4 +256,4 @@ SQLite runtime.
 
 ## License
 
-[FSL-1.1-Apache-2.0](./LICENSE.md)
+[Apache-2.0](./LICENSE.md)

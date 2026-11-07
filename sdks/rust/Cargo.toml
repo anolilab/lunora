@@ -9,7 +9,7 @@
 name = "lunora"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "Apache-2.0"
 description = "Protocol-conformant client for a Lunora deployment"
 
 [dependencies]

@@ -22,11 +22,12 @@ We know a pre-1.0 framework asks for trust. Here is what backs it:
   ([`api-snapshots/`](./api-snapshots), `pnpm api:check`). After 1.0, a breaking
   change **fails a required check** — it cannot ship as a patch by accident. The
   full program is tracked in [`plans/135-stable-1.0-roadmap.md`](./plans/135-stable-1.0-roadmap.md).
-- **No rug-pull on licensing.** Lunora is **FSL-1.1-Apache-2.0**
-  ([Functional Source License](./LICENSE.md)): source-available today, and every
-  release **automatically converts to Apache 2.0 two years after it ships**. The
-  code you build on becomes fully open — that outcome is written into the license,
-  not our goodwill.
+- **Open licensing.** Lunora is **Apache-2.0** ([LICENSE.md](./LICENSE.md)), so
+  the framework can be used, modified and redistributed without a commercial
+  restriction. The hosted Lunora Cloud service in
+  [`apps/cloud/`](./apps/cloud) stays under
+  **FSL-1.1-Apache-2.0** ([LICENSE.md](./apps/cloud/LICENSE.md)), which converts to
+  Apache 2.0 two years after each release.
 - **The runtime is verified where it runs.** The real Cloudflare `workerd`
   runtime — the entire point of the product — runs on a **required merge gate**,
   not just on laptops. Coverage floors, a nightly full-matrix run, and an

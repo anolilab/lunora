@@ -26,7 +26,7 @@ const L = {
     idle: { label: "≈$0, no forced pause", tone: "yes" } as Cell,
     maturity: { label: "Alpha", tone: "warn" } as Cell,
     noServers: { label: "Yes, serverless Workers", tone: "yes" } as Cell,
-    oss: { label: "Yes (FSL-1.1 → Apache-2.0)", tone: "yes" } as Cell,
+    oss: { label: "Yes (Apache-2.0)", tone: "yes" } as Cell,
     reactive: { label: "Yes, reactive queries", tone: "yes" } as Cell,
     selfHost: { label: "Yes", tone: "yes" } as Cell,
     types: { label: "Yes, typed functions", tone: "yes" } as Cell,
@@ -111,10 +111,10 @@ export const COMPARISONS: Record<string, Comparison> = {
     },
     convex: {
         description:
-            "Lunora vs Convex: the same Convex-style DX (typed functions, reactive queries) and the same FSL-1.1 → Apache-2.0 license, but Lunora runs on your own Cloudflare account at the edge, not on Convex's regional AWS. An honest comparison, including where Convex still wins.",
+            "Lunora vs Convex: the same Convex-style DX (typed functions, reactive queries) and the same open-source model (Lunora is Apache-2.0; Convex's backend is FSL-1.1 → Apache-2.0), but Lunora runs on your own Cloudflare account at the edge, not on Convex's regional AWS. An honest comparison, including where Convex still wins.",
         intro: "Convex set the bar for real-time backend DX. Lunora gives you the same end-to-end-typed, reactive model and the same open-source license, but it runs on your own Cloudflare account at the edge instead of Convex's cloud. Here's the honest comparison.",
         lunoraDiffers: {
-            body: "Both are end-to-end-typed, both have reactive queries, and both ship the same FSL-1.1 → Apache-2.0 license, so the real difference is not 'open source.' It is where it runs. Convex Cloud is regional AWS (US-East, EU-West) and a separate vendor and bill; Lunora runs on Cloudflare's global edge and Durable Objects, on the account you already have. Self-hosted Convex means operating a Rust server and a SQL database; Lunora self-hosts as serverless Workers, nothing to keep running, ≈$0 at idle.",
+            body: "Both are end-to-end-typed, both have reactive queries, and both are open source (Lunora under Apache-2.0, Convex's backend under FSL-1.1 → Apache-2.0), so the real difference is not 'open source.' It is where it runs. Convex Cloud is regional AWS (US-East, EU-West) and a separate vendor and bill; Lunora runs on Cloudflare's global edge and Durable Objects, on the account you already have. Self-hosted Convex means operating a Rust server and a SQL database; Lunora self-hosts as serverless Workers, nothing to keep running, ≈$0 at idle.",
             title: "Edge-native, on your own Cloudflare",
         },
         name: "Convex",
@@ -132,11 +132,11 @@ export const COMPARISONS: Record<string, Comparison> = {
         slug: "convex",
         summary: [
             "Looking for a Convex alternative that runs on your own infrastructure? Lunora gives you the same developer experience, typed query, mutation, and action functions with reactive queries that update live, but it runs on Cloudflare Workers and Durable Objects instead of Convex's managed cloud.",
-            "Both projects ship the same FSL-1.1 to Apache-2.0 license and both can be self-hosted, so the real choice is not open source versus closed. It is where your backend runs and who you pay. Convex Cloud is hosted on AWS in a few regions; Lunora runs on Cloudflare's global edge, on the account you already use, and idles at roughly zero cost.",
+            "Both projects are open source (Lunora under Apache-2.0, Convex's backend under FSL-1.1 to Apache-2.0) and both can be self-hosted, so the real choice is not open source versus closed. It is where your backend runs and who you pay. Convex Cloud is hosted on AWS in a few regions; Lunora runs on Cloudflare's global edge, on the account you already use, and idles at roughly zero cost.",
         ],
         faqs: [
             {
-                a: "Yes. The Convex backend is open source under FSL-1.1-Apache-2.0, the same license model Lunora uses, so 'open source' is not a difference between them.",
+                a: "Yes. The Convex backend is open source under FSL-1.1-Apache-2.0. Lunora's framework is Apache-2.0, so 'open source' is not the difference between them.",
                 q: "Is Convex open source?",
             },
             {

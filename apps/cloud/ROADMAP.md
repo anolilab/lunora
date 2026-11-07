@@ -29,7 +29,8 @@ be a product.
   There is no proprietary runtime to get stuck in. Eject to self-managed, or move
   between BYO and fully-managed, without a rewrite.
 - **Built on a framework with a real stability promise.** Cloud inherits the
-  framework's SemVer + API-guard guarantees and its FSL→Apache-2.0 license path
+  framework's SemVer + API-guard guarantees. The framework is Apache-2.0; Cloud
+  is FSL-1.1-Apache-2.0 and converts to Apache-2.0 two years after each release
   (see the [framework roadmap](../../ROADMAP.md#why-you-can-trust-this-roadmap)).
 - **Honest staging.** Waitlist → private early access → BYO GA → optional
   fully-managed. We will tell you which stage a capability is in, and we won't
