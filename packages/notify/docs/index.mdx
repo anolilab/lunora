@@ -74,7 +74,7 @@ and Web Push `TTL`/`Urgency`. A block with nothing in it is left out, so a data-
 send carries no notification.
 
 FCM's own `retries` and `timeout` fields are honoured for topic and condition
-sends. A `Retry-After` up to 10 seconds is waited out; a longer one fails the send.
+sends. `retries` is capped at 10 attempts, so a large count cannot keep a send retrying for hours. A `Retry-After` up to 10 seconds is waited out; a longer one fails the send.
 A device send makes one POST per engine attempt, so the engine's retries apply once.
 
 `ctx.push.sendToTopic(topic, payload)` and `sendToCondition(expression, payload)`

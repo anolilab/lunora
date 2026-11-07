@@ -127,6 +127,12 @@ const MAX_ATTEMPTS = 4;
 /** One POST per engine attempt. The engine's retry middleware owns the retries, so they are not doubled here. */
 const ENGINE_ATTEMPTS = 1;
 
+/**
+ * The most attempts a configured retry count can buy. Without a ceiling a large count keeps a fan-out send in its retry
+ * loop for hours; the default four attempts are far below it.
+ */
+const MAX_SEND_ATTEMPTS = 10;
+
 /** The longest delay between two attempts, before any `Retry-After`. Keeps a large retry count from overflowing a timer. */
 const MAX_BACKOFF_MS = 30_000;
 
@@ -271,6 +277,21 @@ const apnsPriorityOf = (urgency: string): "10" | "5" | undefined => {
     return urgency === "low" || urgency === "very-low" ? "5" : undefined;
 };
 
+/**
+ * Merge generated headers with an app's overrides. HTTP header names are case-insensitive, so a generated header is dropped
+ * when the override names it in another case: the override wins, and the message carries one value per header.
+ */
+const mergeHeaders = (generated: Record<string, string | undefined>, overrides: Record<string, string> | undefined): Record<string, string | undefined> => {
+    if (overrides === undefined) {
+        return generated;
+    }
+
+    const overridden = new Set(Object.keys(overrides).map((name) => name.toLowerCase()));
+    const kept = Object.entries(generated).filter(([name]) => !overridden.has(name.toLowerCase()));
+
+    return { ...Object.fromEntries(kept), ...overrides };
+};
+
 /** An object with no defined value is left out of the wire body entirely. */
 const definedOnly = <T extends Record<string, unknown>>(value: T): T | undefined =>
     Object.values(value).some((entry) => entry !== undefined) ? value : undefined;
@@ -302,13 +323,13 @@ const buildFcmMessage = (payload: FcmPayload, target: FcmTarget): Record<string,
     const aps = definedOnly({ badge: payload.badge, sound: payload.sound, ...overrides?.apns?.payload?.aps });
     const apns = definedOnly({
         ...overrides?.apns,
-        headers: definedOnly({ "apns-expiration": expiresAt, "apns-priority": apnsPriority, ...overrides?.apns?.headers }),
+        headers: definedOnly(mergeHeaders({ "apns-expiration": expiresAt, "apns-priority": apnsPriority }, overrides?.apns?.headers)),
         payload: definedOnly({ ...overrides?.apns?.payload, aps }),
     });
 
     const webpush = definedOnly({
         ...overrides?.webpush,
-        headers: definedOnly({ TTL: ttlSeconds, Urgency: payload.urgency, ...overrides?.webpush?.headers }),
+        headers: definedOnly(mergeHeaders({ TTL: ttlSeconds, Urgency: payload.urgency }, overrides?.webpush?.headers)),
     });
 
     return {
@@ -352,7 +373,7 @@ const requestTimeout = (value: number | undefined): number => (value !== undefin
 
 /** A whole attempt count from a configured value. A non-finite value falls back to the default. */
 const attemptCount = (value: number | undefined, fallback: number): number =>
-    value !== undefined && Number.isFinite(value) ? Math.max(1, Math.trunc(value)) : fallback;
+    value !== undefined && Number.isFinite(value) ? Math.min(MAX_SEND_ATTEMPTS, Math.max(1, Math.trunc(value))) : fallback;
 
 const toError = (error: unknown): Error => (error instanceof Error ? error : new Error(String(error)));
 

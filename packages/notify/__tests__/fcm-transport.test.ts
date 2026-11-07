@@ -704,4 +704,27 @@ describe("createFcmTransport", () => {
         await expect(transport.sendTo({ topic: "news" }, { body: "x" })).resolves.toBe("projects/demo-project/messages/60");
         expect(fetchMock).toHaveBeenCalledTimes(1);
     });
+
+    it("sends one Web Push TTL header when an override names it in another case", () => {
+        expect.hasAssertions();
+
+        const message = buildFcmMessage({ body: "x", fcmOverrides: { webpush: { headers: { ttl: "5" } } }, ttl: 90 }, { token: "t" });
+        const { headers } = message.webpush as { headers: Record<string, string> };
+        const ttlHeaders = Object.keys(headers).filter((name) => name.toLowerCase() === "ttl");
+
+        expect(ttlHeaders).toStrictEqual(["ttl"]);
+        expect(headers.ttl).toBe("5");
+    });
+
+    it("caps a configured retry count, so a large count cannot keep a topic send retrying for hours", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn(async () =>
+            Response.json({ error: { message: "quota", status: "RESOURCE_EXHAUSTED" } }, { headers: { "retry-after": "0" }, status: 429 }),
+        );
+        const transport = createFcmTransport({ ...config, retries: 1_000_000 }, { fetch: fetchMock as unknown as typeof fetch, retryBaseDelay: 0 });
+
+        await expect(transport.sendTo({ topic: "news" }, { body: "x" })).rejects.toThrow(/RESOURCE_EXHAUSTED/u);
+        expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(10);
+    });
 });
