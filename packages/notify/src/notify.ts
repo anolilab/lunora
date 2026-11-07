@@ -659,9 +659,11 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         const transport = fcmTransport();
 
         if (transport === null) {
+            // A missing channel is a fault in the app's configuration, not the caller's input: a server error, and logged.
             observeSkip("push", "channel-not-configured");
+            warnSafely("@lunora/notify: FCM topic or condition send with no fcm channel configured", { target: Object.keys(target).join(",") });
 
-            throw new LunoraError("BAD_REQUEST", "@lunora/notify: FCM topics and conditions need the `fcm` channel configured in defineNotify(...)");
+            throw new LunoraError("INTERNAL", "@lunora/notify: FCM topics and conditions need the `fcm` channel configured in defineNotify(...)");
         }
 
         try {

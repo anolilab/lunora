@@ -676,4 +676,22 @@ describe("createFcmTransport", () => {
         expect(createFcmTransport({ accessToken: "", projectId: "demo-project" }).provider.isAvailable()).toBe(false);
         expect(createFcmTransport({ getAccessToken: async () => "callback-credential", projectId: "demo-project" }).provider.isAvailable()).toBe(true);
     });
+
+    it("reports a retryable failure for a group whose first token is gone, so the others can be retried", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi
+            .fn()
+            .mockImplementationOnce(async () =>
+                Response.json({ error: { details: [{ errorCode: "UNREGISTERED" }], message: "gone", status: "NOT_FOUND" } }, { status: 404 }),
+            )
+            .mockImplementationOnce(async () => Response.json({ error: { message: "busy", status: "UNAVAILABLE" } }, { status: 503 }));
+        const result = await createFcmTransport(config, { fetch: fetchMock as unknown as typeof fetch, retryBaseDelay: 0 }).provider.send({
+            body: "x",
+            to: ["gone-token", "busy-token"],
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.success ? "" : (result.error as Error).message).toContain("FCM 503");
+    });
 });

@@ -1812,7 +1812,10 @@ describe("ctx.push topics and conditions", () => {
         const store = memorySubscriptionStore();
         const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
 
-        await expect(push.sendToTopic("news", { body: "x" })).rejects.toThrow(/need the `fcm` channel/u);
+        await expect(push.sendToTopic("news", { body: "x" })).rejects.toMatchObject({
+            code: "INTERNAL",
+            message: expect.stringMatching(/need the `fcm` channel/u),
+        });
     });
 
     it("resolves the fcm channel once for both the engine and the topic path", async () => {

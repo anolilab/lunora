@@ -10,7 +10,7 @@ import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { SsrfResolution } from "../../../shared/ssrf-resolve";
 import { resolveHostSsrf } from "../../../shared/ssrf-resolve";
 import type { FcmTransport } from "./fcm-transport";
-import { createFcmTransport } from "./fcm-transport";
+import { createFcmTransport, isFcmFinalFailure } from "./fcm-transport";
 import { assertPushPayloadFits } from "./payload-size";
 import { isGoneError } from "./subscriptions/normalize";
 
@@ -280,11 +280,6 @@ const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<Noti
 };
 
 /** FCM answers that re-sending cannot fix: a bad request (400), auth (401/403), not found (404), too large (413), or a refusal with a long Retry-After. */
-// Anchored to the start of the message, after the engine's bracketed prefixes: text the upstream echoes later cannot classify the response.
-const FCM_PERMANENT_STATUS = /^(?:\[[^\]]*\]\s*)*FCM (?:200|400|401|403|404|413) /u;
-
-/** A throttled device whose Retry-After is longer than we will hold open: FCM's answer for that request, not a status. */
-const FCM_LONG_RETRY_AFTER = /\bRetry-After exceeds the \d+s wait limit\b/u;
 
 /**
  * Whether a retry cannot change this failure. Two classes qualify: a recipient that
@@ -317,7 +312,7 @@ const isPermanentFailure = (error: unknown): boolean => {
 
     // FCM's own final answers: a malformed or unauthorised request, or a 429 whose Retry-After we will not hold open.
     // The transport reports them as text, so the match is on the message, which the engine keeps.
-    return isGoneError(text) || (text !== undefined && (FCM_PERMANENT_STATUS.test(text) || FCM_LONG_RETRY_AFTER.test(text)));
+    return isGoneError(text) || (text !== undefined && isFcmFinalFailure(text));
 };
 
 /** FCM refusals of one request: the token is bad or gone, or the payload is too large. Not a service outage. */

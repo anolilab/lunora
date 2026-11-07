@@ -350,6 +350,15 @@ const attemptCount = (value: number | undefined, fallback: number): number =>
 
 const toError = (error: unknown): Error => (error instanceof Error ? error : new Error(String(error)));
 
+/** FCM's answers that re-sending cannot change: a malformed, unauthorised or unknown request, or a Retry-After we will not hold open. */
+const FCM_FINAL_STATUS = /^(?:\[[^\]]*\]\s*)*FCM (?:200|400|401|403|404|413) /u;
+
+/** A throttled device whose Retry-After is longer than we will hold open: FCM's answer for that request, not a status. */
+const FCM_LONG_RETRY_AFTER = /\bRetry-After exceeds the \d+s wait limit\b/u;
+
+/** Whether a failure's text is one of FCM's final answers, so a retry cannot change it. */
+const isFcmFinalFailure = (message: string): boolean => FCM_FINAL_STATUS.test(message) || FCM_LONG_RETRY_AFTER.test(message);
+
 /** Outcome of one POST: done, worth another attempt, or final. */
 type Attempt = { kind: "done"; messageName: string } | { error: Error; kind: "final" } | { error: Error; kind: "retry"; retryAfterMs?: number };
 
@@ -591,7 +600,13 @@ const createFcmTransport = (config: FcmTransportConfig, options: FcmTransportOpt
             const sent = recipients.find((recipient) => recipient.status === "sent");
 
             if (sent === undefined) {
-                return { error: new Error(recipients[0]?.error ?? "All recipients failed"), success: false };
+                // The router judges the group by this one error. Report a failure a retry can fix when there is one, so a
+                // single final refusal (a gone token, say) does not stop the other recipients from being retried.
+                const failures = recipients.filter((recipient) => recipient.status === "failed");
+                const fixable = failures.find((recipient) => !isFcmFinalFailure(recipient.error ?? ""));
+                const chosen = fixable ?? failures[0];
+
+                return { error: new Error(chosen?.error ?? "All recipients failed"), success: false };
             }
 
             return {
@@ -605,4 +620,4 @@ const createFcmTransport = (config: FcmTransportConfig, options: FcmTransportOpt
 };
 
 export type { FcmAndroidConfig, FcmApnsConfig, FcmPayload, FcmPlatformConfig, FcmTarget, FcmTransport, FcmTransportOptions, FcmWebpushConfig };
-export { assertFcmTarget, buildFcmMessage, createFcmTransport };
+export { assertFcmTarget, buildFcmMessage, createFcmTransport, isFcmFinalFailure };
