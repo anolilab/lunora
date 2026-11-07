@@ -1,3 +1,5 @@
+import type { D1DatabaseLike, D1PreparedStatementLike } from "@lunora/d1";
+import { ALLOW_DESTRUCTIVE_MARKER, MigrationRunner } from "@lunora/d1";
 import { describe, expect, it } from "vitest";
 
 import type { SchemaSnapshot } from "../../src/util/migration-diff";
@@ -101,7 +103,7 @@ describe("sQL renderers", () => {
     it("renderDropTable emits DROP TABLE IF EXISTS", () => {
         expect.assertions(1);
 
-        expect(renderDropTable("users")).toBe('DROP TABLE IF EXISTS "users";');
+        expect(renderDropTable("users")).toBe('-- lunora:allow-destructive\nDROP TABLE IF EXISTS "users";');
     });
 
     it("renderCreateIndex emits a `<table>_<name>` index over the physical columns", () => {
@@ -123,7 +125,81 @@ describe("sQL renderers", () => {
     it("renderDropIndex emits DROP INDEX IF EXISTS for the physical index name", () => {
         expect.assertions(1);
 
-        expect(renderDropIndex("users", "by_email")).toBe('DROP INDEX IF EXISTS "users_by_email";');
+        expect(renderDropIndex("users", "by_email")).toBe('-- lunora:allow-destructive\nDROP INDEX IF EXISTS "users_by_email";');
+    });
+});
+
+/** A D1 binding that accepts every statement and records none: enough to reach the runner's own checks. */
+const acceptingDatabase = (): D1DatabaseLike => {
+    const prepare = (): D1PreparedStatementLike => {
+        const statement: D1PreparedStatementLike = {
+            all: async () => {
+                return { results: [], success: true };
+            },
+            bind: () => statement,
+            first: async () => null,
+            raw: async () => [],
+            run: async () => {
+                return { success: true };
+            },
+        };
+
+        return statement;
+    };
+
+    return {
+        batch: async () => [],
+        prepare,
+        withSession: () => {
+            return { getBookmark: () => null, prepare };
+        },
+    };
+};
+
+/** Whether a chunk of SQL holds anything but comments and whitespace. */
+const hasStatement = (chunk: string): boolean =>
+    chunk
+        .split("\n")
+        .map((line) => line.trim())
+        .some((line) => line !== "" && !line.startsWith("--"));
+
+describe("generated destructive statements", () => {
+    it("keep the MigrationRunner opt-in with each DROP when the file is split at `;`", async () => {
+        expect.assertions(3);
+
+        const previous = snapshot({
+            sessions: { columns: { token: { nullable: false, sqlType: "TEXT" } }, indexes: {}, name: "sessions" },
+            users: {
+                columns: { email: { nullable: false, sqlType: "TEXT" } },
+                indexes: { by_email: { fields: ["email"], name: "by_email", unique: false } },
+                name: "users",
+            },
+        });
+        const next = snapshot({
+            posts: {
+                columns: { author: { nullable: false, sqlType: "TEXT" } },
+                indexes: { by_author: { fields: ["author"], name: "by_author", unique: false } },
+                name: "posts",
+            },
+            users: { columns: { email: { nullable: false, sqlType: "TEXT" } }, indexes: {}, name: "users" },
+        });
+        const chunks = renderMigrationFile("split", diffSnapshots(previous, next), "2024-01-01T00:00:00.000Z")
+            .split(";")
+            .filter((chunk) => hasStatement(chunk));
+        const isDrop = (chunk: string): boolean => /^DROP /mu.test(chunk);
+
+        expect(chunks.filter((chunk) => isDrop(chunk)).every((chunk) => chunk.includes(ALLOW_DESTRUCTIVE_MARKER))).toBe(true);
+        // A marker left after a `;` would land on the statement that follows and confirm it instead.
+        expect(chunks.filter((chunk) => !isDrop(chunk)).some((chunk) => chunk.includes(ALLOW_DESTRUCTIVE_MARKER))).toBe(false);
+
+        const result = await new MigrationRunner(
+            acceptingDatabase(),
+            chunks.map((chunk, index) => {
+                return { name: `split_${String(index)}`, sql: chunk, version: index + 1 };
+            }),
+        ).run();
+
+        expect(result.applied).toHaveLength(4);
     });
 });
 
@@ -183,7 +259,7 @@ describe("diffSnapshots", () => {
 
         expect(diff.entries).toHaveLength(1);
         expect(diff.entries[0]?.kind).toBe("dropTable");
-        expect(diff.entries[0]?.sql).toBe('DROP TABLE IF EXISTS "users";');
+        expect(diff.entries[0]?.sql).toBe('-- lunora:allow-destructive\nDROP TABLE IF EXISTS "users";');
     });
 
     it("aDD COLUMN when a column appears on an existing table", () => {

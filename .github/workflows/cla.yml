@@ -26,3 +26,4 @@
         "uses": "anolilab/workflows/.github/workflows/cla.yml@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
         "with":
             "target-repo": "anolilab/lunora"
+            "cla-text": "By submitting this pull request, I confirm that my contribution is made under the terms of the project's license, and I grant the Lunora maintainers and contributors a perpetual, worldwide, non-exclusive, royalty-free license to use, copy, modify, distribute, sublicense and relicense my contribution, including under the Apache License 2.0 and FSL-1.1-Apache-2.0."

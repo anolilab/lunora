@@ -27,4 +27,4 @@ this directly.
 ## License
 
 The lunora `@lunora/dispatch` package is open-sourced software licensed under
-the [FSL-1.1-Apache-2.0 license](./LICENSE.md).
+the [Apache-2.0 license](./LICENSE.md).

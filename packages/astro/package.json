@@ -1,6 +1,6 @@
 {
     "name": "@lunora/astro",
-    "version": "1.0.0-alpha.311",
+    "version": "1.0.0-alpha.312",
     "description": "Astro integration for Lunora — single-worker composition plus reactive-loader server helpers",
     "keywords": [
         "astro",
@@ -14,7 +14,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -63,7 +63,8 @@
     },
     "dependencies": {
         "@lunora/client": "^1.0.0-alpha.286",
-        "@lunora/runtime": "^1.0.0-alpha.276"
+        "@lunora/config": "^1.0.0-alpha.458",
+        "@lunora/runtime": "^1.0.0-alpha.279"
     },
     "devDependencies": {
         "@types/node": "catalog:types",

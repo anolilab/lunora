@@ -1,3 +1,15 @@
+## @lunora/errors [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.88...@lunora/errors@1.0.0-alpha.89) (2026-11-05)
+
+- feat(d1): refuse unconfirmed destructive migration sql; fix the add-column race (#1489)
+
+## @lunora/errors [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.87...@lunora/errors@1.0.0-alpha.88) (2026-11-05)
+
+- feat(codegen): validate lunora.config; Access-aware health probe; env queue warning (#1492)
+
+## @lunora/errors [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.86...@lunora/errors@1.0.0-alpha.87) (2026-11-05)
+
+- fix(client): restart a paginated feed when the server refuses its cursor (#1496)
+
 ## @lunora/errors [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.85...@lunora/errors@1.0.0-alpha.86) (2026-11-05)
 
 - fix(errors): keep the internal SQL_UNAVAILABLE code out of a published hint (#1495)

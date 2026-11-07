@@ -1,10 +1,7 @@
+import { DEFAULT_AUTH_BASE_PATH } from "../../../shared/auth-base-path";
 import type { LunoraAuth } from "./create-auth";
 
-/**
- * Default basePath used by better-auth's client + handler. Override via the
- * second argument if you mount the auth routes somewhere else.
- */
-export const DEFAULT_AUTH_BASE_PATH: string = "/api/auth";
+export { DEFAULT_AUTH_BASE_PATH } from "../../../shared/auth-base-path";
 
 /**
  * Whether `pathname` falls under the auth `basePath` at a segment boundary —

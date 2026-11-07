@@ -7,10 +7,9 @@
  * set, to that self-hosted proxy with no binding at all. These checks read the
  * wrangler config, `.dev.vars`, and the binding inference `doctor` already ran.
  */
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { DEV_VARS_FILE, parseDevVariableEntries } from "@lunora/config";
+import { DEV_VARS_FILE, readDevVariablesRecord } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 
 import { AI_GATEWAY_ID_VAR, AI_GATEWAY_TOKEN_VAR, AI_PROXY_URL_VAR } from "../cloudflare/ai-gateway/variables";
@@ -36,14 +35,10 @@ const configuredVariables = (parsed: WranglerConfig, cwd: string): Set<string> =
         add(environment.vars);
     }
 
-    const devVariablesPath = join(cwd, DEV_VARS_FILE);
-
-    if (existsSync(devVariablesPath)) {
-        try {
-            add(Object.fromEntries(parseDevVariableEntries(readFileSync(devVariablesPath, "utf8")).map((entry) => [entry.key, entry.value])));
-        } catch {
-            // Unreadable `.dev.vars`: read as unset here, like `checkDevVariables` does.
-        }
+    try {
+        add(readDevVariablesRecord(join(cwd, DEV_VARS_FILE)));
+    } catch {
+        // Unreadable `.dev.vars`: read as unset here, like `checkDevVariables` does.
     }
 
     return names;

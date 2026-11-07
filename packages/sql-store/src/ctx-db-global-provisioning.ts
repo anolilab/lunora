@@ -31,6 +31,7 @@ import type { SchemaLike } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
+import { wantedGlobalColumns } from "./column-provisioning";
 import type { GlobalIndexSpec, LegacyColumnRewrite } from "./ctx-db-migrations";
 import {
     foldIdentifier,
@@ -45,7 +46,6 @@ import {
     provisionGlobalTablesSequentially,
     recordIndexStatement,
     undeclaredFrameworkIndexes,
-    wantedGlobalColumns,
 } from "./ctx-db-migrations";
 import type { SqlDialect } from "./dialect";
 import type { SqlCtxExec } from "./sql-exec";

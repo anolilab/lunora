@@ -3,7 +3,7 @@
     "version": "0.0.0",
     "private": true,
     "description": "Lunora documentation & marketing site",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "type": "module",
     "scripts": {
         "build": "node scripts/generate-packages.js && node scripts/copy-package-docs.js && node --experimental-strip-types scripts/generate-error-reference.js && node scripts/check-doc-imports.mjs && node scripts/fetch-stats.js && vite build",

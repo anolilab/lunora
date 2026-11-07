@@ -33,6 +33,17 @@ interface CloudflareTransportOptions {
 }
 ```
 
+### `ConsumeQueuedSendOptions` (interface)
+
+```ts
+interface ConsumeQueuedSendOptions {
+    attempts?: number;
+    enqueuedAt?: Date;
+    sent?: SentMailStore;
+    sentTtlSeconds?: number;
+}
+```
+
 ### `FromEnvOptions` (interface)
 
 ```ts
@@ -41,6 +52,7 @@ interface FromEnvOptions {
     jurisdiction?: DurableObjectJurisdiction;
     queue?: QueueLike;
     rootShard?: string;
+    sendTimeoutMs?: number;
 }
 ```
 
@@ -52,6 +64,7 @@ interface LunoraMailOptions {
     cloudflareSend?: (from: string, to: string, raw: string) => Promise<void>;
     from: string;
     queue?: QueueLike;
+    sendTimeoutMs?: number;
     transport?: MailTransport;
 }
 ```
@@ -66,10 +79,13 @@ type MailEnv = Record<string, unknown>;
 
 ```ts
 class MailSendError extends LunoraError {
+    static override [Symbol.hasInstance](value: unknown): boolean;
+    readonly outcomeUnknown: boolean;
     readonly retryable: boolean;
     constructor(options: {
         cause?: unknown;
         message?: string;
+        outcomeUnknown?: boolean;
         retryable: boolean;
     });
 }
@@ -79,6 +95,7 @@ class MailSendError extends LunoraError {
 
 ```ts
 interface MailSendErrorData {
+    outcomeUnknown: boolean;
     retryable: boolean;
 }
 ```
@@ -87,7 +104,10 @@ interface MailSendErrorData {
 
 ```ts
 interface MailTransport {
-    send: (payload: SendPayload) => Promise<{
+    dedupesOnIdempotencyKey?: boolean;
+    send: (payload: SendPayload, options?: {
+        idempotencyKey?: string;
+    }) => Promise<{
         id: string;
     }>;
 }
@@ -175,10 +195,22 @@ interface SendPayload {
 }
 ```
 
+### `SentMailStore` (interface)
+
+```ts
+interface SentMailStore {
+    get: (key: string) => Promise<string | null | undefined>;
+    put: (key: string, value: string, options: {
+        expirationTtl: number;
+    }) => Promise<void>;
+}
+```
+
 ### `consumeQueuedSend` (const)
 
 ```ts
-const consumeQueuedSend: (mailer: Mailer, payload: unknown) => Promise<{
+const consumeQueuedSend: (mailer: Mailer, payload: unknown, options?: ConsumeQueuedSendOptions) => Promise<{
+    deduplicated: boolean;
     id: string;
 }>;
 ```
@@ -217,6 +249,12 @@ const createMailerFromEnv: (env: MailEnv, options?: FromEnvOptions) => Mailer;
 
 ```ts
 const createResendTransport: (apiKey: string, defaultFrom: string) => MailTransport;
+```
+
+### `isOutcomeUnknownMailError` (const)
+
+```ts
+const isOutcomeUnknownMailError: (error: unknown) => boolean;
 ```
 
 ### `isRetryableMailError` (const)
@@ -269,6 +307,7 @@ interface ForwardableEmailMessageLike {
     readonly from: string;
     readonly headers: Headers;
     readonly raw: ReadableStream<Uint8Array>;
+    readonly rawSize: number;
     reply: (message: {
         from: string;
         raw: string;
@@ -356,6 +395,7 @@ type InboundEmailHandler<TEnv = Record<string, unknown>> = (message: Forwardable
 ```ts
 interface InboundEmailHandlerOptions<TEnv = Record<string, unknown>> {
     dispatch: InboundDispatch<TEnv>;
+    maxRawBytes?: number;
     onError?: (error: unknown, context: InboundDispatchContext<TEnv>) => Promise<void> | void;
     parse: (raw: RawInboundEmail) => Promise<InboundEmail>;
     retain?: InboundRetain<TEnv>;

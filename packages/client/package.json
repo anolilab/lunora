@@ -1,6 +1,6 @@
 {
     "name": "@lunora/client",
-    "version": "1.0.0-alpha.287",
+    "version": "1.0.0-alpha.288",
     "description": "Lunora browser SDK: WebSocket transport, optimistic updates, and an offline mutation queue",
     "keywords": [
         "cloudflare",
@@ -14,7 +14,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -97,7 +97,7 @@
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/do": "^1.0.0-alpha.281",
         "@lunora/runtime": "^1.0.0-alpha.276",
-        "@lunora/shard-engine": "^1.0.0-alpha.191",
+        "@lunora/shard-engine": "^1.0.0-alpha.192",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

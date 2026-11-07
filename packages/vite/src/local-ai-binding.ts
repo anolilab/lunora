@@ -34,6 +34,8 @@ type Customizer = (config: WorkerConfigLike, ...rest: unknown[]) => Partial<Work
 interface LocalAiOptions {
     /** Injection seam; defaults to a credential probe of {@link LocalAiOptions.projectRoot}. */
     hasCredentials?: () => boolean;
+    /** Told the binding names each resolve of the main worker's config withholds, for the dev env check. */
+    onWithheld?: (bindings: ReadonlyArray<string>) => void;
     /** Project whose `.env` files the credential probe also reads. */
     projectRoot?: string;
 }
@@ -63,7 +65,7 @@ const localAiBinding = (options: CloudflarePluginOptions, localOptions: LocalAiO
     const usesNewConfig = newConfig !== undefined && newConfig !== false;
     const hasCredentials = localOptions.hasCredentials ?? (() => hasCloudflareCredentials({ projectRoot: localOptions.projectRoot }));
 
-    const wrapCustomizer = (userConfig: unknown): Customizer => {
+    const wrapCustomizer = (userConfig: unknown, onWithheld?: (bindings: ReadonlyArray<string>) => void): Customizer => {
         const wrap: Customizer = (config, ...rest) => {
             const fromUser =
                 typeof userConfig === "function" ? (userConfig as Customizer)(config, ...rest) : (userConfig as Partial<WorkerConfigLike> | undefined);
@@ -84,6 +86,8 @@ const localAiBinding = (options: CloudflarePluginOptions, localOptions: LocalAiO
                 console.warn(lunoraLine(describeWithheld(entry)));
             }
 
+            onWithheld?.(withheld.map((entry) => entry.binding));
+
             return result;
         };
 
@@ -103,7 +107,7 @@ const localAiBinding = (options: CloudflarePluginOptions, localOptions: LocalAiO
             const target = options as { auxiliaryWorkers?: unknown; config?: unknown };
 
             if (!wrapped.has(target.config as object)) {
-                target.config = wrapCustomizer(target.config);
+                target.config = wrapCustomizer(target.config, localOptions.onWithheld);
             }
 
             if (Array.isArray(target.auxiliaryWorkers)) {

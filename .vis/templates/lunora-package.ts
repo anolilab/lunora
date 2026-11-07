@@ -20,7 +20,7 @@ const pkgJson = (name: string, description: string): string => `{
     "name": "@lunora/${name}",
     "version": "0.0.0",
     "description": "${description}",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "type": "module",
     "sideEffects": false,
     "main": "./dist/index.mjs",

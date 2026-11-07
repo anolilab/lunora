@@ -1,3 +1,7 @@
+## @lunora/nuxt [1.0.0-alpha.304](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.303...@lunora/nuxt@1.0.0-alpha.304) (2026-11-05)
+
+- feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)
+
 ## @lunora/nuxt [1.0.0-alpha.303](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.302...@lunora/nuxt@1.0.0-alpha.303) (2026-11-04)
 
 - Release 1.0.0-alpha.303. Commit a2f1851 set this version and it was never published, so it is released from HEAD.

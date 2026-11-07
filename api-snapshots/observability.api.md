@@ -437,6 +437,7 @@ interface LogEntry {
     exitCode?: number;
     fields?: Record<string, unknown>;
     functionPath?: string;
+    id?: string;
     instance?: string;
     level: LogLevel;
     message: string;

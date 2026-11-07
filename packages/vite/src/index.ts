@@ -15,6 +15,7 @@ import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
 import agentRulesHintPlugin from "./agent-rules-hint-plugin";
+import assetHeadersPlugin from "./asset-headers-plugin";
 import bindingsProvisionPlugin from "./bindings-provision-plugin";
 import bundleMetaPlugin from "./bundle-meta-plugin";
 import { celldDevPlugin, celldDevSupport, withoutDevWhen } from "./celld-dev-plugin";
@@ -170,6 +171,11 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     // binding provisioning, the wrangler validator, container logs and
     // `buildStart`'s reconcile instead of each parsing the project again.
     const discovery = createDiscoveryCache();
+    // What `remoteBindingsPlugin` and `localAiBinding` left out of this session,
+    // read by the env check. Both decide in a `config` hook, which runs before any
+    // `configResolved`, so the check sees them.
+    let withheld: ReadonlyArray<string> = [];
+    let withheldLocally: ReadonlyArray<string> = [];
     // `devVariablesPlugin` is `enforce: "pre"` + `apply: "serve"`: it offers to
     // scaffold `.dev.vars` before `@cloudflare/vite-plugin` boots the worker.
     // The framework-detect plugin runs early (its `config` hook) so the
@@ -186,7 +192,10 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // vinext template's wrangler `main` points at it), because who adds the
         // Cloudflare plugin says nothing about who composes the worker.
         frameworkComposePlugin(resolved, context),
-        devVariablesPlugin(resolved),
+        devVariablesPlugin(resolved, {
+            configPath: resolved.cloudflare === false ? undefined : cloudflareConfigPath(resolved.cloudflare, resolved.projectRoot),
+            withheld: () => [...new Set([...withheld, ...withheldLocally])],
+        }),
         // Writes the bindings the code implies into `wrangler.jsonc` from its
         // `config` hook — before `@cloudflare/vite-plugin` parses that file and
         // before `remoteBindingsPlugin` copies it. Unconditional: provisioning is
@@ -197,6 +206,9 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // Build-only: writes the server bundle's metafile for `lunora build`, which
         // cannot otherwise see what a Vite-built worker contains.
         bundleMetaPlugin(resolved.projectRoot),
+        // Build-only: Lunora's default security headers for the static assets
+        // Cloudflare serves without running the Worker, via the client build's `_headers`.
+        assetHeadersPlugin(resolved, resolved.cloudflare === false ? undefined : cloudflareConfigPath(resolved.cloudflare, resolved.projectRoot)),
         logStreamPlugin(),
         // Registers the running dev server in `.lunora/dev.json` so
         // `lunora dev --background|stop|status|logs` manage Vite projects too.
@@ -245,7 +257,11 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     // config is a copy of that file. Materializing any earlier copies it a
     // binding short. That is also why the provisioning plugin cannot be gated on
     // `validateWrangler`: this copy would go a binding short whenever it was off.
-    plugins.push(remoteBindingsPlugin(cloudflareOptions, { projectRoot: resolved.projectRoot }));
+    plugins.push(
+        remoteBindingsPlugin(cloudflareOptions, { projectRoot: resolved.projectRoot }, (plan) => {
+            withheld = plan.withheld.map((entry) => entry.binding);
+        }),
+    );
 
     // A project that brings its own `cloudflare()` plugin (`cloudflare: false`) still needs the local Hyperdrive
     // database before that plugin resolves its bindings; Lunora's own branch below registers it with its plugin.
@@ -272,7 +288,12 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
             ...withoutDevWhen(
                 [
                     localHyperdrive({ projectRoot: resolved.projectRoot, wranglerConfigPath: cloudflareConfigPath(cloudflareOptions, resolved.projectRoot) }),
-                    localAiBinding(cloudflareOptions, { projectRoot: resolved.projectRoot }),
+                    localAiBinding(cloudflareOptions, {
+                        onWithheld: (bindings) => {
+                            withheldLocally = bindings;
+                        },
+                        projectRoot: resolved.projectRoot,
+                    }),
                     ...withWorkerStartupHint(cloudflare(cloudflareOptions)),
                 ],
                 onCelld,
@@ -320,7 +341,7 @@ export { default as LUNORA_API_UPDATED_EVENT } from "./hmr-events";
 // composition) justifies a public surface. Only `detectFramework` (above) is public.
 export { default as logStreamPlugin } from "./log-stream-plugin";
 export { checkLunoraProxy, proxyCheckPlugin } from "./proxy-check-plugin";
-export type { PlanViteRemoteOptions, ViteRemotePlan } from "./remote-bindings-plugin";
+export type { PlanViteRemoteOptions } from "./remote-bindings-plugin";
 export { planViteRemoteBindings, remoteBindingsPlugin, withRemoteBindings } from "./remote-bindings-plugin";
 // The error→solution rule table itself lives in `@lunora/codegen` (shared with
 // the standalone `lunora dev` CLI); `@lunora/vite` only wraps it as an overlay
@@ -348,4 +369,5 @@ export { wranglerValidatorPlugin } from "./wrangler-validator-plugin";
 // list); re-exported here so this package's surface is unchanged.
 export type { GeneratedClassModule } from "@lunora/config";
 export { GENERATED_CLASS_MODULES } from "@lunora/config";
+export type { RemotePlan } from "@lunora/config/cloudflare";
 export { lunora, resolveOverlayOption, VERSION };

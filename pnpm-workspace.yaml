@@ -329,7 +329,7 @@ catalogs:
     # peers and speaks their plugin APIs structurally — nothing here is bundled.
     "@rsbuild/core": ^2.3.0
     "@rspack/core": ^2.3.0
-    "@visulima/packem": 4.0.2
+    "@visulima/packem": 4.0.4
     "babel-plugin-react-compiler": 1.0.0
     "babel-preset-solid": ^1.9.16
     esbuild: ^0.28.2
@@ -405,6 +405,10 @@ catalogs:
     # `packages/config/__tests__/dev-variables-format.test.ts` are the tripwire)
     # rather than floated in on a range.
     dotenv: 18.0.5
+    # Exact-pinned for the same reason as dotenv: the expansion wrangler's
+    # `loadDotEnv` applies to `.env` values in dev (4.156 bundles 12.0.2), which
+    # `@lunora/config`'s dev env check repeats to see the values the worker sees.
+    dotenv-expand: 12.0.2
     fast-glob: ^3.3.3
     rimraf: 6.1.3
     semver: ^7.8.5
@@ -1263,11 +1267,14 @@ minimumReleaseAgeExclude:
   # Published 2026-10-26 03:22 UTC (pulls disposable-email-domains 2.0.10 above),
   # inside the 24h window; drop after 2026-10-27.
   - '@visulima/email-verifier@1.0.54'
-  - '@visulima/packem-rollup@1.2.3'
-  - '@visulima/packem-share@1.1.2'
-  - '@visulima/packem@4.0.2'
-  - '@visulima/rollup-plugin-css@3.0.2'
-  - '@visulima/rollup-plugin-dts@2.1.0'
+  # packem 4.0.4 and its siblings, published 2026-11-05 11:12-11:15 UTC (dynamic-import extension fix,
+  # visulima/packem#450); drop after 2026-11-06.
+  - '@visulima/css-style-inject@1.1.1'
+  - '@visulima/packem-rollup@1.2.4'
+  - '@visulima/packem-share@1.1.3'
+  - '@visulima/packem@4.0.4'
+  - '@visulima/rollup-plugin-css@3.0.3'
+  - '@visulima/rollup-plugin-dts@2.1.1'
   - '@visulima/vis@6.4.3'
   - '@visulima/vis-binding-darwin-arm64@6.4.3'
   - '@visulima/vis-binding-darwin-x64@6.4.3'

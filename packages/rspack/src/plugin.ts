@@ -189,15 +189,25 @@ const prepareDevSession = async (options: ResolvedLunoraRspackOptions): Promise<
         consoleLogger.info(lunoraLine(message));
     };
 
-    await ensureDevVariables({ confirm: createConfirm("[lunora] "), cwd: options.projectRoot, info });
+    const scaffold = await ensureDevVariables({
+        confirm: createConfirm("[lunora] "),
+        cwd: options.projectRoot,
+        info,
+        warn: (message) => {
+            consoleLogger.warn(lunoraLine(message));
+        },
+    });
 
-    const secretSources = await secretSourcesOrUndefined(options.projectRoot, options.schemaDir, info);
-    fillDevSecrets({ cwd: options.projectRoot, info, secretSources });
-    // `wrangler dev` loads `.dev.vars` but sets no `WORKER_ENV` of its own, and
-    // this plugin never runs the Worker — so without this a developer running
-    // plain `wrangler dev` alongside their build spends the session with
-    // `isDevEnvironment` false. (`lunora dev` passes `--var` and is unaffected.)
-    ensureDevWorkerEnv(options.projectRoot, info);
+    // An unreadable dev-vars file was reported as "nothing written"; writing `.dev.vars` now would contradict it.
+    if (scaffold.status !== "unreadable") {
+        const secretSources = await secretSourcesOrUndefined(options.projectRoot, options.schemaDir, info);
+        fillDevSecrets({ cwd: options.projectRoot, info, secretSources });
+        // `wrangler dev` loads `.dev.vars` but sets no `WORKER_ENV` of its own, and
+        // this plugin never runs the Worker — so without this a developer running
+        // plain `wrangler dev` alongside their build spends the session with
+        // `isDevEnvironment` false. (`lunora dev` passes `--var` and is unaffected.)
+        ensureDevWorkerEnv(options.projectRoot, info);
+    }
 
     if (!detectAgentRules(options.projectRoot).installed && claimAgentRulesHint()) {
         consoleLogger.warn(`\n${lunoraLine(AGENT_RULES_HINT)}\n`);

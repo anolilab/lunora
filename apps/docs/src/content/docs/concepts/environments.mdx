@@ -52,6 +52,17 @@ secret nobody added to the example file is invisible to it.
     migration.
 </Callout>
 
+Queues follow the same rule. A queue name is unique per Cloudflare account, so
+an `env.staging.queues` block that copies the top level's `"emails"` puts staging
+on production's queue: staging's sends land in production, and the two Workers
+compete for its one consumer. Give each environment's queues their own names
+(`"emails-staging"`). Lunora does not write an environment block's queue names,
+because renaming a deployed queue leaves its backlog on the old one, so
+`lunora deploy --env <name>` and `lunora verify --env <name>` warn when the
+block names a queue the top level or another environment also names. An
+environment with its own `account_id` is compared only with the scopes that
+deploy to the same account, since queues on different accounts never meet.
+
 ## Linking a checkout to a deployment
 
 `lunora link` records the deployed worker's name and public URL in a gitignored

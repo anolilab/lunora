@@ -1,12 +1,21 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Plugin } from "vite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { DevEnvCheck } from "@lunora/config";
+import { checkDevEnv } from "@lunora/config";
+import type { Plugin, ViteDevServer } from "vite";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import devVariablesPlugin from "../src/dev-variables-plugin";
 import { lunora } from "../src/index";
+
+// A test that needs a check to finish out of order replaces one run; every other run is the real check.
+vi.mock(import("@lunora/config"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, checkDevEnv: vi.fn<typeof actual.checkDevEnv>(actual.checkDevEnv) };
+});
 
 const RESOLVED = (projectRoot: string) => {
     return {
@@ -56,6 +65,7 @@ describe("devVariablesPlugin", () => {
     });
 
     afterEach(() => {
+        vi.restoreAllMocks();
         rmSync(dir, { force: true, recursive: true });
     });
 
@@ -84,6 +94,20 @@ describe("devVariablesPlugin", () => {
         expect(content).toContain("LUNORA_ADMIN_TOKEN=");
         // The example secret stays unscaffolded — it needs the (declined) prompt.
         expect(content).not.toContain("AUTH_SECRET=");
+    });
+
+    it("warns once and keeps the dev server starting when .dev.vars is a directory", async () => {
+        expect.assertions(2);
+
+        // No example: `fillDevSecrets` read the directory anyway and threw EISDIR out of `configResolved`.
+        mkdirSync(join(dir, ".dev.vars"));
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        vi.spyOn(console, "info").mockImplementation(() => {});
+
+        await expect(runHooks(devVariablesPlugin(RESOLVED(dir)))).resolves.toBeUndefined();
+        expect(warn.mock.calls.filter(([line]) => String(line).includes("EISDIR"))).toHaveLength(1);
     });
 
     it("fills an empty feature-scaffolded secret + the admin token on dev (no prompt)", async () => {
@@ -121,6 +145,251 @@ describe("devVariablesPlugin", () => {
         await runHooks(devVariablesPlugin(RESOLVED(dir)));
 
         expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toMatch(/WORKER_ENV="staging"/u);
+    });
+
+    /** A self-contained stand-in for a `defineEnv` contract requiring `keys`, carrying its brand (no `@lunora/server` import to resolve from a temp dir). */
+    const writeEnvContract = (keys: string[]): void => {
+        mkdirSync(join(dir, "lunora"), { recursive: true });
+        writeFileSync(
+            join(dir, "lunora", "env.ts"),
+            `const keys = ${JSON.stringify(keys)};
+
+const check = (env: Record<string, unknown>) =>
+    keys.filter((key) => env[key] === undefined).map((key) => ({ key, message: "Expected string at <root>, received undefined" }));
+
+export const env = Object.defineProperty((value: unknown) => value, Symbol.for("lunora.env"), { value: check });
+`,
+            "utf8",
+        );
+    };
+
+    it("warns at startup about a key the env contract needs and the dev env lacks, then confirms an env.ts fix", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(dir, ".dev.vars"), "API_URL=https://api.test\n", "utf8");
+        writeEnvContract(["API_URL", "STRIPE_KEY"]);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const plugin = devVariablesPlugin(RESOLVED(dir));
+
+        await runHooks(plugin);
+
+        expect(warn.mock.calls.map(([line]) => String(line)).join("\n")).toMatch(/lunora\/env\.ts: 1 key\(s\) missing[\s\S]*- STRIPE_KEY: Expected string/u);
+
+        // An env.ts edit restarts nothing, so the plugin's own watcher re-checks it.
+        let listener: ((file: string) => void) | undefined;
+        const fixed = new Promise<string>((resolve) => {
+            const server = {
+                config: { logger: { info: resolve, warn: resolve } },
+                watcher: {
+                    add: (): void => {},
+                    on: (event: string, handler: (file: string) => void): void => {
+                        if (event === "change") {
+                            listener = handler;
+                        }
+                    },
+                },
+            } as unknown as ViteDevServer;
+
+            (plugin.configureServer as (s: ViteDevServer) => void)(server);
+        });
+
+        writeEnvContract(["API_URL"]);
+        listener?.(join(dir, "lunora", "env.ts"));
+
+        await expect(fixed).resolves.toMatch(/lunora\/env\.ts: the dev env satisfies the contract again/u);
+    });
+
+    /** Wire the plugin's watcher onto a stub server, answering the env.ts listener per event and the logger's lines. */
+    const watchEnv = (plugin: Plugin): { lines: string[]; save: (event?: string) => void } => {
+        const listeners = new Map<string, (file: string) => void>();
+        const lines: string[] = [];
+        const push = (line: string): void => {
+            lines.push(line);
+        };
+        const server = {
+            config: { logger: { info: push, warn: push } },
+            watcher: {
+                add: (): void => {},
+                on: (event: string, handler: (file: string) => void): void => {
+                    listeners.set(event, handler);
+                },
+            },
+        } as unknown as ViteDevServer;
+
+        (plugin.configureServer as (s: ViteDevServer) => void)(server);
+
+        return {
+            lines,
+            save: (event = "change") => {
+                listeners.get(event)?.(join(dir, "lunora", "env.ts"));
+            },
+        };
+    };
+
+    /** Resolves once the plugin has logged `count` lines — the milestone a fire-and-forget recheck reaches. */
+    const logged = async (lines: string[], count: number): Promise<void> => {
+        await vi.waitFor(() => {
+            if (lines.length < count) {
+                throw new Error(`waiting for line ${String(count)}`);
+            }
+        });
+    };
+
+    /** A check whose answer the test hands over when it chooses. */
+    const deferredCheck = (): ((check: DevEnvCheck) => void) => {
+        let answer: ((check: DevEnvCheck) => void) | undefined;
+
+        vi.mocked(checkDevEnv).mockImplementationOnce(
+            async () =>
+                await new Promise<DevEnvCheck>((resolve) => {
+                    answer = resolve;
+                }),
+        );
+
+        return (check) => answer?.(check);
+    };
+
+    const missing: DevEnvCheck = { failures: [{ key: "STRIPE_KEY", message: "Expected string" }], kind: "invalid", sources: [".dev.vars"] };
+
+    it("confirms a .dev.vars fix on the restart it causes, which builds a new plugin", async () => {
+        expect.assertions(1);
+
+        writeEnvContract(["STRIPE_KEY"]);
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+        await runHooks(devVariablesPlugin(RESOLVED(dir)));
+
+        writeFileSync(join(dir, ".dev.vars"), "STRIPE_KEY=sk_test_1\n", "utf8");
+        await runHooks(devVariablesPlugin(RESOLVED(dir)));
+
+        expect(info.mock.calls.map(([line]) => String(line))).toContainEqual(expect.stringMatching(/the dev env satisfies the contract again/u));
+    });
+
+    it("drops a check that a later env.ts save overtook", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(dir, ".dev.vars"), "API_URL=https://api.test\n", "utf8");
+        writeEnvContract(["API_URL", "STRIPE_KEY"]);
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const plugin = devVariablesPlugin(RESOLVED(dir));
+
+        await runHooks(plugin);
+
+        const { lines, save } = watchEnv(plugin);
+        const answerFirst = deferredCheck();
+        const answerSecond = deferredCheck();
+
+        save();
+        save();
+        answerSecond({ kind: "valid" });
+        await logged(lines, 1);
+
+        expect(lines).toStrictEqual([expect.stringContaining("satisfies the contract again")]);
+
+        // The older check reads the contract the second save replaced: it says nothing.
+        const { results } = vi.mocked(checkDevEnv).mock;
+
+        answerFirst(missing);
+        // Awaited after the plugin's own continuation was queued on it, so that one has run.
+        await results.at(-2)?.value;
+
+        expect(lines).toHaveLength(1);
+    });
+
+    it("keeps an invalid env invalid across a contract that fails to load, so the fix still says so", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(dir, ".dev.vars"), "API_URL=https://api.test\n", "utf8");
+        writeEnvContract(["API_URL", "STRIPE_KEY"]);
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const plugin = devVariablesPlugin(RESOLVED(dir));
+
+        await runHooks(plugin);
+
+        const { lines, save } = watchEnv(plugin);
+
+        // Half-typed: the import fails.
+        vi.mocked(checkDevEnv).mockResolvedValueOnce({ error: "Unexpected token", kind: "unloadable" });
+        save();
+        await logged(lines, 1);
+
+        expect(lines[0]).toMatch(/could not be checked/u);
+
+        writeEnvContract(["API_URL"]);
+        save();
+        await logged(lines, 2);
+
+        expect(lines[1]).toMatch(/satisfies the contract again/u);
+    });
+
+    it("retracts its warning when the contract is deleted", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(dir, ".dev.vars"), "API_URL=https://api.test\n", "utf8");
+        writeEnvContract(["API_URL", "STRIPE_KEY"]);
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const plugin = devVariablesPlugin(RESOLVED(dir));
+
+        await runHooks(plugin);
+
+        const { lines, save } = watchEnv(plugin);
+
+        rmSync(join(dir, "lunora", "env.ts"));
+        save("unlink");
+        await logged(lines, 1);
+
+        expect(lines).toStrictEqual([expect.stringMatching(/no env contract is loaded any more/u)]);
+    });
+
+    it("checks the SvelteKit / Nuxt sidecar's config, and the bindings this session withholds", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        writeEnvContract(["API_URL"]);
+
+        await runHooks(devVariablesPlugin(RESOLVED(dir), { withheld: () => ["AI"] }));
+
+        expect(vi.mocked(checkDevEnv)).toHaveBeenLastCalledWith(expect.objectContaining({ withheld: ["AI"] }));
+
+        writeFileSync(join(dir, "wrangler.dev.jsonc"), `{ "name": "app-dev" }`, "utf8");
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ devDependencies: { "@sveltejs/kit": "^2.0.0" } }), "utf8");
+        await runHooks(devVariablesPlugin(RESOLVED(dir)));
+
+        expect(vi.mocked(checkDevEnv)).toHaveBeenLastCalledWith(
+            expect.objectContaining({ configPath: join(dir, "wrangler.dev.jsonc"), vars: { WORKER_ENV: "development" } }),
+        );
+    });
+
+    it("checks the Cloudflare plugin's config, not a sidecar file a non-sidecar project kept", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        writeEnvContract(["API_URL"]);
+        writeFileSync(join(dir, "wrangler.dev.jsonc"), `{ "name": "stale-dev" }`, "utf8");
+
+        await runHooks(devVariablesPlugin(RESOLVED(dir), { configPath: join(dir, "wrangler.custom.jsonc") }));
+
+        const [options] = vi.mocked(checkDevEnv).mock.lastCall ?? [];
+
+        expect(options?.configPath).toBe(join(dir, "wrangler.custom.jsonc"));
+        expect(options?.vars).toBeUndefined();
+    });
+
+    it("writes no .dev.vars when the example it would scaffold from is unreadable", async () => {
+        expect.assertions(1);
+
+        mkdirSync(join(dir, ".dev.vars.example"));
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        await runHooks(devVariablesPlugin(RESOLVED(dir)));
+
+        expect(existsSync(join(dir, ".dev.vars"))).toBe(false);
     });
 
     it("writes nothing under `vite preview`, which resolves as a `serve` command", async () => {

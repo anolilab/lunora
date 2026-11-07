@@ -149,6 +149,10 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "Migration drift";
     };
+    readonly MIGRATION_DESTRUCTIVE: {
+        readonly status: 409;
+        readonly title: "Destructive migration not confirmed";
+    };
     readonly UNIQUE_INDEX_DUPLICATES: {
         readonly status: 503;
         readonly title: "Unique index blocked by duplicate rows";
@@ -216,6 +220,10 @@ const ERROR_CATALOG: {
     readonly CODEGEN_DIAGNOSTIC: {
         readonly status: 500;
         readonly title: "Codegen diagnostic";
+    };
+    readonly PROJECT_CONFIG_INVALID: {
+        readonly status: 500;
+        readonly title: "lunora.config has an unknown key, a mistyped value or no default export";
     };
     readonly JURISDICTION_MOVE: {
         readonly status: 422;

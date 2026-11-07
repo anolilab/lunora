@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { closestMatch, editDistance } from "../../src/util/suggest";
+import { closestMatch, editDistance } from "../../../../shared/suggest";
 
 describe("editDistance", () => {
     it("counts single-edit operations", () => {

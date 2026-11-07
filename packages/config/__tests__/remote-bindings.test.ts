@@ -12,6 +12,7 @@ import {
     planRemoteBindings,
     REMOTE_ELIGIBLE_KEYS,
     resolveRemoteEnabled,
+    toRemotePlan,
 } from "../src/cloudflare/remote-bindings";
 
 // A config covering every eligible kind (D1/KV/R2 arrays, Vectorize/Services
@@ -183,6 +184,36 @@ describe("injectRemoteFlags", () => {
         expect.assertions(1);
 
         expect(injectRemoteFlags(FULL_WRANGLER, [])).toBe(FULL_WRANGLER);
+    });
+});
+
+describe("toRemotePlan", () => {
+    it("labels each remoted binding `NAME (kind)` and keeps the rest of the materialization", () => {
+        expect.assertions(1);
+
+        const cleanup = (): void => {};
+
+        expect(
+            toRemotePlan(
+                {
+                    cleanup,
+                    configPath: "/app/.wrangler.dev.jsonc",
+                    remoteBindings: [
+                        { binding: "DB", kind: "D1", path: [0], section: "d1_databases" },
+                        { binding: "FILES", kind: "R2", path: [0], section: "r2_buckets" },
+                    ],
+                    withheld: [],
+                },
+                true,
+            ),
+        ).toStrictEqual({
+            bindings: ["DB (D1)", "FILES (R2)"],
+            cleanup,
+            configPath: "/app/.wrangler.dev.jsonc",
+            enabled: true,
+            reason: undefined,
+            withheld: [],
+        });
     });
 });
 

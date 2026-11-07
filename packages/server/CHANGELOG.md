@@ -1,3 +1,15 @@
+## @lunora/server [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.272...@lunora/server@1.0.0-alpha.273) (2026-11-05)
+
+- feat(vite): dev-loop hints, binding-drift notice and env.ts check (#1494)
+
+## @lunora/server [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.271...@lunora/server@1.0.0-alpha.272) (2026-11-05)
+
+- fix(server): guard httpRoute cache headers and keep error causes in logs (#1488)
+
+## @lunora/server [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.270...@lunora/server@1.0.0-alpha.271) (2026-11-05)
+
+- feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)
+
 ## @lunora/server [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.269...@lunora/server@1.0.0-alpha.270) (2026-11-05)
 
 - feat(shard-engine): accept endCursor on findMany for reactive pages (#1485)

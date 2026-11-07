@@ -104,7 +104,7 @@ export const siteConfig = {
                 title: "Legal",
             },
         ],
-        legal: "Code: FSL-1.1-Apache-2.0. Visual Design & Branding: All Rights Reserved (CC BY-NC-ND 4.0).",
+        legal: "Code: Apache-2.0. Visual Design & Branding: All Rights Reserved (CC BY-NC-ND 4.0).",
         copyright: "© 2026–present Lunora & Lunora Contributors",
     },
 

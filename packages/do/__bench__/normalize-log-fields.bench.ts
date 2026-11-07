@@ -19,6 +19,7 @@ const flat3 = { channel: "push", provider: "web-push", status: "accepted" };
 const flat8 = { a: "1", b: 2, c: true, d: "4", e: 5, f: false, g: "7", h: 8 };
 const nested = { detail: { code: 410, reason: "gone" }, list: [1, 2, 3], status: "gone" };
 const bound = { deployment: "prod", region: "iad" };
+const withError = { err: new Error("charge failed", { cause: new Error("card declined") }), orderId: "o-1" };
 
 describe("normalizeLogFields", () => {
     bench("flat 3 primitives (the notify.send attribute shape)", () => {
@@ -35,6 +36,10 @@ describe("normalizeLogFields", () => {
 
     bench("per-call merged over bound fields (.with())", () => {
         normalizeLogFields(flat3, bound);
+    });
+
+    bench("an Error with a cause (the ctx.log path, full encoding)", () => {
+        normalizeLogFields(withError, undefined, "full");
     });
 
     bench("empty bag (early-return fast path)", () => {

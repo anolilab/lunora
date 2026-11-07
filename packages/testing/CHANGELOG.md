@@ -1,3 +1,7 @@
+## @lunora/testing [1.0.0-alpha.335](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.334...@lunora/testing@1.0.0-alpha.335) (2026-11-05)
+
+- Updated dependency @lunora/mail@1.0.0-alpha.139
+
 ## @lunora/testing [1.0.0-alpha.334](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.333...@lunora/testing@1.0.0-alpha.334) (2026-11-04)
 
 - Updated dependency @lunora/notify@1.0.0-alpha.111

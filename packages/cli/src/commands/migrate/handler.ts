@@ -9,9 +9,10 @@
  * the same way `@lunora/auth`'s compiled schema is applied. It is a
  * multi-statement file — one `CREATE TABLE` plus a `CREATE INDEX` per index,
  * per table — so it is NOT a `@lunora/d1` `Migration`: `MigrationRunner`
- * rejects anything past the first statement (`assertSingleStatement`), which
- * is why feeding it a generated file throws. Split the file by hand if you
- * want the runner's hash-tracked, batched application.
+ * rejects a migration holding more than one statement, which is why feeding it
+ * a generated file throws. Split the file at each `;` by hand if you want the
+ * runner's hash-tracked, batched application; each `DROP` carries the
+ * destructive opt-in on the line before it, so the split keeps it.
  *
  * ## What the file is worth applying for
  *

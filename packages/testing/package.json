@@ -1,6 +1,6 @@
 {
     "name": "@lunora/testing",
-    "version": "1.0.0-alpha.334",
+    "version": "1.0.0-alpha.335",
     "description": "Testing toolkit for Lunora: an in-memory harness for queries, mutations, and actions",
     "keywords": [
         "cloudflare",
@@ -14,7 +14,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -62,10 +62,10 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/agent": "^1.0.0-alpha.281",
+        "@lunora/agent": "^1.0.0-alpha.282",
         "@lunora/bindings": "1.0.0-alpha.151",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/mail": "1.0.0-alpha.138",
+        "@lunora/mail": "^1.0.0-alpha.139",
         "@lunora/notify": "^1.0.0-alpha.111",
         "@lunora/platform": "1.0.0-alpha.80",
         "@lunora/queue": "1.0.0-alpha.143",

@@ -1,3 +1,7 @@
+## @lunora/mail [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.138...@lunora/mail@1.0.0-alpha.139) (2026-11-05)
+
+- fix(mail): bound sends, dedupe on idempotency keys, guard inbound size (#1483)
+
 ## @lunora/mail [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.137...@lunora/mail@1.0.0-alpha.138) (2026-11-02)
 
 

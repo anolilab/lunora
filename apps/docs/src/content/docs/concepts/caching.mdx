@@ -5,11 +5,14 @@ description: Edge caching with Cloudflare Workers Cache — declarative headers 
 
 Lunora supports **Cloudflare Workers Cache** for HTTP routes. RPC queries and mutations are `POST /_lunora/rpc` by design and not cacheable at the edge, so caching is exposed on the surfaces that have a cacheable URL: `httpRoute` HTTP endpoints, `httpAction` handlers, and a query published over [REST](/docs/concepts/rest-api#caching) with `.expose({ rest: true, cache })`.
 
-The `httpRoute` methods below write whatever value you pass — they are the
-lower-level escape hatch. The REST `cache` policy is the guarded surface: it
-re-derives `public` vs `private` from the live request, never stores a
-credentialed exchange in the shared cache, and folds the varying headers into the
-cache key rather than trusting `Vary`. Prefer it when the endpoint is a procedure.
+The `httpRoute` methods below are the lower-level escape hatch: they send the
+value you pass, with one exception. When the request carries a credential, a
+`Cache-Control` that is not already `private` or `no-store` is sent as `private`
+(see [Credentialed requests](#credentialed-requests)). The REST `cache` policy is
+the fully guarded surface: it re-derives `public` vs `private` the same way, also
+never stores a credentialed exchange in the shared cache, and folds the varying
+headers into the cache key rather than trusting `Vary`. Prefer it when the
+endpoint is a procedure.
 
 ## Enabling Workers Cache
 
@@ -39,7 +42,7 @@ You can also enable cache for one named export, with `exports[name].cache.enable
 
 ## Declarative cache headers on `httpRoute`
 
-The `httpRoute` builder carries three chainable methods for cache headers. They attach automatically to the response, both JSON and streaming (SSE).
+The `httpRoute` builder carries three chainable methods for cache headers. They attach automatically to the JSON response. Streaming routes (a `.stream()` handler) send only the SSE headers.
 
 | Method                 | Header          | Purpose                                             |
 | ---------------------- | --------------- | --------------------------------------------------- |
@@ -48,7 +51,7 @@ The `httpRoute` builder carries three chainable methods for cache headers. They 
 | `.vary(value)`         | `Vary`          | Store separate cached variants per request header.  |
 
 ```ts title="lunora/products.ts"
-import { httpRoute, v } from "lunorash/server";
+import { httpRoute, LunoraError, v } from "lunorash/server";
 
 import { api } from "@/lunora/_generated/api";
 
@@ -61,11 +64,58 @@ export const getProduct = httpRoute
     .handler(async ({ ctx, params }) => {
         const product = await ctx.runQuery(api.products.get, params);
 
-        return product ?? new Response("Not Found", { status: 404 });
+        if (product === null) {
+            // A route handler returns a JSON payload, not a `Response`: throw to send a 404.
+            throw new LunoraError("NOT_FOUND", "Product not found");
+        }
+
+        return product;
     });
 ```
 
-The headers are sent on both **200 OK** and **204 No Content** responses, as well as streaming SSE responses.
+The headers are sent on **200 OK** and **204 No Content** responses. Error responses (a thrown `LunoraError`, a validation failure) and streaming SSE responses do not carry them.
+
+### Credentialed requests
+
+The handler runs under the caller's `ctx.auth`, so a response to a request with
+credentials is treated as belonging to that caller. Cloudflare keys its cache on
+the URL and ignores `Vary` for anything but `Accept-Encoding`, so a `public`
+response built for one signed-in user could be served to the next visitor.
+
+When the request carries `Authorization`, `Cookie`, `Cf-Access-Jwt-Assertion`, an
+x402 payment header (`Payment-Signature`, `X-Payment`), or a Cloudflare Access
+identity, Lunora rewrites the declared `Cache-Control` before sending it:
+
+- A value that already contains a bare `private` or `no-store` is sent unchanged.
+- Otherwise `public`, `s-maxage` and `proxy-revalidate` are removed and `private`
+  is added. `public, max-age=300, stale-while-revalidate=3600` becomes
+  `private, max-age=300, stale-while-revalidate=3600`. A bare `max-age=300` becomes
+  `private, max-age=300`, because a shared cache would store it too.
+- A field-qualified `private="set-cookie"` does not count as private: it marks
+  only the named headers, and a shared cache may store the rest of the response.
+  It is replaced by a bare `private`.
+
+Only those credentials are recognised. If your app authenticates on another
+header, such as `X-Api-Key`, declare it, or those callers are treated as anonymous
+and get the declared value, `public` included:
+
+```ts
+httpRoute
+    .get("/api/me")
+    .cacheControl("public, max-age=60", { credentialHeaders: ["x-api-key"] })
+    .handler(handler);
+```
+
+This is the same list a REST endpoint declares with
+[`cache.credentialHeaders`](/docs/concepts/rest-api#caching). A credential that is
+not a header at all, such as a signed query parameter, cannot be detected: do not
+mark such a route `public`.
+
+Anonymous requests get the declared value unchanged. In development the first
+rewrite on each route logs a warning. A browser sends every cookie for your
+domain, so a public route served to browsers that hold any cookie is cached only
+privately for them. Serve shared, cacheable data from a cookie-free hostname or
+path if it needs edge hits for those visitors.
 
 ## Programmatic cache purging
 
@@ -220,4 +270,4 @@ Uncomment the cache lines and adjust the values for your use case.
 2. **Use `stale-while-revalidate` for reads.** `public, max-age=300, stale-while-revalidate=3600` means Cloudflare serves from cache for 5 minutes, then revalidates in the background for up to an hour. Your backend sees reduced load.
 3. **Vary on content negotiation.** If your endpoint returns different formats based on `Accept` or compresses differently per `Accept-Encoding`, add `.vary("Accept-Encoding")` so Cloudflare stores separate variants.
 4. **Invalidate eagerly, cache generously.** Cache reads for a long TTL, then purge immediately when a mutation changes the underlying data. A short TTL is a band-aid for missing invalidation.
-5. **Keep cache headers deterministic.** `.cacheControl()` and `.cacheTag()` accept plain strings. There's no built-in parsing or validation, so a typo in the header value is sent verbatim. Test your headers with `curl -I` or the Cloudflare dashboard.
+5. **Keep cache headers deterministic.** `.cacheControl()` and `.cacheTag()` accept plain strings. Apart from the credential rewrite above there's no parsing or validation, so a typo in the header value is sent verbatim. Test your headers with `curl -I` or the Cloudflare dashboard.

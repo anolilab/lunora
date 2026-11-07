@@ -64,4 +64,4 @@ Codegen emits the typed `ctx.queues` producer and the worker `queue()` dispatch;
 ## License
 
 The lunora `@lunora/queue` package is open-sourced software licensed under the
-[FSL-1.1-Apache-2.0 license](./LICENSE.md).
+[Apache-2.0 license](./LICENSE.md).

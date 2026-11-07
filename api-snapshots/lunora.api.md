@@ -273,6 +273,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `HttpRouteCacheOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `HttpRouteFactory` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -4595,6 +4599,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `AssetsFetcherLike` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `AuthAdmin` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4680,6 +4688,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `CronJobInfo` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `CrossOriginOpenerPolicy` (type)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -5858,6 +5870,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `HttpRouteBuilder` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `HttpRouteCacheOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

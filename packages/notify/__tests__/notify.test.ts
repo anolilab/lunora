@@ -98,14 +98,12 @@ describe("ctx.push lifecycle", () => {
         await expect(store.get(stored.id)).resolves.toBeUndefined();
     });
 
-    it("prunes an FCM device the way FCM actually reports one — a NOT_FOUND message, no code", async () => {
+    it("prunes an FCM device on the UNREGISTERED code FCM reports for it", async () => {
         expect.hasAssertions();
 
-        // The FCM provider forwards `body.error.message` and drops
-        // `error.details[].errorCode`, so `UNREGISTERED` never reaches us — the
-        // NOT_FOUND prose is the whole signal (see `FCM_DEAD_TOKEN_ERROR`). This
-        // is the pruning the README, the docs and `LunoraPush.broadcast`'s JSDoc
-        // all promise for FCM.
+        // `fcm-transport` reads the code from `error.details[].errorCode`; the
+        // message it produces (see `FCM_DEAD_TOKEN_ERROR`) carries that code. This is
+        // the pruning the README, the docs and `LunoraPush.broadcast`'s JSDoc promise.
         const { push, store } = setup();
         const stored = await push.register({ kind: "fcm", token: "gone-device-token" });
         const receipt = await push.send(stored.id, { body: "hi" });
@@ -1727,5 +1725,495 @@ describe("push router payload size", () => {
         });
         expect(webPush.sends).toHaveLength(0);
         expect(fcm.sends).toHaveLength(0);
+    });
+});
+
+describe("ctx.push topics and conditions", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    const fcmDefinition = (store: SubscriptionStore): NotifyDefinition => {
+        return {
+            ...baseDefinition(store),
+            fcm: { accessToken: "access-token", projectId: "demo-project" },
+        };
+    };
+
+    it("sends to a topic and returns a success receipt with the FCM message id", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ name: "projects/demo-project/messages/9" }, { status: 200 }));
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.sendToTopic("news", { body: "Breaking", title: "News" })).resolves.toMatchObject({
+            messageId: "projects/demo-project/messages/9",
+            successful: true,
+        });
+
+        const requestBody = fetchSpy.mock.calls[0]?.[1]?.body;
+
+        const sent = JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as { message: Record<string, unknown> };
+
+        expect(sent.message).toMatchObject({ notification: { body: "Breaking", title: "News" }, topic: "news" });
+    });
+
+    it("sends to a condition", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ name: "projects/demo-project/messages/10" }, { status: 200 }));
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.sendToCondition("'sports' in topics", { body: "Score" })).resolves.toMatchObject({
+            messageId: "projects/demo-project/messages/10",
+            successful: true,
+        });
+
+        const requestBody = fetchSpy.mock.calls[0]?.[1]?.body;
+
+        const sent = JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as { message: Record<string, unknown> };
+
+        expect(sent.message).toMatchObject({ condition: "'sports' in topics" });
+    });
+
+    it("forwards per-platform overrides through the real engine on a token send", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ name: "projects/demo-project/messages/11" }));
+        const store = memorySubscriptionStore();
+        // No `engine` override: this runs the production engine, router and FCM transport.
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+        const stored = await push.register({ kind: "fcm", token: "live-device-token" });
+
+        await expect(
+            push.send(stored.id, {
+                body: "Match starts now",
+                clickAction: "OPEN_MATCH",
+                fcmOverrides: { android: { notification: { channel_id: "live-scores" } } },
+                title: "Kickoff",
+            }),
+        ).resolves.toMatchObject({ successful: true });
+
+        const requestBody = fetchSpy.mock.calls[0]?.[1]?.body;
+        const sent = JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as { message: Record<string, unknown> };
+
+        expect(sent.message).toMatchObject({
+            android: { notification: { channel_id: "live-scores", click_action: "OPEN_MATCH" } },
+            notification: { body: "Match starts now", title: "Kickoff" },
+            token: "live-device-token",
+        });
+    });
+
+    it("refuses a topic send when no fcm channel is configured", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.sendToTopic("news", { body: "x" })).rejects.toMatchObject({
+            code: "INTERNAL",
+            message: expect.stringMatching(/need the `fcm` channel/u),
+        });
+    });
+
+    it("resolves the fcm channel once for both the engine and the topic path", async () => {
+        expect.hasAssertions();
+
+        const fcmFactory = vi.fn(() => {
+            return { accessToken: "access-token", projectId: "demo-project" };
+        });
+        const store = memorySubscriptionStore();
+        const definition: NotifyDefinition = { ...baseDefinition(store), fcm: fcmFactory };
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ name: "projects/demo-project/messages/12" }));
+        // No `engine` override: the production engine and the topic path are both built from this definition.
+        const { push } = createNotify(definition, {}, { silent: true });
+
+        await push.sendToTopic("news", { body: "x" });
+        await push.sendToTopic("sports", { body: "y" });
+
+        expect(fcmFactory).toHaveBeenCalledTimes(1);
+        expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("refuses a blank condition as BAD_REQUEST, before any send is counted", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.sendToCondition("   ", { body: "x" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("refuses a malformed topic as BAD_REQUEST, before any request", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch");
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.sendToTopic("/topics/news", { body: "x" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not resolve the FCM factory for an injected engine that never sends to a topic", () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const definition: NotifyDefinition = {
+            ...baseDefinition(store),
+            fcm: () => {
+                throw new Error("fcm factory failed");
+            },
+        };
+
+        expect(() => createNotify(definition, {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true })).not.toThrow();
+    });
+
+    it("does not reject a Web Push send for FCM-only overrides it cannot carry", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+        const stored = await push.register({ subscription: okSub });
+
+        await expect(push.send(stored.id, { body: "x", fcmOverrides: { android: { data: { blob: "x".repeat(5000) } } } })).resolves.toMatchObject({
+            successful: true,
+        });
+    });
+
+    it("sends a final FCM refusal once through the production engine, not once per retry layer", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () =>
+                Response.json({ error: { message: "The registration token is malformed.", status: "INVALID_ARGUMENT" } }, { status: 400 }),
+            );
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+        const stored = await push.register({ kind: "fcm", token: "malformed-token" });
+
+        const receipt = await push.send(stored.id, { body: "x" });
+
+        expect(receipt.successful).toBe(false);
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not read the FCM factory for a broadcast through an injected engine", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const definition: NotifyDefinition = {
+            ...baseDefinition(store),
+            fcm: () => {
+                throw new Error("fcm factory failed");
+            },
+        };
+        const { push } = createNotify(definition, {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.broadcast({ body: "x" })).resolves.toBeDefined();
+    });
+
+    it("accepts a stored subscription object as the send target", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+        const stored = await push.register({ subscription: okSub });
+
+        await expect(push.send(stored, { body: "x" })).resolves.toMatchObject({ successful: true });
+    });
+
+    it("reports a push provider that throws as a failed receipt, not a success", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: mockThrowingPushProvider().provider }), silent: true });
+        const stored = await push.register({ kind: "fcm", token: "throw-device" });
+
+        await expect(push.send(stored.id, { body: "x" })).resolves.toMatchObject({ successful: false });
+    });
+
+    it("logs a status that cannot be recorded on a single send", async () => {
+        expect.hasAssertions();
+
+        const warn = vi.fn();
+        const store = memorySubscriptionStore();
+        const failingStore: SubscriptionStore = {
+            ...store,
+            markStatus: async () => {
+                throw new Error("disk full");
+            },
+        };
+        const { push } = createNotify(
+            baseDefinition(failingStore),
+            {},
+            { engine: mockEngine({ push: mockPushProvider().provider }), log: { warn }, silent: true },
+        );
+        const stored = await push.register({ subscription: okSub });
+
+        await push.send(stored.id, { body: "x" });
+
+        expect(warn).toHaveBeenCalledWith("@lunora/notify: delivery status could not be recorded", expect.objectContaining({ error: "disk full" }));
+    });
+
+    it("logs a page of statuses that cannot be recorded on a broadcast", async () => {
+        expect.hasAssertions();
+
+        const warn = vi.fn();
+        const store = memorySubscriptionStore();
+        const failingStore: SubscriptionStore = {
+            ...store,
+            applyOutcomes: async () => {
+                throw new Error("disk full");
+            },
+        };
+        const { push } = createNotify(
+            baseDefinition(failingStore),
+            {},
+            { engine: mockEngine({ push: mockPushProvider().provider }), log: { warn }, silent: true },
+        );
+        await push.register({ subscription: okSub });
+
+        await push.broadcast({ body: "x" });
+
+        expect(warn).toHaveBeenCalledWith("@lunora/notify: page delivery statuses could not be recorded", expect.objectContaining({ error: "disk full" }));
+    });
+
+    it("logs a failed channel receipt from a multi-channel send", async () => {
+        expect.hasAssertions();
+
+        const warn = vi.fn();
+        const alwaysFails: Provider<unknown, PushPayload> = {
+            channel: "push",
+            id: "always-fails",
+            initialize: () => undefined,
+            isAvailable: () => true,
+            send: () => {
+                return { error: new Error("upstream refused"), success: false };
+            },
+        };
+        const store = memorySubscriptionStore();
+        const { notify } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: alwaysFails }), log: { warn }, silent: true });
+
+        const receipts = await notify.send({ push: { body: "x", to: "device-1" } });
+
+        expect(receipts.length).toBeGreaterThan(0);
+        expect(receipts.every((receipt) => !receipt.successful)).toBe(true);
+        expect(warn).toHaveBeenCalledWith("notify push delivery failed", expect.objectContaining({ channel: "push" }));
+    });
+
+    it("maps a topic transport rejection to INTERNAL and keeps the FCM detail out of the classification", async () => {
+        expect.hasAssertions();
+
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+            Response.json({ error: { message: "bad topic", status: "INVALID_ARGUMENT" } }, { status: 400 }),
+        );
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+
+        await expect(push.sendToTopic("news", { body: "x" })).rejects.toMatchObject({ code: "INTERNAL" });
+    });
+
+    it("sends a broadcast through the FCM channel when no engine is injected", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+
+        await expect(push.broadcast({ body: "x" })).resolves.toBeDefined();
+    });
+
+    it("opens the FCM circuit on repeated 401s, so later sends stop reaching FCM", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () => Response.json({ error: { message: "credentials revoked", status: "UNAUTHENTICATED" } }, { status: 401 }));
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+
+        for (let index = 0; index < 6; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sends are sequential so the circuit sees each failure in order
+            const stored = await push.register({ kind: "fcm", token: `device-${String(index)}` });
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await push.send(stored.id, { body: "x" });
+        }
+
+        expect(fetchSpy).toHaveBeenCalledTimes(5);
+    });
+
+    it("does not open the FCM circuit on per-request 400s", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () => Response.json({ error: { message: "bad request", status: "INVALID_ARGUMENT" } }, { status: 400 }));
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+
+        for (let index = 0; index < 6; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sends are sequential so each failure is seen in order
+            const stored = await push.register({ kind: "fcm", token: `bad-${String(index)}` });
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await push.send(stored.id, { body: "x" });
+        }
+
+        expect(fetchSpy).toHaveBeenCalledTimes(6);
+    });
+
+    it("refuses an invalid TTL before reading the subscription store", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const get = vi.spyOn(store, "get");
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.send("missing-id", { body: "x", ttl: -1 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(get).not.toHaveBeenCalled();
+    });
+
+    it("does not re-send an FCM send whose 2xx reply carries no message name", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({}, { status: 200 }));
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+        const stored = await push.register({ kind: "fcm", token: "accepted-device" });
+
+        await push.send(stored.id, { body: "x" });
+
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not re-send an FCM refusal whose oversized body could not be read", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("x".repeat(70 * 1024), { status: 400 }));
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+        const stored = await push.register({ kind: "fcm", token: "oversized-device" });
+
+        await push.send(stored.id, { body: "x" });
+
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not open the FCM circuit on a token's SENDER_ID_MISMATCH", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () =>
+                Response.json(
+                    { error: { details: [{ errorCode: "SENDER_ID_MISMATCH" }], message: "token belongs to another sender", status: "PERMISSION_DENIED" } },
+                    { status: 403 },
+                ),
+            );
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+
+        for (let index = 0; index < 6; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sends are sequential so the circuit sees each failure in order
+            const stored = await push.register({ kind: "fcm", token: `other-sender-${String(index)}` });
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await push.send(stored.id, { body: "x" });
+        }
+
+        expect(fetchSpy).toHaveBeenCalledTimes(6);
+    });
+
+    it("prunes a device the production engine reports as UNREGISTERED", async () => {
+        expect.hasAssertions();
+
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+            Response.json(
+                { error: { details: [{ errorCode: "UNREGISTERED" }], message: "Requested entity was not found.", status: "NOT_FOUND" } },
+                { status: 404 },
+            ),
+        );
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+        const stored = await push.register({ kind: "fcm", token: "uninstalled-device" });
+
+        await push.send(stored.id, { body: "x" });
+
+        await expect(store.get(stored.id)).resolves.toBeUndefined();
+    });
+
+    it("does not fail a send because its logger throws", async () => {
+        expect.hasAssertions();
+
+        const alwaysFails: Provider<unknown, PushPayload> = {
+            channel: "push",
+            id: "always-fails-logged",
+            initialize: () => undefined,
+            isAvailable: () => true,
+            send: () => {
+                return { error: new Error("upstream refused"), success: false };
+            },
+        };
+        const store = memorySubscriptionStore();
+        const log = {
+            warn: () => {
+                throw new Error("logger is down");
+            },
+        };
+        const { notify } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: alwaysFails }), log, silent: true });
+
+        await expect(notify.send({ push: { body: "x", to: "device-1" } })).resolves.toHaveLength(1);
+    });
+
+    it("opens the FCM circuit on a bare 404 NOT_FOUND, which a wrong project id also produces", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () => Response.json({ error: { message: "Requested entity was not found.", status: "NOT_FOUND" } }, { status: 404 }));
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+
+        for (let index = 0; index < 6; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sends are sequential so the circuit sees each failure in order
+            const stored = await push.register({ kind: "fcm", token: `unknown-project-${String(index)}` });
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await push.send(stored.id, { body: "x" });
+        }
+
+        expect(fetchSpy).toHaveBeenCalledTimes(5);
+    });
+
+    it("does not count FCM-only overrides for a broadcast filtered to Web Push", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+
+        await expect(
+            push.broadcast({ body: "x", fcmOverrides: { android: { data: { blob: "x".repeat(5000) } } } }, { kind: "web-push" }),
+        ).resolves.toBeDefined();
+    });
+
+    it("sends a topic even when another channel's factory throws, with an injected engine", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ name: "projects/demo-project/messages/70" }));
+        const store = memorySubscriptionStore();
+        const definition: NotifyDefinition = {
+            ...fcmDefinition(store),
+            chat: () => {
+                throw new Error("chat secrets missing");
+            },
+        };
+        const { push } = createNotify(definition, {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.sendToTopic("news", { body: "x" })).resolves.toMatchObject({ successful: true });
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
 });

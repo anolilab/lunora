@@ -111,6 +111,11 @@ export const ERROR_CATALOG = {
         status: 409,
         title: "Migration drift",
     },
+    /** `@lunora/d1`'s `MigrationRunner` refused a pending migration that drops, renames, truncates or replaces without the opt-in comment. */
+    MIGRATION_DESTRUCTIVE: {
+        status: 409,
+        title: "Destructive migration not confirmed",
+    },
 
     /**
      * A UNIQUE index cannot be built because existing rows already share its key. The shard refuses user traffic until a later
@@ -161,6 +166,8 @@ export const ERROR_CATALOG = {
 
     /** Package-specific codes. Build-time-only — never cross the RPC wire, so deliberately not `internal`. */
     CODEGEN_DIAGNOSTIC: { status: 500, title: "Codegen diagnostic" },
+    /** Build-time-only (codegen): `lunora.config` would be read as something other than what it says. */
+    PROJECT_CONFIG_INVALID: { status: 500, title: "lunora.config has an unknown key, a mistyped value or no default export" },
     /** Build-time-only (codegen): `.jurisdiction()` would move DO-backed auth to a new, empty object without `{ pinAuth: true }`. */
     JURISDICTION_MOVE: {
         status: 422,

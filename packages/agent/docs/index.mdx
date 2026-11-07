@@ -1095,6 +1095,12 @@ mapped field as attacker-controlled input. A message no agent claims is
 dropped silently; a throw while parsing or dispatching bounces the message with a
 fixed generic reason (never reflecting internal error detail back to the sender).
 
+**Size.** A message over 10 MiB bounces before it is read, since parsing holds the
+raw message, its decoded parts and every attachment in memory at once (the
+`maxRawBytes` guard of `@lunora/mail/inbound`). The auto-wired handler uses that
+default. To accept larger mail, register the handler yourself with
+`dispatchAgentEmail(targets, { maxRawBytes })` from `@lunora/agent/inbound`.
+
 **Shard.** A run started from email uses the default shard. To run a tenant's tools,
 add `resolveEmailShard`. It is called after the sender check and after `onEmail` claimed
 the message, with `{ envelopeTo, email }`. Key it on `envelopeTo`, the SMTP recipient

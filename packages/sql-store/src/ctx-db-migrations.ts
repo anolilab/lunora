@@ -2,8 +2,8 @@
  * Provisioning for the `.global()` store: everything that reshapes the DATABASE
  * rather than reads or writes a row.
  *
- * Table DDL and its drift repair, the declared/`.unique()`/default-order
- * indexes, the aggregate and rank companion tables, and the one-shot storage
+ * Table DDL (its column drift repair lives in `column-provisioning.ts`), the
+ * declared/`.unique()`/default-order indexes, the aggregate and rank companion tables, and the one-shot storage
  * rewrites for `v.bigint()` and untyped columns — the cluster `ensureMigrated`
  * runs once per ctx-db, and nothing on a read or write path calls.
  *
@@ -23,20 +23,10 @@ import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 import { validatorAcceptsNull } from "../../../shared/accepts-null";
+import { addColumnIfMissing, alterGlobalTableDrift, globalColumnAffinity, relaxNullAcceptingColumns } from "./column-provisioning";
 import type { SqlDialect } from "./dialect";
 import type { SqlCtxExec } from "./sql-exec";
-import {
-    columnRefSql,
-    createIndexIfNotExists,
-    MAX_BOUND_PARAMETERS,
-    OCC_VERSION_COLUMN,
-    qualifiedColumnRefSql,
-    queryAll,
-    queryBatch,
-    queryRun,
-    serializeDocumentColumn,
-    tableColumns,
-} from "./sql-exec";
+import { columnRefSql, createIndexIfNotExists, MAX_BOUND_PARAMETERS, OCC_VERSION_COLUMN, queryAll, queryBatch, queryRun, tableColumns } from "./sql-exec";
 import {
     BIGINT_KEY_LENGTH,
     bigintSqlKey,
@@ -46,15 +36,6 @@ import {
     UNTYPED_NUMBER_PREFIX,
     UNTYPED_WIRE_PREFIX,
 } from "./value-codec";
-
-/**
- * SQLite affinity for a column. Resolves the *effective* validator kind (so
- * `v.optional(inner)` stores as `inner` would) and defers to the shared dialect
- * (`@lunora/d1/dialect`) — the same mapping the `lunora migrate generate` SQL
- * emitter uses, so auto-provisioned and hand-migrated tables stay identical.
- */
-const globalColumnAffinity = (validator: ValidatorLike, dialect: SqlDialect, indexedInFull = false): string =>
-    dialect.columnType(effectiveColumnKind(validator), { unique: indexedInFull || validator._meta?.column?.unique === true });
 
 /**
  * Fields whose values a UNIQUE index must cover in FULL, so the column is
@@ -981,278 +962,6 @@ const rewriteLegacyUntypedNumbers = async (exec: SqlCtxExec, tableName: string, 
     runLegacyColumnRewrite(exec, tableName, dialect, untypedRewrite(tableName, definition));
 
 /**
- * `table.column` pairs {@link relaxNullAcceptingColumns} already reported in
- * this isolate. Provisioning runs once per ctx-db — once per request on a
- * Hyperdrive binding — so an unconditional warning would repeat on every one.
- */
-const reportedRelaxations = new Set<string>();
-
-/** Warn once per isolate for `key`. The only channel a provisioning pass has. */
-const warnOnce = (key: string, message: string): void => {
-    if (reportedRelaxations.has(key)) {
-        return;
-    }
-
-    reportedRelaxations.add(key);
-    // eslint-disable-next-line no-console -- the only channel a provisioning pass has; deduplicated per isolate above.
-    console.warn(`[@lunora/sql-store] ${message}`);
-};
-
-/** The value a row gets when none is supplied: `.$defaultFn` evaluated once, else `.default(v)`; `undefined` when neither is declared. */
-const declaredDefaultOf = (validator: ValidatorLike): unknown => {
-    const meta = validator._meta?.column;
-
-    if (meta?.defaultFn) {
-        return meta.defaultFn();
-    }
-
-    return meta && "defaultValue" in meta ? meta.defaultValue : undefined;
-};
-
-/** Is `column` covered by any UNIQUE index, single or composite, or declared `.unique()`? */
-const isUniqueColumn = (definition: SchemaLike["tables"][string], column: string, validator: ValidatorLike): boolean =>
-    validator._meta?.column?.unique === true || definition.indexes.some((index) => index.unique === true && index.fields.includes(column));
-
-/**
- * Give the rows that predate a newly added REQUIRED column the value its declaration says a row gets when none is
- * supplied. A column that may hold null (`v.optional`, `.nullable()`, `v.any()`, a union with `v.null()`) needs
- * nothing: NULL is a valid value there. A required column with no default is left NULL and reported once, and so is
- * one under a UNIQUE constraint: one default written to every old row would collide the moment the index is built
- * (NULLs are distinct, so leaving them builds it), and that would fail provisioning of the whole plane on every pass.
- *
- * Best-effort, like {@link relaxNullAcceptingColumns}: a statement that fails is reported with the `UPDATE` to run,
- * not thrown. Throwing would leave the column in place, so the next pass would skip the backfill anyway; undoing the
- * column instead would loop a persistent failure on every pass and could discard what a concurrent request has since
- * written to it.
- */
-const backfillAddedColumn = async (
-    exec: SqlCtxExec,
-    tableName: string,
-    definition: SchemaLike["tables"][string],
-    dialect: SqlDialect,
-    column: string,
-    validator: ValidatorLike,
-): Promise<void> => {
-    if (validator.kind === "optional" || validatorAcceptsNull(validator)) {
-        return;
-    }
-
-    const unique = isUniqueColumn(definition, column, validator);
-    const value = unique ? undefined : declaredDefaultOf(validator);
-    const manual = `UPDATE "${tableName}" SET "${column}" = … WHERE "${column}" IS NULL`;
-
-    if (value === undefined) {
-        const reason = unique ? "is unique, so one default cannot be written to every row" : "has no default";
-
-        warnOnce(
-            `backfill:${tableName}.${column}`,
-            `"${tableName}.${column}" was added as a required field that ${reason}, so rows written before it read NULL. Backfill it with a migration (${manual}).`,
-        );
-
-        return;
-    }
-
-    try {
-        await queryRun(
-            exec,
-            dialect,
-            sql`UPDATE ${sql.identifier(tableName)} SET ${sql.identifier(column)} = ${serializeDocumentColumn(definition, column, value)} WHERE ${sql.identifier(column)} IS NULL`,
-        );
-    } catch (error) {
-        warnOnce(
-            `backfill:${tableName}.${column}`,
-            `could not backfill "${tableName}.${column}" from its default (${error instanceof Error ? error.message : String(error)}); rows written before it read NULL. Run ${manual}.`,
-        );
-    }
-};
-
-/** The columns a `.global()` table must carry beyond `id`/`_creationTime`: the OCC row version, then one per declared field. */
-const wantedGlobalColumns = (definition: SchemaLike["tables"][string], dialect: SqlDialect): [column: string, type: string, validator?: ValidatorLike][] => [
-    [OCC_VERSION_COLUMN, dialect.companionTypes.integer],
-    ...Object.entries(definition.shape)
-        .filter(([, validator]) => validator._meta?.column !== undefined)
-        .map(([field, validator]): [string, string, ValidatorLike] => [field, globalColumnAffinity(validator, dialect), validator]),
-];
-
-/**
- * Add the columns a `.global()` table is missing.
- *
- * `CREATE TABLE IF NOT EXISTS` alone leaves an existing table exactly as it is,
- * so adding a field to a shipped schema provisioned nothing: every `insert` died
- * with the driver's own `table p has no column named slug` — untyped, and never
- * mentioning a remedy — while reads and unrelated patches kept working, so the
- * deploy looked half-healthy. Both sibling migrations in this package already
- * reshape their own tables (`runSqlAggregateMigrations` PRAGMA-checks and
- * `ALTER`s, `migrateSearchState` `ALTER`s under a try/catch); only the
- * user-facing table was left out.
- *
- * The probe is one `SELECT <every declared column> … LIMIT 0` — dialect-blind,
- * no catalog member on {@link SqlDialect}, and on the overwhelmingly common
- * no-drift path it is a single statement that reads no rows. Only when that
- * fails does it cost one probe per column to find which are missing.
- *
- * Every column reference is **table-qualified**, and that is what makes the
- * probe an answer rather than a formality. workerd and D1 build SQLite with the
- * double-quoted-string misfeature enabled, so a bare `"slug"` that resolves to
- * no column is silently reinterpreted as a string literal and the `SELECT`
- * succeeds — the probe reported "no drift" for every table on the only runtime
- * this path runs on, and the `ADD COLUMN` loop below was never reached. That
- * included {@link OCC_VERSION_COLUMN}, which the guarded-write CAS reads on every
- * `patch`/`replace`/`delete`, so the exact failure this function exists to
- * prevent still bit. A qualified name has no string-literal reading and raises
- * `no such column: t.slug` on all three engines. Verified in
- * `__tests__/workerd/global-table-drift.workerd.test.ts`; `node:sqlite` builds
- * with `SQLITE_DQS=0`, so a Node-only suite cannot see the difference.
- *
- * Added columns are always **nullable** in the DDL, whatever the field declares:
- * `ADD COLUMN … NOT NULL` without a default is rejected outright on a non-empty
- * table by all three engines. The declared `notNull` is still enforced on write
- * by the validator, so existing rows are then made to satisfy it: a REQUIRED
- * field that declares a default (`.default(v)`, `.defaultNow()`, `.$defaultFn`)
- * has that default written to every row that has none, evaluated once. A
- * required field with no default has no value to invent, so its existing rows
- * keep reading NULL and a warning names the column; backfill it with an
- * explicit migration before relying on it. The same goes for a column under a UNIQUE constraint, whatever its
- * default, and for a backfill statement that fails (see {@link backfillAddedColumn}). Additive only, like the `CREATE` it
- * follows — a retype or a drop still needs an explicit migration.
- */
-const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
-    // The OCC version column leads the list: a table provisioned before it
-    // existed carries none, and the guarded-write CAS reads it on every
-    // `patch`/`replace`/`delete`.
-    const wanted = wantedGlobalColumns(definition, dialect);
-
-    // The alias the probe's column references are qualified with; see the docblock.
-    const alias = "t";
-
-    const probe = async (columns: ReadonlyArray<string>): Promise<boolean> => {
-        try {
-            await queryAll(
-                exec,
-                dialect,
-                sql`SELECT ${sql.join(
-                    columns.map((column) => qualifiedColumnRefSql(alias, column)),
-                    sql`, `,
-                )} FROM ${sql.identifier(tableName)} AS ${sql.identifier(alias)} LIMIT 0`,
-            );
-
-            return true;
-        } catch {
-            return false;
-        }
-    };
-
-    if (await probe(wanted.map(([column]) => column))) {
-        return;
-    }
-
-    for (const [column, type, validator] of wanted) {
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared connection; each probe gates its own ALTER.
-        if (await probe([column])) {
-            continue;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- same connection, and a failure here must surface rather than race the next ALTER.
-        await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(tableName)} ADD COLUMN ${sql.identifier(column)} ${sql.raw(type)}`);
-
-        if (validator !== undefined) {
-            // eslint-disable-next-line no-await-in-loop -- one UPDATE per added column, on the same connection.
-            await backfillAddedColumn(exec, tableName, definition, dialect, column, validator);
-        }
-    }
-};
-
-/**
- * The one-off statement that relaxes a MySQL column to NULL while keeping the
- * declaration it has TODAY. `MODIFY COLUMN` replaces the whole definition, so it
- * is rebuilt from `information_schema` rather than from the current DDL: a
- * legacy column may carry a case-folding collation, or `LONGTEXT` where a
- * `.unique()` column is now `VARCHAR(768)`, and restating today's DDL would
- * change how it compares or fail on rows longer than the new type.
- */
-const mysqlRelaxStatement = (tableName: string, field: string, row: Record<string, unknown>): string => {
-    const charset = typeof row["charset"] === "string" ? ` CHARACTER SET ${row["charset"]} COLLATE ${String(row["collation"])}` : "";
-
-    return `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`${field}\` ${String(row["type"])}${charset} NULL`;
-};
-
-/**
- * Drop `NOT NULL` from the columns of an existing table whose validator accepts
- * null — the constraint every table provisioned before those kinds were exempt
- * still carries, so `insert({ note: null })` kept raising a raw constraint error
- * there after the DDL was fixed.
- *
- * Only Postgres is changed in place: `ALTER COLUMN … DROP NOT NULL` touches the
- * catalog and nothing else, and is a no-op once done. MySQL is NOT — its only
- * way to relax a column is `MODIFY COLUMN`, which restates the whole definition
- * and can rebuild the table, so running it from a cold start would block writes
- * and could change the column's collation or type. Such a column is reported
- * instead, once per isolate, with the exact statement to run (see
- * {@link mysqlRelaxStatement}). SQLite cannot drop a column constraint without a
- * rebuild at all: a D1 table keeps it until it is rebuilt by hand (the global
- * tables migration guide carries the recipe), and `lunora migrate generate`
- * reports the nullability change so the step is not missed.
- *
- * Best-effort by design. A failure here is logged and provisioning carries on:
- * the table still serves every write that does not store `null` in such a
- * column, where rejecting the whole provisioning pass would fail every request,
- * on every isolate, until an operator intervened.
- */
-const relaxNullAcceptingColumns = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
-    if (dialect.name === "sqlite") {
-        return;
-    }
-
-    // Exactly the columns the fixed DDL leaves nullable where the old rule did not.
-    const candidates = Object.keys(definition.shape).filter((field) => {
-        const validator = definition.shape[field] as ValidatorLike;
-
-        return validator._meta?.column?.notNull === true && validator.kind !== "optional" && validatorAcceptsNull(validator);
-    });
-
-    if (candidates.length === 0) {
-        return;
-    }
-
-    try {
-        // Postgres needs only the names; MySQL also the declaration the report restates.
-        const selected =
-            dialect.name === "postgres"
-                ? sql`column_name AS ${sql.identifier("name")}`
-                : sql`column_name AS ${sql.identifier("name")}, column_type AS ${sql.identifier("type")}, character_set_name AS ${sql.identifier("charset")}, collation_name AS ${sql.identifier("collation")}`;
-        const schemaScope = dialect.name === "postgres" ? sql`table_schema = ANY (current_schemas(false))` : sql`table_schema = DATABASE()`;
-        const rows = await queryAll(
-            exec,
-            dialect,
-            sql`SELECT ${selected} FROM information_schema.columns WHERE ${schemaScope} AND table_name = ${tableName} AND is_nullable = 'NO' AND column_name IN (${sql.join(
-                candidates.map((field) => sql`${field}`),
-                sql`, `,
-            )})`,
-        );
-
-        for (const row of rows) {
-            const field = String(row["name"]);
-
-            if (dialect.name === "postgres") {
-                // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared connection.
-                await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(tableName)} ALTER COLUMN ${sql.identifier(field)} DROP NOT NULL`);
-                continue;
-            }
-
-            warnOnce(
-                `${tableName}.${field}`,
-                `"${tableName}"."${field}" accepts null in the schema but its column is NOT NULL, so writing null there fails. Relaxing it on MySQL can rebuild the table, so it is not done at startup; run this once, in a maintenance window: ${mysqlRelaxStatement(tableName, field, row)};`,
-            );
-        }
-    } catch (error) {
-        warnOnce(
-            `${tableName}:relax-failed`,
-            `could not relax NOT NULL on the null-accepting columns of "${tableName}" (${candidates.join(", ")}): ${error instanceof Error ? error.message : String(error)}. Writing null to them fails until the constraint is dropped by hand.`,
-        );
-    }
-};
-
-/**
  * Provision one `.global()` table statement by statement: `CREATE TABLE IF NOT EXISTS` with the physical `id` /
  * `_creationTime` / row-version columns plus a typed column per declared field, any missing columns, then its indexes and
  * the one-shot storage rewrites. Idempotent and additive only: it never drops or retypes an existing column, so
@@ -1357,21 +1066,11 @@ const runSqlAggregateMigrations = async (exec: SqlCtxExec, schema: SchemaLike, d
             // Alpha-era companion-rebuild caveat (SQLite/D1 only): a binding that
             // materialized this table before `__count__` existed gets the column
             // added here (defaulted 0). `CREATE TABLE IF NOT EXISTS` won't reshape
-            // an existing table, so we pragma-check then ALTER. Fresh PG/MySQL
-            // tables are created with `__count__` already, so this legacy reshape
-            // is skipped off SQLite.
+            // an existing table. Fresh PG/MySQL tables are created with `__count__`
+            // already, so this legacy reshape is skipped off SQLite.
             if (dialect.name === "sqlite") {
                 // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
-                const columns = await queryAll(exec, dialect, sql`PRAGMA table_info(${sql.identifier(aggTable)})`);
-
-                if (!columns.some((column) => column["name"] === "__count__")) {
-                    // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
-                    await queryRun(
-                        exec,
-                        dialect,
-                        sql`ALTER TABLE ${sql.identifier(aggTable)} ADD COLUMN ${sql.identifier("__count__")} ${sql.raw(integer)} NOT NULL DEFAULT 0`,
-                    );
-                }
+                await addColumnIfMissing(exec, dialect, aggTable, "__count__", `${integer} NOT NULL DEFAULT 0`);
             }
         }
     }
@@ -1532,5 +1231,4 @@ export {
     runSqlAggregateMigrations,
     runSqlRankMigrations,
     undeclaredFrameworkIndexes,
-    wantedGlobalColumns,
 };

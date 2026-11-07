@@ -225,6 +225,38 @@ interface MaterializeDevResult {
     withheld: WithheldBinding[];
 }
 
+/** A dev session's remote-binding decision, as `lunora dev` and `vite dev` both act on it. */
+interface RemotePlan {
+    /** The bindings flipped to remote, as `NAME (kind)` labels for the banner. */
+    bindings: string[];
+    /** Removes the temp config. Idempotent, and a no-op when nothing was written; every shutdown path calls it. */
+    cleanup: () => void;
+    /** The temp config the worker runs with, or `undefined` to run the user's file unchanged. */
+    configPath?: string;
+    /** Whether remote mode was requested. */
+    enabled: boolean;
+    /** Why remote mode didn't take effect despite being requested, for logging. */
+    reason?: string;
+    /** Remote-only bindings (`ai`, `artifacts`) left out for lack of Cloudflare credentials, for the dev warning. */
+    withheld: WithheldBinding[];
+}
+
+/**
+ * The {@link RemotePlan} a materialization amounts to, with `enabled` saying
+ * whether remote mode was asked for. The one place the `NAME (kind)` banner
+ * labels are spelled, so `lunora dev` and `vite dev` print the same list.
+ */
+const toRemotePlan = (result: MaterializeDevResult, enabled: boolean): RemotePlan => {
+    return {
+        bindings: result.remoteBindings.map((binding) => `${binding.binding} (${binding.kind})`),
+        cleanup: result.cleanup,
+        configPath: result.configPath,
+        enabled,
+        reason: result.reason,
+        withheld: result.withheld,
+    };
+};
+
 /**
  * Write the temp wrangler config a dev session runs with: the user's file with any
  * eligible bindings flipped to `"remote": true` (when `remote` is set), and the
@@ -328,5 +360,5 @@ const resolveRemoteEnabled = (inputs: RemoteEnableInputs): boolean => {
     return inputs.configPreference ?? false;
 };
 
-export type { MaterializeDevOptions, MaterializeDevResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape };
-export { injectRemoteFlags, isRemoteEnvEnabled, materializeDevWranglerConfig, planRemoteBindings, REMOTE_ELIGIBLE_KEYS, resolveRemoteEnabled };
+export type { MaterializeDevOptions, MaterializeDevResult, RemoteBindingPlan, RemoteEnableInputs, RemotePlan, RemoteWranglerShape };
+export { injectRemoteFlags, isRemoteEnvEnabled, materializeDevWranglerConfig, planRemoteBindings, REMOTE_ELIGIBLE_KEYS, resolveRemoteEnabled, toRemotePlan };

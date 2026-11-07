@@ -15,7 +15,7 @@
  * span or measurement is, never where it goes.
  */
 import { evaluationAttributes } from "../../../shared/evaluation-attributes";
-import type { LogFields } from "../../../shared/log-fields";
+import type { ErrorEncoding, LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
 import { buildTraceparent, OTLP_SPAN_KIND, otlpRandomHex } from "../../../shared/otlp";
@@ -118,8 +118,8 @@ const assignBoundedAttributes = (attributes: Record<string, LogFields[string]>, 
  * `undefined` when nothing survives — so an empty bag is omitted rather than
  * riding as `{}`, exactly like {@link normalizeLogFields} on its own.
  */
-const boundedAttributes = (fields: LogFields | undefined): LogFields | undefined => {
-    const normalized = normalizeLogFields(fields);
+const boundedAttributes = (fields: LogFields | undefined, errors: ErrorEncoding): LogFields | undefined => {
+    const normalized = normalizeLogFields(fields, undefined, errors);
 
     if (normalized === undefined || Object.keys(normalized).length <= MAX_SPAN_ATTRIBUTES) {
         return normalized;
@@ -131,6 +131,13 @@ const boundedAttributes = (fields: LogFields | undefined): LogFields | undefined
 
     return bounded;
 };
+
+/**
+ * How a span attribute writes an `Error`: its stack only under `captureRaw`, the
+ * same dev-only escape hatch that gates `recordException`'s stacktrace. A span
+ * ships to third-party collectors, and a stack is file paths and internals.
+ */
+const spanErrorEncoding = (captureRaw: boolean): ErrorEncoding => (captureRaw ? "full" : "headline");
 
 /**
  * Redact an outbound URL for a span attribute: scheme, host, and path, with the
@@ -342,6 +349,7 @@ export interface SpanCollector {
  */
 export const createSpanCollector = (ids: SpanContextIds, captureRaw = false, scope: SensitiveScope = NO_SENSITIVE_SCOPE): SpanCollector => {
     const collected: SpanCollection = { attributes: {}, events: [], links: [] };
+    const errors = spanErrorEncoding(captureRaw);
 
     const handle: SpanHandle = {
         spanContext: () => ids,
@@ -350,7 +358,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false, sco
                 return;
             }
 
-            const normalized = redactCredentials(scope.fields(boundedAttributes(attributes)), captureRaw) as LogFields | undefined;
+            const normalized = redactCredentials(scope.fields(boundedAttributes(attributes, errors)), captureRaw) as LogFields | undefined;
 
             collected.events.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
@@ -363,7 +371,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false, sco
                 return;
             }
 
-            const normalized = redactCredentials(scope.fields(boundedAttributes(link.attributes)), captureRaw) as LogFields | undefined;
+            const normalized = redactCredentials(scope.fields(boundedAttributes(link.attributes, errors)), captureRaw) as LogFields | undefined;
 
             collected.links.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
@@ -396,10 +404,10 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false, sco
             });
         },
         setAttribute: (key, value) => {
-            assignBoundedAttributes(collected.attributes, scope.fields(normalizeLogFields({ [key]: value })));
+            assignBoundedAttributes(collected.attributes, scope.fields(normalizeLogFields({ [key]: value }, undefined, errors)));
         },
         setAttributes: (fields) => {
-            assignBoundedAttributes(collected.attributes, scope.fields(normalizeLogFields(fields)));
+            assignBoundedAttributes(collected.attributes, scope.fields(normalizeLogFields(fields, undefined, errors)));
         },
     };
 
@@ -486,7 +494,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
             const resolved: SpanOptions = resolveSpanOptions(options);
             // Normalized once, before the body runs, so a caller mutating the
             // attributes object mid-span can't alter what gets recorded.
-            const normalized = scope.fields(normalizeLogFields(resolved.attributes));
+            const normalized = scope.fields(normalizeLogFields(resolved.attributes, undefined, spanErrorEncoding(captureRaw)));
             // The span name is the same on the recorded span and on the Cloudflare trace it is mirrored
             // to, so a marked property name is masked once here, before either sees it.
             const spanName = scope.name(name);
@@ -836,6 +844,8 @@ export const createMetrics = (deps: MetricsDeps): ContextMetrics => {
         }
 
         // Credentials masked like span attributes: metric attributes ship to the same collector.
+        // An Error is written as `Name: message` even in dev: an attribute is an aggregation key,
+        // and a stack would make every measurement its own series.
         const normalized = redactCredentials(scope.fields(normalizeLogFields(attributes))) as LogFields | undefined;
 
         // Guarded for the same reason as a span's — see `createTracer`.

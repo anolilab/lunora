@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { LogFilterCriteria } from "../../../src/features/logs/logs-panel";
@@ -294,6 +294,81 @@ describe("logsPanel — errors view", () => {
 
         expect(rows).toHaveLength(1);
         expect(rows[0]?.textContent).toContain("order placed");
+    });
+
+    it("shows a logged Error field as its headline and opens its stack and cause chain on demand", async () => {
+        expect.assertions(5);
+
+        const err = JSON.stringify({
+            cause: { message: "disk full", name: "Error", stack: "Error: disk full\n    at write (store.ts:9:3)" },
+            message: "save failed",
+            name: "Error",
+            stack: "Error: save failed\n    at save (orders.ts:4:11)",
+        });
+        const withError: LogEntry[] = [
+            { fields: { err, orderId: "o-1" }, functionPath: "orders:place", level: "error", message: "charge failed", timestamp: 1_700_000_005_000 },
+        ];
+
+        render(renderPanel(createClient(withError)));
+
+        await screen.findByTestId("lg-table");
+        await switchToErrors();
+
+        const fields = await screen.findByTestId("lg-fields");
+
+        expect(fields.textContent).toBe("err=Error: save failed orderId=o-1");
+        expect(screen.queryByTestId("lg-error-detail")).toBeNull();
+
+        const toggle = screen.getByTestId("lg-error-toggle");
+
+        fireEvent.click(toggle);
+
+        const detail = await screen.findByTestId("lg-error-detail");
+
+        expect(toggle.getAttribute("aria-expanded")).toBe("true");
+        expect(detail.textContent).toContain("at save (orders.ts:4:11)");
+        expect(detail.textContent).toContain("caused by: Error: disk full");
+    });
+
+    it("keeps an opened Error details with its line when a live push prepends an identical-looking line", async () => {
+        expect.assertions(3);
+
+        const err = JSON.stringify({ message: "save failed", name: "Error", stack: "Error: save failed\n    at save (orders.ts:4:11)" });
+        const failed: LogEntry = {
+            fields: { err },
+            functionPath: "orders:place",
+            id: "buffer:7",
+            level: "error",
+            message: "charge failed",
+            timestamp: 1_700_000_005_000,
+        };
+        // Same timestamp, level, path, message and fields: a retry loop logging twice in one millisecond. Only `id` differs.
+        const later: LogEntry = { ...failed, id: "buffer:8" };
+        const mock = createClient([failed]);
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("lg-table");
+        await switchToErrors();
+
+        fireEvent.click(await screen.findByTestId("lg-error-toggle"));
+
+        // A fresh array of fresh objects, newest first, as a live push delivers it.
+        act(() => {
+            mock.emit(ADMIN_FUNCTIONS.getLogs, { entries: [later, { ...failed }] });
+        });
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("lg-row").length !== 2) {
+                throw new Error("the pushed lines have not rendered yet");
+            }
+        });
+
+        const rows = screen.getAllByTestId("lg-row");
+
+        expect(rows).toHaveLength(2);
+        expect(within(rows[0] as HTMLElement).queryByTestId("lg-error-detail")).toBeNull();
+        expect(within(rows[1] as HTMLElement).getByTestId("lg-error-detail").textContent).toContain("at save (orders.ts:4:11)");
     });
 
     it("shows the empty state when there are no logs", async () => {

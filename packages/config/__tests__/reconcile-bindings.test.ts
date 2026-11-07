@@ -5,8 +5,9 @@ import { join } from "node:path";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { reconcileWranglerBindings } from "../src/cloudflare/apply-bindings";
 import { HYPERDRIVE_PLACEHOLDER_ID } from "../src/cloudflare/placeholder-ids";
-import { reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
+import { planWranglerBindings } from "../src/cloudflare/reconcile-bindings";
 import type { InferredBindings } from "../src/infer-bindings";
 import type { DurableObjectSpec } from "../src/worker-entry";
 
@@ -57,6 +58,7 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         usesWorkerLoader: false,
         usesX402Charge: false,
         usesX402: false,
+        workerRoutes: [],
         workflows: [],
         ...overrides,
     };
@@ -227,6 +229,220 @@ describe("reconcileWranglerBindings", () => {
 
             expect(result.added).not.toContain("upload_source_maps");
             expect(readConfig().upload_source_maps).toBe(false);
+        });
+    });
+
+    describe("assets.run_worker_first", () => {
+        const withAssets = (assets: string, environment = ""): string => `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    // the client build
+    "assets": ${assets},
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true },
+    "upload_source_maps": true,${environment}
+}
+`;
+
+        it("routes the reserved Lunora paths to the Worker first when the key is absent, keeping comments", () => {
+            expect.assertions(4);
+
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client", "not_found_handling": "none" }'), "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(result.added).toContain("assets.run_worker_first");
+            expect(readConfig().assets).toEqual({
+                directory: "./dist/client",
+                not_found_handling: "none",
+                run_worker_first: ["/_lunora/*", "/__lunora/*"],
+            });
+            expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toContain("// the client build");
+
+            // Idempotent: the second pass finds the key and writes nothing.
+            expect(reconcileWranglerBindings(root, baseInferred()).changed).toBe(false);
+        });
+
+        it("runs the Worker first for every path of a single-page app with an assets binding, exempting its static output", () => {
+            expect.assertions(3);
+
+            writeFileSync(join(root, "package.json"), '{ "name": "app" }\n', "utf8");
+            mkdirSync(join(root, "public", "img"), { recursive: true });
+            writeFileSync(join(root, "public", "favicon.ico"), "", "utf8");
+            writeFileSync(join(root, "public", "_headers"), "", "utf8");
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets(
+                    '{ "binding": "ASSETS", "directory": "./dist/client", "not_found_handling": "single-page-application" }',
+                    '\n    "env": { "staging": { "assets": { "directory": "./dist/staging" } } },',
+                ),
+                "utf8",
+            );
+
+            // `/static/:file` is the Worker's, so `/static/*` is not exempted.
+            reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe", "/static/:file"] }));
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/*", "!/_astro/*", "!/assets/*", "!/favicon.ico", "!/img/*"]);
+            // The env block has its own assets without the fallback, so it keeps the named list.
+            expect(readConfig().env.staging.assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/static/*", "/webhooks/stripe"]);
+            // Owned like any list Lunora writes.
+            expect(reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe", "/static/:file"] })).changed).toBe(false);
+        });
+
+        it("rewrites the old rspack-react list to the worker-first form once the SPA has a binding", () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets(
+                    '{ "binding": "ASSETS", "directory": "./dist", "not_found_handling": "single-page-application", "run_worker_first": ["/_lunora/*"] }',
+                ),
+                "utf8",
+            );
+
+            reconcileWranglerBindings(root, baseInferred());
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/*", "!/_astro/*", "!/assets/*", "!/static/*"]);
+        });
+
+        it("keeps the named list for a single-page app without a binding, and says to add one", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets('{ "directory": "./dist/client", "not_found_handling": "single-page-application" }'),
+                "utf8",
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe"] }));
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/webhooks/stripe"]);
+            expect(result.warnings.join(" ")).toContain('assets falls back to a single-page app but sets no "binding"');
+        });
+
+        it("writes an env block's own assets too", () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets(
+                    '{ "directory": "./dist/client", "run_worker_first": true }',
+                    '\n    "env": { "staging": { "assets": { "directory": "./dist/staging" } } },',
+                ),
+                "utf8",
+            );
+
+            reconcileWranglerBindings(root, baseInferred());
+
+            expect(readConfig().env.staging.assets).toEqual({
+                directory: "./dist/staging",
+                run_worker_first: ["/_lunora/*", "/__lunora/*"],
+            });
+        });
+
+        it("never rewrites an authored value, and warns when it leaves a reserved path to the assets", () => {
+            expect.assertions(3);
+
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client", "run_worker_first": ["/api/*"] }'), "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(result.changed).toBe(false);
+            expect((readConfig().assets as { run_worker_first: unknown }).run_worker_first).toEqual(["/api/*"]);
+            expect(result.warnings.join(" ")).toContain("assets.run_worker_first does not send /_lunora/*, /__lunora/* to the Worker first");
+        });
+
+        it("warns when a negative rule takes part of a reserved path back to the assets", () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets('{ "directory": "./dist/client", "run_worker_first": ["/_lunora/*", "/__lunora/*", "!/_lunora/admin/auth/*"] }'),
+                "utf8",
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+            const warnings = result.warnings.join(" ");
+
+            expect(result.changed).toBe(false);
+            expect(warnings).toContain('sends /_lunora/* to the Worker first, but "!/_lunora/admin/auth/*" takes part of it back to the assets');
+            expect(warnings).not.toContain("does not send");
+        });
+
+        it("leaves a config with no assets block alone", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets("{}").replace('    // the client build\n    "assets": {},\n', ""), "utf8");
+
+            expect(reconcileWranglerBindings(root, baseInferred()).added).not.toContain("assets.run_worker_first");
+        });
+
+        it("adds the app's routes, a parameter becoming a wildcard in place, and rewrites the list it owns when they change", () => {
+            expect.assertions(3);
+
+            writeFileSync(join(root, "package.json"), '{ "name": "app" }\n', "utf8");
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client" }'), "utf8");
+
+            reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/api/todos/:id", "/webhooks/stripe", "/api/auth/*"] }));
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/api/auth", "/api/auth/*", "/api/todos/*", "/webhooks/stripe"]);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe"] }));
+
+            expect(result.updated).toContain("assets.run_worker_first");
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/webhooks/stripe"]);
+        });
+
+        it("leaves a list the user edited after Lunora wrote it, and says which routes it misses", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(root, "package.json"), '{ "name": "app" }\n', "utf8");
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client" }'), "utf8");
+            reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe"] }));
+
+            const edited = readFileSync(join(root, "wrangler.jsonc"), "utf8").replace('"/webhooks/stripe"', '"/webhooks/*"');
+
+            writeFileSync(join(root, "wrangler.jsonc"), edited, "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe", "/hooks/github"] }));
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/webhooks/*"]);
+            expect(result.warnings.join(" ")).toContain("does not send /hooks/github to the Worker first");
+        });
+
+        it("owns the /_lunora/* list the old rspack-react template wrote, and adds the rest without a warning", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist", "run_worker_first": ["/_lunora/*"] }'), "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*"]);
+            expect(result.warnings.join(" ")).not.toContain("run_worker_first does not send");
+        });
+
+        it("leaves an owned list as it is when the routes could not be read", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(root, "package.json"), '{ "name": "app" }\n', "utf8");
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client" }'), "utf8");
+            reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe"] }));
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workerRoutes: undefined }));
+
+            expect(result.changed).toBe(false);
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/webhooks/stripe"]);
+        });
+
+        it.each([["celld"], ["node"]])("leaves assets alone on the %s target", (target) => {
+            expect.assertions(1);
+
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client" }'), "utf8");
+
+            reconcileWranglerBindings(root, baseInferred(), { target });
+
+            expect((readConfig().assets as { run_worker_first?: unknown }).run_worker_first).toBeUndefined();
         });
     });
 
@@ -1569,6 +1785,33 @@ describe("reconcileWranglerBindings", () => {
             expect(receiptConsumer()).toStrictEqual({ dead_letter_queue: "receipt-dlq", max_retries: 5, queue: "receipt-queue", retry_delay: 60 });
             // Still exactly one consumer for the queue — updated in place, not appended.
             expect(readConfig().queues.consumers).toHaveLength(1);
+        });
+
+        it("plans additions and retunes without writing the config or the ownership record", () => {
+            expect.assertions(4);
+
+            seedConsumer(`{ "queue": "receipt-queue", "max_retries": 3 }`);
+
+            const manifest = `{ "name": "app", "lunora": {} }\n`;
+
+            writeFileSync(join(root, "package.json"), manifest, "utf8");
+
+            const wrangler = readFileSync(join(root, "wrangler.jsonc"), "utf8");
+            const inferred = baseInferred({ needsD1: true, queues: [receiptQueue({ maxRetries: 5 })] });
+            const plan = planWranglerBindings(root, inferred);
+
+            expect({ added: plan.added, changed: plan.edit?.text !== plan.edit?.original, updated: plan.updated }).toStrictEqual({
+                added: ["DB (D1)"],
+                changed: true,
+                updated: ["queues.consumers/receipt-queue (max_retries)"],
+            });
+            expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toBe(wrangler);
+            expect(readFileSync(join(root, "package.json"), "utf8")).toBe(manifest);
+
+            // Applying the same plan writes both — planning alone is what kept them untouched.
+            reconcileWranglerBindings(root, inferred);
+
+            expect(readFileSync(join(root, "package.json"), "utf8")).not.toBe(manifest);
         });
 
         it("leaves a field defineQueue does not declare exactly as the user wrote it", () => {

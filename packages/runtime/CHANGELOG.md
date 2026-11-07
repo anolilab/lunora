@@ -1,3 +1,15 @@
+## @lunora/runtime [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.280...@lunora/runtime@1.0.0-alpha.281) (2026-11-05)
+
+- fix(observability): bound logged Errors further and never call their toString (#1501)
+
+## @lunora/runtime [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.279...@lunora/runtime@1.0.0-alpha.280) (2026-11-05)
+
+- fix(server): guard httpRoute cache headers and keep error causes in logs (#1488)
+
+## @lunora/runtime [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.278...@lunora/runtime@1.0.0-alpha.279) (2026-11-05)
+
+- feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)
+
 ## @lunora/runtime [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.277...@lunora/runtime@1.0.0-alpha.278) (2026-11-05)
 
 - fix(runtime): scope the rest edge cache by worker version (#1484)

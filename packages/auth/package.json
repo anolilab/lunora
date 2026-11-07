@@ -1,6 +1,6 @@
 {
     "name": "@lunora/auth",
-    "version": "1.0.0-alpha.257",
+    "version": "1.0.0-alpha.258",
     "description": "Auth for Lunora — a thin better-auth wrapper: email/password, OAuth, plugins, D1-backed",
     "keywords": [
         "auth",
@@ -14,7 +14,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -145,9 +145,9 @@
         "@better-auth/sso": "catalog:auth",
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@lunora/config": "^1.0.0-alpha.453",
-        "@lunora/runtime": "^1.0.0-alpha.276",
-        "@lunora/server": "^1.0.0-alpha.268",
+        "@lunora/config": "^1.0.0-alpha.458",
+        "@lunora/runtime": "^1.0.0-alpha.279",
+        "@lunora/server": "^1.0.0-alpha.271",
         "@types/better-sqlite3": "catalog:tooling",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

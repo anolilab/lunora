@@ -1348,6 +1348,35 @@ describe("lunora dev", () => {
             expect(sidecarKilled).toBe(true); // primary exit tore the sidecar down
         });
 
+        it("fills no secrets when the scaffold found a dev-vars file unreadable", async () => {
+            expect.assertions(2);
+
+            let filled = false;
+
+            const result = await runDevCommand({
+                cwd: workdir,
+                ensureEnv: async () => {
+                    return { addedKeys: [], generatedKeys: [], status: "unreadable" };
+                },
+                fillSecrets: () => {
+                    filled = true;
+
+                    return { addedKeys: [], filledKeys: [], status: "filled" };
+                },
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(filled).toBe(false);
+            expect(result.code).toBe(0);
+        });
+
         it("fills empty .dev.vars secrets + the admin token before the worker boots", async () => {
             expect.assertions(2);
 
@@ -1708,6 +1737,34 @@ describe("lunora dev", () => {
             }
         });
 
+        it("skips the scaffold offer with one warning when .dev.vars is a directory", async () => {
+            expect.assertions(3);
+
+            // The real scaffolder only reads `.dev.vars` once an example exists,
+            // so both are needed to reach the read that used to abort the start.
+            writeFileSync(join(workdir, ".dev.vars.example"), "AUTH_SECRET=\n", "utf8");
+            mkdirSync(join(workdir, ".dev.vars"));
+
+            const warnings: string[] = [];
+            const result = await runDevCommand({
+                cwd: workdir,
+                logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            const scaffoldWarnings = warnings.filter((line) => line.includes("scaffold"));
+
+            expect(result.code).toBe(0);
+            expect(scaffoldWarnings).toHaveLength(1);
+            expect(scaffoldWarnings[0]).toContain("EISDIR");
+        });
+
         it("logs an actionable .dev.vars hint when the scaffolder is declined non-interactively", async () => {
             expect.assertions(2);
 
@@ -1878,6 +1935,48 @@ describe("lunora dev", () => {
             expect(manifest.dev?.origin).toBe("http://localhost:8787");
         });
 
+        it("keeps starting past a binding section of the wrong shape, and names it once", async () => {
+            expect.assertions(4);
+
+            // `kv_namespaces` as an object used to throw out of the manifest
+            // builder and abort `lunora dev` before wrangler could name the key.
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-01-01",
+                    d1_databases: [{ binding: "DB", database_name: "app" }],
+                    kv_namespaces: {},
+                    main: "src/index.ts",
+                    name: "app",
+                    queues: { producers: [null] },
+                }),
+                "utf8",
+            );
+
+            const warnings: string[] = [];
+            const result = await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
+                probeReady: async () => true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            const manifest = JSON.parse(readFileSync(join(workdir, ".lunora", "dev-bindings.json"), "utf8")) as { bindings: { binding: string }[] };
+            const shapeWarnings = warnings.filter((line) => line.includes("not the shape wrangler expects"));
+
+            expect(result.code).toBe(0);
+            expect(manifest.bindings.map((binding) => binding.binding)).toStrictEqual(["DB"]);
+            expect(shapeWarnings).toHaveLength(1);
+            expect(shapeWarnings[0]).toContain("kv_namespaces, queues.producers");
+        });
+
         it("advertises the manifest in the banner only when one was written", async () => {
             expect.assertions(2);
 
@@ -1924,6 +2023,110 @@ describe("lunora dev", () => {
             });
 
             expect(withoutConfig.join("\n")).not.toContain("dev-bindings.json");
+        });
+
+        it("points the banner at the studio's cron and queue triggers", async () => {
+            expect.assertions(2);
+
+            const infos: string[] = [];
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-01-01",
+                    main: "src/index.ts",
+                    name: "app",
+                    queues: { producers: [{ binding: "QUEUE_EMAILS", queue: "emails" }] },
+                    triggers: { crons: ["0 * * * *"] },
+                }),
+                "utf8",
+            );
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "queues.ts"),
+                `import { defineQueue } from "@lunora/queue";\n\nexport const emails = defineQueue({ handler: async () => {} });\n`,
+                "utf8",
+            );
+            await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), info: (message: string) => infos.push(message) },
+                probeReady: async () => true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+            });
+
+            expect(infos).toContain("  ➜  Crons:      1 scheduled → run one now in http://127.0.0.1:6173/schedule");
+            expect(infos).toContain("  ➜  Queues:     emails → send a test message in http://127.0.0.1:6173/queues");
+        });
+
+        it("warns at startup about a key the lunora/env.ts contract needs and the dev env lacks", async () => {
+            expect.assertions(1);
+
+            const warnings: string[] = [];
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ compatibility_date: "2026-01-01", main: "src/index.ts", name: "app" }), "utf8");
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
+            // Self-contained: a temp dir cannot resolve `@lunora/server`, so the fixture carries the brand `defineEnv` sets.
+            writeFileSync(
+                join(workdir, "lunora", "env.ts"),
+                `const check = (value: Record<string, unknown>) => (value["STRIPE_KEY"] === undefined ? [{ key: "STRIPE_KEY", message: "Expected string" }] : []);
+
+export const env = Object.defineProperty((value: unknown) => value, Symbol.for("lunora.env"), { value: check });
+`,
+                "utf8",
+            );
+            await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
+                probeReady: async () => true,
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(warnings.join("\n")).toContain("lunora/env.ts: 1 key(s) missing or invalid in the dev env (wrangler vars + .dev.vars)");
+        });
+
+        it("still starts when the env check meets a .env it cannot read, which wrangler skips too", async () => {
+            expect.assertions(2);
+
+            const warnings: string[] = [];
+
+            // An unreadable `.env` (read when there is no `.dev.vars`) used to throw out of the check and abort the start.
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ compatibility_date: "2026-01-01", main: "src/index.ts", name: "app" }), "utf8");
+            mkdirSync(join(workdir, ".env"));
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "env.ts"),
+                `export const env = Object.defineProperty((value: unknown) => value, Symbol.for("lunora.env"), { value: () => [{ key: "API_URL", message: "missing" }] });\n`,
+                "utf8",
+            );
+
+            const result = await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
+                probeReady: async () => true,
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(result.code).toBe(0);
+            expect(warnings.join("\n")).toContain("lunora/env.ts: 1 key(s) missing or invalid in the dev env");
         });
 
         it("does not fail a project that has no wrangler config when nobody asked", async () => {

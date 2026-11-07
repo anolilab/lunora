@@ -13,6 +13,21 @@ const NOT_LITERAL = Symbol("not-literal");
 /** A numeric literal's value as JavaScript reads it. `getLiteralValue()` answers `NaN` for an overflowing `1e999`, which is `Infinity`. */
 const numericValueOf = (node: NumericLiteral): number => Number(node.getText().replaceAll("_", ""));
 
+/**
+ * The boolean a static boolean literal evaluates to: `true`, `false`, or a minifier's `!0` / `!1`; `undefined` for
+ * anything else. The validator and every boolean reader of `lunora.config` go through here, so a value one accepts
+ * is a value the other reads.
+ */
+const staticBooleanOf = (node: TsNode): boolean | undefined => {
+    if (Node.isTrueLiteral(node) || Node.isFalseLiteral(node)) {
+        return node.getLiteralValue();
+    }
+
+    return Node.isPrefixUnaryExpression(node) && node.getOperatorToken() === SyntaxKind.ExclamationToken && Node.isNumericLiteral(node.getOperand())
+        ? numericValueOf(node.getOperand() as NumericLiteral) === 0
+        : undefined;
+};
+
 const scalarLiteralOf = (node: TsNode): unknown => {
     if (Node.isStringLiteral(node) || Node.isNoSubstitutionTemplateLiteral(node)) {
         return node.getLiteralValue();
@@ -26,8 +41,10 @@ const scalarLiteralOf = (node: TsNode): unknown => {
         return -numericValueOf(node.getOperand() as NumericLiteral);
     }
 
-    if (Node.isTrueLiteral(node) || Node.isFalseLiteral(node)) {
-        return node.getLiteralValue();
+    const boolean = staticBooleanOf(node);
+
+    if (boolean !== undefined) {
+        return boolean;
     }
 
     if (Node.isBinaryExpression(node)) {
@@ -103,4 +120,4 @@ const objectLiteralOf = (node: ObjectLiteralExpression): unknown => {
     return Object.fromEntries(entries);
 };
 
-export { literalOf, NOT_LITERAL };
+export { literalOf, NOT_LITERAL, staticBooleanOf };

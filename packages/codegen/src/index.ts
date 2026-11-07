@@ -31,6 +31,7 @@ export { isTestPath, listLunoraSourceFiles } from "./discover/ast";
 export { default as discoverAuthApiCalls } from "./discover/authapi-calls";
 export { CONTAINERS_FILENAME, discoverContainers } from "./discover/containers";
 export { default as discoverCrons } from "./discover/crons";
+export { ENV_FILENAME } from "./discover/env";
 // The capability probe's per-file reading (value imports and re-exports, dynamic
 // imports, sandbox tools, `ctx.<property>` reads), its fold across files and the
 // one "is it used" matcher — exported so `@lunora/config`'s binding inference
@@ -137,7 +138,14 @@ export { buildOpenRpcDocument, emitOpenRpc, emitOpenRpcModule, OPENRPC_VERSION }
 export type { PlatformDiagnostic } from "./platform-target";
 export { DEFAULT_TARGET, platformMatrixIds, readProjectTarget, resolveCodegenTarget } from "./platform-target";
 export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral } from "./project-config-file";
-export { findProjectConfigFile, loadProjectConfig, PROJECT_CONFIG_FILENAMES, readProjectConfigLiterals, readProjectLazyFunctions } from "./project-config-file";
+export {
+    findProjectConfigFile,
+    loadProjectConfig,
+    PROJECT_CONFIG_FILENAMES,
+    readProjectConfigLiterals,
+    readProjectLazyFunctions,
+    readProjectSecurityHeaders,
+} from "./project-config-file";
 export { findCodegenConfigFile, projectConfigCandidatePaths } from "./project-config-path";
 export type { CodegenOptions, CodegenResult } from "./run-codegen";
 export { createCodegenProject, findTsconfig, refreshCodegenProject, runCodegen, SCHEMA_SNAPSHOT_FILENAME, tsconfigFingerprint } from "./run-codegen";

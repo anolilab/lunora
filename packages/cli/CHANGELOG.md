@@ -1,3 +1,19 @@
+## @lunora/cli [1.0.0-alpha.489](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.488...@lunora/cli@1.0.0-alpha.489) (2026-11-05)
+
+- feat(vite): dev-loop hints, binding-drift notice and env.ts check (#1494)
+
+## @lunora/cli [1.0.0-alpha.488](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.487...@lunora/cli@1.0.0-alpha.488) (2026-11-05)
+
+- feat(d1): refuse unconfirmed destructive migration sql; fix the add-column race (#1489)
+
+## @lunora/cli [1.0.0-alpha.487](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.486...@lunora/cli@1.0.0-alpha.487) (2026-11-05)
+
+- feat(codegen): validate lunora.config; Access-aware health probe; env queue warning (#1492)
+
+## @lunora/cli [1.0.0-alpha.486](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.485...@lunora/cli@1.0.0-alpha.486) (2026-11-05)
+
+- fix(mail): bound sends, dedupe on idempotency keys, guard inbound size (#1483)
+
 ## @lunora/cli [1.0.0-alpha.485](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.484...@lunora/cli@1.0.0-alpha.485) (2026-11-05)
 
 - fix(runtime): scope the rest edge cache by worker version (#1484)

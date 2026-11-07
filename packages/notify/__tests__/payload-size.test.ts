@@ -41,4 +41,17 @@ describe("assertPushPayloadFits", () => {
             assertPushPayloadFits({ body: "", data });
         }).toThrow("push payload is");
     });
+
+    it("counts an FCM-only sound toward the limit for an FCM target, not for Web Push", () => {
+        expect.hasAssertions();
+
+        const sound = "s".repeat(PUSH_PAYLOAD_LIMIT_BYTES + 1);
+
+        expect(() => {
+            assertPushPayloadFits({ body: "x", sound }, { fcm: true });
+        }).toThrow(/bytes/u);
+        expect(() => {
+            assertPushPayloadFits({ body: "x", sound }, { fcm: false });
+        }).not.toThrow();
+    });
 });

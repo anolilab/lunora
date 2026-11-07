@@ -22,8 +22,15 @@ export default getVitestConfig(
                 // is plain React, so the react project covers it like any view.
                 include: ["src/core/**", "src/emails/**", "src/react/**"],
             },
+            // Each project below sets `extends: true` so its workers get the shared
+            // options (notably `execArgv`); inline projects inherit nothing otherwise.
+            // Extending also merges the root `include` (vitest's default glob from
+            // getVitestConfig) into every project's own, so each would run every test
+            // file. Clearing it leaves a project's own `include` as its only selector.
+            include: [],
             projects: [
                 {
+                    extends: true,
                     test: {
                         environment: "jsdom",
                         include: ["__tests__/core/**/*.test.ts", "__tests__/react/**/*.test.tsx"],
@@ -32,6 +39,7 @@ export default getVitestConfig(
                     },
                 },
                 {
+                    extends: true,
                     plugins: [vue()],
                     test: {
                         environment: "jsdom",
@@ -41,6 +49,7 @@ export default getVitestConfig(
                     },
                 },
                 {
+                    extends: true,
                     plugins: [svelte()],
                     // Without the browser condition, `svelte` resolves to its SSR
                     // build and mounting throws lifecycle_function_unavailable.
@@ -53,6 +62,7 @@ export default getVitestConfig(
                     },
                 },
                 {
+                    extends: true,
                     plugins: [solid()],
                     // Matches how a Solid app builds (resolves solid-js's `solid` export).
                     resolve: { conditions: ["development", "browser"] },
@@ -64,6 +74,7 @@ export default getVitestConfig(
                     },
                 },
                 {
+                    extends: true,
                     // No Angular build plugin, and so no component rendering: the cards
                     // use signal inputs, which only the AOT compiler can see, and
                     // pulling in @angular/build for that would land the Angular CLI

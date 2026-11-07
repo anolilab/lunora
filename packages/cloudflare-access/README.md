@@ -24,4 +24,4 @@ reading claims in RLS policies, and the full API.
 
 ## License
 
-FSL-1.1-Apache-2.0
+Apache-2.0
