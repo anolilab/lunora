@@ -1997,8 +1997,9 @@ describe("ctx.push topics and conditions", () => {
 
         const receipts = await notify.send({ push: { body: "x", to: "device-1" } });
 
+        expect(receipts.length).toBeGreaterThan(0);
         expect(receipts.every((receipt) => !receipt.successful)).toBe(true);
-        expect(warn).toHaveBeenCalledWith();
+        expect(warn).toHaveBeenCalledWith("notify push delivery failed", expect.objectContaining({ channel: "push" }));
     });
 
     it("maps a topic transport rejection to INTERNAL and keeps the FCM detail out of the classification", async () => {
