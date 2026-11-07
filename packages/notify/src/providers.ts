@@ -303,6 +303,10 @@ const FCM_PERMANENT_FAILURE = /\bFCM (?:200|400|401|403|404|413) |\bRetry-After 
  * bring back. The cost of a false positive stays one skipped retry, never a
  * dropped row; the cost of the alternative was every dead device spending four
  * POSTs and ~2.2 s before the very next line deleted it.
+ *
+ * It also returns true for FCM's final answers (a 400, 401, 403, 404 or 413, and a 429 whose
+ * `Retry-After` is over the wait limit): re-sending cannot change those, so no retry is spent on them.
+ * Those are not unsubscribe signals, so they do not prune; `deliver` decides pruning by `kind` alone.
  */
 const isPermanentFailure = (error: unknown): boolean => {
     const text = failureText(error);

@@ -104,6 +104,17 @@ type FcmTransportConfig = FcmConfig & {
     timeout?: number;
 };
 
+/** Drops trailing slashes without a backtracking regex: a long run of them is linear here. */
+const withoutTrailingSlashes = (value: string): string => {
+    let end = value.length;
+
+    while (end > 0 && value.charAt(end - 1) === "/") {
+        end -= 1;
+    }
+
+    return value.slice(0, end);
+};
+
 const DEFAULT_ENDPOINT = "https://fcm.googleapis.com";
 
 /**
@@ -428,7 +439,9 @@ const postMessage = async (
     options: FcmTransportOptions,
     fanOut: boolean,
 ): Promise<string> => {
-    const url = `${config.endpoint ?? DEFAULT_ENDPOINT}/v1/projects/${config.projectId}/messages:send`;
+    // A trailing slash on the configured endpoint would produce `//v1/...`, which some gateways route differently.
+    const base = withoutTrailingSlashes(config.endpoint ?? DEFAULT_ENDPOINT);
+    const url = `${base}/v1/projects/${config.projectId}/messages:send`;
     const body = JSON.stringify({ message });
     const baseDelay = options.retryBaseDelay ?? 250;
     const timeoutMs = config.timeout ?? REQUEST_TIMEOUT_MS;

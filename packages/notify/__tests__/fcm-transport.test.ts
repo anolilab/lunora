@@ -633,4 +633,15 @@ describe("createFcmTransport", () => {
         await expect(transport.sendTo({ topic: "news" }, { body: "x" })).rejects.toThrow(/wait limit/u);
         expect(fetchMock).toHaveBeenCalledTimes(1);
     });
+
+    it("does not double the slash when the configured endpoint ends in one", async () => {
+        expect.hasAssertions();
+
+        const { fetchMock } = scriptedFetch({ body: { name: "projects/demo-project/messages/50" }, status: 200 });
+        const transport = createFcmTransport({ ...config, endpoint: "https://fcm.example.test/" }, { fetch: fetchMock });
+
+        await transport.sendTo({ topic: "news" }, { body: "x" });
+
+        expect(fetchMock).toHaveBeenCalledWith("https://fcm.example.test/v1/projects/demo-project/messages:send", expect.anything());
+    });
 });
