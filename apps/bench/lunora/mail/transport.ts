@@ -3,8 +3,8 @@
  * Resend in production, and the `QUEUE_MAIL` producer for `mailer.queue()`. Shared
  * by the mail functions and the mail queue consumer, so both deliver the same way.
  */
-import { createMailerFromEnv } from "@lunora/mail";
 import type { Mailer, QueueLike } from "@lunora/mail";
+import { createMailerFromEnv } from "@lunora/mail";
 import { env as workerEnv } from "cloudflare:workers";
 
 import type { CloudflareBindings } from "#lunora/_generated/server.js";

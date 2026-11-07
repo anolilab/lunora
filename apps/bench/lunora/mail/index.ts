@@ -48,6 +48,7 @@
  * every Lunora registry item uses for bindings, vars, and secrets.
  */
 import type { SendOptions } from "@lunora/mail";
+
 import { internalAction, v } from "#lunora/_generated/server.js";
 
 import { mailer } from "./transport";
