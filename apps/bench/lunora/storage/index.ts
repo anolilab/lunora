@@ -251,7 +251,8 @@ export const generateUploadUrl = action
         const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
         const url = await makeStorage(resolveBaseUrl(ctx.origin)).generateUploadUrl(scoped, { contentType, expiresInSeconds });
 
-        return { key: scoped, url };
+        // Relative, like `listObjects`: the key goes back into `getDownloadUrl` and `deleteObject`, which scope it themselves.
+        return { key, url };
     });
 
 /**
@@ -269,7 +270,7 @@ export const getDownloadUrl = action
         const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
         const url = await makeStorage(resolveBaseUrl(ctx.origin)).getSignedUrl(scoped, { expiresInSeconds, method: "GET" });
 
-        return { key: scoped, url };
+        return { key, url };
     });
 
 /** Delete a stored object owned by the caller. */
@@ -314,7 +315,7 @@ export const listObjects = action
     .use(rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .action(async ({ args: { cursor, limit, prefix }, ctx }): Promise<{ cursor?: string; objects: StorageObject[]; truncated?: boolean }> => {
         const base = requireOwner(ctx.auth.userId);
-        const scopedPrefix = prefix === undefined ? `${base}/` : `${scopeKey(base, prefix)}`;
+        const scopedPrefix = prefix === undefined || prefix === "" ? `${base}/` : scopeKey(base, prefix);
         const stripLength = `${base}/`.length;
 
         const page = await makeStorage().list(scopedPrefix, { cursor, limit });

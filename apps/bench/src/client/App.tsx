@@ -18,8 +18,73 @@ const field = (form: FormData, name: string): string => {
     return typeof value === "string" ? value : "";
 };
 
+/** Verifies one code with the method the user picked: an app code, an email code, or a backup code. */
+const verifyCode = (method: string, code: string) => {
+    if (method === "otp") {
+        return authClient.twoFactor.verifyOtp({ code });
+    }
+
+    if (method === "backup") {
+        return authClient.twoFactor.verifyBackupCode({ code });
+    }
+
+    return authClient.twoFactor.verifyTotp({ code });
+};
+
+/**
+ * The second step of a password sign-in for an account with two-factor enabled. The
+ * password call creates no session until this one succeeds, so the page reloads only
+ * after it.
+ */
+const SecondFactor = (): ReactElement => {
+    const [error, setError] = useState<string>();
+    const codeId = useId();
+
+    const submit = async (form: FormData): Promise<void> => {
+        const result = await verifyCode(field(form, "method"), field(form, "code"));
+
+        if (result.error) {
+            setError(result.error.message ?? "verification failed");
+
+            return;
+        }
+
+        globalThis.location.reload();
+    };
+
+    const emailCode = async (): Promise<void> => {
+        const result = await authClient.twoFactor.sendOtp();
+
+        setError(result.error ? (result.error.message ?? "could not send a code") : undefined);
+    };
+
+    return (
+        <form action={submit}>
+            <h1>Two-factor verification</h1>
+            <label htmlFor={codeId}>
+                Code
+                <input autoComplete="one-time-code" id={codeId} name="code" required />
+            </label>
+            <button name="method" type="submit" value="totp">
+                Verify app code
+            </button>
+            <button name="method" type="submit" value="otp">
+                Verify email code
+            </button>
+            <button name="method" type="submit" value="backup">
+                Use backup code
+            </button>
+            <button onClick={() => void emailCode()} type="button">
+                Email me a code
+            </button>
+            {error === undefined ? undefined : <p role="alert">{error}</p>}
+        </form>
+    );
+};
+
 const SignIn = (): ReactElement => {
     const [error, setError] = useState<string>();
+    const [needsSecondFactor, setNeedsSecondFactor] = useState(false);
     const emailId = useId();
     const passwordId = useId();
 
@@ -37,8 +102,19 @@ const SignIn = (): ReactElement => {
             return;
         }
 
+        // Better Auth answers a password sign-in for a two-factor account with a redirect instead of a session.
+        if ("twoFactorRedirect" in result.data) {
+            setNeedsSecondFactor(true);
+
+            return;
+        }
+
         globalThis.location.reload();
     };
+
+    if (needsSecondFactor) {
+        return <SecondFactor />;
+    }
 
     return (
         <form action={submit}>

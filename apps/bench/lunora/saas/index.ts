@@ -21,10 +21,10 @@
 import { LunoraError } from "@lunora/errors";
 import { RateLimiter, createDbStore, rateLimit } from "lunorash/ratelimit";
 
-import type { Doc, Id, MutationCtx, QueryCtx } from "#lunora/_generated/server.js";
+import type { Doc, Id, MutationCtx, QueryCtx, TableReaderFacade } from "#lunora/_generated/server.js";
 import { internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
 
-import { SAAS_ACTIVITY_PAGE, SAAS_ACTIVITY_TABLE, SAAS_ORGANIZATIONS_TABLE, SAAS_PROJECTS_TABLE } from "./schema.js";
+import { SAAS_ACTIVITY_PAGE, SAAS_ACTIVITY_TABLE, SAAS_ORGANIZATIONS_TABLE, SAAS_PROJECTS_PAGE, SAAS_PROJECTS_TABLE } from "./schema.js";
 
 /**
  * The kit's own limit config, rather than the `limits` map in
@@ -194,46 +194,17 @@ interface OrganizationsPage {
 }
 
 /**
- * The `saas_organizations` reader. The table is `.global()`, so it is served
- * from D1, whose backend has no `query().withIndex()` reader — a call through
- * one throws INTERNAL at runtime — only the per-table facade
- * (`ctx.db.saas_organizations.findFirst` / `findMany`).
- *
- * This item compiles against the base context, which declares no per-table
- * facades, so the two methods it uses are named here. In your project
- * `ctx.db.saas_organizations` is the generated, typed accessor, and this is the
- * one place that reaches it structurally.
+ * The `saas_organizations` reader, typed by the generated per-table facade. The
+ * table is `.global()`, so it is served from D1, which has no `query().withIndex()`
+ * reader: reads go through the facade's `findFirst` / `findMany` / `count` /
+ * `aggregate` / `groupBy`, and the compiler checks each call against the schema.
  */
-interface OrganizationsReader {
-    aggregate: (args: { field: "seats"; op: "sum"; where: OrganizationsWhere }) => Promise<number | null>;
-    count: (where: OrganizationsWhere) => Promise<number>;
-    findFirst: (args: { where: { organizationId: string } }) => Promise<Doc<"saas_organizations"> | null>;
-    findMany: (args: {
-        cursor?: string | null;
-        endCursor?: string | null;
-        limit?: number;
-        orderBy?: Partial<Record<"updatedAt", "asc" | "desc">>[];
-        where: OrganizationsWhere;
-    }) => Promise<OrganizationsPage>;
-    groupBy: (args: {
-        agg: { field?: "seats"; op: "count" | "sum" };
-        by: ["status", "plan"];
-    }) => Promise<ReadonlyArray<{ key: { plan?: unknown; status?: unknown }; value: number | null }>>;
-}
+type OrganizationsReader = TableReaderFacade<"saas_organizations">;
 
-/**
- * A `where` tree over `saas_organizations`, loose on purpose: the typed tree is
- * the generated one, which this item cannot name (see {@link OrganizationsReader}).
- */
-interface OrganizationsWhere {
-    [field: string]: unknown;
-    AND?: OrganizationsWhere[];
-    NOT?: OrganizationsWhere;
-    OR?: OrganizationsWhere[];
-}
+/** A `where` tree over `saas_organizations`, as the generated `findMany` args type it. */
+type OrganizationsWhere = NonNullable<NonNullable<Parameters<OrganizationsReader["findMany"]>[0]>["where"]>;
 
-const organizations = (ctx: MutationCtx | QueryCtx): OrganizationsReader =>
-    (ctx.db as unknown as Record<typeof SAAS_ORGANIZATIONS_TABLE, OrganizationsReader>)[SAAS_ORGANIZATIONS_TABLE];
+const organizations = (ctx: MutationCtx | QueryCtx): OrganizationsReader => ctx.db[SAAS_ORGANIZATIONS_TABLE];
 
 /**
  * Build an activity row. A row builder rather than a writer, because the insert
@@ -358,10 +329,12 @@ export const overview = query.query(async ({ ctx }): Promise<{ activity: Doc<"sa
             .withIndex("byOrgCreatedAt", (q) => q.eq("organizationId", organizationId))
             .order("desc")
             .take(SAAS_ACTIVITY_PAGE),
+        // No index covers `archivedAt`, so the filter reads past archived rows until `take` has enough active ones.
         projects: await ctx.db
             .query(SAAS_PROJECTS_TABLE)
             .withIndex("byOrgSlug", (q) => q.eq("organizationId", organizationId))
-            .collect(),
+            .filter((project) => project.archivedAt === undefined)
+            .take(SAAS_PROJECTS_PAGE),
     };
 });
 

@@ -7,7 +7,7 @@
  * arguments. `agents.ts` takes that id from the run's thread key, which only
  * {@link ask} sets, from the caller's verified identity.
  */
-import { internalQuery, v } from "../_generated/server.js";
+import { internalQuery, v } from "../_generated/server";
 import { orgMutation, requireWriter } from "../lib/crpc";
 
 export const ask = orgMutation.input({ message: v.string().min(1).max(4000) }).mutation(async ({ args, ctx }) => {

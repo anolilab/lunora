@@ -2,7 +2,7 @@
  * Dashboard counters: Workers KV as a cross-shard cache of each tenant's
  * headline numbers, and Analytics Engine for product events.
  */
-import { internalMutation, v } from "../_generated/server.js";
+import { internalMutation, v } from "../_generated/server";
 import { orgQuery, requireOrg } from "../lib/crpc";
 
 interface Headline {

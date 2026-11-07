@@ -2,10 +2,10 @@
  * Link previews through Browser Rendering. Wired but inert in local dev: the
  * `BROWSER` binding needs a Cloudflare account, and the call fails only when made.
  */
-import { v } from "../_generated/server.js";
+import { v } from "../_generated/server";
 import { authAction } from "../lib/crpc";
 
-const TITLE = /<title>([^<]*)<\/title>/iu;
+const TITLE = /<title(?:\s[^>]*)?>([^<]*)<\/title>/iu;
 
 export const preview = authAction.input({ url: v.string().url().max(2048) }).action(async ({ args, ctx }) => {
     const html = await ctx.browser.content(args.url);

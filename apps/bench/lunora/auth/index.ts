@@ -18,17 +18,19 @@
  *     reads `.auth()` does not expose: the session + member lookup in
  *     `resolveIdentity`, and the member count the organization hooks project.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, isDevEnvironment, lunoraD1Adapter } from "@lunora/auth";
 import { admin, organization, passkey, twoFactor, uiConfig } from "@lunora/auth/plugins";
 import { isLunoraError } from "@lunora/errors";
 import { createMailerFromEnv } from "@lunora/mail";
 import { APIError } from "better-auth/api";
-import type { ShardNamespaceLike } from "lunorash/runtime";
+import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
 import { createShardClient } from "lunorash/runtime";
 
-import { internal } from "../_generated/internal.js";
-import { INVITATION_EXPIRES_SECONDS } from "../seats.js";
+import { internal } from "../_generated/internal";
+import { INVITATION_EXPIRES_SECONDS } from "../seats";
 
 /**
  * The Worker env bindings this module needs. Lunora generates a richer `Env`
@@ -46,6 +48,13 @@ export interface AuthEnv {
     /** The shard namespace — the organization hooks write the admin projection through it. */
     SHARD: ShardNamespaceLike;
 }
+
+/**
+ * The request's `ExecutionContext`, set around each Worker `fetch` by `lunora/server.ts`.
+ * better-auth's `backgroundTasks` handler is one process-wide option, so it reads the
+ * context of the request in flight from here.
+ */
+export const requestContext = new AsyncLocalStorage<ExecutionContextLike>();
 
 /**
  * Send a transactional auth email (verification link, password reset) through
@@ -226,6 +235,39 @@ const holdInvitationSeat = async (env: AuthEnv, organizationId: string, email: s
 };
 
 /**
+ * The link an invitee follows. It is built from the configured origin, never the request's
+ * Host header, because it is a credential-bearing link.
+ */
+const invitationLink = (env: AuthEnv, invitationId: string): string => {
+    if (env.BETTER_AUTH_URL === undefined) {
+        throw new Error("auth: BETTER_AUTH_URL is unset, so an invitation link cannot be built.");
+    }
+
+    const url = new URL("/accept-invitation", env.BETTER_AUTH_URL);
+
+    url.searchParams.set("id", invitationId);
+
+    return url.toString();
+};
+
+/**
+ * End a deleted organisation's paid subscriptions. Its admins lose the billing portal with
+ * their membership, so nothing in the app can cancel them afterwards. Logged rather than
+ * thrown: better-auth has already deleted the organisation, and the log line is what an
+ * operator acts on.
+ */
+const cancelOrganizationSubscriptions = async (env: AuthEnv, organizationId: string): Promise<void> => {
+    try {
+        await createShardClient(env.SHARD, { shardKey: "__root__" }).call(internal.payment.cancelOrganizationSubscriptions, {
+            referenceId: organizationId,
+        });
+    } catch (error) {
+        // eslint-disable-next-line no-console -- a live subscription with no owner is billing the customer; surface it in Worker logs
+        console.error("[payment] could not cancel a deleted organization's subscriptions", { error, organizationId });
+    }
+};
+
+/**
  * Give back an invitation's seat once it is accepted (the member now counts),
  * rejected or cancelled. Best-effort: better-auth has already committed the
  * change, and a hold that is not released lapses with its invitation.
@@ -257,6 +299,11 @@ const releaseInvitationSeat = async (env: AuthEnv, organizationId: string, email
  */
 export const authOptions = (env: AuthEnv): LunoraAuthOptions => {
     return {
+        // The reset send runs after the response. Handing it to the request's `waitUntil` keeps
+        // the Worker from cancelling it when the response returns.
+        advanced: {
+            backgroundTasks: { handler: (promise) => requestContext.getStore()?.waitUntil?.(promise) },
+        },
         baseURL: env.BETTER_AUTH_URL,
         emailAndPassword: {
             enabled: true,
@@ -294,6 +341,13 @@ export const authOptions = (env: AuthEnv): LunoraAuthOptions => {
                 // The seat hold an invitation takes (`lunora/seats.ts`) lapses with it, so both come from one constant.
                 invitationExpiresIn: INVITATION_EXPIRES_SECONDS,
                 membershipLimit: async (_user, record) => seatLimit(env, record.id),
+                sendInvitationEmail: async ({ email, id, organization: record }) => {
+                    await sendAuthEmail(env, {
+                        subject: `You're invited to ${record.name}`,
+                        text: `Accept the invitation to ${record.name}:\n${invitationLink(env, id)}`,
+                        to: email,
+                    });
+                },
                 // Keep the admin projection in step with the records it mirrors.
                 organizationHooks: {
                     beforeCreateInvitation: async ({ invitation, organization: record }) => holdInvitationSeat(env, record.id, invitation.email),
@@ -305,7 +359,10 @@ export const authOptions = (env: AuthEnv): LunoraAuthOptions => {
                     afterRejectInvitation: async ({ invitation, organization: record }) => releaseInvitationSeat(env, record.id, invitation.email),
                     afterAddMember: async ({ organization: record }) => projectOrganization(env, record),
                     afterCreateOrganization: async ({ organization: record }) => projectOrganization(env, record),
-                    afterDeleteOrganization: async ({ organization: record }) => projectOrganization(env, record, { status: "deleted" }),
+                    afterDeleteOrganization: async ({ organization: record }) => {
+                        await cancelOrganizationSubscriptions(env, record.id);
+                        await projectOrganization(env, record, { status: "deleted" });
+                    },
                     afterRemoveMember: async ({ organization: record }) => projectOrganization(env, record),
                     afterUpdateOrganization: async ({ organization: record }) => {
                         if (record) {

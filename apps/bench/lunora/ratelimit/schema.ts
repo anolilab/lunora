@@ -29,6 +29,8 @@ import { definePlugin, defineSchemaExtension, defineTable, v } from "lunorash/se
 export const limits = {
     /** Writes on the `send` path: 10 per caller, refilling continuously over 60s. */
     send: { kind: "token bucket", period: 60_000, rate: 10 },
+    /** Metered model calls (`ai`): 20 per caller per minute, shared across every isolate. */
+    inference: { kind: "token bucket", period: 60_000, rate: 20 },
 } as const satisfies RateLimitConfigMap;
 
 /** The limit names you've configured above. */

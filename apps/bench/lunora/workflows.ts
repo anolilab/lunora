@@ -5,7 +5,7 @@
  */
 import { defineWorkflow } from "@lunora/workflow";
 
-import { internal } from "./_generated/internal.js";
+import { internal } from "./_generated/internal";
 
 /**
  * A new organisation's first week: seed a starter task, send the welcome mail,
@@ -27,6 +27,15 @@ export const onboarding = defineWorkflow<{ email: string; organizationId: string
         };
 
         if (tasks > 1) {
+            return { nudged: false };
+        }
+
+        // The starter may have been removed since the welcome mail: a former member is not nudged.
+        const { member } = (await ctx.step.do("member", () => ctx.run(internal.membership.isMember, { organizationId, userId }, { shardKey: "__root__" }))) as {
+            member: boolean;
+        };
+
+        if (!member) {
             return { nudged: false };
         }
 

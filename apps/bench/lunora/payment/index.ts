@@ -63,7 +63,7 @@ import { internal } from "#lunora/_generated/internal.js";
 import { action, internalAction, internalMutation, query, v } from "#lunora/_generated/server.js";
 import type { CloudflareBindings, Doc, Id, QueryCtx } from "#lunora/_generated/server.js";
 
-import { API_CALLS, entitlementsFromPlans, PLANS } from "../plans.js";
+import { API_CALLS, entitlementsFromPlans, PLANS } from "../plans";
 
 /**
  * The Worker's bindings, narrowed so they can be looked up by name.
@@ -166,6 +166,23 @@ export const seatAllowance = internalAction.input({ referenceId: v.string() }).a
 
     return plans.some((plan) => plan.seats === undefined) ? null : (entitlements.limit("seats") ?? null);
 });
+
+/**
+ * Cancel now every subscription `referenceId` still holds. The organisation deletion hook in
+ * `lunora/auth/index.ts` calls it: once the organisation is gone its admins can no longer open
+ * the billing portal, so the subscription would run with nothing in the app able to end it.
+ * Internal, so only server code can cancel another organisation's billing.
+ */
+export const cancelOrganizationSubscriptions = internalAction
+    .input({ referenceId: v.string() })
+    .action(async ({ args: { referenceId }, ctx }): Promise<{ canceled: number }> => {
+        const subscriptions = await ctx.payments.listSubscriptions(referenceId);
+        const live = subscriptions.filter((subscription) => subscription.state !== "canceled");
+
+        await Promise.all(live.map((subscription) => ctx.payments.cancelSubscription(subscription.id)));
+
+        return { canceled: live.length };
+    });
 
 /** The org roles allowed to start a subscription or open the billing portal — the same pair `lunora/saas` lets write projects. */
 const BILLING_ADMIN_ROLES: ReadonlySet<string> = new Set(["admin", "owner"]);

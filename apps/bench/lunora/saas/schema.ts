@@ -55,6 +55,12 @@ export const SAAS_ORGANIZATIONS_TABLE = "saas_organizations";
 export const SAAS_ACTIVITY_PAGE = 50;
 
 /**
+ * How many active projects the dashboard's live list reads. Like the activity
+ * feed, every connected tab re-receives this many rows on each write.
+ */
+export const SAAS_PROJECTS_PAGE = 50;
+
+/**
  * The SaaS kit plugin. `lunora/schema.ts` wires it in through the managed
  * `.extend(saas.extension)` block that `registry add` splices.
  */

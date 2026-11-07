@@ -40,7 +40,7 @@
  */
 import { internalMutation, internalQuery, v } from "#lunora/_generated/server.js";
 
-import { limits, makeRateLimiter } from "./schema.js";
+import { limits, makeRateLimiter } from "./schema";
 
 /** Validator for a configured limit name (e.g. `"send"`). */
 const limitName = v.union(...(Object.keys(limits) as (keyof typeof limits)[]).map((name) => v.literal(name)));
@@ -84,4 +84,4 @@ export const reset = internalMutation
 
 // Re-export the plugin so callers can `import { ratelimit } from "./ratelimit"`
 // and attach the middleware: `c.mutation.use(ratelimit.middleware)`.
-export { limits, ratelimit } from "./schema.js";
+export { limits, ratelimit } from "./schema";

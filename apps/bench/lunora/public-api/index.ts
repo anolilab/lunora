@@ -9,7 +9,7 @@
  * Still needs a session: `authorizeShard` in `lunora/server.ts` refuses anonymous
  * callers on every shard and cannot single this procedure out (FINDINGS.md 20).
  */
-import { query } from "../_generated/server.js";
+import { query } from "../_generated/server";
 import { PLANS } from "../plans";
 
 /** One `COUNT` per catalog plan, so the work is the catalog's size, not the tenant count. */

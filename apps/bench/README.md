@@ -79,6 +79,7 @@ app runs.
 ## Scale it
 
 ```bash
+cd apps/bench   # from the repo root; the scripts resolve paths from here
 node scripts/generate.mjs --domains 12                      # 12 generated domains
 node scripts/generate.mjs --domains 12 --heavy-share 0.5    # half of them with a heavy SDK
 node scripts/generate.mjs --preset customer                 # 40 domains, heavy share 0.5 ≈ the app behind #1166
@@ -115,7 +116,7 @@ Presets: `core` (0 domains), `small` (8), `customer` (40, heavy share 0.5),
 Three benches. Each one generates the size, builds it, measures, and then
 restores the core-only state (pass `--keep` to skip the restore). Each writes
 JSON with the load average and the git SHA to `.bench/results/` and prints a
-table. Run them on a quiet machine, one at a time.
+table. Run them on a quiet machine, one at a time. Run every command from `apps/bench`.
 
 | Script                   | Measures                                                                                      | Typical run                                           |
 | ------------------------ | --------------------------------------------------------------------------------------------- | ----------------------------------------------------- |

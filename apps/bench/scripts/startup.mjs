@@ -29,7 +29,7 @@ import { gzipSync } from "node:zlib";
 
 import { eagerGraph, eagerPackages, registrySplit, startupActiveMs, summarize } from "./worker-startup-measure.js";
 import { appDirectory, sizeFromArgs } from "./generate.mjs";
-import { benchDirectory, buildMode, parseModes, quietEnv, rotated, sizeLabel, withSizedApp, wrangler } from "./sized-app.mjs";
+import { benchDirectory, buildMode, countArg, parseModes, quietEnv, rotated, sizeLabel, withSizedApp, wrangler } from "./sized-app.mjs";
 
 const { values } = parseArgs({
     options: {
@@ -44,7 +44,7 @@ const { values } = parseArgs({
 
 const rootDirectory = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const modes = parseModes(values.modes);
-const runs = Number(values.runs);
+const runs = countArg("runs", values.runs);
 
 const size = sizeFromArgs({ domains: values.domains, heavyShare: values["heavy-share"], preset: values.preset });
 const presetName = sizeLabel(values, size);

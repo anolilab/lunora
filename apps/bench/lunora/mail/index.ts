@@ -48,7 +48,7 @@
  * every Lunora registry item uses for bindings, vars, and secrets.
  */
 import { createMailerFromEnv } from "@lunora/mail";
-import type { Mailer, SendOptions } from "@lunora/mail";
+import type { Mailer, QueueLike, SendOptions } from "@lunora/mail";
 import { internalAction, v } from "#lunora/_generated/server.js";
 import type { CloudflareBindings } from "#lunora/_generated/server.js";
 import { env as workerEnv } from "cloudflare:workers";
@@ -83,14 +83,22 @@ const cloudflareSend = async (from: string, to: string, raw: string): Promise<vo
  * The capture-vs-deliver decision + the inbox wiring live in `@lunora/mail`'s
  * `createMailerFromEnv`, so the same logic backs `@lunora/auth`'s email too.
  *
- * Pass a `queue` binding in `createMailerFromEnv`'s options to enable
- * {@link queueEmail}.
+ * `queue` is the `QUEUE_MAIL` producer binding and backs {@link queueEmail}.
+ * Without it, `queue()` throws outside dev capture mode even though the Worker
+ * declares the queue.
  *
  * `cloudflareSend` is passed only when the `SEND_EMAIL` binding exists:
  * `createMailerFromEnv` prefers it whenever it is supplied, so a Resend-only
  * deployment would otherwise fail inside it instead of using `RESEND_API_KEY`.
  */
-const mailer = (): Mailer => createMailerFromEnv(env, env["SEND_EMAIL"] === undefined ? {} : { cloudflareSend });
+const mailer = (): Mailer => {
+    const queue = env["QUEUE_MAIL"] as QueueLike | undefined;
+
+    return createMailerFromEnv(env, {
+        ...(env["SEND_EMAIL"] === undefined ? {} : { cloudflareSend }),
+        ...(queue === undefined ? {} : { queue }),
+    });
+};
 
 /**
  * Validator for the email payload. Mirrors `@lunora/mail`'s `SendOptions` minus
@@ -98,17 +106,20 @@ const mailer = (): Mailer => createMailerFromEnv(env, env["SEND_EMAIL"] === unde
  * can't cross the RPC boundary as args). To send a React template, render it in
  * a server-side wrapper and pass `html`/`text`, or call `mailer.send({ react })`
  * directly from your own action.
+ *
+ * One `to` and no `cc`/`bcc`: the Cloudflare Email Workers binding (the default
+ * transport) delivers to a single recipient and rejects the rest. Accepting
+ * them here would fail only at send time in production. Fan out one call per
+ * recipient instead.
  */
 const emailArgs = {
-    bcc: v.optional(v.array(v.string())),
-    cc: v.optional(v.array(v.string())),
     from: v.optional(v.string()),
     headers: v.optional(v.record(v.string(), v.string())),
     html: v.optional(v.string()),
     replyTo: v.optional(v.string()),
     subject: v.string(),
     text: v.optional(v.string()),
-    to: v.union(v.string(), v.array(v.string())),
+    to: v.string(),
 } as const;
 
 /**
@@ -117,18 +128,14 @@ const emailArgs = {
  * "use the mailer default", e.g. the configured `from`).
  */
 const toSendOptions = (args: {
-    bcc?: string[];
-    cc?: string[];
     from?: string;
     headers?: Record<string, string>;
     html?: string;
     replyTo?: string;
     subject: string;
     text?: string;
-    to: string | string[];
+    to: string;
 }): SendOptions => ({
-    bcc: args.bcc,
-    cc: args.cc,
     from: args.from,
     headers: args.headers,
     html: args.html,

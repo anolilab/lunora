@@ -10,12 +10,12 @@ import { createStripeAdapter } from "@lunora/payment/stripe";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import type { R2BucketLike } from "@lunora/storage";
 import { createProcedureChargeGate } from "@lunora/x402/charge";
-import type { ShardNamespaceLike } from "lunorash/runtime";
+import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
 import { consoleSink, otlpSink } from "lunorash/runtime";
 
-import { defineApp } from "./_generated/app.js";
-import { openRpcSpec } from "./_generated/openrpc.js";
-import { authOptions, getAuth } from "./auth/index";
+import { defineApp } from "./_generated/app";
+import { openRpcSpec } from "./_generated/openrpc";
+import { authOptions, getAuth, requestContext } from "./auth/index";
 import http from "./http";
 import { entitlementsFromPlans, PLANS } from "./plans";
 
@@ -53,6 +53,9 @@ const telemetry = (env: Env) =>
     env.LUNORA_OTLP_ENDPOINT ? otlpSink({ endpoint: env.LUNORA_OTLP_ENDPOINT, token: env.LUNORA_OTLP_TOKEN ?? "" }) : consoleSink();
 
 const BEARER = /^Bearer\s+/iu;
+
+/** The `event.type`s that need an operator: a failed charge, a lapsed subscription, a sweep that could not repair a row, a metered forward that never reached the provider. */
+const PAYMENT_FAILURE_EVENTS: ReadonlySet<string> = new Set(["payment.failed", "reconcile.error", "subscription.past_due", "usage.report_failed"]);
 
 /**
  * MCP over HTTP: one tool per public function, run as the caller's own bearer
@@ -246,8 +249,15 @@ const app = defineApp<Env>()
              * Worker logs.
              */
             observability: (event) => {
-                // eslint-disable-next-line no-console -- Workers Logs is where this reaches an operator in the kit
-                console.log("[payment]", event.type, event.provider, "referenceId" in event ? event.referenceId : undefined);
+                const fields = { provider: event.provider, referenceId: "referenceId" in event ? event.referenceId : undefined, type: event.type };
+
+                if (PAYMENT_FAILURE_EVENTS.has(event.type)) {
+                    // eslint-disable-next-line no-console -- Workers Logs is where this reaches an operator in the kit; error severity makes it filterable
+                    console.error("[payment]", event.type, fields);
+                } else {
+                    // eslint-disable-next-line no-console -- Workers Logs is where this reaches an operator in the kit
+                    console.log("[payment]", event.type, fields);
+                }
             },
         };
     })
@@ -300,8 +310,14 @@ const app = defineApp<Env>()
 
 export const { ShardDO } = app;
 // Workflow entrypoints for `lunora/workflows.ts` and the durable agents in `lunora/agents.ts`.
-export * from "./_generated/agents.js";
-export { ShardRegistryDO } from "./_generated/shardRegistry.js";
-export * from "./_generated/workflows.js";
+export * from "./_generated/agents";
+export { ShardRegistryDO } from "./_generated/shardRegistry";
+export * from "./_generated/workflows";
 export { SchedulerDO } from "@lunora/scheduler";
-export default app;
+// better-auth sends the password-reset mail after the response; its background handler
+// (`authOptions`) reads the request's `waitUntil` from here so Workers does not cancel it.
+export default {
+    ...app,
+    fetch: (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> =>
+        requestContext.run(context, () => app.fetch(request, env, context)),
+};

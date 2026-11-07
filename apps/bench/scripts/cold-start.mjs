@@ -39,7 +39,7 @@ import { createServiceClient } from "lunorash/client/service";
 import { unstable_startWorker as startWorker } from "wrangler";
 
 import { appDirectory, domainKey, OFFLINE_CALLS, shapeOf, sizeFromArgs } from "./generate.mjs";
-import { benchDirectory, buildMode, parseModes, sizeLabel, withSizedApp } from "./sized-app.mjs";
+import { benchDirectory, buildMode, countArg, parseModes, sizeLabel, withSizedApp } from "./sized-app.mjs";
 
 const { values } = parseArgs({
     options: {
@@ -54,8 +54,8 @@ const { values } = parseArgs({
 });
 
 const modes = parseModes(values.modes);
-const samples = Number(values.samples);
-const warmCalls = Number(values.warm);
+const samples = countArg("samples", values.samples);
+const warmCalls = countArg("warm", values.warm, 0);
 const size = sizeFromArgs({ domains: values.domains, heavyShare: values["heavy-share"], preset: values.preset });
 const presetName = sizeLabel(values, size);
 const stateDirectory = join(benchDirectory, "cold-state");
@@ -237,7 +237,8 @@ const shuffled = (items, seed) => {
     let state = seed;
 
     for (let index = copy.length - 1; index > 0; index--) {
-        state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+        // Low 31 bits of the LCG step. The exact product exceeds 2^53, so the double-precision `%` would round it.
+        state = (Math.imul(state, 1_103_515_245) + 12_345) & 0x7f_ff_ff_ff;
 
         const other = state % (index + 1);
 
@@ -366,7 +367,7 @@ const summary = Object.fromEntries(
                 coldSweep: stats(
                     list.filter((run) => run.cold.every((result) => result.ok)).map((run) => run.cold.reduce((sum, result) => sum + result.ms, 0)),
                 ),
-                coldToFirst: stats(list.map((run) => run.coldToFirstMs)),
+                coldToFirst: stats(list.filter((run) => run.first.ok).map((run) => run.coldToFirstMs)),
                 failures: failures.length,
                 firstErrors: [...new Set(failures.map((result) => result.error))].slice(0, 5),
                 firstResponse: stats(list.filter((run) => run.first.ok).map((run) => run.first.ms)),

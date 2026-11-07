@@ -34,21 +34,21 @@ import { gzipSync } from "node:zlib";
 
 import { startupActiveMs, summarize } from "./worker-startup-measure.js";
 import { appDirectory, sizeFromArgs } from "./generate.mjs";
-import { benchDirectory, buildMode, quietEnv, rotated, sizeLabel, withSizedApp, wrangler } from "./sized-app.mjs";
+import { benchDirectory, buildMode, countArg, quietEnv, rotated, sizeLabel, withSizedApp, wrangler } from "./sized-app.mjs";
 
 const { values } = parseArgs({
     options: {
         domains: { type: "string" },
         "heavy-share": { type: "string" },
         keep: { default: false, type: "boolean" },
-        preset: { default: "customer", type: "string" },
+        preset: { type: "string" },
         runs: { default: "7", type: "string" },
     },
 });
 
-const runs = Number(values.runs);
-// `--preset` has a default, so `--domains` must override it rather than be ignored.
-const preset = values.domains === undefined ? values.preset : undefined;
+const runs = countArg("runs", values.runs);
+// With no size flag at all, chunked measures the customer preset; any explicit size flag replaces that default.
+const preset = values.preset ?? (values.domains === undefined && values["heavy-share"] === undefined ? "customer" : undefined);
 const size = sizeFromArgs({ domains: values.domains, heavyShare: values["heavy-share"], preset });
 const presetName = sizeLabel({ domains: values.domains, preset }, size);
 const vite = join(appDirectory, "node_modules", ".bin", "vite");
@@ -148,19 +148,23 @@ const shape = await withSizedApp(size, { keep: values.keep }, (generated) => {
 
         runOrders.push(order.map((artifact) => artifact.name));
 
-        for (const artifact of order) {
-            if (artifact.errors.length > 0) {
-                continue;
-            }
+        const failedThisRun = new Set();
 
+        for (const artifact of order) {
             const result = profile(artifact.bundle, artifact.name);
 
-            (result.error === undefined ? artifact.samples : artifact.errors).push(result.ms ?? result.error);
+            // A failed run loses only its own sample: the artifact is still measured on every later run.
+            if (result.error === undefined) {
+                artifact.samples.push(result.ms);
+            } else {
+                artifact.errors.push(result.error);
+                failedThisRun.add(artifact.name);
+            }
         }
 
         process.stderr.write(
             `[chunked] run ${String(run + 1)}/${String(runs)}: ${Object.values(artifacts)
-                .map((artifact) => `${artifact.name} ${artifact.errors.length > 0 ? "failed" : String(artifact.samples.at(-1))}`)
+                .map((artifact) => `${artifact.name} ${failedThisRun.has(artifact.name) ? "failed" : String(artifact.samples.at(-1))}`)
                 .join(", ")} (load ${loadavg()[0].toFixed(1)})\n`,
         );
     }

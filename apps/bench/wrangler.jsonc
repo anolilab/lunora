@@ -30,7 +30,9 @@
         },
     ],
     "vars": {
+        // The worker's public URL. Scheduled and agent dispatch call back to it, and the MCP endpoint 401s without it.
         "APP_BASE_URL": "",
+        "LUNORA_ORIGIN_URL": "",
     },
     "ai": {
         "binding": "AI",
@@ -50,6 +52,7 @@
     "kv_namespaces": [
         {
             "binding": "KV",
+            "id": "<replace-with-kv-namespace-id>",
         },
     ],
     "hyperdrive": [

@@ -282,13 +282,29 @@ export const get = orgQuery
             throw new LunoraError("NOT_FOUND", "${key} not found");
         }
 
-        // \`lines.add\` caps a record at MAX_LINES positions, so this reads every line and the total is exact.
-        const items = await ctx.db
-            .query("${lines}")
-            .withIndex("byRecord", (q) => q.eq("organizationId", organizationId).eq("recordId", args.id))
-            .take(MAX_LINES);
+        const linesOf = () =>
+            ctx.db
+                .query("${lines}")
+                .withIndex("byRecord", (q) => q.eq("organizationId", organizationId).eq("recordId", args.id));
+        const items = await linesOf().take(MAX_LINES);
 
-        return { items, record, total: items.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0) };
+        // The total pages through every line: \`importMany\` numbers lines from zero, so a record can hold one more than MAX_LINES.
+        let total = 0;
+        let cursor: string | null = null;
+        let isDone = false;
+
+        while (!isDone) {
+            const page = await linesOf().paginate({ cursor, numItems: MAX_LINES });
+
+            for (const line of page.page) {
+                total += line.quantity * line.unitPrice;
+            }
+
+            cursor = page.continueCursor;
+            isDone = page.isDone;
+        }
+
+        return { items, record, total };
     });
 
 export const stats = orgQuery
@@ -405,7 +421,9 @@ export const archive = orgMutation
     .input({ id: v.id("${table}") })
     .mutation(async ({ args, ctx }) => {
         await requireWriter(ctx);
-        await ctx.db.patch("${table}", args.id, { archivedAt: Date.now() });
+        const now = Date.now();
+
+        await ctx.db.patch("${table}", args.id, { archivedAt: now, updatedAt: now });
 
         return { ok: true as const };
     });
@@ -514,7 +532,7 @@ const notesModule = (key) => {
 
 import type { Id } from "../../_generated/server.js";
 import { v } from "../../_generated/server.js";
-import { orgMutation, orgQuery, requireOrg, tenantRead, tenantWrite } from "../../lib/crpc";
+import { orgMutation, orgQuery, requireOrg, requireWriter, tenantRead, tenantWrite } from "../../lib/crpc";
 
 export const forRecord = orgQuery
     .use(tenantRead("${table}"))
@@ -548,7 +566,7 @@ export const pin = orgMutation
     .use(tenantWrite("${table}"))
     .input({ id: v.id("${table}"), pinned: v.boolean() })
     .mutation(async ({ args, ctx }) => {
-        await requireOrg(ctx);
+        await requireWriter(ctx);
         await ctx.db.patch("${table}", args.id, { pinned: args.pinned });
 
         return { ok: true as const };
@@ -609,7 +627,8 @@ export const upsertCatalog = internalMutation
 const adminModule = (
     key,
     shape,
-) => `${header(key)}${shape.aiHook ? 'import { generateText } from "@lunora/ai";\n\n' : ""}import { internal } from "../../_generated/internal.js";
+) => `${header(key)}${shape.aiHook ? 'import { generateText } from "@lunora/ai";\n\n' : ""}import { LunoraError } from "@lunora/errors";
+import { internal } from "../../_generated/internal.js";
 import { v } from "../../_generated/server.js";
 import { authAction, orgBulkMutation, requireWriter, tenantWrite } from "../../lib/crpc";
 import { ${key}Import } from "./validators";
@@ -624,10 +643,15 @@ export const importMany = orgBulkMutation
         let lines = 0;
 
         for (const { lines: items = [], price, ...draft } of args.rows) {
+            if (items.length > ${MAX_LINES_PER_RECORD}) {
+                throw new LunoraError("UNPROCESSABLE", "a ${key} holds at most ${MAX_LINES_PER_RECORD} lines");
+            }
+
             const id = await ctx.db.insert("dom_${key}Records", { ...draft, amount: price?.amount ?? draft.amount, createdAt: now, createdBy: userId, organizationId, state: "draft", updatedAt: now });
 
-            for (const [position, item] of items.entries()) {
-                await ctx.db.insert("dom_${key}Lines", { ...item, createdAt: now, organizationId, position, recordId: id });
+            // Numbered from 1, as \`lines.add\` numbers them, so a record holds at most ${MAX_LINES_PER_RECORD} positions.
+            for (const [index, item] of items.entries()) {
+                await ctx.db.insert("dom_${key}Lines", { ...item, createdAt: now, organizationId, position: index + 1, recordId: id });
                 lines += 1;
             }
         }
@@ -883,6 +907,14 @@ ${tables.join("\n")}
 
 /** The size a CLI asked for: a preset, or `--domains` with an optional `--heavy-share` (0..1). */
 export const sizeFromArgs = ({ domains, heavyShare, preset }) => {
+    if (preset !== undefined && (domains !== undefined || heavyShare !== undefined)) {
+        throw new Error("--preset cannot be combined with --domains or --heavy-share");
+    }
+
+    if (preset === undefined && heavyShare !== undefined && domains === undefined) {
+        throw new Error("--heavy-share needs --domains");
+    }
+
     const size = preset === undefined ? { domains: Number(domains ?? 0), heavyShare: Number(heavyShare ?? 0) } : PRESETS[preset];
 
     if (size === undefined || !Number.isInteger(size.domains) || size.domains < 0 || !(size.heavyShare >= 0 && size.heavyShare <= 1)) {
@@ -900,7 +932,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     // `_generated/` registers every domain module; without codegen it still names the ones just removed.
     execFileSync(process.execPath, [join(appDirectory, "node_modules", "lunorash", "dist", "bin.mjs"), "codegen", "--api-spec", "both"], {
         cwd: appDirectory,
-        stdio: "ignore",
+        stdio: ["ignore", "ignore", "inherit"],
     });
     process.stdout.write(`${JSON.stringify(shape)}\n`);
 }

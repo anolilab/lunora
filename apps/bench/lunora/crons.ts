@@ -4,7 +4,7 @@
  */
 import { cronJobs } from "lunorash/server";
 
-import { internal } from "./_generated/internal.js";
+import { internal } from "./_generated/internal";
 
 const crons = cronJobs();
 

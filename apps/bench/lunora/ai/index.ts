@@ -16,26 +16,9 @@
  */
 import { generateText } from "@lunora/ai";
 import { LunoraError } from "@lunora/errors";
-import { RateLimiter, createMemoryStore, rateLimit } from "lunorash/ratelimit";
 
+import { internal } from "#lunora/_generated/internal.js";
 import { action, v } from "#lunora/_generated/server.js";
-
-/**
- * Per-caller rate limit on the model calls. The default store is in-memory
- * (per-isolate, resets on eviction); run `lunora add ratelimit` for the durable,
- * `ctx.db`-backed store in production, and tune the rate to your budget.
- *
- * The key at each `.use(...)` site below is the authenticated caller, falling
- * back to the server-trusted `ctx.ip` (Cloudflare's `CF-Connecting-IP`,
- * forwarded server-side, never read from a client header) so anonymous traffic
- * can't share — and exhaust — one global `"anon"` bucket.
- */
-const limiter = new RateLimiter({
-    config: {
-        inference: { kind: "token bucket", period: 60_000, rate: 20 },
-    },
-    store: createMemoryStore(),
-});
 
 /** The caller's id, or a clear failure — metered inference is never anonymous here. */
 const requireUser = (userId: string | null): string => {
@@ -58,23 +41,26 @@ const requireUser = (userId: string | null): string => {
  *
  * Requires the `AI` binding in wrangler.jsonc (added by this item).
  */
-export const summarize = action
-    .input({ text: v.string().max(20_000) })
-    .use(rateLimit(limiter, "inference", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
-    .action(async ({ args: { text }, ctx }) => {
-        requireUser(ctx.auth.userId);
+export const summarize = action.input({ text: v.string().max(20_000) }).action(async ({ args: { text }, ctx }) => {
+    const userId = requireUser(ctx.auth.userId);
+    // The bucket lives in `ctx.db`, so every isolate shares one budget. An in-memory limiter would give each isolate its own.
+    const budget = await ctx.runMutation(internal.ratelimit.consume, { key: userId, name: "inference" });
 
-        const result = await generateText({
-            // The output half of the neuron bill. Without it an anonymous-shaped
-            // prompt can drive an arbitrarily long completion; a 2-3 sentence
-            // summary has no business being longer than this.
-            maxOutputTokens: 300,
-            model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
-            prompt: `Summarize this text in 2-3 sentences:\n\n${text}`,
-        });
+    if (!budget.ok) {
+        throw new LunoraError("RATE_LIMITED", `inference is limited per caller; retry in ${String(budget.retryAfter ?? 0)} ms`);
+    }
 
-        return { summary: result.text };
+    const result = await generateText({
+        // The output half of the neuron bill. Without it an anonymous-shaped
+        // prompt can drive an arbitrarily long completion; a 2-3 sentence
+        // summary has no business being longer than this.
+        maxOutputTokens: 300,
+        model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+        prompt: `Summarize this text in 2-3 sentences:\n\n${text}`,
     });
+
+    return { summary: result.text };
+});
 
 const SENTIMENTS = ["positive", "negative", "neutral"] as const;
 
@@ -96,18 +82,21 @@ const toSentiment = (reply: string): Sentiment => {
 /**
  * Classify the sentiment of `text` as one of {@link SENTIMENTS}.
  */
-export const analyzeSentiment = action
-    .input({ text: v.string().max(20_000) })
-    .use(rateLimit(limiter, "inference", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
-    .action(async ({ args: { text }, ctx }) => {
-        requireUser(ctx.auth.userId);
+export const analyzeSentiment = action.input({ text: v.string().max(20_000) }).action(async ({ args: { text }, ctx }) => {
+    const userId = requireUser(ctx.auth.userId);
+    // The bucket lives in `ctx.db`, so every isolate shares one budget. An in-memory limiter would give each isolate its own.
+    const budget = await ctx.runMutation(internal.ratelimit.consume, { key: userId, name: "inference" });
 
-        const result = await generateText({
-            // One word is the whole contract; anything past that is billed waste.
-            maxOutputTokens: 10,
-            model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
-            prompt: `Analyze the sentiment. Respond with one word: positive, negative, or neutral.\n\n${text}`,
-        });
+    if (!budget.ok) {
+        throw new LunoraError("RATE_LIMITED", `inference is limited per caller; retry in ${String(budget.retryAfter ?? 0)} ms`);
+    }
 
-        return { sentiment: toSentiment(result.text) };
+    const result = await generateText({
+        // One word is the whole contract; anything past that is billed waste.
+        maxOutputTokens: 10,
+        model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+        prompt: `Analyze the sentiment. Respond with one word: positive, negative, or neutral.\n\n${text}`,
     });
+
+    return { sentiment: toSentiment(result.text) };
+});

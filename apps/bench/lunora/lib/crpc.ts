@@ -17,8 +17,8 @@ import type { Middleware, Policy } from "lunorash/server";
 import { definePolicies, rls } from "lunorash/server";
 import * as z from "zod";
 
-import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "../_generated/server.js";
-import { action, mutation, query, v } from "../_generated/server.js";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "../_generated/server";
+import { action, mutation, query, v } from "../_generated/server";
 
 /** Write limits every org-scoped mutation draws from; the bucket table is the one the `ratelimit` item declares. */
 export const appLimits = {
@@ -161,4 +161,4 @@ export const dateRangeSchema = z.object({ from: z.int(), to: z.int() }).refine((
 
 export const pageArgs = { cursor: v.optional(v.string()), limit: v.optional(v.number().int().min(1).max(200)) };
 
-export { internalMutation, v } from "../_generated/server.js";
+export { internalMutation, v } from "../_generated/server";

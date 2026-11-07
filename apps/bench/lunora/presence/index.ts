@@ -36,9 +36,9 @@ import { RateLimiter, rateLimit, createMemoryStore } from "lunorash/ratelimit";
 import type { MutationCtx } from "#lunora/_generated/server.js";
 import { internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
 
-import { PRESENCE_TABLE, PRESENCE_TTL_MS } from "./schema.js";
+import { PRESENCE_TABLE, PRESENCE_TTL_MS } from "./schema";
 
-export { presence } from "./schema.js";
+export { presence } from "./schema";
 
 /**
  * Per-session rate limit for the public `heartbeat` mutation — clients call it on

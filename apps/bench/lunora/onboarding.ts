@@ -10,12 +10,14 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { internalMutation, internalQuery, v } from "./_generated/server.js";
+import { internalMutation, internalQuery, v } from "./_generated/server";
 import { orgBulkMutation, requireWriter } from "./lib/crpc";
 
 /**
  * Idempotent per organisation: the instance id is derived from the tenant, so a
- * second start reports the first instance instead of mailing again. The `bulk`
+ * second start reports the running instance instead of mailing again. An
+ * instance that errored is restarted: Workflows replays the steps that finished,
+ * the welcome mail included, so only the failed step runs again. The `bulk`
  * budget (5 per minute per caller) bounds retries.
  */
 export const start = orgBulkMutation.mutation(async ({ ctx }) => {
@@ -28,9 +30,23 @@ export const start = orgBulkMutation.mutation(async ({ ctx }) => {
     }
 
     const id = `onboarding-${organizationId}`;
-    const { created } = await ctx.workflows.get("onboarding").createBatch({ instances: [{ id, params: { email, organizationId, userId } }] });
+    const workflow = ctx.workflows.get("onboarding");
+    const { created } = await workflow.createBatch({ instances: [{ id, params: { email, organizationId, userId } }] });
 
-    return { instanceId: id, started: created.length === 1 };
+    if (created.length === 1) {
+        return { instanceId: id, started: true };
+    }
+
+    const instance = await workflow.get(id);
+    const { status } = await instance.status();
+
+    if (status !== "errored") {
+        return { instanceId: id, started: false };
+    }
+
+    await instance.restart();
+
+    return { instanceId: id, started: true };
 });
 
 export const seedOrganization = internalMutation.input({ organizationId: v.string(), userId: v.string() }).mutation(async ({ args, ctx }) => {

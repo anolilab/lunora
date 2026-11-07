@@ -8,7 +8,7 @@
 import { defineQueue } from "@lunora/queue";
 import * as z from "zod";
 
-import { internal } from "./_generated/internal.js";
+import { internal } from "./_generated/internal";
 
 const domainEventSchema = z.object({ kind: z.string().min(1).max(64), organizationId: z.string().min(1), subjectId: z.string().optional() });
 
