@@ -76,7 +76,12 @@ const PRESENCE_DATA_MAX_BYTES = 4096;
 const presenceTenant = (identity: unknown): string => {
     const orgId = (identity as { orgId?: unknown } | null)?.orgId;
 
-    return typeof orgId === "string" ? orgId : "";
+    // Without an active organisation every such caller would share one room, so presence refuses them.
+    if (typeof orgId !== "string" || orgId === "") {
+        throw new LunoraError("FORBIDDEN", "presence needs an active organisation");
+    }
+
+    return orgId;
 };
 
 /** A single present member as returned by `listPresent`. */

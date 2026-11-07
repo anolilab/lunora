@@ -1,4 +1,4 @@
-import { lunoraSessionSync } from "@lunora/auth/plugins/client";
+import { lunoraSessionSync, passkeyClient } from "@lunora/auth/plugins/client";
 import { organizationClient, twoFactorClient } from "better-auth/client/plugins";
 import { createAuthClient } from "better-auth/react";
 
@@ -11,5 +11,5 @@ import { createAuthClient } from "better-auth/react";
  */
 export const authClient = createAuthClient({
     basePath: "/api/auth",
-    plugins: [lunoraSessionSync(), organizationClient(), twoFactorClient()],
+    plugins: [lunoraSessionSync(), organizationClient(), twoFactorClient(), passkeyClient()],
 });

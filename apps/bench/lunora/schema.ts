@@ -27,6 +27,11 @@ export default defineSchema({
      * and taken inside a mutation, because only a mutation serialises two
      * concurrent purchases; the provider call itself cannot.
      */
+    /** Organisations whose subscription cancellation after deletion is still owed (see `payment:sweepPendingCancels`). */
+    billing_pending: defineTable({
+        organizationId: v.string(),
+    }).index("byOrganization", ["organizationId"]),
+
     checkout_holds: defineTable({
         expiresAt: v.number(),
         priceId: v.string(),
@@ -58,6 +63,8 @@ export default defineSchema({
         labels: v.array(v.string()),
         organizationId: v.string(),
         priority: v.union(v.literal("low"), v.literal("normal"), v.literal("high"), v.literal("urgent")),
+        /** Written only by the onboarding seed, which the nudge count leaves out. Not in any caller's validator. */
+        starter: v.optional(v.boolean()),
         projectId: v.optional(v.id("saas_projects")),
         status: v.union(v.literal("todo"), v.literal("doing"), v.literal("review"), v.literal("done"), v.literal("archived")),
         title: v.string(),

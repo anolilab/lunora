@@ -112,6 +112,18 @@ const SignIn = (): ReactElement => {
         globalThis.location.reload();
     };
 
+    const signInWithPasskey = async (): Promise<void> => {
+        const result = await authClient.signIn.passkey();
+
+        if (result.error) {
+            setError(result.error.message ?? "passkey sign-in failed");
+
+            return;
+        }
+
+        globalThis.location.reload();
+    };
+
     if (needsSecondFactor) {
         return <SecondFactor />;
     }
@@ -132,6 +144,9 @@ const SignIn = (): ReactElement => {
             </button>
             <button name="mode" type="submit" value="up">
                 Sign up
+            </button>
+            <button onClick={() => void signInWithPasskey()} type="button">
+                Sign in with a passkey
             </button>
             {error === undefined ? undefined : <p role="alert">{error}</p>}
         </form>

@@ -257,10 +257,12 @@ const invitationLink = (env: AuthEnv, invitationId: string): string => {
  * operator acts on.
  */
 const cancelOrganizationSubscriptions = async (env: AuthEnv, organizationId: string): Promise<void> => {
+    const root = createShardClient(env.SHARD, { shardKey: "__root__" });
+
     try {
-        await createShardClient(env.SHARD, { shardKey: "__root__" }).call(internal.payment.cancelOrganizationSubscriptions, {
-            referenceId: organizationId,
-        });
+        // Recorded first, so an attempt that fails stays owed to the hourly sweep.
+        await root.call(internal.payment.recordPendingCancel, { referenceId: organizationId });
+        await root.call(internal.payment.cancelOrganizationSubscriptions, { referenceId: organizationId });
     } catch (error) {
         // eslint-disable-next-line no-console -- a live subscription with no owner is billing the customer; surface it in Worker logs
         console.error("[payment] could not cancel a deleted organization's subscriptions", { error, organizationId });

@@ -353,6 +353,18 @@ export const create = orgMutation
             throw new LunoraError("CONFLICT", \`code \${args.draft.code} is taken\`);
         }
 
+        // Totals add amounts across a domain, so a labelled amount and an unlabelled one cannot share it.
+        if (args.draft.amount !== undefined) {
+            const held = await ctx.db
+                .query("${table}")
+                .withIndex("byOrgCode", (q) => q.eq("organizationId", organizationId))
+                .take(200);
+
+            if (held.some((record) => record.currency !== undefined)) {
+                throw new LunoraError("UNPROCESSABLE", "this domain's amounts are in a currency: create cannot add an unlabelled amount");
+            }
+        }
+
         const now = Date.now();
         const id = await ctx.db.insert("${table}", { ...args.draft, createdAt: now, createdBy: userId, organizationId, state: "draft", updatedAt: now });
 

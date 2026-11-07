@@ -68,6 +68,7 @@ export const seedOrganization = internalMutation.input({ organizationId: v.strin
         createdAt: now,
         createdBy: args.userId,
         labels: ["onboarding"],
+        starter: true,
         organizationId: args.organizationId,
         priority: "normal",
         status: "todo",
@@ -84,5 +85,5 @@ export const progress = internalQuery.input({ organizationId: v.string() }).quer
         .withIndex("byOrgStatus", (q) => q.eq("organizationId", args.organizationId))
         .take(10);
 
-    return { tasks: tasks.filter((task) => task.title !== STARTER_TITLE || !task.labels.includes("onboarding")).length };
+    return { tasks: tasks.filter((task) => task.starter !== true).length };
 });

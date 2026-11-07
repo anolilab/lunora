@@ -60,7 +60,7 @@ import type { SubscriptionState } from "@lunora/payment";
 import { resolveEntitlements } from "@lunora/payment";
 import type { PaginationResult } from "lunorash/server";
 import { internal } from "#lunora/_generated/internal.js";
-import { action, internalAction, internalMutation, query, v } from "#lunora/_generated/server.js";
+import { action, internalAction, internalMutation, internalQuery, query, v } from "#lunora/_generated/server.js";
 import type { CloudflareBindings, Doc, Id, QueryCtx } from "#lunora/_generated/server.js";
 
 import { API_CALLS, entitlementsFromPlans, PLANS } from "../plans";
@@ -181,8 +181,49 @@ export const cancelOrganizationSubscriptions = internalAction
 
         await Promise.all(live.map((subscription) => ctx.payments.cancelSubscription(subscription.id)));
 
+        // Cleared only once every live subscription was cancelled: a throw above leaves the row for the sweep.
+        await ctx.runMutation(internal.payment.clearPendingCancel, { referenceId });
+
         return { canceled: live.length };
     });
+
+/** Queued before the first attempt, so an attempt that fails is still owed. */
+export const recordPendingCancel = internalMutation.input({ referenceId: v.string() }).mutation(async ({ args: { referenceId }, ctx }): Promise<void> => {
+    const existing = await ctx.db
+        .query("billing_pending")
+        .withIndex("byOrganization", (q) => q.eq("organizationId", referenceId))
+        .first();
+
+    if (existing === null) {
+        await ctx.db.insert("billing_pending", { organizationId: referenceId });
+    }
+});
+
+export const clearPendingCancel = internalMutation.input({ referenceId: v.string() }).mutation(async ({ args: { referenceId }, ctx }): Promise<void> => {
+    const rows = await ctx.db
+        .query("billing_pending")
+        .withIndex("byOrganization", (q) => q.eq("organizationId", referenceId))
+        .collect();
+
+    await Promise.all(rows.map(async (row) => ctx.db.delete("billing_pending", row._id)));
+});
+
+export const pendingCancels = internalQuery.input({ limit: v.number() }).query(async ({ args: { limit }, ctx }): Promise<string[]> => {
+    const rows = await ctx.db.query("billing_pending").take(limit);
+
+    return rows.map((row) => row.organizationId);
+});
+
+/** The hourly retry for cancellations a deletion could not finish. Bounded per run; the rest wait for the next one. */
+export const sweepPendingCancels = internalAction.action(async ({ ctx }): Promise<{ failed: number; swept: number }> => {
+    const pending = await ctx.runQuery(internal.payment.pendingCancels, { limit: 20 });
+    const results = await Promise.allSettled(
+        pending.map(async (referenceId) => ctx.runAction(internal.payment.cancelOrganizationSubscriptions, { referenceId })),
+    );
+    const failed = results.filter((result) => result.status === "rejected").length;
+
+    return { failed, swept: results.length - failed };
+});
 
 /** The org roles allowed to start a subscription or open the billing portal — the same pair `lunora/saas` lets write projects. */
 const BILLING_ADMIN_ROLES: ReadonlySet<string> = new Set(["admin", "owner"]);
