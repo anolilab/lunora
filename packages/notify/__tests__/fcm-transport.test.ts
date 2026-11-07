@@ -644,4 +644,29 @@ describe("createFcmTransport", () => {
 
         expect(fetchMock).toHaveBeenCalledWith("https://fcm.example.test/v1/projects/demo-project/messages:send", expect.anything());
     });
+
+    it("caps each retry delay, so a large retry count never asks a timer for more than the cap", async () => {
+        expect.hasAssertions();
+
+        const delays: number[] = [];
+        const timers = vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, delay?: number) => {
+            delays.push(delay ?? 0);
+            callback();
+
+            return 0;
+        }) as unknown as typeof setTimeout);
+
+        try {
+            const refused = { body: { error: { message: "quota", status: "RESOURCE_EXHAUSTED" } }, status: 429 };
+            const { fetchMock } = scriptedFetch(refused, refused, refused, refused, refused, refused);
+
+            await expect(
+                createFcmTransport({ ...config, retries: 5 }, { fetch: fetchMock, retryBaseDelay: 1_000_000_000 }).sendTo({ topic: "news" }, { body: "x" }),
+            ).rejects.toThrow(/RESOURCE_EXHAUSTED/u);
+            expect(delays.length).toBeGreaterThan(0);
+            expect(Math.max(...delays)).toBeLessThanOrEqual(30_000);
+        } finally {
+            timers.mockRestore();
+        }
+    });
 });

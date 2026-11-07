@@ -280,7 +280,11 @@ const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<Noti
 };
 
 /** FCM answers that re-sending cannot fix: a bad request (400), auth (401/403), not found (404), too large (413), or a refusal with a long Retry-After. */
-const FCM_PERMANENT_FAILURE = /\bFCM (?:200|400|401|403|404|413) |\bRetry-After exceeds the \d+s wait limit\b/u;
+// Anchored to the start of the message, after the engine's bracketed prefixes: text the upstream echoes later cannot classify the response.
+const FCM_PERMANENT_STATUS = /^(?:\[[^\]]*\]\s*)*FCM (?:200|400|401|403|404|413) /u;
+
+/** A throttled device whose Retry-After is longer than we will hold open: FCM's answer for that request, not a status. */
+const FCM_LONG_RETRY_AFTER = /\bRetry-After exceeds the \d+s wait limit\b/u;
 
 /**
  * Whether a retry cannot change this failure. Two classes qualify: a recipient that
@@ -313,14 +317,14 @@ const isPermanentFailure = (error: unknown): boolean => {
 
     // FCM's own final answers: a malformed or unauthorised request, or a 429 whose Retry-After we will not hold open.
     // The transport reports them as text, so the match is on the message, which the engine keeps.
-    return isGoneError(text) || (text !== undefined && FCM_PERMANENT_FAILURE.test(text));
+    return isGoneError(text) || (text !== undefined && (FCM_PERMANENT_STATUS.test(text) || FCM_LONG_RETRY_AFTER.test(text)));
 };
 
 /** FCM refusals of one request: the token is bad or gone, or the payload is too large. Not a service outage. */
 // `SENDER_ID_MISMATCH` (403) is one token's sender, not a fault of the whole service; it is excluded with the per-request refusals.
 // A bare 404 NOT_FOUND is not here: FCM answers a wrong project id with it too, so it is a service-level failure the circuit must count.
 // The dead-token 404 (UNREGISTERED) is caught by isGoneError; the 400, 413 and one-token SENDER_ID_MISMATCH refusals are listed here.
-const FCM_REQUEST_REFUSAL = /\bFCM (?:400|413) |\bFCM 403 SENDER_ID_MISMATCH\b/u;
+const FCM_REQUEST_REFUSAL = /^(?:\[[^\]]*\]\s*)*FCM (?:400 |413 |403 SENDER_ID_MISMATCH\b)/u;
 
 /** Whether a failure is about this one request, so the circuit should not count it. */
 const isRequestRefusal = (error: unknown): boolean => {

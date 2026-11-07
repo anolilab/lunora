@@ -127,6 +127,9 @@ const MAX_ATTEMPTS = 4;
 /** One POST per engine attempt. The engine's retry middleware owns the retries, so they are not doubled here. */
 const ENGINE_ATTEMPTS = 1;
 
+/** The longest delay between two attempts, before any `Retry-After`. Keeps a large retry count from overflowing a timer. */
+const MAX_BACKOFF_MS = 30_000;
+
 /** A success body is a short JSON object. Anything larger is refused rather than buffered. */
 const MAX_RESPONSE_BYTES = 64 * 1024;
 
@@ -453,7 +456,8 @@ const postMessage = async (
             // Jitter spreads retries out; it is not a security input.
             // eslint-disable-next-line sonarjs/pseudo-random -- retry jitter, not a secret
             const jitterMs = Math.floor(Math.random() * baseDelay);
-            const backoffMs = baseDelay * 2 ** (attempt - 1) + jitterMs;
+            // Capped: a large retry count would otherwise grow past what a timer can hold, and then fire almost at once.
+            const backoffMs = Math.min(baseDelay * 2 ** (attempt - 1) + jitterMs, MAX_BACKOFF_MS);
 
             // eslint-disable-next-line no-await-in-loop -- retries are sequential by definition: each waits out the last
             await new Promise((resolve) => {
