@@ -495,7 +495,7 @@ Re-exported from `@visulima/notification` — signature tracked at its source.
 ### `buildEngine` (const)
 
 ```ts
-const buildEngine: (resolved: ResolvedProviders) => Notification;
+const buildEngine: (resolved: ResolvedProviders, fcmTransport?: FcmTransport) => Notification;
 ```
 
 ### `createNotify` (const)
@@ -661,6 +661,39 @@ public API and is gated as one. Listed once per package, sorted by name.
 interface BroadcastPageResult {
     nextCursor?: string;
     result: BroadcastResult;
+}
+```
+
+### `FcmPayload` (type)
+
+```ts
+type FcmPayload = Omit<PushPayload, "to"> & {
+    fcmOverrides?: FcmPlatformConfig;
+};
+```
+
+### `FcmTarget` (type)
+
+```ts
+type FcmTarget = {
+    condition: string;
+} | {
+    token: string;
+} | {
+    topic: string;
+};
+```
+
+### `FcmTransport` (interface)
+
+```ts
+interface FcmTransport {
+    provider: Provider<unknown, FcmPayload & {
+        to: string | string[];
+    }>;
+    sendTo: (target: Exclude<FcmTarget, {
+        token: string;
+    }>, payload: FcmPayload) => Promise<string>;
 }
 ```
 

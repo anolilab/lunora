@@ -72,6 +72,9 @@ const NotificationsPanel = (): ReactElement => {
 
     const devices: PushSubscriptionDevice[] = data?.subscriptions ?? [];
     const failingCount = devices.filter((device) => device.lastStatus === "failed").length;
+    // The admin read is capped server-side at 1000 rows and does not say it was cut, so a full page
+    // means the failing count may be short. Say so instead of presenting it as exact.
+    const mayBeTruncated = devices.length >= 1000;
 
     // Client-side kind + substring filter over the already-fetched devices — never
     // triggers a refetch. The substring matches the target endpoint/id and owner.
@@ -134,7 +137,7 @@ const NotificationsPanel = (): ReactElement => {
                     type="button"
                     variant={failingOnly ? "secondary" : "ghost"}
                 >
-                    {t("{count} failing", { count: failingCount })}
+                    {mayBeTruncated ? t("{count}+ failing", { count: failingCount }) : t("{count} failing", { count: failingCount })}
                 </Button>
                 <Input
                     aria-label={t("Filter devices")}

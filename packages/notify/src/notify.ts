@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import type { Notification, Provider, Receipt, SuccessReceipt } from "@visulima/notification";
 
 import type { FcmTransport } from "./fcm-transport";
-import { createFcmTransport } from "./fcm-transport";
+import { assertFcmTarget, createFcmTransport } from "./fcm-transport";
 import { assertPushPayloadFits } from "./payload-size";
 import type { ResolvedProviders } from "./providers";
 import { buildEngine, checkPushTtl, checkPushUrgency } from "./providers";
@@ -110,8 +110,10 @@ const resolveProviders = (definition: NotifyDefinition, env: NotifyEnv): Resolve
 interface NotifyRuntime {
     engine?: Notification;
     fallbackStore?: SubscriptionStore;
-    /** The FCM transport behind `sendToTopic` / `sendToCondition`; `null` when `fcm` is not configured. */
+    /** The FCM transport behind the engine's push provider and `sendToTopic` / `sendToCondition`; `null` when `fcm` is not configured. */
     fcm?: FcmTransport | null;
+    /** The definition's channels, resolved once per isolate so the engine and the topic path share one FCM config. */
+    resolved?: ResolvedProviders;
     store?: SubscriptionStore;
     warnedNoPushOriginAllowlist: boolean;
     warnedNoStore: boolean;
@@ -206,11 +208,21 @@ export interface CreateNotifyOptions {
 export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, options: CreateNotifyOptions = {}): { notify: LunoraNotify; push: LunoraPush } => {
     const runtime = runtimeFor(definition, env);
 
+    // Resolved once per isolate: the engine's FCM provider and the topic path must
+    // share one config, or a factory returning fresh objects could split them.
+    runtime.resolved ??= resolveProviders(definition, env);
+
+    if (runtime.fcm === undefined) {
+        const fcmConfig = runtime.resolved.fcm;
+
+        runtime.fcm = fcmConfig === undefined ? null : createFcmTransport(fcmConfig);
+    }
+
     let engine: Notification;
 
     if (options.engine === undefined) {
         // Build once per isolate; the `options.engine` override seam bypasses it.
-        runtime.engine ??= buildEngine(resolveProviders(definition, env));
+        runtime.engine ??= buildEngine(runtime.resolved, runtime.fcm ?? undefined);
         engine = runtime.engine;
     } else {
         engine = options.engine;
@@ -246,13 +258,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
 
     // Topic and condition sends bypass the engine (they have no subscription rows to
     // route over), so the facade holds the same transport the engine's FCM provider wraps.
-    if (runtime.fcm === undefined) {
-        const fcmConfig = resolveMaybeFactory(definition.fcm, env);
-
-        runtime.fcm = fcmConfig === undefined ? null : createFcmTransport(fcmConfig);
-    }
-
-    const fcmTransport = runtime.fcm;
+    const fcmTransport = runtime.fcm ?? null;
     // `definition` before the defaults, `options` before both: the app's
     // `defineNotify` is the only seam an app has (codegen's call passes just
     // `{ log, metrics }`), while `options` stays the test/tuning override.
@@ -612,6 +618,8 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
 
     const sendFcmTarget = async (target: { condition: string } | { topic: string }, payload: PushContent): Promise<SuccessReceipt> => {
         checkPushPayload(payload);
+        // A malformed topic or condition is the caller's input error: refuse it before any send is counted or logged as a failure.
+        assertFcmTarget(target);
 
         if (fcmTransport === null) {
             observeSkip("push", "channel-not-configured");

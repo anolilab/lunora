@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { NotificationResult, Provider, PushPayload, RecipientResult, Result } from "@visulima/notification";
 import type { FcmConfig } from "@visulima/notification/providers/fcm";
 
@@ -88,14 +89,26 @@ interface FcmTransport {
 interface FcmTransportOptions {
     /** Injected for tests; defaults to the global `fetch`. */
     fetch?: typeof fetch;
+    /** Attempts for a direct `sendTo`, including the first. Defaults to four. */
+    maxAttempts?: number;
     /** Base of the exponential retry backoff, in ms. Only a test double changes it. */
     retryBaseDelay?: number;
 }
 
 const DEFAULT_ENDPOINT = "https://fcm.googleapis.com";
 
-/** One attempt plus three retries, the same budget the engine's own retry middleware spends. */
+/**
+ * Attempts a direct `sendTo` (topic or condition) makes: one plus three retries. The engine
+ * provider makes one attempt per POST and leaves retries to the engine's own middleware, so an
+ * engine-routed device send costs four POSTs, the same as web push.
+ */
 const MAX_ATTEMPTS = 4;
+
+/** One POST per engine attempt. The engine's retry middleware owns the retries, so they are not doubled here. */
+const ENGINE_ATTEMPTS = 1;
+
+/** A success body is a short JSON object. Anything larger is refused rather than buffered. */
+const MAX_RESPONSE_BYTES = 64 * 1024;
 
 /** Per request, so one stalled connection cannot hold a send open indefinitely. */
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -117,11 +130,55 @@ interface FcmErrorBody {
  * word itself, and no `HTTP 404` appears, so the subscription classifier in
  * `subscriptions/normalize` reads a dead token as gone and nothing else as gone.
  */
+/** The body is untrusted: a retryable status can arrive with a differently shaped error, so the shape is checked, not assumed. */
+const hasUnregisteredCode = (details: unknown): boolean =>
+    Array.isArray(details) &&
+    details.some((detail: unknown) => typeof detail === "object" && detail !== null && "errorCode" in detail && detail.errorCode === "UNREGISTERED");
+
 const failureMessage = (status: number, body: unknown): string => {
     const error = (body as FcmErrorBody | null | undefined)?.error;
-    const code = error?.details?.some((detail) => detail.errorCode === "UNREGISTERED") ? "UNREGISTERED" : (error?.status ?? "ERROR");
+    const code = hasUnregisteredCode(error?.details) ? "UNREGISTERED" : (error?.status ?? "ERROR");
 
     return `FCM ${String(status)} ${code}: ${error?.message ?? "request failed"}`;
+};
+
+/** Read a response body up to {@link MAX_RESPONSE_BYTES}, cancelling the stream once it is exceeded. */
+const readCappedBody = async (response: Response): Promise<string> => {
+    const reader = response.body?.getReader();
+
+    if (reader === undefined) {
+        return "";
+    }
+
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+
+    let next = await reader.read();
+
+    while (!next.done) {
+        size += next.value.byteLength;
+
+        if (size > MAX_RESPONSE_BYTES) {
+            // eslint-disable-next-line no-await-in-loop -- the cancel must settle before the error is thrown
+            await reader.cancel();
+
+            throw new Error(`FCM response is larger than ${String(MAX_RESPONSE_BYTES)} bytes`);
+        }
+
+        chunks.push(next.value);
+        // eslint-disable-next-line no-await-in-loop -- see above
+        next = await reader.read();
+    }
+
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+
+    for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+
+    return new TextDecoder().decode(bytes);
 };
 
 const parseBody = (text: string): unknown => {
@@ -190,14 +247,20 @@ const retryable = (status: number): boolean => status === 408 || status === 429 
  * POST one message, retrying transport errors and 408/429/5xx with jittered
  * exponential backoff. Any other failure is final on the first response.
  */
-const postMessage = async (config: FcmConfig, token: string, message: Record<string, unknown>, options: FcmTransportOptions): Promise<string> => {
+const postMessage = async (
+    config: FcmConfig,
+    token: string,
+    message: Record<string, unknown>,
+    attempts: number,
+    options: FcmTransportOptions,
+): Promise<string> => {
     const fetchImpl = options.fetch ?? fetch;
     const url = `${config.endpoint ?? DEFAULT_ENDPOINT}/v1/projects/${config.projectId}/messages:send`;
     const body = JSON.stringify({ message });
     const baseDelay = options.retryBaseDelay ?? 250;
     let lastError: Error = new Error("FCM send failed");
 
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
         if (attempt > 0) {
             // eslint-disable-next-line no-await-in-loop -- retries are sequential by definition: each waits out the last
             await new Promise((resolve) => {
@@ -224,12 +287,17 @@ const postMessage = async (config: FcmConfig, token: string, message: Record<str
         }
 
         // eslint-disable-next-line no-await-in-loop -- the body must be read before the next attempt is decided
-        const text = await response.text();
+        const text = await readCappedBody(response);
 
         if (response.ok) {
-            const name = (parseBody(text) as { name?: unknown } | undefined)?.name;
+            // A 2xx without a message name is not a delivery we can account for, so it fails rather than reporting an empty id.
+            const name = (parseBody(text) as { name?: unknown } | null | undefined)?.name;
 
-            return typeof name === "string" ? name : "";
+            if (typeof name !== "string" || name === "") {
+                throw new Error("FCM accepted the request but returned no message name");
+            }
+
+            return name;
         }
 
         lastError = new Error(failureMessage(response.status, parseBody(text)));
@@ -243,24 +311,52 @@ const postMessage = async (config: FcmConfig, token: string, message: Record<str
 };
 
 /**
+ * Reject a topic or condition the FCM API would refuse, before any request. A bad
+ * target is the caller's input error, so it is a `BAD_REQUEST`, not a send failure.
+ */
+const assertFcmTarget = (target: FcmTarget): void => {
+    if ("topic" in target && !TOPIC_PATTERN.test(target.topic)) {
+        throw new LunoraError("BAD_REQUEST", `@lunora/notify: FCM topic ${JSON.stringify(target.topic)} must match ${String(TOPIC_PATTERN)}`);
+    }
+
+    if ("condition" in target && target.condition.trim() === "") {
+        throw new LunoraError("BAD_REQUEST", "@lunora/notify: FCM condition must be a non-empty expression");
+    }
+};
+
+/**
  * An edge-safe FCM HTTP v1 transport. It replaces `@visulima/notification`'s FCM
  * provider, which builds the message from title/body/data only and keeps just the
  * error text of a failed request. This one forwards the per-platform overrides and
  * the structured error code, so a dead token is recognised by `UNREGISTERED` alone.
  */
 const createFcmTransport = (config: FcmConfig, options: FcmTransportOptions = {}): FcmTransport => {
-    const accessToken = async (): Promise<string> => (config.getAccessToken === undefined ? (config.accessToken ?? "") : await config.getAccessToken());
+    // Checked at send time, not at construction: a throw from the engine's provider would take every channel down with it.
+    const requireConfigured = (): void => {
+        if (!config.projectId) {
+            throw new Error("FCM projectId is not configured");
+        }
+    };
+
+    const accessToken = async (): Promise<string> => {
+        if (config.getAccessToken !== undefined) {
+            return config.getAccessToken();
+        }
+
+        if (config.accessToken !== undefined && config.accessToken !== "") {
+            return config.accessToken;
+        }
+
+        throw new Error("FCM has no access token: set FCM_SERVICE_ACCOUNT, or pass getAccessToken to the fcm channel");
+    };
+
+    const sendAttempts = options.maxAttempts ?? MAX_ATTEMPTS;
 
     const sendTo: FcmTransport["sendTo"] = async (target, payload) => {
-        if ("topic" in target && !TOPIC_PATTERN.test(target.topic)) {
-            throw new TypeError(`@lunora/notify: FCM topic ${JSON.stringify(target.topic)} must match ${String(TOPIC_PATTERN)}`);
-        }
+        assertFcmTarget(target);
+        requireConfigured();
 
-        if ("condition" in target && target.condition.trim() === "") {
-            throw new TypeError("@lunora/notify: FCM condition must be a non-empty expression");
-        }
-
-        return postMessage(config, await accessToken(), buildFcmMessage(payload, target), options);
+        return postMessage(config, await accessToken(), buildFcmMessage(payload, target), sendAttempts, options);
     };
 
     const provider: Provider<unknown, FcmPayload & { to: string | string[] }> = {
@@ -272,6 +368,17 @@ const createFcmTransport = (config: FcmConfig, options: FcmTransportOptions = {}
         isAvailable: () => Boolean(config.projectId && (config.accessToken ?? config.getAccessToken)),
         options: config,
         send: async (payload): Promise<Result<NotificationResult>> => {
+            // Same rule the previous provider applied: a bad TTL fails the send before a credential or a request is used.
+            if (payload.ttl !== undefined && (!Number.isInteger(payload.ttl) || payload.ttl < 0)) {
+                return { error: new Error(`push ttl must be a non-negative integer, got ${String(payload.ttl)}`), success: false };
+            }
+
+            try {
+                requireConfigured();
+            } catch (error) {
+                return { error: new Error(messageOf(error)), success: false };
+            }
+
             let token: string;
 
             try {
@@ -286,7 +393,7 @@ const createFcmTransport = (config: FcmConfig, options: FcmTransportOptions = {}
             for (const recipient of targets) {
                 try {
                     // eslint-disable-next-line no-await-in-loop -- one message per recipient, in order, matching the engine's per-target receipts
-                    const messageId = await postMessage(config, token, buildFcmMessage(payload, { token: recipient }), options);
+                    const messageId = await postMessage(config, token, buildFcmMessage(payload, { token: recipient }), ENGINE_ATTEMPTS, options);
 
                     recipients.push({ id: recipient, messageId, status: "sent" });
                 } catch (error) {
@@ -311,4 +418,4 @@ const createFcmTransport = (config: FcmConfig, options: FcmTransportOptions = {}
 };
 
 export type { FcmAndroidConfig, FcmApnsConfig, FcmPayload, FcmPlatformConfig, FcmTarget, FcmTransport, FcmTransportOptions, FcmWebpushConfig };
-export { buildFcmMessage, createFcmTransport };
+export { assertFcmTarget, buildFcmMessage, createFcmTransport };

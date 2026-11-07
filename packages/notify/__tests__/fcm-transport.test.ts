@@ -127,32 +127,80 @@ describe("createFcmTransport", () => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
-    it("retries a 503 and succeeds on the next attempt", async () => {
+    it("retries a 503 on a direct topic send and succeeds on the next attempt", async () => {
         expect.hasAssertions();
 
         const { fetchMock } = scriptedFetch(
             { body: { error: { message: "backend unavailable", status: "UNAVAILABLE" } }, status: 503 },
             { body: { name: "projects/demo-project/messages/4" }, status: 200 },
         );
-        const result = await createFcmTransport(config, { fetch: fetchMock, retryBaseDelay: 0 }).provider.send({ body: "hi", to: "token" });
+        const transport = createFcmTransport(config, { fetch: fetchMock, retryBaseDelay: 0 });
 
-        expect(result.success).toBe(true);
+        await expect(transport.sendTo({ topic: "news" }, { body: "hi" })).resolves.toBe("projects/demo-project/messages/4");
         expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    it("gives up after the retry budget on a persistent 5xx", async () => {
+    it("gives up after the retry budget on a persistent 5xx of a direct topic send", async () => {
         expect.hasAssertions();
 
-        const { fetchMock } = scriptedFetch(
-            { body: { error: { message: "down", status: "UNAVAILABLE" } }, status: 503 },
-            { body: { error: { message: "down", status: "UNAVAILABLE" } }, status: 503 },
-            { body: { error: { message: "down", status: "UNAVAILABLE" } }, status: 503 },
-            { body: { error: { message: "down", status: "UNAVAILABLE" } }, status: 503 },
-        );
+        const down = { body: { error: { message: "down", status: "UNAVAILABLE" } }, status: 503 };
+        const { fetchMock } = scriptedFetch(down, down, down, down);
+        const transport = createFcmTransport(config, { fetch: fetchMock, retryBaseDelay: 0 });
+
+        await expect(transport.sendTo({ topic: "news" }, { body: "hi" })).rejects.toThrow(/UNAVAILABLE/u);
+        expect(fetchMock).toHaveBeenCalledTimes(4);
+    });
+
+    it("makes one POST per engine attempt, leaving retries to the engine middleware", async () => {
+        expect.hasAssertions();
+
+        const { fetchMock } = scriptedFetch({ body: { error: { message: "down", status: "UNAVAILABLE" } }, status: 503 });
         const result = await createFcmTransport(config, { fetch: fetchMock, retryBaseDelay: 0 }).provider.send({ body: "hi", to: "token" });
 
         expect(result.success).toBe(false);
-        expect(fetchMock).toHaveBeenCalledTimes(4);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads a 2xx without a message name as a failure, not a sent message", async () => {
+        expect.hasAssertions();
+
+        const { fetchMock } = scriptedFetch({ body: { unexpected: true }, status: 200 });
+        const result = await createFcmTransport(config, { fetch: fetchMock }).provider.send({ body: "hi", to: "token" });
+
+        expect(result.success).toBe(false);
+    });
+
+    it("refuses an oversized response instead of buffering it", async () => {
+        expect.hasAssertions();
+
+        const huge = new Response("x".repeat(70 * 1024), { status: 200 });
+        const fetchMock = vi.fn(async () => huge);
+        const result = await createFcmTransport(config, { fetch: fetchMock as unknown as typeof fetch }).provider.send({ body: "hi", to: "token" });
+
+        expect(result.success).toBe(false);
+    });
+
+    it("rejects an invalid TTL before a request is made", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn();
+        const result = await createFcmTransport(config, { fetch: fetchMock as unknown as typeof fetch }).provider.send({ body: "hi", to: "token", ttl: -1 });
+
+        expect(result.success).toBe(false);
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("reports a missing credential as a send failure rather than sending an empty bearer", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn();
+        const result = await createFcmTransport({ projectId: "demo-project" }, { fetch: fetchMock as unknown as typeof fetch }).provider.send({
+            body: "hi",
+            to: "token",
+        });
+
+        expect(result.success).toBe(false);
+        expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it("sends to a topic and to a condition, without a token", async () => {

@@ -1814,4 +1814,34 @@ describe("ctx.push topics and conditions", () => {
 
         await expect(push.sendToTopic("news", { body: "x" })).rejects.toThrow(/need the `fcm` channel/u);
     });
+
+    it("resolves the fcm channel once for both the engine and the topic path", async () => {
+        expect.hasAssertions();
+
+        const fcmFactory = vi.fn(() => {
+            return { accessToken: "access-token", projectId: "demo-project" };
+        });
+        const store = memorySubscriptionStore();
+        const definition: NotifyDefinition = { ...baseDefinition(store), fcm: fcmFactory };
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ name: "projects/demo-project/messages/12" }));
+        // No `engine` override: the production engine and the topic path are both built from this definition.
+        const { push } = createNotify(definition, {}, { silent: true });
+
+        await push.sendToTopic("news", { body: "x" });
+        await push.sendToTopic("sports", { body: "y" });
+
+        expect(fcmFactory).toHaveBeenCalledTimes(1);
+        expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("refuses a malformed topic as BAD_REQUEST, before any request", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch");
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(push.sendToTopic("/topics/news", { body: "x" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
 });

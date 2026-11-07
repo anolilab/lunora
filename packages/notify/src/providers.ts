@@ -9,6 +9,7 @@ import { createWebPushProvider } from "@visulima/notification/providers/web-push
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { SsrfResolution } from "../../../shared/ssrf-resolve";
 import { resolveHostSsrf } from "../../../shared/ssrf-resolve";
+import type { FcmTransport } from "./fcm-transport";
 import { createFcmTransport } from "./fcm-transport";
 import { assertPushPayloadFits } from "./payload-size";
 import { isGoneError } from "./subscriptions/normalize";
@@ -476,10 +477,9 @@ const perTransportCircuitBreaker = (): Middleware => {
  * on both transports (neither exposes a collapse/topic key here) and is the same
  * one the engine's retry already accepts for every single-kind send.
  *
- * Total HTTP requests differ per transport and deliberately are not evened out:
- * the FCM provider retries each POST itself (up to 3, same curve), the web-push
- * provider does not. So four router attempts are up to sixteen POSTs on FCM and
- * exactly four on web push — which is what an FCM-only send has always cost.
+ * Each transport makes one POST per attempt: the FCM provider does not retry a
+ * POST itself, so four router attempts are four POSTs on FCM and four on web push.
+ * Retrying inside the provider as well would have multiplied the two to sixteen.
  */
 const GROUP_RETRIES = 2;
 
@@ -774,9 +774,9 @@ export const attachResilience = (engine: Notification, options: ResilienceOption
  * are wired (Web Push, FCM, chat, in-app, webhook); APNs and SMS are excluded
  * from the edge facade by construction.
  */
-export const buildEngine = (resolved: ResolvedProviders): Notification => {
+export const buildEngine = (resolved: ResolvedProviders, fcmTransport?: FcmTransport): Notification => {
     const webPush = resolved.webPush === undefined ? undefined : createWebPushProvider(resolved.webPush);
-    const fcm = resolved.fcm === undefined ? undefined : createFcmTransport(resolved.fcm).provider;
+    const fcm = fcmTransport?.provider ?? (resolved.fcm === undefined ? undefined : createFcmTransport(resolved.fcm).provider);
 
     const providers: NotificationProviders = {};
 

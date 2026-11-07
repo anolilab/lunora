@@ -135,8 +135,8 @@ delivers one page of that job and returns the outcome.
 
 ### `ctx.push.sendToTopic(topic, payload)` and `ctx.push.sendToCondition(expression, payload)`
 
-**Type:** `(topic: string, payload: PushContent) => Promise<string>` and
-`(expression: string, payload: PushContent) => Promise<string>`
+**Type:** `(topic: string, payload: PushContent) => Promise<SuccessReceipt>` and
+`(expression: string, payload: PushContent) => Promise<SuccessReceipt>`
 
 Send one FCM message to a topic or condition. Resolves to a success receipt whose `messageId` is the FCM message name.
 See [FCM platform fields, topics and conditions](#fcm-platform-fields-topics-and-conditions).
