@@ -145,7 +145,9 @@ const hasUnregisteredCode = (details: unknown): boolean =>
 
 const failureMessage = (status: number, body: unknown): string => {
     const error = (body as FcmErrorBody | null | undefined)?.error;
-    const code = hasUnregisteredCode(error?.details) ? "UNREGISTERED" : (error?.status ?? "ERROR");
+    // The status is a fallback name only: a body whose status reads UNREGISTERED but whose details do not is not a dead-token report.
+    const fallback = error?.status !== undefined && error.status !== "UNREGISTERED" ? error.status : "ERROR";
+    const code = hasUnregisteredCode(error?.details) ? "UNREGISTERED" : fallback;
 
     return `FCM ${String(status)} ${code}: ${error?.message ?? "request failed"}`;
 };
@@ -306,16 +308,25 @@ const classify = async (response: Response, fanOut: boolean): Promise<Attempt> =
     try {
         text = await readCappedBody(response);
     } catch (error) {
-        return mayRetry(response.status, fanOut) ? { error: toError(error), kind: "retry" } : { error: toError(error), kind: "final" };
+        // The status is kept in the message: the engine's policy classifies on text, and an oversized 400 or 404 must stay final.
+        const readError = toError(error);
+
+        if (response.ok) {
+            return { error: new Error(`FCM ${String(response.status)} ACCEPTED_UNREADABLE: ${readError.message}`), kind: "final" };
+        }
+
+        const unreadable = new Error(`FCM ${String(response.status)} ERROR: ${readError.message}`);
+
+        return mayRetry(response.status, fanOut) ? { error: unreadable, kind: "retry" } : { error: unreadable, kind: "final" };
     }
 
     if (response.ok) {
-        // A 2xx without a message name is not a delivery we can account for, so it fails rather than reporting an empty id.
+        // A 2xx without a message name is probably an acceptance FCM already made: final, and marked so the engine does not re-send it.
         const name = (parseBody(text) as { name?: unknown } | null | undefined)?.name;
 
         return typeof name === "string" && name !== ""
             ? { kind: "done", messageName: name }
-            : { error: new Error("FCM accepted the request but returned no message name"), kind: "final" };
+            : { error: new Error("FCM 200 ACCEPTED_NO_NAME: the request was accepted but returned no message name"), kind: "final" };
     }
 
     const error = new Error(failureMessage(response.status, parseBody(text)));

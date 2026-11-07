@@ -316,6 +316,8 @@ describe("targetOf / ids / isGoneError", () => {
         // an HTTP status, a legacy code nor upstream prose prunes it: FCM and its gateways
         // use the same words for failures that do not mean the token is dead.
         expect(isGoneError("FCM 404 UNREGISTERED: Requested entity was not found.", "fcm")).toBe(true);
+        // FCM's own text echoed later in a message must not forge the dead-token report: the marker has to lead.
+        expect(isGoneError("FCM 404 NOT_FOUND: upstream said FCM 404 UNREGISTERED: x", "fcm")).toBe(false);
         expect(isGoneError("NotRegistered", "fcm")).toBe(false);
         expect(isGoneError("HTTP 404: Not Found", "fcm")).toBe(false);
         expect(isGoneError("FCM access token unavailable: Google token exchange failed with HTTP 404 UNREGISTERED", "fcm")).toBe(false);

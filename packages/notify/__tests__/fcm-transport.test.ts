@@ -554,4 +554,13 @@ describe("createFcmTransport", () => {
         );
         expect(fetchMock).toHaveBeenCalledTimes(1);
     });
+
+    it("does not name a dead token from a status of UNREGISTERED without the detail", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn(async () => Response.json({ error: { message: "gone", status: "UNREGISTERED" } }, { status: 404 }));
+        const result = await createFcmTransport(config, { fetch: fetchMock as unknown as typeof fetch }).provider.send({ body: "x", to: "token" });
+
+        expect(result.success ? "" : (result.error as Error).message).toBe("FCM 404 ERROR: gone");
+    });
 });

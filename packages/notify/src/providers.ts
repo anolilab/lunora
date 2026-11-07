@@ -280,7 +280,7 @@ const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<Noti
 };
 
 /** FCM answers that re-sending cannot fix: a bad request (400), auth (401/403), not found (404), too large (413), or a refusal with a long Retry-After. */
-const FCM_PERMANENT_FAILURE = /\bFCM (?:400|401|403|404|413) |\bRetry-After exceeds the \d+s wait limit\b/u;
+const FCM_PERMANENT_FAILURE = /\bFCM (?:200|400|401|403|404|413) |\bRetry-After exceeds the \d+s wait limit\b/u;
 
 /**
  * Whether a failed send can never succeed for this recipient — the device

@@ -2073,4 +2073,30 @@ describe("ctx.push topics and conditions", () => {
         await expect(push.send("missing-id", { body: "x", ttl: -1 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
         expect(get).not.toHaveBeenCalled();
     });
+
+    it("does not re-send an FCM send whose 2xx reply carries no message name", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({}, { status: 200 }));
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+        const stored = await push.register({ kind: "fcm", token: "accepted-device" });
+
+        await push.send(stored.id, { body: "x" });
+
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not re-send an FCM refusal whose oversized body could not be read", async () => {
+        expect.hasAssertions();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("x".repeat(70 * 1024), { status: 400 }));
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+        const stored = await push.register({ kind: "fcm", token: "oversized-device" });
+
+        await push.send(stored.id, { body: "x" });
+
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
 });
