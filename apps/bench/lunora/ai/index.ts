@@ -16,6 +16,9 @@
  */
 import { generateText } from "@lunora/ai";
 import { LunoraError } from "@lunora/errors";
+import { env as workerEnv } from "cloudflare:workers";
+import { createShardClient } from "lunorash/runtime";
+import type { ShardNamespaceLike } from "lunorash/runtime";
 
 import { internal } from "#lunora/_generated/internal.js";
 import { action, v } from "#lunora/_generated/server.js";
@@ -35,6 +38,18 @@ const requireUser = (userId: string | null): string => {
 };
 
 /**
+ * Spend one call from the inference budget on the root shard, so an isolate, a
+ * tenant shard or a root-shard caller all draw from the same bucket. An action
+ * runs on whichever shard the caller reached, so `ctx.runMutation` would split
+ * the budget per shard.
+ */
+const consumeInference = async (userId: string): Promise<{ ok: boolean; retryAfter?: number }> =>
+    createShardClient((workerEnv as unknown as { SHARD: ShardNamespaceLike }).SHARD, { shardKey: "__root__" }).call(internal.ratelimit.consume, {
+        key: userId,
+        name: "inference",
+    });
+
+/**
  * Summarize text using Workers AI via `ctx.ai`. The `@lunora/ai` package
  * re-exports Vercel AI SDK helpers, so you can build agentic flows
  * directly in your Lunora actions.
@@ -43,8 +58,7 @@ const requireUser = (userId: string | null): string => {
  */
 export const summarize = action.input({ text: v.string().max(20_000) }).action(async ({ args: { text }, ctx }) => {
     const userId = requireUser(ctx.auth.userId);
-    // The bucket lives in `ctx.db`, so every isolate shares one budget. An in-memory limiter would give each isolate its own.
-    const budget = await ctx.runMutation(internal.ratelimit.consume, { key: userId, name: "inference" });
+    const budget = await consumeInference(userId);
 
     if (!budget.ok) {
         throw new LunoraError("RATE_LIMITED", `inference is limited per caller; retry in ${String(budget.retryAfter ?? 0)} ms`);
@@ -84,8 +98,7 @@ const toSentiment = (reply: string): Sentiment => {
  */
 export const analyzeSentiment = action.input({ text: v.string().max(20_000) }).action(async ({ args: { text }, ctx }) => {
     const userId = requireUser(ctx.auth.userId);
-    // The bucket lives in `ctx.db`, so every isolate shares one budget. An in-memory limiter would give each isolate its own.
-    const budget = await ctx.runMutation(internal.ratelimit.consume, { key: userId, name: "inference" });
+    const budget = await consumeInference(userId);
 
     if (!budget.ok) {
         throw new LunoraError("RATE_LIMITED", `inference is limited per caller; retry in ${String(budget.retryAfter ?? 0)} ms`);

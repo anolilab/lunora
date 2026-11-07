@@ -356,7 +356,7 @@ export const create = orgMutation
         const id = await ctx.db.insert("${table}", { ...args.draft, createdAt: now, createdBy: userId, organizationId, state: "draft", updatedAt: now });
 
         await ctx.db.insert("saas_activity", { action: "${key}.created", actorId: userId, createdAt: now, organizationId, subjectId: id, subjectType: "${key}" });
-${shape.schedulerHook ? `        await ctx.scheduler.runAfter(60_000, internal.domains.${key}.jobs.recount, { organizationId });\n` : ""}${shape.queueHook ? `        await ctx.queues.events.send({ kind: "${key}.created", organizationId, subjectId: id });\n` : ""}
+${shape.schedulerHook ? `        await ctx.scheduler.runAfter(60_000, internal.domains.${key}.jobs.recount, { organizationId }, { shardKey: organizationId });\n` : ""}${shape.queueHook ? `        await ctx.queues.events.send({ kind: "${key}.created", organizationId, subjectId: id });\n` : ""}
         return id;
     });
 

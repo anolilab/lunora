@@ -16,9 +16,9 @@ import { orgBulkMutation, requireWriter } from "./lib/crpc";
 /**
  * Idempotent per organisation: the instance id is derived from the tenant, so a
  * second start reports the running instance instead of mailing again. An
- * instance that errored is restarted: Workflows replays the steps that finished,
- * the welcome mail included, so only the failed step runs again. The `bulk`
- * budget (5 per minute per caller) bounds retries.
+ * instance that errored is restarted, which runs every step again; the welcome
+ * mail is claimed once per organisation (`saas:claimWelcome`), so it is not sent
+ * twice. The `bulk` budget (5 per minute per caller) bounds retries.
  */
 export const start = orgBulkMutation.mutation(async ({ ctx }) => {
     const { organizationId, userId } = await requireWriter(ctx);

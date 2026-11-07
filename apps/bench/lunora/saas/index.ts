@@ -650,6 +650,30 @@ export const syncOrganization = internalMutation
     });
 
 /**
+ * Claim the organisation's welcome mail. The first claim wins, and a restarted
+ * onboarding instance finds it claimed, so the mail is not sent twice. Runs on
+ * the root shard with the projection it marks.
+ */
+export const claimWelcome = internalMutation
+    .input({ organizationId: v.string() })
+    .mutation(async ({ args: { organizationId }, ctx }): Promise<{ claimed: boolean }> => {
+        const existing = await organizations(ctx).findFirst({ where: { organizationId } });
+
+        // Not projected yet (the auth hook has not run): retry, so the welcome is not lost.
+        if (!existing) {
+            throw new LunoraError("SERVICE_UNAVAILABLE", `organization ${organizationId} is not in the projection yet — retry once it is`);
+        }
+
+        if (existing["welcomedAt"] !== undefined) {
+            return { claimed: false };
+        }
+
+        await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"] as Id<"saas_organizations">, { welcomedAt: ctx.now });
+
+        return { claimed: true };
+    });
+
+/**
  * Record an organisation's current plan in the projection — what the admin list
  * shows and filters on. Internal: billing calls it when a subscription changes
  * (`payment:processWebhook` in the saas template), never a client. A patch to an

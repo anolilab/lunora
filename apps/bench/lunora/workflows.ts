@@ -19,15 +19,23 @@ export const onboarding = defineWorkflow<{ email: string; organizationId: string
         const instanceKey = `onboarding-${organizationId}`;
 
         await ctx.step.do("seed", () => ctx.run(internal.onboarding.seedOrganization, { organizationId, userId }, { shardKey: organizationId }));
-        // A stable key per mail: a restarted instance replays these steps, and the provider drops a repeat of the same key.
-        await ctx.step.do("welcome", () =>
-            ctx.run(internal.mail.sendEmail, {
-                idempotencyKey: `${instanceKey}:welcome`,
-                subject: "Welcome to the bench",
-                text: "Your workspace is ready.",
-                to: email,
-            }),
-        );
+        // Claimed on the root shard before the send: a restarted instance runs this step again, and the claim has
+        // already been made, so the welcome goes out once per organisation. A send that fails after the claim is not
+        // retried by a restart; it is retried within this run.
+        const { claimed } = (await ctx.step.do("claim welcome", () => ctx.run(internal.saas.claimWelcome, { organizationId }, { shardKey: "__root__" }))) as {
+            claimed: boolean;
+        };
+
+        if (claimed) {
+            await ctx.step.do("welcome", () =>
+                ctx.run(internal.mail.sendEmail, {
+                    idempotencyKey: `${instanceKey}:welcome`,
+                    subject: "Welcome to the bench",
+                    text: "Your workspace is ready.",
+                    to: email,
+                }),
+            );
+        }
         await ctx.step.sleep("settle", "1 day");
 
         // `ctx.run` resolves to `unknown` whatever the reference returns (FINDINGS.md), so the shape is restated here.

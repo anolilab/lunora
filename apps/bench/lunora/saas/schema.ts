@@ -126,6 +126,8 @@ export const saas = definePlugin("saas", {
                  * so an older derivation landing late cannot replace a newer plan.
                  */
                 planAsOf: v.optional(v.number()),
+                /** When the first-week welcome mail was claimed (see `saas:claimWelcome`); set once. */
+                welcomedAt: v.optional(v.number()),
                 seats: v.number(),
                 slug: v.string(),
                 status: v.string(),
