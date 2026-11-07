@@ -74,7 +74,7 @@ describe("createFcmTransport", () => {
         expect(message).toMatchObject({
             android: {
                 notification: { channel_id: "live-scores", click_action: "OPEN_MATCH", sound: "goal.caf" },
-                priority: "high",
+                priority: "HIGH",
                 ttl: "120s",
             },
             apns: { payload: { aps: { badge: 3, category: "MATCH", sound: "goal.caf", "thread-id": "m42" } } },
@@ -273,7 +273,7 @@ describe("createFcmTransport", () => {
         const message = buildFcmMessage({ body: "x", ttl: 90, urgency: "high" }, { token: "t" });
 
         expect(message).toMatchObject({
-            android: { priority: "high", ttl: "90s" },
+            android: { priority: "HIGH", ttl: "90s" },
             apns: { headers: { "apns-priority": "10" } },
             webpush: { headers: { TTL: "90", Urgency: "high" } },
         });
@@ -491,7 +491,7 @@ describe("createFcmTransport", () => {
 
         const message = buildFcmMessage({ body: "x", ttl: 10, urgency: "low" }, { token: "t" });
 
-        expect(message).toMatchObject({ android: { priority: "normal" }, apns: { headers: { "apns-priority": "5" } } });
+        expect(message).toMatchObject({ android: { priority: "NORMAL" }, apns: { headers: { "apns-priority": "5" } } });
     });
 
     it("sends each token of a multi-token payload as its own message", async () => {
@@ -571,5 +571,16 @@ describe("createFcmTransport", () => {
 
         expect(message).toMatchObject({ apns: { headers: { "apns-expiration": expect.any(String) } } });
         expect((message.apns as { headers: Record<string, string | undefined> }).headers["apns-priority"]).toBeUndefined();
+    });
+
+    it("names a refusal from its readable fields, not as [object Object]", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn(async () => Response.json({ error: { message: { reason: "malformed" }, status: { code: 3 } } }, { status: 400 }));
+        const result = await createFcmTransport(config, { fetch: fetchMock as unknown as typeof fetch }).provider.send({ body: "x", to: "token" });
+        const message = result.success ? "" : (result.error as Error).message;
+
+        expect(message).toBe("FCM 400 ERROR: request failed");
+        expect(message).not.toContain("[object Object]");
     });
 });

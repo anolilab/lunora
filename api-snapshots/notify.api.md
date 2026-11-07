@@ -108,7 +108,7 @@ interface FcmAndroidConfig {
         tag?: string;
         title?: string;
     };
-    priority?: "normal" | "high";
+    priority?: "HIGH" | "NORMAL";
     ttl?: string;
 }
 ```

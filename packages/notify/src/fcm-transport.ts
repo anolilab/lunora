@@ -22,7 +22,8 @@ interface FcmAndroidConfig {
         tag?: string;
         title?: string;
     };
-    priority?: "normal" | "high";
+    /** FCM HTTP v1 takes the uppercase enum values. */
+    priority?: "HIGH" | "NORMAL";
     ttl?: string;
 }
 
@@ -173,15 +174,18 @@ const hasUnregisteredCode = (details: unknown): boolean =>
  * word itself, and no `HTTP 404` appears, so the subscription classifier in
  * `subscriptions/normalize` reads a dead token as gone and nothing else as gone.
  */
-const failureMessage = (status: number, body: unknown): string => {
+const failureMessage = (httpStatus: number, body: unknown): string => {
     const error = (body as FcmErrorBody | null | undefined)?.error;
+    // The body is untrusted: a field of the wrong type is ignored rather than rendered as "[object Object]".
+    const message = typeof error?.message === "string" ? error.message : "request failed";
+    const status = typeof error?.status === "string" ? error.status : undefined;
     // The status is a fallback name only: a body whose status reads UNREGISTERED but whose details do not is not a dead-token report.
-    const fallback = error?.status !== undefined && error.status !== "UNREGISTERED" ? error.status : "ERROR";
+    const fallback = status !== undefined && status !== "UNREGISTERED" ? status : "ERROR";
     // A structured code from the details names the refusal (SENDER_ID_MISMATCH, for one) more precisely than the HTTP status.
     const detailed = firstDetailCode(error?.details);
     const code = hasUnregisteredCode(error?.details) ? "UNREGISTERED" : (detailed ?? fallback);
 
-    return `FCM ${String(status)} ${code}: ${error?.message ?? "request failed"}`;
+    return `FCM ${String(httpStatus)} ${code}: ${message}`;
 };
 
 /** Read a response body up to {@link MAX_RESPONSE_BYTES}, cancelling the stream once it is exceeded. */
@@ -240,7 +244,8 @@ const toWireData = (data: Record<string, unknown> | undefined): Record<string, s
         ? undefined
         : Object.fromEntries(Object.entries(data).map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)]));
 
-const androidPriorityOf = (urgency: string): "high" | "normal" => (urgency === "high" ? "high" : "normal");
+/** FCM HTTP v1 takes the uppercase enum values; lowercase is rejected. */
+const androidPriorityOf = (urgency: string): "HIGH" | "NORMAL" => (urgency === "high" ? "HIGH" : "NORMAL");
 
 // APNs delivers immediately when the header is absent, so `normal` (the default) sets nothing: only `high` raises
 // the priority and the low urgencies lower it.
