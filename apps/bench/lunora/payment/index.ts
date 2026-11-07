@@ -41,10 +41,11 @@
  *      app.post("/payment/webhook", httpAction(async (ctx, request) => {
  *          // Capped (413 past 1 MiB): the body is read before its signature can be checked.
  *          const body = await readWebhookBody(request);
- *          const headers = Object.fromEntries(SIGNATURE_HEADERS.flatMap((name) => {
+ *          const present = SIGNATURE_HEADERS.flatMap((name) => {
  *              const value = request.headers.get(name);
  *              return value === null ? [] : [[name, value]];
- *          }));
+ *          });
+ *          const headers = Object.fromEntries(present);
  *          return webhookResponse(await ctx.runAction(processWebhook, { body, headers }));
  *      }));
  *      ```
@@ -53,15 +54,15 @@
  *      `.dev.vars` (locally) and push the secrets to production with
  *      `wrangler secret put`.
  */
-import { env as workerEnv } from "cloudflare:workers";
-
 import { LunoraError } from "@lunora/errors";
 import type { SubscriptionState } from "@lunora/payment";
 import { resolveEntitlements } from "@lunora/payment";
+import { env as workerEnv } from "cloudflare:workers";
 import type { PaginationResult } from "lunorash/server";
+
 import { internal } from "#lunora/_generated/internal.js";
-import { action, internalAction, internalMutation, internalQuery, query, v } from "#lunora/_generated/server.js";
 import type { CloudflareBindings, Doc, Id, QueryCtx } from "#lunora/_generated/server.js";
+import { action, internalAction, internalMutation, internalQuery, query, v } from "#lunora/_generated/server.js";
 
 import { API_CALLS, entitlementsFromPlans, PLANS } from "../plans";
 
@@ -161,9 +162,12 @@ export const seatAllowance = internalAction.input({ referenceId: v.string() }).a
             );
         }
 
+        // `null` is the unmetered marker on the seatAllowance RPC result, not an absent value.
+        // eslint-disable-next-line unicorn/no-null -- seatAllowance's `number | null` return is a shard RPC wire value
         return FREE_PLAN.seats ?? null;
     }
 
+    // eslint-disable-next-line unicorn/no-null -- seatAllowance's `number | null` return is a shard RPC wire value (null = unmetered)
     return plans.some((plan) => plan.seats === undefined) ? null : (entitlements.limit("seats") ?? null);
 });
 
@@ -337,15 +341,15 @@ export const holdCheckout = internalMutation
             .first();
         const sessionExpiresAt = ctx.now + CHECKOUT_SESSION_MS;
 
-        if (hold && (hold["expiresAt"] as number) > ctx.now) {
+        if (hold && hold["expiresAt"] > ctx.now) {
             if (hold["priceId"] !== priceId) {
                 throw new LunoraError("CONFLICT", "a checkout for this organization is already in progress — finish it, or pick another plan once it expires");
             }
 
-            const url = hold["url"] as string | undefined;
+            const { url } = hold;
             // The session's own deadline is the hold less its margin, and it is stable: a retry reuses it as the
             // provider's expires_at rather than extending it.
-            const sessionEnds = (hold["expiresAt"] as number) - CHECKOUT_HOLD_MARGIN_MS;
+            const sessionEnds = hold["expiresAt"] - CHECKOUT_HOLD_MARGIN_MS;
 
             if (url !== undefined && sessionEnds > ctx.now) {
                 return { url };
@@ -356,7 +360,7 @@ export const holdCheckout = internalMutation
                 // until `sessionEnds`. Retry under the same hold with the same deadline, or wait for it to lapse; never open
                 // a second session beside a payable one.
                 if (sessionEnds - ctx.now >= CHECKOUT_MIN_SESSION_MS) {
-                    return { holdId: hold["_id"] as Id<"checkout_holds">, sessionExpiresAt: sessionEnds };
+                    return { holdId: hold["_id"], sessionExpiresAt: sessionEnds };
                 }
 
                 throw new LunoraError("CONFLICT", "a checkout for this organization is still settling — retry once it has lapsed");
@@ -367,7 +371,7 @@ export const holdCheckout = internalMutation
 
         // A fresh row rather than a patch: an expired session's `url` must not be handed to the next caller.
         if (hold) {
-            await ctx.db.delete("checkout_holds", hold["_id"] as never);
+            await ctx.db.delete("checkout_holds", hold["_id"]);
         }
 
         const holdId = await ctx.db.insert("checkout_holds", { expiresAt: sessionExpiresAt + CHECKOUT_HOLD_MARGIN_MS, priceId, referenceId });
@@ -387,6 +391,21 @@ export const settleCheckoutHold = internalMutation
             await ctx.db.patch("checkout_holds", holdId, { url });
         }
     });
+
+/**
+ * Refuse while `referenceId` still holds a subscription the provider is billing:
+ * `past_due` and `paused` count, not just `active`.
+ */
+const requireNoLiveSubscription = async (
+    ctx: { payments: { listSubscriptions: (referenceId: string) => Promise<ReadonlyArray<{ state: SubscriptionState }>> } },
+    referenceId: string,
+): Promise<void> => {
+    const existing = await ctx.payments.listSubscriptions(referenceId);
+
+    if (existing.some((subscription) => subscription.state !== "canceled")) {
+        throw new LunoraError("CONFLICT", "this organization already has a subscription — change the plan from the billing portal");
+    }
+};
 
 /**
  * Start a checkout session and hand the client the redirect URL. The reference
@@ -415,13 +434,13 @@ export const checkout = action.input({ priceId: v.string().max(512) }).action(as
     // A checkout opens a NEW subscription. Started on top of one the provider is
     // still billing — `past_due` and `paused` included, not just `active` — it
     // bills the organisation for both. A plan change goes through the portal.
-    const existing = await ctx.payments.listSubscriptions(referenceId);
-
-    if (existing.some((subscription) => subscription.state !== "canceled")) {
-        throw new LunoraError("CONFLICT", "this organization already has a subscription — change the plan from the billing portal");
-    }
+    await requireNoLiveSubscription(ctx, referenceId);
 
     const pending = await ctx.runMutation(internal.payment.holdCheckout, { priceId, referenceId });
+
+    // Read again now the hold is ours: a purchase whose webhook landed during the gap above is visible here. The hold
+    // does not serialise webhook writes, so one that lands after this read is not caught.
+    await requireNoLiveSubscription(ctx, referenceId);
 
     if ("url" in pending) {
         return { url: pending.url };
@@ -430,11 +449,12 @@ export const checkout = action.input({ priceId: v.string().max(512) }).action(as
     // A failure here keeps the hold: a timeout or a dropped response can follow a
     // session the provider did create. The hold's id is the idempotency key, so a
     // retry for the same plan gets that session back rather than a second one.
+    // A provider that mints a customer from an email needs it on the first
+    // checkout; the claim is verified at sign-in, never taken from the client.
+    const identity = await ctx.auth.getIdentity();
     const { url } = await ctx.payments.createCheckout({
         cancelUrl: billingPage("cancel"),
-        // A provider that mints a customer from an email needs it on the first
-        // checkout; the claim is verified at sign-in, never taken from the client.
-        email: (await ctx.auth.getIdentity())?.email,
+        email: identity?.email,
         expiresAt: pending.sessionExpiresAt,
         idempotencyKey: String(pending.holdId),
         mode: "subscription",
@@ -497,10 +517,9 @@ export const portal = action.action(async ({ ctx }): Promise<{ url: string }> =>
  * These narrow instead of asserting, and an absent optional column reads back as
  * `null` (not `undefined`) through the shard, which the `typeof` tests handle.
  */
-const readString = (row: Record<string, unknown>, column: string): string => (typeof row[column] === "string" ? (row[column] as string) : "");
+const readString = (row: Record<string, unknown>, column: string): string => (typeof row[column] === "string" ? row[column] : "");
 
-const readOptionalNumber = (row: Record<string, unknown>, column: string): number | undefined =>
-    typeof row[column] === "number" ? (row[column] as number) : undefined;
+const readOptionalNumber = (row: Record<string, unknown>, column: string): number | undefined => (typeof row[column] === "number" ? row[column] : undefined);
 
 const readOptionalStringArray = (row: Record<string, unknown>, column: string): string[] | undefined => {
     const value = row[column];
@@ -545,7 +564,7 @@ interface SubscriptionRow {
 /** Project one stored subscription row onto {@link SubscriptionRow}. */
 const toSubscriptionRow = (document: object): SubscriptionRow => {
     // A spread, not the document itself: in a codegen'd app the row is the
-    // typed `Doc<"payment_subscriptions">` interface, which has no index signature,
+    // typed document interface of the payment_subscriptions table, which has no index signature,
     // while its object-literal copy satisfies the readers' record type.
     const row: Record<string, unknown> = { ...document };
 
@@ -666,11 +685,11 @@ export const adminSubscriptions = query
     .query(async ({ args: { paginationOpts }, ctx }): Promise<PaginationResult<BilledSubscriptionRow>> => {
         await requireBillingAdmin(ctx);
 
-        const numItems = Math.min(Math.max(Math.floor(paginationOpts.numItems), 1), ADMIN_SUBSCRIPTIONS_PAGE_MAX);
+        const numberItems = Math.min(Math.max(Math.floor(paginationOpts.numItems), 1), ADMIN_SUBSCRIPTIONS_PAGE_MAX);
         const result = await ctx.db
             .query("payment_subscriptions")
             .order("desc")
-            .paginate({ ...paginationOpts, numItems });
+            .paginate({ ...paginationOpts, numItems: numberItems });
 
         return {
             ...result,
@@ -737,7 +756,7 @@ export const processWebhook = internalAction
             method: "POST",
         });
         const response = await ctx.payments.handleWebhook(request);
-        const result = (await response.json()) as { applied?: boolean; referenceId?: string };
+        const result = await response.json<{ applied?: boolean; referenceId?: string }>();
 
         // A subscription change moves the organisation's plan, which the admin list
         // shows and filters on. Re-derived from every active subscription rather than
@@ -746,7 +765,8 @@ export const processWebhook = internalAction
         // write fails, the route answers 5xx and the provider's retry finishes it.
         if (result.referenceId !== undefined) {
             const { asOf, plans } = await currentPlans(ctx, result.referenceId);
-            const [plan] = plans.toSorted((a, b) => b.priceMinor - a.priceMinor);
+            // `.at` types the head as possibly absent: `plans` is empty when no priced plan is active.
+            const plan = plans.toSorted((a, b) => b.priceMinor - a.priceMinor).at(0);
 
             await ctx.runMutation(internal.saas.syncOrganizationPlan, { asOf, organizationId: result.referenceId, plan: (plan ?? FREE_PLAN)?.id ?? "free" });
         }
