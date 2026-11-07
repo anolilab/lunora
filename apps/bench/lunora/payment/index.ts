@@ -195,7 +195,7 @@ export const recordPendingCancel = internalMutation.input({ referenceId: v.strin
         .first();
 
     if (existing === null) {
-        await ctx.db.insert("billing_pending", { organizationId: referenceId });
+        await ctx.db.insert("billing_pending", { organizationId: referenceId, tried: 0 });
     }
 });
 
@@ -208,8 +208,21 @@ export const clearPendingCancel = internalMutation.input({ referenceId: v.string
     await Promise.all(rows.map(async (row) => ctx.db.delete("billing_pending", row._id)));
 });
 
+export const touchPendingCancel = internalMutation.input({ referenceId: v.string() }).mutation(async ({ args: { referenceId }, ctx }): Promise<void> => {
+    const rows = await ctx.db
+        .query("billing_pending")
+        .withIndex("byOrganization", (q) => q.eq("organizationId", referenceId))
+        .collect();
+
+    await Promise.all(rows.map(async (row) => ctx.db.patch("billing_pending", row._id, { tried: ctx.now })));
+});
+
 export const pendingCancels = internalQuery.input({ limit: v.number() }).query(async ({ args: { limit }, ctx }): Promise<string[]> => {
-    const rows = await ctx.db.query("billing_pending").take(limit);
+    // Least recently tried first: rows that failed in an earlier run wait behind the ones not yet tried.
+    const rows = await ctx.db
+        .query("billing_pending")
+        .withIndex("byTried", (q) => q.gte("tried", 0))
+        .take(limit);
 
     return rows.map((row) => row.organizationId);
 });
@@ -220,9 +233,12 @@ export const sweepPendingCancels = internalAction.action(async ({ ctx }): Promis
     const results = await Promise.allSettled(
         pending.map(async (referenceId) => ctx.runAction(internal.payment.cancelOrganizationSubscriptions, { referenceId })),
     );
-    const failed = results.filter((result) => result.status === "rejected").length;
+    const failedIds = pending.filter((_, index) => results[index]?.status === "rejected");
 
-    return { failed, swept: results.length - failed };
+    // A failed row is marked tried now, so it moves behind the rows not yet tried.
+    await Promise.all(failedIds.map(async (referenceId) => ctx.runMutation(internal.payment.touchPendingCancel, { referenceId })));
+
+    return { failed: failedIds.length, swept: results.length - failedIds.length };
 });
 
 /** The org roles allowed to start a subscription or open the billing portal — the same pair `lunora/saas` lets write projects. */

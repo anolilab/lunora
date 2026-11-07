@@ -30,7 +30,11 @@ export default defineSchema({
     /** Organisations whose subscription cancellation after deletion is still owed (see `payment:sweepPendingCancels`). */
     billing_pending: defineTable({
         organizationId: v.string(),
-    }).index("byOrganization", ["organizationId"]),
+        /** When the sweep last tried this cancellation; the oldest is tried first, so a failing row cannot hold up the rest. */
+        tried: v.number(),
+    })
+        .index("byOrganization", ["organizationId"])
+        .index("byTried", ["tried"]),
 
     checkout_holds: defineTable({
         expiresAt: v.number(),
