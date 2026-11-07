@@ -4,7 +4,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { v } from "../_generated/server.js";
+import { v } from "../_generated/server";
 import { authAction, requireOrg } from "../lib/crpc";
 
 /** SQLSTATE `42P01`, undefined_table: the relation is not in the database. */

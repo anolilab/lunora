@@ -156,7 +156,7 @@ export const slugSchema = z
     .regex(/^[a-z0-9][a-z0-9-]*$/u);
 export const emailSchema = z.email().max(254);
 export const tagsSchema = z.array(z.string().min(1).max(32)).max(20);
-export const moneySchema = z.object({ amount: z.int().nonnegative(), currency: z.string().length(3) });
+export const moneySchema = z.object({ amount: z.int().nonnegative().max(1_000_000_000), currency: z.string().length(3) });
 export const dateRangeSchema = z.object({ from: z.int(), to: z.int() }).refine((range) => range.from <= range.to, { error: "from must not be after to" });
 
 export const pageArgs = { cursor: v.optional(v.string()), limit: v.optional(v.number().int().min(1).max(200)) };

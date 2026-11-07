@@ -278,22 +278,27 @@ export const holdCheckout = internalMutation
         const sessionExpiresAt = ctx.now + CHECKOUT_SESSION_MS;
 
         if (hold && (hold["expiresAt"] as number) > ctx.now) {
-            const url = hold["url"] as string | undefined;
-
-            if (hold["priceId"] === priceId) {
-                // Started: hand back the same session. Not started, or not known to be (the
-                // provider call failed or is still running): retry under the same hold, which
-                // replays the provider's session if one was created rather than opening another.
-                return url === undefined
-                    ? { holdId: hold["_id"] as Id<"checkout_holds">, sessionExpiresAt: (hold["expiresAt"] as number) - CHECKOUT_HOLD_MARGIN_MS }
-                    : { url };
+            if (hold["priceId"] !== priceId) {
+                throw new LunoraError("CONFLICT", "a checkout for this organization is already in progress — finish it, or pick another plan once it expires");
             }
 
-            throw new LunoraError("CONFLICT", "a checkout for this organization is already in progress — finish it, or pick another plan once it expires");
+            const url = hold["url"] as string | undefined;
+
+            // The session's own deadline is the hold less its margin: a URL past it is a session the provider has expired.
+            if (url !== undefined && (hold["expiresAt"] as number) - CHECKOUT_HOLD_MARGIN_MS > ctx.now) {
+                return { url };
+            }
+
+            if (url === undefined) {
+                // Not started, or not known to be: retry under the same hold so the provider replays any session it
+                // created, with the session's deadline counted from now rather than from the first attempt.
+                await ctx.db.patch("checkout_holds", hold["_id"] as never, { expiresAt: sessionExpiresAt + CHECKOUT_HOLD_MARGIN_MS });
+
+                return { holdId: hold["_id"] as Id<"checkout_holds">, sessionExpiresAt };
+            }
         }
 
-        // A fresh row rather than a patch: the expired hold's `url` is a session the
-        // provider may still accept, and it must not be handed to the next caller.
+        // A fresh row rather than a patch: an expired session's `url` must not be handed to the next caller.
         if (hold) {
             await ctx.db.delete("checkout_holds", hold["_id"] as never);
         }

@@ -31,6 +31,8 @@ export const limits = {
     send: { kind: "token bucket", period: 60_000, rate: 10 },
     /** Metered model calls (`ai`): 20 per caller per minute, shared across every isolate. */
     inference: { kind: "token bucket", period: 60_000, rate: 20 },
+    /** Link previews, each a billed Browser Rendering session: 10 per caller per minute. */
+    preview: { kind: "token bucket", period: 60_000, rate: 10 },
 } as const satisfies RateLimitConfigMap;
 
 /** The limit names you've configured above. */

@@ -6,8 +6,8 @@
 import { LunoraError } from "@lunora/errors";
 import type { PaginationResult } from "lunorash/server";
 
-import type { Doc, Id } from "../_generated/server.js";
-import { internalMutation, v } from "../_generated/server.js";
+import type { Doc, Id } from "../_generated/server";
+import { internalMutation, v } from "../_generated/server";
 import { orgBulkMutation, orgMutation, orgQuery, pageArgs, requireOrg, requireWriter, tagsSchema, tenantRead, tenantWrite } from "../lib/crpc";
 
 const status = v.union(v.literal("todo"), v.literal("doing"), v.literal("review"), v.literal("done"), v.literal("archived"));

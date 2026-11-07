@@ -83,13 +83,16 @@
     },
     "queues": {
         "consumers": [
+            // Failed deliveries land in a dead-letter queue instead of being dropped. The queues must exist.
             {
                 "queue": "events",
                 "max_retries": 3,
+                "dead_letter_queue": "events-dlq",
             },
             {
                 "queue": "mail",
                 "max_retries": 5,
+                "dead_letter_queue": "mail-dlq",
             },
         ],
         "producers": [

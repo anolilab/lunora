@@ -9,8 +9,11 @@ import { internal } from "./_generated/internal";
 
 /**
  * A new organisation's first week: seed a starter task, send the welcome mail,
- * and nudge after a day if nothing was created. Every `ctx.run` names the
- * tenant's shard, so the writes land where the tenant's rows live.
+ * and nudge after a day if the team has created no task. Every `ctx.run` names the
+ * tenant's shard, so the writes land where the tenant's rows live. The welcome and
+ * the nudge are each claimed once per organisation on the root shard before the
+ * send: a restarted instance runs every step again, and the claim keeps either mail
+ * from going out twice.
  */
 export const onboarding = defineWorkflow<{ email: string; organizationId: string; userId: string }, { nudged: boolean }>({
     handler: async (ctx) => {
@@ -19,14 +22,12 @@ export const onboarding = defineWorkflow<{ email: string; organizationId: string
         const instanceKey = `onboarding-${organizationId}`;
 
         await ctx.step.do("seed", () => ctx.run(internal.onboarding.seedOrganization, { organizationId, userId }, { shardKey: organizationId }));
-        // Claimed on the root shard before the send: a restarted instance runs this step again, and the claim has
-        // already been made, so the welcome goes out once per organisation. A send that fails after the claim is not
-        // retried by a restart; it is retried within this run.
-        const { claimed } = (await ctx.step.do("claim welcome", () => ctx.run(internal.saas.claimWelcome, { organizationId }, { shardKey: "__root__" }))) as {
-            claimed: boolean;
-        };
 
-        if (claimed) {
+        const { claimed: welcomed } = (await ctx.step.do("claim welcome", () =>
+            ctx.run(internal.saas.claimMail, { kind: "welcome", organizationId }, { shardKey: "__root__" }),
+        )) as { claimed: boolean };
+
+        if (welcomed) {
             await ctx.step.do("welcome", () =>
                 ctx.run(internal.mail.sendEmail, {
                     idempotencyKey: `${instanceKey}:welcome`,
@@ -36,14 +37,15 @@ export const onboarding = defineWorkflow<{ email: string; organizationId: string
                 }),
             );
         }
+
         await ctx.step.sleep("settle", "1 day");
 
-        // `ctx.run` resolves to `unknown` whatever the reference returns (FINDINGS.md), so the shape is restated here.
+        // The team's own tasks only: the starter is not counted, so a nudge goes to a team that has done nothing yet.
         const { tasks } = (await ctx.step.do("count", () => ctx.run(internal.onboarding.progress, { organizationId }, { shardKey: organizationId }))) as {
             tasks: number;
         };
 
-        if (tasks > 1) {
+        if (tasks > 0) {
             return { nudged: false };
         }
 
@@ -53,6 +55,14 @@ export const onboarding = defineWorkflow<{ email: string; organizationId: string
         };
 
         if (!member) {
+            return { nudged: false };
+        }
+
+        const { claimed: nudged } = (await ctx.step.do("claim nudge", () =>
+            ctx.run(internal.saas.claimMail, { kind: "nudge", organizationId }, { shardKey: "__root__" }),
+        )) as { claimed: boolean };
+
+        if (!nudged) {
             return { nudged: false };
         }
 

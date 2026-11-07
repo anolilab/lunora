@@ -5,10 +5,12 @@
  * A consumer runs with the system identity (no end-user RLS), so every message
  * body is validated before anything acts on it.
  */
+import { consumeQueuedSend } from "@lunora/mail";
 import { defineQueue } from "@lunora/queue";
 import * as z from "zod";
 
 import { internal } from "./_generated/internal";
+import { mailer } from "./mail/transport";
 
 const domainEventSchema = z.object({ kind: z.string().min(1).max(64), organizationId: z.string().min(1), subjectId: z.string().optional() });
 
@@ -46,12 +48,18 @@ export const events = defineQueue<z.infer<typeof domainEventSchema>>({
     maxRetries: 3,
 });
 
-/** Outbound mail, so a slow provider never holds a mutation open. */
-export const mail = defineQueue<{ idempotencyKey?: string; subject: string; text: string; to: string }>({
+/**
+ * Outbound mail, so a slow provider never holds a mutation open. The body is what
+ * `queueEmail` enqueued (`toQueuedPayload`), consumed by the mail package, which
+ * skips a send that already reached the provider and tells a redelivery apart.
+ */
+export const mail = defineQueue<unknown>({
     handler: async (_context, batch) => {
+        const transport = mailer();
+
         for (const message of batch.messages) {
             // eslint-disable-next-line no-await-in-loop -- one send at a time: a provider rate limit must not fail the whole batch
-            await message.run(internal.mail.sendEmail, message.body);
+            await consumeQueuedSend(transport, message.body, { attempts: message.attempts, enqueuedAt: message.timestamp });
             message.ack();
         }
     },

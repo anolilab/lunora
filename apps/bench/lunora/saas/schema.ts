@@ -128,6 +128,8 @@ export const saas = definePlugin("saas", {
                 planAsOf: v.optional(v.number()),
                 /** When the first-week welcome mail was claimed (see `saas:claimWelcome`); set once. */
                 welcomedAt: v.optional(v.number()),
+                /** When the nudge mail was claimed (see `saas:claimMail`); set once. */
+                nudgedAt: v.optional(v.number()),
                 seats: v.number(),
                 slug: v.string(),
                 status: v.string(),

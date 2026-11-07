@@ -1,7 +1,7 @@
 /**
  * The in-app notification feed (per tenant shard) and the device-push plane.
  */
-import { action, internalMutation, v } from "../_generated/server.js";
+import { action, internalMutation, v } from "../_generated/server";
 import { orgMutation, orgQuery, requireOrg, tenantRead, tenantWrite } from "../lib/crpc";
 
 /** Written by the `events` queue consumer, on the tenant's shard. */
@@ -60,7 +60,8 @@ export const testPush = action.action(async ({ ctx }) => {
         return { delivered: false };
     }
 
-    await ctx.push.broadcast({ body: "Push works.", title: "Lunora bench" }, { userId });
+    const result = await ctx.push.broadcast({ body: "Push works.", title: "Lunora bench" }, { userId });
 
-    return { delivered: true };
+    // A caller with no registered device has nothing to send to, and a provider failure is a failed receipt, not an exception.
+    return { delivered: result.total > 0 && result.sent > 0 && result.failed === 0 };
 });

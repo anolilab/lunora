@@ -24,7 +24,7 @@ import { RateLimiter, createDbStore, rateLimit } from "lunorash/ratelimit";
 import type { Doc, Id, MutationCtx, QueryCtx, TableReaderFacade } from "#lunora/_generated/server.js";
 import { internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
 
-import { SAAS_ACTIVITY_PAGE, SAAS_ACTIVITY_TABLE, SAAS_ORGANIZATIONS_TABLE, SAAS_PROJECTS_PAGE, SAAS_PROJECTS_TABLE } from "./schema.js";
+import { SAAS_ACTIVITY_PAGE, SAAS_ACTIVITY_TABLE, SAAS_ORGANIZATIONS_TABLE, SAAS_PROJECTS_PAGE, SAAS_PROJECTS_TABLE } from "./schema";
 
 /**
  * The kit's own limit config, rather than the `limits` map in
@@ -650,25 +650,32 @@ export const syncOrganization = internalMutation
     });
 
 /**
- * Claim the organisation's welcome mail. The first claim wins, and a restarted
- * onboarding instance finds it claimed, so the mail is not sent twice. Runs on
- * the root shard with the projection it marks.
+ * Claim one onboarding mail (`welcome` or `nudge`) for an organisation. The first
+ * claim wins, and a restarted onboarding instance, which runs every step again,
+ * finds it claimed, so the mail is not sent twice. Runs on the root shard with the
+ * projection it marks, so the claim is shared by every instance.
  */
-export const claimWelcome = internalMutation
-    .input({ organizationId: v.string() })
-    .mutation(async ({ args: { organizationId }, ctx }): Promise<{ claimed: boolean }> => {
+export const claimMail = internalMutation
+    .input({ kind: v.union(v.literal("nudge"), v.literal("welcome")), organizationId: v.string() })
+    .mutation(async ({ args: { kind, organizationId }, ctx }): Promise<{ claimed: boolean }> => {
         const existing = await organizations(ctx).findFirst({ where: { organizationId } });
 
-        // Not projected yet (the auth hook has not run): retry, so the welcome is not lost.
+        // Not projected yet (the auth hook has not run): retry, so the mail is not lost.
         if (!existing) {
             throw new LunoraError("SERVICE_UNAVAILABLE", `organization ${organizationId} is not in the projection yet — retry once it is`);
         }
 
-        if (existing["welcomedAt"] !== undefined) {
+        const claimedAt = kind === "welcome" ? existing["welcomedAt"] : existing["nudgedAt"];
+
+        if (claimedAt !== undefined) {
             return { claimed: false };
         }
 
-        await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"] as Id<"saas_organizations">, { welcomedAt: ctx.now });
+        await ctx.db.patch(
+            SAAS_ORGANIZATIONS_TABLE,
+            existing["_id"] as Id<"saas_organizations">,
+            kind === "welcome" ? { welcomedAt: ctx.now } : { nudgedAt: ctx.now },
+        );
 
         return { claimed: true };
     });
@@ -704,7 +711,9 @@ export const syncOrganizationPlan = internalMutation
 
         const stored = typeof existing["planAsOf"] === "number" ? existing["planAsOf"] : undefined;
 
-        if (stored !== undefined && (asOf < stored || (asOf === stored && existing["plan"] === plan))) {
+        // Only a strictly newer derivation applies. A retry of the same one is a no-op, and when two changes share a
+        // timestamp the first one written stands.
+        if (stored !== undefined && asOf <= stored) {
             return;
         }
 

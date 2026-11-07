@@ -47,58 +47,10 @@
  * Config is read from `cloudflare:workers`' `env` — the one canonical source
  * every Lunora registry item uses for bindings, vars, and secrets.
  */
-import { createMailerFromEnv } from "@lunora/mail";
-import type { Mailer, QueueLike, SendOptions } from "@lunora/mail";
+import type { SendOptions } from "@lunora/mail";
 import { internalAction, v } from "#lunora/_generated/server.js";
-import type { CloudflareBindings } from "#lunora/_generated/server.js";
-import { env as workerEnv } from "cloudflare:workers";
 
-/**
- * The Worker's bindings, narrowed so they can be looked up by name.
- *
- * `cloudflare:workers` types `env` as `Cloudflare.Env`, which
- * `@cloudflare/workers-types` declares EMPTY until the project runs
- * `wrangler types` — so indexing it, or handing it to `createMailerFromEnv`
- * (whose `MailEnv` is a `Record<string, unknown>`), is a `tsc` error in a fresh
- * scaffold. The generated `CloudflareBindings` is the open index signature both
- * want.
- */
-const env = workerEnv as CloudflareBindings;
-
-/**
- * The Cloudflare Email Workers send callback: serialize the RFC 822 message
- * through the `SEND_EMAIL` binding. Kept here (not in `@lunora/mail`) because it
- * needs the `cloudflare:email` runtime module. Ignored in dev (capture instead).
- */
-const cloudflareSend = async (from: string, to: string, raw: string): Promise<void> => {
-    const { EmailMessage } = await import("cloudflare:email");
-    const binding = env["SEND_EMAIL"] as { send: (message: InstanceType<typeof EmailMessage>) => Promise<void> };
-
-    await binding.send(new EmailMessage(from, to, raw));
-};
-
-/**
- * Build a mailer from env on each invocation: capture into the studio inbox in
- * dev, deliver via the `SEND_EMAIL` binding (or `RESEND_API_KEY`) in production.
- * The capture-vs-deliver decision + the inbox wiring live in `@lunora/mail`'s
- * `createMailerFromEnv`, so the same logic backs `@lunora/auth`'s email too.
- *
- * `queue` is the `QUEUE_MAIL` producer binding and backs {@link queueEmail}.
- * Without it, `queue()` throws outside dev capture mode even though the Worker
- * declares the queue.
- *
- * `cloudflareSend` is passed only when the `SEND_EMAIL` binding exists:
- * `createMailerFromEnv` prefers it whenever it is supplied, so a Resend-only
- * deployment would otherwise fail inside it instead of using `RESEND_API_KEY`.
- */
-const mailer = (): Mailer => {
-    const queue = env["QUEUE_MAIL"] as QueueLike | undefined;
-
-    return createMailerFromEnv(env, {
-        ...(env["SEND_EMAIL"] === undefined ? {} : { cloudflareSend }),
-        ...(queue === undefined ? {} : { queue }),
-    });
-};
+import { mailer } from "./transport";
 
 /**
  * Validator for the email payload. Mirrors `@lunora/mail`'s `SendOptions` minus

@@ -308,6 +308,8 @@ export const authOptions = (env: AuthEnv): LunoraAuthOptions => {
         emailAndPassword: {
             enabled: true,
             requireEmailVerification: true,
+            // A reset is what a compromised password needs: sessions obtained before it stop working.
+            revokeSessionsOnPasswordReset: true,
             sendResetPassword: async ({ url, user }) => {
                 await sendAuthEmail(env, { subject: "Reset your password", text: `Reset your password:\n${url}`, to: user.email });
             },

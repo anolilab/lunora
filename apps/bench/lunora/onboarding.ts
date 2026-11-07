@@ -17,7 +17,7 @@ import { orgBulkMutation, requireWriter } from "./lib/crpc";
  * Idempotent per organisation: the instance id is derived from the tenant, so a
  * second start reports the running instance instead of mailing again. An
  * instance that errored is restarted, which runs every step again; the welcome
- * mail is claimed once per organisation (`saas:claimWelcome`), so it is not sent
+ * mail is claimed once per organisation (`saas:claimMail`), so it is not sent
  * twice. The `bulk` budget (5 per minute per caller) bounds retries.
  */
 export const start = orgBulkMutation.mutation(async ({ ctx }) => {
@@ -49,6 +49,9 @@ export const start = orgBulkMutation.mutation(async ({ ctx }) => {
     return { instanceId: id, started: true };
 });
 
+/** The starter task `seedOrganization` writes, which the progress count does not treat as the team's own work. */
+const STARTER_TITLE = "Invite your team";
+
 export const seedOrganization = internalMutation.input({ organizationId: v.string(), userId: v.string() }).mutation(async ({ args, ctx }) => {
     const existing = await ctx.db
         .query("tasks")
@@ -68,7 +71,7 @@ export const seedOrganization = internalMutation.input({ organizationId: v.strin
         organizationId: args.organizationId,
         priority: "normal",
         status: "todo",
-        title: "Invite your team",
+        title: STARTER_TITLE,
         updatedAt: now,
     });
 
@@ -81,5 +84,5 @@ export const progress = internalQuery.input({ organizationId: v.string() }).quer
         .withIndex("byOrgStatus", (q) => q.eq("organizationId", args.organizationId))
         .take(10);
 
-    return { tasks: tasks.length };
+    return { tasks: tasks.filter((task) => task.title !== STARTER_TITLE || !task.labels.includes("onboarding")).length };
 });

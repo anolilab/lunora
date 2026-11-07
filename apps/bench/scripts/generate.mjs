@@ -139,6 +139,7 @@ const tableDefinitions = (key, shape) => {
             code: v.string(),
             createdAt: v.number(),
             createdBy: v.string(),
+            currency: v.optional(v.string()),
             meta: v.optional(v.record(v.string(), v.any())),
             organizationId: v.string(),
             ownerId: v.optional(v.string()),
@@ -368,7 +369,7 @@ export const update = orgMutation
         const now = Date.now();
 
         await ctx.db.patch("${table}", args.id, { ...args.patch, updatedAt: now });
-        await ctx.db.insert("saas_activity", { action: "${key}.updated", actorId: userId, createdAt: now, organizationId, subjectId: args.id, subjectType: "${key}" });
+${shape.schedulerHook ? `        if (args.patch.state !== undefined) {\n            await ctx.scheduler.runAfter(60_000, internal.domains.${key}.jobs.recount, { organizationId }, { shardKey: organizationId });\n        }\n` : ""}        await ctx.db.insert("saas_activity", { action: "${key}.updated", actorId: userId, createdAt: now, organizationId, subjectId: args.id, subjectType: "${key}" });
 
         return { ok: true as const };
     });
@@ -647,7 +648,7 @@ export const importMany = orgBulkMutation
                 throw new LunoraError("UNPROCESSABLE", "a ${key} holds at most ${MAX_LINES_PER_RECORD} lines");
             }
 
-            const id = await ctx.db.insert("dom_${key}Records", { ...draft, amount: price?.amount ?? draft.amount, createdAt: now, createdBy: userId, organizationId, state: "draft", updatedAt: now });
+            const id = await ctx.db.insert("dom_${key}Records", { ...draft, amount: price?.amount ?? draft.amount, currency: price?.currency, createdAt: now, createdBy: userId, organizationId, state: "draft", updatedAt: now });
 
             // Numbered from 1, as \`lines.add\` numbers them, so a record holds at most ${MAX_LINES_PER_RECORD} positions.
             for (const [index, item] of items.entries()) {
