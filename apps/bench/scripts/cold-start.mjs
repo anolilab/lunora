@@ -326,7 +326,8 @@ const shape = await withSizedApp(size, { keep: values.keep }, async (generated) 
 
     hyperdrive.username = "bench";
     hyperdrive.password = secret();
-    process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??= String(hyperdrive);
+    // Always this run's string: an inherited value would send signup and the measured workers to another database.
+    process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE = String(hyperdrive);
 
     const sessions = await signUp(modes[0], samples * modes.length);
 

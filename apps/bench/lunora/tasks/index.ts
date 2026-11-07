@@ -169,10 +169,12 @@ export const bulkArchive = orgBulkMutation
         const { organizationId, userId } = await requireWriter(ctx);
 
         const now = Date.now();
+        // A repeated id is one task: one patch, one audit row, one count.
+        const ids = [...new Set(args.ids)];
 
         // One `task.updated` row per task, the same shape `update` writes for a status change.
         await Promise.all(
-            args.ids.map(async (id) => {
+            ids.map(async (id) => {
                 await ctx.db.patch("tasks", id, { status: "archived", updatedAt: now });
                 await ctx.db.insert("saas_activity", {
                     action: "task.updated",
@@ -186,7 +188,7 @@ export const bulkArchive = orgBulkMutation
             }),
         );
 
-        return { archived: args.ids.length };
+        return { archived: ids.length };
     });
 
 const SWEEP_BATCH = 500;
