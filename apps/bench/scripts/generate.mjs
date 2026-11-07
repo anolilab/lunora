@@ -380,6 +380,22 @@ export const update = orgMutation
         const { organizationId, userId } = await requireWriter(ctx);
         const now = Date.now();
 
+        // An unlabelled record may not take an amount into a domain whose amounts are labelled (see create).
+        if (args.patch.amount !== undefined) {
+            const current = await ctx.db.get("${table}", args.id);
+
+            if (current !== null && current.currency === undefined) {
+                const held = await ctx.db
+                    .query("${table}")
+                    .withIndex("byOrgCode", (q) => q.eq("organizationId", organizationId))
+                    .take(200);
+
+                if (held.some((record) => record.currency !== undefined)) {
+                    throw new LunoraError("UNPROCESSABLE", "this domain's amounts are in a currency: an unlabelled amount cannot join them");
+                }
+            }
+        }
+
         await ctx.db.patch("${table}", args.id, { ...args.patch, updatedAt: now });
 ${shape.schedulerHook ? `        if (args.patch.state !== undefined) {\n            await ctx.scheduler.runAfter(60_000, internal.domains.${key}.jobs.recount, { organizationId }, { shardKey: organizationId });\n        }\n` : ""}        await ctx.db.insert("saas_activity", { action: "${key}.updated", actorId: userId, createdAt: now, organizationId, subjectId: args.id, subjectType: "${key}" });
 
