@@ -26,7 +26,7 @@
  * Prerequisite: built packages (`pnpm --filter "@lunora/bench..." run build:prod`).
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { loadavg } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -55,6 +55,11 @@ const vite = join(appDirectory, "node_modules", ".bin", "vite");
 const strictConfig = join(benchDirectory, "vite.strict.config.ts");
 // `@cloudflare/vite-plugin` writes this after every build; while it exists, wrangler deploys the Vite output instead of the source.
 const redirect = join(appDirectory, ".wrangler", "deploy", "config.json");
+
+// The cleanup below removes this file: a copy that was there before the run is not ours to remove, so refuse to start.
+if (existsSync(redirect)) {
+    throw new Error(`${redirect} exists before the run; move it aside, since chunked removes it after each build`);
+}
 
 const freeze = (name) => {
     const bundle = join(benchDirectory, `chunked-${name}.bundle`);

@@ -525,8 +525,14 @@ export const add = orgMutation
             .order("desc")
             .first();
 
-        // Positions only grow, so this bounds every line the record will ever read back.
-        if ((last?.position ?? 0) >= MAX_LINES) {
+        // Bounds the lines the record holds, not its highest position: a deletion leaves a gap, so the position can pass the
+        // cap while fewer lines remain.
+        const held = await ctx.db
+            .query("${table}")
+            .withIndex("byRecord", (q) => q.eq("organizationId", organizationId).eq("recordId", args.recordId))
+            .take(MAX_LINES);
+
+        if (held.length >= MAX_LINES) {
             throw new LunoraError("UNPROCESSABLE", \`a ${key} holds at most \${String(MAX_LINES)} lines\`);
         }
 

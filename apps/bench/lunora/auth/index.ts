@@ -317,6 +317,8 @@ export const authOptions = (env: AuthEnv): LunoraAuthOptions => {
             },
         },
         emailVerification: {
+            // Sent when the account is created; without it the first email never goes out.
+            sendOnSignUp: true,
             sendVerificationEmail: async ({ url, user }) => {
                 await sendAuthEmail(env, { subject: "Verify your email address", text: `Verify your email address:\n${url}`, to: user.email });
             },

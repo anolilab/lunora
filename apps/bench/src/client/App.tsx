@@ -154,21 +154,36 @@ const SignIn = (): ReactElement => {
 };
 
 const CreateOrganization = (): ReactElement => {
+    const [createdId, setCreatedId] = useState<string | undefined>(undefined);
     const [error, setError] = useState<string | undefined>(undefined);
-    const submit = async (form: FormData): Promise<void> => {
-        const name = field(form, "name");
-        const created = await authClient.organization.create({ name, slug: name.toLowerCase().replaceAll(/[^a-z0-9]+/gu, "-") });
 
-        if (created.error) {
-            setError(created.error.message ?? "The organization could not be created. Try again.");
+    // Activation is its own step. A created organisation that fails to activate is kept, so the retry activates it
+    // rather than creating a second one under the same slug.
+    const activate = async (organizationId: string): Promise<void> => {
+        const activated = await authClient.organization.setActive({ organizationId });
+
+        if (activated.error) {
+            setError(activated.error.message ?? "The organization was created but could not be made active. Try again.");
 
             return;
         }
 
-        if (created.data) {
-            await authClient.organization.setActive({ organizationId: created.data.id });
-            globalThis.location.reload();
+        globalThis.location.reload();
+    };
+
+    const submit = async (form: FormData): Promise<void> => {
+        const name = field(form, "name");
+        const created = await authClient.organization.create({ name, slug: name.toLowerCase().replaceAll(/[^a-z0-9]+/gu, "-") });
+        const organizationId = created.data?.id;
+
+        if (created.error || organizationId === undefined) {
+            setError(created.error?.message ?? "The organization could not be created. Try again.");
+
+            return;
         }
+
+        setCreatedId(organizationId);
+        await activate(organizationId);
     };
 
     return (
@@ -178,7 +193,14 @@ const CreateOrganization = (): ReactElement => {
                 Name
                 <input id="organization-name" name="name" placeholder="Acme" required />
             </label>
-            <button type="submit">Create</button>
+            <button disabled={createdId !== undefined} type="submit">
+                Create
+            </button>
+            {createdId === undefined ? undefined : (
+                <button onClick={() => void activate(createdId)} type="button">
+                    Make it active
+                </button>
+            )}
             {error === undefined ? undefined : <p role="alert">{error}</p>}
         </form>
     );
