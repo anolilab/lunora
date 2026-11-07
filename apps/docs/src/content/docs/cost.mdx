@@ -22,7 +22,8 @@ limits that matter for Lunora:
 | Durable Object duration                   | 13,000 GB-s per day         |
 | Durable Object SQLite rows read / written | 5 million / 100,000 per day |
 | D1 rows read / written                    | 5 million / 100,000 per day |
-| Durable Object stored data, D1 storage    | 5 GB total                  |
+| Durable Object SQLite storage             | 1 GB per Object, 5 GB total |
+| D1 storage                                | 5 GB total                  |
 
 Durable Objects on the free plan must use the SQLite storage backend, which
 Lunora uses. Daily limits reset at 00:00 UTC.
@@ -47,10 +48,14 @@ Workers duration has no charge.
 
 ## Which meters grow with your app
 
-- **Requests.** Every query, mutation, and action is a Worker request. Traffic
-  growth shows up here first.
+- **Requests.** Mutations, actions, and HTTP calls are Worker requests. A live
+  query stays subscribed over one open WebSocket and updates over it, so an
+  active subscription costs fewer requests than the same reads made as HTTP
+  calls. Check Cloudflare's billing docs for how WebSocket messages are metered.
 - **Durable Object duration.** A shard with no traffic hibernates, and its idle
-  WebSocket subscribers cost storage, not CPU, so a quiet app accrues little
+  WebSocket subscribers cost storage, not CPU. Subscribed `.global()` shapes are
+  the exception: their shard polls D1 every 2 seconds through an alarm until the
+  last one is unsubscribed. A quiet app that keeps a global shape open accrues
   duration. See [architecture](/docs/architecture) for how hibernation works.
 - **Rows read and written.** These follow your queries and writes. An unindexed
   scan reads every row it touches, so [indexes](/docs/concepts/indexes) are also a
