@@ -214,7 +214,47 @@ const Tasks = ({ organizationId }: { organizationId: string }): ReactElement => 
     );
 };
 
-export const App = (): ReactElement => {
+/**
+ * The landing page of an invitation email. The organisation plugin accepts the
+ * invitation for the signed-in user, who must be the invited address; the link
+ * carries the invitation id in `id`.
+ */
+const AcceptInvitation = (): ReactElement => {
+    const [error, setError] = useState<string | undefined>(undefined);
+    const invitationId = new URLSearchParams(globalThis.location.search).get("id");
+
+    const accept = async (): Promise<void> => {
+        if (invitationId === null) {
+            setError("This invitation link has no invitation id.");
+
+            return;
+        }
+
+        const accepted = await authClient.organization.acceptInvitation({ invitationId });
+        const organizationId = accepted.data?.member.organizationId;
+
+        if (accepted.error || organizationId === undefined) {
+            setError(accepted.error?.message ?? "The invitation could not be accepted. Sign in with the invited address, then try again.");
+
+            return;
+        }
+
+        await authClient.organization.setActive({ organizationId });
+        globalThis.location.assign("/");
+    };
+
+    return (
+        <main>
+            <h1>Accept invitation</h1>
+            <button type="button" onClick={() => void accept()}>
+                Accept
+            </button>
+            {error === undefined ? undefined : <p role="alert">{error}</p>}
+        </main>
+    );
+};
+
+const Session = (): ReactElement => {
     const [signedOut, setSignedOut] = useState(false);
     const me = useQuery(
         api.saas.me,
@@ -240,3 +280,5 @@ export const App = (): ReactElement => {
 
     return <Tasks organizationId={me.organizationId} />;
 };
+
+export const App = (): ReactElement => (globalThis.location.pathname === "/accept-invitation" ? <AcceptInvitation /> : <Session />);

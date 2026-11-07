@@ -667,7 +667,8 @@ export const claimMail = internalMutation
 
         const claimedAt = kind === "welcome" ? existing["welcomedAt"] : existing["nudgedAt"];
 
-        if (claimedAt !== undefined) {
+        // A released claim is stored as 0, so it reads as unclaimed.
+        if (claimedAt !== undefined && claimedAt !== 0) {
             return { claimed: false };
         }
 
@@ -678,6 +679,22 @@ export const claimMail = internalMutation
         );
 
         return { claimed: true };
+    });
+
+/**
+ * Give an onboarding mail's claim back after its send failed for good, so the
+ * next run of the instance sends it. Stored as 0: a released claim reads as unclaimed.
+ */
+export const releaseMail = internalMutation
+    .input({ kind: v.union(v.literal("nudge"), v.literal("welcome")), organizationId: v.string() })
+    .mutation(async ({ args: { kind, organizationId }, ctx }): Promise<void> => {
+        const existing = await organizations(ctx).findFirst({ where: { organizationId } });
+
+        if (!existing) {
+            return;
+        }
+
+        await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"] as Id<"saas_organizations">, kind === "welcome" ? { welcomedAt: 0 } : { nudgedAt: 0 });
     });
 
 /**

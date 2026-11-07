@@ -33,6 +33,8 @@
         // The worker's public URL. Scheduled and agent dispatch call back to it, and the MCP endpoint 401s without it.
         "APP_BASE_URL": "",
         "LUNORA_ORIGIN_URL": "",
+        // Invitation links are built from this, so it must be the public origin the invitee can open.
+        "BETTER_AUTH_URL": "",
     },
     "ai": {
         "binding": "AI",

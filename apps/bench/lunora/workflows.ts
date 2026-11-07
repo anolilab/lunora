@@ -8,6 +8,20 @@ import { defineWorkflow } from "@lunora/workflow";
 import { internal } from "./_generated/internal";
 
 /**
+ * Send one onboarding mail. If the send fails for good, `release` gives its claim
+ * back first, so a later run of the instance can send it; the failure is rethrown.
+ */
+const sendOrRelease = async (release: () => Promise<unknown>, send: () => Promise<unknown>): Promise<void> => {
+    try {
+        await send();
+    } catch (error) {
+        await release();
+
+        throw error;
+    }
+};
+
+/**
  * A new organisation's first week: seed a starter task, send the welcome mail,
  * and nudge after a day if the team has created no task. Every `ctx.run` names the
  * tenant's shard, so the writes land where the tenant's rows live. The welcome and
@@ -28,13 +42,17 @@ export const onboarding = defineWorkflow<{ email: string; organizationId: string
         )) as { claimed: boolean };
 
         if (welcomed) {
-            await ctx.step.do("welcome", () =>
-                ctx.run(internal.mail.sendEmail, {
-                    idempotencyKey: `${instanceKey}:welcome`,
-                    subject: "Welcome to the bench",
-                    text: "Your workspace is ready.",
-                    to: email,
-                }),
+            await sendOrRelease(
+                () => ctx.step.do("release welcome", () => ctx.run(internal.saas.releaseMail, { kind: "welcome", organizationId }, { shardKey: "__root__" })),
+                () =>
+                    ctx.step.do("welcome", () =>
+                        ctx.run(internal.mail.sendEmail, {
+                            idempotencyKey: `${instanceKey}:welcome`,
+                            subject: "Welcome to the bench",
+                            text: "Your workspace is ready.",
+                            to: email,
+                        }),
+                    ),
             );
         }
 
@@ -66,13 +84,17 @@ export const onboarding = defineWorkflow<{ email: string; organizationId: string
             return { nudged: false };
         }
 
-        await ctx.step.do("nudge", () =>
-            ctx.run(internal.mail.sendEmail, {
-                idempotencyKey: `${instanceKey}:nudge`,
-                subject: "Your first task is waiting",
-                text: "Create a task to get going.",
-                to: email,
-            }),
+        await sendOrRelease(
+            () => ctx.step.do("release nudge", () => ctx.run(internal.saas.releaseMail, { kind: "nudge", organizationId }, { shardKey: "__root__" })),
+            () =>
+                ctx.step.do("nudge", () =>
+                    ctx.run(internal.mail.sendEmail, {
+                        idempotencyKey: `${instanceKey}:nudge`,
+                        subject: "Your first task is waiting",
+                        text: "Create a task to get going.",
+                        to: email,
+                    }),
+                ),
         );
 
         return { nudged: true };

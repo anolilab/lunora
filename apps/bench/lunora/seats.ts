@@ -23,6 +23,9 @@ const holdsOf = async (ctx: QueryCtx, organizationId: string): Promise<Doc<"invi
         .withIndex("byOrganizationEmail", (q) => q.eq("organizationId", organizationId))
         .collect();
 
+/** Lapsed holds removed per invitation: a bounded batch, so one invitation never reads an organisation's whole history. */
+const EXPIRED_BATCH = 50;
+
 /**
  * Reserve a seat for an invitation to `email`, or refuse with `FORBIDDEN` when
  * `members` plus the organisation's live holds already fill `limit` (`null`: no
@@ -32,24 +35,41 @@ export const holdInvitationSeat = internalMutation
     .input({ email: v.string(), limit: v.union(v.number(), v.null()), members: v.number(), organizationId: v.string() })
     .mutation(async ({ args: { email, limit, members, organizationId }, ctx }): Promise<void> => {
         const address = email.trim().toLowerCase();
-        const holds = await holdsOf(ctx, organizationId);
         const expiresAt = ctx.now + INVITATION_EXPIRES_SECONDS * 1000;
-        const live = holds.filter((hold) => hold.expiresAt > ctx.now);
-        // Only an unexpired hold is renewed. A lapsed one for the same address goes through the seat check below like a new invitation.
-        const existing = live.find((hold) => hold.email === address);
+        const existing = await ctx.db
+            .query("invitation_holds")
+            .withIndex("byOrganizationEmail", (q) => q.eq("organizationId", organizationId).eq("email", address))
+            .first();
 
-        // An organisation's holds are bounded by its seats, so clearing its lapsed ones here
-        // keeps the table from growing without a sweep.
-        await Promise.all(holds.filter((hold) => hold.expiresAt <= ctx.now).map(async (hold) => ctx.db.delete("invitation_holds", hold._id)));
-
-        if (existing !== undefined) {
+        if (existing !== null && existing.expiresAt > ctx.now) {
             await ctx.db.patch("invitation_holds", existing._id, { expiresAt });
 
             return;
         }
 
-        if (limit !== null && members + live.length >= limit) {
-            throw new LunoraError("FORBIDDEN", "every seat on this plan is taken or invited — upgrade the plan to invite more");
+        // A lapsed hold for the address goes first, so the unique address row can be written again.
+        const lapsed = await ctx.db
+            .query("invitation_holds")
+            .withIndex("byOrganizationExpiry", (q) => q.eq("organizationId", organizationId).lte("expiresAt", ctx.now))
+            .take(EXPIRED_BATCH);
+
+        await Promise.all(lapsed.map(async (hold) => ctx.db.delete("invitation_holds", hold._id)));
+
+        if (existing !== null && !lapsed.some((hold) => hold._id === existing._id)) {
+            await ctx.db.delete("invitation_holds", existing._id);
+        }
+
+        // Only a capped plan counts its holds, and the table is bounded by that cap; an uncapped one has no seats to count.
+        if (limit !== null) {
+            const holds = await ctx.db
+                .query("invitation_holds")
+                .withIndex("byOrganizationEmail", (q) => q.eq("organizationId", organizationId))
+                .collect();
+            const live = holds.filter((hold) => hold.expiresAt > ctx.now).length;
+
+            if (members + live >= limit) {
+                throw new LunoraError("FORBIDDEN", "every seat on this plan is taken or invited — upgrade the plan to invite more");
+            }
         }
 
         await ctx.db.insert("invitation_holds", { email: address, expiresAt, organizationId });

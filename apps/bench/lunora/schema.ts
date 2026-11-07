@@ -43,7 +43,9 @@ export default defineSchema({
         email: v.string(),
         expiresAt: v.number(),
         organizationId: v.string(),
-    }).index("byOrganizationEmail", ["organizationId", "email"], { unique: true }),
+    })
+        .index("byOrganizationEmail", ["organizationId", "email"], { unique: true })
+        .index("byOrganizationExpiry", ["organizationId", "expiresAt"]),
 
     /** Per-tenant work items — the core CRUD surface the bench exercises. */
     tasks: defineTable({
