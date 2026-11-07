@@ -5,18 +5,14 @@ import { attachResilience } from "../src/providers";
 import type { D1Like, D1PreparedLike } from "../src/subscriptions/d1-store";
 
 /**
- * The message the `@visulima/notification` FCM provider ACTUALLY produces for a
- * dead device token, verbatim.
- *
- * Its send path forwards `body.error.message` and nothing else, and FCM HTTP v1
+ * The message `fcm-transport` produces for a dead device token, verbatim. FCM HTTP v1
  * reports an unregistered token as HTTP 404 with `error.status: "NOT_FOUND"`,
- * `error.message: "Requested entity was not found."` and the canonical
- * `UNREGISTERED` code buried in `error.details[].errorCode` — which the provider
- * drops. The engine then prefixes it via `NotificationError`. A double answering
- * an invented `"FCM push failed: UNREGISTERED"` agrees with the code and disagrees
- * with FCM: no such string ever reaches `isGoneError`.
+ * `error.message: "Requested entity was not found."` and the `UNREGISTERED` code in
+ * `error.details[].errorCode`. The transport surfaces that code in the message, and
+ * `isGoneError` prunes on it. A bare NOT_FOUND is not a dead token; see
+ * `subscriptions/normalize`.
  */
-const FCM_DEAD_TOKEN_ERROR = "[@visulima/notification] [fcm] Requested entity was not found.";
+const FCM_DEAD_TOKEN_ERROR = "FCM 404 UNREGISTERED: Requested entity was not found.";
 
 /**
  * A mock push `Provider` whose outcome is driven by the target text: a target

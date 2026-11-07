@@ -18,7 +18,7 @@ import type { Lint } from "../../types";
 const notifyMissingPushConfig: Lint = {
     categories: ["SCHEMA"],
     description:
-        "The app sends push notifications via `ctx.push` but `defineNotify(...)` configures neither a Web Push nor an FCM channel, so every send fails at runtime. Wire at least one push channel (`webPush` and/or `fcm`) and provide its secrets (`VAPID_*` / `FCM_*`).",
+        "The app sends push notifications via `ctx.push`, but `defineNotify(...)` does not wire a channel for them: neither Web Push nor FCM, or FCM for `sendToTopic` / `sendToCondition`. Those sends fail at runtime. Wire the channel (`webPush` and/or `fcm`) and provide its secrets (`VAPID_*` / `FCM_*`).",
     facing: "INTERNAL",
     level: "WARN",
     name: "notify_missing_push_config",
@@ -27,21 +27,37 @@ const notifyMissingPushConfig: Lint = {
     run: (context) => {
         const config = context.notifyConfig;
 
-        // No config evidence, or the app doesn't push, or a channel is wired → nothing to assert.
-        if (config === undefined || !config.usesPush || config.hasWebPush || config.hasFcm) {
+        // No config evidence, or FCM is wired → nothing to assert.
+        if (config === undefined || config.hasFcm) {
             return [];
         }
 
-        return [
-            emit(notifyMissingPushConfig, {
-                cacheKey: "notify_missing_push_config",
-                detail: "`ctx.push` is used to send notifications, but `defineNotify(...)` wires neither `webPush` nor `fcm` — every push send will fail at runtime. Configure at least one push channel and its secrets.",
-                metadata: { hasFcm: config.hasFcm, hasWebPush: config.hasWebPush, usesPush: config.usesPush },
-            }),
-        ];
+        // Neither channel wired, but the app sends: every send fails.
+        if (config.usesPush && !config.hasWebPush) {
+            return [
+                emit(notifyMissingPushConfig, {
+                    cacheKey: "notify_missing_push_config",
+                    detail: "`ctx.push` is used to send notifications, but `defineNotify(...)` wires neither `webPush` nor `fcm` — every push send will fail at runtime. Configure at least one push channel and its secrets.",
+                    metadata: { hasFcm: config.hasFcm, hasWebPush: config.hasWebPush, usesPush: config.usesPush },
+                }),
+            ];
+        }
+
+        // Web Push is wired, but a topic or condition send needs FCM, which is not: that send throws.
+        if (config.usesFcmOnlySend) {
+            return [
+                emit(notifyMissingPushConfig, {
+                    cacheKey: "notify_missing_push_config:fcm_only",
+                    detail: "`ctx.push.sendToTopic` / `sendToCondition` are used, but `defineNotify(...)` does not wire `fcm`. Topics and conditions exist only on FCM, so those sends throw. Wire `fcm: (env) => fcmFromEnv(env)`.",
+                    metadata: { hasFcm: config.hasFcm, hasWebPush: config.hasWebPush, usesFcmOnlySend: config.usesFcmOnlySend },
+                }),
+            ];
+        }
+
+        return [];
     },
     source: "static",
-    title: "Push used with no Web Push / FCM channel configured",
+    title: "Push sends without a matching push channel configured",
 };
 
 export default notifyMissingPushConfig;

@@ -13,9 +13,10 @@ import { useT } from "../../i18n/i18n-context";
 import type { PushSubscriptionDevice, PushSubscriptionsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { formatTimestamp } from "../../lib/internal";
+import type { KindFilter } from "./notifications-filter";
+import { deviceTarget, partitionDevices } from "./notifications-filter";
 
 /** The three kind filters the toolbar toggles between (`"all"` clears the filter). */
-type KindFilter = "all" | "fcm" | "web-push";
 
 /** Map a device's last-send status to a semantic badge variant. */
 const statusVariant = (status: string | undefined): "destructive" | "secondary" | "success" | "warning" => {
@@ -40,7 +41,6 @@ const statusVariant = (status: string | undefined): "destructive" | "secondary" 
  * `token`) are stripped server-side, so a device is only ever identified by its
  * endpoint / id here — never by a credential.
  */
-const deviceTarget = (device: PushSubscriptionDevice): string => device.endpoint ?? device.id;
 
 /**
  * The Notifications inspector — the app's registered `@lunora/notify` push
@@ -60,6 +60,7 @@ const NotificationsPanel = (): ReactElement => {
 
     const [kind, setKind] = useState<KindFilter>("all");
     const [search, setSearch] = useState<string>("");
+    const [failingOnly, setFailingOnly] = useState<boolean>(false);
 
     // One-shot admin read (no shard, no live subscription): the store is a worker
     // option, so there is no per-shard write-flush to stream. `refetch` backs the
@@ -70,22 +71,16 @@ const NotificationsPanel = (): ReactElement => {
     const { data, error, errorSource, isLoading, refetch } = useAdminQuery<PushSubscriptionsResult>(ADMIN_FUNCTIONS.listPushSubscriptions, {});
 
     const devices: PushSubscriptionDevice[] = data?.subscriptions ?? [];
+    // The admin read is capped server-side at 1000 rows and does not say it was cut, so a full page
+    // means the failing count may be short. Say so instead of presenting it as exact.
+    const mayBeTruncated = devices.length >= 1000;
 
     // Client-side kind + substring filter over the already-fetched devices — never
     // triggers a refetch. The substring matches the target endpoint/id and owner.
     // (React Compiler memoizes this derivation — no useMemo.)
-    const needle = search.trim().toLowerCase();
-    const filtered: PushSubscriptionDevice[] = devices.filter((device) => {
-        if (kind !== "all" && device.kind !== kind) {
-            return false;
-        }
-
-        if (needle === "") {
-            return true;
-        }
-
-        return `${deviceTarget(device)} ${device.userId ?? ""}`.toLowerCase().includes(needle);
-    });
+    // The failing count is taken over the kind and search scope, so it matches what the button reveals.
+    const { failing, filtered } = partitionDevices(devices, kind, search, failingOnly);
+    const failingCount = failing.length;
 
     const onSearchChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setSearch(event.target.value);
@@ -118,6 +113,21 @@ const NotificationsPanel = (): ReactElement => {
                         </Button>
                     ))}
                 </div>
+                {data !== undefined && (
+                    <Button
+                        aria-pressed={failingOnly}
+                        data-testid="nt-failing-filter"
+                        onClick={(): void => {
+                            // Functional update: two toggles queued before a render must both apply.
+                            setFailingOnly((current) => !current);
+                        }}
+                        size="sm"
+                        type="button"
+                        variant={failingOnly ? "secondary" : "ghost"}
+                    >
+                        {mayBeTruncated ? t("{count}+ failing", { count: failingCount }) : t("{count} failing", { count: failingCount })}
+                    </Button>
+                )}
                 <Input
                     aria-label={t("Filter devices")}
                     className="h-8 w-56"
@@ -140,9 +150,13 @@ const NotificationsPanel = (): ReactElement => {
 
             {error === null && !isLoading && filtered.length === 0 && (
                 <EmptyState
-                    description={t(
-                        "Registered Web Push / FCM devices appear here. Configure lunora/notify.ts with defineNotify({ store }) and register a device with ctx.push.register(...).",
-                    )}
+                    description={
+                        devices.length > 0
+                            ? t("No device matches the current kind, search or failing filter.")
+                            : t(
+                                  "Registered Web Push / FCM devices appear here. Configure lunora/notify.ts with defineNotify({ store }) and register a device with ctx.push.register(...).",
+                              )
+                    }
                     icon={
                         <svg
                             aria-hidden="true"
@@ -157,7 +171,7 @@ const NotificationsPanel = (): ReactElement => {
                         </svg>
                     }
                     testId="nt-empty"
-                    title={t("No registered devices.")}
+                    title={devices.length > 0 ? t("No matching devices.") : t("No registered devices.")}
                 />
             )}
 

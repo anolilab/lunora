@@ -1,6 +1,16 @@
-import type { ChatPayload, InAppPayload, NotificationMessage, PushPayload, Receipt, WebhookPayload } from "@visulima/notification";
+import type {
+    ChatPayload,
+    InAppPayload,
+    NotificationMessage as ChannelNotificationMessage,
+    PushPayload,
+    Receipt,
+    SuccessReceipt,
+    WebhookPayload,
+} from "@visulima/notification";
 import type { FcmConfig } from "@visulima/notification/providers/fcm";
 import type { PushSubscriptionLike, WebPushConfig } from "@visulima/notification/providers/web-push";
+
+import type { FcmPlatformConfig } from "./fcm-transport";
 
 /**
  * A Worker `env` projected as a plain record (vars, secrets and bindings are
@@ -264,7 +274,7 @@ export interface BroadcastPageResult {
  *
  * - `accepted` — the provider took the message (a `Receipt.successful` send).
  * - `failed` — a provider error; the log line carries the `error` text.
- * - `gone` — the endpoint is unregistered (Web Push 404/410, FCM's `NOT_FOUND` for a dead token) and pruned; push-only.
+ * - `gone` — the endpoint is unregistered (Web Push 404/410, FCM's `UNREGISTERED` for a dead token) and pruned; push-only.
  *
  * Web Push and FCM give no delivery/open receipts, so the vocabulary stops at the
  * send attempt: a `delivered`/`opened` status would be a lie for these channels.
@@ -313,7 +323,7 @@ export interface LunoraPush {
     /**
      * Fan-out a push to every stored subscription matching `filter` (default: all).
      * Reuses the engine's retry/circuit-breaker middleware; prunes subscriptions
-     * the push service reports as gone (Web Push 404/410, FCM's `NOT_FOUND` for a dead token). The `to`
+     * the push service reports as gone (Web Push 404/410, FCM's `UNREGISTERED` for a dead token). The `to`
      * target is derived from each subscription, so it is omitted from the payload.
      *
      * Internally walks the audience in bounded pages (via {@link LunoraPush.broadcastPage},
@@ -367,8 +377,24 @@ export interface LunoraPush {
      * unregisters as its current owner first.
      */
     register: (input: RegisterInput) => Promise<StoredSubscription>;
+
     /** Send a push to a single stored subscription (by id or record); `to` is derived from it. */
     send: (target: StoredSubscription | string, payload: PushContent) => Promise<Receipt>;
+
+    /**
+     * Send one message to every device whose topics match an FCM condition, such as
+     * `"'sports' in topics && 'news' in topics"`. Same contract as
+     * {@link LunoraPush.sendToTopic}.
+     */
+    sendToCondition: (condition: string, payload: PushContent) => Promise<SuccessReceipt>;
+
+    /**
+     * Send one message to every device subscribed to an FCM topic. Topics have no
+     * subscription rows, so there is no per-recipient receipt and no gone-pruning:
+     * the result is a success receipt whose `messageId` is the FCM message name, and a failure throws. Requires `fcm` in
+     * `defineNotify`; web push has no topics.
+     */
+    sendToTopic: (topic: string, payload: PushContent) => Promise<SuccessReceipt>;
 
     /**
      * Remove ONE of `owner`'s subscriptions by id (idempotent).
@@ -409,7 +435,14 @@ export interface PushOwner {
  * stored subscription. Its `ttl` / `urgency` override the channel defaults per
  * message on every push transport (Web Push, FCM, APNs, Expo).
  */
-export type PushContent = Omit<PushPayload, "to">;
+export type PushContent = Omit<PushPayload, "to"> & {
+    /**
+     * FCM per-platform overrides (`android`, `apns`, `webpush`, `fcm_options`),
+     * forwarded to the message as sent. Applied over the common fields, so an
+     * `android.notification.channel_id` here wins over anything derived from them.
+     */
+    fcmOverrides?: FcmPlatformConfig;
+};
 
 /**
  * The multi-channel notification facade — spliced onto ctx as `ctx.notify`.
@@ -514,6 +547,12 @@ export interface NotifyDefinition extends NotifyConfig {
 // Re-export the engine payload/config types an app touches when authoring
 // `defineNotify` or a send, so consumers don't need a direct dependency on
 // `@visulima/notification` just for typing.
-export type { ChatPayload, InAppPayload, NotificationMessage, PushPayload, Receipt, WebhookPayload } from "@visulima/notification";
+export type { ChatPayload, InAppPayload, PushPayload, Receipt, WebhookPayload } from "@visulima/notification";
+
+/** A push payload that may carry FCM per-platform overrides. The overrides reach only FCM targets. */
+export type PushMessage = PushPayload & { fcmOverrides?: FcmPlatformConfig };
+
+/** A multi-channel message whose `push` entry accepts `fcmOverrides`. */
+export type NotificationMessage = Omit<ChannelNotificationMessage, "push"> & { push?: PushMessage };
 export type { FcmConfig } from "@visulima/notification/providers/fcm";
 export type { PushSubscriptionLike, WebPushConfig } from "@visulima/notification/providers/web-push";
