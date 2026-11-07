@@ -429,9 +429,9 @@ const GONE_TEXT_FALLBACK = /\bsubscription (?:is )?(?:gone|expired|no longer val
  * transient failure worth retrying.
  *
  * Gates on STRUCTURED signals first: an `HTTP 404/410` status (both providers
- * answer one for a dead endpoint/token; FCM's transport reports its errors without
- * an HTTP status, so the code below is the signal there) or, for FCM only, an
- * `UNREGISTERED`/`NOT_REGISTERED` code (see {@link FCM_GONE_PATTERN}). The
+ * answer one for a dead endpoint/token). For a known FCM device the signal is only the
+ * dead-token report `FCM 404 UNREGISTERED` (see {@link FCM_DEAD_TOKEN_REPORT}); for a caller with
+ * no kind, the `UNREGISTERED`/`NOT_REGISTERED` codes (see {@link FCM_GONE_PATTERN}) also count. The
  * free-text {@link GONE_TEXT_FALLBACK} is a tightened last resort only, so a
  * transient error that happens to contain `expired` (a cert/session expiry) can
  * never permanently drop a valid subscription.
