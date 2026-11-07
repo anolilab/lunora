@@ -146,7 +146,7 @@ export const registrySplit = (outDirectory, { appPrefix, registry = "_generated/
  * source, so whatever `_generated/` is on disk decides what is measured.
  */
 export const startupActiveMs = (appDirectory, { profile, timeout = 120_000, wrangler, workerBundle }) => {
-    const args = ["check", "startup", "--outfile", profile, ...(workerBundle ? ["--workerBundle", workerBundle] : [])];
+    const args = ["check", "startup", "--outfile", profile, ...(workerBundle ? ["--worker", workerBundle] : [])];
     const output = execFileSync(wrangler, args, { cwd: appDirectory, encoding: "utf8", env: quietEnv(), stdio: ["ignore", "pipe", "pipe"], timeout });
     const match = /Active:\s+([\d.]+) ms/.exec(output);
 
