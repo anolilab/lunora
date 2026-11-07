@@ -283,10 +283,10 @@ const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<Noti
 const FCM_PERMANENT_FAILURE = /\bFCM (?:200|400|401|403|404|413) |\bRetry-After exceeds the \d+s wait limit\b/u;
 
 /**
- * Whether a failed send can never succeed for this recipient — the device
- * unsubscribed or its token was revoked. The facade is about to DELETE the
- * subscription for exactly this signal (see `isGoneError`), so it is the one
- * failure class that is provably not worth a second attempt.
+ * Whether a retry cannot change this failure. Two classes qualify: a recipient that
+ * unsubscribed or had its token revoked (`isGoneError`, the signal the facade DELETES the
+ * subscription on), and FCM's final answers for one request (see below). Neither is worth
+ * another attempt.
  *
  * Deliberately kind-less: a middleware sees a provider id, not the stored
  * subscription, so the FCM-specific patterns are tested against a web-push failure
