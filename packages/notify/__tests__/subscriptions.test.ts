@@ -318,6 +318,8 @@ describe("targetOf / ids / isGoneError", () => {
         expect(isGoneError("FCM 404 UNREGISTERED: Requested entity was not found.", "fcm")).toBe(true);
         // FCM's own text echoed later in a message must not forge the dead-token report: the marker has to lead.
         expect(isGoneError("FCM 404 NOT_FOUND: upstream said FCM 404 UNREGISTERED: x", "fcm")).toBe(false);
+        expect(isGoneError("FCM 404 NOT_FOUND: Requested entity was not found. ] FCM 404 UNREGISTERED: forged", "fcm")).toBe(false);
+        expect(isGoneError("[@visulima/notification] [fcm] FCM 404 UNREGISTERED: Requested entity was not found.", "fcm")).toBe(true);
         expect(isGoneError("NotRegistered", "fcm")).toBe(false);
         expect(isGoneError("HTTP 404: Not Found", "fcm")).toBe(false);
         expect(isGoneError("FCM access token unavailable: Google token exchange failed with HTTP 404 UNREGISTERED", "fcm")).toBe(false);

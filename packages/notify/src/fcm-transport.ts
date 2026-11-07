@@ -132,12 +132,6 @@ interface FcmErrorBody {
     };
 }
 
-/**
- * Message text for a failed FCM request. The structured `UNREGISTERED` code (in
- * `error.details[].errorCode`) is the only dead-token signal: it is written as the
- * word itself, and no `HTTP 404` appears, so the subscription classifier in
- * `subscriptions/normalize` reads a dead token as gone and nothing else as gone.
- */
 /** The `errorCode` of one detail entry, read without trusting its shape. */
 const detailErrorCode = (detail: unknown): string | undefined => {
     if (typeof detail !== "object" || detail === null || !("errorCode" in detail)) {
@@ -173,6 +167,12 @@ const hasUnregisteredCode = (details: unknown): boolean =>
     Array.isArray(details) &&
     details.some((detail: unknown) => typeof detail === "object" && detail !== null && "errorCode" in detail && detail.errorCode === "UNREGISTERED");
 
+/**
+ * Message text for a failed FCM request. The structured `UNREGISTERED` code (in
+ * `error.details[].errorCode`) is the only dead-token signal: it is written as the
+ * word itself, and no `HTTP 404` appears, so the subscription classifier in
+ * `subscriptions/normalize` reads a dead token as gone and nothing else as gone.
+ */
 const failureMessage = (status: number, body: unknown): string => {
     const error = (body as FcmErrorBody | null | undefined)?.error;
     // The status is a fallback name only: a body whose status reads UNREGISTERED but whose details do not is not a dead-token report.
@@ -242,7 +242,15 @@ const toWireData = (data: Record<string, unknown> | undefined): Record<string, s
 
 const androidPriorityOf = (urgency: string): "high" | "normal" => (urgency === "high" ? "high" : "normal");
 
-const apnsPriorityOf = (urgency: string): "10" | "5" => (urgency === "high" ? "10" : "5");
+// APNs delivers immediately when the header is absent, so `normal` (the default) sets nothing: only `high` raises
+// the priority and the low urgencies lower it.
+const apnsPriorityOf = (urgency: string): "10" | "5" | undefined => {
+    if (urgency === "high") {
+        return "10";
+    }
+
+    return urgency === "low" || urgency === "very-low" ? "5" : undefined;
+};
 
 /** An object with no defined value is left out of the wire body entirely. */
 const definedOnly = <T extends Record<string, unknown>>(value: T): T | undefined =>

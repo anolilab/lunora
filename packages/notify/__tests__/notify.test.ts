@@ -2124,4 +2124,22 @@ describe("ctx.push topics and conditions", () => {
 
         expect(fetchSpy).toHaveBeenCalledTimes(6);
     });
+
+    it("prunes a device the production engine reports as UNREGISTERED", async () => {
+        expect.hasAssertions();
+
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+            Response.json(
+                { error: { details: [{ errorCode: "UNREGISTERED" }], message: "Requested entity was not found.", status: "NOT_FOUND" } },
+                { status: 404 },
+            ),
+        );
+        const store = memorySubscriptionStore();
+        const { push } = createNotify(fcmDefinition(store), {}, { silent: true });
+        const stored = await push.register({ kind: "fcm", token: "uninstalled-device" });
+
+        await push.send(stored.id, { body: "x" });
+
+        await expect(store.get(stored.id)).resolves.toBeUndefined();
+    });
 });

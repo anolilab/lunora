@@ -18,7 +18,7 @@ import type { Lint } from "../../types";
 const notifyMissingPushConfig: Lint = {
     categories: ["SCHEMA"],
     description:
-        "The app sends push notifications via `ctx.push` but `defineNotify(...)` configures neither a Web Push nor an FCM channel, so every send fails at runtime. Wire at least one push channel (`webPush` and/or `fcm`) and provide its secrets (`VAPID_*` / `FCM_*`).",
+        "The app sends push notifications via `ctx.push`, but `defineNotify(...)` does not wire a channel for them: neither Web Push nor FCM, or FCM for `sendToTopic` / `sendToCondition`. Those sends fail at runtime. Wire the channel (`webPush` and/or `fcm`) and provide its secrets (`VAPID_*` / `FCM_*`).",
     facing: "INTERNAL",
     level: "WARN",
     name: "notify_missing_push_config",
@@ -57,7 +57,7 @@ const notifyMissingPushConfig: Lint = {
         return [];
     },
     source: "static",
-    title: "Push used with no Web Push / FCM channel configured",
+    title: "Push sends without a matching push channel configured",
 };
 
 export default notifyMissingPushConfig;

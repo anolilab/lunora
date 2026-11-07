@@ -168,7 +168,6 @@ const discoverNotifyCalls = (project: Project, lunoraDirectory: string): Advisor
     return calls;
 };
 
-/** Whether any exported handler (of any kind) performs a `ctx.push` device-push send. */
 /** The names of the `ctx.push` send methods any handler calls (`send`, `broadcast`, `sendToTopic`, …). */
 const pushSendMethodsUsed = (project: Project, lunoraDirectory: string): Set<string> => {
     const methods = new Set<string>();

@@ -410,7 +410,9 @@ const WEB_PUSH_GONE_PATTERN = /\bhttp\s*4(?:04|10)\b/iu;
  */
 /** The dead-token report `fcm-transport` writes when FCM's `error.details` carries `UNREGISTERED`. */
 // Anchored to the start of the transport's own message (or to the engine's `[fcm] ` prefix), so text FCM echoes later in the body cannot forge it.
-const FCM_DEAD_TOKEN_REPORT = /(?:^|\]\s*)FCM 404 UNREGISTERED: /u;
+// Leading only, after the engine's bracketed prefixes: the transport writes its own text first, so FCM's text that
+// follows it can never make this match. A `] FCM 404 UNREGISTERED: ` inside an upstream message does not count.
+const FCM_DEAD_TOKEN_REPORT = /^(?:\[[^\]]*\]\s*)*FCM 404 UNREGISTERED: /u;
 
 const FCM_GONE_PATTERN = /\b(?:unregistered|not[\s-]?registered|registration-token-not-registered)\b/iu;
 

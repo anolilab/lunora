@@ -563,4 +563,13 @@ describe("createFcmTransport", () => {
 
         expect(result.success ? "" : (result.error as Error).message).toBe("FCM 404 ERROR: gone");
     });
+
+    it("leaves APNs priority to APNs' own default for a normal-urgency send", () => {
+        expect.hasAssertions();
+
+        const message = buildFcmMessage({ body: "x", ttl: 10, urgency: "normal" }, { token: "t" });
+
+        expect(message).toMatchObject({ apns: { headers: { "apns-expiration": expect.any(String) } } });
+        expect((message.apns as { headers: Record<string, string | undefined> }).headers["apns-priority"]).toBeUndefined();
+    });
 });
