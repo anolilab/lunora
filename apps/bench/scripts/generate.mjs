@@ -153,8 +153,7 @@ const tableDefinitions = (key, shape) => {
             .index("byOrgCode", ["organizationId", "code"], { unique: true })
             .index("byOrgOwner", ["organizationId", "ownerId", "createdAt"])
             .searchIndex("search_title", { field: "title", filterFields: ["organizationId", "state"] })
-            .aggregateIndex("countByOrgState", { by: ["organizationId", "state"] })
-            .aggregateIndex("amountByOrg", { by: ["organizationId"], field: "amount", op: "sum" }),`,
+            .aggregateIndex("countByOrgState", { by: ["organizationId", "state"] }),`,
         `        ${key}Lines: defineTable({
             createdAt: v.number(),
             label: v.string(),
@@ -354,18 +353,6 @@ export const create = orgMutation
             throw new LunoraError("CONFLICT", \`code \${args.draft.code} is taken\`);
         }
 
-        // Totals add amounts across a domain, so a labelled amount and an unlabelled one cannot share it.
-        if (args.draft.amount !== undefined) {
-            const held = await ctx.db
-                .query("${table}")
-                .withIndex("byOrgCode", (q) => q.eq("organizationId", organizationId))
-                .take(200);
-
-            if (held.some((record) => record.currency !== undefined)) {
-                throw new LunoraError("UNPROCESSABLE", "this domain's amounts are in a currency: create cannot add an unlabelled amount");
-            }
-        }
-
         const now = Date.now();
         const id = await ctx.db.insert("${table}", { ...args.draft, createdAt: now, createdBy: userId, organizationId, state: "draft", updatedAt: now });
 
@@ -380,22 +367,6 @@ export const update = orgMutation
     .mutation(async ({ args, ctx }) => {
         const { organizationId, userId } = await requireWriter(ctx);
         const now = Date.now();
-
-        // An unlabelled record may not take an amount into a domain whose amounts are labelled (see create).
-        if (args.patch.amount !== undefined) {
-            const current = await ctx.db.get("${table}", args.id);
-
-            if (current !== null && current.currency === undefined) {
-                const held = await ctx.db
-                    .query("${table}")
-                    .withIndex("byOrgCode", (q) => q.eq("organizationId", organizationId))
-                    .take(200);
-
-                if (held.some((record) => record.currency !== undefined)) {
-                    throw new LunoraError("UNPROCESSABLE", "this domain's amounts are in a currency: an unlabelled amount cannot join them");
-                }
-            }
-        }
 
         await ctx.db.patch("${table}", args.id, { ...args.patch, updatedAt: now });
 ${shape.schedulerHook ? `        if (args.patch.state !== undefined) {\n            await ctx.scheduler.runAfter(60_000, internal.domains.${key}.jobs.recount, { organizationId }, { shardKey: organizationId });\n        }\n` : ""}        await ctx.db.insert("saas_activity", { action: "${key}.updated", actorId: userId, createdAt: now, organizationId, subjectId: args.id, subjectType: "${key}" });
@@ -638,10 +609,30 @@ export const sweepVoid = internalMutation.input({ before: v.number(), organizati
 });
 
 export const totals = internalQuery.input({ organizationId: v.string() }).query(async ({ args, ctx }) => {
-    const where = { organizationId: args.organizationId };
-    const [amount, count] = await Promise.all([ctx.db.dom_${key}Records.aggregate({ field: "amount", op: "sum", where }), ctx.db.dom_${key}Records.count(where)]);
+    // One sum per currency, so amounts in different units never combine; a record without a currency is its own bucket.
+    const byCurrency: Record<string, number> = {};
+    let count = 0;
+    let cursor: string | null = null;
+    let isDone = false;
 
-    return { amount: amount ?? 0, count };
+    while (!isDone) {
+        const page = await ctx.db
+            .query("dom_${key}Records")
+            .withIndex("byOrgCode", (q) => q.eq("organizationId", args.organizationId))
+            .paginate({ cursor, numItems: 200 });
+
+        for (const record of page.page) {
+            const unit = record.currency ?? "unlabelled";
+
+            count += 1;
+            byCurrency[unit] = (byCurrency[unit] ?? 0) + (record.amount ?? 0);
+        }
+
+        cursor = page.continueCursor;
+        isDone = page.isDone;
+    }
+
+    return { byCurrency, count };
 });
 ${
     shape.catalog
@@ -681,27 +672,6 @@ export const importMany = orgBulkMutation
         const now = Date.now();
         let lines = 0;
 
-        // A total is one number, so an import is in one currency, and not in a different one from what the domain holds.
-        // Records without a currency count as a different one. The check reads the newest 200 records of the organisation.
-        const currencies = new Set(args.rows.flatMap((row) => (row.price === undefined ? [] : [row.price.currency])));
-
-        if (currencies.size > 1) {
-            throw new LunoraError("UNPROCESSABLE", "an import is in one currency: split the rows by currency");
-        }
-
-        const [currency] = currencies;
-
-        if (currency !== undefined) {
-            const held = await ctx.db
-                .query("dom_${key}Records")
-                .withIndex("byOrgCode", (q) => q.eq("organizationId", organizationId))
-                .take(200);
-
-            if (held.some((record) => record.currency !== currency)) {
-                throw new LunoraError("UNPROCESSABLE", "this domain holds records in another currency or without one: totals would mix units");
-            }
-        }
-
         for (const { lines: items = [], price, ...draft } of args.rows) {
             if (items.length > ${MAX_LINES_PER_RECORD}) {
                 throw new LunoraError("UNPROCESSABLE", "a ${key} holds at most ${MAX_LINES_PER_RECORD} lines");
@@ -728,7 +698,7 @@ ${
         ? `    const { text } = await generateText({
         maxOutputTokens: 120,
         model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
-        prompt: \`Summarise \${String(totals.count)} ${key} records worth \${String(totals.amount)}.\`,
+        prompt: \`Summarise \${String(totals.count)} ${key} records with sums \${JSON.stringify(totals.byCurrency)}.\`,
     });
 
     return { ...totals, summary: text };
