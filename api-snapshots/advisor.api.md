@@ -536,6 +536,7 @@ interface AdvisorNotifyCall {
 interface AdvisorNotifyConfig {
     hasFcm: boolean;
     hasWebPush: boolean;
+    usesFcmOnlySend: boolean;
     usesPush: boolean;
 }
 ```

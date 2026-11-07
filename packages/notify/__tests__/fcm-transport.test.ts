@@ -127,11 +127,11 @@ describe("createFcmTransport", () => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
-    it("retries a 503 on a direct topic send and succeeds on the next attempt", async () => {
+    it("retries a 429 on a direct topic send and succeeds on the next attempt", async () => {
         expect.hasAssertions();
 
         const { fetchMock } = scriptedFetch(
-            { body: { error: { message: "backend unavailable", status: "UNAVAILABLE" } }, status: 503 },
+            { body: { error: { message: "slow down", status: "RESOURCE_EXHAUSTED" } }, headers: { "retry-after": "0" }, status: 429 },
             { body: { name: "projects/demo-project/messages/4" }, status: 200 },
         );
         const transport = createFcmTransport(config, { fetch: fetchMock, retryBaseDelay: 0 });
@@ -140,14 +140,36 @@ describe("createFcmTransport", () => {
         expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    it("gives up after the retry budget on a persistent 5xx of a direct topic send", async () => {
+    it("does not retry a 5xx on a direct topic send, because FCM may have accepted it", async () => {
         expect.hasAssertions();
 
-        const down = { body: { error: { message: "down", status: "UNAVAILABLE" } }, status: 503 };
-        const { fetchMock } = scriptedFetch(down, down, down, down);
+        const { fetchMock } = scriptedFetch({ body: { error: { message: "down", status: "UNAVAILABLE" } }, status: 503 });
         const transport = createFcmTransport(config, { fetch: fetchMock, retryBaseDelay: 0 });
 
         await expect(transport.sendTo({ topic: "news" }, { body: "hi" })).rejects.toThrow(/UNAVAILABLE/u);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not retry a timed-out topic send, because the audience may already have it", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn(async () => {
+            throw new Error("The operation was aborted due to timeout");
+        });
+        const transport = createFcmTransport(config, { fetch: fetchMock as unknown as typeof fetch, retryBaseDelay: 0 });
+
+        await expect(transport.sendTo({ topic: "news" }, { body: "hi" })).rejects.toThrow(/timeout/u);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("gives up after the retry budget on a persistent 429 of a direct topic send", async () => {
+        expect.hasAssertions();
+
+        const refused = { body: { error: { message: "quota", status: "RESOURCE_EXHAUSTED" } }, headers: { "retry-after": "0" }, status: 429 };
+        const { fetchMock } = scriptedFetch(refused, refused, refused, refused);
+        const transport = createFcmTransport(config, { fetch: fetchMock, retryBaseDelay: 0 });
+
+        await expect(transport.sendTo({ topic: "news" }, { body: "hi" })).rejects.toThrow(/RESOURCE_EXHAUSTED/u);
         expect(fetchMock).toHaveBeenCalledTimes(4);
     });
 
@@ -295,7 +317,7 @@ describe("createFcmTransport", () => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
-    it("retries a retryable status whose body cannot be read", async () => {
+    it("retries a 429 whose body cannot be read on a topic send", async () => {
         expect.hasAssertions();
 
         const unreadable = () =>
@@ -305,7 +327,7 @@ describe("createFcmTransport", () => {
                         controller.error(new Error("connection reset"));
                     },
                 }),
-                { status: 503 },
+                { status: 429 },
             );
         const fetchMock = vi
             .fn()
@@ -318,13 +340,11 @@ describe("createFcmTransport", () => {
         expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    it("honours the FcmConfig retries and timeout when they are set", async () => {
+    it("honours the FcmConfig retries when they are set", async () => {
         expect.hasAssertions();
 
-        const { fetchMock } = scriptedFetch(
-            { body: { error: { message: "down", status: "UNAVAILABLE" } }, status: 503 },
-            { body: { error: { message: "down", status: "UNAVAILABLE" } }, status: 503 },
-        );
+        const refused = { body: { error: { message: "quota", status: "RESOURCE_EXHAUSTED" } }, headers: { "retry-after": "0" }, status: 429 };
+        const { fetchMock } = scriptedFetch(refused, refused);
 
         await expect(
             createFcmTransport({ ...config, retries: 1 }, { fetch: fetchMock, retryBaseDelay: 0 }).sendTo({ topic: "news" }, { body: "x" }),

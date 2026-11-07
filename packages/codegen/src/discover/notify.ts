@@ -169,20 +169,23 @@ const discoverNotifyCalls = (project: Project, lunoraDirectory: string): Advisor
 };
 
 /** Whether any exported handler (of any kind) performs a `ctx.push` device-push send. */
-const projectUsesPush = (project: Project, lunoraDirectory: string): boolean => {
+/** The names of the `ctx.push` send methods any handler calls (`send`, `broadcast`, `sendToTopic`, …). */
+const pushSendMethodsUsed = (project: Project, lunoraDirectory: string): Set<string> => {
+    const methods = new Set<string>();
+
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
         for (const procedure of proceduresInSourceFile(sourceFile)) {
             for (const access of descendantsOfKind(procedure.handler, SyntaxKind.PropertyAccessExpression)) {
                 if (isPushSend(access)) {
-                    return true;
+                    methods.add(access.getName());
                 }
             }
         }
     }
 
-    return false;
+    return methods;
 };
 
 /**
@@ -622,9 +625,19 @@ const discoverNotifyChannels = (project: Project, lunoraDirectory: string): Noti
 const discoverNotifyConfig = (project: Project, lunoraDirectory: string): AdvisorNotifyConfig | undefined => {
     const channels = discoverNotifyChannels(project, lunoraDirectory);
 
-    return channels === undefined
-        ? undefined
-        : { hasFcm: channels.fcm !== "absent", hasWebPush: channels.hasWebPush, usesPush: projectUsesPush(project, lunoraDirectory) };
+    if (channels === undefined) {
+        return undefined;
+    }
+
+    const sent = pushSendMethodsUsed(project, lunoraDirectory);
+
+    return {
+        hasFcm: channels.fcm !== "absent",
+        hasWebPush: channels.hasWebPush,
+        // Topic and condition sends have no Web Push form, so they need the FCM channel even when Web Push is wired.
+        usesFcmOnlySend: sent.has("sendToTopic") || sent.has("sendToCondition"),
+        usesPush: sent.size > 0,
+    };
 };
 
 export type { FcmCredentials, NotifyChannels };

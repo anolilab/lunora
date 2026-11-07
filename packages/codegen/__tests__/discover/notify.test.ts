@@ -175,7 +175,32 @@ export default defineNotify({ webPush: (env) => webPushFromEnv(env) });
         );
         writeFileSync(join(workdir, "lunora", "ping.ts"), ACTION_PUSH_SEND, "utf8");
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: true });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesFcmOnlySend: false, usesPush: true });
+    });
+
+    it("marks a topic send as FCM-only in the config evidence", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify, webPushFromEnv } from "@lunora/notify";
+export default defineNotify({ webPush: (env) => webPushFromEnv(env) });
+`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "news.ts"),
+            `import { mutation } from "@lunora/server";
+
+export const headline = mutation({
+    args: {},
+    handler: async (ctx) => ctx.push.sendToTopic("news", { title: "news" }),
+});
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesFcmOnlySend: true, usesPush: true });
     });
 
     it("flags a push-using app whose defineNotify wires neither channel (usesPush, no channels)", () => {
@@ -190,7 +215,7 @@ export default defineNotify({});
         );
         writeFileSync(join(workdir, "lunora", "ping.ts"), MUTATION_PUSH_SEND, "utf8");
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: false, usesPush: true });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: false, usesFcmOnlySend: false, usesPush: true });
     });
 
     it.each([
@@ -250,7 +275,7 @@ export default defineNotify(config);
 
         writeFileSync(join(workdir, "lunora", "notify.ts"), source, "utf8");
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesPush: false });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesFcmOnlySend: false, usesPush: false });
     });
 
     it("follows a same-file const alias of a direct defineNotify call (webPush-only does not scaffold fcm)", () => {
@@ -265,7 +290,7 @@ export default definition;
             "utf8",
         );
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesFcmOnlySend: false, usesPush: false });
     });
 
     it("follows a cross-file default re-export of a direct defineNotify call (webPush-only does not scaffold fcm)", () => {
@@ -286,7 +311,7 @@ export default definition;
             "utf8",
         );
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesFcmOnlySend: false, usesPush: false });
     });
 
     it("reads a same-file variable config argument of defineNotify (webPush-only does not scaffold fcm)", () => {
@@ -301,7 +326,7 @@ export default defineNotify(config);
             "utf8",
         );
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesFcmOnlySend: false, usesPush: false });
     });
 
     it("reads an imported variable config argument of defineNotify from a sibling file (webPush-only does not scaffold fcm)", () => {
@@ -317,7 +342,7 @@ export default defineNotify(config);
             "utf8",
         );
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesFcmOnlySend: false, usesPush: false });
     });
 
     it("reports both channels when an imported config is mutated in the using file", () => {
@@ -334,7 +359,7 @@ export default defineNotify(config);
             "utf8",
         );
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesPush: false });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesFcmOnlySend: false, usesPush: false });
     });
 
     it("reports both channels when an imported config is mutated in its declaring file", () => {
@@ -354,7 +379,7 @@ export default defineNotify(config);
             "utf8",
         );
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesPush: false });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesFcmOnlySend: false, usesPush: false });
     });
 });
 

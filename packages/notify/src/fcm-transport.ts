@@ -288,14 +288,21 @@ const toError = (error: unknown): Error => (error instanceof Error ? error : new
 /** Outcome of one POST: done, worth another attempt, or final. */
 type Attempt = { kind: "done"; messageName: string } | { error: Error; kind: "final" } | { error: Error; kind: "retry"; retryAfterMs?: number };
 
+/**
+ * Whether a status may be retried. A fan-out send (a topic or condition) reaches every subscriber,
+ * and FCM may already have accepted a 5xx or a timed-out POST, so only 429 (refused) is retried.
+ * A device send is one recipient, and the engine's retry has always covered 408/429/5xx.
+ */
+const mayRetry = (status: number, fanOut: boolean): boolean => (fanOut ? status === 429 : retryable(status));
+
 /** Read a response and classify it. A retryable status is retried even when its body is unreadable; the status decides. */
-const classify = async (response: Response): Promise<Attempt> => {
+const classify = async (response: Response, fanOut: boolean): Promise<Attempt> => {
     let text: string;
 
     try {
         text = await readCappedBody(response);
     } catch (error) {
-        return retryable(response.status) ? { error: toError(error), kind: "retry" } : { error: toError(error), kind: "final" };
+        return mayRetry(response.status, fanOut) ? { error: toError(error), kind: "retry" } : { error: toError(error), kind: "final" };
     }
 
     if (response.ok) {
@@ -309,7 +316,7 @@ const classify = async (response: Response): Promise<Attempt> => {
 
     const error = new Error(failureMessage(response.status, parseBody(text)));
 
-    if (!retryable(response.status)) {
+    if (!mayRetry(response.status, fanOut)) {
         return { error, kind: "final" };
     }
 
@@ -319,8 +326,11 @@ const classify = async (response: Response): Promise<Attempt> => {
     return retryAfterMs !== undefined && retryAfterMs > MAX_RETRY_AFTER_MS ? { error, kind: "final" } : { error, kind: "retry", retryAfterMs };
 };
 
-/** One POST. A transport error is a retry; a response is classified by {@link classify}. */
-const sendOnce = async (url: string, body: string, token: string, timeoutMs: number, fetchImpl: typeof fetch): Promise<Attempt> => {
+/**
+ * One POST. A transport error is a retry for a device send, but final for a fan-out send: a timeout
+ * can follow an acceptance FCM already made, and a retry would reach the whole audience again.
+ */
+const sendOnce = async (url: string, body: string, token: string, timeoutMs: number, fetchImpl: typeof fetch, fanOut: boolean): Promise<Attempt> => {
     try {
         const response = await fetchImpl(url, {
             body,
@@ -329,9 +339,9 @@ const sendOnce = async (url: string, body: string, token: string, timeoutMs: num
             signal: AbortSignal.timeout(timeoutMs),
         });
 
-        return await classify(response);
+        return await classify(response, fanOut);
     } catch (error) {
-        return { error: toError(error), kind: "retry" };
+        return { error: toError(error), kind: fanOut ? "final" : "retry" };
     }
 };
 
@@ -346,6 +356,7 @@ const postMessage = async (
     message: Record<string, unknown>,
     attempts: number,
     options: FcmTransportOptions,
+    fanOut: boolean,
 ): Promise<string> => {
     const url = `${config.endpoint ?? DEFAULT_ENDPOINT}/v1/projects/${config.projectId}/messages:send`;
     const body = JSON.stringify({ message });
@@ -368,7 +379,7 @@ const postMessage = async (
         }
 
         // eslint-disable-next-line no-await-in-loop -- one attempt at a time; a parallel retry would double-send
-        const outcome = await sendOnce(url, body, token, timeoutMs, options.fetch ?? fetch);
+        const outcome = await sendOnce(url, body, token, timeoutMs, options.fetch ?? fetch, fanOut);
 
         if (outcome.kind === "done") {
             return outcome.messageName;
@@ -434,7 +445,7 @@ const createFcmTransport = (config: FcmTransportConfig, options: FcmTransportOpt
         assertFcmTarget(target);
         requireConfigured();
 
-        return postMessage(config, await accessToken(), buildFcmMessage(payload, target), sendAttempts, options);
+        return postMessage(config, await accessToken(), buildFcmMessage(payload, target), sendAttempts, options, true);
     };
 
     const provider: Provider<unknown, FcmPayload & { to: string | string[] }> = {
@@ -471,7 +482,7 @@ const createFcmTransport = (config: FcmTransportConfig, options: FcmTransportOpt
             for (const recipient of targets) {
                 try {
                     // eslint-disable-next-line no-await-in-loop -- one message per recipient, in order, matching the engine's per-target receipts
-                    const messageId = await postMessage(config, token, buildFcmMessage(payload, { token: recipient }), ENGINE_ATTEMPTS, options);
+                    const messageId = await postMessage(config, token, buildFcmMessage(payload, { token: recipient }), ENGINE_ATTEMPTS, options, false);
 
                     recipients.push({ id: recipient, messageId, status: "sent" });
                 } catch (error) {
