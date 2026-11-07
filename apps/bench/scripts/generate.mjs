@@ -236,6 +236,7 @@ const state = v.union(v.literal("draft"), v.literal("open"), v.literal("closed")
 
 const MAX_LINES = ${MAX_LINES_PER_RECORD};
 
+// Archived rows stay readable by id (\`get\`) but leave every active view: list, mine, search and stats.
 export const list = orgQuery
     .use(tenantRead("${table}"))
     .input({ ...pageArgs, state: v.optional(state) })
@@ -245,6 +246,7 @@ export const list = orgQuery
         return ctx.db
             .query("${table}")
             .withIndex("byOrgState", (q) => (args.state === undefined ? q.eq("organizationId", organizationId) : q.eq("organizationId", organizationId).eq("state", args.state)))
+            .filter((row) => row.archivedAt === undefined)
             .order("desc")
             .paginate({ cursor: args.cursor, numItems: args.limit ?? 50 });
     });
@@ -258,6 +260,7 @@ export const mine = orgQuery
         return ctx.db
             .query("${table}")
             .withIndex("byOrgOwner", (q) => q.eq("organizationId", organizationId).eq("ownerId", userId))
+            .filter((row) => row.archivedAt === undefined)
             .take(args.limit ?? 25);
     });
 
@@ -270,6 +273,7 @@ export const search = orgQuery
         return ctx.db
             .query("${table}")
             .withSearchIndex("search_title", (q) => q.search("title", args.term).eq("organizationId", organizationId))
+            .filter((row) => row.archivedAt === undefined)
             .take(20);
     });
 
@@ -314,7 +318,7 @@ export const stats = orgQuery
     .query(async ({ ctx }) => {
         const { organizationId } = await requireOrg(ctx);
         // \`groupBy\` rather than \`count\`: under tenant RLS it is scoped to the rows the caller may read.
-        const groups = await ctx.db.${table}.groupBy({ agg: { op: "count" }, by: ["state"], where: { organizationId } });
+        const groups = await ctx.db.${table}.groupBy({ agg: { op: "count" }, by: ["state"], where: { archivedAt: { isNull: true }, organizationId } });
         const byState: Record<string, number> = {};
 
         for (const { key, value } of groups) {
@@ -586,7 +590,7 @@ const jobsModule = (key, shape) => `${header(key)}import { internalMutation, int
 
 /** Rolls the open count into the activity feed; scheduled after writes in hooked domains. */
 export const recount = internalMutation.input({ organizationId: v.string() }).mutation(async ({ args, ctx }) => {
-    const open = await ctx.db.dom_${key}Records.count({ organizationId: args.organizationId, state: "open" });
+    const open = await ctx.db.dom_${key}Records.count({ archivedAt: { isNull: true }, organizationId: args.organizationId, state: "open" });
 
     await ctx.db.insert("saas_activity", { action: "${key}.recount", actorId: "system", createdAt: Date.now(), meta: { open }, organizationId: args.organizationId, subjectType: "${key}" });
 
