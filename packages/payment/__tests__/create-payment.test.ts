@@ -641,7 +641,11 @@ describe("createPayment", () => {
             },
         }) as PaymentStore;
 
-        const adapter = fakeAdapter({ cancelSubscription: async (id) => {return { ...subscription("user_1", "canceled"), id }} });
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                return { ...subscription("user_1", "canceled"), id };
+            },
+        });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: racing });
 
         await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "canceled" });
