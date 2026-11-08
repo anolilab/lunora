@@ -218,3 +218,18 @@ measurement code (build, eager graph, `wrangler check startup`);
 share.
 
 Framework defects found while building this app are in [FINDINGS.md](./FINDINGS.md).
+
+## Before you deploy
+
+`wrangler.jsonc` is a template. Fill these in for your account before `wrangler deploy`:
+
+- **KV namespace id** (`kv_namespaces[].id`): the placeholder must be replaced with a namespace from your Cloudflare account.
+- **Origin URLs** (`vars`): `APP_BASE_URL`, `LUNORA_ORIGIN_URL` and `BETTER_AUTH_URL` are empty. Set each to the public origin of the deployed worker. Invitation links, scheduled callbacks and the MCP endpoint depend on them.
+- **Dead-letter queues**: `events-dlq` and `mail-dlq` must exist on the account before the consumers bind to them.
+
+## Known gap: checkout and webhooks
+
+A checkout re-checks for a live subscription after it takes its hold, but the hold does not
+serialise webhook writes. A purchase whose webhook lands after that re-check can still create a
+second live subscription. Closing the window means routing webhook writes through the checkout hold
+in `@lunora/payment`, which is tracked as a separate framework change.
