@@ -68,6 +68,8 @@ export interface PaymentsFromContextOptions {
     readonly entitlements?: EntitlementsConfig;
     /** Optional telemetry sink, forwarded to the facade. */
     readonly observability?: PaymentObserver;
+    /** Refuse a second live subscription on one reference, forwarded to the facade (see `CreatePaymentOptions`). */
+    readonly singleSubscriptionPerReference?: boolean;
 }
 
 /**
@@ -108,6 +110,7 @@ export const paymentsFromContext = (context: PaymentContextLike, options: Paymen
         authorize: authorize ? (referenceId) => authorize(referenceId, caller) : (referenceId) => caller.userId !== undefined && referenceId === caller.userId,
         entitlements: options.entitlements,
         observability: options.observability,
+        singleSubscriptionPerReference: options.singleSubscriptionPerReference,
         store: createDatabasePaymentStore(lunoraDatabaseToPaymentDatabase(context.db)),
     });
 };

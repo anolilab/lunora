@@ -77,6 +77,33 @@ describe("applyWebhookAction", () => {
         expect(observer).toHaveBeenCalledWith({ provider: "creem", subscriptionId: "sub_2", type: "subscription.duplicate" });
     });
 
+    it("counts a subscription with the same id from another provider as a second live one", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const live = {
+            eventId: "e1",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        } as const;
+        const sameIdElsewhere = {
+            eventId: "e2",
+            priceId: "prod_team",
+            provider: "stripe",
+            referenceId: "org_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        } as const;
+
+        await applyWebhookAction(store, live, undefined, true);
+
+        await expect(applyWebhookAction(store, sameIdElsewhere, undefined, true)).resolves.toEqual({ applied: false, reason: "duplicate_subscription" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toBeUndefined();
+    });
+
     it("keeps a second subscription on one reference when the policy is off, as before", async () => {
         expect.assertions(2);
 

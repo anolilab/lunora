@@ -15,7 +15,7 @@ import type { PaymentAction, SubscriptionAction } from "./state-machine";
 import { nextPaymentState, nextSubscriptionState } from "./state-machine";
 import type { PaymentStore } from "./store";
 import { ownerOf } from "./store";
-import type { ApplyResult, Money, PaymentSession, PaymentState, Subscription, SubscriptionState, WebhookAction, WebhookActionType } from "./types";
+import type { ApplyResult, Money, PaymentSession, PaymentState, ProviderId, Subscription, SubscriptionState, WebhookAction, WebhookActionType } from "./types";
 
 const PAYMENT_ACTION_BY_TYPE: Partial<Record<WebhookActionType, PaymentAction>> = {
     "payment.authorized": "authorize",
@@ -420,6 +420,7 @@ const isSecondLiveSubscription = async (
     store: PaymentStore,
     singleSubscriptionPerReference: boolean,
     referenceId: string,
+    provider: ProviderId,
     subscriptionId: string,
 ): Promise<boolean> => {
     if (!singleSubscriptionPerReference || referenceId === "") {
@@ -428,7 +429,9 @@ const isSecondLiveSubscription = async (
 
     const subscriptions = await store.listSubscriptionsByReference(referenceId);
 
-    return subscriptions.some((subscription) => subscription.id !== subscriptionId && subscription.state !== "canceled");
+    return subscriptions.some(
+        (subscription) => (subscription.provider !== provider || subscription.id !== subscriptionId) && subscription.state !== "canceled",
+    );
 };
 
 /** Create the row for a subscription the store has not seen: the checkout's owner, if it arrived first, and the opt-in duplicate check. */
@@ -446,7 +449,7 @@ const createSubscription = async (
 
     // Opt-in: a second live subscription on one reference is refused rather than entitled. A checkout
     // refuses one too, but a purchase that began before that check can still arrive here.
-    if (await isSecondLiveSubscription(store, singleSubscriptionPerReference, referenceId, subscriptionId)) {
+    if (await isSecondLiveSubscription(store, singleSubscriptionPerReference, referenceId, action.provider, subscriptionId)) {
         return { applied: false, reason: "duplicate_subscription" };
     }
 

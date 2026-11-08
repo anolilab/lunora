@@ -501,6 +501,7 @@ interface PaymentsFromContextOptions {
     readonly authorize?: AuthorizeContextReference;
     readonly entitlements?: EntitlementsConfig;
     readonly observability?: PaymentObserver;
+    readonly singleSubscriptionPerReference?: boolean;
 }
 ```
 
@@ -795,7 +796,7 @@ const allocateMoney: (amount: Money, ratios: ReadonlyArray<bigint>) => Money[];
 ### `applyWebhookAction` (const)
 
 ```ts
-const applyWebhookAction: (store: PaymentStore, action: WebhookAction, observer?: PaymentObserver) => Promise<ApplyResult>;
+const applyWebhookAction: (store: PaymentStore, action: WebhookAction, observer?: PaymentObserver, singleSubscriptionPerReference?: boolean) => Promise<ApplyResult>;
 ```
 
 ### `canTransitionPayment` (const)
