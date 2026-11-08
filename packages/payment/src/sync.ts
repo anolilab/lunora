@@ -449,7 +449,11 @@ const createSubscription = async (
 
     // Opt-in: a second live subscription on one reference is refused rather than entitled. A checkout
     // refuses one too, but a purchase that began before that check can still arrive here.
-    if (await isSecondLiveSubscription(store, singleSubscriptionPerReference, referenceId, action.provider, subscriptionId)) {
+    // Only a row that would entitle is refused: a cancellation that arrives first is stored, not reported as a duplicate.
+    if (
+        ENTITLING_STATES.has(targetState) &&
+        (await isSecondLiveSubscription(store, singleSubscriptionPerReference, referenceId, action.provider, subscriptionId))
+    ) {
         return { applied: false, reason: "duplicate_subscription" };
     }
 

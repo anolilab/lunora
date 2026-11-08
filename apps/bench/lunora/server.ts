@@ -265,7 +265,13 @@ const app = defineApp<Env>()
              * Worker logs.
              */
             observability: (event) => {
-                const fields = { provider: event.provider, referenceId: "referenceId" in event ? event.referenceId : undefined, type: event.type };
+                const fields = {
+                    provider: event.provider,
+                    referenceId: "referenceId" in event ? event.referenceId : undefined,
+                    type: event.type,
+                    // The one event whose subject is a subscription with no reference to fall back on: the id is how an operator finds it.
+                    ...(event.type === "subscription.duplicate" ? { subscriptionId: event.subscriptionId } : {}),
+                };
 
                 if (PAYMENT_FAILURE_EVENTS.has(event.type)) {
                     // eslint-disable-next-line no-console -- Workers Logs is where this reaches an operator in the kit; error severity makes it filterable

@@ -104,6 +104,27 @@ describe("applyWebhookAction", () => {
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toBeUndefined();
     });
 
+    it("stores a cancellation that arrives first on a reference without reporting a duplicate", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const observer = vi.fn<PaymentObserver>();
+        const live = {
+            eventId: "e1",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        } as const;
+        const canceled = { eventId: "e2", provider: "creem", referenceId: "org_1", subscriptionId: "sub_2", type: "subscription.canceled" } as const;
+
+        await applyWebhookAction(store, live, observer, true);
+
+        await expect(applyWebhookAction(store, canceled, observer, true)).resolves.toEqual({ applied: true, reason: "ok" });
+        expect(observer).not.toHaveBeenCalledWith(expect.objectContaining({ type: "subscription.duplicate" }));
+    });
+
     it("keeps a second subscription on one reference when the policy is off, as before", async () => {
         expect.assertions(2);
 
