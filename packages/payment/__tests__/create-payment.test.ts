@@ -6,6 +6,7 @@ import { createPayment, webhookResponse } from "../src/create-payment";
 import { LunoraPaymentError } from "../src/errors";
 import { derivedIdempotencyKey } from "../src/idempotency";
 import { money } from "../src/money";
+import type { PaymentObserver } from "../src/observability";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
 import type { CheckoutRequest, PaymentSession, Subscription, WebhookAction } from "../src/types";
@@ -453,6 +454,32 @@ describe("createPayment", () => {
         const stored = await store.getSubscription("stripe", "sub_1");
 
         expect(stored?.state).toBe("canceled");
+    });
+
+    it("does not let a cancel response activate a past-due row next to another active subscription", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const observer = vi.fn<PaymentObserver>();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), id: "sub_2" });
+        await store.upsertSubscription(subscription("user_1", "past_due"));
+
+        // The provider reports the scheduled cancellation as still active.
+        const adapter = fakeAdapter({ cancelSubscription: async (id) => {return { ...subscription("user_1", "active"), id }} });
+        const payment = createPayment({
+            adapter,
+            authorize: (referenceId) => referenceId === "user_1",
+            observability: observer,
+            singleSubscriptionPerReference: true,
+            store,
+        });
+
+        const returned = await payment.cancelSubscription("sub_1");
+
+        expect(returned.state).toBe("past_due");
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "past_due" });
+        expect(observer).toHaveBeenCalledWith({ provider: "stripe", subscriptionId: "sub_1", type: "subscription.duplicate" });
     });
 
     it("keeps the stored subscription's referenceId when the cancel response doesn't echo it", async () => {
