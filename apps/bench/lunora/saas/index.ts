@@ -22,8 +22,9 @@ import { LunoraError } from "@lunora/errors";
 import { createDbStore, rateLimit, RateLimiter } from "lunorash/ratelimit";
 
 import type { Doc, Id, MutationCtx, QueryCtx, TableReaderFacade } from "#lunora/_generated/server.js";
-import { internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
+import { internalMutation, internalQuery, mutation, query, v } from "#lunora/_generated/server.js";
 
+import { PLANS } from "../plans";
 import { SAAS_ACTIVITY_PAGE, SAAS_ACTIVITY_TABLE, SAAS_ORGANIZATIONS_TABLE, SAAS_PROJECTS_PAGE, SAAS_PROJECTS_TABLE } from "./schema";
 
 /**
@@ -324,6 +325,20 @@ export const me = query.query(async ({ ctx }): Promise<{ name?: string; organiza
 
     return { name, organizationId, orgRole, seats: typeof seats === "number" ? seats : undefined, userId };
 });
+
+/**
+ * The features the organisation's plan grants, read from the `.global()` projection so a
+ * tenant shard can answer for its own organisation (the billing tables live on the root).
+ * Empty when the organisation has no plan, so a gate on a feature refuses by default.
+ */
+export const planFeatures = internalQuery
+    .input({ organizationId: v.string() })
+    .query(async ({ args: { organizationId }, ctx }): Promise<ReadonlyArray<string>> => {
+        const organization = await organizations(ctx).findFirst({ where: { organizationId } });
+        const plan = PLANS.find((candidate) => candidate.id === organization?.["plan"]);
+
+        return plan?.features ?? [];
+    });
 
 /**
  * The dashboard's landing query: the tenant's live project list and the tail of

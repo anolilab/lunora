@@ -697,6 +697,13 @@ export const importMany = orgBulkMutation
 /** Admin export of the caller's active organisation; the tenant comes from the verified identity, never from args. */
 export const exportSummary = authAction.action(async ({ ctx }) => {
     const { organizationId } = await requireWriter(ctx);
+    // Export is a paid-plan feature. The plan is read from the cross-tenant projection, so this tenant shard answers itself.
+    const features = await ctx.runQuery(internal.saas.planFeatures, { organizationId });
+
+    if (!features.includes("export")) {
+        throw new LunoraError("FORBIDDEN", "the export is a paid-plan feature — upgrade the plan to export");
+    }
+
     const totals = await ctx.runQuery(internal.domains.${key}.jobs.totals, { organizationId });
 ${
     shape.aiHook
