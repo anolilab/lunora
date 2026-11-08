@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { LunoraPaymentError } from "../src/errors";
 import { money } from "../src/money";
+import type { PaymentObserver } from "../src/observability";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
 import type { PaymentSession, WebhookAction } from "../src/types";
@@ -44,6 +45,63 @@ describe("applyWebhookAction", () => {
             applyWebhookAction(store, { eventId: "e2", priceId: "prod_team", provider: "creem", subscriptionId: "sub_1", type: "subscription.active" }),
         ).resolves.toEqual({ applied: true, reason: "ok" });
         await expect(store.getSubscription("creem", "sub_1")).resolves.toMatchObject({ referenceId: "org_1" });
+    });
+
+    it("refuses a second live subscription on one reference when the policy is on, and alerts the operator", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+        const observer = vi.fn<PaymentObserver>();
+        const live = {
+            eventId: "e1",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        } as const;
+        const second = {
+            eventId: "e2",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_2",
+            type: "subscription.active",
+        } as const;
+
+        await applyWebhookAction(store, live, observer, true);
+
+        await expect(applyWebhookAction(store, second, observer, true)).resolves.toEqual({ applied: false, reason: "duplicate_subscription" });
+        await expect(store.getSubscription("creem", "sub_2")).resolves.toBeUndefined();
+        await expect(store.listSubscriptionsByReference("org_1")).resolves.toHaveLength(1);
+        expect(observer).toHaveBeenCalledWith({ provider: "creem", subscriptionId: "sub_2", type: "subscription.duplicate" });
+    });
+
+    it("keeps a second subscription on one reference when the policy is off, as before", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const live = {
+            eventId: "e1",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        } as const;
+        const second = {
+            eventId: "e2",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_2",
+            type: "subscription.active",
+        } as const;
+
+        await applyWebhookAction(store, live);
+
+        await expect(applyWebhookAction(store, second)).resolves.toEqual({ applied: true, reason: "ok" });
+        await expect(store.listSubscriptionsByReference("org_1")).resolves.toHaveLength(2);
     });
 
     it("lets a stale event fill a blank owner, but nothing else", async () => {

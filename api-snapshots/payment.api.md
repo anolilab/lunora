@@ -24,7 +24,7 @@ interface AdapterRegistry {
 ```ts
 interface ApplyResult {
     readonly applied: boolean;
-    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled" | "unstorable";
+    readonly reason?: "duplicate" | "duplicate_subscription" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled" | "unstorable";
 }
 ```
 
@@ -119,6 +119,7 @@ interface CreatePaymentOptions {
     readonly authorize: AuthorizeReference;
     readonly entitlements?: EntitlementsConfig;
     readonly observability?: PaymentObserver;
+    readonly singleSubscriptionPerReference?: boolean;
     readonly store: PaymentStore;
 }
 ```
@@ -373,6 +374,10 @@ type PaymentEvent = {
     eventId: string;
     provider: ProviderId;
     type: "webhook.duplicate";
+} | {
+    provider: ProviderId;
+    subscriptionId: string;
+    type: "subscription.duplicate";
 } | {
     error: unknown;
     id: string;

@@ -134,6 +134,13 @@ export interface CreatePaymentOptions {
     readonly entitlements?: EntitlementsConfig;
     /** Optional telemetry sink — fired on webhook apply, failed payments, and past-due subscriptions. */
     readonly observability?: PaymentObserver;
+
+    /**
+     * Refuse a second live subscription on one reference. Off by default: some apps sell several
+     * subscriptions per customer. When on, a webhook that would create one is not entitled, and
+     * `subscription.duplicate` tells the operator to cancel it at the provider, which still bills it.
+     */
+    readonly singleSubscriptionPerReference?: boolean;
     readonly store: PaymentStore;
 }
 
@@ -513,7 +520,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // WEBHOOK_EVENT_ID_MISSING) surfaces uncaught as a 5xx rather than its catalog 400, so
             // every provider retries the transient malformed delivery instead of some providers
             // treating a 400 as "stop retrying". Do not wrap this call in the parseWebhook try/catch.
-            const result = await applyWebhookAction(store, action, options.observability);
+            const result = await applyWebhookAction(store, action, options.observability, options.singleSubscriptionPerReference ?? false);
 
             // Deliberate non-200: the row this event patches hasn't been created yet (out-of-order
             // delivery), and its claim was released — the provider must retry so the update applies

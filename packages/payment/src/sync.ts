@@ -412,7 +412,67 @@ const isStaleSubscriptionEvent = (existing: Subscription, action: WebhookAction)
     return target !== undefined && ENTITLING_STATES.has(target) && !ENTITLING_STATES.has(existing.state);
 };
 
-const applySubscription = async (store: PaymentStore, action: WebhookAction): Promise<ApplyResult> => {
+/**
+ * Opt-in: whether a new subscription would be a second live one on `referenceId`, which is refused
+ * rather than entitled. A reference that is not known yet cannot hold one.
+ */
+const isSecondLiveSubscription = async (
+    store: PaymentStore,
+    singleSubscriptionPerReference: boolean,
+    referenceId: string,
+    subscriptionId: string,
+): Promise<boolean> => {
+    if (!singleSubscriptionPerReference || referenceId === "") {
+        return false;
+    }
+
+    const subscriptions = await store.listSubscriptionsByReference(referenceId);
+
+    return subscriptions.some((subscription) => subscription.id !== subscriptionId && subscription.state !== "canceled");
+};
+
+/** Create the row for a subscription the store has not seen: the checkout's owner, if it arrived first, and the opt-in duplicate check. */
+const createSubscription = async (
+    store: PaymentStore,
+    action: WebhookAction,
+    subscriptionId: string,
+    targetState: SubscriptionState,
+    singleSubscriptionPerReference: boolean,
+    now: number,
+): Promise<ApplyResult> => {
+    // No owner on the event: take the one the checkout's payment session recorded, if it landed first.
+    const checkout = action.referenceId?.trim() ? undefined : await store.getPaymentSessionBySubscription(action.provider, subscriptionId);
+    const referenceId = ownerOf(action.referenceId, checkout?.referenceId);
+
+    // Opt-in: a second live subscription on one reference is refused rather than entitled. A checkout
+    // refuses one too, but a purchase that began before that check can still arrive here.
+    if (await isSecondLiveSubscription(store, singleSubscriptionPerReference, referenceId, subscriptionId)) {
+        return { applied: false, reason: "duplicate_subscription" };
+    }
+
+    await store.upsertSubscription({
+        cancelAtPeriodEnd: action.cancelAtPeriodEnd ?? false,
+        createdAt: now,
+        currentPeriodEnd: action.currentPeriodEnd,
+        currentPeriodStart: action.currentPeriodStart ?? now,
+        id: subscriptionId,
+        lastEventAt: action.occurredAt,
+        priceId: action.priceId ?? "",
+        // Left ABSENT rather than defaulted to `[]`: an empty set would grant nothing, whereas
+        // absent falls back to `[priceId]` on read — the right answer for the single-price
+        // providers and for an adapter that could not establish the full set.
+        priceIds: action.priceIds,
+        provider: action.provider,
+        quantity: action.quantity ?? 1,
+        referenceId,
+        state: targetState,
+        updatedAt: now,
+    });
+
+    return { applied: true, reason: "ok" };
+};
+
+const applySubscription = async (store: PaymentStore, action: WebhookAction, singleSubscriptionPerReference: boolean): Promise<ApplyResult> => {
     if (!action.subscriptionId) {
         return { applied: false, reason: "unhandled" };
     }
@@ -455,29 +515,7 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
     }
 
     if (!existing) {
-        // No owner on the event: take the one the checkout's payment session recorded, if it landed first.
-        const checkout = action.referenceId?.trim() ? undefined : await store.getPaymentSessionBySubscription(action.provider, action.subscriptionId);
-
-        await store.upsertSubscription({
-            cancelAtPeriodEnd: action.cancelAtPeriodEnd ?? false,
-            createdAt: now,
-            currentPeriodEnd: action.currentPeriodEnd,
-            currentPeriodStart: action.currentPeriodStart ?? now,
-            id: action.subscriptionId,
-            lastEventAt: action.occurredAt,
-            priceId: action.priceId ?? "",
-            // Left ABSENT rather than defaulted to `[]`: an empty set would grant nothing, whereas
-            // absent falls back to `[priceId]` on read — the right answer for the single-price
-            // providers and for an adapter that could not establish the full set.
-            priceIds: action.priceIds,
-            provider: action.provider,
-            quantity: action.quantity ?? 1,
-            referenceId: ownerOf(action.referenceId, checkout?.referenceId),
-            state: targetState,
-            updatedAt: now,
-        });
-
-        return { applied: true, reason: "ok" };
+        return createSubscription(store, action, action.subscriptionId, targetState, singleSubscriptionPerReference, now);
     }
 
     const subscriptionAction = resolveSubscriptionAction(existing.state, targetState, action.type);
@@ -493,7 +531,12 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
     return { applied: true, reason: "ok" };
 };
 
-const applyWebhookAction = async (store: PaymentStore, action: WebhookAction, observer?: PaymentObserver): Promise<ApplyResult> => {
+const applyWebhookAction = async (
+    store: PaymentStore,
+    action: WebhookAction,
+    observer?: PaymentObserver,
+    singleSubscriptionPerReference = false,
+): Promise<ApplyResult> => {
     if (action.type === "unhandled") {
         return { applied: false, reason: "unhandled" };
     }
@@ -521,7 +564,7 @@ const applyWebhookAction = async (store: PaymentStore, action: WebhookAction, ob
     let result: ApplyResult;
 
     try {
-        result = paymentAction ? await applyPayment(store, action, paymentAction) : await applySubscription(store, action);
+        result = paymentAction ? await applyPayment(store, action, paymentAction) : await applySubscription(store, action, singleSubscriptionPerReference);
     } catch (error) {
         // The claim is taken before apply; a genuine store-write failure would otherwise leave the
         // event marked-processed so the provider's retry dedupes to a lost effect. Release the claim
@@ -555,6 +598,11 @@ const applyWebhookAction = async (store: PaymentStore, action: WebhookAction, ob
     }
 
     notifyObserver(observer, { action: action.type, eventId: action.eventId, provider: action.provider, reason: result.reason, type: "webhook.applied" });
+
+    // The provider still bills the refused subscription, so the operator has to cancel it there: this event is the alert.
+    if (result.reason === "duplicate_subscription" && action.subscriptionId !== undefined) {
+        notifyObserver(observer, { provider: action.provider, subscriptionId: action.subscriptionId, type: "subscription.duplicate" });
+    }
 
     // Alertable signals — emitted on the provider's report regardless of the FSM outcome.
     if (action.type === "payment.failed") {
