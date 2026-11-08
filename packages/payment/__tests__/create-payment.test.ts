@@ -512,7 +512,11 @@ describe("createPayment", () => {
         await store.upsertSubscription(subscription("user_1", "past_due"));
 
         // Stripe has recovered the subscription, and its webhook has not arrived yet.
-        const adapter = fakeAdapter({ cancelSubscription: async (id) => {return { ...subscription("user_1", "active"), id }} });
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                return { ...subscription("user_1", "active"), id };
+            },
+        });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", singleSubscriptionPerReference: true, store });
 
         await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "active" });
