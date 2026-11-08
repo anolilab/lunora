@@ -188,6 +188,22 @@ const projectOrganization = async (env: AuthEnv, record: OrganizationRecord, fie
             });
             written = seats;
         }
+
+        // The members projection is what a tenant checks an assignee against, so it follows the same hooks.
+        const count = written ?? 0;
+        const userIds: string[] = [];
+
+        if (count > 0) {
+            const rows = await adapter.findMany({ limit: count, model: "member", where: [{ field: "organizationId", value: record.id }] });
+
+            for (const row of rows) {
+                if (row instanceof Object && "userId" in row && typeof row.userId === "string") {
+                    userIds.push(row.userId);
+                }
+            }
+        }
+
+        await shard.call(internal.saas.syncMembers, { organizationId: record.id, userIds });
     } catch (error) {
         // eslint-disable-next-line no-console -- the admin projection is best-effort; surface the drift in Worker logs
         console.error("[saas] could not project organization", { error, organizationId: record.id });

@@ -25,6 +25,7 @@ import type { Doc, Id, MutationCtx, QueryCtx, TableReaderFacade } from "#lunora/
 import { internalMutation, internalQuery, mutation, query, v } from "#lunora/_generated/server.js";
 
 import { PLANS } from "../plans";
+import { membersOf } from "./members";
 import { SAAS_ACTIVITY_PAGE, SAAS_ACTIVITY_TABLE, SAAS_ORGANIZATIONS_TABLE, SAAS_PROJECTS_PAGE, SAAS_PROJECTS_TABLE } from "./schema";
 
 /**
@@ -764,4 +765,44 @@ export const syncOrganizationPlan = internalMutation
         }
 
         await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"], { plan, planAsOf: asOf, updatedAt: ctx.now });
+    });
+
+/** Members read per page when the projection is rebuilt. */
+const MEMBERS_PAGE = 100;
+
+/**
+ * Make `organizationId`'s members projection exactly `userIds`. The auth hooks that change
+ * membership call it, so a tenant can check an assignee without a cross-shard call.
+ */
+export const syncMembers = internalMutation
+    .input({ organizationId: v.string(), userIds: v.array(v.string()) })
+    .mutation(async ({ args: { organizationId, userIds }, ctx }): Promise<void> => {
+        const wanted = new Set(userIds);
+        const held = new Set<string>();
+        const stale: Id<"saas_members">[] = [];
+        let cursor: string | undefined;
+        let isDone = false;
+
+        while (!isDone) {
+            // eslint-disable-next-line no-await-in-loop -- each page's cursor comes from the page before it
+            const result = await membersOf(ctx).findMany({ cursor, limit: MEMBERS_PAGE, where: { organizationId } });
+
+            for (const row of result.page) {
+                if (wanted.has(row.userId)) {
+                    held.add(row.userId);
+                } else {
+                    stale.push(row._id);
+                }
+            }
+
+            cursor = result.continueCursor ?? undefined;
+            isDone = result.isDone;
+        }
+
+        const missing = [...wanted].filter((userId) => !held.has(userId));
+
+        await Promise.all([
+            ...stale.map(async (id) => ctx.db.delete("saas_members", id)),
+            ...missing.map(async (userId) => ctx.db.insert("saas_members", { organizationId, userId })),
+        ]);
     });

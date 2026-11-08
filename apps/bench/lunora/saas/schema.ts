@@ -47,6 +47,9 @@ export const SAAS_ACTIVITY_TABLE = "saas_activity";
 /** Merged name of the cross-tenant `organizations` projection. */
 export const SAAS_ORGANIZATIONS_TABLE = "saas_organizations";
 
+/** The cross-tenant members projection (see the `members` table below). */
+export const SAAS_MEMBERS_TABLE = "saas_members";
+
 /**
  * How many activity rows a dashboard feed reads. The feed is a live query, so
  * this is the size of what every connected tab re-receives on each write —
@@ -148,6 +151,18 @@ export const saas = definePlugin("saas", {
                 // seat sum per status and plan, kept in step on every write.
                 .aggregateIndex("countByStatusPlan", { by: ["status", "plan"] })
                 .aggregateIndex("seatsByStatusPlan", { by: ["status", "plan"], field: "seats", op: "sum" }),
+
+            /**
+             * Cross-tenant projection of who belongs to each organisation, written from the same
+             * auth hooks as `organizations`. A tenant checks an assignee against it, because a
+             * tenant mutation cannot read the root shard's membership.
+             */
+            members: defineTable({
+                organizationId: v.string(),
+                userId: v.string(),
+            })
+                .global()
+                .index("byOrgUser", ["organizationId", "userId"], { unique: true }),
         },
     }),
 });

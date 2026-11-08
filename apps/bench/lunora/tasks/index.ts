@@ -9,6 +9,7 @@ import type { PaginationResult } from "lunorash/server";
 import type { Doc, Id } from "../_generated/server";
 import { internalMutation, v } from "../_generated/server";
 import { orgBulkMutation, orgMutation, orgQuery, pageArgs, requireOrg, requireWriter, tagsSchema, tenantRead, tenantWrite } from "../lib/crpc";
+import { isOrganizationMember } from "../saas/members";
 
 const status = v.union(v.literal("todo"), v.literal("doing"), v.literal("review"), v.literal("done"), v.literal("archived"));
 const priority = v.union(v.literal("low"), v.literal("normal"), v.literal("high"), v.literal("urgent"));
@@ -100,6 +101,10 @@ export const create = orgMutation
     .mutation(async ({ args, ctx }): Promise<Id<"tasks">> => {
         const { organizationId, userId } = await requireWriter(ctx);
 
+        if (args.assigneeId !== undefined && !(await isOrganizationMember(ctx, organizationId, args.assigneeId))) {
+            throw new LunoraError("BAD_REQUEST", "the assignee is not a member of this organisation");
+        }
+
         if (args.projectId !== undefined) {
             const project = await ctx.db.get("saas_projects", args.projectId);
 
@@ -141,6 +146,11 @@ export const update = orgMutation
     })
     .mutation(async ({ args, ctx }) => {
         const { organizationId, userId } = await requireWriter(ctx);
+
+        if (args.assigneeId !== undefined && !(await isOrganizationMember(ctx, organizationId, args.assigneeId))) {
+            throw new LunoraError("BAD_REQUEST", "the assignee is not a member of this organisation");
+        }
+
         const { id, ...patch } = args;
         const now = Date.now();
 
