@@ -1,3 +1,7 @@
+## @lunora/server [1.0.0-alpha.274](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.273...@lunora/server@1.0.0-alpha.274) (2026-11-08)
+
+- feat(bench): add a realistic benchmark app built on the saas kit (#1420)
+
 ## @lunora/server [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.272...@lunora/server@1.0.0-alpha.273) (2026-11-05)
 
 - feat(vite): dev-loop hints, binding-drift notice and env.ts check (#1494)

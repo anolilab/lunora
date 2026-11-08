@@ -1,3 +1,7 @@
+## @lunora/runtime [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.281...@lunora/runtime@1.0.0-alpha.282) (2026-11-08)
+
+- feat(bench): add a realistic benchmark app built on the saas kit (#1420)
+
 ## @lunora/runtime [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.280...@lunora/runtime@1.0.0-alpha.281) (2026-11-05)
 
 - fix(observability): bound logged Errors further and never call their toString (#1501)
