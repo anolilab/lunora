@@ -456,7 +456,7 @@ describe("createPayment", () => {
         expect(stored?.state).toBe("canceled");
     });
 
-    it("does not let a cancel response activate a past-due row next to another active subscription", async () => {
+    it("keeps a past-due row past-due when the cancel response reports it active", async () => {
         expect.assertions(3);
 
         const store = new MemoryPaymentStore();
@@ -466,7 +466,11 @@ describe("createPayment", () => {
         await store.upsertSubscription(subscription("user_1", "past_due"));
 
         // The provider reports the scheduled cancellation as still active.
-        const adapter = fakeAdapter({ cancelSubscription: async (id) => {return { ...subscription("user_1", "active"), id }} });
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                return { ...subscription("user_1", "active"), id };
+            },
+        });
         const payment = createPayment({
             adapter,
             authorize: (referenceId) => referenceId === "user_1",
@@ -479,7 +483,7 @@ describe("createPayment", () => {
 
         expect(returned.state).toBe("past_due");
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "past_due" });
-        expect(observer).toHaveBeenCalledWith({ provider: "stripe", subscriptionId: "sub_1", type: "subscription.duplicate" });
+        expect(observer).not.toHaveBeenCalledWith(expect.objectContaining({ type: "subscription.duplicate" }));
     });
 
     it("keeps the stored subscription's referenceId when the cancel response doesn't echo it", async () => {

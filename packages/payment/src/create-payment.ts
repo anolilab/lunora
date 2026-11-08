@@ -18,7 +18,7 @@ import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription } from "./store";
-import { storeSubscription } from "./subscription-policy";
+import { ENTITLING_STATES } from "./subscription-policy";
 import applyWebhookAction from "./sync";
 import type {
     AttachInput,
@@ -416,15 +416,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             ]);
             const synced = overlayProviderSubscription(existing, await adapter.cancelSubscription(subscriptionId, { ...cancelOptions, idempotencyKey: key }));
 
-            // The provider's answer can report a row as active (a past-due one scheduled to cancel, say). The policy
-            // decides whether it may grant access; a refused write keeps the stored row and raises the same alert.
-            if ((await storeSubscription(store, options.singleSubscriptionPerReference ?? false, existing, synced)) === "refused") {
-                notifyObserver(options.observability, { provider: synced.provider, subscriptionId: synced.id, type: "subscription.duplicate" });
+            // The response can report an access-granting state for a row that grants nothing yet (a past-due one
+            // scheduled to end, say). It may change the cancellation, never grant access, so the stored state stands.
+            const state = ENTITLING_STATES.has(synced.state) && !ENTITLING_STATES.has(existing.state) ? existing.state : synced.state;
+            const accepted: Subscription = { ...synced, state };
 
-                return existing;
-            }
+            await store.upsertSubscription(accepted);
 
-            return synced;
+            return accepted;
         },
 
         capturePayment: async (input) => {
