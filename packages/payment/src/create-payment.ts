@@ -18,7 +18,7 @@ import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription } from "./store";
-import { ENTITLING_STATES, storeSubscription } from "./subscription-policy";
+import { storeSubscription } from "./subscription-policy";
 import applyWebhookAction from "./sync";
 import type {
     AttachInput,
@@ -414,20 +414,24 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             ]);
             const synced = overlayProviderSubscription(existing, await adapter.cancelSubscription(subscriptionId, { ...cancelOptions, idempotencyKey: key }));
 
-            // With the policy on, a response may change the cancellation but not grant access: an access-granting state
-            // on a row that grants nothing yet (a past-due one scheduled to end, say) keeps the stored state. The write
-            // itself goes through the policy, so an owner the provider names cannot be adopted into a second live one.
-            const policy = options.singleSubscriptionPerReference ?? false;
-            const state = policy && ENTITLING_STATES.has(synced.state) && !ENTITLING_STATES.has(existing.state) ? existing.state : synced.state;
-            const accepted: Subscription = { ...synced, state };
+            // The provider's answer goes through the policy, so a second live subscription is refused rather than
+            // granted. The write is guarded by the revision read before the call: a webhook that landed meanwhile is
+            // newer than this answer, so it stands and is returned.
+            const outcome = await storeSubscription(store, options.singleSubscriptionPerReference ?? false, existing, synced, {
+                ifRevision: existing.revision,
+            });
 
-            if ((await storeSubscription(store, policy, existing, accepted)) === "refused") {
-                notifyObserver(options.observability, { provider: accepted.provider, subscriptionId: accepted.id, type: "subscription.duplicate" });
+            if (outcome === "rejected") {
+                return (await store.getSubscription(adapter.identifier, subscriptionId)) ?? existing;
+            }
+
+            if (outcome === "refused") {
+                notifyObserver(options.observability, { provider: synced.provider, subscriptionId: synced.id, type: "subscription.duplicate" });
 
                 return existing;
             }
 
-            return accepted;
+            return synced;
         },
 
         capturePayment: async (input) => {

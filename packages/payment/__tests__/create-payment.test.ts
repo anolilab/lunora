@@ -483,7 +483,7 @@ describe("createPayment", () => {
 
         expect(returned.state).toBe("past_due");
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "past_due" });
-        expect(observer).not.toHaveBeenCalledWith(expect.objectContaining({ type: "subscription.duplicate" }));
+        expect(observer).toHaveBeenCalledWith({ provider: "stripe", subscriptionId: "sub_1", type: "subscription.duplicate" });
     });
 
     it("still takes the provider's state for a cancel response when the policy is off", async () => {
@@ -493,7 +493,47 @@ describe("createPayment", () => {
 
         await store.upsertSubscription(subscription("user_1", "past_due"));
 
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                return { ...subscription("user_1", "active"), id };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "active" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
+    });
+
+    it("takes a provider's recovery on a cancel response when no other live subscription holds the reference", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "past_due"));
+
+        // Stripe has recovered the subscription, and its webhook has not arrived yet.
         const adapter = fakeAdapter({ cancelSubscription: async (id) => {return { ...subscription("user_1", "active"), id }} });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", singleSubscriptionPerReference: true, store });
+
+        await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "active" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
+    });
+
+    it("keeps a webhook that lands during the cancel call instead of overwriting it with the response", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "past_due"));
+
+        // While the provider call is in flight, a webhook activates the row.
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                await store.upsertSubscription({ ...subscription("user_1", "active"), id });
+
+                return { ...subscription("user_1", "past_due"), id };
+            },
+        });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
 
         await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "active" });
@@ -510,7 +550,11 @@ describe("createPayment", () => {
         await store.upsertSubscription({ ...subscription("", "active"), id: "sub_blank" });
 
         // The app's authorizer admits a blank owner, and the provider names one in its response.
-        const adapter = fakeAdapter({ cancelSubscription: async (id) => {return { ...subscription("user_1", "active"), id }} });
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                return { ...subscription("user_1", "active"), id };
+            },
+        });
         const payment = createPayment({
             adapter,
             authorize: () => true,
