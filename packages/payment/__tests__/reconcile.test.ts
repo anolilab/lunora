@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { PaymentAdapter } from "../src/adapter";
 import { money } from "../src/money";
+import type { PaymentObserver } from "../src/observability";
 import { reconcile } from "../src/reconcile";
 import { MemoryPaymentStore } from "../src/store";
 import type { Subscription } from "../src/types";
@@ -41,6 +42,21 @@ const truthAdapter = (): PaymentAdapter =>
     }) as unknown as PaymentAdapter;
 
 describe("reconcile", () => {
+    it("does not reactivate a refused subscription when the provider still reports it active", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        // The reference already holds a live subscription, so the past-due row must not be activated by reconciliation.
+        await store.upsertSubscription({ ...subscription("active"), id: "sub_live" });
+        await store.upsertSubscription({ ...subscription("past_due"), id: "sub_2" });
+
+        const observer = vi.fn<PaymentObserver>();
+        await reconcile({ adapter: truthAdapter(), observability: observer, singleSubscriptionPerReference: true, store, subscriptionIds: ["sub_2"] });
+
+        await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ state: "past_due" });
+        expect(observer).toHaveBeenCalledWith({ provider: "stripe", subscriptionId: "sub_2", type: "subscription.duplicate" });
+    });
+
     it("does not overwrite a webhook that lands between its read and its write", async () => {
         expect.assertions(2);
 

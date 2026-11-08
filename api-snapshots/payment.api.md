@@ -549,6 +549,7 @@ interface ReconcileInput {
     readonly adapter: PaymentAdapter;
     readonly observability?: PaymentObserver;
     readonly paymentSessionIds?: ReadonlyArray<string>;
+    readonly singleSubscriptionPerReference?: boolean;
     readonly store: PaymentStore;
     readonly subscriptionIds?: ReadonlyArray<string>;
     readonly usageReportLimit?: number;
