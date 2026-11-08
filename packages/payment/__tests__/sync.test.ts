@@ -200,6 +200,26 @@ describe("applyWebhookAction", () => {
         await expect(store.getSubscription("creem", "sub_2")).resolves.toMatchObject({ state: "active" });
     });
 
+    it("does not treat a whitespace-only owner as an owner when checking for a duplicate", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const created = { eventId: "e1", priceId: "prod_team", provider: "creem", subscriptionId: "sub_1", type: "subscription.active" } as const;
+        const second = { eventId: "e2", priceId: "prod_team", provider: "creem", subscriptionId: "sub_2", type: "subscription.active" } as const;
+
+        await applyWebhookAction(store, created, undefined, true);
+        await applyWebhookAction(store, second, undefined, true);
+
+        // Both rows take the same whitespace-only owner on an update: that is no owner, so neither is a duplicate.
+        await expect(
+            applyWebhookAction(store, { ...created, eventId: "e3", occurredAt: 1, referenceId: "  ", type: "subscription.updated" }, undefined, true),
+        ).resolves.toEqual({ applied: true, reason: "ok" });
+        await expect(
+            applyWebhookAction(store, { ...second, eventId: "e4", occurredAt: 2, referenceId: "  ", type: "subscription.updated" }, undefined, true),
+        ).resolves.toEqual({ applied: true, reason: "ok" });
+        await expect(store.getSubscription("creem", "sub_2")).resolves.toMatchObject({ state: "active" });
+    });
+
     it("keeps a second subscription on one reference when the policy is off, as before", async () => {
         expect.assertions(2);
 

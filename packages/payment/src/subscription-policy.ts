@@ -41,7 +41,7 @@ const storeSubscription = async (
     if (
         singleSubscriptionPerReference &&
         grantsAccess &&
-        next.referenceId !== "" &&
+        next.referenceId.trim() !== "" &&
         (await hasOtherLiveSubscription(store, next.referenceId, next.provider, next.id))
     ) {
         return "refused";

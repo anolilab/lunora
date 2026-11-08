@@ -486,6 +486,46 @@ describe("createPayment", () => {
         expect(observer).not.toHaveBeenCalledWith(expect.objectContaining({ type: "subscription.duplicate" }));
     });
 
+    it("still takes the provider's state for a cancel response when the policy is off", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "past_due"));
+
+        const adapter = fakeAdapter({ cancelSubscription: async (id) => {return { ...subscription("user_1", "active"), id }} });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "active" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
+    });
+
+    it("does not adopt an owner the cancel response names into a blank row another live subscription holds", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const observer = vi.fn<PaymentObserver>();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), id: "sub_live" });
+        await store.upsertSubscription({ ...subscription("", "active"), id: "sub_blank" });
+
+        // The app's authorizer admits a blank owner, and the provider names one in its response.
+        const adapter = fakeAdapter({ cancelSubscription: async (id) => {return { ...subscription("user_1", "active"), id }} });
+        const payment = createPayment({
+            adapter,
+            authorize: () => true,
+            observability: observer,
+            singleSubscriptionPerReference: true,
+            store,
+        });
+
+        await payment.cancelSubscription("sub_blank");
+
+        await expect(store.getSubscription("stripe", "sub_blank")).resolves.toMatchObject({ referenceId: "" });
+        await expect(store.listSubscriptionsByReference("user_1")).resolves.toHaveLength(1);
+        expect(observer).toHaveBeenCalledWith({ provider: "stripe", subscriptionId: "sub_blank", type: "subscription.duplicate" });
+    });
+
     it("keeps the stored subscription's referenceId when the cancel response doesn't echo it", async () => {
         expect.assertions(3);
 

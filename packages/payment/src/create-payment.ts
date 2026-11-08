@@ -18,7 +18,7 @@ import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription } from "./store";
-import { ENTITLING_STATES } from "./subscription-policy";
+import { ENTITLING_STATES, storeSubscription } from "./subscription-policy";
 import applyWebhookAction from "./sync";
 import type {
     AttachInput,
@@ -400,9 +400,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             // Already in the requested end state: a retry after a successful cancel. Calling the
             // provider again would be a fresh key (the row's `updatedAt` moved) on a canceled sub.
-            const done = cancelOptions?.atPeriodEnd
-                ? existing.cancelAtPeriodEnd && (existing.state === "active" || existing.state === "trialing")
-                : existing.state === "canceled";
+            const done = cancelOptions?.atPeriodEnd ? existing.cancelAtPeriodEnd && existing.state !== "canceled" : existing.state === "canceled";
 
             if (done) {
                 return existing;
@@ -416,12 +414,18 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             ]);
             const synced = overlayProviderSubscription(existing, await adapter.cancelSubscription(subscriptionId, { ...cancelOptions, idempotencyKey: key }));
 
-            // The response can report an access-granting state for a row that grants nothing yet (a past-due one
-            // scheduled to end, say). It may change the cancellation, never grant access, so the stored state stands.
-            const state = ENTITLING_STATES.has(synced.state) && !ENTITLING_STATES.has(existing.state) ? existing.state : synced.state;
+            // With the policy on, a response may change the cancellation but not grant access: an access-granting state
+            // on a row that grants nothing yet (a past-due one scheduled to end, say) keeps the stored state. The write
+            // itself goes through the policy, so an owner the provider names cannot be adopted into a second live one.
+            const policy = options.singleSubscriptionPerReference ?? false;
+            const state = policy && ENTITLING_STATES.has(synced.state) && !ENTITLING_STATES.has(existing.state) ? existing.state : synced.state;
             const accepted: Subscription = { ...synced, state };
 
-            await store.upsertSubscription(accepted);
+            if ((await storeSubscription(store, policy, existing, accepted)) === "refused") {
+                notifyObserver(options.observability, { provider: accepted.provider, subscriptionId: accepted.id, type: "subscription.duplicate" });
+
+                return existing;
+            }
 
             return accepted;
         },

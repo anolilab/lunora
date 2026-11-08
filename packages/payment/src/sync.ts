@@ -191,7 +191,7 @@ const refundedAfter = (base: PaymentSession, action: WebhookAction, resolvedActi
  * the row from this session. Returns false when the policy refuses the adoption.
  */
 const adoptOrphanSubscription = async (store: PaymentStore, action: WebhookAction, now: number, singleSubscriptionPerReference: boolean): Promise<boolean> => {
-    if (!action.subscriptionId || !action.referenceId) {
+    if (!action.subscriptionId || !action.referenceId?.trim()) {
         return true;
     }
 
