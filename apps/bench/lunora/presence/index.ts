@@ -230,8 +230,8 @@ export const listPresent = query.input({ roomId: v.string().max(256) }).query(as
 
     const rows = await ctx.db
         .query(PRESENCE_TABLE)
-        .withIndex("byTenantRoomSession", (q) => q.eq("tenantId", tenantId).eq("roomId", roomId))
-        .filter((row) => row["lastSeen"] > cutoff)
+        .withIndex("byTenantRoomLastSeen", (q) => q.eq("tenantId", tenantId).eq("roomId", roomId).gt("lastSeen", cutoff))
+        .order("desc")
         .take(PRESENCE_LIST_MAX);
 
     return rows

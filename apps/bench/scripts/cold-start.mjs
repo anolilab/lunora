@@ -15,7 +15,7 @@
  *   4. `--warm` further calls of each.
  *
  * The sample is the functions a caller can reach without writing (see
- * `sampleCalls`): each domain's `queries:list` and `admin:exportSummary`, plus the
+ * `sampleCalls`): each domain's `queries:list`, plus the
  * offline action of every heavy domain's `integrations` module (S3 presign, e2b
  * template, protobuf, tldts, the OpenAI provider). Modes alternate per sample, so
  * drift in machine load hits both.
@@ -203,23 +203,19 @@ const signUp = async (mode, count) => {
 
 /**
  * The functions a caller can reach without writing, one module each, per domain:
- * `queries:list`; `admin:exportSummary`, which also loads `jobs` and `validators`
- * (skipped where the domain's AI hook makes it call remote-only Workers AI); and a
- * heavy domain's offline integration action. That reaches 4–5 of a domain's 6–8
- * modules; `lines`, `notes`, `mutations` and `catalog` are not sampled.
+ * `queries:list` and a heavy domain's offline integration action. `admin:exportSummary`
+ * is not sampled: export is a paid-plan feature and the sampled organisations are on the
+ * free plan, so every call would be refused. That reaches a domain's 2–3 of its 6–8
+ * modules; `lines`, `notes`, `mutations`, `catalog`, `admin` and `jobs` are not sampled.
  */
 const sampleCalls = () => {
     const calls = [];
 
     for (let index = 0; index < size.domains; index++) {
         const key = domainKey(index);
-        const { aiHook, integration } = shapeOf(index, size.heavyShare);
+        const { integration } = shapeOf(index, size.heavyShare);
 
         calls.push({ args: {}, heavy: false, kind: "query", path: `domains_${key}_queries:list` });
-
-        if (!aiHook) {
-            calls.push({ args: {}, heavy: false, kind: "action", path: `domains_${key}_admin:exportSummary` });
-        }
 
         if (integration) {
             const { args, name } = OFFLINE_CALLS[integration];

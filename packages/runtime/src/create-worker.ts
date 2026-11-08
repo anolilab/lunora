@@ -968,9 +968,10 @@ interface NotifySubscriptionFilter {
  */
 interface ShardCaller {
     /**
-     * The function the caller's RPC envelope names. Set only on the single-call RPC
-     * path; a transport that names no function leaves it unset, so a gate keyed on
-     * it refuses those callers.
+     * The function being called, where the transport names one: the RPC envelope
+     * (single, batch, REST, `serverQuery`), the scheduler's target and a `ctx.run*`
+     * on a named shard. Unset on a path that names none (a WebSocket upgrade, a live
+     * publish, `fetchShard`), so a gate keyed on it must refuse those callers.
      */
     functionPath?: string;
     /** The identity `resolveIdentity` produced for this request, or `null` when the caller is unauthenticated. */
@@ -4849,7 +4850,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // built from a client-supplied `shardKey`. The default shard is the app's
                 // own and is not gated.
                 if (shardKey !== defaultShard) {
-                    await assertShardAuthorized(identity, shardKey);
+                    await assertShardAuthorized(identity, shardKey, false, functionPath);
                 }
 
                 // Through the SAME dispatcher the `/_lunora/rpc` and `serverQuery` paths

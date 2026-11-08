@@ -80,6 +80,8 @@ export const presence = definePlugin("presence", {
                 // The `(tenantId, roomId)` prefix also covers the per-room
                 // `listPresent`/`sweep` scans — a separate room index would be redundant.
                 .index("byTenantRoomSession", ["tenantId", "roomId", "sessionId"])
+                // `listPresent` ranges over live rows here, newest first, so a busy room's cap keeps the newest members.
+                .index("byTenantRoomLastSeen", ["tenantId", "roomId", "lastSeen"])
                 // Keep `after` equal to PRESENCE_TTL_MS, written out: codegen reads this
                 // literal to build the shard's alarm sweep, and does not resolve a constant.
                 .ttl("lastSeen", { after: 30_000 }),

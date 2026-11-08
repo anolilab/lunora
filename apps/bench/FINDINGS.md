@@ -574,6 +574,8 @@ Two review claims are intended behaviour, not defects:
 
 ## 20. A paid public procedure cannot be reached once `authorizeShard` is set (medium)
 
+**Status: fixed.** `authorizeShard` now receives the function being called (`ShardCaller.functionPath`), and the bench admits anonymous callers only to `public_api:planMix` on `__root__`.
+
 `authorizeShard` receives only `{ identity, shardKey }`, not the procedure being
 called. An app that refuses anonymous callers there (as `templates/saas` and the
 bench do) therefore refuses them for every procedure, including an `.x402()`
