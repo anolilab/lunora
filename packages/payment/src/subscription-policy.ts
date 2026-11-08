@@ -8,12 +8,15 @@ import type { ProviderId, Subscription, SubscriptionState } from "./types";
 /** The states that grant access. */
 const ENTITLING_STATES: ReadonlySet<SubscriptionState> = new Set<SubscriptionState>(["active", "trialing"]);
 
-/** Whether `referenceId` holds a live (not canceled) subscription other than `provider`/`subscriptionId`. */
+/**
+ * Whether `referenceId` holds a subscription that grants access, other than `provider`/`subscriptionId`. Paused and
+ * past-due rows grant nothing, so they do not block: each activation is checked when it happens.
+ */
 const hasOtherLiveSubscription = async (store: PaymentStore, referenceId: string, provider: ProviderId, subscriptionId: string): Promise<boolean> => {
     const subscriptions = await store.listSubscriptionsByReference(referenceId);
 
     return subscriptions.some(
-        (subscription) => (subscription.provider !== provider || subscription.id !== subscriptionId) && subscription.state !== "canceled",
+        (subscription) => (subscription.provider !== provider || subscription.id !== subscriptionId) && ENTITLING_STATES.has(subscription.state),
     );
 };
 

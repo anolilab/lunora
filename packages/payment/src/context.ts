@@ -68,7 +68,7 @@ export interface PaymentsFromContextOptions {
     readonly entitlements?: EntitlementsConfig;
     /** Optional telemetry sink, forwarded to the facade. */
     readonly observability?: PaymentObserver;
-    /** Refuse a second live subscription on one reference, forwarded to the facade (see `CreatePaymentOptions`). */
+    /** Refuse a second subscription that grants access on one reference, forwarded to the facade (see `CreatePaymentOptions`). */
     readonly singleSubscriptionPerReference?: boolean;
 }
 

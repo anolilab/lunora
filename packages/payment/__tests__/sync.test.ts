@@ -180,6 +180,26 @@ describe("applyWebhookAction", () => {
         await expect(store.listSubscriptionsByReference("org_1")).resolves.toHaveLength(1);
     });
 
+    it("does not let a paused subscription block a second one that grants access", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const paused = { eventId: "e1", provider: "creem", referenceId: "org_1", subscriptionId: "sub_1", type: "subscription.paused" } as const;
+        const active = {
+            eventId: "e2",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_2",
+            type: "subscription.active",
+        } as const;
+
+        await applyWebhookAction(store, paused, undefined, true);
+
+        await expect(applyWebhookAction(store, active, undefined, true)).resolves.toEqual({ applied: true, reason: "ok" });
+        await expect(store.getSubscription("creem", "sub_2")).resolves.toMatchObject({ state: "active" });
+    });
+
     it("keeps a second subscription on one reference when the policy is off, as before", async () => {
         expect.assertions(2);
 

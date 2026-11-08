@@ -28,7 +28,7 @@ interface ReconcileInput {
     /** Optional telemetry sink — fired per drifted row and once on completion. */
     readonly observability?: PaymentObserver;
     readonly paymentSessionIds?: ReadonlyArray<string>;
-    /** Refuse a second live subscription on one reference; pass the same value as `createPayment`'s option. */
+    /** Refuse a second subscription that grants access on one reference; pass the same value as `createPayment`'s option. */
     readonly singleSubscriptionPerReference?: boolean;
     readonly store: PaymentStore;
     readonly subscriptionIds?: ReadonlyArray<string>;

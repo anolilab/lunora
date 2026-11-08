@@ -136,9 +136,10 @@ export interface CreatePaymentOptions {
     readonly observability?: PaymentObserver;
 
     /**
-     * Refuse a second live subscription on one reference. Off by default: some apps sell several
-     * subscriptions per customer. When on, a webhook that would create one is not entitled, and
-     * `subscription.duplicate` tells the operator to cancel it at the provider, which still bills it.
+     * Refuse a second subscription that grants access on one reference. Off by default: some apps sell several
+     * subscriptions per customer. When on, a write that would give a second subscription access is refused, and
+     * `subscription.duplicate` tells the operator to cancel it at the provider, which still bills it. A paused or
+     * past-due subscription grants nothing, so it does not count.
      */
     readonly singleSubscriptionPerReference?: boolean;
     readonly store: PaymentStore;
