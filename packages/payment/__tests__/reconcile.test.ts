@@ -62,6 +62,24 @@ describe("reconcile", () => {
         expect(observer).toHaveBeenCalledWith(expect.objectContaining({ id: "sub_2", type: "reconcile.drift" }));
     });
 
+    it("records a refused revival as paused, so the customer can still cancel it", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+        await store.upsertSubscription({ ...subscription("active"), id: "sub_live" });
+        await store.upsertSubscription({ ...subscription("canceled"), id: "sub_2" });
+
+        const adapter = {
+            ...truthAdapter(),
+            getSubscriptionStatus: async () => {
+                return { ...subscription("active"), id: "sub_2" };
+            },
+        } as PaymentAdapter;
+        await reconcile({ adapter, singleSubscriptionPerReference: true, store, subscriptionIds: ["sub_2"] });
+
+        await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ state: "paused" });
+    });
+
     it("does not reactivate a refused subscription when the provider still reports it active", async () => {
         expect.assertions(2);
 

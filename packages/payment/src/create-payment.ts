@@ -171,7 +171,7 @@ export interface CreatePaymentOptions {
     /**
      * Refuse a second subscription that grants access on one reference. Off by default: some apps sell several
      * subscriptions per customer. When on, a write that would give a second subscription access is refused. The
-     * refused subscription is recorded as past due, so it can be cancelled in the app, and `subscription.duplicate`
+     * refused subscription is recorded as paused, so it can be cancelled in the app, and `subscription.duplicate`
      * tells the operator to cancel it at the provider, which still bills it. A paused or past-due subscription grants
      * nothing, so it does not count.
      */

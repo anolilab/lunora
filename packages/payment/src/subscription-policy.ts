@@ -54,8 +54,11 @@ const storeSubscription = async (
             return (await store.upsertSubscription(kept, guard)) ? "refused" : "rejected";
         }
 
-        // A new row is past due: the provider still bills it, and past due grants nothing. A stored row keeps its state.
-        const recorded: Subscription = { ...next, state: previous?.state ?? "past_due" };
+        // The provider still bills a refused subscription, but it must grant nothing and must stay cancellable. A stored
+        // row keeps its state, except a canceled one, which would stop the customer cancelling. A new row is paused, not
+        // past due: past due is a paid tier to consumers that treat it as one, and paused is not.
+        const recordedState = previous !== undefined && previous.state !== "canceled" ? previous.state : "paused";
+        const recorded: Subscription = { ...next, state: recordedState };
 
         return (await store.upsertSubscription(recorded, guard)) ? "refused" : "rejected";
     }
