@@ -183,12 +183,14 @@ const reconcileSubscription = async (
         ifRevision: after?.revision,
     });
 
-    if (outcome === "refused") {
-        notifyObserver(observer, { provider: adapter.identifier, subscriptionId: id, type: "subscription.duplicate" });
+    // A refusal is still a write: the policy records the subscription in a state that grants nothing. It is counted and
+    // reported as drift, so a sweep's totals and events show the row it changed.
+    if (outcome === "rejected") {
+        return false;
     }
 
-    if (outcome !== "written") {
-        return false;
+    if (outcome === "refused") {
+        notifyObserver(observer, { provider: adapter.identifier, subscriptionId: id, type: "subscription.duplicate" });
     }
 
     notifyObserver(observer, { id, kind: "subscription", provider: adapter.identifier, type: "reconcile.drift" });

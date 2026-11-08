@@ -42,6 +42,21 @@ const truthAdapter = (): PaymentAdapter =>
     }) as unknown as PaymentAdapter;
 
 describe("reconcile", () => {
+    it("counts a sweep's refused row as a changed row and reports it as drift", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        await store.upsertSubscription({ ...subscription("active"), id: "sub_live" });
+        await store.upsertSubscription({ ...subscription("past_due"), id: "sub_2" });
+
+        const observer = vi.fn<PaymentObserver>();
+        const adapter = { ...truthAdapter(), getSubscriptionStatus: async () => {return { ...subscription("active"), id: "sub_2" }} } as PaymentAdapter;
+        const result = await reconcile({ adapter, observability: observer, singleSubscriptionPerReference: true, store, subscriptionIds: ["sub_2"] });
+
+        expect(result.updatedSubscriptions).toBe(1);
+        expect(observer).toHaveBeenCalledWith(expect.objectContaining({ id: "sub_2", type: "reconcile.drift" }));
+    });
+
     it("does not reactivate a refused subscription when the provider still reports it active", async () => {
         expect.assertions(2);
 
