@@ -6,6 +6,8 @@ import { createPayment, webhookResponse } from "../src/create-payment";
 import { LunoraPaymentError } from "../src/errors";
 import { derivedIdempotencyKey } from "../src/idempotency";
 import { money } from "../src/money";
+import type { PaymentObserver } from "../src/observability";
+import type { PaymentStore, RevisionGuard } from "../src/store";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
 import type { CheckoutRequest, PaymentSession, Subscription, WebhookAction } from "../src/types";
@@ -453,6 +455,231 @@ describe("createPayment", () => {
         const stored = await store.getSubscription("stripe", "sub_1");
 
         expect(stored?.state).toBe("canceled");
+    });
+
+    it("keeps a past-due row past-due when the cancel response reports it active", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const observer = vi.fn<PaymentObserver>();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), id: "sub_2" });
+        await store.upsertSubscription(subscription("user_1", "past_due"));
+
+        // The provider reports the scheduled cancellation as still active.
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                return { ...subscription("user_1", "active"), id };
+            },
+        });
+        const payment = createPayment({
+            adapter,
+            authorize: (referenceId) => referenceId === "user_1",
+            observability: observer,
+            singleSubscriptionPerReference: true,
+            store,
+        });
+
+        const returned = await payment.cancelSubscription("sub_1");
+
+        expect(returned.state).toBe("past_due");
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "past_due" });
+        expect(observer).toHaveBeenCalledWith({ provider: "stripe", subscriptionId: "sub_1", type: "subscription.duplicate" });
+    });
+
+    it("still takes the provider's state for a cancel response when the policy is off", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "past_due"));
+
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                return { ...subscription("user_1", "active"), id };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "active" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
+    });
+
+    it("takes a provider's recovery on a cancel response when no other live subscription holds the reference", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "past_due"));
+
+        // Stripe has recovered the subscription, and its webhook has not arrived yet.
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                return { ...subscription("user_1", "active"), id };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", singleSubscriptionPerReference: true, store });
+
+        await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "active" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
+    });
+
+    it("keeps a webhook that lands during the cancel call instead of overwriting it with the response", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "past_due"));
+
+        // While the provider call is in flight, a webhook activates the row.
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                await store.upsertSubscription({ ...subscription("user_1", "active"), id });
+
+                return { ...subscription("user_1", "past_due"), id };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "active" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
+    });
+
+    it("does not adopt an owner the cancel response names into a blank row another live subscription holds", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const observer = vi.fn<PaymentObserver>();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), id: "sub_live" });
+        await store.upsertSubscription({ ...subscription("", "active"), id: "sub_blank" });
+
+        // The app's authorizer admits a blank owner, and the provider names one in its response.
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                return { ...subscription("user_1", "active"), id };
+            },
+        });
+        const payment = createPayment({
+            adapter,
+            authorize: () => true,
+            observability: observer,
+            singleSubscriptionPerReference: true,
+            store,
+        });
+
+        await payment.cancelSubscription("sub_blank");
+
+        // Recorded under the owner the provider named, as paused: it grants nothing, and the customer can still cancel it.
+        await expect(store.getSubscription("stripe", "sub_blank")).resolves.toMatchObject({ referenceId: "user_1", state: "paused" });
+        await expect(store.listSubscriptionsByReference("user_1")).resolves.toHaveLength(2);
+        expect(observer).toHaveBeenCalledWith({ provider: "stripe", subscriptionId: "sub_blank", type: "subscription.duplicate" });
+    });
+
+    it("lets the customer cancel a subscription the policy refused, because the refusal is recorded", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), id: "sub_live" });
+        await applyWebhookAction(
+            store,
+            { eventId: "e1", priceId: "prod_team", provider: "stripe", referenceId: "user_1", subscriptionId: "sub_2", type: "subscription.active" },
+            undefined,
+            true,
+        );
+
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                return { ...subscription("user_1", "canceled"), id };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", singleSubscriptionPerReference: true, store });
+
+        await expect(payment.cancelSubscription("sub_2")).resolves.toMatchObject({ id: "sub_2", state: "canceled" });
+        await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ state: "canceled" });
+    });
+
+    it("records a cancel even when a non-newer webhook moves the row during the provider call", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // A renewal webhook lands during the call. It is not newer than the cancel, but it moves the row.
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                await store.upsertSubscription({ ...subscription("user_1", "active"), id, priceId: "price_renewed" });
+
+                return { ...subscription("user_1", "canceled"), id };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "canceled" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ priceId: "price_renewed", state: "canceled" });
+    });
+
+    it("keeps a cancel when the row moves again while the cancel is being recorded", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // The first three guarded writes lose a race with other writers, then the row settles.
+        let losses = 3;
+        const racing = Object.assign(Object.create(store) as object, {
+            upsertSubscription: (record: Subscription, guard?: RevisionGuard) => {
+                if (guard !== undefined && losses > 0) {
+                    losses -= 1;
+
+                    return Promise.resolve(false);
+                }
+
+                return store.upsertSubscription(record, guard);
+            },
+        }) as PaymentStore;
+
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                return { ...subscription("user_1", "canceled"), id };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: racing });
+
+        await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "canceled" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
+    });
+
+    it("raises a conflict rather than dropping a cancel when the row moves through every guarded attempt", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // Every guarded write loses a race, so the cancel cannot be recorded.
+        const racing = Object.assign(Object.create(store) as object, {
+            upsertSubscription: (record: Subscription, guard?: RevisionGuard) => {
+                if (guard !== undefined) {
+                    return Promise.resolve(false);
+                }
+
+                return store.upsertSubscription(record, guard);
+            },
+        }) as PaymentStore;
+
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                return { ...subscription("user_1", "canceled"), id };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: racing });
+
+        await expect(payment.cancelSubscription("sub_1")).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
     });
 
     it("keeps the stored subscription's referenceId when the cancel response doesn't echo it", async () => {

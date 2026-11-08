@@ -62,7 +62,13 @@ const BEARER = /^Bearer\s+/iu;
 const MEMBERSHIP_RECHECK_MS = 5 * 60_000;
 
 /** The `event.type`s that need an operator: a failed charge, a lapsed subscription, a sweep that could not repair a row, a metered forward that never reached the provider. */
-const PAYMENT_FAILURE_EVENTS: ReadonlySet<string> = new Set(["payment.failed", "reconcile.error", "subscription.past_due", "usage.report_failed"]);
+const PAYMENT_FAILURE_EVENTS: ReadonlySet<string> = new Set([
+    "payment.failed",
+    "reconcile.error",
+    "subscription.duplicate",
+    "subscription.past_due",
+    "usage.report_failed",
+]);
 
 /**
  * MCP over HTTP: one tool per public function, run as the caller's own bearer
@@ -248,6 +254,8 @@ const app = defineApp<Env>()
              */
             authorize: (referenceId) => referenceId.trim() !== "",
             entitlements: ENTITLEMENTS,
+            // A purchase whose checkout check was raced past is refused here and the operator is alerted (see `observability`).
+            singleSubscriptionPerReference: true,
             /*
              * Failed payments, past-due subscriptions and reconciliation drift
              * arrive here. Route them at your alerting — a dunning failure nobody
@@ -257,7 +265,13 @@ const app = defineApp<Env>()
              * Worker logs.
              */
             observability: (event) => {
-                const fields = { provider: event.provider, referenceId: "referenceId" in event ? event.referenceId : undefined, type: event.type };
+                const fields = {
+                    provider: event.provider,
+                    referenceId: "referenceId" in event ? event.referenceId : undefined,
+                    type: event.type,
+                    // The one event whose subject is a subscription with no reference to fall back on: the id is how an operator finds it.
+                    ...(event.type === "subscription.duplicate" || event.type === "subscription.past_due" ? { subscriptionId: event.subscriptionId } : {}),
+                };
 
                 if (PAYMENT_FAILURE_EVENTS.has(event.type)) {
                     // eslint-disable-next-line no-console -- Workers Logs is where this reaches an operator in the kit; error severity makes it filterable

@@ -99,12 +99,13 @@ export const ShardDO = createShardDO({
 
 The thunk returns `PaymentsFromContextOptions`:
 
-| Option          | Type                        | Notes                                                                                                                                                       |
-| --------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `adapter`       | `PaymentAdapter`            | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter` / `createCreemAdapter`. Required.             |
-| `authorize`     | `AuthorizeContextReference` | `(referenceId, { db, userId }) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".                                                        |
-| `entitlements`  | `EntitlementsConfig`        | Plan → features/limits map. Required for a `featureId` check and for `listBalances` on providers without native entitlements; a `priceId` check needs none. |
-| `observability` | `PaymentObserver`           | Telemetry sink for webhook applies, failed payments, past-due subscriptions.                                                                                |
+| Option                           | Type                        | Notes                                                                                                                                                                                                                                                           |
+| -------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `adapter`                        | `PaymentAdapter`            | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter` / `createCreemAdapter`. Required.                                                                                                                 |
+| `authorize`                      | `AuthorizeContextReference` | `(referenceId, { db, userId }) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".                                                                                                                                                            |
+| `entitlements`                   | `EntitlementsConfig`        | Plan → features/limits map. Required for a `featureId` check and for `listBalances` on providers without native entitlements; a `priceId` check needs none.                                                                                                     |
+| `observability`                  | `PaymentObserver`           | Telemetry sink for webhook applies, failed payments, past-due subscriptions.                                                                                                                                                                                    |
+| `singleSubscriptionPerReference` | `boolean`                   | Off by default. When on, a second subscription that would grant access on one reference is refused and recorded in a state that grants nothing. The operator is alerted with `subscription.duplicate` and must cancel it at the provider, which still bills it. |
 
 ### Provider adapters
 
@@ -507,6 +508,8 @@ Re-fetches the provider's current state for the given `paymentSessionIds` and `s
 
 **Default:** `usageReportLimit` is `100`.
 
+`singleSubscriptionPerReference` is required, and it must match the value given to `createPayment`. A sweep that omits it can re-grant access the policy refused. A refused subscription is recorded in a state that grants nothing (`paused`, or the state the row already had when that grants nothing too), under the owner it was refused for, and reported as `reconcile.drift`, with a `subscription.duplicate` event naming the subscription.
+
 ### `LunoraPaymentError`
 
 **Type:** `class LunoraPaymentError extends LunoraError`, with `code: PaymentErrorCode`
@@ -544,7 +547,7 @@ Builds a `Money` value, `{ currency, minorUnits: bigint }`, from integer minor u
 
 **Type:** `(event: PaymentEvent) => void`
 
-The type of the `observability` option. `PaymentEvent.type` is one of `webhook.applied`, `webhook.duplicate`, `payment.failed`, `subscription.past_due`, `usage.report_failed`, `reconcile.drift`, `reconcile.completed` or `reconcile.error`.
+The type of the `observability` option. `PaymentEvent.type` is one of `webhook.applied`, `webhook.duplicate`, `subscription.duplicate`, `payment.failed`, `subscription.past_due`, `usage.report_failed`, `reconcile.drift`, `reconcile.completed` or `reconcile.error`.
 
 ### `PaymentAdapter`
 

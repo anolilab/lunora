@@ -20,6 +20,7 @@ import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription, ownerOf } from "./store";
+import { storeSubscription } from "./subscription-policy";
 import type { Customer, PaymentSession, PaymentState, Subscription } from "./types";
 
 interface ReconcileInput {
@@ -27,6 +28,12 @@ interface ReconcileInput {
     /** Optional telemetry sink — fired per drifted row and once on completion. */
     readonly observability?: PaymentObserver;
     readonly paymentSessionIds?: ReadonlyArray<string>;
+
+    /**
+     * Refuse a second subscription that grants access on one reference. Required, so a sweep cannot re-grant access
+     * the policy refused: pass the same value as `createPayment`'s `singleSubscriptionPerReference`.
+     */
+    readonly singleSubscriptionPerReference: boolean;
     readonly store: PaymentStore;
     readonly subscriptionIds?: ReadonlyArray<string>;
 
@@ -151,7 +158,13 @@ const rowChanged = (before: unknown, after: unknown): boolean => JSON.stringify(
 // is in flight is newer than the provider snapshot, and only a `before` read taken ahead of that
 // call can see it change. The write is then guarded on the revision read at `after`, so a webhook
 // that lands after that read makes the write a no-op rather than an overwrite.
-const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
+const reconcileSubscription = async (
+    adapter: PaymentAdapter,
+    store: PaymentStore,
+    id: string,
+    observer: PaymentObserver | undefined,
+    singleSubscriptionPerReference: boolean,
+): Promise<boolean> => {
     const before = await store.getSubscription(adapter.identifier, id);
     const current = await adapter.getSubscriptionStatus(id);
     const after = await store.getSubscription(adapter.identifier, id);
@@ -166,10 +179,18 @@ const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStor
 
     // Provider truth for the lifecycle; the store keeps the owner (a read may not echo checkout
     // metadata, or report Dodo's customer id), `createdAt` and `lastEventAt`.
-    const written = await store.upsertSubscription(overlayProviderSubscription(after, current), { ifRevision: after?.revision });
+    const outcome = await storeSubscription(store, singleSubscriptionPerReference, after, overlayProviderSubscription(after, current), {
+        ifRevision: after?.revision,
+    });
 
-    if (!written) {
+    // A refusal is still a write: the policy records the subscription in a state that grants nothing. It is counted and
+    // reported as drift, so a sweep's totals and events show the row it changed.
+    if (outcome === "rejected") {
         return false;
+    }
+
+    if (outcome === "refused") {
+        notifyObserver(observer, { provider: adapter.identifier, subscriptionId: id, type: "subscription.duplicate" });
     }
 
     notifyObserver(observer, { id, kind: "subscription", provider: adapter.identifier, type: "reconcile.drift" });
@@ -347,7 +368,7 @@ const reconcile = async (input: ReconcileInput): Promise<ReconcileResult> => {
     const subscriptionCounts = await sweep(
         subscriptionIds,
         "subscription",
-        (id) => reconcileSubscription(adapter, store, id, observability),
+        (id) => reconcileSubscription(adapter, store, id, observability, input.singleSubscriptionPerReference),
         adapter,
         observability,
     );
