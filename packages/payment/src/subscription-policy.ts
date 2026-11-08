@@ -27,6 +27,9 @@ type SubscriptionWrite = "refused" | "rejected" | "written";
  * Write `next` unless the policy refuses it. A write grants access when `next` entitles and either there was no row,
  * the row did not entitle, or its owner changes. Only such a write is refused, so a duplicate row that already exists
  * does not block updates to the row it already has.
+ *
+ * A refused subscription is still recorded, in a state that grants nothing, so the customer can cancel it in the app
+ * and the provider's later events for it find a row. A row that already granted access is left as it is.
  */
 const storeSubscription = async (
     store: PaymentStore,
@@ -44,7 +47,14 @@ const storeSubscription = async (
         next.referenceId.trim() !== "" &&
         (await hasOtherLiveSubscription(store, next.referenceId, next.provider, next.id))
     ) {
-        return "refused";
+        if (previous !== undefined && ENTITLING_STATES.has(previous.state)) {
+            return "refused";
+        }
+
+        // A new row is past due: the provider still bills it, and past due grants nothing. A stored row keeps its state.
+        const recorded: Subscription = { ...next, state: previous?.state ?? "past_due" };
+
+        return (await store.upsertSubscription(recorded, guard)) ? "refused" : "rejected";
     }
 
     return (await store.upsertSubscription(next, guard)) ? "written" : "rejected";

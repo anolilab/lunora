@@ -138,9 +138,10 @@ export interface CreatePaymentOptions {
 
     /**
      * Refuse a second subscription that grants access on one reference. Off by default: some apps sell several
-     * subscriptions per customer. When on, a write that would give a second subscription access is refused, and
-     * `subscription.duplicate` tells the operator to cancel it at the provider, which still bills it. A paused or
-     * past-due subscription grants nothing, so it does not count.
+     * subscriptions per customer. When on, a write that would give a second subscription access is refused. The
+     * refused subscription is recorded as past due, so it can be cancelled in the app, and `subscription.duplicate`
+     * tells the operator to cancel it at the provider, which still bills it. A paused or past-due subscription grants
+     * nothing, so it does not count.
      */
     readonly singleSubscriptionPerReference?: boolean;
     readonly store: PaymentStore;
@@ -421,14 +422,13 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 ifRevision: existing.revision,
             });
 
-            if (outcome === "rejected") {
-                return (await store.getSubscription(adapter.identifier, subscriptionId)) ?? existing;
-            }
-
             if (outcome === "refused") {
                 notifyObserver(options.observability, { provider: synced.provider, subscriptionId: synced.id, type: "subscription.duplicate" });
+            }
 
-                return existing;
+            // Anything not written returns what the store holds, so the caller sees the row the policy left.
+            if (outcome !== "written") {
+                return (await store.getSubscription(adapter.identifier, subscriptionId)) ?? existing;
             }
 
             return synced;

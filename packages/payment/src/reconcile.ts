@@ -28,8 +28,12 @@ interface ReconcileInput {
     /** Optional telemetry sink — fired per drifted row and once on completion. */
     readonly observability?: PaymentObserver;
     readonly paymentSessionIds?: ReadonlyArray<string>;
-    /** Refuse a second subscription that grants access on one reference; pass the same value as `createPayment`'s option. */
-    readonly singleSubscriptionPerReference?: boolean;
+
+    /**
+     * Refuse a second subscription that grants access on one reference. Required, so a sweep cannot re-grant access
+     * the policy refused: pass the same value as `createPayment`'s `singleSubscriptionPerReference`.
+     */
+    readonly singleSubscriptionPerReference: boolean;
     readonly store: PaymentStore;
     readonly subscriptionIds?: ReadonlyArray<string>;
 
@@ -362,7 +366,7 @@ const reconcile = async (input: ReconcileInput): Promise<ReconcileResult> => {
     const subscriptionCounts = await sweep(
         subscriptionIds,
         "subscription",
-        (id) => reconcileSubscription(adapter, store, id, observability, input.singleSubscriptionPerReference ?? false),
+        (id) => reconcileSubscription(adapter, store, id, observability, input.singleSubscriptionPerReference),
         adapter,
         observability,
     );

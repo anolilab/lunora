@@ -51,7 +51,8 @@ describe("reconcile", () => {
         await store.upsertSubscription({ ...subscription("past_due"), id: "sub_2" });
 
         const observer = vi.fn<PaymentObserver>();
-        await reconcile({ adapter: truthAdapter(), observability: observer, singleSubscriptionPerReference: true, store, subscriptionIds: ["sub_2"] });
+        const adapter = { ...truthAdapter(), getSubscriptionStatus: async () => {return { ...subscription("active"), id: "sub_2" }} } as PaymentAdapter;
+        await reconcile({ adapter, observability: observer, singleSubscriptionPerReference: true, store, subscriptionIds: ["sub_2"] });
 
         await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ state: "past_due" });
         expect(observer).toHaveBeenCalledWith({ provider: "stripe", subscriptionId: "sub_2", type: "subscription.duplicate" });
@@ -82,7 +83,7 @@ describe("reconcile", () => {
             return row;
         };
 
-        const result = await reconcile({ adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
 
         expect(result.updatedSubscriptions).toBe(0);
 
@@ -99,7 +100,7 @@ describe("reconcile", () => {
         // Store stuck on a stale state a missed cancellation→reactivation left behind.
         await store.upsertSubscription(subscription("past_due"));
 
-        const result = await reconcile({ adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
 
         expect(result).toEqual({
             checkedPayments: 0,
@@ -130,18 +131,27 @@ describe("reconcile", () => {
         // Same primary price, but the add-on is still on the row — and with it, its entitlement.
         await store.upsertSubscription({ ...truth, lastEventAt: 900, priceIds: ["price_1", "price_addon"] });
 
-        await expect(reconcile({ adapter, store, subscriptionIds: ["sub_1"] })).resolves.toMatchObject({ updatedSubscriptions: 1 });
+        await expect(reconcile({ singleSubscriptionPerReference: false, adapter, store, subscriptionIds: ["sub_1"] })).resolves.toMatchObject({
+            updatedSubscriptions: 1,
+        });
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 900, priceIds: ["price_1"] });
 
         await store.upsertSubscription({ ...truth, currentPeriodStart: 1000 });
 
-        await expect(reconcile({ adapter, store, subscriptionIds: ["sub_1"] })).resolves.toMatchObject({ updatedSubscriptions: 1 });
+        await expect(reconcile({ singleSubscriptionPerReference: false, adapter, store, subscriptionIds: ["sub_1"] })).resolves.toMatchObject({
+            updatedSubscriptions: 1,
+        });
 
         // An unknown set (`undefined`) is not drift.
         const unknownSet = { ...truth, priceIds: undefined };
 
         await expect(
-            reconcile({ adapter: { ...adapter, getSubscriptionStatus: async () => unknownSet }, store, subscriptionIds: ["sub_1"] }),
+            reconcile({
+                singleSubscriptionPerReference: false,
+                adapter: { ...adapter, getSubscriptionStatus: async () => unknownSet },
+                store,
+                subscriptionIds: ["sub_1"],
+            }),
         ).resolves.toMatchObject({ updatedSubscriptions: 0 });
     });
 
@@ -152,7 +162,7 @@ describe("reconcile", () => {
 
         await store.upsertSubscription(subscription("active"));
 
-        const result = await reconcile({ adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
 
         expect(result.updatedSubscriptions).toBe(0);
     });
@@ -162,7 +172,7 @@ describe("reconcile", () => {
 
         const store = new MemoryPaymentStore();
 
-        const result = await reconcile({ adapter: truthAdapter(), paymentSessionIds: ["pi_1"], store });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter: truthAdapter(), paymentSessionIds: ["pi_1"], store });
 
         expect(result).toEqual({
             checkedPayments: 1,
@@ -202,7 +212,7 @@ describe("reconcile", () => {
 
         // The provider snapshot reports captured / refunded 0 (a Stripe PaymentIntent stays `succeeded`
         // after a refund). Reconcile must preserve the refund rather than overwrite it back to captured.
-        const result = await reconcile({ adapter: truthAdapter(), paymentSessionIds: ["pi_1"], store });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter: truthAdapter(), paymentSessionIds: ["pi_1"], store });
 
         const session = await store.getPaymentSession("stripe", "pi_1");
 
@@ -246,7 +256,7 @@ describe("reconcile", () => {
             updatedAt: 100,
         });
 
-        const result = await reconcile({ adapter: blankReferenceAdapter, paymentSessionIds: ["pi_1"], store });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter: blankReferenceAdapter, paymentSessionIds: ["pi_1"], store });
 
         const session = await store.getPaymentSession("stripe", "pi_1");
 
@@ -277,6 +287,7 @@ describe("reconcile", () => {
 
         const result = await reconcile({
             adapter: flakyAdapter,
+            singleSubscriptionPerReference: false,
             observability: (event) => events.push(event),
             store,
             subscriptionIds: ["sub_boom", "sub_1"],
@@ -334,7 +345,7 @@ describe("reconcile", () => {
         };
         const ids = Array.from({ length: 20 }, (_, index) => `sub_${String(index)}`);
 
-        const result = await reconcile({ adapter, store: new MemoryPaymentStore(), subscriptionIds: ids });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, store: new MemoryPaymentStore(), subscriptionIds: ids });
 
         expect(peak).toBe(POOL);
         expect(result.updatedSubscriptions).toBe(20);
@@ -374,7 +385,7 @@ describe("reconcile", () => {
             },
         } as PaymentAdapter;
 
-        const result = await reconcile({ adapter, store, subscriptionIds: ["sub_1"] });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, store, subscriptionIds: ["sub_1"] });
 
         expect(calls).toEqual(["read", "adapter", "read"]);
         expect(upsert).not.toHaveBeenCalled();
@@ -423,7 +434,7 @@ describe("reconcile", () => {
             },
         };
 
-        const result = await reconcile({ adapter, paymentSessionIds: ["pay_1"], store });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, paymentSessionIds: ["pay_1"], store });
 
         expect(calls).toEqual(["read", "adapter", "read"]);
         expect(upsert).not.toHaveBeenCalled();
@@ -473,7 +484,7 @@ describe("reconcile", () => {
             reportedToProvider: false,
         });
 
-        const result = await reconcile({ adapter, store });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
 
         expect(reported).toStrictEqual([{ idempotencyKey: "evt_1", quantity: 5 }]);
         expect(result.updatedUsage).toBe(1);
@@ -516,7 +527,7 @@ describe("reconcile", () => {
             identifier: "polar",
         } as unknown as PaymentAdapter;
 
-        await reconcile({ adapter, paymentSessionIds: ["ord_1"], store });
+        await reconcile({ singleSubscriptionPerReference: false, adapter, paymentSessionIds: ["ord_1"], store });
 
         const merged = await store.getPaymentSession("polar", "ord_1");
 
@@ -553,7 +564,7 @@ describe("reconcile", () => {
             identifier: "polar",
         } as unknown as PaymentAdapter;
 
-        await reconcile({ adapter, paymentSessionIds: ["ord_1"], store });
+        await reconcile({ singleSubscriptionPerReference: false, adapter, paymentSessionIds: ["ord_1"], store });
 
         const merged = await store.getPaymentSession("polar", "ord_1");
 
@@ -580,7 +591,7 @@ describe("reconcile", () => {
             identifier: "creem",
         } as unknown as PaymentAdapter;
 
-        const result = await reconcile({ adapter, store, subscriptionIds: ["sub_1"] });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, store, subscriptionIds: ["sub_1"] });
 
         expect(result.updatedSubscriptions).toBe(1);
 
@@ -600,7 +611,7 @@ describe("reconcile", () => {
 
         await store.upsertSubscription({ ...subscription("past_due"), referenceId: "" });
 
-        await reconcile({ adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
+        await reconcile({ singleSubscriptionPerReference: false, adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
 
         await expect(store.getSubscription("stripe", "sub_1").then((row) => row?.referenceId)).resolves.toBe("user_1");
     });
@@ -632,7 +643,7 @@ describe("reconcile", () => {
             reportedToProvider: false,
         });
 
-        const result = await reconcile({ adapter, store });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
 
         expect(reported).toStrictEqual([]);
         expect(result.checkedUsage).toBe(0);
@@ -662,7 +673,7 @@ describe("reconcile", () => {
             reportedToProvider: false,
         });
 
-        const result = await reconcile({ adapter, store });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
 
         expect(result.failedUsage).toBe(1);
         await expect(store.listUnreportedUsage("stripe", 10)).resolves.toHaveLength(1);
@@ -705,7 +716,7 @@ describe("reconcile", () => {
         await record(2, "user_1");
         await record(3, "user_2");
 
-        const result = await reconcile({ adapter, store });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
 
         expect(lookup.mock.calls).toStrictEqual([
             ["stripe", "user_1"],
@@ -758,7 +769,7 @@ describe("reconcile", () => {
             reportedToProvider: false,
         });
 
-        await reconcile({ adapter, store });
+        await reconcile({ singleSubscriptionPerReference: false, adapter, store });
 
         expect(reported).toStrictEqual([undefined, "cus_new"]);
         await expect(store.listUnreportedUsage("stripe", 10)).resolves.toStrictEqual([]);
@@ -787,11 +798,11 @@ describe("reconcile", () => {
             reportedToProvider: false,
         });
 
-        const first = await reconcile({ adapter, store });
+        const first = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
 
         expect(first.failedUsage).toBe(1);
 
-        const second = await reconcile({ adapter, store });
+        const second = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
 
         expect(second.updatedUsage).toBe(1);
         expect(lookup).toHaveBeenCalledTimes(2);

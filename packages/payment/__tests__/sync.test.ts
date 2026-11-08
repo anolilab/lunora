@@ -72,8 +72,9 @@ describe("applyWebhookAction", () => {
         await applyWebhookAction(store, live, observer, true);
 
         await expect(applyWebhookAction(store, second, observer, true)).resolves.toEqual({ applied: false, reason: "duplicate_subscription" });
-        await expect(store.getSubscription("creem", "sub_2")).resolves.toBeUndefined();
-        await expect(store.listSubscriptionsByReference("org_1")).resolves.toHaveLength(1);
+        await expect(store.getSubscription("creem", "sub_2")).resolves.toMatchObject({ referenceId: "org_1", state: "past_due" });
+        // The refusal is recorded as past due, so the operator and the customer can both see it; access stays with sub_1.
+        await expect(store.listSubscriptionsByReference("org_1")).resolves.toHaveLength(2);
         expect(observer).toHaveBeenCalledWith({ provider: "creem", subscriptionId: "sub_2", type: "subscription.duplicate" });
     });
 
@@ -101,7 +102,7 @@ describe("applyWebhookAction", () => {
         await applyWebhookAction(store, live, undefined, true);
 
         await expect(applyWebhookAction(store, sameIdElsewhere, undefined, true)).resolves.toEqual({ applied: false, reason: "duplicate_subscription" });
-        await expect(store.getSubscription("stripe", "sub_1")).resolves.toBeUndefined();
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ provider: "stripe", state: "past_due" });
     });
 
     it("stores a cancellation that arrives first on a reference without reporting a duplicate", async () => {

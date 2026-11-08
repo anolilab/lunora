@@ -574,6 +574,26 @@ describe("createPayment", () => {
         expect(observer).toHaveBeenCalledWith({ provider: "stripe", subscriptionId: "sub_blank", type: "subscription.duplicate" });
     });
 
+    it("lets the customer cancel a subscription the policy refused, because the refusal is recorded", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), id: "sub_live" });
+        await applyWebhookAction(
+            store,
+            { eventId: "e1", priceId: "prod_team", provider: "stripe", referenceId: "user_1", subscriptionId: "sub_2", type: "subscription.active" },
+            undefined,
+            true,
+        );
+
+        const adapter = fakeAdapter({ cancelSubscription: async (id) => {return { ...subscription("user_1", "canceled"), id }} });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", singleSubscriptionPerReference: true, store });
+
+        await expect(payment.cancelSubscription("sub_2")).resolves.toMatchObject({ id: "sub_2", state: "canceled" });
+        await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ state: "canceled" });
+    });
+
     it("keeps the stored subscription's referenceId when the cancel response doesn't echo it", async () => {
         expect.assertions(3);
 
