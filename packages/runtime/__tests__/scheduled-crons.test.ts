@@ -345,6 +345,6 @@ describe("createWorker — `authorizeShard` gates callers, never system dispatch
 
         expect(response.status).toBe(200);
         expect(shard.calls).toHaveLength(1);
-        expect(requireSignedInUser).toHaveBeenCalledWith({ identity: { userId: "user_42" }, shardKey: "tenant-7" });
+        expect(requireSignedInUser).toHaveBeenCalledWith({ functionPath: "presence:list", identity: { userId: "user_42" }, shardKey: "tenant-7" });
     });
 });

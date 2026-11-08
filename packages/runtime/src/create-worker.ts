@@ -241,6 +241,7 @@ interface SchedulerRunOptions {
         maxAttempts?: number;
         maxMs?: number;
     };
+    shardKey?: string;
 }
 
 /**
@@ -966,6 +967,13 @@ interface NotifySubscriptionFilter {
  * unauthenticated end user.
  */
 interface ShardCaller {
+    /**
+     * The function being called, where the transport names one: the RPC envelope
+     * (single, batch, REST, `serverQuery`), the scheduler's target and a `ctx.run*`
+     * on a named shard. Unset on a path that names none (a WebSocket upgrade, a live
+     * publish, `fetchShard`), so a gate keyed on it must refuse those callers.
+     */
+    functionPath?: string;
     /** The identity `resolveIdentity` produced for this request, or `null` when the caller is unauthenticated. */
     identity: ResolvedIdentity | null;
     /** The shard the caller named (the default shard when the request named none). */
@@ -3594,7 +3602,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * end user and denies. The reserved-name refusal below is NOT skipped: an
      * admin credential does not make `foo::relay::0` a well-formed shard key.
      */
-    const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string, isAdmin = false): Promise<void> => {
+    const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string, isAdmin = false, functionPath?: string): Promise<void> => {
         // `::relay::` / `::replica::` are RESERVED: only the runtime mints those
         // names, and a DO reads its own name to learn its role. A client-supplied
         // key carrying either infix therefore addresses a DO that believes it is
@@ -3611,7 +3619,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         if (options.authorizeShard) {
-            const allowed = await grants(options.authorizeShard({ identity, shardKey }));
+            const allowed = await grants(options.authorizeShard({ functionPath, identity, shardKey }));
 
             if (!allowed) {
                 throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
@@ -4648,7 +4656,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * the dispatch — and answers `ORIGIN_NOT_CONFIGURED` when it is unset. So
      * nothing origin-shaped is sent from here.
      */
-    const buildHttpScheduler = (namespace: ShardNamespaceLike): SchedulerContext => {
+    const buildHttpScheduler = (namespace: ShardNamespaceLike, identity: ResolvedIdentity | null): SchedulerContext => {
         /** Undo `schedule`'s encode on a record read back out of the DO — the mirror of `@lunora/scheduler`'s `decodeRecordArgs`. Identity for pure-JSON args. */
         const decodeRecordArgs = (record: Record<string, unknown>): Record<string, unknown> =>
             "args" in record ? { ...record, args: decodeWire(record["args"]) } : record;
@@ -4739,6 +4747,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         ): Promise<string> => {
             const fields = targetFields(target);
 
+            // The record names the shard its job runs on, and the dispatch that fires it trusts
+            // the record's HMAC rather than a caller, so the tenant check has to run here, while
+            // the caller's identity is still known. The gate also gets the job's function, so a
+            // policy that admits a shard only for a named function sees the function being scheduled.
+            const jobShardKey = runOptions?.shardKey;
+
+            if (jobShardKey !== undefined && jobShardKey.length > 0 && jobShardKey !== defaultShard) {
+                const jobFunctionPath = typeof fields["functionPath"] === "string" ? fields["functionPath"] : undefined;
+
+                await assertShardAuthorized(identity, jobShardKey, false, jobFunctionPath);
+            }
+
             const { id } = await post<{ id: string }>("/schedule", {
                 args: encodeArgsOrThrow("ctx.scheduler", String(fields["functionPath"] ?? fields["workflow"]), args),
                 // Whole milliseconds, rounded up: the SchedulerDO refuses a
@@ -4747,6 +4767,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 scheduledFor: Math.ceil(scheduledFor),
                 // The SchedulerDO sanitizes the policy (`normalizeRetry`), so it is forwarded as given.
                 retry: runOptions?.retry,
+                shardKey: runOptions?.shardKey,
                 ...fields,
             });
 
@@ -4829,7 +4850,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // built from a client-supplied `shardKey`. The default shard is the app's
                 // own and is not gated.
                 if (shardKey !== defaultShard) {
-                    await assertShardAuthorized(identity, shardKey);
+                    await assertShardAuthorized(identity, shardKey, false, functionPath);
                 }
 
                 // Through the SAME dispatcher the `/_lunora/rpc` and `serverQuery` paths
@@ -4950,7 +4971,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             runAction: run,
             runMutation: run,
             runQuery: run,
-            ...(schedulerDO === undefined ? {} : { scheduler: buildHttpScheduler(schedulerDO) }),
+            ...(schedulerDO === undefined ? {} : { scheduler: buildHttpScheduler(schedulerDO, identity) }),
             // Bound to the execution context so a handler — or a wrapper reading
             // it structurally, e.g. `@lunora/x402`'s `withX402` receipt sink —
             // can outlive the response. Omitted entirely when the host supplied
@@ -5457,7 +5478,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // No per-shard gate and the caller named a non-default shard:
         // default-denied unless unauthenticated shard access is opted in.
-        await assertShardAuthorized(identity, envelope.shardKey ?? defaultShard);
+        await assertShardAuthorized(identity, envelope.shardKey ?? defaultShard, false, envelope.functionPath);
     };
 
     /**

@@ -2319,6 +2319,7 @@ interface RunQueryOptions {
 ```ts
 interface ScheduleRunOptions {
     retry?: RetryPolicy;
+    shardKey?: string;
 }
 ```
 

@@ -1,0 +1,16 @@
+{
+    "name": "lunora-bench",
+    "tags": ["type:app", "category:bench"],
+    "targets": {
+        "lint:eslint": {
+            "cache": true,
+            "inputs": ["default", "{workspaceRoot}/eslint.config.js"],
+            "command": "eslint . --max-warnings=0"
+        },
+        "lint:eslint:fix": {
+            "cache": true,
+            "inputs": ["default", "{workspaceRoot}/eslint.config.js"],
+            "command": "eslint . --fix"
+        }
+    }
+}
