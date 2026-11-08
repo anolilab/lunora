@@ -18,6 +18,7 @@ import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription } from "./store";
+import type { SubscriptionWrite } from "./subscription-policy";
 import { storeSubscription } from "./subscription-policy";
 import applyWebhookAction from "./sync";
 import type {
@@ -56,6 +57,37 @@ import { readWebhookBody } from "./webhook-body";
  * they cannot BOTH apply, which absolute markers guarantee.
  */
 let lastUsageStamp = 0;
+
+/** How many times a cancel answer is recorded over a row that keeps moving under it before it is given up. */
+const CANCEL_RECORD_ATTEMPTS = 3;
+
+/**
+ * Record the provider's cancel answer over `current`, the row as it stands now. The lifecycle state of a row a webhook
+ * moved stands, and the cancellation is recorded on top of it. A write that loses a race re-reads the row and tries again.
+ */
+const recordCancelAnswer = async (
+    store: PaymentStore,
+    policy: boolean,
+    synced: Subscription,
+    current: Subscription,
+    attempts: number,
+): Promise<SubscriptionWrite> => {
+    const merged: Subscription = {
+        ...current,
+        cancelAtPeriodEnd: synced.cancelAtPeriodEnd,
+        state: synced.state === "canceled" ? "canceled" : current.state,
+        updatedAt: Date.now(),
+    };
+    const outcome = await storeSubscription(store, policy, current, merged, { ifRevision: current.revision });
+
+    if (outcome !== "rejected" || attempts <= 1) {
+        return outcome;
+    }
+
+    const latest = (await store.getSubscription(current.provider, current.id)) ?? current;
+
+    return recordCancelAnswer(store, policy, synced, latest, attempts - 1);
+};
 
 const nextUsageStamp = (): number => {
     const now = Date.now();
@@ -424,14 +456,8 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             if (outcome === "rejected") {
                 const current = (await store.getSubscription(adapter.identifier, subscriptionId)) ?? existing;
-                const merged: Subscription = {
-                    ...current,
-                    cancelAtPeriodEnd: synced.cancelAtPeriodEnd,
-                    state: synced.state === "canceled" ? "canceled" : current.state,
-                    updatedAt: Date.now(),
-                };
 
-                outcome = await storeSubscription(store, policy, current, merged, { ifRevision: current.revision });
+                outcome = await recordCancelAnswer(store, policy, synced, current, CANCEL_RECORD_ATTEMPTS);
             }
 
             if (outcome === "refused") {

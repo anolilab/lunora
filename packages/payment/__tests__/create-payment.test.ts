@@ -7,6 +7,7 @@ import { LunoraPaymentError } from "../src/errors";
 import { derivedIdempotencyKey } from "../src/idempotency";
 import { money } from "../src/money";
 import type { PaymentObserver } from "../src/observability";
+import type { PaymentStore, RevisionGuard } from "../src/store";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
 import type { CheckoutRequest, PaymentSession, Subscription, WebhookAction } from "../src/types";
@@ -617,6 +618,34 @@ describe("createPayment", () => {
 
         await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "canceled" });
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ priceId: "price_renewed", state: "canceled" });
+    });
+
+    it("keeps a cancel when the row moves again while the cancel is being recorded", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // The first three guarded writes lose a race with other writers, then the row settles.
+        let losses = 3;
+        const racing = Object.assign(Object.create(store) as object, {
+            upsertSubscription: (record: Subscription, guard?: RevisionGuard) => {
+                if (guard !== undefined && losses > 0) {
+                    losses -= 1;
+
+                    return Promise.resolve(false);
+                }
+
+                return store.upsertSubscription(record, guard);
+            },
+        }) as PaymentStore;
+
+        const adapter = fakeAdapter({ cancelSubscription: async (id) => {return { ...subscription("user_1", "canceled"), id }} });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: racing });
+
+        await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "canceled" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
     });
 
     it("keeps the stored subscription's referenceId when the cancel response doesn't echo it", async () => {
