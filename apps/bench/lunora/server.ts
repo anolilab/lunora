@@ -270,7 +270,7 @@ const app = defineApp<Env>()
                     referenceId: "referenceId" in event ? event.referenceId : undefined,
                     type: event.type,
                     // The one event whose subject is a subscription with no reference to fall back on: the id is how an operator finds it.
-                    ...(event.type === "subscription.duplicate" ? { subscriptionId: event.subscriptionId } : {}),
+                    ...(event.type === "subscription.duplicate" || event.type === "subscription.past_due" ? { subscriptionId: event.subscriptionId } : {}),
                 };
 
                 if (PAYMENT_FAILURE_EVENTS.has(event.type)) {
