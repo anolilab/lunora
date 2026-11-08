@@ -50,7 +50,12 @@ describe("reconcile", () => {
         await store.upsertSubscription({ ...subscription("past_due"), id: "sub_2" });
 
         const observer = vi.fn<PaymentObserver>();
-        const adapter = { ...truthAdapter(), getSubscriptionStatus: async () => {return { ...subscription("active"), id: "sub_2" }} } as PaymentAdapter;
+        const adapter = {
+            ...truthAdapter(),
+            getSubscriptionStatus: async () => {
+                return { ...subscription("active"), id: "sub_2" };
+            },
+        } as PaymentAdapter;
         const result = await reconcile({ adapter, observability: observer, singleSubscriptionPerReference: true, store, subscriptionIds: ["sub_2"] });
 
         expect(result.updatedSubscriptions).toBe(1);
