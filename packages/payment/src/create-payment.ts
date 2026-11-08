@@ -63,7 +63,9 @@ const CANCEL_RECORD_ATTEMPTS = 3;
 
 /**
  * Record the provider's cancel answer over `current`, the row as it stands now. The lifecycle state of a row a webhook
- * moved stands, and the cancellation is recorded on top of it. A write that loses a race re-reads the row and tries again.
+ * moved stands, and the cancellation is recorded on top of it. A guarded write that loses a race re-reads the row and
+ * tries again. The last attempt is unguarded, so a cancel the provider accepted is never dropped: it lands on the
+ * freshest row read just before it.
  */
 const recordCancelAnswer = async (
     store: PaymentStore,
@@ -78,7 +80,7 @@ const recordCancelAnswer = async (
         state: synced.state === "canceled" ? "canceled" : current.state,
         updatedAt: Date.now(),
     };
-    const outcome = await storeSubscription(store, policy, current, merged, { ifRevision: current.revision });
+    const outcome = await storeSubscription(store, policy, current, merged, attempts > 1 ? { ifRevision: current.revision } : undefined);
 
     if (outcome !== "rejected" || attempts <= 1) {
         return outcome;

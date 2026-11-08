@@ -652,6 +652,32 @@ describe("createPayment", () => {
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
     });
 
+    it("still records a cancel when the row moves through every guarded attempt", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // Every guarded write loses a race; only the final, unguarded attempt lands.
+        const racing = Object.assign(Object.create(store) as object, {
+            upsertSubscription: (record: Subscription, guard?: RevisionGuard) => {
+                if (guard !== undefined) {
+                    return Promise.resolve(false);
+                }
+
+                return store.upsertSubscription(record, guard);
+            },
+        }) as PaymentStore;
+
+        const adapter = fakeAdapter({ cancelSubscription: async (id) => {return { ...subscription("user_1", "canceled"), id }} });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: racing });
+
+        await payment.cancelSubscription("sub_1");
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
+    });
+
     it("keeps the stored subscription's referenceId when the cancel response doesn't echo it", async () => {
         expect.assertions(3);
 
