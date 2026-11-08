@@ -58,14 +58,14 @@ import { readWebhookBody } from "./webhook-body";
  */
 let lastUsageStamp = 0;
 
-/** How many times a cancel answer is recorded over a row that keeps moving under it before it is given up. */
+/** How many guarded writes record a cancel answer over a row that keeps moving under it, before the conflict is raised. */
 const CANCEL_RECORD_ATTEMPTS = 3;
 
 /**
  * Record the provider's cancel answer over `current`, the row as it stands now. The lifecycle state of a row a webhook
- * moved stands, and the cancellation is recorded on top of it. A guarded write that loses a race re-reads the row and
- * tries again. The last attempt is unguarded, so a cancel the provider accepted is never dropped: it lands on the
- * freshest row read just before it.
+ * moved stands, and the cancellation is recorded on top of it. Every write is guarded, so no webhook's state is ever
+ * overwritten. A write that loses a race re-reads the row and tries again; when every attempt loses, the conflict is
+ * raised rather than the cancel dropped silently. Reconciliation then records the provider's state for that row.
  */
 const recordCancelAnswer = async (
     store: PaymentStore,
@@ -80,10 +80,17 @@ const recordCancelAnswer = async (
         state: synced.state === "canceled" ? "canceled" : current.state,
         updatedAt: Date.now(),
     };
-    const outcome = await storeSubscription(store, policy, current, merged, attempts > 1 ? { ifRevision: current.revision } : undefined);
+    const outcome = await storeSubscription(store, policy, current, merged, { ifRevision: current.revision });
 
-    if (outcome !== "rejected" || attempts <= 1) {
+    if (outcome !== "rejected") {
         return outcome;
+    }
+
+    if (attempts <= 1) {
+        throw new LunoraPaymentError(
+            "INVALID_TRANSITION",
+            "the subscription changed while it was being cancelled; the provider has accepted the cancel, so reconcile this subscription",
+        );
     }
 
     const latest = (await store.getSubscription(current.provider, current.id)) ?? current;
@@ -173,7 +180,7 @@ export interface CreatePaymentOptions {
     /**
      * Refuse a second subscription that grants access on one reference. Off by default: some apps sell several
      * subscriptions per customer. When on, a write that would give a second subscription access is refused. The
-     * refused subscription is recorded as paused, so it can be cancelled in the app, and `subscription.duplicate`
+     * refused subscription is recorded in a non-granting state, so it can be cancelled in the app, and `subscription.duplicate`
      * tells the operator to cancel it at the provider, which still bills it. A paused or past-due subscription grants
      * nothing, so it does not count.
      */

@@ -47,18 +47,18 @@ const storeSubscription = async (
         next.referenceId.trim() !== "" &&
         (await hasOtherLiveSubscription(store, next.referenceId, next.provider, next.id))
     ) {
-        if (previous !== undefined && ENTITLING_STATES.has(previous.state)) {
-            // The row already grants access under its own owner. The owner change is refused; the rest of the update applies.
+        if (previous !== undefined && ENTITLING_STATES.has(previous.state) && previous.referenceId.trim() !== "") {
+            // The row already grants access under a real owner. That owner stays; the rest of the update applies.
             const kept: Subscription = { ...next, referenceId: previous.referenceId };
 
             return (await store.upsertSubscription(kept, guard)) ? "refused" : "rejected";
         }
 
-        // The provider still bills a refused subscription, but it must grant nothing and must stay cancellable. A stored
-        // row keeps its state, except a canceled one, which would stop the customer cancelling. A new row is paused, not
-        // past due: past due is a paid tier to consumers that treat it as one, and paused is not.
-        const recordedState = previous !== undefined && previous.state !== "canceled" ? previous.state : "paused";
-        const recorded: Subscription = { ...next, state: recordedState };
+        // The provider still bills a refused subscription, but it must grant nothing and must stay cancellable under the
+        // owner it asked for. A stored row that grants nothing keeps its state, except a canceled one, which would stop the
+        // customer cancelling. Everything else is recorded as paused: past due is a paid tier to consumers that treat it as one.
+        const keepsState = previous !== undefined && !ENTITLING_STATES.has(previous.state) && previous.state !== "canceled";
+        const recorded: Subscription = { ...next, state: keepsState ? previous.state : "paused" };
 
         return (await store.upsertSubscription(recorded, guard)) ? "refused" : "rejected";
     }

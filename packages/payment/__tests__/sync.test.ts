@@ -176,9 +176,10 @@ describe("applyWebhookAction", () => {
         await applyWebhookAction(store, blankOwner, observer, true);
         await applyWebhookAction(store, capture, observer, true);
 
-        await expect(store.getSubscription("creem", "sub_2")).resolves.toMatchObject({ referenceId: "" });
+        // The refused adoption is recorded under the owner the capture named, paused: it grants nothing.
+        await expect(store.getSubscription("creem", "sub_2")).resolves.toMatchObject({ referenceId: "org_1", state: "paused" });
         expect(observer).toHaveBeenCalledWith({ provider: "creem", subscriptionId: "sub_2", type: "subscription.duplicate" });
-        await expect(store.listSubscriptionsByReference("org_1")).resolves.toHaveLength(1);
+        await expect(store.listSubscriptionsByReference("org_1")).resolves.toHaveLength(2);
     });
 
     it("does not let a paused subscription block a second one that grants access", async () => {
@@ -250,7 +251,7 @@ describe("applyWebhookAction", () => {
         } as const;
 
         await expect(applyWebhookAction(store, update, undefined, true)).resolves.toEqual({ applied: false, reason: "duplicate_subscription" });
-        await expect(store.getSubscription("creem", "sub_2")).resolves.toMatchObject({ quantity: 5, referenceId: "" });
+        await expect(store.getSubscription("creem", "sub_2")).resolves.toMatchObject({ quantity: 5, referenceId: "org_1", state: "paused" });
     });
 
     it("keeps a second subscription on one reference when the policy is off, as before", async () => {

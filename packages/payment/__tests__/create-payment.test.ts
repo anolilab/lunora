@@ -570,8 +570,9 @@ describe("createPayment", () => {
 
         await payment.cancelSubscription("sub_blank");
 
-        await expect(store.getSubscription("stripe", "sub_blank")).resolves.toMatchObject({ referenceId: "" });
-        await expect(store.listSubscriptionsByReference("user_1")).resolves.toHaveLength(1);
+        // Recorded under the owner the provider named, as paused: it grants nothing, and the customer can still cancel it.
+        await expect(store.getSubscription("stripe", "sub_blank")).resolves.toMatchObject({ referenceId: "user_1", state: "paused" });
+        await expect(store.listSubscriptionsByReference("user_1")).resolves.toHaveLength(2);
         expect(observer).toHaveBeenCalledWith({ provider: "stripe", subscriptionId: "sub_blank", type: "subscription.duplicate" });
     });
 
@@ -652,14 +653,14 @@ describe("createPayment", () => {
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
     });
 
-    it("still records a cancel when the row moves through every guarded attempt", async () => {
-        expect.assertions(1);
+    it("raises a conflict rather than dropping a cancel when the row moves through every guarded attempt", async () => {
+        expect.assertions(2);
 
         const store = new MemoryPaymentStore();
 
         await store.upsertSubscription(subscription("user_1", "active"));
 
-        // Every guarded write loses a race; only the final, unguarded attempt lands.
+        // Every guarded write loses a race, so the cancel cannot be recorded.
         const racing = Object.assign(Object.create(store) as object, {
             upsertSubscription: (record: Subscription, guard?: RevisionGuard) => {
                 if (guard !== undefined) {
@@ -670,12 +671,15 @@ describe("createPayment", () => {
             },
         }) as PaymentStore;
 
-        const adapter = fakeAdapter({ cancelSubscription: async (id) => {return { ...subscription("user_1", "canceled"), id }} });
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                return { ...subscription("user_1", "canceled"), id };
+            },
+        });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: racing });
 
-        await payment.cancelSubscription("sub_1");
-
-        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
+        await expect(payment.cancelSubscription("sub_1")).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
     });
 
     it("keeps the stored subscription's referenceId when the cancel response doesn't echo it", async () => {
