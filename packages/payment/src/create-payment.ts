@@ -416,22 +416,30 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             const synced = overlayProviderSubscription(existing, await adapter.cancelSubscription(subscriptionId, { ...cancelOptions, idempotencyKey: key }));
 
             // The provider's answer goes through the policy, so a second live subscription is refused rather than
-            // granted. The write is guarded by the revision read before the call: a webhook that landed meanwhile is
-            // newer than this answer, so it stands and is returned.
-            const outcome = await storeSubscription(store, options.singleSubscriptionPerReference ?? false, existing, synced, {
-                ifRevision: existing.revision,
-            });
+            // granted. It is guarded by the revision read before the call. If a webhook landed during the call, that
+            // webhook's lifecycle state stands, and the cancellation itself is recorded on top of it: a cancel is never
+            // dropped because the row moved.
+            const policy = options.singleSubscriptionPerReference ?? false;
+            let outcome = await storeSubscription(store, policy, existing, synced, { ifRevision: existing.revision });
+
+            if (outcome === "rejected") {
+                const current = (await store.getSubscription(adapter.identifier, subscriptionId)) ?? existing;
+                const merged: Subscription = {
+                    ...current,
+                    cancelAtPeriodEnd: synced.cancelAtPeriodEnd,
+                    state: synced.state === "canceled" ? "canceled" : current.state,
+                    updatedAt: Date.now(),
+                };
+
+                outcome = await storeSubscription(store, policy, current, merged, { ifRevision: current.revision });
+            }
 
             if (outcome === "refused") {
                 notifyObserver(options.observability, { provider: synced.provider, subscriptionId: synced.id, type: "subscription.duplicate" });
             }
 
-            // Anything not written returns what the store holds, so the caller sees the row the policy left.
-            if (outcome !== "written") {
-                return (await store.getSubscription(adapter.identifier, subscriptionId)) ?? existing;
-            }
-
-            return synced;
+            // Whatever the store now holds is what the caller gets, so a refused or merged cancel is reported as stored.
+            return (await store.getSubscription(adapter.identifier, subscriptionId)) ?? synced;
         },
 
         capturePayment: async (input) => {

@@ -48,7 +48,10 @@ const storeSubscription = async (
         (await hasOtherLiveSubscription(store, next.referenceId, next.provider, next.id))
     ) {
         if (previous !== undefined && ENTITLING_STATES.has(previous.state)) {
-            return "refused";
+            // The row already grants access under its own owner. The owner change is refused; the rest of the update applies.
+            const kept: Subscription = { ...next, referenceId: previous.referenceId };
+
+            return (await store.upsertSubscription(kept, guard)) ? "refused" : "rejected";
         }
 
         // A new row is past due: the provider still bills it, and past due grants nothing. A stored row keeps its state.

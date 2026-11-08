@@ -598,6 +598,27 @@ describe("createPayment", () => {
         await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ state: "canceled" });
     });
 
+    it("records a cancel even when a non-newer webhook moves the row during the provider call", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // A renewal webhook lands during the call. It is not newer than the cancel, but it moves the row.
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                await store.upsertSubscription({ ...subscription("user_1", "active"), id, priceId: "price_renewed" });
+
+                return { ...subscription("user_1", "canceled"), id };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "canceled" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ priceId: "price_renewed", state: "canceled" });
+    });
+
     it("keeps the stored subscription's referenceId when the cancel response doesn't echo it", async () => {
         expect.assertions(3);
 
