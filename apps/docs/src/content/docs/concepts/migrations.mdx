@@ -279,6 +279,13 @@ file already runs as one batch. `lunora deploy --migrate` runs `apply` before th
 data migrations, so a deploy applies its SQL with the rest. Any other deploy tool
 can call the same command as a step before its deploy.
 
+Who may run `apply` is set by the token. The root admin token runs any file. A
+named token minted with `lunora admin-token create <name> --scope migrations` runs
+only additive statements: `CREATE TABLE`, `CREATE INDEX` and `ADD COLUMN`. A file
+with any other statement, such as a `DROP`, an `UPDATE` or a trigger, is refused
+before anything in the run executes, and the refusal says which token it needs.
+A dry run shows which statements those are.
+
 **Upgrading an existing project.** Files committed before `migrate apply` existed were never recorded, so the first run would treat every one of them as pending. A file that drops a table could then run again over rows written since it last ran. Record the files that already ran on each environment, without running them, before its first `deploy --migrate`:
 
 ```bash
@@ -299,8 +306,14 @@ stage first, then record it:
 
 ```bash
 wrangler d1 execute <database-name> --remote --file lunora/migrations/<file>.sql
-lunora migrate apply --baseline --url https://your-worker.example.workers.dev --yes
+lunora migrate apply --baseline-through <file>.sql --url https://your-worker.example.workers.dev --yes
 ```
+
+Name the file you ran by hand, so `--baseline-through` records it and nothing
+after it. A later file on the same stage stays pending, and a normal
+`lunora migrate apply --url … --yes` runs it. Plain `--baseline` would record
+every pending file as applied, later ones included, so a later file would never
+run.
 
 Run it by hand before the baseline, never after or instead of it: a recorded file
 is never executed, so a baseline of a DROP that has not run leaves the table in

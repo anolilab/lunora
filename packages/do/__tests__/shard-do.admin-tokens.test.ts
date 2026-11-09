@@ -104,6 +104,26 @@ describe("shardDO named admin tokens", () => {
         database.close();
     });
 
+    it("stores a token's scopes, returns them on verify and list, and refuses a scope it does not know", async () => {
+        expect.assertions(4);
+
+        const refused = await shard.fetch(asRoot(ADMIN_FUNCTIONS.createAdminToken, { digest: DIGEST, name: "ci", scopes: ["everything"] }));
+
+        expect(refused.status).toBe(400);
+
+        const created = await shard.fetch(asRoot(ADMIN_FUNCTIONS.createAdminToken, { digest: DIGEST, name: "ci", scopes: ["migrations"] }));
+
+        expect(created.status).toBe(200);
+
+        const verified = await shard.fetch(asRoot(ADMIN_FUNCTIONS.verifyAdminToken, { digest: DIGEST, name: "ci" }));
+
+        await expect(verified.json()).resolves.toMatchObject({ result: { ok: true, scopes: ["migrations"] } });
+
+        const listed = await shard.fetch(asRoot(ADMIN_FUNCTIONS.listAdminTokens, {}));
+
+        await expect(listed.json()).resolves.toMatchObject({ result: { tokens: [{ name: "ci", scopes: ["migrations"] }] } });
+    });
+
     it("stores a digest the root token can verify, and lists it without the digest", async () => {
         expect.assertions(4);
 
@@ -114,7 +134,7 @@ describe("shardDO named admin tokens", () => {
         const good = await shard.fetch(asRoot(ADMIN_FUNCTIONS.verifyAdminToken, { digest: DIGEST, name: "ci" }));
         const bad = await shard.fetch(asRoot(ADMIN_FUNCTIONS.verifyAdminToken, { digest: "e".repeat(64), name: "ci" }));
 
-        await expect(good.json()).resolves.toStrictEqual({ result: { createdAt: expect.any(Number), ok: true } });
+        await expect(good.json()).resolves.toStrictEqual({ result: { createdAt: expect.any(Number), ok: true, scopes: [] } });
         await expect(bad.json()).resolves.toStrictEqual({ result: { known: true, ok: false } });
 
         const listed = await shard.fetch(asRoot(ADMIN_FUNCTIONS.listAdminTokens));

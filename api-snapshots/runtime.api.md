@@ -47,6 +47,7 @@ interface AdminTokenSummary {
     lastUsedAt?: number;
     name: string;
     revoked?: boolean;
+    scopes: AdminTokenScope[];
 }
 ```
 
@@ -2862,6 +2863,20 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
+### `ADMIN_TOKEN_SCOPES` (const)
+
+```ts
+const ADMIN_TOKEN_SCOPES: readonly [
+    "migrations"
+];
+```
+
+### `AdminTokenScope` (type)
+
+```ts
+type AdminTokenScope = (typeof ADMIN_TOKEN_SCOPES)[number];
+```
+
 ### `AiOptInLevel` (type)
 
 ```ts
@@ -3434,6 +3449,7 @@ type SqlMigrationApplier = (request: SqlMigrationApplyRequest) => Promise<SqlMig
 
 ```ts
 interface SqlMigrationApplyRequest {
+    additiveOnly: boolean;
     baseline: boolean;
     baselineThrough?: string;
     confirmDestructive: boolean;
@@ -3449,10 +3465,12 @@ interface SqlMigrationApplyResult {
     files: ReadonlyArray<{
         destructive: ReadonlyArray<string>;
         name: string;
+        rootOnly: ReadonlyArray<string>;
         skipped: ReadonlyArray<string>;
         state: "applied" | "baselined" | "changed" | "pending" | "ran";
         statements: ReadonlyArray<string>;
     }>;
+    refused?: ReadonlyArray<string>;
 }
 ```
 

@@ -27,6 +27,8 @@ const FILE_STATES: ReadonlySet<string> = new Set<MigrateSqlFileState>(["applied"
 interface MigrateSqlFilePlan {
     destructive: string[];
     name: string;
+    /** Statements a migrations-scoped token may not run. Absent from a reply that predates the scope. */
+    rootOnly?: string[];
     skipped: string[];
     state: MigrateSqlFileState;
     statements: string[];
@@ -86,6 +88,10 @@ const logSqlFilePlan = (logger: Logger, file: MigrateSqlFilePlan, dryRun: boolea
         for (const statement of file.statements) {
             logger.info(`    ${statement.split("\n").join("\n    ")}`);
         }
+    }
+
+    if ((file.rootOnly?.length ?? 0) > 0 && file.state === "pending") {
+        logger.warn(`${file.name} runs statements a migrations-scoped token may not run; it needs the root admin token.`);
     }
 
     if (file.destructive.length > 0 && file.state === "pending") {
@@ -177,6 +183,13 @@ const isFilePlan = (value: unknown): value is MigrateSqlFilePlan => {
  * once, with the fields the CLI reads. A 200 is not proof the worker ran anything: a proxy or an SPA fallback can
  * answer any path with a success, and a name-only entry would fail later in logging.
  */
+/** The files a dry run says a real run would refuse. A reply without the list, from a worker that predates it, reads as none. */
+const refusedFromReply = (body: unknown): string[] => {
+    const refused: unknown = (body as { refused?: unknown } | null | undefined)?.refused;
+
+    return Array.isArray(refused) && refused.every((name) => typeof name === "string") ? refused : [];
+};
+
 const plansFromReply = (body: unknown, files: ReadonlyArray<{ name: string }>): MigrateSqlFilePlan[] | undefined => {
     const reported: unknown = (body as { files?: unknown } | null | undefined)?.files;
 
@@ -255,11 +268,19 @@ const replyRefusal = (
         return { code: 0, files: [] };
     }
 
-    // A named admin token may not run SQL: the files can rewrite auth rows. Say so rather than print the raw refusal.
-    if (replyErrorCode(body) === "ADMIN_ROOT_REQUIRED") {
+    // Refusals the worker names, said in terms of the fix rather than the raw reply.
+    if (replyErrorCode(body) === "ADMIN_SCOPE_REQUIRED") {
         return refuse(
             logger,
-            `${target.baseUrl} accepts migrate apply only from the root admin token; a named admin token cannot run SQL migrations`,
+            `${target.baseUrl} refused migrate apply: this token has no migrations scope. Mint one with \`lunora admin-token create <name> --scope migrations\` and pass it as --token.`,
+            exitCodeForStatus(response.status),
+        );
+    }
+
+    if (replyErrorCode(body) === "MIGRATION_ROOT_REQUIRED") {
+        return refuse(
+            logger,
+            `${target.baseUrl} refused migrate apply: a file runs statements that a migrations-scoped token may not run (a DROP, a row write or a trigger). Run it with the root admin token; the dry run lists the statements.`,
             exitCodeForStatus(response.status),
         );
     }
@@ -286,16 +307,25 @@ const replyRefusal = (
 const unfinishedRun = (
     plans: ReadonlyArray<MigrateSqlFilePlan>,
     files: ReadonlyArray<{ name: string }>,
-    options: { baselineThrough: string | undefined; baseUrl: string; dryRun: boolean; logger: Logger },
+    options: { baselineThrough: string | undefined; baseUrl: string; dryRun: boolean; logger: Logger; refused: ReadonlyArray<string> },
 ): MigrateSqlCommandResult | undefined => {
     if (options.dryRun) {
         const drifted = plans.filter((file) => file.state === "changed").map((file) => file.name);
 
-        if (drifted.length === 0) {
-            return undefined;
+        if (drifted.length > 0) {
+            return refuse(options.logger, `${String(drifted.length)} SQL file(s) changed after they were applied: ${drifted.join(", ")}`, EXIT_CODE.CONFLICT);
         }
 
-        return refuse(options.logger, `${String(drifted.length)} SQL file(s) changed after they were applied: ${drifted.join(", ")}`, EXIT_CODE.CONFLICT);
+        // A plan the real run would refuse is a failed check too, so `status --sql` in CI catches it before the deploy.
+        if (options.refused.length > 0) {
+            return refuse(
+                options.logger,
+                `${String(options.refused.length)} SQL file(s) would be refused when applied: ${options.refused.join(", ")}. See the statements listed above.`,
+                EXIT_CODE.CONFLICT,
+            );
+        }
+
+        return undefined;
     }
 
     const required = requiredFileNames(files, options.baselineThrough);
@@ -327,17 +357,17 @@ const runMigrateSqlCommand = async (options: MigrateSqlCommandOptions): Promise<
     }
 
     const files = readSqlMigrationFiles(cwd);
+    // The argument checks come first, so a bad `--baseline-through` is refused even when there is nothing to apply.
+    const refusal = argumentRefusal(options, files);
+
+    if (refusal !== undefined) {
+        return refusal;
+    }
 
     if (files.length === 0) {
         options.logger.info("no SQL migration files under lunora/migrations/ — nothing to apply");
 
         return { code: 0, files: [] };
-    }
-
-    const refusal = argumentRefusal(options, files);
-
-    if (refusal !== undefined) {
-        return refusal;
     }
 
     const target = resolveSqlTarget(options, cwd, dryRun);
@@ -377,7 +407,13 @@ const runMigrateSqlCommand = async (options: MigrateSqlCommandOptions): Promise<
         logSqlFilePlan(options.logger, file, dryRun);
     }
 
-    const unfinished = unfinishedRun(plans, files, { baselineThrough, baseUrl: target.baseUrl, dryRun, logger: options.logger });
+    const unfinished = unfinishedRun(plans, files, {
+        baselineThrough,
+        baseUrl: target.baseUrl,
+        dryRun,
+        logger: options.logger,
+        refused: refusedFromReply(body),
+    });
 
     if (unfinished !== undefined) {
         return { ...unfinished, files: plans };

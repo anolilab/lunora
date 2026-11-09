@@ -1910,19 +1910,75 @@ describe("lunora migrate apply / status --sql", () => {
         expect(skipped.error).toBeUndefined();
     });
 
-    it("says a named admin token cannot run the SQL, rather than printing the raw refusal", async () => {
+    it("says a token without the migrations scope needs one, and names the command that mints it", async () => {
         expect.assertions(2);
 
-        const named = await runMigrateSqlCommand({
+        const unscoped = await runMigrateSqlCommand({
             cwd: sqlWorkdir,
-            fetchImpl: recordSql([], 403, { error: { code: "ADMIN_ROOT_REQUIRED", message: "root only" } }),
+            fetchImpl: recordSql([], 403, { error: { code: "ADMIN_SCOPE_REQUIRED", message: "no scope" } }),
             logger: silentLogger(),
             token: "named-token",
             url: "http://localhost:9999",
         });
 
-        expect(named.code).toBe(EXIT_CODE.PERMISSION);
-        expect(named.error).toMatch(/only from the root admin token/u);
+        expect(unscoped.code).toBe(EXIT_CODE.PERMISSION);
+        expect(unscoped.error).toMatch(/lunora admin-token create <name> --scope migrations/u);
+    });
+
+    it("says a file's root-only statements need the root token, rather than printing the raw refusal", async () => {
+        expect.assertions(2);
+
+        const rootOnly = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql([], 409, { error: { code: "MIGRATION_ROOT_REQUIRED", message: "root only" } }),
+            logger: silentLogger(),
+            token: "scoped-token",
+            url: "http://localhost:9999",
+        });
+
+        expect(rootOnly.code).not.toBe(0);
+        expect(rootOnly.error).toMatch(/Run it with the root admin token/u);
+    });
+
+    it("a dry run that the real apply would refuse exits CONFLICT and names the files", async () => {
+        expect.assertions(2);
+
+        const refused = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            dryRun: true,
+            fetchImpl: recordSql([], 200, {
+                files: [
+                    { destructive: [], name: "001_create_emails.sql", rootOnly: [], skipped: [], state: "pending", statements: [] },
+                    { destructive: ["DROP TABLE"], name: "002_drop_emails.sql", rootOnly: [], skipped: [], state: "pending", statements: [] },
+                ],
+                refused: ["002_drop_emails.sql"],
+            }),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+
+        expect(refused.code).toBe(EXIT_CODE.CONFLICT);
+        expect(refused.error).toMatch(/1 SQL file\(s\) would be refused when applied: 002_drop_emails\.sql/u);
+    });
+
+    it("refuses a --baseline-through that names no file, even when the directory has no SQL files", async () => {
+        expect.assertions(2);
+
+        const empty = mkdtempSync(join(tmpdir(), "lunora-cli-migrate-empty-"));
+        const calls: SqlCall[] = [];
+
+        const result = await runMigrateSqlCommand({
+            baselineThrough: "001_create_emails.sql",
+            cwd: empty,
+            fetchImpl: recordSql(calls),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(calls).toStrictEqual([]);
     });
 
     it("returns the worker's per-file plan, and a refused run carries the HTTP status", async () => {

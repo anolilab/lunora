@@ -10,6 +10,8 @@
  * one place the secret appears.
  */
 import { digestAdminTokenSecret, generateAdminToken, isValidAdminTokenName } from "../../../shared/admin-token";
+import type { AdminTokenScope } from "../../../shared/admin-token-scope";
+import { ADMIN_TOKEN_SCOPES, isAdminTokenScope } from "../../../shared/admin-token-scope";
 import type { AdminRevocations } from "./admin-revocations";
 import { LunoraError } from "./errors";
 
@@ -52,6 +54,9 @@ interface AdminTokenSummary {
      * name: revoke it again to clear the row. A revoked token is refused regardless.
      */
     revoked?: boolean;
+
+    /** What the token may do beyond the admin plane. Empty for an ordinary token. */
+    scopes: AdminTokenScope[];
 }
 
 /** The answer to `POST /_lunora/admin/tokens` — the only response that ever carries the secret. */
@@ -73,12 +78,26 @@ const requireName = (name: unknown): string => {
     return name;
 };
 
+/** The scopes a create asks for. Absent is none; an unknown scope is refused rather than minted without it. */
+const requireScopes = (scopes: unknown): AdminTokenScope[] => {
+    if (scopes === undefined) {
+        return [];
+    }
+
+    if (!Array.isArray(scopes) || !scopes.every(isAdminTokenScope)) {
+        throw new LunoraError(`admin token \`scopes\` must be a list of ${ADMIN_TOKEN_SCOPES.join(", ")}`, { code: "BAD_REQUEST", status: 400 });
+    }
+
+    return [...new Set(scopes)];
+};
+
 const buildAdminTokenRoutes = (deps: AdminTokenRouteDeps): Record<string, (request: Request) => Promise<Response>> => {
     const now = deps.now ?? Date.now;
 
     const create = async (request: Request): Promise<Response> => {
         const body = await deps.readJsonBody(request);
         const name = requireName(body.name);
+        const scopes = requireScopes(body.scopes);
         const { expiresAt } = body;
 
         if (expiresAt !== undefined && (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= now())) {
@@ -99,10 +118,13 @@ const buildAdminTokenRoutes = (deps: AdminTokenRouteDeps): Record<string, (reque
         const latestRevoked = await deps.revocations.latestRevoked(name);
         const createdAt = latestRevoked === undefined ? now() : Math.max(now(), latestRevoked + 1);
 
-        const stored = (await deps.callStore(CREATE_ADMIN_TOKEN_OP, { createdAt, digest: await digestAdminTokenSecret(secret), expiresAt, name })) as Record<
-            string,
-            unknown
-        >;
+        const stored = (await deps.callStore(CREATE_ADMIN_TOKEN_OP, {
+            createdAt,
+            digest: await digestAdminTokenSecret(secret),
+            expiresAt,
+            name,
+            scopes,
+        })) as Record<string, unknown>;
 
         deps.evict(name);
 

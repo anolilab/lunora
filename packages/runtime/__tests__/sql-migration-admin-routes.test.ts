@@ -13,8 +13,13 @@ const post = (body: unknown): Request =>
         method: "POST",
     });
 
-const handlerFor = (applier: SqlMigrationApplier | undefined, assertAdmin = vi.fn<(request: Request) => void>()) => {
-    const routes = buildSqlMigrationAdminRoutes({ applySqlMigrations: applier, assertAdmin });
+/** A route over `applier`. The caller is the root token unless `isRootAdmin` says otherwise. */
+const handlerFor = (
+    applier: SqlMigrationApplier | undefined,
+    assertAdmin = vi.fn<(request: Request) => void>(),
+    isRootAdmin = vi.fn<(request: Request) => boolean>(() => true),
+) => {
+    const routes = buildSqlMigrationAdminRoutes({ applySqlMigrations: applier, assertAdmin, isRootAdmin });
 
     return routes[SQL_MIGRATIONS_PATH] as (request: Request) => Promise<Response>;
 };
@@ -25,7 +30,7 @@ describe("the /_lunora/admin/sql-migrations route", () => {
 
         const applier = vi.fn<SqlMigrationApplier>(async () => {
             return {
-                files: [{ destructive: [], name: "a.sql", skipped: [], state: "ran", statements: ["CREATE TABLE a (id TEXT)"] }],
+                files: [{ destructive: [], name: "a.sql", rootOnly: [], skipped: [], state: "ran", statements: ["CREATE TABLE a (id TEXT)"] }],
             };
         });
 
@@ -34,6 +39,7 @@ describe("the /_lunora/admin/sql-migrations route", () => {
         );
 
         expect(applier).toHaveBeenCalledWith({
+            additiveOnly: false,
             baseline: false,
             confirmDestructive: true,
             dryRun: false,
@@ -52,7 +58,7 @@ describe("the /_lunora/admin/sql-migrations route", () => {
 
         await handlerFor(applier)(post({ files: [] }));
 
-        expect(applier).toHaveBeenCalledWith({ baseline: false, confirmDestructive: false, dryRun: false, files: [] });
+        expect(applier).toHaveBeenCalledWith({ additiveOnly: false, baseline: false, confirmDestructive: false, dryRun: false, files: [] });
     });
 
     it("passes baseline through, and refuses a baseline flag that is not a boolean", async () => {
@@ -64,7 +70,7 @@ describe("the /_lunora/admin/sql-migrations route", () => {
 
         await handlerFor(applier)(post({ baseline: true, files: [] }));
 
-        expect(applier).toHaveBeenCalledWith({ baseline: true, confirmDestructive: false, dryRun: false, files: [] });
+        expect(applier).toHaveBeenCalledWith({ additiveOnly: false, baseline: true, confirmDestructive: false, dryRun: false, files: [] });
         await expect(handlerFor(applier)(post({ baseline: "yes", files: [] }))).rejects.toMatchObject({ code: "BAD_REQUEST" });
         expect(applier).toHaveBeenCalledTimes(1);
     });
@@ -120,9 +126,30 @@ describe("the /_lunora/admin/sql-migrations route", () => {
 
         await handlerFor(applier)(post({ baselineThrough: "001_a.sql", files: [] }));
 
-        expect(applier).toHaveBeenCalledWith({ baseline: false, baselineThrough: "001_a.sql", confirmDestructive: false, dryRun: false, files: [] });
+        expect(applier).toHaveBeenCalledWith({
+            additiveOnly: false,
+            baseline: false,
+            baselineThrough: "001_a.sql",
+            confirmDestructive: false,
+            dryRun: false,
+            files: [],
+        });
         await expect(handlerFor(applier)(post({ baselineThrough: 1, files: [] }))).rejects.toMatchObject({ code: "BAD_REQUEST" });
         expect(applier).toHaveBeenCalledTimes(1);
+    });
+
+    it("runs additive-only for a caller without the root token, whatever the body says", async () => {
+        expect.assertions(2);
+
+        const applier = vi.fn<SqlMigrationApplier>(async () => {
+            return { files: [] };
+        });
+        const isRootAdmin = vi.fn<(request: Request) => boolean>(() => false);
+
+        await handlerFor(applier, undefined, isRootAdmin)(post({ additiveOnly: false, files: [] }));
+
+        expect(applier).toHaveBeenCalledWith({ additiveOnly: true, baseline: false, confirmDestructive: false, dryRun: false, files: [] });
+        expect(isRootAdmin).toHaveBeenCalledTimes(1);
     });
 
     it("answers not-configured in the error envelope the CLI reads, with status 400", async () => {

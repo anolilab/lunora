@@ -197,6 +197,7 @@ INSERT INTO posts (id) VALUES (1);`;
             {
                 destructive: [DROP_STATEMENT],
                 name: "drop.sql",
+                rootOnly: [DROP_STATEMENT],
                 skipped: [],
                 state: "pending",
                 statements: [DROP_STATEMENT],
@@ -501,6 +502,190 @@ INSERT INTO posts (id) VALUES (1);`;
         expect(result.files[0]?.state).toBe("ran");
         expect(result.files[0]?.skipped).toHaveLength(1);
         expect(trackedNames(sqlite)).toEqual(["add_extra.sql", "base.sql"]);
+
+        sqlite.close();
+    });
+
+    it("an additive-only run applies a new table, a new index and an added column", async () => {
+        expect.assertions(3);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE t (id TEXT);" }]);
+
+        const result = await applySqlMigrationFiles(
+            database,
+            [{ name: "grow.sql", sql: 'CREATE TABLE IF NOT EXISTS "u" (id TEXT);\nCREATE INDEX u_id ON "u" (id);\nALTER TABLE t ADD COLUMN c TEXT;' }],
+            { additiveOnly: true },
+        );
+
+        expect(result.files[0]?.state).toBe("ran");
+        expect(result.files[0]?.rootOnly).toEqual([]);
+        expect(tables(sqlite)).toEqual(["__lunora_sql_migrations", "t", "u"]);
+
+        sqlite.close();
+    });
+
+    it("an additive-only run refuses any file with a DROP, a row write or a trigger, before running anything", async () => {
+        expect.assertions(3);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE t (id TEXT);" }]);
+
+        await expect(
+            applySqlMigrationFiles(
+                database,
+                [
+                    { name: "new_table.sql", sql: "CREATE TABLE fresh (id TEXT);" },
+                    { name: "drop_t.sql", sql: 'drop table "t";' },
+                ],
+                { additiveOnly: true, confirmDestructive: true },
+            ),
+        ).rejects.toMatchObject({ code: "MIGRATION_ROOT_REQUIRED" });
+        expect(tables(sqlite)).not.toContain("fresh");
+
+        await expect(applySqlMigrationFiles(database, [{ name: "rows.sql", sql: "update t set id = 'x';" }], { additiveOnly: true })).rejects.toMatchObject({
+            code: "MIGRATION_ROOT_REQUIRED",
+        });
+
+        sqlite.close();
+    });
+
+    it("a dry run and a baseline report the root-only statements without refusing, for an additive-only caller", async () => {
+        expect.assertions(3);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+        const files = [{ name: "trig.sql", sql: "CREATE TRIGGER t_audit AFTER INSERT ON t BEGIN SELECT 1; END;" }];
+
+        const plan = await applySqlMigrationFiles(database, files, { additiveOnly: true, dryRun: true });
+
+        expect(plan.files[0]?.rootOnly).toHaveLength(1);
+
+        const baselined = await applySqlMigrationFiles(database, files, { additiveOnly: true, baseline: true });
+
+        expect(baselined.files[0]?.state).toBe("baselined");
+        expect(tables(sqlite)).not.toContain("t_audit");
+
+        sqlite.close();
+    });
+
+    it("skips an ADD COLUMN on a schema-qualified table whose column is already there", async () => {
+        expect.assertions(3);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE t (sender TEXT);" }]);
+
+        const result = await applySqlMigrationFiles(database, [{ name: "add.sql", sql: "ALTER TABLE main.t ADD COLUMN sender TEXT;" }]);
+
+        expect(result.files[0]?.state).toBe("ran");
+        expect(result.files[0]?.skipped).toHaveLength(1);
+        expect(result.files[0]?.statements).toEqual([]);
+
+        sqlite.close();
+    });
+
+    it("skips an ADD COLUMN after a CREATE TABLE IF NOT EXISTS that changes nothing, when the column is already there", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE t (id TEXT, c TEXT);" }]);
+
+        const result = await applySqlMigrationFiles(database, [
+            { name: "grow.sql", sql: "CREATE TABLE IF NOT EXISTS t (id TEXT);\nALTER TABLE t ADD COLUMN c TEXT;" },
+        ]);
+
+        expect(result.files[0]?.state).toBe("ran");
+        expect(result.files[0]?.skipped).toHaveLength(1);
+
+        sqlite.close();
+    });
+
+    it("refuses a CTE-prefixed row write on a database with no recorded file, and names the statement", async () => {
+        expect.assertions(1);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await expect(
+            applySqlMigrationFiles(database, [{ name: "cte.sql", sql: "WITH x AS (SELECT 1) DELETE FROM t WHERE id IN x;" }], { confirmDestructive: true }),
+        ).rejects.toMatchObject({ code: "MIGRATION_DESTRUCTIVE", message: expect.stringContaining("WITH x AS (SELECT 1) DELETE FROM t WHERE id IN x") });
+
+        sqlite.close();
+    });
+
+    it("refuses a file that changes foreign-key enforcement when it would run, and reports it in a dry run", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+        const files = [{ name: "fk.sql", sql: "PRAGMA foreign_keys = OFF;" }];
+
+        const plan = await applySqlMigrationFiles(database, files, { dryRun: true });
+
+        expect(plan.files[0]?.state).toBe("pending");
+        await expect(applySqlMigrationFiles(database, files)).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+        sqlite.close();
+    });
+
+    it("reports, in a dry run, the pending files a real run would refuse with the same options", async () => {
+        expect.assertions(3);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        const fresh = await applySqlMigrationFiles(database, [{ name: "delete.sql", sql: "DELETE FROM t WHERE id = 1;" }], { dryRun: true });
+
+        expect(fresh.refused).toStrictEqual(["delete.sql"]);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE t (id TEXT);" }]);
+
+        const scoped = await applySqlMigrationFiles(database, [{ name: "drop.sql", sql: "DROP TABLE t;" }], { additiveOnly: true, dryRun: true });
+        const plain = await applySqlMigrationFiles(database, [{ name: "drop.sql", sql: "DROP TABLE t;" }], { dryRun: true });
+
+        expect(scoped.refused).toStrictEqual(["drop.sql"]);
+        expect(plain.refused).toStrictEqual([]);
+
+        sqlite.close();
+    });
+
+    it("skips an ADD COLUMN whose keywords are split by comments, when the column is already there", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE t (sender TEXT);" }]);
+
+        const result = await applySqlMigrationFiles(database, [
+            { name: "add.sql", sql: "ALTER /* added by hand */ TABLE t\n-- the column\nADD COLUMN sender TEXT;" },
+        ]);
+
+        expect(result.files[0]?.skipped).toHaveLength(1);
+        expect(result.files[0]?.statements).toStrictEqual([]);
+
+        sqlite.close();
+    });
+
+    it("reports as a file's statements only the ones that ran, not an ADD COLUMN that was skipped", async () => {
+        expect.assertions(1);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE t (c TEXT);" }]);
+
+        const result = await applySqlMigrationFiles(database, [{ name: "mixed.sql", sql: "ALTER TABLE t ADD COLUMN c TEXT;\nCREATE TABLE u (id TEXT);" }]);
+
+        expect(result.files[0]?.statements).toStrictEqual(["CREATE TABLE u (id TEXT)"]);
 
         sqlite.close();
     });

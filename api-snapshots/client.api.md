@@ -1895,6 +1895,7 @@ class LunoraAdminClient extends LunoraClient {
     createAdminToken(options: {
         expiresAt?: number;
         name: string;
+        scopes?: ReadonlyArray<string>;
     }): Promise<CreatedAdminToken>;
     revokeAdminToken(name: string): Promise<void>;
     listKvNamespaces(): Promise<KvNamespaceSummary[]>;

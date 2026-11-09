@@ -4,8 +4,8 @@
  * (drift, destructive confirmation, skipped `ADD COLUMN`s) live in `@lunora/d1`; this module only checks the request
  * and hands it over.
  *
- * Root-admin only: a file can drop a table, and a hand-written UPDATE can rewrite auth or role rows, which named tokens
- * must not reach.
+ * Gated to the root token, or a named token minted with the `migrations` scope. A scoped caller runs additive statements
+ * only: a file can drop a table or rewrite auth or role rows, and only the root token may do that.
  */
 import { readJsonBodyWithLimit } from "./body-readers";
 import { LunoraError } from "./errors";
@@ -27,6 +27,8 @@ interface SqlMigrationFileRequest {
 }
 
 interface SqlMigrationApplyRequest {
+    /** Run only additive statements (a new table or index, an added column). Set by the route from the caller's token, never by the body. */
+    additiveOnly: boolean;
     /** Record every pending file as applied without running it. Drift is still refused. */
     baseline: boolean;
     /** Record pending files up to and including this one (by name), and leave the later ones pending. */
@@ -43,10 +45,13 @@ interface SqlMigrationApplyResult {
     files: ReadonlyArray<{
         destructive: ReadonlyArray<string>;
         name: string;
+        rootOnly: ReadonlyArray<string>;
         skipped: ReadonlyArray<string>;
         state: "applied" | "baselined" | "changed" | "pending" | "ran";
         statements: ReadonlyArray<string>;
     }>;
+    /** A dry run only: the pending files a real run with the same options would refuse. */
+    refused?: ReadonlyArray<string>;
 }
 
 /** The worker option that runs a request against the D1 binding; absent when the worker has no D1 global plane. */
@@ -55,8 +60,10 @@ type SqlMigrationApplier = (request: SqlMigrationApplyRequest) => Promise<SqlMig
 interface SqlMigrationAdminRouteDeps {
     /** Runs the files against the worker's D1 binding; absent when there is no D1 global plane (e.g. Hyperdrive-only). */
     applySqlMigrations?: SqlMigrationApplier;
-    /** Enforce the admin bearer, as `/_lunora/admin/import` does. */
+    /** Enforce the route's gate: the root token, or a named token with the `migrations` scope. */
     assertAdmin: (request: Request) => void;
+    /** Whether the caller holds the root token. A scoped caller's run is additive-only. */
+    isRootAdmin: (request: Request) => boolean;
 }
 
 /** Reads the `files` array, rejecting anything that is not a named SQL text. */
@@ -119,6 +126,7 @@ const buildSqlMigrationAdminRoutes = (deps: SqlMigrationAdminRouteDeps): Record<
 
         const through = baselineThroughName(body);
         const result = await apply({
+            additiveOnly: !deps.isRootAdmin(request),
             baseline: flag(body, "baseline"),
             ...(through === undefined ? {} : { baselineThrough: through }),
             confirmDestructive: flag(body, "confirmDestructive"),

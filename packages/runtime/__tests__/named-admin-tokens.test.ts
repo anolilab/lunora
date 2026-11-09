@@ -97,13 +97,13 @@ const issuedAt = (value: unknown): number => (typeof value === "number" ? value 
 
 const fakeShards = (
     hooks?: ShardHooks,
-): { namespace: ShardNamespaceLike; seen: SeenRequest[]; store: Map<string, { createdAt: number; digest: string; expiresAt?: number }> } => {
+): { namespace: ShardNamespaceLike; seen: SeenRequest[]; store: Map<string, { createdAt: number; digest: string; expiresAt?: number; scopes?: string[] }> } => {
     // Every test builds its shards first, so this is where the revocation store starts clean.
     revocationStore.failReads = false;
     revocationStore.failWrites = false;
     revocationStore.revoked.clear();
 
-    const store = new Map<string, { createdAt: number; digest: string; expiresAt?: number }>();
+    const store = new Map<string, { createdAt: number; digest: string; expiresAt?: number; scopes?: string[] }>();
     const seen: SeenRequest[] = [];
     const reply = (result: unknown): Response => Response.json({ result });
 
@@ -137,6 +137,7 @@ const fakeShards = (
                 store.set(String(args.name), {
                     createdAt: issuedAt(args.createdAt),
                     digest: String(args.digest),
+                    scopes: (args as { scopes?: string[] }).scopes ?? [],
                     ...(typeof args.expiresAt === "number" ? { expiresAt: args.expiresAt } : {}),
                 });
 
@@ -145,7 +146,7 @@ const fakeShards = (
             case "__lunora_admin__:listAdminTokens": {
                 return reply({
                     tokens: [...store.keys()].map((name) => {
-                        return { createdAt: store.get(name)?.createdAt ?? 1, name };
+                        return { createdAt: store.get(name)?.createdAt ?? 1, name, scopes: store.get(name)?.scopes ?? [] };
                     }),
                 });
             }
@@ -164,7 +165,7 @@ const fakeShards = (
 
                 return reply(
                     stored !== undefined && stored.digest === args.digest
-                        ? { createdAt: stored.createdAt, expiresAt: stored.expiresAt, ok: true }
+                        ? { createdAt: stored.createdAt, expiresAt: stored.expiresAt, ok: true, scopes: stored.scopes ?? [] }
                         : { known: stored !== undefined, ok: false },
                 );
             }
@@ -271,7 +272,7 @@ describe("a revocation that outlives a restore of the token store", () => {
         const listed = await call(worker, TOKENS, ROOT);
 
         // Not shown as live: it is flagged revoked, row still pending cleanup.
-        await expect(listed.json()).resolves.toStrictEqual({ tokens: [{ createdAt: expect.any(Number), name: "ci", revoked: true }] });
+        await expect(listed.json()).resolves.toStrictEqual({ tokens: [{ createdAt: expect.any(Number), name: "ci", revoked: true, scopes: [] }] });
 
         // The name is still held by the revived row, so revoking it again must clear it and free the name.
         await expect(status(call(worker, `${TOKENS}?name=ci`, ROOT, { method: "DELETE" }))).resolves.toBe(200);
@@ -505,7 +506,7 @@ describe("a revocation that outlives a restore of the token store", () => {
 
         const listed = await call(worker, TOKENS, ROOT);
 
-        await expect(listed.json()).resolves.toStrictEqual({ tokens: [{ createdAt: expect.any(Number), name: "ci", revoked: true }] });
+        await expect(listed.json()).resolves.toStrictEqual({ tokens: [{ createdAt: expect.any(Number), name: "ci", revoked: true, scopes: [] }] });
 
         // Retried once the shard answers again: the row goes and the name is free.
         hooks.failRevoke = false;
@@ -550,7 +551,7 @@ describe("named admin tokens", () => {
 
         const listed = await call(worker, TOKENS, ROOT);
 
-        await expect(listed.json()).resolves.toStrictEqual({ tokens: [{ createdAt: expect.any(Number), name: "ci" }] });
+        await expect(listed.json()).resolves.toStrictEqual({ tokens: [{ createdAt: expect.any(Number), name: "ci", scopes: [] }] });
         expect(listed.headers.get("cache-control")).toBe("no-store");
     });
 
@@ -580,6 +581,35 @@ describe("named admin tokens", () => {
         await expect(errorCodeOf(call(worker, TOKENS, token, { body: JSON.stringify({ name: "ci2" }), method: "POST" }))).resolves.toBe("ADMIN_ROOT_REQUIRED");
         await expect(errorCodeOf(call(worker, `${TOKENS}?name=ci`, token, { method: "DELETE" }))).resolves.toBe("ADMIN_ROOT_REQUIRED");
         await expect(errorCodeOf(call(worker, `${ORIGIN}/_lunora/admin/ws-token`, token, { method: "POST" }))).resolves.toBe("ADMIN_ROOT_REQUIRED");
+    });
+
+    it("gives the migrations scope to the SQL route alone, and a scoped token still cannot manage tokens or open admin sockets", async () => {
+        expect.assertions(6);
+
+        const { namespace } = fakeShards();
+        const runs: { additiveOnly: boolean }[] = [];
+        const worker = createWorker({
+            adminToken: ROOT,
+            applySqlMigrations: async (request) => {
+                runs.push({ additiveOnly: request.additiveOnly });
+
+                return { files: [] };
+            },
+            functions: REGISTRY,
+            shardDO: namespace,
+        });
+        const scoped = await call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "migrate", scopes: ["migrations"] }), method: "POST" });
+        const { token: scopedToken } = await scoped.json<{ token: string }>();
+        const plain = await call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "plain" }), method: "POST" });
+        const { token: plainToken } = await plain.json<{ token: string }>();
+        const sql = `${ORIGIN}/_lunora/admin/sql-migrations`;
+
+        await expect(status(call(worker, sql, scopedToken, { body: JSON.stringify({ files: [] }), method: "POST" }))).resolves.toBe(200);
+        expect(runs).toStrictEqual([{ additiveOnly: true }]);
+        await expect(errorCodeOf(call(worker, sql, plainToken, { body: JSON.stringify({ files: [] }), method: "POST" }))).resolves.toBe("ADMIN_SCOPE_REQUIRED");
+        await expect(errorCodeOf(call(worker, TOKENS, scopedToken))).resolves.toBe("ADMIN_ROOT_REQUIRED");
+        await expect(errorCodeOf(call(worker, `${TOKENS}?name=migrate`, scopedToken, { method: "DELETE" }))).resolves.toBe("ADMIN_ROOT_REQUIRED");
+        await expect(errorCodeOf(call(worker, `${ORIGIN}/_lunora/admin/ws-token`, scopedToken, { method: "POST" }))).resolves.toBe("ADMIN_ROOT_REQUIRED");
     });
 
     it("accepts a token created right after its name was refused", async () => {
