@@ -57,21 +57,28 @@ const ROW_WRITE_RE = /^(?:WITH|INSERT|UPDATE|DELETE|REPLACE)\b/iu;
 const ROW_COPY_RE = new RegExp(String.raw`^CREATE${GAP}TABLE(?:${GAP}IF${GAP}NOT${GAP}EXISTS)?${GAP}${SCHEMA_PREFIX}(?:${IDENTIFIER})${GAP}AS\b`, "iu");
 
 /**
- * The additive statements a migrations-scoped token may run: a new table with a column list, or a new index. An added
- * column is matched by `ADD_COLUMN_RE`.
+ * The additive statements a migrations-scoped token may run: a new table with a column list, or a plain index. A unique
+ * index constrains the rows that may be written to its table, so it is not one. An added column is matched by
+ * `ADD_COLUMN_RE`.
  */
 const ADDITIVE_CREATE_RE = new RegExp(
-    String.raw`^CREATE${GAP}(?:TABLE(?:${GAP}IF${GAP}NOT${GAP}EXISTS)?${GAP}${SCHEMA_PREFIX}(?:${IDENTIFIER})${GAP_OPT}\(|(?:UNIQUE${GAP})?INDEX\b)`,
+    String.raw`^CREATE${GAP}(?:TABLE(?:${GAP}IF${GAP}NOT${GAP}EXISTS)?${GAP}${SCHEMA_PREFIX}(?:${IDENTIFIER})${GAP_OPT}\(|INDEX\b)`,
     "iu",
 );
 
 /**
- * The column clauses that give an added column a value for every row already in the table: a DEFAULT, and a generated
- * column's expression (`GENERATED ALWAYS AS (…)` or `AS (…)`). SQLite's ADD COLUMN already forbids the constraints that
- * could otherwise set a value, such as PRIMARY KEY and UNIQUE, so this list is the whole set. Matched against the
- * definition only, after the column name, so a column named `default_note` is not one of these.
+ * The column clauses that change the rows already in a table once the column is added: a DEFAULT or a generated
+ * column's expression, which give every existing row a value, and a CHECK, REFERENCES or UNIQUE, which constrain the
+ * writes that follow. Matched against the definition only, after the column name, so a column named `default_note` is
+ * not one of these.
  */
-const VALUE_CLAUSE_RE = /\b(?:DEFAULT|GENERATED|AS)\b/iu;
+const VALUE_CLAUSE_RE = /\b(?:DEFAULT|GENERATED|AS|CHECK|REFERENCES|UNIQUE)\b/iu;
+/** A foreign key on a new table constrains deletes from the parent table it references, so it is not additive. */
+const REFERENCES_RE = /\bREFERENCES\b/iu;
+/** A partial index (`WHERE`) constrains which rows may be written to its table, so it is not additive. */
+const PARTIAL_INDEX_RE = /\bWHERE\b/iu;
+/** The tables a migration may not touch from an additive statement: the tracking table and the framework's own, and SQLite's. */
+const INTERNAL_TABLE_RE = /__lunora_|sqlite_/iu;
 
 /**
  * Foreign-key enforcement is a connection setting, not data a file changes, so a file may not assign it. Reading it
@@ -212,13 +219,18 @@ const columnExists = async (client: D1Client, table: string, column: string): Pr
  */
 const isAdditiveStatement = (statementText: string): boolean => {
     const body = bodyOf(statementText);
+
+    if (INTERNAL_TABLE_RE.test(body)) {
+        return false;
+    }
+
     const addColumn = ADD_COLUMN_RE.exec(body);
 
     if (addColumn !== null) {
         return !VALUE_CLAUSE_RE.test(body.slice(addColumn[0].length));
     }
 
-    return ADDITIVE_CREATE_RE.test(body);
+    return ADDITIVE_CREATE_RE.test(body) && !PARTIAL_INDEX_RE.test(body) && !REFERENCES_RE.test(body);
 };
 
 /** Records the table a statement creates, drops or renames, so a later ADD COLUMN on it is not skipped from a stale catalog. */

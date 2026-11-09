@@ -822,4 +822,39 @@ INSERT INTO posts (id) VALUES (1);`;
 
         sqlite.close();
     });
+
+    it("refuses a constraint that writes must satisfy, and a name the framework owns, for an additive-only caller", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE users (id TEXT);" }]);
+
+        const refusals = [
+            "CREATE UNIQUE INDEX users_name ON users (id);",
+            "CREATE INDEX users_live ON users (id) WHERE id > 0;",
+            "ALTER TABLE users ADD COLUMN z TEXT CHECK (z <> 'admin');",
+            "CREATE TABLE child (uid TEXT REFERENCES users(id));",
+            "ALTER TABLE __lunora_sql_migrations ADD COLUMN x TEXT;",
+        ];
+        const codes = await Promise.all(
+            refusals.map((sql, index) =>
+                applySqlMigrationFiles(database, [{ name: `refused_${String(index)}.sql`, sql }], { additiveOnly: true }).then(
+                    () => "ran",
+                    (error: unknown) => (error as { code?: string }).code,
+                ),
+            ),
+        );
+
+        expect(codes).toStrictEqual(refusals.map(() => "MIGRATION_ROOT_REQUIRED"));
+
+        const plain = await applySqlMigrationFiles(database, [{ name: "index.sql", sql: "CREATE INDEX users_id ON users (id);" }], {
+            additiveOnly: true,
+        });
+
+        expect(plain.files[0]?.state).toBe("ran");
+
+        sqlite.close();
+    });
 });
