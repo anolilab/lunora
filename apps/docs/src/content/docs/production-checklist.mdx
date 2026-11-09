@@ -163,11 +163,14 @@ data export/import, migrations, the Studio, scheduled-job admin.
 Lunora has two migration surfaces; see [Migrations](/docs/concepts/migrations).
 
 - [ ] **D1 schema migrations** for `.global()` tables are generated
-      (`lunora migrate generate`) and committed as a review artifact. Nothing
-      applies them: the runtime provisions global tables from the schema on
-      first use (`CREATE TABLE IF NOT EXISTS` + additive `ADD COLUMN`), so any
-      hand-written SQL in a generated file must be applied yourself
-      (`wrangler d1 execute <DB> --remote --file=…`) before the deploy.
+      (`lunora migrate generate`) and committed as a review artifact. The
+      runtime provisions additive changes on first use, so the drops and
+      hand-written SQL in a generated file are run with
+      `lunora migrate apply --url <worker> --yes` before the deploy that depends
+      on them. `lunora deploy --migrate` runs them after the new code is live,
+      so it is not a substitute for a change the new code needs. A project that
+      predates this tracking runs `lunora migrate apply --baseline` once first
+      (see Migrations). `lunora migrate status --sql` shows what has run.
 - [ ] **Data migrations** (`lunora migrate create <name> --table <table>`, run with
       `lunora migrate up`) have been dry-run against a copy where the change
       is destructive. Runs are admin-gated: set `LUNORA_ADMIN_TOKEN` or pass

@@ -8,6 +8,7 @@ import { exportEndLine } from "../../../../shared/export-end";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import { execute as migrateExecute } from "../../src/commands/migrate/dispatch";
 import { runMigrateBackendCommand, runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand } from "../../src/commands/migrate/handler";
+import { runMigrateSqlCommand } from "../../src/commands/migrate/sql";
 import type { FetchLike } from "../../src/commands/run/handler";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
@@ -1577,5 +1578,264 @@ describe("lunora migrate d1-to-hyperdrive | hyperdrive-to-d1", () => {
 
         // The finally block removed the staging dir it created; no new one leaked.
         expect(dumpDirsAfter).toStrictEqual(dumpDirsBefore);
+    });
+});
+
+describe("lunora migrate apply / status --sql", () => {
+    let sqlWorkdir: string;
+
+    beforeEach(() => {
+        sqlWorkdir = mkdtempSync(join(tmpdir(), "lunora-cli-migrate-sql-"));
+
+        const migrations = join(sqlWorkdir, "lunora", "migrations");
+
+        mkdirSync(migrations, { recursive: true });
+        writeFileSync(join(migrations, "002_drop_emails.sql"), '-- lunora:allow-destructive\nDROP TABLE IF EXISTS "emails";\n', "utf8");
+        writeFileSync(join(migrations, "001_create_emails.sql"), 'CREATE TABLE IF NOT EXISTS "emails" ("_id" TEXT);\n', "utf8");
+        writeFileSync(join(migrations, ".snapshot.json"), "{}", "utf8");
+    });
+
+    afterEach(() => {
+        rmSync(sqlWorkdir, { force: true, recursive: true });
+    });
+
+    interface SqlCall {
+        body: { confirmDestructive: boolean; dryRun: boolean; files: { name: string; sql: string }[] };
+        headers?: Record<string, string>;
+        url: string;
+    }
+
+    // By default the worker answers as a real one does: a result for every file it was sent.
+    const recordSql =
+        (calls: SqlCall[], status = 200, body?: unknown): FetchLike =>
+        async (url, init) => {
+            const sent = JSON.parse(init?.body ?? "{}") as SqlCall["body"];
+
+            calls.push({ body: sent, headers: init?.headers, url });
+
+            const payload = body ?? {
+                files: (sent.files ?? []).map((file) => {
+                    return { destructive: [], name: file.name, skipped: [], state: "applied", statements: [] };
+                }),
+            };
+            const text = JSON.stringify(payload);
+
+            return { json: async () => payload, ok: status >= 200 && status < 300, status, text: async () => text };
+        };
+
+    it("sends every .sql file in name order, with the bearer, and confirmDestructive mirrors --yes", async () => {
+        expect.assertions(6);
+
+        const calls: SqlCall[] = [];
+        const result = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql(calls),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+            yes: true,
+        });
+
+        expect(result.code).toBe(0);
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.url).toBe("http://localhost:9999/_lunora/admin/sql-migrations");
+        expect(calls[0]?.headers?.authorization).toBe("Bearer s3cret");
+        expect(calls[0]?.body.files.map((file) => file.name)).toEqual(["001_create_emails.sql", "002_drop_emails.sql"]);
+        expect(calls[0]?.body).toMatchObject({ confirmDestructive: true, dryRun: false });
+    });
+
+    it("refuses a non-local target without --yes, and sends nothing", async () => {
+        expect.assertions(2);
+
+        const calls: SqlCall[] = [];
+        const result = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql(calls),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "https://app.example.workers.dev",
+        });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(calls).toHaveLength(0);
+    });
+
+    it("a dry run needs no --yes against a remote target, and asks the worker not to run anything", async () => {
+        expect.assertions(2);
+
+        const calls: SqlCall[] = [];
+        const result = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            dryRun: true,
+            fetchImpl: recordSql(calls),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "https://app.example.workers.dev",
+        });
+
+        expect(result.code).toBe(0);
+        expect(calls[0]?.body.dryRun).toBe(true);
+    });
+
+    it("sends nothing and succeeds when there are no SQL files", async () => {
+        expect.assertions(2);
+
+        rmSync(join(sqlWorkdir, "lunora", "migrations"), { force: true, recursive: true });
+
+        const calls: SqlCall[] = [];
+        const result = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql(calls),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "https://app.example.workers.dev",
+        });
+
+        expect(result).toEqual({ code: 0, files: [] });
+        expect(calls).toHaveLength(0);
+    });
+
+    it("says the worker predates migrate apply when its route answers 404", async () => {
+        expect.assertions(2);
+
+        const result = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql([], 404, {}),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+
+        expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
+        expect(result.error).toMatch(/predates `migrate apply`/u);
+    });
+
+    it("apply --dry-run through the dispatch plans against a remote worker without --yes, and says so", async () => {
+        expect.assertions(3);
+
+        const calls: SqlCall[] = [];
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+            const sent = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as SqlCall["body"];
+            const target = input instanceof Request ? input.url : String(input);
+
+            calls.push({ body: sent, headers: init?.headers as Record<string, string>, url: target });
+
+            return Response.json({
+                files: sent.files.map((file) => {
+                    return { destructive: [], name: file.name, skipped: [], state: "pending", statements: [] };
+                }),
+            });
+        });
+
+        try {
+            const stdout = await captureStdout(async () => {
+                await migrateExecute({
+                    argument: ["apply"],
+                    options: { dryRun: true, format: "json", token: "s3cret", url: "https://app.example.workers.dev" },
+                    process: { cwd: sqlWorkdir, exit: () => {} },
+                } as unknown as Parameters<typeof migrateExecute>[0]);
+            });
+
+            const document = JSON.parse(stdout) as { data: { files: { state: string }[]; subcommand: string } };
+
+            expect(calls).toHaveLength(1);
+            expect(calls[0]?.body.dryRun).toBe(true);
+            expect(document.data).toMatchObject({ files: [{ state: "pending" }, { state: "pending" }], subcommand: "apply" });
+        } finally {
+            fetchSpy.mockRestore();
+        }
+    });
+
+    it("--baseline sends the flag, and a dry run that finds a changed file exits CONFLICT", async () => {
+        expect.assertions(4);
+
+        const calls: SqlCall[] = [];
+        const baselined = await runMigrateSqlCommand({
+            baseline: true,
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql(calls),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+            yes: true,
+        });
+
+        expect(calls[0]?.body).toMatchObject({ baseline: true, dryRun: false });
+        expect(baselined.code).toBe(0);
+
+        const drift = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            dryRun: true,
+            fetchImpl: recordSql([], 200, {
+                files: [
+                    { destructive: [], name: "001_create_emails.sql", skipped: [], state: "changed", statements: [] },
+                    { destructive: [], name: "002_drop_emails.sql", skipped: [], state: "applied", statements: [] },
+                ],
+            }),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+
+        expect(drift.code).toBe(EXIT_CODE.CONFLICT);
+        expect(drift.error).toMatch(/changed after they were applied: 001_create_emails\.sql/u);
+    });
+
+    it("a 200 that does not name every file sent is a failed run, not a success with nothing applied", async () => {
+        expect.assertions(4);
+
+        // An SPA fallback or a proxy answers any path with a 200 and a body that is not an apply result.
+        const fallback = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql([], 200, "<!doctype html><title>app</title>"),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+
+        expect(fallback.code).toBe(EXIT_CODE.FAILURE);
+
+        const silent = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql([], 200, { files: [{ name: "001_create_emails.sql", state: "applied" }] }),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+
+        expect(silent.code).toBe(EXIT_CODE.FAILURE);
+        expect(silent.error).toMatch(/without a result for every SQL file/u);
+        expect(silent.files).toEqual([]);
+    });
+
+    it("returns the worker's per-file plan, and a refused run carries the HTTP status", async () => {
+        expect.assertions(3);
+
+        const plan = {
+            files: [
+                { destructive: [], name: "001_create_emails.sql", skipped: [], state: "applied", statements: [] },
+                { destructive: [], name: "002_drop_emails.sql", skipped: [], state: "pending", statements: [] },
+            ],
+        };
+        const applied = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql([], 200, plan),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+
+        expect(applied.files).toEqual(plan.files);
+
+        const refused = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql([], 409, { code: "MIGRATION_DESTRUCTIVE" }),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+
+        expect(refused.code).not.toBe(0);
+        expect(refused.error).toMatch(/HTTP 409/u);
     });
 });

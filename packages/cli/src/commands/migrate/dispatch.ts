@@ -16,6 +16,8 @@ import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import type { MigrateBackendDirection } from "./handler";
 import { runMigrateBackendCommand, runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand } from "./handler";
 import type { MigrateOptions } from "./index";
+import type { MigrateSqlFilePlan } from "./sql";
+import { runMigrateSqlCommand } from "./sql";
 
 /**
  * The `--format json` payload, discriminated by `subcommand`: the verbs
@@ -26,6 +28,7 @@ type MigrateCommandData =
     | { bytes: number; exported: number; imported: number; replaced: number; subcommand: MigrateBackendDirection }
     | { empty: boolean; migrationFile?: string; subcommand: "generate" }
     | { file?: string; name: string; subcommand: "create" }
+    | { files: MigrateSqlFilePlan[]; subcommand: "apply" | "status-sql" }
     | { id: string; result: unknown; subcommand: "down" | "status" | "up" };
 
 /** What every `migrate` subcommand shell below needs: the parsed invocation. */
@@ -93,6 +96,30 @@ const dispatchCreate = async (context: MigrateDispatchContext): Promise<CommandR
     return { code: result.code, data: { file: result.file === "" ? undefined : result.file, name, subcommand: "create" } };
 };
 
+/** `migrate apply` runs the generated SQL files; `migrate status --sql` reports them without running anything. */
+const dispatchSql = async (
+    context: MigrateDispatchContext,
+    mode: { baseline: boolean; dryRun: boolean; subcommand: "apply" | "status-sql" },
+): Promise<CommandResult<MigrateCommandData>> => {
+    const { cwd, logger, options } = context;
+    const result = await runMigrateSqlCommand({
+        baseline: mode.baseline,
+        cwd,
+        dryRun: mode.dryRun,
+        logger,
+        prod: options.prod === true,
+        token: options.token,
+        url: resolveProductionWorkerUrl({ cwd, prod: options.prod === true, url: options.url }),
+        yes: options.yes === true,
+    });
+
+    return {
+        code: result.code,
+        data: { files: result.files, subcommand: mode.subcommand },
+        ...(result.error === undefined ? {} : { error: result.error }),
+    };
+};
+
 /** `migrate up|down|status`: drive the cross-shard data-migration orchestrator. */
 const dispatchData = async (context: MigrateDispatchContext, subcommand: "down" | "status" | "up"): Promise<CommandResult<MigrateCommandData>> => {
     const { argument, cwd, logger, options } = context;
@@ -136,6 +163,9 @@ const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions, Mi
     const context: MigrateDispatchContext = { argument, cwd, logger, options };
 
     switch (sub) {
+        case "apply": {
+            return await dispatchSql(context, { baseline: options.baseline === true, dryRun: options.dryRun === true, subcommand: "apply" });
+        }
         case "create": {
             return await dispatchCreate(context);
         }
@@ -144,15 +174,19 @@ const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions, Mi
             return await dispatchBackend(context, sub);
         }
         case "down":
-        case "status":
         case "up": {
             return await dispatchData(context, sub);
         }
         case "generate": {
             return dispatchGenerate(context);
         }
+        case "status": {
+            return options.sql === true
+                ? await dispatchSql(context, { baseline: false, dryRun: true, subcommand: "status-sql" })
+                : await dispatchData(context, sub);
+        }
         default: {
-            const message = `unknown migrate subcommand: "${sub ?? ""}" — expected generate | create | up | down | status | d1-to-hyperdrive | hyperdrive-to-d1`;
+            const message = `unknown migrate subcommand: "${sub ?? ""}" — expected generate | apply | create | up | down | status | d1-to-hyperdrive | hyperdrive-to-d1`;
 
             context.logger.error(message);
 

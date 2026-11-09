@@ -37,5 +37,7 @@ export type { D1QueryCost } from "./query-metrics";
 export { d1QueryTag, emitD1QueryCost, readD1QueryCost } from "./query-metrics";
 export type { D1RetryOptions } from "./retry";
 export { D1TimeoutError, isTransientD1Error, retryingExec, withD1Retry } from "./retry";
+export type { ApplySqlMigrationOptions, SqlMigrationEntry, SqlMigrationFile, SqlMigrationResult, SqlMigrationState } from "./sql-file-migrations";
+export { applySqlMigrationFiles } from "./sql-file-migrations";
 export { default as sqliteDialect } from "./sqlite-dialect";
 export { applyCdcChanges } from "@lunora/shard-engine";

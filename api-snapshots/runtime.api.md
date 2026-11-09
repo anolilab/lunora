@@ -2382,6 +2382,7 @@ interface WorkerOptions {
     aiOptInLevel?: AiOptInLevel;
     allowUnauthenticatedShardAccess?: boolean;
     applyGlobals?: GlobalCdcApplyFunction;
+    applySqlMigrations?: SqlMigrationApplier;
     architecture?: unknown;
     authAdmin?: AuthAdmin;
     authAuditReader?: AuthAuditReader;
@@ -3420,6 +3421,46 @@ interface SpanLink {
     attributes?: LogFields;
     spanId: string;
     traceId: string;
+}
+```
+
+### `SqlMigrationApplier` (type)
+
+```ts
+type SqlMigrationApplier = (request: SqlMigrationApplyRequest) => Promise<SqlMigrationApplyResult>;
+```
+
+### `SqlMigrationApplyRequest` (interface)
+
+```ts
+interface SqlMigrationApplyRequest {
+    baseline: boolean;
+    confirmDestructive: boolean;
+    dryRun: boolean;
+    files: ReadonlyArray<SqlMigrationFileRequest>;
+}
+```
+
+### `SqlMigrationApplyResult` (interface)
+
+```ts
+interface SqlMigrationApplyResult {
+    files: ReadonlyArray<{
+        destructive: ReadonlyArray<string>;
+        name: string;
+        skipped: ReadonlyArray<string>;
+        state: "applied" | "baselined" | "changed" | "pending" | "ran";
+        statements: ReadonlyArray<string>;
+    }>;
+}
+```
+
+### `SqlMigrationFileRequest` (interface)
+
+```ts
+interface SqlMigrationFileRequest {
+    name: string;
+    sql: string;
 }
 ```
 

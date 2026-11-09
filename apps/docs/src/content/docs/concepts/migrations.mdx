@@ -250,34 +250,45 @@ So a deploy that only adds tables, optional fields or non-unique indexes needs
 nothing beyond the deploy itself. Two things still need a person before it:
 the hand-written SQL described below, and a data migration that backfills rows.
 
-### Nothing applies the generated file
+### Applying the generated file
 
-The `.sql` file is a record of the diff, not a step in any pipeline. What
-actually provisions a global table is the runtime: on the first request that
-touches one it runs `CREATE TABLE IF NOT EXISTS` for the declared columns and
-indexes, and `ALTER TABLE … ADD COLUMN` for fields the table lacks. That covers
-every additive change, which is most of them, with the schema as the single
-source of truth.
+The runtime provisions a global table on the first request that touches one: it
+runs `CREATE TABLE IF NOT EXISTS` for the declared columns and indexes, and
+`ALTER TABLE … ADD COLUMN` for fields the table lacks. That covers every additive
+change, which is most of them, with the schema as the single source of truth.
 
-It does **not** cover anything the generator flags as `unsupported`, or SQL you
-add by hand: a backfilling `UPDATE`, a column rename written as add/copy/drop,
-an index the schema does not declare, a `DROP TABLE`. Apply those yourself, once
-per environment, before the deploy that depends on them:
+What it never runs is the rest: a `DROP TABLE`, a `DROP INDEX`, anything the
+generator flags as `unsupported`, and SQL you add by hand, such as a backfilling
+`UPDATE` or a column rename written as add/copy/drop. Apply those with
+`lunora migrate apply`:
 
 ```bash
-wrangler d1 execute <DB> --remote --file=lunora/migrations/<timestamp>_<slug>.sql
+lunora migrate status --sql --url https://your-worker.example.workers.dev   # what has run, what is pending
+lunora migrate apply --url https://your-worker.example.workers.dev --yes    # run the pending files
 ```
 
-The generator writes a `-- lunora:allow-destructive` comment on its own line
-before every `DROP`. `wrangler` ignores it. It is there for `@lunora/d1`'s
-`MigrationRunner`, which refuses a pending `DROP`, `RENAME`, `TRUNCATE` or
-replacing write (`INSERT OR REPLACE`, `REPLACE INTO`, `UPDATE OR REPLACE`,
-`ON CONFLICT REPLACE`) unless the migration carries that comment.
-If you split this file at each `;` into runner entries, every `DROP` keeps its
-confirmation. Add the same comment before destructive SQL you write by hand, but
-never to a migration that has already run: that changes its hash and is refused
-as drift. See
-[`MigrationRunner`](/docs/packages/d1#destructive-statements-need-an-opt-in).
+`apply` sends each `lunora/migrations/*.sql` file to the Worker in name order.
+The Worker runs a file's statements and records its name and SHA-256 in one
+atomic batch, so a file runs once per environment. A second run is a no-op. A
+file whose text changed after it ran is refused rather than run again: put the
+change in a new file. A `DROP` or a replacing write is refused unless you pass
+`--yes`, and the refusal lists the statements. `--dry-run` prints the statements
+without running them. `lunora deploy --migrate` runs `apply` before the data
+migrations, so a deploy applies its SQL with the rest. Any other deploy tool can
+call the same command as a step before its deploy.
+
+**Upgrading an existing project.** Files committed before `migrate apply` existed were never recorded, so the first run would treat every one of them as pending. A file that drops a table could then run again over rows written since it last ran. Before the first `deploy --migrate` or `migrate apply` against a database that already has those files applied, record them without running them:
+
+```bash
+lunora migrate apply --baseline --url https://your-worker.example.workers.dev --yes
+```
+
+A database with no recorded file refuses any file that drops or replaces data, whatever `--yes` says, and the refusal points here. Once a file is recorded, a later run applies only what is new.
+
+An `ADD COLUMN` that the runtime already added is skipped, since SQLite has no
+`IF NOT EXISTS` for it. The generator's `-- lunora:allow-destructive` comment
+before each `DROP` is what `@lunora/d1`'s `MigrationRunner` reads, and `apply`
+does not need it.
 
 ### Relaxing NOT NULL on a D1 table
 

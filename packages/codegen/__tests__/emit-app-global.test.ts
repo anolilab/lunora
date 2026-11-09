@@ -77,11 +77,19 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
         expect(output).toContain(
-            'import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";',
+            'import { applyCdcChanges, applySqlMigrationFiles, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";',
         );
         expect(output).toContain("return importGlobalRows(writer, schema as unknown as");
         // A dry run must reach the D1 importer, or a global table would be written by a check.
         expect(output).toContain("dryRun: request.dryRun === true,");
+    });
+
+    it("wires lunora migrate apply to the D1 binding, so the generated SQL files have something to run against", () => {
+        expect.assertions(1);
+
+        const output = emitApp({ ...baseOptions, hasGlobal: true });
+
+        expect(output).toContain("options.applySqlMigrations = (request) => applySqlMigrationFiles(database, request.files, request);");
     });
 
     it("wraps the D1 exec so .global() reads retry D1's transient failures", () => {

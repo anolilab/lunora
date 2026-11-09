@@ -101,6 +101,8 @@ import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 import type { AssetsFetcherLike } from "./spa-assets";
 import { serveSpaAsset, serveSpaShell } from "./spa-assets";
+import type { SqlMigrationApplier } from "./sql-migration-admin-routes";
+import { buildSqlMigrationAdminRoutes, SQL_MIGRATION_BODY_BYTES, SQL_MIGRATIONS_PATH } from "./sql-migration-admin-routes";
 import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
 import { buildTenantFanoutRoutes, QUEUE_DISPATCH_MAX_BODY_BYTES, QUEUE_DISPATCH_PATH } from "./tenant-fanout-routes";
 import type { TrustInboundTraceContext } from "./trace-trust";
@@ -139,6 +141,7 @@ type Route = (request: Request, env: unknown, context: ExecutionContextLike) => 
 const ROUTE_BODY_BUDGETS: Record<string, number> = {
     [KV_VALUE_PATH]: KV_VALUE_MAX_BODY_BYTES,
     [QUEUE_DISPATCH_PATH]: QUEUE_DISPATCH_MAX_BODY_BYTES,
+    [SQL_MIGRATIONS_PATH]: SQL_MIGRATION_BODY_BYTES,
     [STORAGE_PATH]: STORAGE_UPLOAD_MAX_BODY_BYTES,
 };
 
@@ -1091,6 +1094,12 @@ interface WorkerOptions {
      * (point-in-time recovery). When omitted, apply covers only shard-local tables.
      */
     applyGlobals?: GlobalCdcApplyFunction;
+
+    /**
+     * Runs the SQL migration files `lunora migrate apply` sends (`POST /_lunora/admin/sql-migrations`). Codegen sets it
+     * for a D1 global plane. Absent, the route refuses, since a file that drops a table has no binding to run against.
+     */
+    applySqlMigrations?: SqlMigrationApplier;
 
     /**
      * The generated architecture manifest (module catalog + static call graph).
@@ -4467,6 +4476,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         syncGlobals: options.syncGlobals,
     });
 
+    // `lunora migrate apply`: the generated SQL files, run against the D1 global plane.
+    const sqlMigrationAdminRoutes = buildSqlMigrationAdminRoutes({
+        applySqlMigrations: options.applySqlMigrations,
+        assertAdmin: assertAdminAuthorized,
+    });
+
     /** Read a query param, collapsing missing (`null`) and empty (`""`) to `undefined`. */
     const queryParameter = (url: URL, name: string): string | undefined => {
         const value = url.searchParams.get(name);
@@ -6658,6 +6673,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // (functions / cron-jobs / openapi / openrpc / global tables).
         ...orchestrationAdminRoutes,
         ...dataMovementAdminRoutes,
+        ...sqlMigrationAdminRoutes,
         ...scheduledAdminRoutes,
         ...workflowsAdminRoutes,
         ...storageAdminRoutes,

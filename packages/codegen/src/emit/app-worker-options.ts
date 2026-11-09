@@ -188,6 +188,9 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 options.exportGlobals = buildGlobalExporter(database);
                 options.syncGlobals = buildGlobalCdcSync(database);
                 options.applyGlobals = buildGlobalCdcApplier(database, this.cdcEnabled);
+                // \`lunora migrate apply\` runs the generated SQL files against this binding, recording each in
+                // \`__lunora_sql_migrations\`. A file runs once per stage, and nothing else runs it.
+                options.applySqlMigrations = (request) => applySqlMigrationFiles(database, request.files, request);
             }
         }`,
           ]

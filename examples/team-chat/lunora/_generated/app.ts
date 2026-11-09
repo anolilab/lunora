@@ -4,7 +4,7 @@
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import type * as LunoraAuthModule from "./authModule.js";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
-import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
+import { applyCdcChanges, applySqlMigrationFiles, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
 import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
 import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, SecurityOptions, ShardingInfo, ShardNamespaceLike, ShardRegistryRpc, WorkerOptions } from "lunorash/runtime";
@@ -620,6 +620,9 @@ class AppBuilder<Env extends object> {
                 options.exportGlobals = buildGlobalExporter(database);
                 options.syncGlobals = buildGlobalCdcSync(database);
                 options.applyGlobals = buildGlobalCdcApplier(database, this.cdcEnabled);
+                // `lunora migrate apply` runs the generated SQL files against this binding, recording each in
+                // `__lunora_sql_migrations`. A file runs once per stage, and nothing else runs it.
+                options.applySqlMigrations = (request) => applySqlMigrationFiles(database, request.files, request);
             }
         }
 
