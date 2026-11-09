@@ -4,7 +4,8 @@
  * (drift, destructive confirmation, skipped `ADD COLUMN`s) live in `@lunora/d1`; this module only checks the request
  * and hands it over.
  *
- * Admin-gated the way `/_lunora/admin/import` is, because a file can drop a table.
+ * Root-admin only: a file can drop a table, and a hand-written UPDATE can rewrite auth or role rows, which named tokens
+ * must not reach.
  */
 import { readJsonBodyWithLimit } from "./body-readers";
 import { LunoraError } from "./errors";
@@ -28,6 +29,8 @@ interface SqlMigrationFileRequest {
 interface SqlMigrationApplyRequest {
     /** Record every pending file as applied without running it. Drift is still refused. */
     baseline: boolean;
+    /** Record pending files up to and including this one (by name), and leave the later ones pending. */
+    baselineThrough?: string;
     /** Run files that hold destructive statements. Without it such a file is refused and nothing runs. */
     confirmDestructive: boolean;
     /** Report the plan without running or recording anything. */
@@ -73,6 +76,17 @@ const parseFiles = (raw: unknown): SqlMigrationFileRequest[] => {
     });
 };
 
+/** The optional `baselineThrough` file name: absent is `undefined`, anything but a string is refused. */
+const baselineThroughName = (body: Record<string, unknown>): string | undefined => {
+    const value = body["baselineThrough"];
+
+    if (value !== undefined && typeof value !== "string") {
+        throw new LunoraError("SQL migration `baselineThrough` must be a file name", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    return value;
+};
+
 /** An optional boolean flag from the request body: absent is `false`, anything but a boolean is refused. */
 const flag = (body: Record<string, unknown>, name: string): boolean => {
     if (body[name] !== undefined && typeof body[name] !== "boolean") {
@@ -103,8 +117,10 @@ const buildSqlMigrationAdminRoutes = (deps: SqlMigrationAdminRouteDeps): Record<
 
         const body = await readJsonBodyWithLimit(request, SQL_MIGRATION_BODY_BYTES);
 
+        const through = baselineThroughName(body);
         const result = await apply({
             baseline: flag(body, "baseline"),
+            ...(through === undefined ? {} : { baselineThrough: through }),
             confirmDestructive: flag(body, "confirmDestructive"),
             dryRun: flag(body, "dryRun"),
             files: parseFiles(body["files"]),

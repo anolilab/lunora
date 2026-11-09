@@ -4476,10 +4476,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         syncGlobals: options.syncGlobals,
     });
 
-    // `lunora migrate apply`: the generated SQL files, run against the D1 global plane.
+    // `lunora migrate apply`: the generated SQL files, run against the D1 global plane. Root-only: the files can hold
+    // statements that rewrite auth or role rows, which named tokens must not reach.
     const sqlMigrationAdminRoutes = buildSqlMigrationAdminRoutes({
         applySqlMigrations: options.applySqlMigrations,
-        assertAdmin: assertAdminAuthorized,
+        assertAdmin: assertRootAdmin,
     });
 
     /** Read a query param, collapsing missing (`null`) and empty (`""`) to `undefined`. */

@@ -5,8 +5,11 @@ import { describe, expect, it } from "vitest";
 import type { D1DatabaseLike, D1PreparedStatementLike } from "../src/d1-client";
 import { applySqlMigrationFiles } from "../src/sql-file-migrations";
 
-/** A {@link D1DatabaseLike} over a real `node:sqlite` connection, so the statements run through SQLite itself. */
-const createSqliteDatabase = (sqlite: DatabaseSync): D1DatabaseLike => {
+/**
+ * A {@link D1DatabaseLike} over a real `node:sqlite` connection, so the statements run through SQLite itself. `beforeBatch`
+ * runs first on every batch, so a test can make a concurrent write, or a failure, land between the plan and the batch.
+ */
+const createSqliteDatabase = (sqlite: DatabaseSync, beforeBatch: () => void = () => {}): D1DatabaseLike => {
     const prepare = (sql: string): D1PreparedStatementLike => {
         let bound: unknown[] = [];
         const stmt: D1PreparedStatementLike = {
@@ -32,6 +35,8 @@ const createSqliteDatabase = (sqlite: DatabaseSync): D1DatabaseLike => {
 
     return {
         batch: async (stmts: D1PreparedStatementLike[]) => {
+            beforeBatch();
+
             const results = [];
 
             for (const stmt of stmts) {
@@ -165,6 +170,9 @@ BEGIN
     INSERT INTO audit (post_id) VALUES (NEW.id);
 END;
 INSERT INTO posts (id) VALUES (1);`;
+
+        // A file must already be recorded: on a fresh database a row write is refused, and this test is about splitting.
+        await applySqlMigrationFiles(database, [{ name: "setup.sql", sql: "CREATE TABLE seed (id INTEGER);" }]);
 
         const result = await applySqlMigrationFiles(database, [{ name: "trigger.sql", sql }]);
 
@@ -317,6 +325,182 @@ INSERT INTO posts (id) VALUES (1);`;
         expect(result.files.map((file) => file.state)).toEqual(["ran", "ran"]);
         expect(result.files[1]?.skipped).toEqual([]);
         expect((sqlite.prepare('PRAGMA table_info("t")').all() as { name: string }[]).map((row) => row.name)).toEqual(["id", "c"]);
+
+        sqlite.close();
+    });
+
+    it("refuses a file whose SQL moved to another name, instead of replaying it under the new one", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "old_name.sql", sql: "CREATE TABLE a (id INTEGER);" }]);
+
+        await expect(applySqlMigrationFiles(database, [{ name: "new_name.sql", sql: "CREATE TABLE a (id INTEGER);" }])).rejects.toMatchObject({
+            code: "MIGRATION_DRIFT",
+            message: expect.stringContaining("renamed"),
+        });
+        expect(tables(sqlite)).toEqual(["__lunora_sql_migrations", "a"]);
+
+        sqlite.close();
+    });
+
+    it("skips an ADD COLUMN whose column is already there under a different capitalisation", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE t (Sender TEXT);" }]);
+
+        const result = await applySqlMigrationFiles(database, [{ name: "add_sender.sql", sql: "ALTER TABLE t ADD COLUMN sender TEXT;" }]);
+
+        expect(result.files[0]?.state).toBe("ran");
+        expect(result.files[0]?.skipped).toHaveLength(1);
+
+        sqlite.close();
+    });
+
+    it("runs an ADD COLUMN that follows a DROP COLUMN of the same name earlier in its own file", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE t (id TEXT, c TEXT);" }]);
+
+        const result = await applySqlMigrationFiles(database, [{ name: "swap_c.sql", sql: "ALTER TABLE t DROP COLUMN c;\nALTER TABLE t ADD COLUMN c TEXT;" }], {
+            confirmDestructive: true,
+        });
+
+        expect(result.files[0]?.skipped).toEqual([]);
+        expect((sqlite.prepare('PRAGMA table_info("t")').all() as { name: string }[]).map((row) => row.name)).toEqual(["id", "c"]);
+
+        sqlite.close();
+    });
+
+    it("reports transaction control in a dry run and a baseline, and refuses it when the file would run", async () => {
+        expect.assertions(3);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+        const sql = "BEGIN;\nCREATE TABLE t (id INTEGER);\nCOMMIT;";
+
+        const plan = await applySqlMigrationFiles(database, [{ name: "tx.sql", sql }], { dryRun: true });
+
+        expect(plan.files[0]?.statements).toHaveLength(3);
+
+        await expect(applySqlMigrationFiles(database, [{ name: "tx.sql", sql }])).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+        const baselined = await applySqlMigrationFiles(database, [{ name: "tx.sql", sql }], { baseline: true });
+
+        expect(baselined.files[0]?.state).toBe("baselined");
+
+        sqlite.close();
+    });
+
+    it("baselines only the files up to the named one, and a later run applies the rest", async () => {
+        expect.assertions(5);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+        const files = [
+            { name: "a.sql", sql: "CREATE TABLE a (id INTEGER);" },
+            { name: "b.sql", sql: "CREATE TABLE b (id INTEGER);" },
+            { name: "drop_a.sql", sql: DROP_FILE },
+        ];
+
+        const baselined = await applySqlMigrationFiles(database, files, { baselineThrough: "b.sql" });
+
+        expect(baselined.files.map((file) => file.state)).toEqual(["baselined", "baselined", "pending"]);
+        expect(tables(sqlite)).not.toContain("a");
+
+        await expect(applySqlMigrationFiles(database, files)).rejects.toMatchObject({ code: "MIGRATION_DESTRUCTIVE" });
+
+        const later = await applySqlMigrationFiles(database, files, { confirmDestructive: true });
+
+        expect(later.files.map((file) => file.state)).toEqual(["applied", "applied", "ran"]);
+        expect(trackedNames(sqlite)).toEqual(["a.sql", "b.sql", "drop_a.sql"]);
+
+        sqlite.close();
+    });
+
+    it("refuses baseline and baselineThrough together, and a baselineThrough that names no file", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+        const files = [{ name: "a.sql", sql: "CREATE TABLE a (id INTEGER);" }];
+
+        await expect(applySqlMigrationFiles(database, files, { baseline: true, baselineThrough: "a.sql" })).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+        });
+        await expect(applySqlMigrationFiles(database, files, { baselineThrough: "missing.sql" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+        sqlite.close();
+    });
+
+    it("refuses a row write on a database with no recorded file, even when confirmed", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        sqlite.exec('CREATE TABLE "emails" ("_id" TEXT, "seen" INTEGER)');
+        sqlite.exec('INSERT INTO "emails" ("_id", "seen") VALUES (\'1\', 0)');
+
+        await expect(
+            applySqlMigrationFiles(database, [{ name: "backfill.sql", sql: 'UPDATE "emails" SET "seen" = 1;' }], { confirmDestructive: true }),
+        ).rejects.toMatchObject({ code: "MIGRATION_DESTRUCTIVE" });
+        expect((sqlite.prepare('SELECT "seen" FROM "emails"').all() as { seen: number }[])[0]?.seen).toBe(0);
+
+        sqlite.close();
+    });
+
+    it("records a file a concurrent run recorded first with the same SQL, and refuses one recorded with other SQL", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        // A concurrent run records a.sql with other SQL after this run has planned it as pending.
+        const database = createSqliteDatabase(sqlite, () => {
+            sqlite.prepare("INSERT INTO __lunora_sql_migrations (name, sha256, applied_at) VALUES ('a.sql', 'other-sql', 0)").run();
+        });
+
+        await expect(applySqlMigrationFiles(database, [{ name: "a.sql", sql: "CREATE TABLE a (id INTEGER);" }])).rejects.toMatchObject({
+            code: "MIGRATION_DRIFT",
+        });
+        expect(tables(sqlite)).not.toContain("a");
+
+        sqlite.close();
+    });
+
+    it("re-plans once when the runtime added the column between the catalog read and the batch", async () => {
+        expect.assertions(3);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE t (id TEXT);" }]);
+
+        let raced = false;
+        const racing = createSqliteDatabase(sqlite, () => {
+            if (raced) {
+                return;
+            }
+
+            raced = true;
+            // The runtime's first-use ADD COLUMN lands here, so the batch's own ADD fails on the duplicate.
+            sqlite.exec("ALTER TABLE t ADD COLUMN extra TEXT");
+
+            throw new Error("D1_ERROR: duplicate column name: extra");
+        });
+
+        const result = await applySqlMigrationFiles(racing, [{ name: "add_extra.sql", sql: "ALTER TABLE t ADD COLUMN extra TEXT;" }]);
+
+        expect(result.files[0]?.state).toBe("ran");
+        expect(result.files[0]?.skipped).toHaveLength(1);
+        expect(trackedNames(sqlite)).toEqual(["add_extra.sql", "base.sql"]);
 
         sqlite.close();
     });

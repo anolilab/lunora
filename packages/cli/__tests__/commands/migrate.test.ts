@@ -1804,8 +1804,125 @@ describe("lunora migrate apply / status --sql", () => {
         });
 
         expect(silent.code).toBe(EXIT_CODE.FAILURE);
-        expect(silent.error).toMatch(/without a result for every SQL file/u);
+        expect(silent.error).toMatch(/without a valid result for every SQL file/u);
         expect(silent.files).toEqual([]);
+    });
+
+    it("a non-dry run that leaves a file pending has not finished, so it is a failed run", async () => {
+        expect.assertions(2);
+
+        const incomplete = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql([], 200, {
+                files: [
+                    { destructive: [], name: "001_create_emails.sql", skipped: [], state: "applied", statements: [] },
+                    { destructive: [], name: "002_drop_emails.sql", skipped: [], state: "pending", statements: [] },
+                ],
+            }),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+
+        expect(incomplete.code).toBe(EXIT_CODE.FAILURE);
+        expect(incomplete.error).toMatch(/002_drop_emails\.sql was not recorded/u);
+    });
+
+    it("--baseline-through sends the bound, and the files after it may stay pending", async () => {
+        expect.assertions(3);
+
+        const calls: SqlCall[] = [];
+        const through = await runMigrateSqlCommand({
+            baselineThrough: "001_create_emails.sql",
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql(calls, 200, {
+                files: [
+                    { destructive: [], name: "001_create_emails.sql", skipped: [], state: "baselined", statements: [] },
+                    { destructive: ["DROP TABLE"], name: "002_drop_emails.sql", skipped: [], state: "pending", statements: [] },
+                ],
+            }),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+            yes: true,
+        });
+
+        expect(calls[0]?.body).toMatchObject({ baselineThrough: "001_create_emails.sql" });
+        expect(through.code).toBe(0);
+        expect(through.files.map((file) => file.state)).toEqual(["baselined", "pending"]);
+    });
+
+    it("refuses --baseline with --baseline-through, and a --baseline-through that names no file, before any request", async () => {
+        expect.assertions(4);
+
+        const calls: SqlCall[] = [];
+        const both = await runMigrateSqlCommand({
+            baseline: true,
+            baselineThrough: "001_create_emails.sql",
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql(calls),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+        const unknown = await runMigrateSqlCommand({
+            baselineThrough: "999_missing.sql",
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql(calls),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+
+        expect(both.code).toBe(EXIT_CODE.USAGE);
+        expect(unknown.code).toBe(EXIT_CODE.USAGE);
+        expect(unknown.error).toMatch(/names no file/u);
+        expect(calls).toEqual([]);
+    });
+
+    it("says the files exceed the request limit when the worker answers 413", async () => {
+        expect.assertions(2);
+
+        const tooLarge = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql([], 413, { error: { code: "PAYLOAD_TOO_LARGE" } }),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+
+        expect(tooLarge.code).not.toBe(0);
+        expect(tooLarge.error).toMatch(/8 MiB/u);
+    });
+
+    it("skips with a warning, and succeeds, when the worker has no D1 plane to run the files on", async () => {
+        expect.assertions(2);
+
+        const skipped = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql([], 400, { error: { code: "SQL_MIGRATIONS_NOT_CONFIGURED", message: "no D1 plane" } }),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+
+        expect(skipped.code).toBe(0);
+        expect(skipped.error).toBeUndefined();
+    });
+
+    it("says a named admin token cannot run the SQL, rather than printing the raw refusal", async () => {
+        expect.assertions(2);
+
+        const named = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql([], 403, { error: { code: "ADMIN_ROOT_REQUIRED", message: "root only" } }),
+            logger: silentLogger(),
+            token: "named-token",
+            url: "http://localhost:9999",
+        });
+
+        expect(named.code).toBe(EXIT_CODE.PERMISSION);
+        expect(named.error).toMatch(/only from the root admin token/u);
     });
 
     it("returns the worker's per-file plan, and a refused run carries the HTTP status", async () => {

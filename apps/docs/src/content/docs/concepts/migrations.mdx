@@ -271,19 +271,45 @@ lunora migrate apply --url https://your-worker.example.workers.dev --yes    # ru
 The Worker runs a file's statements and records its name and SHA-256 in one
 atomic batch, so a file runs once per environment. A second run is a no-op. A
 file whose text changed after it ran is refused rather than run again: put the
-change in a new file. A `DROP` or a replacing write is refused unless you pass
-`--yes`, and the refusal lists the statements. `--dry-run` prints the statements
-without running them. `lunora deploy --migrate` runs `apply` before the data
-migrations, so a deploy applies its SQL with the rest. Any other deploy tool can
-call the same command as a step before its deploy.
+change in a new file. Renaming an applied file counts as a change, so it is
+refused too. A `DROP` or a replacing write is refused unless you pass `--yes`,
+and the refusal lists the statements. `--dry-run` prints the statements without
+running them. A file cannot contain `BEGIN`, `COMMIT` or `ROLLBACK`, because each
+file already runs as one batch. `lunora deploy --migrate` runs `apply` before the
+data migrations, so a deploy applies its SQL with the rest. Any other deploy tool
+can call the same command as a step before its deploy.
 
-**Upgrading an existing project.** Files committed before `migrate apply` existed were never recorded, so the first run would treat every one of them as pending. A file that drops a table could then run again over rows written since it last ran. Before the first `deploy --migrate` or `migrate apply` against a database that already has those files applied, record them without running them:
+**Upgrading an existing project.** Files committed before `migrate apply` existed were never recorded, so the first run would treat every one of them as pending. A file that drops a table could then run again over rows written since it last ran. Record the files that already ran on each environment, without running them, before its first `deploy --migrate`:
 
 ```bash
+# Every file in lunora/migrations/ has already run on this environment:
+lunora migrate apply --baseline --url https://your-worker.example.workers.dev --yes
+
+# Only the files up to the last one that ran. Later files, such as a DROP that has not run yet, stay pending:
+lunora migrate apply --baseline-through <last-file-that-ran>.sql --url https://your-worker.example.workers.dev --yes
+```
+
+After a `--baseline-through`, `lunora migrate apply --url … --yes` runs the files
+that are left, including a `DROP`. Baseline only the files that ran: a recorded
+file is never executed.
+
+If the file that drops a table is the first `.sql` file on a stage, nothing ran
+before it there, so there is no earlier file to name. Run that file by hand on the
+stage first, then record it:
+
+```bash
+wrangler d1 execute <database-name> --remote --file lunora/migrations/<file>.sql
 lunora migrate apply --baseline --url https://your-worker.example.workers.dev --yes
 ```
 
-A database with no recorded file refuses any file that drops or replaces data, whatever `--yes` says, and the refusal points here. Once a file is recorded, a later run applies only what is new.
+Run it by hand before the baseline, never after or instead of it: a recorded file
+is never executed, so a baseline of a DROP that has not run leaves the table in
+place for good. The same applies to a seed `INSERT` on a database that is new to
+tracking.
+
+A database with no recorded file refuses any file that drops, replaces or writes
+rows, whatever `--yes` says, and the refusal points here. Once a file is
+recorded, a later run applies only what is new.
 
 An `ADD COLUMN` that the runtime already added is skipped, since SQLite has no
 `IF NOT EXISTS` for it. The generator's `-- lunora:allow-destructive` comment

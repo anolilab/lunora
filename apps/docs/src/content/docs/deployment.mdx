@@ -354,9 +354,11 @@ have not declared your own:
 Under `--migrate`, the deploy applies the SQL that `lunora migrate generate` emits
 (`lunora migrate apply`) and then runs the data migrations, both **after** the
 deploy. Both require `--migrate-yes` for a production target and, on an unlinked
-checkout, `--migrate-url`. A deploy tool other than `lunora deploy` runs
-`lunora migrate apply --url <worker> --yes` as its own step; see
-[Migrations](/docs/concepts/migrations).
+checkout, `--migrate-url`. The SQL step needs the root admin token: a named token
+is refused, and `deploy --migrate` stops before the data migrations, so a
+pipeline with only a named token cannot use `--migrate`. A deploy tool other than
+`lunora deploy` runs `lunora migrate apply --url <worker> --yes` as its own step;
+see [Migrations](/docs/concepts/migrations).
 
 CI should run one of these before the deploy job, so codegen drift and a stale
 `_generated/` are a build failure rather than a deploy that silently ships old

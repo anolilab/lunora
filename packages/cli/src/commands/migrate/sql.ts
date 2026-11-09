@@ -17,18 +17,26 @@ import type { FetchLike } from "../run/handler";
 /** The Worker route `migrate apply` posts the generated SQL files to; mirrors `SQL_MIGRATIONS_PATH` in `@lunora/runtime`. */
 const SQL_MIGRATIONS_PATH = "/_lunora/admin/sql-migrations";
 
+type MigrateSqlFileState = "applied" | "baselined" | "changed" | "pending" | "ran";
+
+/** The states a file is in once a run has recorded it, or applied it. Anything else after a run is incomplete. */
+const RECORDED_STATES: ReadonlySet<string> = new Set<MigrateSqlFileState>(["applied", "baselined", "ran"]);
+const FILE_STATES: ReadonlySet<string> = new Set<MigrateSqlFileState>(["applied", "baselined", "changed", "pending", "ran"]);
+
 /** What the Worker reports for one SQL file: what it did, or would do, and why a statement was left out. */
 interface MigrateSqlFilePlan {
     destructive: string[];
     name: string;
     skipped: string[];
-    state: "applied" | "baselined" | "changed" | "pending" | "ran";
+    state: MigrateSqlFileState;
     statements: string[];
 }
 
 interface MigrateSqlCommandOptions {
     /** Record the pending files as applied without running them (`migrate apply --baseline`). */
     baseline?: boolean;
+    /** Record the pending files up to and including this one, by name; the later ones stay pending. */
+    baselineThrough?: string;
     cwd?: string;
     /** Report each file's state and statements without running anything (`migrate status --sql`). */
     dryRun?: boolean;
@@ -96,13 +104,20 @@ const readReply = async (response: { text: () => Promise<string> }): Promise<unk
     }
 };
 
+/** The `error.code` of a Worker error reply, or `undefined` for any other body. */
+const replyErrorCode = (body: unknown): string | undefined => {
+    const code = (body as { error?: { code?: unknown } } | null | undefined)?.error?.code;
+
+    return typeof code === "string" ? code : undefined;
+};
+
 /** The verb the log line and the error messages use for this run. */
-const runVerb = (dryRun: boolean, baseline: boolean): string => {
+const runVerb = (dryRun: boolean, recordOnly: boolean): string => {
     if (dryRun) {
         return "plan";
     }
 
-    return baseline ? "baseline" : "apply";
+    return recordOnly ? "baseline" : "apply";
 };
 
 /**
@@ -137,20 +152,162 @@ const resolveSqlTarget = (options: MigrateSqlCommandOptions, cwd: string, dryRun
     return { baseUrl, token };
 };
 
+const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
+
+/** One reply entry with every field the CLI reads, checked rather than trusted from a cast. */
+const isFilePlan = (value: unknown): value is MigrateSqlFilePlan => {
+    if (typeof value !== "object" || value === null) {
+        return false;
+    }
+
+    const entry = value as Record<string, unknown>;
+
+    return (
+        typeof entry["name"] === "string" &&
+        typeof entry["state"] === "string" &&
+        FILE_STATES.has(entry["state"]) &&
+        isStringArray(entry["destructive"]) &&
+        isStringArray(entry["skipped"]) &&
+        isStringArray(entry["statements"])
+    );
+};
+
 /**
- * The per-file plans from a 200 reply, or `undefined` when the reply does not name every file that was sent. A 200 is
- * not proof the worker ran anything: a proxy or an SPA fallback can answer any path with a success. The reply has to
- * name every file, or the run did not happen and `deploy --migrate` must not go on.
+ * The per-file plans from a 200 reply, or `undefined` when the reply does not name every file that was sent, exactly
+ * once, with the fields the CLI reads. A 200 is not proof the worker ran anything: a proxy or an SPA fallback can
+ * answer any path with a success, and a name-only entry would fail later in logging.
  */
 const plansFromReply = (body: unknown, files: ReadonlyArray<{ name: string }>): MigrateSqlFilePlan[] | undefined => {
-    const reported = (body as { files?: unknown } | null | undefined)?.files;
-    const reportedNames = Array.isArray(reported) ? reported.map((file: unknown) => (file as { name?: unknown } | null)?.name) : [];
+    const reported: unknown = (body as { files?: unknown } | null | undefined)?.files;
 
-    if (!Array.isArray(reported) || !files.every((file) => reportedNames.includes(file.name))) {
+    if (!Array.isArray(reported) || !reported.every(isFilePlan)) {
         return undefined;
     }
 
-    return reported as MigrateSqlFilePlan[];
+    const names = reported.map((plan) => plan.name);
+    const sent = files.map((file) => file.name);
+    const namesEachFileOnce = new Set(names).size === names.length && names.length === sent.length && sent.every((name) => names.includes(name));
+
+    return namesEachFileOnce ? reported : undefined;
+};
+
+/**
+ * The files a run must bring to a recorded state. With `--baseline-through` only the files up to that name; the later
+ * ones are meant to stay pending, so a later apply can run them.
+ */
+const requiredFileNames = (files: ReadonlyArray<{ name: string }>, baselineThrough: string | undefined): Set<string> => {
+    const through = baselineThrough === undefined ? files.length - 1 : files.findIndex((file) => file.name === baselineThrough);
+
+    return new Set(files.slice(0, through + 1).map((file) => file.name));
+};
+
+/** The refusal for a run that cannot go ahead: logged, and returned with its exit code. */
+const refuse = (logger: Logger, error: string, code: number): MigrateSqlCommandResult => {
+    logger.error(error);
+
+    return { code, error, files: [] };
+};
+
+/** The usage refusal for flags that cannot be combined, or a `--baseline-through` that names no file. */
+const argumentRefusal = (options: MigrateSqlCommandOptions, files: ReadonlyArray<{ name: string }>): MigrateSqlCommandResult | undefined => {
+    const { baselineThrough } = options;
+
+    if (options.baseline === true && baselineThrough !== undefined) {
+        return refuse(options.logger, "pass either --baseline or --baseline-through, not both", EXIT_CODE.USAGE);
+    }
+
+    if (baselineThrough !== undefined && !files.some((file) => file.name === baselineThrough)) {
+        return refuse(options.logger, `--baseline-through ${baselineThrough} names no file under lunora/migrations/`, EXIT_CODE.USAGE);
+    }
+
+    return undefined;
+};
+
+/**
+ * The refusal for a reply that is not a per-file result, or `undefined` when the reply should be read as one. A 400 for
+ * a worker with no D1 plane is a skip, not a refusal: that worker has nothing for the files to run against.
+ */
+const replyRefusal = (
+    response: { ok: boolean; status: number },
+    body: unknown,
+    target: { baseUrl: string },
+    logger: Logger,
+): MigrateSqlCommandResult | undefined => {
+    if (response.status === 404) {
+        return refuse(
+            logger,
+            `the worker at ${target.baseUrl} has no ${SQL_MIGRATIONS_PATH} route, so it predates \`migrate apply\`. Deploy a version of lunora that includes it, then re-run.`,
+            EXIT_CODE.NOT_FOUND,
+        );
+    }
+
+    if (response.status === 413) {
+        return refuse(
+            logger,
+            `${target.baseUrl} refused the request: the SQL files in lunora/migrations/ together exceed the 8 MiB one request can carry. Split the files across deploys.`,
+            exitCodeForStatus(response.status),
+        );
+    }
+
+    if (response.status === 400 && replyErrorCode(body) === "SQL_MIGRATIONS_NOT_CONFIGURED") {
+        logger.warn(`${target.baseUrl} has no D1 global plane, so the SQL files in lunora/migrations/ do not run there. Skipping them.`);
+
+        return { code: 0, files: [] };
+    }
+
+    // A named admin token may not run SQL: the files can rewrite auth rows. Say so rather than print the raw refusal.
+    if (replyErrorCode(body) === "ADMIN_ROOT_REQUIRED") {
+        return refuse(
+            logger,
+            `${target.baseUrl} accepts migrate apply only from the root admin token; a named admin token cannot run SQL migrations`,
+            exitCodeForStatus(response.status),
+        );
+    }
+
+    if (!response.ok) {
+        // The reply is only printed when it failed: on success the per-file lines below say what happened.
+        logger.info(JSON.stringify(body, undefined, 2));
+
+        return refuse(
+            logger,
+            `migrate apply was refused by ${target.baseUrl} (HTTP ${String(response.status)}) — see the response above`,
+            exitCodeForStatus(response.status),
+        );
+    }
+
+    return undefined;
+};
+
+/**
+ * The failure for a run that did not finish: a dry run that finds a file changed, or a real run that left a file it was
+ * asked to reach unrecorded. `deploy --migrate` must not go on past either. A dry run changes nothing, so it has no
+ * unrecorded files to report.
+ */
+const unfinishedRun = (
+    plans: ReadonlyArray<MigrateSqlFilePlan>,
+    files: ReadonlyArray<{ name: string }>,
+    options: { baselineThrough: string | undefined; baseUrl: string; dryRun: boolean; logger: Logger },
+): MigrateSqlCommandResult | undefined => {
+    if (options.dryRun) {
+        const drifted = plans.filter((file) => file.state === "changed").map((file) => file.name);
+
+        if (drifted.length === 0) {
+            return undefined;
+        }
+
+        return refuse(options.logger, `${String(drifted.length)} SQL file(s) changed after they were applied: ${drifted.join(", ")}`, EXIT_CODE.CONFLICT);
+    }
+
+    const required = requiredFileNames(files, options.baselineThrough);
+    const incomplete = plans.filter((file) => required.has(file.name) && !RECORDED_STATES.has(file.state)).map((file) => file.name);
+
+    if (incomplete.length === 0) {
+        return undefined;
+    }
+
+    const verb = incomplete.length === 1 ? "was" : "were";
+
+    return refuse(options.logger, `${incomplete.join(", ")} ${verb} not recorded by ${options.baseUrl}, so the run did not finish`, EXIT_CODE.FAILURE);
 };
 
 /**
@@ -162,13 +319,11 @@ const runMigrateSqlCommand = async (options: MigrateSqlCommandOptions): Promise<
     const cwd = options.cwd ?? process.cwd();
     const dryRun = options.dryRun === true;
     const baseline = options.baseline === true;
+    const { baselineThrough } = options;
+    const recordOnly = baseline || baselineThrough !== undefined;
 
     if (options.prod && options.url === undefined) {
-        const error = "--prod requires an explicit --url (refusing to migrate the implicit localhost worker)";
-
-        options.logger.error(error);
-
-        return { code: EXIT_CODE.USAGE, error, files: [] };
+        return refuse(options.logger, "--prod requires an explicit --url (refusing to migrate the implicit localhost worker)", EXIT_CODE.USAGE);
     }
 
     const files = readSqlMigrationFiles(cwd);
@@ -177,6 +332,12 @@ const runMigrateSqlCommand = async (options: MigrateSqlCommandOptions): Promise<
         options.logger.info("no SQL migration files under lunora/migrations/ — nothing to apply");
 
         return { code: 0, files: [] };
+    }
+
+    const refusal = argumentRefusal(options, files);
+
+    if (refusal !== undefined) {
+        return refusal;
     }
 
     const target = resolveSqlTarget(options, cwd, dryRun);
@@ -188,58 +349,38 @@ const runMigrateSqlCommand = async (options: MigrateSqlCommandOptions): Promise<
     const requestUrl = `${target.baseUrl}${SQL_MIGRATIONS_PATH}`;
     const fetchImpl: FetchLike = options.fetchImpl ?? adminFetch;
 
-    options.logger.info(`POST ${requestUrl} -> ${runVerb(dryRun, baseline)} ${String(files.length)} SQL file(s)`);
+    options.logger.info(`POST ${requestUrl} -> ${runVerb(dryRun, recordOnly)} ${String(files.length)} SQL file(s)`);
 
     const response = await fetchImpl(requestUrl, {
-        body: JSON.stringify({ baseline, confirmDestructive: options.yes === true, dryRun, files }),
+        body: JSON.stringify({ baseline, baselineThrough, confirmDestructive: options.yes === true, dryRun, files }),
         headers: { authorization: `Bearer ${target.token}`, "content-type": "application/json" },
         method: "POST",
     });
-
-    if (response.status === 404) {
-        const error = `the worker at ${target.baseUrl} has no ${SQL_MIGRATIONS_PATH} route, so it predates \`migrate apply\`. Deploy a version of lunora that includes it, then re-run.`;
-
-        options.logger.error(error);
-
-        return { code: EXIT_CODE.NOT_FOUND, error, files: [] };
-    }
-
     const body = await readReply(response);
+    const refused = replyRefusal(response, body, target, options.logger);
 
-    if (!response.ok) {
-        // The reply is only printed when it failed: on success the per-file lines below say what happened.
-        options.logger.info(JSON.stringify(body, undefined, 2));
-
-        const error = `migrate apply was refused by ${target.baseUrl} (HTTP ${String(response.status)}) — see the response above`;
-
-        options.logger.error(error);
-
-        return { code: exitCodeForStatus(response.status), error, files: [] };
+    if (refused !== undefined) {
+        return refused;
     }
 
     const plans = plansFromReply(body, files);
 
     if (plans === undefined) {
-        const error = `${target.baseUrl} answered ${dryRun ? "the plan" : "the apply"} without a result for every SQL file — it may not support \`migrate apply\`, or a proxy answered for it`;
-
-        options.logger.error(error);
-
-        return { code: EXIT_CODE.FAILURE, error, files: [] };
+        return refuse(
+            options.logger,
+            `${target.baseUrl} answered ${dryRun ? "the plan" : "the apply"} without a valid result for every SQL file — it may not support \`migrate apply\`, or a proxy answered for it`,
+            EXIT_CODE.FAILURE,
+        );
     }
 
     for (const file of plans) {
         logSqlFilePlan(options.logger, file, dryRun);
     }
 
-    // A dry run that finds a file changed since it was applied is a failed check, so CI can gate on `status --sql`.
-    const drifted = plans.filter((file) => file.state === "changed").map((file) => file.name);
+    const unfinished = unfinishedRun(plans, files, { baselineThrough, baseUrl: target.baseUrl, dryRun, logger: options.logger });
 
-    if (dryRun && drifted.length > 0) {
-        const error = `${String(drifted.length)} SQL file(s) changed after they were applied: ${drifted.join(", ")}`;
-
-        options.logger.error(error);
-
-        return { code: EXIT_CODE.CONFLICT, error, files: plans };
+    if (unfinished !== undefined) {
+        return { ...unfinished, files: plans };
     }
 
     return { code: 0, files: plans };

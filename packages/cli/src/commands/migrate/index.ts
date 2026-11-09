@@ -40,6 +40,12 @@ const migrateCommand: Command = {
             type: Boolean,
         },
         {
+            description:
+                "With apply: record the pending SQL files up to and including this file name, and leave the later ones pending so a later apply can run them",
+            name: "baseline-through",
+            type: String,
+        },
+        {
             description: "Preview a data migration, or the SQL files `migrate apply` would run, without running anything",
             name: "dry-run",
             type: Boolean,
@@ -85,6 +91,7 @@ export { migrateCommand };
 
 export type MigrateOptions = CreateOptions<{
     baseline: boolean | undefined;
+    "baseline-through": string | undefined;
     "batch-size": number | undefined;
     "dry-run": boolean | undefined;
     format: string | undefined;

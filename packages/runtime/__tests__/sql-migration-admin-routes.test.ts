@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { LunoraError } from "../src/errors";
+import { LunoraError, toErrorResponse } from "../src/errors";
 import type { SqlMigrationApplier } from "../src/sql-migration-admin-routes";
 import { buildSqlMigrationAdminRoutes, SQL_MIGRATIONS_PATH } from "../src/sql-migration-admin-routes";
 
@@ -109,5 +109,28 @@ describe("the /_lunora/admin/sql-migrations route", () => {
 
         await expect(handlerFor(applier)(post({ confirmDestructive: "yes", files: [] }))).rejects.toMatchObject({ code: "BAD_REQUEST" });
         expect(applier).not.toHaveBeenCalled();
+    });
+
+    it("passes baselineThrough through, and refuses one that is not a file name", async () => {
+        expect.assertions(3);
+
+        const applier = vi.fn<SqlMigrationApplier>(async () => {
+            return { files: [] };
+        });
+
+        await handlerFor(applier)(post({ baselineThrough: "001_a.sql", files: [] }));
+
+        expect(applier).toHaveBeenCalledWith({ baseline: false, baselineThrough: "001_a.sql", confirmDestructive: false, dryRun: false, files: [] });
+        await expect(handlerFor(applier)(post({ baselineThrough: 1, files: [] }))).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(applier).toHaveBeenCalledTimes(1);
+    });
+
+    it("answers not-configured in the error envelope the CLI reads, with status 400", async () => {
+        expect.assertions(2);
+
+        const response = toErrorResponse(await handlerFor(undefined)(post({ files: [] })).catch((error: unknown) => error));
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "SQL_MIGRATIONS_NOT_CONFIGURED" } });
     });
 });

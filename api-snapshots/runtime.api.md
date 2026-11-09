@@ -3435,6 +3435,7 @@ type SqlMigrationApplier = (request: SqlMigrationApplyRequest) => Promise<SqlMig
 ```ts
 interface SqlMigrationApplyRequest {
     baseline: boolean;
+    baselineThrough?: string;
     confirmDestructive: boolean;
     dryRun: boolean;
     files: ReadonlyArray<SqlMigrationFileRequest>;

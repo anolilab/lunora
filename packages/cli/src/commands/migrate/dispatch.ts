@@ -99,11 +99,12 @@ const dispatchCreate = async (context: MigrateDispatchContext): Promise<CommandR
 /** `migrate apply` runs the generated SQL files; `migrate status --sql` reports them without running anything. */
 const dispatchSql = async (
     context: MigrateDispatchContext,
-    mode: { baseline: boolean; dryRun: boolean; subcommand: "apply" | "status-sql" },
+    mode: { baseline: boolean; baselineThrough?: string; dryRun: boolean; subcommand: "apply" | "status-sql" },
 ): Promise<CommandResult<MigrateCommandData>> => {
     const { cwd, logger, options } = context;
     const result = await runMigrateSqlCommand({
         baseline: mode.baseline,
+        baselineThrough: mode.baselineThrough,
         cwd,
         dryRun: mode.dryRun,
         logger,
@@ -164,7 +165,12 @@ const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions, Mi
 
     switch (sub) {
         case "apply": {
-            return await dispatchSql(context, { baseline: options.baseline === true, dryRun: options.dryRun === true, subcommand: "apply" });
+            return await dispatchSql(context, {
+                baseline: options.baseline === true,
+                baselineThrough: options.baselineThrough,
+                dryRun: options.dryRun === true,
+                subcommand: "apply",
+            });
         }
         case "create": {
             return await dispatchCreate(context);
