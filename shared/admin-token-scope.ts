@@ -11,7 +11,7 @@ const ADMIN_TOKEN_SCOPES = ["migrations"] as const;
 
 type AdminTokenScope = (typeof ADMIN_TOKEN_SCOPES)[number];
 
-const isAdminTokenScope = (value: unknown): value is AdminTokenScope => typeof value === "string" && (ADMIN_TOKEN_SCOPES as readonly string[]).includes(value);
+const isAdminTokenScope = (value: unknown): value is AdminTokenScope => ADMIN_TOKEN_SCOPES.some((scope) => scope === value);
 
 export { ADMIN_TOKEN_SCOPES, isAdminTokenScope };
 export type { AdminTokenScope };
