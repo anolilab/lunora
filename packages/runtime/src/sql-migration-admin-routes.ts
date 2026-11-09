@@ -54,11 +54,14 @@ interface SqlMigrationApplyResult {
     refused?: ReadonlyArray<string>;
 }
 
-/** The worker option that runs a request against the D1 binding; absent when the worker has no D1 global plane. */
+/** The worker option that runs a request against the D1 binding. */
 type SqlMigrationApplier = (request: SqlMigrationApplyRequest) => Promise<SqlMigrationApplyResult>;
 
 interface SqlMigrationAdminRouteDeps {
-    /** Runs the files against the worker's D1 binding; absent when there is no D1 global plane (e.g. Hyperdrive-only). */
+    /**
+     * Runs the files against the worker's D1 binding. Absent for a worker with no D1 (e.g. Hyperdrive-only), where the step is
+     * skipped; absent for a worker that has a D1 binding, which is a hand-wired worker missing the option, so the step fails.
+     */
     applySqlMigrations?: SqlMigrationApplier;
     /** Enforce the route's gate: the root token, or a named token with the `migrations` scope. */
     assertAdmin: (request: Request) => void;
@@ -105,8 +108,21 @@ const flag = (body: Record<string, unknown>, name: string): boolean => {
     return body[name] === true;
 };
 
-const buildSqlMigrationAdminRoutes = (deps: SqlMigrationAdminRouteDeps): Record<string, (request: Request) => Promise<Response>> => {
-    const handleSqlMigrations = async (request: Request): Promise<Response> => {
+/** A D1 database by its shape (`.prepare`, `.batch`, `.dump`), so the check does not depend on the binding's name. */
+const isD1Binding = (value: unknown): boolean => {
+    if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+        return false;
+    }
+
+    const shape = value as Record<string, unknown>;
+
+    return typeof shape["prepare"] === "function" && typeof shape["batch"] === "function" && typeof shape["dump"] === "function";
+};
+
+const hasD1Binding = (env: unknown): boolean => typeof env === "object" && env !== null && Object.values(env).some((value) => isD1Binding(value));
+
+const buildSqlMigrationAdminRoutes = (deps: SqlMigrationAdminRouteDeps): Record<string, (request: Request, env?: unknown) => Promise<Response>> => {
+    const handleSqlMigrations = async (request: Request, env?: unknown): Promise<Response> => {
         const wrongMethod = methodGuard(request, ["POST"]);
 
         if (wrongMethod) {
@@ -122,6 +138,15 @@ const buildSqlMigrationAdminRoutes = (deps: SqlMigrationAdminRouteDeps): Record<
         const apply = deps.applySqlMigrations;
 
         if (apply === undefined) {
+            // A D1 binding with no applier means the worker was wired by hand without the option. Skipping would report a
+            // deploy that left SQL files unapplied, so this is a failure.
+            if (hasD1Binding(env)) {
+                throw new LunoraError("the worker has a D1 binding but no applySqlMigrations option, so the SQL files cannot run", {
+                    code: "MISCONFIGURED",
+                    status: 500,
+                });
+            }
+
             throw new LunoraError("SQL migrations run against the D1 global plane, and this worker has none to run them on", {
                 code: "SQL_MIGRATIONS_NOT_CONFIGURED",
                 status: 400,

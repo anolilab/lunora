@@ -120,7 +120,11 @@ export const ERROR_CATALOG = {
     },
     /** A migration file holds a statement that only the root admin token may run (a DROP, a row write, or a trigger, for a scoped caller). */
     MIGRATION_ROOT_REQUIRED: { status: 403, title: "Root admin token required for this migration" },
-    /** The SQL migration route has no D1 global plane to run files against, so the files are skipped by the CLI. */
+
+    /**
+     * The SQL migration route has no D1 binding to run files against, so the CLI skips the files. A worker that has a D1
+     * binding but no `applySqlMigrations` option answers `MISCONFIGURED` instead, since skipping would hide the unapplied files.
+     */
     SQL_MIGRATIONS_NOT_CONFIGURED: { status: 400, title: "SQL migrations not configured" },
 
     /**

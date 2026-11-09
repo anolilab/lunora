@@ -22,7 +22,7 @@ const handlerFor = (
 ) => {
     const routes = buildSqlMigrationAdminRoutes({ applySqlMigrations: applier, assertAdmin, isAdmin, isRootAdmin });
 
-    return routes[SQL_MIGRATIONS_PATH] as (request: Request) => Promise<Response>;
+    return routes[SQL_MIGRATIONS_PATH] as (request: Request, env?: unknown) => Promise<Response>;
 };
 
 describe("the /_lunora/admin/sql-migrations route", () => {
@@ -94,6 +94,19 @@ describe("the /_lunora/admin/sql-migrations route", () => {
         expect.assertions(1);
 
         await expect(handlerFor(undefined)(post({ files: [] }))).rejects.toMatchObject({ code: "SQL_MIGRATIONS_NOT_CONFIGURED", status: 400 });
+    });
+
+    it("fails with MISCONFIGURED, not a skip, when the worker has a D1 binding but no applier", async () => {
+        expect.assertions(2);
+
+        // A D1 database by shape: `prepare`, `batch` and `dump`. Its name is not what the check reads.
+        const d1 = { batch: () => undefined, dump: () => undefined, prepare: () => undefined };
+
+        await expect(handlerFor(undefined)(post({ files: [] }), { ANYTHING: d1 })).rejects.toMatchObject({ code: "MISCONFIGURED", status: 500 });
+        await expect(handlerFor(undefined)(post({ files: [] }), { KV: {} })).rejects.toMatchObject({
+            code: "SQL_MIGRATIONS_NOT_CONFIGURED",
+            status: 400,
+        });
     });
 
     it("rejects a file entry without a string name and sql", async () => {

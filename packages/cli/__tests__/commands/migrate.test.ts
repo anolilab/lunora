@@ -1910,6 +1910,22 @@ describe("lunora migrate apply / status --sql", () => {
         expect(skipped.error).toBeUndefined();
     });
 
+    it("says a D1 worker wired without applySqlMigrations must be fixed, rather than skipping its files", async () => {
+        expect.assertions(3);
+
+        const misconfigured = await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql([], 500, { error: { code: "MISCONFIGURED", message: "Worker misconfigured" } }),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+
+        expect(misconfigured.code).not.toBe(0);
+        expect(misconfigured.error).toMatch(/applySqlMigrations/u);
+        expect(misconfigured.error).not.toMatch(/skip/iu);
+    });
+
     it("says a token without the migrations scope needs one, and names the command that mints it", async () => {
         expect.assertions(2);
 

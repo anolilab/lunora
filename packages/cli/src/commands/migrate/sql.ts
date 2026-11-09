@@ -271,6 +271,15 @@ const replyRefusal = (
         return { code: 0, files: [] };
     }
 
+    // The worker has a D1 binding but was wired without `applySqlMigrations`. The worker redacts this code's message, so say the fix here.
+    if (replyErrorCode(body) === "MISCONFIGURED") {
+        return refuse(
+            logger,
+            `${target.baseUrl} has a D1 binding but its worker options have no applySqlMigrations, so the SQL files in lunora/migrations/ cannot run. Pass applySqlMigrations built from applySqlMigrationFiles in @lunora/d1, then redeploy.`,
+            exitCodeForStatus(response.status),
+        );
+    }
+
     // Refusals the worker names, said in terms of the fix rather than the raw reply.
     if (replyErrorCode(body) === "ADMIN_SCOPE_REQUIRED") {
         return refuse(
