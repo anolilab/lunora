@@ -571,6 +571,26 @@ INSERT INTO posts (id) VALUES (1);`;
         sqlite.close();
     });
 
+    it("an additive-only run treats a statement in the temp schema as root-only, since it persists nothing", async () => {
+        expect.assertions(1);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE users (id TEXT);" }]);
+
+        const files = [
+            { name: "temp_bare.sql", sql: "CREATE TABLE temp.x (id INTEGER);" },
+            { name: "temp_quoted.sql", sql: 'CREATE TABLE "temp".y (id INTEGER);' },
+            { name: "temp_alter.sql", sql: "ALTER TABLE temp.users ADD COLUMN note TEXT;" },
+        ];
+        const plan = await applySqlMigrationFiles(database, files, { additiveOnly: true, dryRun: true });
+
+        expect(plan.files.map((file) => file.rootOnly.length)).toStrictEqual([1, 1, 1]);
+
+        sqlite.close();
+    });
+
     it("an additive-only run refuses any file with a DROP, a row write or a trigger, before running anything", async () => {
         expect.assertions(3);
 

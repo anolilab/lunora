@@ -106,6 +106,12 @@ const REFERENCES_RE = /\bREFERENCES\b/iu;
 const INTERNAL_TABLE_RE = /__lunora_|__drizzle_|sqlite_|_cf_/iu;
 
 /**
+ * The `temp` schema qualifier. An object created there lives only for one connection, so a file that records it as applied
+ * persists nothing. Matched on the raw text, since `code` blanks a quoted qualifier (`"temp".t`).
+ */
+const TEMP_SCHEMA_RE = /\btemp["\]`]?\s*\./iu;
+
+/**
  * Foreign-key enforcement is a connection setting, not data a file changes, so a file may not assign it. Reading it
  * (`PRAGMA foreign_keys;`) changes nothing, so only an assignment, `= value` or `(value)`, matches.
  */
@@ -251,12 +257,12 @@ const columnExists = async (client: D1Client, table: string, column: string): Pr
 /**
  * Whether a statement is additive: a new table, a plain index, or a column added to a table without a clause that changes
  * the rows already there (see `VALUE_CLAUSE_RE`). The shape is read from the scanner's `code`, so comments and quoted
- * names do not change it. A statement that names an internal table, a foreign key, a partial index, or an index over an
+ * names do not change it. A statement that names an internal table or the temp schema, a foreign key, a partial index, or an index over an
  * expression is not additive, since each constrains writes beyond the new object. Anything else needs the root token.
  * A value clause on a new table is fine, since the table has no rows.
  */
 const isAdditiveStatement = (scan: ReturnType<typeof scanStatement>): boolean => {
-    if (INTERNAL_TABLE_RE.test(scan.statementText)) {
+    if (INTERNAL_TABLE_RE.test(scan.statementText) || TEMP_SCHEMA_RE.test(scan.statementText)) {
         return false;
     }
 

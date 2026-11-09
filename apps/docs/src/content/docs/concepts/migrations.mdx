@@ -301,13 +301,20 @@ that are left, including a `DROP`. Baseline only the files that ran: a recorded
 file is never executed.
 
 If the file that drops a table is the first `.sql` file on a stage, nothing ran
-before it there, so there is no earlier file to name. Run that file by hand on the
-stage first, then record it:
+before it there, so there is no earlier file to name. Run that file's statements
+by hand on the stage first, then record it. Do not run the whole file as it is: an
+`ADD COLUMN` the runtime already provisioned makes the duplicate column stop the
+run before the `DROP`. Copy the file, delete the `ADD COLUMN` lines for columns the
+stage already has, and run the copy:
 
 ```bash
-wrangler d1 execute <database-name> --remote --file lunora/migrations/<file>.sql
+cp lunora/migrations/<file>.sql /tmp/<file>.sql
+# Remove the ADD COLUMN lines for columns the stage already has from /tmp/<file>.sql
+wrangler d1 execute <database-name> --remote --file /tmp/<file>.sql
 lunora migrate apply --baseline-through <file>.sql --url https://your-worker.example.workers.dev --yes
 ```
+
+Record the file only once every statement in it has run.
 
 Name the file you ran by hand, so `--baseline-through` records it and nothing
 after it. A later file on the same stage stays pending, and a normal
