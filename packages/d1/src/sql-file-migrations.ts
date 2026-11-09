@@ -194,8 +194,6 @@ interface PlannedFile {
     hash: string;
     /** Set when the file's SQL is recorded under this other name, which is no longer among the files sent. */
     renamedFrom?: string;
-    /** Set when a root run replaces the row a migrations-scoped run recorded under this name: the hash that row holds. */
-    replaces?: string;
     /** Set when the file is pending and runs a row write or a destructive statement. */
     replayUnsafe: boolean;
 }
@@ -502,13 +500,6 @@ const renamedSources = (recorded: ReadonlyMap<string, RecordedRow>, sent: Readon
 };
 
 /**
- * The hash of the row a root run replaces with this file: a row a migrations-scoped run recorded under the same name with
- * other SQL. So a scoped run cannot block a root file. A scoped run never replaces a row, so a mismatch it meets stays drift.
- */
-const replacedHash = (previous: RecordedRow | undefined, hash: string, replaceScoped: boolean): string | undefined =>
-    previous?.writtenBy === "migrations" && replaceScoped && previous.sha256 !== hash ? previous.sha256 : undefined;
-
-/**
  * Decide each file's state against what is recorded. Pending files are parsed, which can refuse one outright. A pending
  * file whose SQL is recorded under a name no longer sent was renamed, and running it would replay the applied SQL.
  */
@@ -517,7 +508,6 @@ const planFiles = async (
     files: ReadonlyArray<SqlMigrationFile>,
     recorded: ReadonlyMap<string, RecordedRow>,
     refuseTransactionControl: boolean,
-    replaceScoped: boolean,
 ): Promise<PlannedFile[]> => {
     const hashed = await Promise.all(
         files.map(async (file) => {
@@ -529,14 +519,13 @@ const planFiles = async (
 
     for (const { file, hash } of hashed) {
         const previous = recorded.get(file.name);
-        const replaces = replacedHash(previous, hash, replaceScoped);
 
-        if (previous !== undefined && replaces === undefined) {
+        if (previous !== undefined) {
             planned.push(answeredByRecord(file, hash, previous.sha256 === hash ? "applied" : "changed"));
             continue;
         }
 
-        const renamedFrom = replaces === undefined ? vanished.get(hash) : undefined;
+        const renamedFrom = vanished.get(hash);
 
         if (renamedFrom !== undefined) {
             planned.push(answeredByRecord(file, hash, "changed", renamedFrom));
@@ -557,7 +546,6 @@ const planFiles = async (
             },
             file,
             hash,
-            ...(replaces === undefined ? {} : { replaces }),
             replayUnsafe: plan.replayUnsafe,
         });
     }
@@ -739,7 +727,7 @@ const commitFile = async (
     file: SqlMigrationFile,
     hash: string,
     runs: ReadonlyArray<SQL | string>,
-    write: { origin: "applied" | "baselined"; replaces?: string; writtenBy: WrittenBy },
+    write: { origin: "applied" | "baselined"; writtenBy: WrittenBy },
 ): Promise<SqlMigrationState> => {
     const baselined = write.origin === "baselined" ? 1 : 0;
     const record = client.drizzle.run(
@@ -747,18 +735,8 @@ const commitFile = async (
             `INSERT INTO ${SQL_TRACKING_TABLE} (name, sha256, applied_at, baselined, written_by) VALUES ('${file.name}', '${hash}', ${String(Date.now())}, ${String(baselined)}, '${write.writtenBy}')`,
         ),
     );
-    // The DELETE matches the row the plan saw, so a row a concurrent run changed meanwhile survives and the INSERT fails as drift.
-    const leading: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] =
-        write.replaces === undefined
-            ? [record]
-            : [
-                  client.drizzle.run(
-                      sql.raw(`DELETE FROM ${SQL_TRACKING_TABLE} WHERE name = '${file.name}' AND sha256 = '${write.replaces}' AND written_by = 'migrations'`),
-                  ),
-                  record,
-              ];
     const items: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [
-        ...leading,
+        record,
         ...runs.map((statement) => client.drizzle.run(typeof statement === "string" ? sql.raw(statement) : statement)),
     ];
 
@@ -812,7 +790,7 @@ const commitPlanned = async (
     commit: CommitOptions,
 ): Promise<Pick<SqlMigrationEntry, "skipped" | "state" | "statements">> => {
     const plan = await planPendingFile(client, item.file, true, commit.schema);
-    const write = { origin: "applied" as const, writtenBy: commit.writtenBy, ...(item.replaces === undefined ? {} : { replaces: item.replaces }) };
+    const write = { origin: "applied" as const, writtenBy: commit.writtenBy };
 
     return { skipped: plan.skipped, state: await commitFile(client, item.file, item.hash, plan.runs, write), statements: plan.statements };
 };
@@ -859,7 +837,7 @@ const baselineBound = (files: ReadonlyArray<SqlMigrationFile>, options: ApplySql
 const recordPending = async (client: D1Client, planned: ReadonlyArray<PlannedFile>, through: number): Promise<void> => {
     for (const [index, item] of planned.entries()) {
         if (item.entry.state === "pending" && index <= through) {
-            const write = { origin: "baselined" as const, writtenBy: "root" as const, ...(item.replaces === undefined ? {} : { replaces: item.replaces }) };
+            const write = { origin: "baselined" as const, writtenBy: "root" as const };
 
             // eslint-disable-next-line no-await-in-loop -- each record must commit before the next file is checked against the table
             item.entry.state = (await commitFile(client, item.file, item.hash, [], write)) === "ran" ? "baselined" : "applied";
@@ -894,7 +872,7 @@ const applySqlMigrationFiles = async (
     // Transaction control is refused only where the file would run; a baseline or a dry run never executes it.
     const writtenBy: WrittenBy = options.additiveOnly === true ? "migrations" : "root";
     const commit: CommitOptions = { schema: options.schema, writtenBy };
-    const planned = await planFiles(client, files, recorded, !dryRun && !recordOnly, writtenBy === "root");
+    const planned = await planFiles(client, files, recorded, !dryRun && !recordOnly);
 
     if (dryRun) {
         return { files: planned.map((item) => item.entry), refused: refusedOnApply(planned, options, fresh) };

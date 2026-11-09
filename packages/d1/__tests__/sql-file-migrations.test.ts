@@ -554,40 +554,13 @@ INSERT INTO posts (id) VALUES (1);`;
         sqlite.close();
     });
 
-    it("lets a root run replace the row a migrations-scoped run recorded under the same name", async () => {
-        expect.assertions(3);
+    it("reports a root run that meets a row a migrations-scoped run recorded with other SQL as drift, and runs nothing", async () => {
+        expect.assertions(2);
 
         const sqlite = new DatabaseSync(":memory:");
         const database = createSqliteDatabase(sqlite);
 
         await applySqlMigrationFiles(database, [{ name: "007.sql", sql: "CREATE TABLE squat (id TEXT);" }], { additiveOnly: true });
-
-        const result = await applySqlMigrationFiles(database, [{ name: "007.sql", sql: "CREATE TABLE real (id TEXT);" }]);
-
-        expect(result.files[0]?.state).toBe("ran");
-        expect(tables(sqlite)).toContain("real");
-        expect((sqlite.prepare("SELECT written_by FROM __lunora_sql_migrations WHERE name = '007.sql'").get() as { written_by: string }).written_by).toBe(
-            "root",
-        );
-
-        sqlite.close();
-    });
-
-    it("refuses a replacement whose squatted row a concurrent run changed before the batch", async () => {
-        expect.assertions(2);
-
-        const sqlite = new DatabaseSync(":memory:");
-
-        await applySqlMigrationFiles(createSqliteDatabase(sqlite), [{ name: "007.sql", sql: "CREATE TABLE squat (id TEXT);" }], { additiveOnly: true });
-
-        let raced = false;
-        const database = createSqliteDatabase(sqlite, () => {
-            // The plan read the squatted hash. A concurrent scoped run changes it before this batch.
-            if (!raced) {
-                raced = true;
-                sqlite.exec("UPDATE __lunora_sql_migrations SET sha256 = 'changed-again' WHERE name = '007.sql'");
-            }
-        });
 
         await expect(applySqlMigrationFiles(database, [{ name: "007.sql", sql: "CREATE TABLE real (id TEXT);" }])).rejects.toMatchObject({
             code: "MIGRATION_DRIFT",
