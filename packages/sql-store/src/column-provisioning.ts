@@ -170,6 +170,31 @@ const runBackfill = async (exec: SqlCtxExec, dialect: SqlDialect, tableName: str
     }
 };
 
+/**
+ * The `UPDATE` that fills the rows a column predates, for a column a SQL migration file adds. It is the one the
+ * provisioner writes when it adds the same column itself, so a file that runs first does not leave NULL rows that
+ * provisioning would have filled. Undefined when the schema has no such `.global()` field, or its declaration gives no
+ * value. Names match without case, as they do in SQL.
+ */
+const globalColumnBackfill = (schema: SchemaLike, tableName: string, column: string): SQL | undefined => {
+    const table = Object.keys(schema.tables).find((name) => name.toLowerCase() === tableName.toLowerCase());
+    const definition = table === undefined ? undefined : schema.tables[table];
+
+    if (table === undefined || definition?.shardMode?.kind !== "global") {
+        return undefined;
+    }
+
+    const field = Object.entries(definition.shape).find(([name]) => name.toLowerCase() === column.toLowerCase());
+
+    if (field?.[1]._meta?.column === undefined) {
+        return undefined;
+    }
+
+    const backfill = columnBackfill(table, definition, field[0], field[1]);
+
+    return backfill !== undefined && "build" in backfill ? backfill.build() : undefined;
+};
+
 /** The columns a `.global()` table must carry beyond `id`/`_creationTime`: the OCC row version, then one per declared field. */
 const wantedGlobalColumns = (definition: SchemaLike["tables"][string], dialect: SqlDialect): [column: string, type: string, validator?: ValidatorLike][] => [
     [OCC_VERSION_COLUMN, dialect.companionTypes.integer],
@@ -451,4 +476,4 @@ const relaxNullAcceptingColumns = async (exec: SqlCtxExec, tableName: string, de
     }
 };
 
-export { addColumnIfMissing, alterGlobalTableDrift, globalColumnAffinity, relaxNullAcceptingColumns, wantedGlobalColumns };
+export { addColumnIfMissing, alterGlobalTableDrift, globalColumnAffinity, globalColumnBackfill, relaxNullAcceptingColumns, wantedGlobalColumns };

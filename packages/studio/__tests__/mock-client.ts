@@ -231,7 +231,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     // In-memory named admin-token store, so the Settings card's create → list → revoke round-trips.
     const adminTokens = new Map<string, AdminTokenSummary>();
     const createAdminToken = vi.fn<(options: { expiresAt?: number; name: string }) => Promise<CreatedAdminToken>>(async ({ name }) => {
-        adminTokens.set(name, { createdAt: 1, name });
+        adminTokens.set(name, { createdAt: 1, name, scopes: [] });
 
         return { createdAt: 1, name, token: `lnat.${name}.${"s".repeat(43)}` };
     });

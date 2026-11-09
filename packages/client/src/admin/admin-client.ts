@@ -540,7 +540,7 @@ class LunoraAdminClient extends LunoraClient {
      * Create a named admin token. The returned `token` is the only time the
      * secret is shown. Root-only: a named token cannot create another.
      */
-    public async createAdminToken(options: { expiresAt?: number; name: string }): Promise<CreatedAdminToken> {
+    public async createAdminToken(options: { expiresAt?: number; name: string; scopes?: ReadonlyArray<string> }): Promise<CreatedAdminToken> {
         return createAdminToken(this.adminHost, options);
     }
 

@@ -1,3 +1,5 @@
+import type { AdminTokenScope } from "../../../../../shared/admin-token-scope";
+import { ADMIN_TOKEN_SCOPES, isAdminTokenScope } from "../../../../../shared/admin-token-scope";
 import { resolveAdminBearer } from "../../util/admin-token";
 import { adminFetch, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
@@ -24,6 +26,8 @@ interface AdminTokenCommandOptions {
     name?: string;
     now?: () => number;
     prod?: boolean;
+    /** For `create`: the comma-separated scopes the token gets, as typed. */
+    scope?: string;
     subcommand: string | undefined;
     token?: string;
     url?: string;
@@ -42,6 +46,7 @@ interface TokenRow {
     name: string;
     /** Revoked, but the row still holds the name: revoke again to clear it. */
     revoked?: boolean;
+    scopes?: string[];
 }
 
 const failure = (logger: Logger, error: string, code: number): AdminTokenCommandResult => {
@@ -52,7 +57,26 @@ const failure = (logger: Logger, error: string, code: number): AdminTokenCommand
 
 const when = (epochMs: number | undefined, fallback: string): string => (epochMs === undefined ? fallback : new Date(epochMs).toISOString());
 
-const request = (subcommand: (typeof SUBCOMMANDS)[number], options: AdminTokenCommandOptions): { body?: string; method: string; path: string } => {
+/** The `--scope` list. Absent is no scopes; an unknown name is refused before anything is sent. */
+const parseScopes = (scope: string | undefined): { error: string } | { scopes: AdminTokenScope[] } => {
+    const names = (scope ?? "")
+        .split(",")
+        .map((name) => name.trim())
+        .filter((name) => name !== "");
+    const unknown = names.filter((name) => !isAdminTokenScope(name));
+
+    if (unknown.length > 0) {
+        return { error: `unknown scope ${unknown.join(", ")} — expected ${ADMIN_TOKEN_SCOPES.join(", ")}` };
+    }
+
+    return { scopes: [...new Set(names.filter(isAdminTokenScope))] };
+};
+
+const request = (
+    subcommand: (typeof SUBCOMMANDS)[number],
+    options: AdminTokenCommandOptions,
+    scopes: AdminTokenScope[],
+): { body?: string; method: string; path: string } => {
     if (subcommand === "list") {
         return { method: "GET", path: ADMIN_TOKENS_PATH };
     }
@@ -63,13 +87,21 @@ const request = (subcommand: (typeof SUBCOMMANDS)[number], options: AdminTokenCo
 
     const expiresAt = options.expiresDays === undefined ? undefined : (options.now ?? Date.now)() + options.expiresDays * DAY_MS;
 
-    return { body: JSON.stringify({ expiresAt, name: options.name }), method: "POST", path: ADMIN_TOKENS_PATH };
+    return {
+        body: JSON.stringify({ expiresAt, name: options.name, ...(scopes.length === 0 ? {} : { scopes }) }),
+        method: "POST",
+        path: ADMIN_TOKENS_PATH,
+    };
 };
 
 const report = (logger: Logger, subcommand: (typeof SUBCOMMANDS)[number], data: Record<string, unknown>, name: string | undefined): void => {
     if (subcommand === "create") {
         logger.success(`created admin token "${String(data.name)}" — copy it now, it is not shown again:`);
         logger.info(String(data.token));
+
+        if (Array.isArray(data.scopes) && data.scopes.length > 0) {
+            logger.info(`scopes: ${data.scopes.map(String).join(", ")}`);
+        }
 
         return;
     }
@@ -87,20 +119,18 @@ const report = (logger: Logger, subcommand: (typeof SUBCOMMANDS)[number], data: 
     }
 
     for (const row of tokens) {
+        const scopes = row.scopes === undefined || row.scopes.length === 0 ? "" : `  scopes ${row.scopes.join(",")}`;
+
         logger.info(
-            `${row.name}  created ${when(row.createdAt, "?")}  last used ${when(row.lastUsedAt, "never")}  expires ${when(row.expiresAt, "never")}${row.revoked === true ? "  revoked (its row still holds the name: revoke it again to free it)" : ""}`,
+            `${row.name}  created ${when(row.createdAt, "?")}  last used ${when(row.lastUsedAt, "never")}  expires ${when(row.expiresAt, "never")}${scopes}${row.revoked === true ? "  revoked (its row still holds the name: revoke it again to free it)" : ""}`,
         );
     }
 };
 
 /** `lunora admin-token` core: one call to `/_lunora/admin/tokens`, which only the root admin token may make. */
-const runAdminTokenCommand = async (options: AdminTokenCommandOptions): Promise<AdminTokenCommandResult> => {
+/** The usage refusal for input that cannot be sent: a missing name, a bad expiry, a scope on the wrong verb, or `--prod` without `--url`. */
+const inputRefusal = (options: AdminTokenCommandOptions, subcommand: (typeof SUBCOMMANDS)[number]): AdminTokenCommandResult | undefined => {
     const { logger } = options;
-    const subcommand = SUBCOMMANDS.find((candidate) => candidate === options.subcommand);
-
-    if (subcommand === undefined) {
-        return failure(logger, `admin-token: unknown subcommand "${options.subcommand ?? ""}" — expected ${SUBCOMMANDS.join(" | ")}`, EXIT_CODE.USAGE);
-    }
 
     if (subcommand !== "list" && (options.name === undefined || options.name === "")) {
         return failure(logger, `admin-token ${subcommand}: a token name is required`, EXIT_CODE.USAGE);
@@ -110,9 +140,39 @@ const runAdminTokenCommand = async (options: AdminTokenCommandOptions): Promise<
         return failure(logger, "--expires-days must be a positive number", EXIT_CODE.USAGE);
     }
 
+    if (options.scope !== undefined && subcommand !== "create") {
+        return failure(logger, "--scope applies to `admin-token create` only", EXIT_CODE.USAGE);
+    }
+
+    const parsed = parseScopes(options.scope);
+
+    if ("error" in parsed) {
+        return failure(logger, `admin-token create: ${parsed.error}`, EXIT_CODE.USAGE);
+    }
+
     if (options.prod && options.url === undefined) {
         return failure(logger, "--prod requires an explicit --url", EXIT_CODE.USAGE);
     }
+
+    return undefined;
+};
+
+const runAdminTokenCommand = async (options: AdminTokenCommandOptions): Promise<AdminTokenCommandResult> => {
+    const { logger } = options;
+    const subcommand = SUBCOMMANDS.find((candidate) => candidate === options.subcommand);
+
+    if (subcommand === undefined) {
+        return failure(logger, `admin-token: unknown subcommand "${options.subcommand ?? ""}" — expected ${SUBCOMMANDS.join(" | ")}`, EXIT_CODE.USAGE);
+    }
+
+    const refusal = inputRefusal(options, subcommand);
+
+    if (refusal !== undefined) {
+        return refusal;
+    }
+
+    const parsed = parseScopes(options.scope);
+    const scopes = "scopes" in parsed ? parsed.scopes : [];
 
     const baseUrl = resolveAdminBaseUrl(options.url, logger, options.cwd);
 
@@ -126,7 +186,7 @@ const runAdminTokenCommand = async (options: AdminTokenCommandOptions): Promise<
         return failure(logger, "root admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)", EXIT_CODE.AUTH);
     }
 
-    const { body, method, path } = request(subcommand, options);
+    const { body, method, path } = request(subcommand, options, scopes);
     const response = await (options.fetchImpl ?? adminFetch)(`${baseUrl}${path}`, {
         body,
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -167,6 +227,7 @@ const execute: CommandHandler<AdminTokenOptions> = defineHandler<AdminTokenOptio
         logger,
         name: argument[1],
         prod: options.prod,
+        scope: options.scope,
         subcommand: argument[0],
         token: options.token,
         url: resolveProductionWorkerUrl({ cwd, prod: options.prod === true, url: options.url }),

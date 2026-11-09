@@ -259,7 +259,7 @@ const validateMigrateDeployPreflight = (options: DeployCommandOptions): string |
     }
 
     if (options.migrateYes !== true) {
-        const message = "--migrate runs production data migrations after deploy. Re-run with --migrate-yes to confirm.";
+        const message = "--migrate runs production SQL migrations and data migrations after deploy. Re-run with --migrate-yes to confirm the target.";
 
         options.logger.error(message);
 
