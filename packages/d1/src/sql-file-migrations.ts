@@ -21,15 +21,15 @@ const SQL_TRACKING_DDL = `CREATE TABLE IF NOT EXISTS ${SQL_TRACKING_TABLE} (name
 const SAFE_FILE_NAME_RE = /^\w[\w.-]*\.sql$/u;
 const SQL_TRACKING_NAME_UNIQUE_RE = new RegExp(String.raw`UNIQUE constraint failed:\s*${SQL_TRACKING_TABLE}\.name`, "iu");
 const DUPLICATE_COLUMN_RE = /duplicate column name/iu;
-/** Leading comments and whitespace, so a statement's first keyword can be read past its header. */
-const LEADING_TRIVIA_RE = /^(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/u;
 const BACKTICK = "`";
 /** One SQLite identifier: double-quoted, bracketed, backticked or bare. Has no capture groups of its own. */
 const IDENTIFIER = String.raw`"(?:[^"]|"")+"|\[[^\]]+\]|${BACKTICK}(?:[^${BACKTICK}]|${BACKTICK}${BACKTICK})+${BACKTICK}|[_a-z]\w*`;
 /** The space between two SQL tokens. A comment counts as space, so a block comment between two keywords does not hide the statement. */
-const GAP = String.raw`(?:\s|--[^\n]*\n|\/\*[\s\S]*?\*\/)+`;
+const GAP = String.raw`(?:\s|--[^\n]*\n|\/\*(?:[^*]|\*(?!\/))*\*\/)+`;
 /** The same, but optional: between two tokens that may sit next to each other. */
-const GAP_OPT = String.raw`(?:\s|--[^\n]*\n|\/\*[\s\S]*?\*\/)*`;
+const GAP_OPT = String.raw`(?:\s|--[^\n]*\n|\/\*(?:[^*]|\*(?!\/))*\*\/)*`;
+/** Leading comments and whitespace, so a statement's first keyword can be read past its header. */
+const LEADING_TRIVIA_RE = new RegExp(String.raw`^${GAP_OPT}`, "u");
 /** An optional `schema.` before a table name, as in `main.t`. Non-capturing, so the table name keeps its group. */
 const SCHEMA_PREFIX = String.raw`(?:(?:${IDENTIFIER})${GAP_OPT}\.${GAP_OPT})?`;
 const ADD_COLUMN_RE = new RegExp(String.raw`^ALTER${GAP}TABLE${GAP}${SCHEMA_PREFIX}(${IDENTIFIER})${GAP}ADD${GAP}(?:COLUMN${GAP})?(${IDENTIFIER})`, "iu");
