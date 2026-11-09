@@ -70,6 +70,16 @@ interface CreatedAdminToken {
 
 const NO_STORE = { "cache-control": "no-store" };
 
+/**
+ * Whether the store kept the scopes a create asked for. A shard on an older build ignores `scopes` and still
+ * answers success, and an unscoped create's reply may omit the field, so a missing list counts as none.
+ */
+const scopesKept = (requested: AdminTokenScope[], reply: unknown): boolean => {
+    const kept: unknown[] = Array.isArray(reply) ? reply : [];
+
+    return kept.length === requested.length && requested.every((scope) => kept.includes(scope));
+};
+
 const requireName = (name: unknown): string => {
     if (typeof name !== "string" || !isValidAdminTokenName(name)) {
         throw new LunoraError("admin token `name` must match /^[a-z0-9][a-z0-9_-]{0,63}$/", { code: "BAD_REQUEST", status: 400 });
@@ -125,6 +135,27 @@ const buildAdminTokenRoutes = (deps: AdminTokenRouteDeps): Record<string, (reque
             name,
             scopes,
         })) as Record<string, unknown>;
+
+        if (!scopesKept(scopes, stored.scopes)) {
+            // The secret was never returned, so the row holds only the name: remove it and the refused create leaves nothing behind.
+            let removed = true;
+
+            try {
+                await deps.revocations.revoke(name, createdAt);
+                await deps.callStore(REVOKE_ADMIN_TOKEN_OP, { createdAt, name });
+            } catch {
+                removed = false;
+            } finally {
+                deps.evict(name);
+            }
+
+            const recovery = removed ? "the token was removed, so retry" : `it could not be removed, so revoke "${name}" to free the name`;
+
+            throw new LunoraError(`the store did not keep the scopes for admin token "${name}" (a shard on an older build ignores them); ${recovery}`, {
+                code: "CONFLICT",
+                status: 409,
+            });
+        }
 
         deps.evict(name);
 

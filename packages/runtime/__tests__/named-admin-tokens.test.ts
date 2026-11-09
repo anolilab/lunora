@@ -88,12 +88,22 @@ interface ShardHooks {
     down?: boolean;
     /** Deleting a token row fails, after the revocation was already recorded. */
     failRevoke?: boolean;
+    /** Acts like a shard on an older build: drops `scopes` on create and does not echo them back. */
+    ignoreScopes?: boolean;
     /** Runs when a non-token admin op reaches a shard, before it is answered. */
     onAdminOp?: (functionPath: string) => Promise<void>;
 }
 
 /** The createdAt a create carried, or a fixed one when it carried none. */
 const issuedAt = (value: unknown): number => (typeof value === "number" ? value : 1);
+
+/** A create as a shard answers it. An older build drops the `scopes` it was sent and does not echo them back. */
+const createAnswer = (args: Record<string, number | string>, olderShard: boolean): { answer: Record<string, unknown>; scopes: string[] } => {
+    const scopes = olderShard ? [] : ((args as { scopes?: string[] }).scopes ?? []);
+    const answer = { createdAt: issuedAt(args.createdAt), name: args.name, ...(olderShard ? {} : { scopes }) };
+
+    return { answer, scopes };
+};
 
 const fakeShards = (
     hooks?: ShardHooks,
@@ -134,14 +144,16 @@ const fakeShards = (
 
         switch (functionPath) {
             case "__lunora_admin__:createAdminToken": {
+                const issued = createAnswer(args, hooks?.ignoreScopes === true);
+
                 store.set(String(args.name), {
                     createdAt: issuedAt(args.createdAt),
                     digest: String(args.digest),
-                    scopes: (args as { scopes?: string[] }).scopes ?? [],
+                    scopes: issued.scopes,
                     ...(typeof args.expiresAt === "number" ? { expiresAt: args.expiresAt } : {}),
                 });
 
-                return reply({ createdAt: issuedAt(args.createdAt), name: args.name });
+                return reply(issued.answer);
             }
             case "__lunora_admin__:listAdminTokens": {
                 return reply({
@@ -610,6 +622,19 @@ describe("named admin tokens", () => {
         await expect(errorCodeOf(call(worker, TOKENS, scopedToken))).resolves.toBe("ADMIN_ROOT_REQUIRED");
         await expect(errorCodeOf(call(worker, `${TOKENS}?name=migrate`, scopedToken, { method: "DELETE" }))).resolves.toBe("ADMIN_ROOT_REQUIRED");
         await expect(errorCodeOf(call(worker, `${ORIGIN}/_lunora/admin/ws-token`, scopedToken, { method: "POST" }))).resolves.toBe("ADMIN_ROOT_REQUIRED");
+    });
+
+    it("refuses a scoped create that the store did not keep, and removes the row it wrote", async () => {
+        expect.assertions(3);
+
+        const { namespace, store } = fakeShards({ ignoreScopes: true });
+        const worker = createWorker({ adminToken: ROOT, functions: REGISTRY, shardDO: namespace });
+
+        await expect(
+            errorCodeOf(call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "migrate", scopes: ["migrations"] }), method: "POST" })),
+        ).resolves.toBe("CONFLICT");
+        expect(store.has("migrate")).toBe(false);
+        await expect(status(call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "plain" }), method: "POST" }))).resolves.toBe(201);
     });
 
     it("accepts a token created right after its name was refused", async () => {
