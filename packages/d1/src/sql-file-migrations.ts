@@ -72,13 +72,23 @@ const ADDITIVE_CREATE_RE = new RegExp(
  * writes that follow. Matched against the definition only, after the column name, so a column named `default_note` is
  * not one of these.
  */
-const VALUE_CLAUSE_RE = /\b(?:DEFAULT|GENERATED|AS|CHECK|REFERENCES|UNIQUE)\b/iu;
+const VALUE_CLAUSE_RE = /\b(?:DEFAULT|GENERATED|AS|CHECK|REFERENCES|UNIQUE|NOT\s+NULL)\b/iu;
 /** A foreign key on a new table constrains deletes from the parent table it references, so it is not additive. */
 const REFERENCES_RE = /\bREFERENCES\b/iu;
 /** A partial index (`WHERE`) constrains which rows may be written to its table, so it is not additive. */
 const PARTIAL_INDEX_RE = /\bWHERE\b/iu;
-/** The tables a migration may not touch from an additive statement: the tracking table and the framework's own, and SQLite's. */
-const INTERNAL_TABLE_RE = /__lunora_|sqlite_/iu;
+
+/**
+ * The tables a migration may not touch from an additive statement: the tracking tables (this file's, the data
+ * migrations', and the migration runner's), Cloudflare's, and SQLite's own.
+ */
+const INTERNAL_TABLE_RE = /__lunora_|__drizzle_|sqlite_|_cf_/iu;
+
+/**
+ * An index whose column list calls a function, such as `ON t (json_extract(c, '$'))`. The expression runs on every
+ * write to the table, and it can fail the write.
+ */
+const INDEX_COLUMN_CALL_RE = new RegExp(String.raw`^CREATE${GAP}INDEX\b[^(]*\sON\s[^(]*\([^)]*\(`, "iu");
 
 /**
  * Foreign-key enforcement is a connection setting, not data a file changes, so a file may not assign it. Reading it
@@ -178,6 +188,17 @@ const foldIdentifier = (identifier: string): string => identifier.replaceAll(/[A
 /** The statement without its leading comments, so its first keyword can be matched. */
 const bodyOf = (statementText: string): string => statementText.slice(LEADING_TRIVIA_RE.exec(statementText)?.[0].length ?? 0);
 
+/**
+ * A statement on one line, so a refusal that names it shows all of it. Line comments go first: joined onto one line, a
+ * `--` would swallow the code after it. A `--` inside a string literal is dropped from the message too, which is fine
+ * for a message.
+ */
+const oneLine = (statement: string): string =>
+    statement
+        .replaceAll(/--[^\n]*/gu, " ")
+        .replaceAll(/\s+/gu, " ")
+        .trim();
+
 /** Whether a statement switches foreign-key enforcement, under any schema qualifier. Shared by the run and the dry-run report. */
 const changesForeignKeys = (statementText: string): boolean => FOREIGN_KEYS_PRAGMA_RE.test(bodyOf(statementText));
 
@@ -231,7 +252,7 @@ const isAdditiveStatement = (statementText: string): boolean => {
         return !VALUE_CLAUSE_RE.test(body.slice(addColumn[0].length));
     }
 
-    return ADDITIVE_CREATE_RE.test(body) && !PARTIAL_INDEX_RE.test(body) && !REFERENCES_RE.test(body);
+    return ADDITIVE_CREATE_RE.test(body) && !PARTIAL_INDEX_RE.test(body) && !REFERENCES_RE.test(body) && !INDEX_COLUMN_CALL_RE.test(body);
 };
 
 /** Records the table a statement creates, drops or renames, so a later ADD COLUMN on it is not skipped from a stale catalog. */
@@ -518,9 +539,7 @@ const assertDestructiveConfirmed = (planned: ReadonlyArray<PlannedFile>, confirm
         const unsafe = pending.filter((item) => item.replayUnsafe);
 
         if (unsafe.length > 0) {
-            const listed = unsafe.flatMap((item) =>
-                replayingStatements(item.entry).map((statement) => `${item.entry.name}: ${statement.split("\n").at(-1) ?? statement}`),
-            );
+            const listed = unsafe.flatMap((item) => replayingStatements(item.entry).map((statement) => `${item.entry.name}: ${oneLine(statement)}`));
 
             throw new LunoraError(
                 "MIGRATION_DESTRUCTIVE",
@@ -537,7 +556,7 @@ const assertDestructiveConfirmed = (planned: ReadonlyArray<PlannedFile>, confirm
         return;
     }
 
-    const listed = destructive.flatMap((item) => item.entry.destructive.map((statement) => `${item.entry.name}: ${statement.split("\n").at(-1) ?? statement}`));
+    const listed = destructive.flatMap((item) => item.entry.destructive.map((statement) => `${item.entry.name}: ${oneLine(statement)}`));
 
     throw new LunoraError(
         "MIGRATION_DESTRUCTIVE",
@@ -560,7 +579,7 @@ const assertAdditiveOnly = (planned: ReadonlyArray<PlannedFile>, additiveOnly: b
         return;
     }
 
-    const listed = needsRoot.flatMap((item) => item.entry.rootOnly.map((statement) => `${item.entry.name}: ${statement.split("\n").at(-1) ?? statement}`));
+    const listed = needsRoot.flatMap((item) => item.entry.rootOnly.map((statement) => `${item.entry.name}: ${oneLine(statement)}`));
 
     throw new LunoraError(
         "MIGRATION_ROOT_REQUIRED",

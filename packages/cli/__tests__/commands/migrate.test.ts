@@ -1981,6 +1981,30 @@ describe("lunora migrate apply / status --sql", () => {
         expect(calls).toStrictEqual([]);
     });
 
+    it("sends only the files under lunora/migrations/, not a directory that has a .sql name", async () => {
+        expect.assertions(2);
+
+        const dir = mkdtempSync(join(tmpdir(), "lunora-cli-migrate-dirname-"));
+
+        mkdirSync(join(dir, "lunora", "migrations", "notes.sql"), { recursive: true });
+        writeFileSync(join(dir, "lunora", "migrations", "real.sql"), "CREATE TABLE real (id TEXT);");
+
+        const calls: SqlCall[] = [];
+        const result = await runMigrateSqlCommand({
+            cwd: dir,
+            dryRun: true,
+            fetchImpl: recordSql(calls, 200, {
+                files: [{ destructive: [], name: "real.sql", rootOnly: [], skipped: [], state: "pending", statements: [] }],
+            }),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+
+        expect(calls[0]?.body.files.map((file) => file.name)).toStrictEqual(["real.sql"]);
+        expect(result.code).toBe(0);
+    });
+
     it("returns the worker's per-file plan, and a refused run carries the HTTP status", async () => {
         expect.assertions(3);
 

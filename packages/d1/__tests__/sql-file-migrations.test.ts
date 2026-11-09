@@ -837,6 +837,9 @@ INSERT INTO posts (id) VALUES (1);`;
             "ALTER TABLE users ADD COLUMN z TEXT CHECK (z <> 'admin');",
             "CREATE TABLE child (uid TEXT REFERENCES users(id));",
             "ALTER TABLE __lunora_sql_migrations ADD COLUMN x TEXT;",
+            "ALTER TABLE users ADD COLUMN blocked TEXT NOT NULL;",
+            'ALTER TABLE "__drizzle_migrations" ADD COLUMN note TEXT;',
+            "CREATE INDEX users_json ON users (json_extract(id, '$'));",
         ];
         const codes = await Promise.all(
             refusals.map((sql, index) =>
@@ -854,6 +857,21 @@ INSERT INTO posts (id) VALUES (1);`;
         });
 
         expect(plain.files[0]?.state).toBe("ran");
+
+        sqlite.close();
+    });
+
+    it("names a multi-line refused statement on one line, so the refusal shows all of it", async () => {
+        expect.assertions(1);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await expect(
+            applySqlMigrationFiles(database, [{ name: "multi.sql", sql: "DELETE FROM t -- keep the id filter\nWHERE id = 1;" }], {
+                confirmDestructive: true,
+            }),
+        ).rejects.toMatchObject({ message: expect.stringContaining("multi.sql: DELETE FROM t WHERE id = 1") });
 
         sqlite.close();
     });

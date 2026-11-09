@@ -70,8 +70,10 @@ const readSqlMigrationFiles = (cwd: string): { name: string; sql: string }[] => 
         return [];
     }
 
-    return readdirSync(directory)
-        .filter((name) => name.endsWith(".sql"))
+    // A directory with a `.sql` name is not a migration: reading it would throw and halt the deploy after it went live.
+    return readdirSync(directory, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".sql"))
+        .map((entry) => entry.name)
         .toSorted((left, right) => left.localeCompare(right))
         .map((name) => {
             return { name, sql: readFileSync(join(directory, name), "utf8") };
