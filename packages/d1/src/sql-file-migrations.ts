@@ -64,8 +64,14 @@ const ADDITIVE_CREATE_RE = new RegExp(
     String.raw`^CREATE${GAP}(?:TABLE(?:${GAP}IF${GAP}NOT${GAP}EXISTS)?${GAP}${SCHEMA_PREFIX}(?:${IDENTIFIER})${GAP_OPT}\(|(?:UNIQUE${GAP})?INDEX\b)`,
     "iu",
 );
-/** A column's DEFAULT clause, which an added column carries into every row that already exists. */
-const DEFAULT_CLAUSE_RE = /\bDEFAULT\b/iu;
+
+/**
+ * The column clauses that give an added column a value for every row already in the table: a DEFAULT, and a generated
+ * column's expression (`GENERATED ALWAYS AS (…)` or `AS (…)`). SQLite's ADD COLUMN already forbids the constraints that
+ * could otherwise set a value, such as PRIMARY KEY and UNIQUE, so this list is the whole set. Matched against the
+ * definition only, after the column name, so a column named `default_note` is not one of these.
+ */
+const VALUE_CLAUSE_RE = /\b(?:DEFAULT|GENERATED|AS)\b/iu;
 
 /**
  * Foreign-key enforcement is a connection setting, not data a file changes, so a file may not assign it. Reading it
@@ -200,14 +206,19 @@ const columnExists = async (client: D1Client, table: string, column: string): Pr
 };
 
 /**
- * Whether a statement is additive: a new table or index, or a column added to one. Anything else needs the root token.
- * A column added to an existing table with a DEFAULT reads that value back for every row already there, so an added
- * column with a DEFAULT is not additive. A DEFAULT on a new table is fine, since the table has no rows.
+ * Whether a statement is additive: a new table or index, or a column added to one that gives no value to the rows
+ * already there (see `VALUE_CLAUSE_RE`). Anything else needs the root token. A value clause on a new table is fine,
+ * since the table has no rows.
  */
 const isAdditiveStatement = (statementText: string): boolean => {
     const body = bodyOf(statementText);
+    const addColumn = ADD_COLUMN_RE.exec(body);
 
-    return ADDITIVE_CREATE_RE.test(body) || (ADD_COLUMN_RE.test(body) && !DEFAULT_CLAUSE_RE.test(body));
+    if (addColumn !== null) {
+        return !VALUE_CLAUSE_RE.test(body.slice(addColumn[0].length));
+    }
+
+    return ADDITIVE_CREATE_RE.test(body);
 };
 
 /** Records the table a statement creates, drops or renames, so a later ADD COLUMN on it is not skipped from a stale catalog. */

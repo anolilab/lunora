@@ -794,4 +794,32 @@ INSERT INTO posts (id) VALUES (1);`;
 
         sqlite.close();
     });
+
+    it("refuses a generated column for an additive-only caller, since its expression fills every existing row", async () => {
+        expect.assertions(4);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE users (id TEXT);" }]);
+
+        const shadow = [{ name: "shadow.sql", sql: "ALTER TABLE users ADD COLUMN role TEXT GENERATED ALWAYS AS ('admin') VIRTUAL;" }];
+        const alias = [{ name: "alias.sql", sql: "ALTER TABLE users ADD COLUMN role TEXT AS ('admin');" }];
+
+        await expect(applySqlMigrationFiles(database, shadow, { additiveOnly: true })).rejects.toMatchObject({
+            code: "MIGRATION_ROOT_REQUIRED",
+        });
+        await expect(applySqlMigrationFiles(database, alias, { additiveOnly: true })).rejects.toMatchObject({
+            code: "MIGRATION_ROOT_REQUIRED",
+        });
+
+        const named = await applySqlMigrationFiles(database, [{ name: "named.sql", sql: "ALTER TABLE users ADD COLUMN default_note TEXT;" }], {
+            additiveOnly: true,
+        });
+
+        expect(named.files[0]?.state).toBe("ran");
+        expect(named.files[0]?.rootOnly).toStrictEqual([]);
+
+        sqlite.close();
+    });
 });
