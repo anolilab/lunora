@@ -213,9 +213,10 @@ const columnExists = async (client: D1Client, table: string, column: string): Pr
 };
 
 /**
- * Whether a statement is additive: a new table or index, or a column added to one that gives no value to the rows
- * already there (see `VALUE_CLAUSE_RE`). Anything else needs the root token. A value clause on a new table is fine,
- * since the table has no rows.
+ * Whether a statement is additive: a new table or plain index, or a column added to one without a clause that changes
+ * the rows already there (see `VALUE_CLAUSE_RE`). A statement that names an internal table, a partial index, or a
+ * foreign key is not additive, since each constrains writes beyond the new object. Anything else needs the root token.
+ * A value clause on a new table is fine, since the table has no rows.
  */
 const isAdditiveStatement = (statementText: string): boolean => {
     const body = bodyOf(statementText);
