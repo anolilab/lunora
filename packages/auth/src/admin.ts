@@ -464,7 +464,17 @@ const USER_CASCADE = [
  * secret-bearing columns of better-auth core + the admin/organization/passkey/
  * two-factor plugin tables.
  */
-const SENSITIVE_FIELDS = new Set(["accessToken", "backupCodes", "idToken", "password", "publicKey", "refreshToken", "secret", "token", "tokenHash"]);
+const SENSITIVE_FIELDS: ReadonlySet<string> = new Set([
+    "accessToken",
+    "backupCodes",
+    "idToken",
+    "password",
+    "publicKey",
+    "refreshToken",
+    "secret",
+    "token",
+    "tokenHash",
+]);
 
 const clampLimit = (limit?: number): number => Math.min(Math.max(Math.trunc(limit ?? DEFAULT_LIMIT), 1), MAX_LIMIT);
 const clampOffset = (offset?: number): number => Math.max(0, Math.trunc(offset ?? 0));
@@ -1373,4 +1383,4 @@ export type {
     ImpersonationResult,
     ListUsersOptions,
 };
-export { createAuthAdmin, LunoraAuthAdminError };
+export { createAuthAdmin, LunoraAuthAdminError, SENSITIVE_FIELDS };
