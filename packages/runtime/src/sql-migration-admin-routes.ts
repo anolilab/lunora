@@ -62,6 +62,8 @@ interface SqlMigrationAdminRouteDeps {
     applySqlMigrations?: SqlMigrationApplier;
     /** Enforce the route's gate: the root token, or a named token with the `migrations` scope. */
     assertAdmin: (request: Request) => void;
+    /** Whether the caller holds any admin authority. Checked before the worker's configuration, so a stranger learns nothing. */
+    isAdmin: (request: Request) => boolean;
     /** Whether the caller holds the root token. A scoped caller's run is additive-only. */
     isRootAdmin: (request: Request) => boolean;
 }
@@ -111,7 +113,11 @@ const buildSqlMigrationAdminRoutes = (deps: SqlMigrationAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        deps.assertAdmin(request);
+        // Authentication first, then the worker's configuration, then the scope. A named token without the scope learns
+        // whether the worker has a D1 plane to run on, which the CLI needs to skip the step rather than fail the deploy.
+        if (!deps.isAdmin(request)) {
+            throw new LunoraError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
 
         const apply = deps.applySqlMigrations;
 
@@ -121,6 +127,8 @@ const buildSqlMigrationAdminRoutes = (deps: SqlMigrationAdminRouteDeps): Record<
                 status: 400,
             });
         }
+
+        deps.assertAdmin(request);
 
         const body = await readJsonBodyWithLimit(request, SQL_MIGRATION_BODY_BYTES);
 

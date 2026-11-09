@@ -65,7 +65,7 @@ const ADDITIVE_CREATE_RE = new RegExp(
     "iu",
 );
 /** Foreign-key enforcement is a connection setting, not data a file changes, so a file may not switch it off. */
-const FOREIGN_KEYS_PRAGMA_RE = new RegExp(String.raw`^PRAGMA${GAP}foreign_keys\b`, "iu");
+const FOREIGN_KEYS_PRAGMA_RE = new RegExp(String.raw`^PRAGMA${GAP}${SCHEMA_PREFIX}(?:foreign_keys|"foreign_keys")(?!\w)`, "iu");
 
 /** One SQL file: its name under `lunora/migrations/` and its text. */
 interface SqlMigrationFile {
@@ -159,6 +159,9 @@ const foldIdentifier = (identifier: string): string => identifier.replaceAll(/[A
 /** The statement without its leading comments, so its first keyword can be matched. */
 const bodyOf = (statementText: string): string => statementText.slice(LEADING_TRIVIA_RE.exec(statementText)?.[0].length ?? 0);
 
+/** Whether a statement switches foreign-key enforcement, under any schema qualifier. Shared by the run and the dry-run report. */
+const changesForeignKeys = (statementText: string): boolean => FOREIGN_KEYS_PRAGMA_RE.test(bodyOf(statementText));
+
 /** The table and column an `ALTER TABLE … ADD [COLUMN]` statement adds, or `undefined` for any other statement. */
 const addedColumn = (statementText: string): { column: string; table: string } | undefined => {
     const match = ADD_COLUMN_RE.exec(bodyOf(statementText));
@@ -235,7 +238,7 @@ const assertRunnable = (file: SqlMigrationFile, scan: ReturnType<typeof scanStat
         );
     }
 
-    if (FOREIGN_KEYS_PRAGMA_RE.test(bodyOf(scan.statementText))) {
+    if (changesForeignKeys(scan.statementText)) {
         throw new LunoraError("VALIDATION_ERROR", `${file.name} changes foreign-key enforcement (PRAGMA foreign_keys). A migration file may not; remove it.`);
     }
 };
@@ -464,7 +467,7 @@ const refusedOnApply = (planned: ReadonlyArray<PlannedFile>, options: ApplySqlMi
         (fresh && item.replayUnsafe) ||
         (options.additiveOnly === true && item.entry.rootOnly.length > 0) ||
         (!fresh && item.entry.destructive.length > 0 && options.confirmDestructive !== true) ||
-        item.entry.statements.some((statement) => TRANSACTION_RE.test(bodyOf(statement)));
+        item.entry.statements.some((statement) => TRANSACTION_RE.test(bodyOf(statement)) || changesForeignKeys(statement));
 
     return pending.filter((item) => refusedByRun(item)).map((item) => item.entry.name);
 };

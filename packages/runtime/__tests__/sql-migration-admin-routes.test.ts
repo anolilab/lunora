@@ -18,8 +18,9 @@ const handlerFor = (
     applier: SqlMigrationApplier | undefined,
     assertAdmin = vi.fn<(request: Request) => void>(),
     isRootAdmin = vi.fn<(request: Request) => boolean>(() => true),
+    isAdmin = vi.fn<(request: Request) => boolean>(() => true),
 ) => {
-    const routes = buildSqlMigrationAdminRoutes({ applySqlMigrations: applier, assertAdmin, isRootAdmin });
+    const routes = buildSqlMigrationAdminRoutes({ applySqlMigrations: applier, assertAdmin, isAdmin, isRootAdmin });
 
     return routes[SQL_MIGRATIONS_PATH] as (request: Request) => Promise<Response>;
 };
@@ -150,6 +151,32 @@ describe("the /_lunora/admin/sql-migrations route", () => {
 
         expect(applier).toHaveBeenCalledWith({ additiveOnly: true, baseline: false, confirmDestructive: false, dryRun: false, files: [] });
         expect(isRootAdmin).toHaveBeenCalledTimes(1);
+    });
+
+    it("answers not-configured, not the scope refusal, to a named token without the scope on a worker with no D1 plane", async () => {
+        expect.assertions(2);
+
+        const assertAdmin = vi.fn<(request: Request) => void>(() => {
+            throw new LunoraError("this named admin token has no `migrations` scope", { code: "ADMIN_SCOPE_REQUIRED", status: 403 });
+        });
+
+        await expect(handlerFor(undefined, assertAdmin)(post({ files: [] }))).rejects.toMatchObject({
+            code: "SQL_MIGRATIONS_NOT_CONFIGURED",
+            status: 400,
+        });
+        expect(assertAdmin).not.toHaveBeenCalled();
+    });
+
+    it("refuses a caller with no admin authority before it learns how the worker is configured", async () => {
+        expect.assertions(2);
+
+        const isAdmin = vi.fn<(request: Request) => boolean>(() => false);
+
+        await expect(handlerFor(undefined, undefined, undefined, isAdmin)(post({ files: [] }))).rejects.toMatchObject({
+            code: "ADMIN_FORBIDDEN",
+            status: 403,
+        });
+        expect(isAdmin).toHaveBeenCalledTimes(1);
     });
 
     it("answers not-configured in the error envelope the CLI reads, with status 400", async () => {

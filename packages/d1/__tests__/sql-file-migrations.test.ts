@@ -740,4 +740,20 @@ INSERT INTO posts (id) VALUES (1);`;
 
         sqlite.close();
     });
+
+    it("refuses a schema-qualified foreign-key pragma, and reports it in a dry run", async () => {
+        expect.assertions(3);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+        const files = [{ name: "fk.sql", sql: "PRAGMA main.foreign_keys = OFF;" }];
+
+        const plan = await applySqlMigrationFiles(database, files, { dryRun: true });
+
+        expect(plan.refused).toStrictEqual(["fk.sql"]);
+        await expect(applySqlMigrationFiles(database, files)).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        expect(trackedNames(sqlite)).toStrictEqual([]);
+
+        sqlite.close();
+    });
 });

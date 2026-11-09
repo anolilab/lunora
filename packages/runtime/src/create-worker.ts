@@ -4505,6 +4505,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const sqlMigrationAdminRoutes = buildSqlMigrationAdminRoutes({
         applySqlMigrations: options.applySqlMigrations,
         assertAdmin: assertMigrationsAdmin,
+        isAdmin: requestIsAdmin,
         isRootAdmin: requestIsRootAdmin,
     });
 
