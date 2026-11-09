@@ -1623,6 +1623,28 @@ describe("lunora migrate apply / status --sql", () => {
             return { json: async () => payload, ok: status >= 200 && status < 300, status, text: async () => text };
         };
 
+    it("orders the files by code unit, so a machine's locale cannot reorder mixed-case names", async () => {
+        expect.assertions(1);
+
+        const migrations = join(sqlWorkdir, "lunora", "migrations");
+
+        writeFileSync(join(migrations, "a_case.sql"), "CREATE TABLE a_case (id TEXT);\n", "utf8");
+        writeFileSync(join(migrations, "B_case.sql"), "CREATE TABLE b_case (id TEXT);\n", "utf8");
+
+        const calls: SqlCall[] = [];
+
+        await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql(calls),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+            yes: true,
+        });
+
+        expect(calls[0]?.body.files.map((file) => file.name)).toStrictEqual(["001_create_emails.sql", "002_drop_emails.sql", "B_case.sql", "a_case.sql"]);
+    });
+
     it("sends every .sql file in name order, with the bearer, and confirmDestructive mirrors --yes", async () => {
         expect.assertions(6);
 

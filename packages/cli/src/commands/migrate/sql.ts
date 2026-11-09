@@ -62,7 +62,10 @@ interface MigrateSqlCommandResult {
     files: MigrateSqlFilePlan[];
 }
 
-/** The SQL files under `lunora/migrations/`, in name order, which is timestamp order for generated files. */
+/**
+ * The SQL files under `lunora/migrations/`, in name order, which is timestamp order for generated files. The order is by code
+ * unit, not `localeCompare`, so every machine sends the files, and resolves `--baseline-through`, the same way.
+ */
 const readSqlMigrationFiles = (cwd: string): { name: string; sql: string }[] => {
     const directory = join(cwd, "lunora", "migrations");
 
@@ -74,7 +77,7 @@ const readSqlMigrationFiles = (cwd: string): { name: string; sql: string }[] => 
     return readdirSync(directory, { withFileTypes: true })
         .filter((entry) => entry.isFile() && entry.name.endsWith(".sql"))
         .map((entry) => entry.name)
-        .toSorted((left, right) => left.localeCompare(right))
+        .toSorted((left, right) => Number(left > right) - Number(left < right))
         .map((name) => {
             return { name, sql: readFileSync(join(directory, name), "utf8") };
         });
