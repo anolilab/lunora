@@ -733,6 +733,55 @@ INSERT INTO posts (id) VALUES (1);`;
         sqlite.close();
     });
 
+    it("plans a later ADD COLUMN as apply runs it, when an earlier file in the run drops that column", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        sqlite.exec('CREATE TABLE "notes" ("id" TEXT, "slug" TEXT)');
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE IF NOT EXISTS other (id TEXT);" }]);
+
+        const plan = await applySqlMigrationFiles(
+            database,
+            [
+                { name: "drop_slug.sql", sql: 'ALTER TABLE "notes" DROP COLUMN "slug";' },
+                { name: "add_slug.sql", sql: 'ALTER TABLE "notes" ADD COLUMN "slug" TEXT;' },
+            ],
+            { dryRun: true },
+        );
+
+        expect(plan.files[1]?.skipped).toHaveLength(0);
+        expect(plan.files[1]?.statements).toHaveLength(1);
+
+        sqlite.close();
+    });
+
+    it("plans a repeated ADD COLUMN as skipped when an earlier file in the run adds the column, as apply does", async () => {
+        expect.assertions(3);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        sqlite.exec('CREATE TABLE "notes" ("id" TEXT)');
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE IF NOT EXISTS other (id TEXT);" }]);
+
+        const files = [
+            { name: "add_a.sql", sql: 'ALTER TABLE "notes" ADD COLUMN "slug" TEXT;' },
+            { name: "add_b.sql", sql: 'ALTER TABLE "notes" ADD COLUMN "slug" INTEGER;' },
+        ];
+        const plan = await applySqlMigrationFiles(database, files, { dryRun: true });
+
+        expect(plan.files[1]?.skipped).toHaveLength(1);
+        expect(plan.files[1]?.statements).toHaveLength(0);
+
+        const applied = await applySqlMigrationFiles(database, files);
+
+        expect(applied.files[1]?.skipped).toHaveLength(1);
+
+        sqlite.close();
+    });
+
     it("refuses two pending files that repeat the same row write, so the write does not apply twice", async () => {
         expect.assertions(4);
 

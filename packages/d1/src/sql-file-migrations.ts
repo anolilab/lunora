@@ -326,11 +326,84 @@ const writesRows = (statementText: string): boolean => {
 /** Whether running a statement again would change data written since it first ran: a destructive one, or a row write. */
 const replaysData = (statementText: string, isDestructive: boolean): boolean => isDestructive || writesRows(statementText);
 
-/** Whether a statement adds a column the table already has, so the file can leave it out. A table an earlier statement changed is read as stale. */
-const isAlreadyPresent = async (client: D1Client, statementText: string, changed: ReadonlySet<string>): Promise<boolean> => {
+/**
+ * What the pending files planned before a file in the same run leave the catalog as. A dry run plans every file against the
+ * catalog it has now, while apply replans each file after the ones before it ran. So a later `ADD COLUMN` could be reported
+ * as skipped when apply runs it, or the reverse. `present` holds the columns those files added or dropped, keyed by folded
+ * table and column. `stale` holds tables they changed in a way the catalog cannot follow, which are read as unknown.
+ */
+interface RunSchema {
+    present: Map<string, Map<string, boolean>>;
+    stale: Set<string>;
+}
+
+const emptyRunSchema = (): RunSchema => {
+    return { present: new Map(), stale: new Set() };
+};
+
+const DROP_COLUMN_RE = new RegExp(String.raw`^ALTER${GAP}TABLE${GAP}${SCHEMA_PREFIX}(${IDENTIFIER})${GAP}DROP${GAP}(?:COLUMN${GAP})?(${IDENTIFIER})`, "iu");
+
+/** The column a statement drops, or `undefined` when it drops none. */
+const droppedColumn = (statementText: string): { column: string; table: string } | undefined => {
+    const match = DROP_COLUMN_RE.exec(bodyOf(statementText));
+
+    if (match === null) {
+        return undefined;
+    }
+
+    return { column: unquoteIdentifier(match[2] ?? ""), table: unquoteIdentifier(match[1] ?? "") };
+};
+
+/** Whether a statement leaves a column present (`ADD COLUMN`) or absent (`DROP COLUMN`), keyed by folded names. */
+interface PresenceChange {
+    column: string;
+    present: boolean;
+    table: string;
+}
+
+const presenceChange = (statementText: string): PresenceChange | undefined => {
     const added = addedColumn(statementText);
 
-    return added !== undefined && !changed.has(foldIdentifier(added.table)) && (await columnExists(client, added.table, added.column));
+    if (added !== undefined) {
+        return { column: foldIdentifier(added.column), present: true, table: foldIdentifier(added.table) };
+    }
+
+    const dropped = droppedColumn(statementText);
+
+    return dropped === undefined ? undefined : { column: foldIdentifier(dropped.column), present: false, table: foldIdentifier(dropped.table) };
+};
+
+/** Whether a statement adds a column the table already has, so the file can leave it out. A table an earlier statement changed is read as stale. */
+const isAlreadyPresent = async (client: D1Client, statementText: string, changed: ReadonlySet<string>, prior: RunSchema): Promise<boolean> => {
+    const added = addedColumn(statementText);
+
+    if (added === undefined) {
+        return false;
+    }
+
+    const table = foldIdentifier(added.table);
+
+    if (changed.has(table) || prior.stale.has(table)) {
+        return false;
+    }
+
+    const known = prior.present.get(table)?.get(foldIdentifier(added.column));
+
+    return known ?? (await columnExists(client, added.table, added.column));
+};
+
+/** Carries one planned file's column changes, and the tables it changed beyond their columns, into the run's schema. */
+const carryInto = (prior: RunSchema, observed: ReadonlyArray<PresenceChange>, tableWide: ReadonlySet<string>): void => {
+    for (const change of observed) {
+        const columns = prior.present.get(change.table) ?? new Map<string, boolean>();
+
+        columns.set(change.column, change.present);
+        prior.present.set(change.table, columns);
+    }
+
+    for (const table of tableWide) {
+        prior.stale.add(table);
+    }
 };
 
 /**
@@ -360,12 +433,33 @@ const fillForAddedColumn = (statementText: string, schema: SchemaLike | undefine
     return added === undefined || schema === undefined ? undefined : globalColumnBackfill(schema, added.table, added.column);
 };
 
+/** What a planner needs to know about a statement that later statements and files depend on. */
+const noteStatement = (statementText: string, observed: PresenceChange[], tableWide: Set<string>): void => {
+    const change = presenceChange(statementText);
+
+    if (change !== undefined) {
+        observed.push(change);
+    }
+
+    if (droppedColumn(statementText) === undefined) {
+        rememberChangedTable(statementText, tableWide);
+    }
+};
+
+/** The statements a planned statement runs: itself, then the backfill that fills the rows of a column it adds. */
+const runsOf = (statementText: string, schema: SchemaLike | undefined): (SQL | string)[] => {
+    const fill = fillForAddedColumn(statementText, schema);
+
+    return fill === undefined ? [statementText] : [statementText, fill];
+};
+
 /** Split one pending file into the statements to run, the ones left out, and the destructive and root-only ones. */
 const planPendingFile = async (
     client: D1Client,
     file: SqlMigrationFile,
     refuseTransactionControl: boolean,
     schema?: SchemaLike,
+    prior: RunSchema = emptyRunSchema(),
 ): Promise<{ destructive: string[]; replayUnsafe: boolean; rootOnly: string[]; runs: (SQL | string)[]; skipped: string[]; statements: string[] }> => {
     const destructive: string[] = [];
     const rootOnly: string[] = [];
@@ -373,6 +467,9 @@ const planPendingFile = async (
     const skipped: string[] = [];
     // Tables an earlier statement of this file has created, dropped or renamed: the catalog read is stale for them.
     const changed = new Set<string>();
+    // The same tables, leaving out a column drop, which the run's schema follows column by column.
+    const tableWide = new Set<string>();
+    const observed: PresenceChange[] = [];
     let replayUnsafe = false;
     let start = 0;
 
@@ -393,6 +490,8 @@ const planPendingFile = async (
         const { statementText } = scan;
         const isDestructive = firstDestructive(scan) !== undefined;
 
+        noteStatement(statementText, observed, tableWide);
+
         if (isDestructive) {
             destructive.push(statementText);
         }
@@ -404,25 +503,17 @@ const planPendingFile = async (
         // `ADD COLUMN` has no `IF NOT EXISTS`, and the worker adds a `.global()` column itself the first time it
         // touches the table. Running the statement anyway would fail on the duplicate and roll the whole file back.
         // eslint-disable-next-line no-await-in-loop -- statements are checked in file order, one catalog read each
-        if (await isAlreadyPresent(client, statementText, changed)) {
+        if (await isAlreadyPresent(client, statementText, changed, prior)) {
             skipped.push(statementText);
             continue;
         }
 
-        runs.push(statementText);
-
-        const fill = fillForAddedColumn(statementText, schema);
-
-        if (fill !== undefined) {
-            runs.push(fill);
-        }
-
-        if (replaysData(statementText, isDestructive)) {
-            replayUnsafe = true;
-        }
-
+        runs.push(...runsOf(statementText, schema));
+        replayUnsafe ||= replaysData(statementText, isDestructive);
         rememberChangedTable(statementText, changed);
     }
+
+    carryInto(prior, observed, tableWide);
 
     // What runs is what the file would run, so a skipped ADD COLUMN is reported only under `skipped`. A backfill is the
     // schema's write, not one of the file's statements, so it is left out of the report.
@@ -515,6 +606,8 @@ const planFiles = async (
         }),
     );
     const vanished = renamedSources(recorded, new Set(files.map((file) => file.name)));
+    // The pending files run in this order, so each one is planned against what the ones before it leave behind.
+    const prior = emptyRunSchema();
     const planned: PlannedFile[] = [];
 
     for (const { file, hash } of hashed) {
@@ -533,7 +626,7 @@ const planFiles = async (
         }
 
         // eslint-disable-next-line no-await-in-loop -- files are planned in the order they run
-        const plan = await planPendingFile(client, file, refuseTransactionControl);
+        const plan = await planPendingFile(client, file, refuseTransactionControl, undefined, prior);
 
         planned.push({
             entry: {
