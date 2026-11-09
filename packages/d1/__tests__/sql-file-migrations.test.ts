@@ -898,7 +898,9 @@ INSERT INTO posts (id) VALUES (1);`;
         ];
         const ran = await applySqlMigrationFiles(
             database,
-            plain.map((sql, index) => {return { name: `plain_${String(index)}.sql`, sql }}),
+            plain.map((sql, index) => {
+                return { name: `plain_${String(index)}.sql`, sql };
+            }),
             { additiveOnly: true },
         );
 
