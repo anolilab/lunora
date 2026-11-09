@@ -198,8 +198,9 @@ const plansFromReply = (body: unknown, files: ReadonlyArray<{ name: string }>): 
     }
 
     const names = reported.map((plan) => plan.name);
+    const reportedNames = new Set(names);
     const sent = files.map((file) => file.name);
-    const namesEachFileOnce = new Set(names).size === names.length && names.length === sent.length && sent.every((name) => names.includes(name));
+    const namesEachFileOnce = reportedNames.size === names.length && names.length === sent.length && sent.every((name) => reportedNames.has(name));
 
     return namesEachFileOnce ? reported : undefined;
 };
