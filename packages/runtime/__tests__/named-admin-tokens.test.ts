@@ -655,6 +655,26 @@ describe("named admin tokens", () => {
         expect(body.error?.message).toContain('revoke "migrate" to free the name');
     });
 
+    it("logs why a refused token row was not removed, naming the token and never its secret", async () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+            const { namespace } = fakeShards({ failRevoke: true, ignoreScopes: true });
+            const worker = createWorker({ adminToken: ROOT, functions: REGISTRY, shardDO: namespace });
+
+            await call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "migrate", scopes: ["migrations"] }), method: "POST" });
+
+            const logged = warn.mock.calls.map((args) => String(args[0])).join("\n");
+
+            expect(logged).toContain('admin token "migrate"');
+            expect(logged).not.toContain("lnat.");
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
     it("accepts a token created right after its name was refused", async () => {
         expect.assertions(2);
 

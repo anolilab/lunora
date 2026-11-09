@@ -145,8 +145,12 @@ const buildAdminTokenRoutes = (deps: AdminTokenRouteDeps): Record<string, (reque
                 const { revoked } = (await deps.callStore(REVOKE_ADMIN_TOKEN_OP, { createdAt, name })) as { revoked?: unknown };
 
                 removed = revoked === true;
-            } catch {
+            } catch (error) {
                 removed = false;
+                // The response says what to do; the cause is only here, in the Worker logs. The secret is never in this path.
+                console.warn(
+                    `[lunora] admin token "${name}" was refused for its dropped scopes and its row was not removed: ${error instanceof Error ? error.message : String(error)}`,
+                );
             } finally {
                 deps.evict(name);
             }
