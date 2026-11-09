@@ -64,8 +64,12 @@ const ADDITIVE_CREATE_RE = new RegExp(
     String.raw`^CREATE${GAP}(?:TABLE(?:${GAP}IF${GAP}NOT${GAP}EXISTS)?${GAP}${SCHEMA_PREFIX}(?:${IDENTIFIER})${GAP_OPT}\(|(?:UNIQUE${GAP})?INDEX\b)`,
     "iu",
 );
-/** Foreign-key enforcement is a connection setting, not data a file changes, so a file may not switch it off. */
-const FOREIGN_KEYS_PRAGMA_RE = new RegExp(String.raw`^PRAGMA${GAP}${SCHEMA_PREFIX}(?:foreign_keys|"foreign_keys")(?!\w)`, "iu");
+
+/**
+ * Foreign-key enforcement is a connection setting, not data a file changes, so a file may not assign it. Reading it
+ * (`PRAGMA foreign_keys;`) changes nothing, so only an assignment, `= value` or `(value)`, matches.
+ */
+const FOREIGN_KEYS_PRAGMA_RE = new RegExp(String.raw`^PRAGMA${GAP}${SCHEMA_PREFIX}(?:foreign_keys|"foreign_keys")${GAP_OPT}(?:=|\()`, "iu");
 
 /** One SQL file: its name under `lunora/migrations/` and its text. */
 interface SqlMigrationFile {

@@ -756,4 +756,19 @@ INSERT INTO posts (id) VALUES (1);`;
 
         sqlite.close();
     });
+
+    it("lets a file read foreign-key enforcement, since a read changes nothing", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+        const files = [{ name: "read.sql", sql: "PRAGMA foreign_keys;" }];
+
+        const plan = await applySqlMigrationFiles(database, files, { dryRun: true });
+
+        expect(plan.refused).toStrictEqual([]);
+        await expect(applySqlMigrationFiles(database, files)).resolves.toMatchObject({ files: [{ state: "ran" }] });
+
+        sqlite.close();
+    });
 });
