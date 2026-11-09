@@ -485,6 +485,8 @@ catalogs:
     # silently disabling `no-unsafe-*` on exactly the two globals most likely to be
     # absent at runtime. The patch drops both declarations so @types/node wins.
     "@cloudflare/workers-types": 5.20261004.1
+    # Deploys the docs Worker from apps/docs/alchemy.run.ts, the same tool `lunora deploy` targets.
+    alchemy: 0.93.12
     # >= 4.131.0 for the containers `durable_object` scheduling policy and its
     # `images` map, >= 4.142.0 for Workflows declared in `exports` (and run on
     # `ctx.exports` locally), >= 4.145.0 for the Analytics SQL `analytics` binding

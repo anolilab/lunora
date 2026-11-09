@@ -5,9 +5,9 @@
     "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
-    // Waitlist sign-ups from /api/waitlist, keyed `waitlist:<email>`. Replace the
-    // `id` with a real one (`wrangler kv namespace create WAITLIST`) before deploying.
-    // The account is not set here: deploys read CLOUDFLARE_ACCOUNT_ID from the environment.
+    // Local dev only: `wrangler dev` and the Vite plugin use this binding. Deploys
+    // come from alchemy.run.ts, which provisions the namespace itself, so the `id`
+    // here is never used for a deployed Worker.
     "kv_namespaces": [
         {
             "binding": "WAITLIST",
