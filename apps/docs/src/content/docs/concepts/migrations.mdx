@@ -228,8 +228,10 @@ An added column is always created nullable, because SQLite and D1 reject
 field as required, so rows written before it need a value:
 
 - **A required field with a default** (`.default(v)`, `.defaultNow()`,
-  `.$defaultFn(fn)`) is backfilled on a `.global()` table when the runtime adds
-  the column: every row without a value gets the default, evaluated once. That
+  `.$defaultFn(fn)`) is backfilled on a `.global()` table when the column is
+  added, whether the runtime adds it or a generated SQL file does through
+  `lunora migrate apply`, which fills it in the same batch. Every row without a
+  value gets the default, evaluated once. That
   includes the `updatedAt` column `.timestamps()` adds, which starts at the time
   of the deploy. A column under a unique constraint (`.unique()`, or part of any unique index) is the
   exception, whatever its default: one value written to every row would collide

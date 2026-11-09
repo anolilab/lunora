@@ -375,8 +375,10 @@ class AppBuilder<Env extends object> {
                 options.syncGlobals = buildGlobalCdcSync(database);
                 options.applyGlobals = buildGlobalCdcApplier(database, this.cdcEnabled);
                 // `lunora migrate apply` runs the generated SQL files against this binding, recording each in
-                // `__lunora_sql_migrations`. A file runs once per stage, and nothing else runs it.
-                options.applySqlMigrations = (request) => applySqlMigrationFiles(database, request.files, request);
+                // `__lunora_sql_migrations`. A file runs once per stage, and nothing else runs it. The schema lets a
+                // column a file adds be filled the way the runtime fills it, so its rows never read NULL.
+                options.applySqlMigrations = (request) =>
+                    applySqlMigrationFiles(database, request.files, { ...request, schema: schema as unknown as D1CtxDbOptions["schema"] });
             }
         }
 

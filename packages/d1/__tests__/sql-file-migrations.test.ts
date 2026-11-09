@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
+import type { SchemaLike } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
 import type { D1DatabaseLike, D1PreparedStatementLike } from "../src/d1-client";
@@ -71,6 +72,17 @@ const DROP_FILE = `-- Lunora migration: drop_emails
 -- lunora:allow-destructive
 DROP TABLE IF EXISTS "emails";
 `;
+
+/** A schema holding one `.global()` table. Validators are the `_meta.column` shape the sql-store provisioning tests build. */
+const globalSchema = (table: unknown): SchemaLike => ({ tables: { notes: table } }) as unknown as SchemaLike;
+
+const notesWithSlug = {
+    indexes: [],
+    shape: { slug: { _meta: { column: { defaultValue: "untitled", notNull: true } }, kind: "string" } },
+    shardMode: { kind: "global" },
+};
+
+const optionalWithDefault = { _meta: { column: { defaultValue: "untitled" } }, inner: { kind: "string" }, kind: "optional" };
 
 describe("applySqlMigrationFiles", () => {
     it("runs a multi-statement file once and records it by name and hash", async () => {
@@ -455,6 +467,63 @@ INSERT INTO posts (id) VALUES (1);`;
             applySqlMigrationFiles(database, [{ name: "backfill.sql", sql: 'UPDATE "emails" SET "seen" = 1;' }], { confirmDestructive: true }),
         ).rejects.toMatchObject({ code: "MIGRATION_DESTRUCTIVE" });
         expect((sqlite.prepare('SELECT "seen" FROM "emails"').all() as { seen: number }[])[0]?.seen).toBe(0);
+
+        sqlite.close();
+    });
+
+    it("fills the rows a column a file adds predates with the declared default, in the same batch", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        sqlite.exec('CREATE TABLE "notes" ("id" TEXT, "body" TEXT)');
+        sqlite.exec(`INSERT INTO "notes" ("id", "body") VALUES ('n1', 'hello'), ('n2', 'world')`);
+
+        await applySqlMigrationFiles(database, [{ name: "add_slug.sql", sql: 'ALTER TABLE "notes" ADD COLUMN "slug" TEXT;' }], {
+            schema: globalSchema(notesWithSlug),
+        });
+
+        expect(sqlite.prepare('SELECT "slug" FROM "notes" ORDER BY "id"').all()).toEqual([{ slug: "untitled" }, { slug: "untitled" }]);
+        expect(sqlite.prepare("SELECT name FROM __lunora_sql_migrations").all()).toHaveLength(1);
+
+        sqlite.close();
+    });
+
+    it("leaves a column the runtime added before the file alone, since the runtime already filled it", async () => {
+        expect.assertions(1);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        sqlite.exec('CREATE TABLE "notes" ("id" TEXT, "body" TEXT, "slug" TEXT)');
+        sqlite.exec(`INSERT INTO "notes" ("id", "body") VALUES ('n1', 'hello')`);
+
+        await applySqlMigrationFiles(database, [{ name: "add_slug.sql", sql: 'ALTER TABLE "notes" ADD COLUMN "slug" TEXT;' }], {
+            schema: globalSchema(notesWithSlug),
+        });
+
+        expect(sqlite.prepare('SELECT "slug" FROM "notes"').all()).toEqual([{ slug: null }]);
+
+        sqlite.close();
+    });
+
+    it("writes no backfill for a column that may hold null", async () => {
+        expect.assertions(1);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        sqlite.exec('CREATE TABLE "notes" ("id" TEXT)');
+        sqlite.exec(`INSERT INTO "notes" ("id") VALUES ('n1')`);
+
+        const optionalSlug = { indexes: [], shape: { slug: optionalWithDefault }, shardMode: { kind: "global" } };
+
+        await applySqlMigrationFiles(database, [{ name: "add_slug.sql", sql: 'ALTER TABLE "notes" ADD COLUMN "slug" TEXT;' }], {
+            schema: globalSchema(optionalSlug),
+        });
+
+        expect(sqlite.prepare('SELECT "slug" FROM "notes"').all()).toEqual([{ slug: null }]);
 
         sqlite.close();
     });

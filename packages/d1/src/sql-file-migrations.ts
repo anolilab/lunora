@@ -1,4 +1,7 @@
 import { LunoraError } from "@lunora/errors";
+import type { SchemaLike } from "@lunora/shard-engine";
+import { globalColumnBackfill } from "@lunora/sql-store";
+import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 
@@ -174,6 +177,12 @@ interface ApplySqlMigrationOptions {
     confirmDestructive?: boolean;
     /** Report each file's state and statements without running or recording anything. Never refuses. */
     dryRun?: boolean;
+
+    /**
+     * The app's schema. A column a file adds to a `.global()` table is filled with the value its declaration gives, in the
+     * same batch, as the runtime does when it adds the column itself. Without it, the rows that predate the column read NULL.
+     */
+    schema?: SchemaLike;
 }
 
 /** A file with its decided entry, the hash its tracking row records, and whether a fresh database must refuse it. */
@@ -341,15 +350,26 @@ const assertRunnable = (file: SqlMigrationFile, scan: ReturnType<typeof scanStat
     }
 };
 
+/**
+ * The `UPDATE` that fills the rows a column this statement adds predates, when the schema gives that column a value. It
+ * runs in the same batch straight after the `ALTER`, so a column the runtime would have backfilled is never left NULL.
+ */
+const fillForAddedColumn = (statementText: string, schema: SchemaLike | undefined): SQL | undefined => {
+    const added = addedColumn(statementText);
+
+    return added === undefined || schema === undefined ? undefined : globalColumnBackfill(schema, added.table, added.column);
+};
+
 /** Split one pending file into the statements to run, the ones left out, and the destructive and root-only ones. */
 const planPendingFile = async (
     client: D1Client,
     file: SqlMigrationFile,
     refuseTransactionControl: boolean,
-): Promise<{ destructive: string[]; replayUnsafe: boolean; rootOnly: string[]; runs: string[]; skipped: string[]; statements: string[] }> => {
+    schema?: SchemaLike,
+): Promise<{ destructive: string[]; replayUnsafe: boolean; rootOnly: string[]; runs: (SQL | string)[]; skipped: string[]; statements: string[] }> => {
     const destructive: string[] = [];
     const rootOnly: string[] = [];
-    const runs: string[] = [];
+    const runs: (SQL | string)[] = [];
     const skipped: string[] = [];
     // Tables an earlier statement of this file has created, dropped or renamed: the catalog read is stale for them.
     const changed = new Set<string>();
@@ -391,6 +411,12 @@ const planPendingFile = async (
 
         runs.push(statementText);
 
+        const fill = fillForAddedColumn(statementText, schema);
+
+        if (fill !== undefined) {
+            runs.push(fill);
+        }
+
         if (replaysData(statementText, isDestructive)) {
             replayUnsafe = true;
         }
@@ -398,8 +424,9 @@ const planPendingFile = async (
         rememberChangedTable(statementText, changed);
     }
 
-    // What runs is what the file would run, so a skipped ADD COLUMN is reported only under `skipped`.
-    return { destructive, replayUnsafe, rootOnly, runs, skipped, statements: runs };
+    // What runs is what the file would run, so a skipped ADD COLUMN is reported only under `skipped`. A backfill is the
+    // schema's write, not one of the file's statements, so it is left out of the report.
+    return { destructive, replayUnsafe, rootOnly, runs, skipped, statements: runs.filter((run): run is string => typeof run === "string") };
 };
 
 const assertFileNames = (files: ReadonlyArray<SqlMigrationFile>): void => {
@@ -673,7 +700,7 @@ const commitFile = async (
     client: D1Client,
     file: SqlMigrationFile,
     hash: string,
-    runs: ReadonlyArray<string>,
+    runs: ReadonlyArray<SQL | string>,
     write: { origin: "applied" | "baselined"; replaces?: string; writtenBy: WrittenBy },
 ): Promise<SqlMigrationState> => {
     const baselined = write.origin === "baselined" ? 1 : 0;
@@ -692,7 +719,10 @@ const commitFile = async (
                   ),
                   record,
               ];
-    const items: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [...leading, ...runs.map((statement) => client.drizzle.run(sql.raw(statement)))];
+    const items: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [
+        ...leading,
+        ...runs.map((statement) => client.drizzle.run(typeof statement === "string" ? sql.raw(statement) : statement)),
+    ];
 
     try {
         await client.batch(items);
@@ -732,13 +762,19 @@ const commitFile = async (
 };
 
 /** Plan a pending file against the catalog as it is now, then commit it. */
+/** What a run that executes files needs beyond the files: the schema that fills new columns, and the token that writes rows. */
+interface CommitOptions {
+    schema: SchemaLike | undefined;
+    writtenBy: WrittenBy;
+}
+
 const commitPlanned = async (
     client: D1Client,
     item: PlannedFile,
-    writtenBy: WrittenBy,
+    commit: CommitOptions,
 ): Promise<Pick<SqlMigrationEntry, "skipped" | "state" | "statements">> => {
-    const plan = await planPendingFile(client, item.file, true);
-    const write = { origin: "applied" as const, writtenBy, ...(item.replaces === undefined ? {} : { replaces: item.replaces }) };
+    const plan = await planPendingFile(client, item.file, true, commit.schema);
+    const write = { origin: "applied" as const, writtenBy: commit.writtenBy, ...(item.replaces === undefined ? {} : { replaces: item.replaces }) };
 
     return { skipped: plan.skipped, state: await commitFile(client, item.file, item.hash, plan.runs, write), statements: plan.statements };
 };
@@ -750,15 +786,15 @@ const commitPlanned = async (
  * When the runtime adds the column between that read and the batch, the batch fails on the duplicate and rolls back.
  * Re-planning once then skips the column, since it is now present.
  */
-const runPending = async (client: D1Client, item: PlannedFile, writtenBy: WrittenBy): Promise<Pick<SqlMigrationEntry, "skipped" | "state" | "statements">> => {
+const runPending = async (client: D1Client, item: PlannedFile, commit: CommitOptions): Promise<Pick<SqlMigrationEntry, "skipped" | "state" | "statements">> => {
     try {
-        return await commitPlanned(client, item, writtenBy);
+        return await commitPlanned(client, item, commit);
     } catch (error: unknown) {
         if (!(error instanceof Error) || !DUPLICATE_COLUMN_RE.test(error.message)) {
             throw error;
         }
 
-        return commitPlanned(client, item, writtenBy);
+        return commitPlanned(client, item, commit);
     }
 };
 
@@ -819,6 +855,7 @@ const applySqlMigrationFiles = async (
     const { fresh, recorded } = await readRecorded(client, dryRun);
     // Transaction control is refused only where the file would run; a baseline or a dry run never executes it.
     const writtenBy: WrittenBy = options.additiveOnly === true ? "migrations" : "root";
+    const commit: CommitOptions = { schema: options.schema, writtenBy };
     const planned = await planFiles(client, files, recorded, !dryRun && !recordOnly, writtenBy === "root");
 
     if (dryRun) {
@@ -845,7 +882,7 @@ const applySqlMigrationFiles = async (
     for (const item of planned) {
         if (item.entry.state === "pending") {
             // eslint-disable-next-line no-await-in-loop -- each file's tracking row must commit before the next file is planned against it
-            const outcome = await runPending(client, item, writtenBy);
+            const outcome = await runPending(client, item, commit);
 
             // The re-plan at commit time is the one that ran, so its statements are what the entry reports.
             item.entry.skipped = outcome.skipped;

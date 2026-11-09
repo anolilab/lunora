@@ -85,11 +85,12 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
     });
 
     it("wires lunora migrate apply to the D1 binding, so the generated SQL files have something to run against", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
-        expect(output).toContain("options.applySqlMigrations = (request) => applySqlMigrationFiles(database, request.files, request);");
+        expect(output).toContain("options.applySqlMigrations = (request) =>");
+        expect(output).toContain('applySqlMigrationFiles(database, request.files, { ...request, schema: schema as unknown as D1CtxDbOptions["schema"] });');
     });
 
     it("wraps the D1 exec so .global() reads retry D1's transient failures", () => {
