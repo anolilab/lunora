@@ -751,10 +751,32 @@ INSERT INTO posts (id) VALUES (1);`;
             { name: "temp_bare.sql", sql: "CREATE TABLE temp.x (id INTEGER);" },
             { name: "temp_quoted.sql", sql: 'CREATE TABLE "temp".y (id INTEGER);' },
             { name: "temp_alter.sql", sql: "ALTER TABLE temp.users ADD COLUMN note TEXT;" },
+            { name: "temp_comment.sql", sql: "CREATE TABLE temp/**/.z (id INTEGER);" },
         ];
         const plan = await applySqlMigrationFiles(database, files, { additiveOnly: true, dryRun: true });
 
-        expect(plan.files.map((file) => file.rootOnly.length)).toStrictEqual([1, 1, 1]);
+        expect(plan.files.map((file) => file.rootOnly.length)).toStrictEqual([1, 1, 1, 1]);
+
+        sqlite.close();
+    });
+
+    it("an additive-only run treats the framework's change log and companion tables as root-only", async () => {
+        expect.assertions(1);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE users (id TEXT);" }]);
+
+        const files = [
+            { name: "cdc_log.sql", sql: "CREATE TABLE __cdc_log (op TEXT);" },
+            { name: "cdc_index.sql", sql: "CREATE INDEX cdc_op ON __cdc_log (op);" },
+            { name: "companion.sql", sql: "ALTER TABLE users__agg_x ADD COLUMN y TEXT;" },
+            { name: "ordinary.sql", sql: "CREATE TABLE notes (id TEXT);" },
+        ];
+        const plan = await applySqlMigrationFiles(database, files, { additiveOnly: true, dryRun: true });
+
+        expect(plan.files.map((file) => file.rootOnly.length)).toStrictEqual([1, 1, 1, 0]);
 
         sqlite.close();
     });

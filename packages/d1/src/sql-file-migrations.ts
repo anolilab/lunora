@@ -106,15 +106,17 @@ const REFERENCES_RE = /\bREFERENCES\b/iu;
 
 /**
  * The tables a migration may not touch from an additive statement: the tracking tables (this file's, the data
- * migrations', and the migration runner's), Cloudflare's, and SQLite's own.
+ * migrations', and the migration runner's), Cloudflare's, SQLite's own, and the change log and companion tables the
+ * framework keeps (`__cdc_*`, `<table>__agg_*`, `<table>__rank_*`, `<table>__fts_*`).
  */
-const INTERNAL_TABLE_RE = /__lunora_|__drizzle_|sqlite_|_cf_/iu;
+const INTERNAL_TABLE_RE = /__lunora_|__drizzle_|__cdc_|__agg_|__rank_|__fts_|sqlite_|_cf_/iu;
 
 /**
  * The `temp` schema qualifier. An object created there lives only for one connection, so a file that records it as applied
- * persists nothing. Matched on the raw text, since `code` blanks a quoted qualifier (`"temp".t`).
+ * persists nothing. Matched on the raw text, since `code` blanks a quoted qualifier (`"temp".t`), and comments may sit
+ * between the qualifier and the dot, as SQLite reads them.
  */
-const TEMP_SCHEMA_RE = /\btemp["\]`]?\s*\./iu;
+const TEMP_SCHEMA_RE = new RegExp(String.raw`\btemp["\]${BACKTICK}]?${GAP_OPT}\.`, "iu");
 
 /**
  * Foreign-key enforcement is a connection setting, not data a file changes, so a file may not assign it. Reading it
