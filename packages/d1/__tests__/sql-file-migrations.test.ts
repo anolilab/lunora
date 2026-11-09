@@ -554,7 +554,7 @@ INSERT INTO posts (id) VALUES (1);`;
         sqlite.close();
     });
 
-    it("a dry run and a baseline report the root-only statements without refusing, for an additive-only caller", async () => {
+    it("a dry run reports the root-only statements without refusing, for an additive-only caller", async () => {
         expect.assertions(3);
 
         const sqlite = new DatabaseSync(":memory:");
@@ -564,11 +564,11 @@ INSERT INTO posts (id) VALUES (1);`;
         const plan = await applySqlMigrationFiles(database, files, { additiveOnly: true, dryRun: true });
 
         expect(plan.files[0]?.rootOnly).toHaveLength(1);
+        expect(plan.refused).toStrictEqual(["trig.sql"]);
 
-        const baselined = await applySqlMigrationFiles(database, files, { additiveOnly: true, baseline: true });
-
-        expect(baselined.files[0]?.state).toBe("baselined");
-        expect(tables(sqlite)).not.toContain("t_audit");
+        await expect(applySqlMigrationFiles(database, files, { additiveOnly: true, baseline: true })).rejects.toMatchObject({
+            code: "MIGRATION_ROOT_REQUIRED",
+        });
 
         sqlite.close();
     });
@@ -637,7 +637,7 @@ INSERT INTO posts (id) VALUES (1);`;
     });
 
     it("reports, in a dry run, the pending files a real run would refuse with the same options", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const sqlite = new DatabaseSync(":memory:");
         const database = createSqliteDatabase(sqlite);
@@ -650,9 +650,14 @@ INSERT INTO posts (id) VALUES (1);`;
 
         const scoped = await applySqlMigrationFiles(database, [{ name: "drop.sql", sql: "DROP TABLE t;" }], { additiveOnly: true, dryRun: true });
         const plain = await applySqlMigrationFiles(database, [{ name: "drop.sql", sql: "DROP TABLE t;" }], { dryRun: true });
+        const confirmed = await applySqlMigrationFiles(database, [{ name: "drop.sql", sql: "DROP TABLE t;" }], {
+            confirmDestructive: true,
+            dryRun: true,
+        });
 
         expect(scoped.refused).toStrictEqual(["drop.sql"]);
-        expect(plain.refused).toStrictEqual([]);
+        expect(plain.refused).toStrictEqual(["drop.sql"]);
+        expect(confirmed.refused).toStrictEqual([]);
 
         sqlite.close();
     });
@@ -686,6 +691,52 @@ INSERT INTO posts (id) VALUES (1);`;
         const result = await applySqlMigrationFiles(database, [{ name: "mixed.sql", sql: "ALTER TABLE t ADD COLUMN c TEXT;\nCREATE TABLE u (id TEXT);" }]);
 
         expect(result.files[0]?.statements).toStrictEqual(["CREATE TABLE u (id TEXT)"]);
+
+        sqlite.close();
+    });
+
+    it("refuses a baseline from an additive-only caller, and writes no tracking row for a file it could not run", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await expect(
+            applySqlMigrationFiles(database, [{ name: "drop.sql", sql: "DROP TABLE t;" }], { additiveOnly: true, baseline: true }),
+        ).rejects.toMatchObject({ code: "MIGRATION_ROOT_REQUIRED" });
+        expect(trackedNames(sqlite)).toStrictEqual([]);
+
+        sqlite.close();
+    });
+
+    it("refuses a table copied from a query for an additive-only caller, and for the root token on a fresh database", async () => {
+        expect.assertions(4);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+        const copy = [{ name: "copy.sql", sql: "CREATE TABLE copied AS SELECT 1 AS id;" }];
+
+        await expect(applySqlMigrationFiles(database, copy, { additiveOnly: true })).rejects.toMatchObject({ code: "MIGRATION_ROOT_REQUIRED" });
+        expect(tables(sqlite)).not.toContain("copied");
+
+        await expect(applySqlMigrationFiles(database, copy, { confirmDestructive: true })).rejects.toMatchObject({ code: "MIGRATION_DESTRUCTIVE" });
+        expect(trackedNames(sqlite)).toStrictEqual([]);
+
+        sqlite.close();
+    });
+
+    it("skips an ADD COLUMN on a qualified table written with spaces around the dot", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE t (sender TEXT);" }]);
+
+        const result = await applySqlMigrationFiles(database, [{ name: "add.sql", sql: "ALTER TABLE main . t ADD COLUMN sender TEXT;" }]);
+
+        expect(result.files[0]?.skipped).toHaveLength(1);
+        expect(result.files[0]?.statements).toStrictEqual([]);
 
         sqlite.close();
     });

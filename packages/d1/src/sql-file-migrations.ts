@@ -28,8 +28,10 @@ const BACKTICK = "`";
 const IDENTIFIER = String.raw`"(?:[^"]|"")+"|\[[^\]]+\]|${BACKTICK}(?:[^${BACKTICK}]|${BACKTICK}${BACKTICK})+${BACKTICK}|[_a-z]\w*`;
 /** The space between two SQL tokens. A comment counts as space, so a block comment between two keywords does not hide the statement. */
 const GAP = String.raw`(?:\s|--[^\n]*\n|\/\*[\s\S]*?\*\/)+`;
+/** The same, but optional: between two tokens that may sit next to each other. */
+const GAP_OPT = String.raw`(?:\s|--[^\n]*\n|\/\*[\s\S]*?\*\/)*`;
 /** An optional `schema.` before a table name, as in `main.t`. Non-capturing, so the table name keeps its group. */
-const SCHEMA_PREFIX = String.raw`(?:(?:${IDENTIFIER})\.)?`;
+const SCHEMA_PREFIX = String.raw`(?:(?:${IDENTIFIER})${GAP_OPT}\.${GAP_OPT})?`;
 const ADD_COLUMN_RE = new RegExp(String.raw`^ALTER${GAP}TABLE${GAP}${SCHEMA_PREFIX}(${IDENTIFIER})${GAP}ADD${GAP}(?:COLUMN${GAP})?(${IDENTIFIER})`, "iu");
 
 /**
@@ -47,8 +49,21 @@ const TABLE_CHANGE_RE = new RegExp(
  * need a parser.
  */
 const ROW_WRITE_RE = /^(?:WITH|INSERT|UPDATE|DELETE|REPLACE)\b/iu;
-/** The additive statements a migrations-scoped token may run: a new table or index. An added column is matched by `ADD_COLUMN_RE`. */
-const ADDITIVE_CREATE_RE = new RegExp(String.raw`^CREATE${GAP}(?:TABLE|(?:UNIQUE${GAP})?INDEX)\b`, "iu");
+
+/**
+ * A table created from a query's rows: `CREATE TABLE t AS SELECT …`. It copies data in, so it is a row write, and it is
+ * not additive. A `CREATE TABLE` with a column list is.
+ */
+const ROW_COPY_RE = new RegExp(String.raw`^CREATE${GAP}TABLE(?:${GAP}IF${GAP}NOT${GAP}EXISTS)?${GAP}${SCHEMA_PREFIX}(?:${IDENTIFIER})${GAP}AS\b`, "iu");
+
+/**
+ * The additive statements a migrations-scoped token may run: a new table with a column list, or a new index. An added
+ * column is matched by `ADD_COLUMN_RE`.
+ */
+const ADDITIVE_CREATE_RE = new RegExp(
+    String.raw`^CREATE${GAP}(?:TABLE(?:${GAP}IF${GAP}NOT${GAP}EXISTS)?${GAP}${SCHEMA_PREFIX}(?:${IDENTIFIER})${GAP_OPT}\(|(?:UNIQUE${GAP})?INDEX\b)`,
+    "iu",
+);
 /** Foreign-key enforcement is a connection setting, not data a file changes, so a file may not switch it off. */
 const FOREIGN_KEYS_PRAGMA_RE = new RegExp(String.raw`^PRAGMA${GAP}foreign_keys\b`, "iu");
 
@@ -191,8 +206,15 @@ const rememberChangedTable = (statementText: string, changed: Set<string>): void
     }
 };
 
+/** Whether a statement writes rows: a row write, or a table created from a query's rows. */
+const writesRows = (statementText: string): boolean => {
+    const body = bodyOf(statementText);
+
+    return ROW_WRITE_RE.test(body) || ROW_COPY_RE.test(body);
+};
+
 /** Whether running a statement again would change data written since it first ran: a destructive one, or a row write. */
-const replaysData = (statementText: string, isDestructive: boolean): boolean => isDestructive || ROW_WRITE_RE.test(bodyOf(statementText));
+const replaysData = (statementText: string, isDestructive: boolean): boolean => isDestructive || writesRows(statementText);
 
 /** Whether a statement adds a column the table already has, so the file can leave it out. A table an earlier statement changed is read as stale. */
 const isAlreadyPresent = async (client: D1Client, statementText: string, changed: ReadonlySet<string>): Promise<boolean> => {
@@ -419,16 +441,33 @@ const assertNoDrift = (planned: ReadonlyArray<PlannedFile>): void => {
 
 /** The statements of a pending file that would change data again: its destructive ones, and its row writes. */
 const replayingStatements = (entry: SqlMigrationEntry): string[] =>
-    entry.statements.filter((statement) => entry.destructive.includes(statement) || ROW_WRITE_RE.test(bodyOf(statement)));
+    entry.statements.filter((statement) => entry.destructive.includes(statement) || writesRows(statement));
+
+/** A statement that opens or closes a transaction. A file may not contain one, and a dry run should say so. */
+const TRANSACTION_RE = /^(?:BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE)\b/iu;
 
 /**
- * The pending files a real run would refuse with these options: a fresh database's files that change data again, and,
- * for an additive-only caller, files with a statement it may not run. A dry run reports them rather than failing.
+ * The pending files a real run with these options would refuse, so a dry run reports what the run would stop on. A
+ * baseline is root-only, so for a scoped caller it refuses every pending file. Otherwise the refusals are the ones
+ * `applySqlMigrationFiles` makes for a run: the fresh-database guard, the additive-only rule, an unconfirmed
+ * destructive file, and transaction control.
  */
-const refusedOnApply = (planned: ReadonlyArray<PlannedFile>, additiveOnly: boolean, fresh: boolean): string[] =>
-    planned
-        .filter((item) => item.entry.state === "pending" && ((fresh && item.replayUnsafe) || (additiveOnly && item.entry.rootOnly.length > 0)))
-        .map((item) => item.entry.name);
+const refusedOnApply = (planned: ReadonlyArray<PlannedFile>, options: ApplySqlMigrationOptions, fresh: boolean): string[] => {
+    const pending = planned.filter((item) => item.entry.state === "pending");
+    const recordOnly = options.baseline === true || options.baselineThrough !== undefined;
+
+    if (recordOnly) {
+        return options.additiveOnly === true ? pending.map((item) => item.entry.name) : [];
+    }
+
+    const refusedByRun = (item: PlannedFile): boolean =>
+        (fresh && item.replayUnsafe) ||
+        (options.additiveOnly === true && item.entry.rootOnly.length > 0) ||
+        (!fresh && item.entry.destructive.length > 0 && options.confirmDestructive !== true) ||
+        item.entry.statements.some((statement) => TRANSACTION_RE.test(bodyOf(statement)));
+
+    return pending.filter((item) => refusedByRun(item)).map((item) => item.entry.name);
+};
 
 /**
  * Refuse a pending file that would change data again. On a database with no recorded file, a file that drops, replaces
@@ -621,10 +660,16 @@ const applySqlMigrationFiles = async (
     const planned = await planFiles(client, files, recorded, !dryRun && !recordOnly);
 
     if (dryRun) {
-        return { files: planned.map((item) => item.entry), refused: refusedOnApply(planned, options.additiveOnly === true, fresh) };
+        return { files: planned.map((item) => item.entry), refused: refusedOnApply(planned, options, fresh) };
     }
 
     assertNoDrift(planned);
+
+    // A baseline records a file as applied without running it. A caller that cannot run a root-only file cannot record
+    // one either, or a later root run would skip a file that never ran.
+    if (recordOnly && options.additiveOnly === true) {
+        throw new LunoraError("MIGRATION_ROOT_REQUIRED", "a baseline records files as applied without running them, so only the root admin token may run one");
+    }
 
     if (recordOnly) {
         await recordPending(client, planned, through);
