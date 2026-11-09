@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.490](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.489...@lunora/cli@1.0.0-alpha.490) (2026-11-09)
+
+- feat(cli): apply generated SQL migrations per stage (#1516)
+
 ## @lunora/cli [1.0.0-alpha.489](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.488...@lunora/cli@1.0.0-alpha.489) (2026-11-05)
 
 - feat(vite): dev-loop hints, binding-drift notice and env.ts check (#1494)

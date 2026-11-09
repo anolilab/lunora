@@ -1,3 +1,7 @@
+## @lunora/errors [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.89...@lunora/errors@1.0.0-alpha.90) (2026-11-09)
+
+- feat(cli): apply generated SQL migrations per stage (#1516)
+
 ## @lunora/errors [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.88...@lunora/errors@1.0.0-alpha.89) (2026-11-05)
 
 - feat(d1): refuse unconfirmed destructive migration sql; fix the add-column race (#1489)
