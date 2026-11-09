@@ -4,7 +4,7 @@ The Lunora documentation & marketing site (`@lunora/docs`) — TanStack Start on
 Vite, file-based routing via TanStack Router, Fumadocs/MDX content, Tailwind v4
 with shadcn/ui, prerendered to static HTML.
 
-> Deployment target is not yet wired for Lunora: the upstream template targeted Netlify and `@netlify/vite-plugin-tanstack-start` still runs in production builds. Switching to Cloudflare Workers is a tracked follow-up.
+> Deployed as a Cloudflare Worker (`wrangler.jsonc`, `@cloudflare/vite-plugin`). The Worker cannot compile wasm from bytes at runtime, so `/api/og` does not render under workerd yet (satori's harfbuzz), and `/code-of-conduct` is not prerendered and returns 500 live. Verify a change with `pnpm run build` then `wrangler dev -c dist/server/wrangler.json`.
 
 Writing rules for every docs page (voice, page types, code samples, agent
 readability): [`STYLE.md`](STYLE.md).

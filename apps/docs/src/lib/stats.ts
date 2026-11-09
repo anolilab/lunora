@@ -1,6 +1,6 @@
 // Emitted by Vite as a hashed static asset, so the packages pages read the
 // prebuilt numbers from the CDN instead of calling a server function on every
-// visit (each such call could land on a cold Netlify function).
+// visit (each such call would hit a Worker cold start).
 import statsUrl from "@/data/stats.json?url";
 
 export interface MonthlyDataPoint {

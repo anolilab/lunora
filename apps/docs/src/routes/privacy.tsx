@@ -79,11 +79,11 @@ const RouteComponent = () => (
         </p>
         <p>We are using the following host(s):</p>
         <p>
-            Netlify
+            Cloudflare, Inc.
             <br />
-            44 Montgomery St Suite 300,
+            101 Townsend St,
             <br />
-            San Francisco, California 94104, US
+            San Francisco, California 94107, US
         </p>
 
         <h2>3. General information and mandatory information</h2>
@@ -362,9 +362,9 @@ const RouteComponent = () => (
             data processing transactions that have already taken place remains unaffected by the revocation.
         </p>
         <p>
-            Form submissions are processed on our behalf by our hosting and forms provider, Netlify, Inc. (44 Montgomery Street, Suite 300, San Francisco,
-            California 94104, USA), acting as a processor under a data processing agreement (Art. 28 GDPR). Where data is transferred to the USA, the transfer
-            is safeguarded by the EU Standard Contractual Clauses and/or the EU&ndash;U.S. Data Privacy Framework.
+            Form submissions are processed on our behalf by our hosting provider, Cloudflare, Inc. (101 Townsend Street, San Francisco, California 94107, USA),
+            acting as a processor under a data processing agreement (Art. 28 GDPR). Where data is transferred to the USA, the transfer is safeguarded by the EU
+            Standard Contractual Clauses and/or the EU&ndash;U.S. Data Privacy Framework.
         </p>
         <p>
             We retain the data you provide via the waitlist until you withdraw your consent or the purpose for storing it ceases to apply (for example, after we

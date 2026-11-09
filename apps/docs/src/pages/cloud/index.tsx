@@ -54,10 +54,9 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
         setStatus("sending");
 
         try {
-            // Netlify Forms: POST url-encoded to the static detection form (public/__forms.html).
-            const response = await fetch("/__forms.html", {
-                body: new URLSearchParams({ email, "form-name": "lunora-waitlist", honeyField: "", privacy: "true", source }).toString(),
-                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            const response = await fetch("/api/waitlist", {
+                body: JSON.stringify({ email, honeyField: "", privacy: true, source }),
+                headers: { "Content-Type": "application/json" },
                 method: "POST",
             });
 
@@ -82,17 +81,7 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
     }
 
     return (
-        <form
-            className="flex w-full max-w-md flex-col gap-2"
-            data-netlify="true"
-            method="POST"
-            name="lunora-waitlist"
-            // eslint-disable-next-line react/no-unknown-property -- Netlify Forms spam-filter attribute, read by Netlify's build, not the DOM
-            netlify-honeypot="honeyField"
-            onSubmit={(event) => void submit(event)}
-        >
-            <input name="form-name" type="hidden" value="lunora-waitlist" />
-            <input name="source" type="hidden" value={source} />
+        <form className="flex w-full max-w-md flex-col gap-2" onSubmit={(event) => void submit(event)}>
             <p className="hidden">
                 <label htmlFor={honeyId}>
                     Don&apos;t fill this out if you&apos;re human: <input id={honeyId} name="honeyField" tabIndex={-1} />

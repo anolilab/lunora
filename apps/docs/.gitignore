@@ -1,7 +1,8 @@
 .source
 .tmp-external-docs
 .tanstack/tmp
-.netlify
+.wrangler
+.dev.vars
 public/assets
 
 !src/data

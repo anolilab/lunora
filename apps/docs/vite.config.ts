@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 
-import netlify from "@netlify/vite-plugin-tanstack-start";
+import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
@@ -61,7 +61,6 @@ export default defineConfig(async ({ mode }) => {
             chunkSizeWarningLimit: 1000,
             cssCodeSplit: true,
             cssMinify: "lightningcss",
-            minify: "esbuild",
             reportCompressedSize: true,
             sourcemap: false,
             target: "esnext",
@@ -72,6 +71,8 @@ export default defineConfig(async ({ mode }) => {
             exclude: ["scripts/*", "@fumadocs/mdx-remote", "@fumadocs/mdx-remote/client", "@resvg/resvg-wasm"],
         },
         plugins: [
+            // Must come first so it owns the `ssr` environment before `tanstackStart()` configures it.
+            cloudflare({ viteEnvironment: { name: "ssr" } }),
             ...plugins,
             mdx(await import("./source.config")),
             tailwindcss(),
@@ -134,11 +135,9 @@ export default defineConfig(async ({ mode }) => {
                     crawlLinks: true,
                     enabled: true,
                     // Retry transient prerender failures instead of crashing the
-                    // build. Netlify's concurrent crawler intermittently hits a
-                    // "fetch failed" (ETIMEDOUT ::1 → ECONNREFUSED 127.0.0.1) when
-                    // a self-request races the local prerender server; without a
-                    // retry that surfaces as an uncaught rejection and fails the
-                    // whole build.
+                    // build. The crawler's self-requests can race the local
+                    // prerender server ("fetch failed"); without a retry that
+                    // surfaces as an uncaught rejection and fails the whole build.
                     retryCount: 3,
                     retryDelay: 1000,
                 },
@@ -151,52 +150,14 @@ export default defineConfig(async ({ mode }) => {
                     outputPath: "sitemap.xml",
                 },
             }),
-            ...(mode !== "development" ? [netlify()] : []),
             react(),
             babel({ presets: [reactCompilerPreset()] }),
         ],
-        server: {
-            proxy: {
-                // Dev-side mirror of the `/pr/posthog` rules in `public/_redirects`.
-                // These two must stay in step: this block only exists in the dev
-                // server, so production ingestion rides entirely on the Netlify
-                // rules. Assets host first — Vite matches proxy keys by longest
-                // prefix, but keeping the order explicit mirrors _redirects, where
-                // order is what decides.
-                "/pr/posthog/static": {
-                    changeOrigin: true,
-                    rewrite: (path) => path.replace(/^\/pr\/posthog/, ""),
-                    target: "https://eu-assets.i.posthog.com",
-                },
-                "/pr/posthog": {
-                    changeOrigin: true,
-                    rewrite: (path) => path.replace(/^\/pr\/posthog/, ""),
-                    target: "https://eu.i.posthog.com",
-                },
-            },
-        },
         ssr: {
-            // resvg-wasm: load from node_modules at runtime, don't bundle (avoids the
-            // bundler resolving its .wasm asset at build time).
-            external: ["@resvg/resvg-wasm"],
-            // Bundle c15t into the server output instead of resolving it from
-            // node_modules at runtime.
-            //
-            // `@c15t/react` is imported by `__root.tsx`, so it is in the SSR graph
-            // for every route. Left external, the deployed function imports it by
-            // specifier — and it reaches `@c15t/ui/styles/primitives/*.module.js`
-            // through a wildcard `exports` map, which Netlify's file tracer does
-            // not follow. Those files were therefore never uploaded, and the
-            // function threw ERR_MODULE_NOT_FOUND on cold start: every invocation
-            // returned 502, taking out `/api/og`, the 404 page, and the loader
-            // call behind every client-side navigation. Prerendered pages hid it,
-            // because `preferStatic` serves those without touching the function —
-            // which is why a hard refresh worked and clicking a link did not.
-            //
-            // `@icons-pack/react-simple-icons` fails the same way: the site
-            // imports it through `icons/*.mjs` deep paths, resolved by the same
-            // kind of wildcard `exports` entry, so the tracer left the whole
-            // package out and every client-side navigation 502'd.
+            // Bundle these into the Worker instead of resolving them from
+            // node_modules at runtime. Workers have no node_modules, and a
+            // wildcard `exports` map (c15t's primitives, the simple-icons `icons/*`
+            // paths) cannot be resolved there at request time.
             noExternal: ["@c15t/react", "@c15t/ui", "@icons-pack/react-simple-icons"],
             optimizeDeps: {
                 exclude: ["fumadocs-ui", "fumadocs-core", "@fumadocs/mdx-remote", "@resvg/resvg-wasm"],

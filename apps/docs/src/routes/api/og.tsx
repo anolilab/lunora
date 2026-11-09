@@ -1,11 +1,10 @@
+// resvg-wasm (no native binary) so this works in a Worker, where the native
+// @resvg/resvg-js addon cannot load. The wasm is imported as a compiled module at
+// build time: Workers cannot compile wasm fetched at runtime.
+import resvgWasm from "@resvg/resvg-wasm/index_bg.wasm?module";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { getPackageBySlug } from "@/data/packages";
-
-// resvg-wasm (no native binary) so this works in serverless functions, where the
-// native @resvg/resvg-js addon fails to bundle. The wasm version must match the
-// installed @resvg/resvg-wasm version. Initialized once per cold start.
-const RESVG_WASM_URL = "https://cdn.jsdelivr.net/npm/@resvg/resvg-wasm@2.6.2/index_bg.wasm";
 
 let wasmReady: Promise<void> | null = null;
 
@@ -29,7 +28,7 @@ const ALREADY_INITIALIZED = /already initialized/i;
  * rejects instantly from the cache. Clearing it lets the next request retry.
  */
 const ensureWasm = (initWasm: typeof import("@resvg/resvg-wasm").initWasm): Promise<void> => {
-    wasmReady ??= initWasm(fetch(RESVG_WASM_URL)).catch((error: unknown) => {
+    wasmReady ??= initWasm(resvgWasm).catch((error: unknown) => {
         if (error instanceof Error && ALREADY_INITIALIZED.test(error.message)) {
             return;
         }
@@ -85,14 +84,11 @@ const truncate = (text: string, max: number): string => (text.length > max ? `${
 
 const renderPng = async (title: string, description: string, eyebrow: string, accent: string): Promise<Uint8Array<ArrayBuffer>> => {
     // Imported here, not at the top of the module. This file is part of the route
-    // tree, so a top-level import loads satori on every request the function
-    // serves. satori statically imports harfbuzzjs, whose entry starts loading
-    // `hb.wasm` from disk on import and leaves the result as a promise nothing
-    // awaits. When that file is missing (Netlify's tracer does not follow it; see
-    // `included_files` in netlify.toml) the rejection goes unhandled, and on Lambda
-    // that ends the process. Every instance died after its first request, so every
-    // navigation paid a ~8s cold start. Loading the renderer here keeps any such
-    // failure confined to this endpoint.
+    // tree, so a top-level import would load satori on every request the Worker
+    // serves. satori statically imports harfbuzzjs, which compiles its wasm from
+    // bytes on load; workerd rejects that ("Wasm code generation disallowed by
+    // embedder"), so this endpoint fails under `wrangler dev` until the renderer
+    // is replaced or the wasm is precompiled.
     const [{ default: satori }, { initWasm, Resvg }] = await Promise.all([import("satori"), import("@resvg/resvg-wasm")]);
 
     const svg = await satori(
