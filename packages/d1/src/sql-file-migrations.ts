@@ -761,13 +761,13 @@ const commitFile = async (
     }
 };
 
-/** Plan a pending file against the catalog as it is now, then commit it. */
 /** What a run that executes files needs beyond the files: the schema that fills new columns, and the token that writes rows. */
 interface CommitOptions {
     schema: SchemaLike | undefined;
     writtenBy: WrittenBy;
 }
 
+/** Plan a pending file against the catalog as it is now, then commit it. */
 const commitPlanned = async (
     client: D1Client,
     item: PlannedFile,
