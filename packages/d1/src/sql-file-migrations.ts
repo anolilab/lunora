@@ -134,7 +134,7 @@ interface SqlMigrationEntry {
     /** Destructive statements (drops, renames, truncates, replaces), in file order. */
     destructive: string[];
     name: string;
-    /** Statements a migrations-scoped token may not run: anything but a new table or index, or an added column. */
+    /** Statements a migrations-scoped token may not run: anything but a new table, a non-unique index or an added column. */
     rootOnly: string[];
     /** Statements left out because the column they add is already there, provisioned by the runtime on first use. */
     skipped: string[];
@@ -613,7 +613,7 @@ const assertAdditiveOnly = (planned: ReadonlyArray<PlannedFile>, additiveOnly: b
 
     throw new LunoraError(
         "MIGRATION_ROOT_REQUIRED",
-        `these files run statements that a migrations-scoped token may not run (only CREATE TABLE, CREATE INDEX and ADD COLUMN). Run them with the root admin token:\n  ${listed.join("\n  ")}`,
+        `these files run statements that a migrations-scoped token may not run (only CREATE TABLE, a CREATE INDEX that is not UNIQUE, and ADD COLUMN). Run them with the root admin token:\n  ${listed.join("\n  ")}`,
     );
 };
 

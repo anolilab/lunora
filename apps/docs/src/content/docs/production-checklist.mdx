@@ -87,7 +87,8 @@ data export/import, migrations, the Studio, scheduled-job admin.
       below need `LUNORA_ADMIN_TOKEN`. A pipeline that runs `deploy --migrate`
       runs `migrate apply` as its first step: give that pipeline a token minted
       with `--scope migrations`, which runs only additive SQL, and keep the root
-      token for a file that drops or rewrites rows. Revoke one with
+      token for a file that drops or rewrites rows or adds a unique index (a
+      `.unique()` field generates one). Revoke one with
       `lunora admin-token revoke <name>`: the revoking isolate refuses it at once,
       and every other isolate within 30 seconds (its verification cache); an
       expiring token stops at its expiry everywhere. Anything that would outlive

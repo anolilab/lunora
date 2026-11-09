@@ -292,7 +292,7 @@ const replyRefusal = (
     if (replyErrorCode(body) === "MIGRATION_ROOT_REQUIRED") {
         return refuse(
             logger,
-            `${target.baseUrl} refused migrate apply: a file runs statements that a migrations-scoped token may not run (a DROP, a row write or a trigger). Run it with the root admin token; the dry run lists the statements.`,
+            `${target.baseUrl} refused migrate apply: a file runs statements that a migrations-scoped token may not run (a DROP, a row write, a trigger or a UNIQUE index). Run it with the root admin token; the dry run lists the statements.`,
             exitCodeForStatus(response.status),
         );
     }

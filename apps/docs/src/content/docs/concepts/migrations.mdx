@@ -281,10 +281,12 @@ can call the same command as a step before its deploy.
 
 Who may run `apply` is set by the token. The root admin token runs any file. A
 named token minted with `lunora admin-token create <name> --scope migrations` runs
-only additive statements: `CREATE TABLE`, `CREATE INDEX` and `ADD COLUMN`. A file
-with any other statement, such as a `DROP`, an `UPDATE` or a trigger, is refused
-before anything in the run executes, and the refusal says which token it needs.
-A dry run shows which statements those are.
+only additive statements: `CREATE TABLE`, a `CREATE INDEX` that is not `UNIQUE`, and
+`ADD COLUMN` with no default, constraint or generated value. A file with any other statement, such as a `DROP`,
+an `UPDATE`, a trigger or a `CREATE UNIQUE INDEX`, is refused before anything in the
+run executes, and the refusal says which token it needs. A `.unique()` field or index
+generates a `CREATE UNIQUE INDEX`, so a deploy that adds one needs the root token. A
+dry run shows which statements those are.
 
 **Upgrading an existing project.** Files committed before `migrate apply` existed were never recorded, so the first run would treat every one of them as pending. A file that drops a table could then run again over rows written since it last ran. Record the files that already ran on each environment, without running them, before its first `deploy --migrate`:
 
