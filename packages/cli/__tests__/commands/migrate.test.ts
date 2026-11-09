@@ -1645,11 +1645,30 @@ describe("lunora migrate apply / status --sql", () => {
         expect(calls[0]?.body.files.map((file) => file.name)).toStrictEqual(["001_create_emails.sql", "002_drop_emails.sql", "B_case.sql", "a_case.sql"]);
     });
 
-    it("sends every .sql file in name order, with the bearer, and confirmDestructive mirrors --yes", async () => {
+    it("does not confirm a destructive file from --yes alone: the destructive confirmation is its own flag", async () => {
+        expect.assertions(2);
+
+        const calls: SqlCall[] = [];
+
+        await runMigrateSqlCommand({
+            cwd: sqlWorkdir,
+            fetchImpl: recordSql(calls),
+            logger: silentLogger(),
+            token: "s3cret",
+            url: "http://localhost:9999",
+            yes: true,
+        });
+
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.body).toMatchObject({ confirmDestructive: false });
+    });
+
+    it("sends every .sql file in name order, with the bearer, and confirmDestructive mirrors --allow-destructive", async () => {
         expect.assertions(6);
 
         const calls: SqlCall[] = [];
         const result = await runMigrateSqlCommand({
+            allowDestructive: true,
             cwd: sqlWorkdir,
             fetchImpl: recordSql(calls),
             logger: silentLogger(),

@@ -103,6 +103,7 @@ const dispatchSql = async (
 ): Promise<CommandResult<MigrateCommandData>> => {
     const { cwd, logger, options } = context;
     const result = await runMigrateSqlCommand({
+        allowDestructive: options.allowDestructive === true,
         baseline: mode.baseline,
         baselineThrough: mode.baselineThrough,
         cwd,

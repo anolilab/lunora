@@ -62,8 +62,13 @@ const migrateCommand: Command = {
             type: String,
         },
         {
-            description: "Required with --prod for up/down/apply, and to run a SQL file that drops or replaces data — confirms the run",
+            description: "Required with --prod for up/down/apply, and for any run against a non-local worker — confirms the target",
             name: "yes",
+            type: Boolean,
+        },
+        {
+            description: "Confirms a SQL file that drops, renames, truncates or replaces data (apply). Separate from --yes",
+            name: "allow-destructive",
             type: Boolean,
         },
         // d1-to-hyperdrive / hyperdrive-to-d1 backend migration.
@@ -90,6 +95,7 @@ const migrateCommand: Command = {
 export { migrateCommand };
 
 export type MigrateOptions = CreateOptions<{
+    "allow-destructive": boolean | undefined;
     baseline: boolean | undefined;
     "baseline-through": string | undefined;
     "batch-size": number | undefined;

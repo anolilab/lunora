@@ -679,7 +679,7 @@ const assertDestructiveConfirmed = (planned: ReadonlyArray<PlannedFile>, confirm
 
     throw new LunoraError(
         "MIGRATION_DESTRUCTIVE",
-        `these files drop, rename, truncate or replace data and have not run yet. Re-run with --yes to apply them:\n  ${listed.join("\n  ")}`,
+        `these files drop, rename, truncate or replace data and have not run yet. Re-run with --allow-destructive to apply them:\n  ${listed.join("\n  ")}`,
     );
 };
 

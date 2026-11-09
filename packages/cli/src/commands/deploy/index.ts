@@ -69,6 +69,11 @@ const deployCommand: Command = {
             type: String,
         },
         { description: "Confirm running the production data migration triggered by --migrate (required with --migrate)", name: "migrate-yes", type: Boolean },
+        {
+            description: "Confirm a committed SQL file that drops, renames, truncates or replaces data during --migrate. Separate from --migrate-yes",
+            name: "migrate-allow-destructive",
+            type: Boolean,
+        },
         // Both the positive AND the `no-*` form are declared explicitly, same as
         // `lunora codegen`'s identically-named flag (#285): relying on cerebro to
         // synthesize `--strict-advisories` from only the `no-*` declaration clones
@@ -130,6 +135,7 @@ export type DeployOptions = CreateOptions<{
     "health-check": boolean | undefined;
     "lazy-functions": boolean | undefined;
     migrate: boolean | undefined;
+    "migrate-allow-destructive": boolean | undefined;
     "migrate-token": string | undefined;
     "migrate-url": string | undefined;
     "migrate-yes": boolean | undefined;

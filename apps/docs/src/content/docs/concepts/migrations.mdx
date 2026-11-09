@@ -274,8 +274,9 @@ The Worker runs a file's statements and records its name and SHA-256 in one
 atomic batch, so a file runs once per environment. A second run is a no-op. A
 file whose text changed after it ran is refused rather than run again: put the
 change in a new file. Renaming an applied file counts as a change, so it is
-refused too. A `DROP` or a replacing write is refused unless you pass `--yes`,
-and the refusal lists the statements. `--dry-run` prints the statements without
+refused too. A `DROP` or a replacing write is refused unless you pass
+`--allow-destructive`, and the refusal lists the statements. `--yes` only
+confirms the target, so a remote run needs both flags for such a file. `--dry-run` prints the statements without
 running them. A file cannot contain `BEGIN`, `COMMIT` or `ROLLBACK`, because each
 file already runs as one batch. `lunora deploy --migrate` runs `apply` before the
 data migrations, so a deploy applies its SQL with the rest. Any other deploy tool
@@ -322,7 +323,7 @@ Record the file only once every statement in it has run.
 
 Name the file you ran by hand, so `--baseline-through` records it and nothing
 after it. A later file on the same stage stays pending, and a normal
-`lunora migrate apply --url … --yes` runs it. Plain `--baseline` would record
+`lunora migrate apply --url … --yes` runs it, with `--allow-destructive` too if it drops or replaces data. Plain `--baseline` would record
 every pending file as applied, later ones included, so a later file would never
 run.
 
@@ -332,7 +333,7 @@ place for good. The same applies to a seed `INSERT` on a database that is new to
 tracking.
 
 A database with no recorded file refuses any file that drops, replaces or writes
-rows, whatever `--yes` says, and the refusal points here. Once a file is
+rows, whatever `--allow-destructive` says, and the refusal points here. Once a file is
 recorded, a later run applies only what is new.
 
 An `ADD COLUMN` that the runtime already added is skipped, since SQLite has no
@@ -466,15 +467,16 @@ lunora migrate down backfill-read-by           # apply the down transform
 lunora migrate status backfill-read-by         # per-shard run-state
 ```
 
-| Flag           | Description                                                                                    |
-| -------------- | ---------------------------------------------------------------------------------------------- |
-| `--dry-run`    | Scan and count without rewriting rows or persisting run-state.                                 |
-| `--batch-size` | Rows per batch, overriding the migration's own `batchSize` and the default.                    |
-| `--steps`      | Cap on batches processed this invocation (the runner's `maxBatches`). The run stays resumable. |
-| `--url`        | Worker URL (defaults to `http://localhost:8787`).                                              |
-| `--token`      | Admin bearer token. Falls back to `LUNORA_ADMIN_TOKEN`.                                        |
-| `--prod`       | Target production. Requires an explicit `--url`.                                               |
-| `--yes`        | Required alongside `--prod` for `up`/`down`; confirms running against production.              |
+| Flag                  | Description                                                                                                       |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `--dry-run`           | Scan and count without rewriting rows or persisting run-state.                                                    |
+| `--batch-size`        | Rows per batch, overriding the migration's own `batchSize` and the default.                                       |
+| `--steps`             | Cap on batches processed this invocation (the runner's `maxBatches`). The run stays resumable.                    |
+| `--url`               | Worker URL (defaults to `http://localhost:8787`).                                                                 |
+| `--token`             | Admin bearer token. Falls back to `LUNORA_ADMIN_TOKEN`.                                                           |
+| `--prod`              | Target production. Requires an explicit `--url`.                                                                  |
+| `--yes`               | Required alongside `--prod` for `up`/`down`, and for any `apply` against a non-local worker; confirms the target. |
+| `--allow-destructive` | `apply` only: confirms a file that drops, renames, truncates or replaces data. Separate from `--yes`.             |
 
 Every run is admin-gated: pass `--token` or set `LUNORA_ADMIN_TOKEN`. Against
 production, `--prod` requires an explicit `--url`, and `up`/`down` additionally

@@ -1774,6 +1774,7 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
         // production-linked checkout must not silently supply its URL to a
         // `--env staging --migrate` run (see resolveWorkerUrl's env guard).
         migrateUrl: resolveWorkerUrl({ cwd, env: options.env, url: options.migrateUrl }),
+        migrateAllowDestructive: options.migrateAllowDestructive === true,
         migrateYes: options.migrateYes === true,
         preview: options.preview === true,
         // `--prebuilt` trusts a prior `lunora build`/`prepare`: skip codegen (and

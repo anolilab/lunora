@@ -33,6 +33,7 @@ const runPostDeploySqlMigrations = async (options: DeployCommandOptions, cwd: st
         cwd,
         fetchImpl: options.fetchImpl,
         logger: options.logger,
+        allowDestructive: options.migrateAllowDestructive === true,
         // Same production gate as the data migrations below: `--migrate-url` is set, and `--migrate-yes` confirms it.
         prod: true,
         token: options.migrateToken,

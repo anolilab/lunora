@@ -35,6 +35,8 @@ interface MigrateSqlFilePlan {
 }
 
 interface MigrateSqlCommandOptions {
+    /** Confirms a file that drops, renames, truncates or replaces data. Required even on a local worker. */
+    allowDestructive?: boolean;
     /** Record the pending files as applied without running them (`migrate apply --baseline`). */
     baseline?: boolean;
     /** Record the pending files up to and including this one, by name; the later ones stay pending. */
@@ -50,7 +52,7 @@ interface MigrateSqlCommandOptions {
     token?: string;
     /** Worker URL (default `http://localhost:8787`). */
     url?: string;
-    /** Confirms a run against a non-local worker, and a file that drops or replaces data. */
+    /** Confirms a run against a non-local worker. Separate from `allowDestructive`, so a remote run never confirms a DROP by itself. */
     yes?: boolean;
 }
 
@@ -100,7 +102,7 @@ const logSqlFilePlan = (logger: Logger, file: MigrateSqlFilePlan, dryRun: boolea
     }
 
     if (file.destructive.length > 0 && file.state === "pending") {
-        logger.warn(`${file.name} drops, renames, truncates or replaces data. It runs only with --yes.`);
+        logger.warn(`${file.name} drops, renames, truncates or replaces data. It runs only with --allow-destructive.`);
     }
 };
 
@@ -397,7 +399,7 @@ const runMigrateSqlCommand = async (options: MigrateSqlCommandOptions): Promise<
     options.logger.info(`POST ${requestUrl} -> ${runVerb(dryRun, recordOnly)} ${String(files.length)} SQL file(s)`);
 
     const response = await fetchImpl(requestUrl, {
-        body: JSON.stringify({ baseline, baselineThrough, confirmDestructive: options.yes === true, dryRun, files }),
+        body: JSON.stringify({ baseline, baselineThrough, confirmDestructive: options.allowDestructive === true, dryRun, files }),
         headers: { authorization: `Bearer ${target.token}`, "content-type": "application/json" },
         method: "POST",
     });
