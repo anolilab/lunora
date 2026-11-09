@@ -138,11 +138,13 @@ const buildAdminTokenRoutes = (deps: AdminTokenRouteDeps): Record<string, (reque
 
         if (!scopesKept(scopes, stored.scopes)) {
             // The secret was never returned, so the row holds only the name: remove it and the refused create leaves nothing behind.
-            let removed = true;
+            let removed: boolean;
 
             try {
                 await deps.revocations.revoke(name, createdAt);
-                await deps.callStore(REVOKE_ADMIN_TOKEN_OP, { createdAt, name });
+                const { revoked } = (await deps.callStore(REVOKE_ADMIN_TOKEN_OP, { createdAt, name })) as { revoked?: unknown };
+
+                removed = revoked === true;
             } catch {
                 removed = false;
             } finally {

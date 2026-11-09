@@ -90,6 +90,8 @@ interface ShardHooks {
     failRevoke?: boolean;
     /** Acts like a shard on an older build: drops `scopes` on create and does not echo them back. */
     ignoreScopes?: boolean;
+    /** The store answers a revoke with `revoked: false` and keeps the row, as when its issuance no longer matches. */
+    keepRevoked?: boolean;
     /** Runs when a non-token admin op reaches a shard, before it is answered. */
     onAdminOp?: (functionPath: string) => Promise<void>;
 }
@@ -98,6 +100,13 @@ interface ShardHooks {
 const issuedAt = (value: unknown): number => (typeof value === "number" ? value : 1);
 
 /** A create as a shard answers it. An older build drops the `scopes` it was sent and does not echo them back. */
+/** The store's answer to a revoke: it deletes the row only when the issuance matches, and keeps it when `keepRow` pins it. */
+const revokeAnswer = (store: Map<string, { createdAt: number }>, name: string, createdAt: unknown, keepRow: boolean): boolean => {
+    const stored = store.get(name);
+
+    return !keepRow && stored !== undefined && stored.createdAt === createdAt && store.delete(name);
+};
+
 const createAnswer = (args: Record<string, number | string>, olderShard: boolean): { answer: Record<string, unknown>; scopes: string[] } => {
     const scopes = olderShard ? [] : ((args as { scopes?: string[] }).scopes ?? []);
     const answer = { createdAt: issuedAt(args.createdAt), name: args.name, ...(olderShard ? {} : { scopes }) };
@@ -167,10 +176,7 @@ const fakeShards = (
                     return new Response("shard unavailable", { status: 503 });
                 }
 
-                // Honours createdAt like the real shard: only the named issuance goes.
-                const stored = store.get(String(args.name));
-
-                return reply({ revoked: stored !== undefined && stored.createdAt === args.createdAt && store.delete(String(args.name)) });
+                return reply({ revoked: revokeAnswer(store, String(args.name), args.createdAt, hooks?.keepRevoked === true) });
             }
             default: {
                 const stored = store.get(String(args.name));
@@ -635,6 +641,18 @@ describe("named admin tokens", () => {
         ).resolves.toBe("CONFLICT");
         expect(store.has("migrate")).toBe(false);
         await expect(status(call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "plain" }), method: "POST" }))).resolves.toBe(201);
+    });
+
+    it("says the name is still taken when the store keeps the refused row, instead of saying it was removed", async () => {
+        expect.assertions(2);
+
+        const { namespace } = fakeShards({ ignoreScopes: true, keepRevoked: true });
+        const worker = createWorker({ adminToken: ROOT, functions: REGISTRY, shardDO: namespace });
+        const response = await call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "migrate", scopes: ["migrations"] }), method: "POST" });
+        const body = await response.json<{ error?: { code?: string; message?: string } }>();
+
+        expect(body.error?.code).toBe("CONFLICT");
+        expect(body.error?.message).toContain('revoke "migrate" to free the name');
     });
 
     it("accepts a token created right after its name was refused", async () => {
