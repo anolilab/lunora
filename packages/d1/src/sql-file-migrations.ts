@@ -373,7 +373,10 @@ const presenceChange = (statementText: string): PresenceChange | undefined => {
     return dropped === undefined ? undefined : { column: foldIdentifier(dropped.column), present: false, table: foldIdentifier(dropped.table) };
 };
 
-/** Whether a statement adds a column the table already has, so the file can leave it out. A table an earlier statement changed is read as stale. */
+/**
+ * Whether a statement adds a column the table already has, so the file can leave it out. A table an earlier statement of this
+ * file, or an earlier file in the run, changed is read as stale, unless that run's column change says otherwise.
+ */
 const isAlreadyPresent = async (client: D1Client, statementText: string, changed: ReadonlySet<string>, prior: RunSchema): Promise<boolean> => {
     const added = addedColumn(statementText);
 
