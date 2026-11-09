@@ -13,6 +13,10 @@ const migrateCommand: Command = {
     examples: [
         ["lunora migrate generate", "Diff lunora/schema.ts and emit a SQL migration"],
         ["lunora migrate apply --url https://app.example.workers.dev --yes", "Run the pending SQL migration files on a deployed worker"],
+        [
+            "lunora migrate apply --url https://app.example.workers.dev --yes --allow-destructive",
+            "Same, and also run a file that drops, renames or replaces data",
+        ],
         ["lunora migrate status --sql --url https://app.example.workers.dev", "List which SQL migration files have run on a worker, without running any"],
         ["lunora migrate create add_users_email", "Scaffold a data migration"],
         ["lunora migrate up backfill-names", "Run a data migration across shards"],
@@ -62,12 +66,13 @@ const migrateCommand: Command = {
             type: String,
         },
         {
-            description: "Required with --prod for up/down/apply, and for any run against a non-local worker — confirms the target",
+            description: "Confirms the target: required with --prod for up/down, and for any apply against a non-local worker",
             name: "yes",
             type: Boolean,
         },
         {
-            description: "Confirms a SQL file that drops, renames, truncates or replaces data (apply). Separate from --yes",
+            description:
+                "With apply: confirm a file that drops, renames, truncates or replaces data. Needed even against a local worker; --yes does not cover it",
             name: "allow-destructive",
             type: Boolean,
         },

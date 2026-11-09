@@ -10,7 +10,11 @@ const deployCommand: Command = {
         ["lunora deploy", "Deploy to Cloudflare"],
         ["lunora deploy --env production", "Deploy to a named environment"],
         ["lunora deploy --dry-run", "Validate + bundle without publishing"],
-        ["lunora deploy --migrate --migrate-yes --migrate-url <url>", "Deploy, then run pending data migrations"],
+        ["lunora deploy --migrate --migrate-yes --migrate-url <url>", "Deploy, then apply pending SQL and run the data migrations"],
+        [
+            "lunora deploy --migrate --migrate-yes --migrate-allow-destructive --migrate-url <url>",
+            "Same, and also apply a committed file that drops, renames or replaces data",
+        ],
     ],
     group: "Deploy",
     loader: () =>
@@ -68,9 +72,13 @@ const deployCommand: Command = {
             name: "migrate-url",
             type: String,
         },
-        { description: "Confirm running the production data migration triggered by --migrate (required with --migrate)", name: "migrate-yes", type: Boolean },
         {
-            description: "Confirm a committed SQL file that drops, renames, truncates or replaces data during --migrate. Separate from --migrate-yes",
+            description: "Confirm the production target for --migrate: its SQL files and its data migrations (required with --migrate)",
+            name: "migrate-yes",
+            type: Boolean,
+        },
+        {
+            description: "With --migrate: confirm a committed SQL file that drops, renames, truncates or replaces data. --migrate-yes does not cover it",
             name: "migrate-allow-destructive",
             type: Boolean,
         },
