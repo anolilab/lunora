@@ -257,9 +257,9 @@ const columnExists = async (client: D1Client, table: string, column: string): Pr
 /**
  * Whether a statement is additive: a new table, a plain index, or a column added to a table without a clause that changes
  * the rows already there (see `VALUE_CLAUSE_RE`). The shape is read from the scanner's `code`, so comments and quoted
- * names do not change it. A statement that names an internal table or the temp schema, a foreign key, a partial index, or an index over an
- * expression is not additive, since each constrains writes beyond the new object. Anything else needs the root token.
- * A value clause on a new table is fine, since the table has no rows.
+ * names do not change it. A statement that names an internal table or the temp schema, a foreign key, a partial index,
+ * or an index over an expression is not additive, since each constrains writes beyond the new object. Anything else
+ * needs the root token. A value clause on a new table is fine, since the table has no rows.
  */
 const isAdditiveStatement = (scan: ReturnType<typeof scanStatement>): boolean => {
     if (INTERNAL_TABLE_RE.test(scan.statementText) || TEMP_SCHEMA_RE.test(scan.statementText)) {
