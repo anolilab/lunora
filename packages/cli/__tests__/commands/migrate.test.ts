@@ -1968,17 +1968,21 @@ describe("lunora migrate apply / status --sql", () => {
         const empty = mkdtempSync(join(tmpdir(), "lunora-cli-migrate-empty-"));
         const calls: SqlCall[] = [];
 
-        const result = await runMigrateSqlCommand({
-            baselineThrough: "001_create_emails.sql",
-            cwd: empty,
-            fetchImpl: recordSql(calls),
-            logger: silentLogger(),
-            token: "s3cret",
-            url: "http://localhost:9999",
-        });
+        try {
+            const result = await runMigrateSqlCommand({
+                baselineThrough: "001_create_emails.sql",
+                cwd: empty,
+                fetchImpl: recordSql(calls),
+                logger: silentLogger(),
+                token: "s3cret",
+                url: "http://localhost:9999",
+            });
 
-        expect(result.code).toBe(EXIT_CODE.USAGE);
-        expect(calls).toStrictEqual([]);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(calls).toStrictEqual([]);
+        } finally {
+            rmSync(empty, { force: true, recursive: true });
+        }
     });
 
     it("sends only the files under lunora/migrations/, not a directory that has a .sql name", async () => {
@@ -1986,23 +1990,27 @@ describe("lunora migrate apply / status --sql", () => {
 
         const dir = mkdtempSync(join(tmpdir(), "lunora-cli-migrate-dirname-"));
 
-        mkdirSync(join(dir, "lunora", "migrations", "notes.sql"), { recursive: true });
-        writeFileSync(join(dir, "lunora", "migrations", "real.sql"), "CREATE TABLE real (id TEXT);");
+        try {
+            mkdirSync(join(dir, "lunora", "migrations", "notes.sql"), { recursive: true });
+            writeFileSync(join(dir, "lunora", "migrations", "real.sql"), "CREATE TABLE real (id TEXT);");
 
-        const calls: SqlCall[] = [];
-        const result = await runMigrateSqlCommand({
-            cwd: dir,
-            dryRun: true,
-            fetchImpl: recordSql(calls, 200, {
-                files: [{ destructive: [], name: "real.sql", rootOnly: [], skipped: [], state: "pending", statements: [] }],
-            }),
-            logger: silentLogger(),
-            token: "s3cret",
-            url: "http://localhost:9999",
-        });
+            const calls: SqlCall[] = [];
+            const result = await runMigrateSqlCommand({
+                cwd: dir,
+                dryRun: true,
+                fetchImpl: recordSql(calls, 200, {
+                    files: [{ destructive: [], name: "real.sql", rootOnly: [], skipped: [], state: "pending", statements: [] }],
+                }),
+                logger: silentLogger(),
+                token: "s3cret",
+                url: "http://localhost:9999",
+            });
 
-        expect(calls[0]?.body.files.map((file) => file.name)).toStrictEqual(["real.sql"]);
-        expect(result.code).toBe(0);
+            expect(calls[0]?.body.files.map((file) => file.name)).toStrictEqual(["real.sql"]);
+            expect(result.code).toBe(0);
+        } finally {
+            rmSync(dir, { force: true, recursive: true });
+        }
     });
 
     it("returns the worker's per-file plan, and a refused run carries the HTTP status", async () => {
