@@ -69,7 +69,7 @@ const TRIVIA_SOURCE = String.raw`(?:\s|--[^\n]*\n|\/\*[\s\S]*?\*\/)`;
  * Unlike {@link TRIVIA_SOURCE} this position CAN run to end-of-input — a file of
  * nothing but a comment is all trivia — hence the extra `$` alternative.
  */
-const LEADING_TRIVIA_RE = /^(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/u;
+const LEADING_TRIVIA_RE = /(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/uy;
 
 /**
  * `CREATE [TEMP|TEMPORARY] TRIGGER` at the head of a migration — the one
@@ -81,7 +81,7 @@ const LEADING_TRIVIA_RE = /^(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/u;
  * read the body's first `;` as a statement boundary and rejected the trailing
  * `END`, telling the author to split a statement SQLite cannot have split.
  */
-const CREATE_TRIGGER_RE = new RegExp(String.raw`^CREATE${TRIVIA_SOURCE}+(?:TEMP${TRIVIA_SOURCE}+|TEMPORARY${TRIVIA_SOURCE}+)?TRIGGER\b`, "iu");
+const CREATE_TRIGGER_RE = new RegExp(String.raw`CREATE${TRIVIA_SOURCE}+(?:TEMP${TRIVIA_SOURCE}+|TEMPORARY${TRIVIA_SOURCE}+)?TRIGGER\b`, "iuy");
 
 /** Lowercase hex SHA-256 shape guard before inlining the hash into SQL. Hoisted to avoid per-call recompilation. */
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/u;
@@ -209,8 +209,12 @@ const lineComment = (code: string, codeIndex: number, text: string): StatementSc
  */
 // eslint-disable-next-line sonarjs/cognitive-complexity -- a single-pass SQL lexer: its mode branching is the grammar, and split helpers would all share the cursor and mode state
 const scanStatement = (text: string, label: string, start = 0, multi = false): StatementScan => {
-    const head = text.slice(start);
-    const isTrigger = CREATE_TRIGGER_RE.test(head.slice(LEADING_TRIVIA_RE.exec(head)?.[0].length ?? 0));
+    // Both probes are sticky, so they read from `start` without copying the rest of the file. Copying it per statement made a
+    // file of many short statements quadratic.
+    LEADING_TRIVIA_RE.lastIndex = start;
+    LEADING_TRIVIA_RE.exec(text);
+    CREATE_TRIGGER_RE.lastIndex = LEADING_TRIVIA_RE.lastIndex;
+    const isTrigger = CREATE_TRIGGER_RE.test(text);
     const lineComments: StatementScan["lineComments"] = [];
     let code = "";
     // The character that ends the string or quoted identifier being read, and the comment being read.

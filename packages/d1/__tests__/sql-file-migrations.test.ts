@@ -476,6 +476,50 @@ INSERT INTO posts (id) VALUES (1);`;
         sqlite.close();
     });
 
+    it("refuses a file that a concurrent baseline recorded between the plan and the batch, since its SQL never ran", async () => {
+        expect.assertions(2);
+
+        // The hash a baseline would record for CREATE_FILE, taken from a database that records it without running it.
+        const probe = new DatabaseSync(":memory:");
+
+        await applySqlMigrationFiles(createSqliteDatabase(probe), [{ name: "create_emails.sql", sql: CREATE_FILE }], { baseline: true });
+        const { sha256 } = probe.prepare("SELECT sha256 FROM __lunora_sql_migrations").get() as { sha256: string };
+        probe.close();
+
+        const sqlite = new DatabaseSync(":memory:");
+        let raced = false;
+        const database = createSqliteDatabase(sqlite, () => {
+            // The tracking table exists by the first batch. The baseline lands once, after the plan, before the batch.
+            if (!raced) {
+                raced = true;
+                sqlite.exec(`INSERT INTO __lunora_sql_migrations (name, sha256, applied_at, baselined) VALUES ('create_emails.sql', '${sha256}', 0, 1)`);
+            }
+        });
+
+        await expect(applySqlMigrationFiles(database, [{ name: "create_emails.sql", sql: CREATE_FILE }], {})).rejects.toMatchObject({
+            code: "CONFLICT",
+        });
+        expect(tables(sqlite)).not.toContain("emails");
+
+        sqlite.close();
+    });
+
+    it("runs a file of many short statements, each one applied and recorded", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+        const count = 2000;
+        const sql = Array.from({ length: count }, (_, index) => `CREATE TABLE t_${String(index)} (id TEXT);`).join("\n");
+
+        await applySqlMigrationFiles(database, [{ name: "many.sql", sql }], {});
+
+        expect(tables(sqlite).filter((name) => name.startsWith("t_"))).toHaveLength(count);
+        expect(trackedNames(sqlite)).toStrictEqual(["many.sql"]);
+
+        sqlite.close();
+    });
+
     it("re-plans once when the runtime added the column between the catalog read and the batch", async () => {
         expect.assertions(3);
 

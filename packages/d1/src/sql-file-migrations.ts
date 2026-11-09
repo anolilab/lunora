@@ -16,7 +16,7 @@ import { firstDestructive, isTransactionControl, normalizeMigrationText, scanSta
  */
 
 const SQL_TRACKING_TABLE = "__lunora_sql_migrations";
-const SQL_TRACKING_DDL = `CREATE TABLE IF NOT EXISTS ${SQL_TRACKING_TABLE} (name TEXT PRIMARY KEY, sha256 TEXT NOT NULL, applied_at INTEGER NOT NULL)`;
+const SQL_TRACKING_DDL = `CREATE TABLE IF NOT EXISTS ${SQL_TRACKING_TABLE} (name TEXT PRIMARY KEY, sha256 TEXT NOT NULL, applied_at INTEGER NOT NULL, baselined INTEGER NOT NULL DEFAULT 0)`;
 /** A plain file name, so it can be inlined into the tracking insert without quoting. */
 const SAFE_FILE_NAME_RE = /^\w[\w.-]*\.sql$/u;
 const SQL_TRACKING_NAME_UNIQUE_RE = new RegExp(String.raw`UNIQUE constraint failed:\s*${SQL_TRACKING_TABLE}\.name`, "iu");
@@ -611,21 +611,34 @@ const assertAdditiveOnly = (planned: ReadonlyArray<PlannedFile>, additiveOnly: b
     );
 };
 
-/** The hash recorded for one file, read after a tracking insert lost the race to a concurrent runner. */
-const recordedHash = async (client: D1Client, name: string): Promise<string | undefined> => {
-    const rows = await client.drizzle.all<{ sha256: string }>(sql.raw(`SELECT sha256 FROM ${SQL_TRACKING_TABLE} WHERE name = '${name}'`));
+/** The tracking row for one file, read after an insert lost the race to a concurrent runner. */
+const recordedRow = async (client: D1Client, name: string): Promise<{ baselined: number; sha256: string } | undefined> => {
+    const rows = await client.drizzle.all<{ baselined: number; sha256: string }>(
+        sql.raw(`SELECT sha256, baselined FROM ${SQL_TRACKING_TABLE} WHERE name = '${name}'`),
+    );
 
-    return rows[0]?.sha256;
+    return rows[0];
 };
 
 /**
  * Run one file's statements and its tracking row in one batch, so the file either runs whole or not at all. The row
  * goes first: a concurrent runner that recorded the file already fails the batch before any DDL runs. With no
- * statements it only records the file. Returns `applied` when a concurrent runner recorded the same SQL first.
+ * statements it only records the file. `origin` says whether this call ran the SQL (`applied`) or only records the file
+ * (`baselined`). Returns `applied` when a concurrent runner recorded the same SQL first. That holds only for an
+ * executed row: a concurrent baseline recorded the file without running it, so an apply that planned to run it fails.
  */
-const commitFile = async (client: D1Client, file: SqlMigrationFile, hash: string, runs: ReadonlyArray<string>): Promise<SqlMigrationState> => {
+const commitFile = async (
+    client: D1Client,
+    file: SqlMigrationFile,
+    hash: string,
+    runs: ReadonlyArray<string>,
+    origin: "applied" | "baselined",
+): Promise<SqlMigrationState> => {
+    const baselined = origin === "baselined" ? 1 : 0;
     const record = client.drizzle.run(
-        sql.raw(`INSERT INTO ${SQL_TRACKING_TABLE} (name, sha256, applied_at) VALUES ('${file.name}', '${hash}', ${String(Date.now())})`),
+        sql.raw(
+            `INSERT INTO ${SQL_TRACKING_TABLE} (name, sha256, applied_at, baselined) VALUES ('${file.name}', '${hash}', ${String(Date.now())}, ${String(baselined)})`,
+        ),
     );
     const items: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [record, ...runs.map((statement) => client.drizzle.run(sql.raw(statement)))];
 
@@ -644,7 +657,17 @@ const commitFile = async (client: D1Client, file: SqlMigrationFile, hash: string
 
         // The batch rolled back, so nothing ran twice. A different hash means a concurrent run applied other SQL under
         // this name, which is drift: this run must not report the file as applied.
-        if ((await recordedHash(client, file.name)) === hash) {
+        const recorded = await recordedRow(client, file.name);
+
+        if (recorded?.sha256 === hash) {
+            if (origin === "applied" && recorded.baselined === 1) {
+                throw new LunoraError(
+                    "CONFLICT",
+                    `${file.name} was recorded as a baseline by a concurrent run, which records a file without running it. Its SQL did not run here, so this apply stopped; run it again to see the file's state.`,
+                    { cause: error },
+                );
+            }
+
             return "applied";
         }
 
@@ -660,7 +683,7 @@ const commitFile = async (client: D1Client, file: SqlMigrationFile, hash: string
 const commitPlanned = async (client: D1Client, item: PlannedFile): Promise<Pick<SqlMigrationEntry, "skipped" | "state" | "statements">> => {
     const plan = await planPendingFile(client, item.file, true);
 
-    return { skipped: plan.skipped, state: await commitFile(client, item.file, item.hash, plan.runs), statements: plan.statements };
+    return { skipped: plan.skipped, state: await commitFile(client, item.file, item.hash, plan.runs, "applied"), statements: plan.statements };
 };
 
 /**
@@ -706,7 +729,7 @@ const recordPending = async (client: D1Client, planned: ReadonlyArray<PlannedFil
     for (const [index, item] of planned.entries()) {
         if (item.entry.state === "pending" && index <= through) {
             // eslint-disable-next-line no-await-in-loop -- each record must commit before the next file is checked against the table
-            item.entry.state = (await commitFile(client, item.file, item.hash, [])) === "ran" ? "baselined" : "applied";
+            item.entry.state = (await commitFile(client, item.file, item.hash, [], "baselined")) === "ran" ? "baselined" : "applied";
         }
     }
 };
