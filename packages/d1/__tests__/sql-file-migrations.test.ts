@@ -861,6 +861,52 @@ INSERT INTO posts (id) VALUES (1);`;
         sqlite.close();
     });
 
+    it("refuses an index or column that hides an expression or a clause behind a comment, a quoted name or a JSON operator", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE users (id TEXT, note TEXT);" }]);
+
+        const refusals = [
+            "CREATE INDEX users_arrow ON users (note ->> '$.a');",
+            "CREATE INDEX users_plain_arrow ON users (note->'$.a');",
+            "CREATE INDEX users_call ON/**/users(json_extract(note, '$'));",
+            "CREATE INDEX \"users(\" ON users (json_extract(note, '$'));",
+            "CREATE INDEX users_quoted ON users (\"note\" ->> '$.a');",
+            "CREATE INDEX users_where ON users (id) /**/ WHERE id > 0;",
+            "ALTER TABLE users ADD COLUMN blocked TEXT NOT/**/NULL;",
+            "ALTER TABLE users ADD COLUMN blocked TEXT DEFAULT/**/'x';",
+        ];
+        const codes = await Promise.all(
+            refusals.map((sql, index) =>
+                applySqlMigrationFiles(database, [{ name: `hidden_${String(index)}.sql`, sql }], { additiveOnly: true }).then(
+                    () => "ran",
+                    (error: unknown) => (error as { code?: string }).code,
+                ),
+            ),
+        );
+
+        expect(codes).toStrictEqual(refusals.map(() => "MIGRATION_ROOT_REQUIRED"));
+
+        // The plain forms, with comments between their tokens and quoted names, are still additive.
+        const plain = [
+            "CREATE INDEX users_note ON/**/users (note COLLATE NOCASE DESC);",
+            'CREATE INDEX IF NOT EXISTS "users_id" ON "users" ("id" ASC, note);',
+            "CREATE INDEX users_pair ON users (id, /* sort */ note);",
+        ];
+        const ran = await applySqlMigrationFiles(
+            database,
+            plain.map((sql, index) => {return { name: `plain_${String(index)}.sql`, sql }}),
+            { additiveOnly: true },
+        );
+
+        expect(ran.files.map((file) => file.state)).toStrictEqual(plain.map(() => "ran"));
+
+        sqlite.close();
+    });
+
     it("names a multi-line refused statement on one line, so the refusal shows all of it", async () => {
         expect.assertions(1);
 

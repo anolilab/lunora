@@ -57,14 +57,37 @@ const ROW_WRITE_RE = /^(?:WITH|INSERT|UPDATE|DELETE|REPLACE)\b/iu;
 const ROW_COPY_RE = new RegExp(String.raw`^CREATE${GAP}TABLE(?:${GAP}IF${GAP}NOT${GAP}EXISTS)?${GAP}${SCHEMA_PREFIX}(?:${IDENTIFIER})${GAP}AS\b`, "iu");
 
 /**
- * The additive statements a migrations-scoped token may run: a new table with a column list, or a plain index. A unique
- * index constrains the rows that may be written to its table, so it is not one. An added column is matched by
- * `ADD_COLUMN_RE`.
+ * Names as the scanner's `code` shows them: a quoted name or a string literal reads as `_`, and comments are blank. The
+ * additive checks run on `code`, so a comment or a quoted name cannot hide a keyword or a call from them.
  */
-const ADDITIVE_CREATE_RE = new RegExp(
-    String.raw`^CREATE${GAP}(?:TABLE(?:${GAP}IF${GAP}NOT${GAP}EXISTS)?${GAP}${SCHEMA_PREFIX}(?:${IDENTIFIER})${GAP_OPT}\(|INDEX\b)`,
+const CODE_NAME = String.raw`[_a-z][\w$]*`;
+const CODE_SCHEMA = String.raw`(?:${CODE_NAME}\s*\.\s*)?`;
+
+/**
+ * A new table with a column list. The additive statements a migrations-scoped token may run are a new table, a plain
+ * index (`INDEX_HEAD_CODE_RE`), or an added column (`ADD_COLUMN_CODE_RE`). A unique index is not one: it constrains
+ * the rows that may be written to its table.
+ */
+// eslint-disable-next-line no-secrets/no-secrets -- a SQL keyword pattern; the entropy check reads its repeated keywords as a secret
+const CREATE_TABLE_CODE_RE = new RegExp(String.raw`^\s*CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+${CODE_SCHEMA}${CODE_NAME}\s*\(`, "iu");
+
+/**
+ * A plain index: `CREATE INDEX [IF NOT EXISTS] name ON table (columns)`, with nothing after the column list. The column
+ * list is matched without parentheses, so a call such as `json_extract(...)` and a partial index's `WHERE` do not fit.
+ */
+const INDEX_HEAD_CODE_RE = new RegExp(
+    String.raw`^\s*CREATE\s+INDEX(?:\s+IF\s+NOT\s+EXISTS)?\s+${CODE_SCHEMA}${CODE_NAME}\s+ON\s+${CODE_SCHEMA}${CODE_NAME}\s*\(([^()]*)\)[\s;]*$`,
     "iu",
 );
+
+/**
+ * One column of a plain index: a name, optionally with `COLLATE` and a sort order. An operator (`->`, `->>`), a call or a
+ * literal does not fit, so the index is not additive.
+ */
+const INDEX_ITEM_CODE_RE = new RegExp(String.raw`^\s*${CODE_NAME}(?:\s+COLLATE\s+${CODE_NAME})?(?:\s+(?:ASC|DESC))?\s*$`, "iu");
+
+/** `ALTER TABLE t ADD [COLUMN] c`, read on `code`, so the column definition after it can be checked without its comments. */
+const ADD_COLUMN_CODE_RE = new RegExp(String.raw`^\s*ALTER\s+TABLE\s+${CODE_SCHEMA}${CODE_NAME}\s+ADD\s+(?:COLUMN\s+)?${CODE_NAME}`, "iu");
 
 /**
  * The column clauses that change the rows already in a table once the column is added: a DEFAULT or a generated
@@ -72,23 +95,15 @@ const ADDITIVE_CREATE_RE = new RegExp(
  * writes that follow. Matched against the definition only, after the column name, so a column named `default_note` is
  * not one of these.
  */
-const VALUE_CLAUSE_RE = /\b(?:DEFAULT|GENERATED|AS|CHECK|REFERENCES|UNIQUE|NOT\s+NULL)\b/iu;
+const VALUE_CLAUSE_RE = /\b(?:DEFAULT|GENERATED|AS|CHECK|REFERENCES|UNIQUE|NOT\s+NULL|NOTNULL)\b/iu;
 /** A foreign key on a new table constrains deletes from the parent table it references, so it is not additive. */
 const REFERENCES_RE = /\bREFERENCES\b/iu;
-/** A partial index (`WHERE`) constrains which rows may be written to its table, so it is not additive. */
-const PARTIAL_INDEX_RE = /\bWHERE\b/iu;
 
 /**
  * The tables a migration may not touch from an additive statement: the tracking tables (this file's, the data
  * migrations', and the migration runner's), Cloudflare's, and SQLite's own.
  */
 const INTERNAL_TABLE_RE = /__lunora_|__drizzle_|sqlite_|_cf_/iu;
-
-/**
- * An index whose column list calls a function, such as `ON t (json_extract(c, '$'))`. The expression runs on every
- * write to the table, and it can fail the write.
- */
-const INDEX_COLUMN_CALL_RE = new RegExp(String.raw`^CREATE${GAP}INDEX\b[^(]*\sON\s[^(]*\([^)]*\(`, "iu");
 
 /**
  * Foreign-key enforcement is a connection setting, not data a file changes, so a file may not assign it. Reading it
@@ -234,25 +249,34 @@ const columnExists = async (client: D1Client, table: string, column: string): Pr
 };
 
 /**
- * Whether a statement is additive: a new table or plain index, or a column added to one without a clause that changes
- * the rows already there (see `VALUE_CLAUSE_RE`). A statement that names an internal table, a partial index, or a
- * foreign key is not additive, since each constrains writes beyond the new object. Anything else needs the root token.
+ * Whether a statement is additive: a new table, a plain index, or a column added to a table without a clause that changes
+ * the rows already there (see `VALUE_CLAUSE_RE`). The shape is read from the scanner's `code`, so comments and quoted
+ * names do not change it. A statement that names an internal table, a foreign key, a partial index, or an index over an
+ * expression is not additive, since each constrains writes beyond the new object. Anything else needs the root token.
  * A value clause on a new table is fine, since the table has no rows.
  */
-const isAdditiveStatement = (statementText: string): boolean => {
-    const body = bodyOf(statementText);
-
-    if (INTERNAL_TABLE_RE.test(body)) {
+const isAdditiveStatement = (scan: ReturnType<typeof scanStatement>): boolean => {
+    if (INTERNAL_TABLE_RE.test(scan.statementText)) {
         return false;
     }
 
-    const addColumn = ADD_COLUMN_RE.exec(body);
+    const addColumn = ADD_COLUMN_CODE_RE.exec(scan.code);
 
     if (addColumn !== null) {
-        return !VALUE_CLAUSE_RE.test(body.slice(addColumn[0].length));
+        return !VALUE_CLAUSE_RE.test(scan.code.slice(addColumn[0].length));
     }
 
-    return ADDITIVE_CREATE_RE.test(body) && !PARTIAL_INDEX_RE.test(body) && !REFERENCES_RE.test(body) && !INDEX_COLUMN_CALL_RE.test(body);
+    if (REFERENCES_RE.test(scan.code)) {
+        return false;
+    }
+
+    const index = INDEX_HEAD_CODE_RE.exec(scan.code);
+
+    if (index !== null) {
+        return (index[1] ?? "").split(",").every((item) => INDEX_ITEM_CODE_RE.test(item));
+    }
+
+    return CREATE_TABLE_CODE_RE.test(scan.code);
 };
 
 /** Records the table a statement creates, drops or renames, so a later ADD COLUMN on it is not skipped from a stale catalog. */
@@ -334,7 +358,7 @@ const planPendingFile = async (
             destructive.push(statementText);
         }
 
-        if (!isAdditiveStatement(statementText)) {
+        if (!isAdditiveStatement(scan)) {
             rootOnly.push(statementText);
         }
 
