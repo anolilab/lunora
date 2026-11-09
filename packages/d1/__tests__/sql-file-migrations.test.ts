@@ -459,6 +459,105 @@ INSERT INTO posts (id) VALUES (1);`;
         sqlite.close();
     });
 
+    it("keeps a migrations-scoped run from disarming the fresh-database guard", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        sqlite.exec('CREATE TABLE "emails" ("_id" TEXT, "seen" INTEGER)');
+        sqlite.exec('INSERT INTO "emails" ("_id", "seen") VALUES (\'1\', 0)');
+
+        await applySqlMigrationFiles(database, [{ name: "create_tags.sql", sql: "CREATE TABLE tags (id TEXT);" }], { additiveOnly: true });
+
+        await expect(
+            applySqlMigrationFiles(
+                database,
+                [
+                    { name: "create_tags.sql", sql: "CREATE TABLE tags (id TEXT);" },
+                    { name: "backfill.sql", sql: 'UPDATE "emails" SET "seen" = 1;' },
+                ],
+                { confirmDestructive: true },
+            ),
+        ).rejects.toMatchObject({ code: "MIGRATION_DESTRUCTIVE" });
+        expect((sqlite.prepare('SELECT "seen" FROM "emails"').all() as { seen: number }[])[0]?.seen).toBe(0);
+
+        sqlite.close();
+    });
+
+    it("lets a root run replace the row a migrations-scoped run recorded under the same name", async () => {
+        expect.assertions(3);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "007.sql", sql: "CREATE TABLE squat (id TEXT);" }], { additiveOnly: true });
+
+        const result = await applySqlMigrationFiles(database, [{ name: "007.sql", sql: "CREATE TABLE real (id TEXT);" }]);
+
+        expect(result.files[0]?.state).toBe("ran");
+        expect(tables(sqlite)).toContain("real");
+        expect((sqlite.prepare("SELECT written_by FROM __lunora_sql_migrations WHERE name = '007.sql'").get() as { written_by: string }).written_by).toBe(
+            "root",
+        );
+
+        sqlite.close();
+    });
+
+    it("refuses a replacement whose squatted row a concurrent run changed before the batch", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+
+        await applySqlMigrationFiles(createSqliteDatabase(sqlite), [{ name: "007.sql", sql: "CREATE TABLE squat (id TEXT);" }], { additiveOnly: true });
+
+        let raced = false;
+        const database = createSqliteDatabase(sqlite, () => {
+            // The plan read the squatted hash. A concurrent scoped run changes it before this batch.
+            if (!raced) {
+                raced = true;
+                sqlite.exec("UPDATE __lunora_sql_migrations SET sha256 = 'changed-again' WHERE name = '007.sql'");
+            }
+        });
+
+        await expect(applySqlMigrationFiles(database, [{ name: "007.sql", sql: "CREATE TABLE real (id TEXT);" }])).rejects.toMatchObject({
+            code: "MIGRATION_DRIFT",
+        });
+        expect(tables(sqlite)).not.toContain("real");
+
+        sqlite.close();
+    });
+
+    it("does not read a file as renamed from a row a migrations-scoped run recorded", async () => {
+        expect.assertions(1);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "old.sql", sql: "CREATE TABLE IF NOT EXISTS a (id TEXT);" }], { additiveOnly: true });
+
+        const result = await applySqlMigrationFiles(database, [{ name: "new.sql", sql: "CREATE TABLE IF NOT EXISTS a (id TEXT);" }]);
+
+        expect(result.files[0]?.state).toBe("ran");
+
+        sqlite.close();
+    });
+
+    it("keeps a mismatch that a migrations-scoped run meets as drift, since a scoped run never replaces a row", async () => {
+        expect.assertions(1);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await applySqlMigrationFiles(database, [{ name: "a.sql", sql: "CREATE TABLE IF NOT EXISTS a (id TEXT);" }], { additiveOnly: true });
+
+        await expect(
+            applySqlMigrationFiles(database, [{ name: "a.sql", sql: "CREATE TABLE IF NOT EXISTS b (id TEXT);" }], { additiveOnly: true }),
+        ).rejects.toMatchObject({ code: "MIGRATION_DRIFT" });
+
+        sqlite.close();
+    });
+
     it("records a file a concurrent run recorded first with the same SQL, and refuses one recorded with other SQL", async () => {
         expect.assertions(2);
 

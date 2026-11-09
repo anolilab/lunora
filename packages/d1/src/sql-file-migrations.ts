@@ -16,7 +16,9 @@ import { firstDestructive, isTransactionControl, normalizeMigrationText, scanSta
  */
 
 const SQL_TRACKING_TABLE = "__lunora_sql_migrations";
-const SQL_TRACKING_DDL = `CREATE TABLE IF NOT EXISTS ${SQL_TRACKING_TABLE} (name TEXT PRIMARY KEY, sha256 TEXT NOT NULL, applied_at INTEGER NOT NULL, baselined INTEGER NOT NULL DEFAULT 0)`;
+// `written_by` says which token recorded the row. Only a root row says the stage was baselined or run by root, so a
+// migrations-scoped run cannot disarm the fresh-database guard.
+const SQL_TRACKING_DDL = `CREATE TABLE IF NOT EXISTS ${SQL_TRACKING_TABLE} (name TEXT PRIMARY KEY, sha256 TEXT NOT NULL, applied_at INTEGER NOT NULL, baselined INTEGER NOT NULL DEFAULT 0, written_by TEXT NOT NULL DEFAULT 'root')`;
 /** A plain file name, so it can be inlined into the tracking insert without quoting. */
 const SAFE_FILE_NAME_RE = /^\w[\w.-]*\.sql$/u;
 const SQL_TRACKING_NAME_UNIQUE_RE = new RegExp(String.raw`UNIQUE constraint failed:\s*${SQL_TRACKING_TABLE}\.name`, "iu");
@@ -181,8 +183,19 @@ interface PlannedFile {
     hash: string;
     /** Set when the file's SQL is recorded under this other name, which is no longer among the files sent. */
     renamedFrom?: string;
+    /** Set when a root run replaces the row a migrations-scoped run recorded under this name: the hash that row holds. */
+    replaces?: string;
     /** Set when the file is pending and runs a row write or a destructive statement. */
     replayUnsafe: boolean;
+}
+
+/** Which token a tracking row was written by. */
+type WrittenBy = "migrations" | "root";
+
+/** One tracking row, as the planner reads it. */
+interface RecordedRow {
+    sha256: string;
+    writtenBy: WrittenBy;
 }
 
 /** Name and quoting of an identifier, with its quotes removed. */
@@ -409,7 +422,7 @@ const assertFileNames = (files: ReadonlyArray<SqlMigrationFile>): void => {
  * What is recorded on the database. A dry run creates nothing, so a database without the tracking table reads as
  * empty instead of being written to. `fresh` means no file has ever been recorded here.
  */
-const readRecorded = async (client: D1Client, dryRun: boolean): Promise<{ fresh: boolean; recorded: Map<string, string> }> => {
+const readRecorded = async (client: D1Client, dryRun: boolean): Promise<{ fresh: boolean; recorded: Map<string, RecordedRow> }> => {
     if (dryRun) {
         const tables = await client.drizzle.all<{ name: string }>(
             sql.raw(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = '${SQL_TRACKING_TABLE}'`),
@@ -422,10 +435,49 @@ const readRecorded = async (client: D1Client, dryRun: boolean): Promise<{ fresh:
         await client.drizzle.run(sql.raw(SQL_TRACKING_DDL));
     }
 
-    const rows = await client.drizzle.all<{ name: string; sha256: string }>(sql.raw(`SELECT name, sha256 FROM ${SQL_TRACKING_TABLE}`));
+    const rows = await client.drizzle.all<{ name: string; sha256: string; written_by: WrittenBy }>(
+        sql.raw(`SELECT name, sha256, written_by FROM ${SQL_TRACKING_TABLE}`),
+    );
 
-    return { fresh: rows.length === 0, recorded: new Map(rows.map((row) => [row.name, row.sha256])) };
+    return {
+        fresh: !rows.some((row) => row.written_by === "root"),
+        recorded: new Map(rows.map((row) => [row.name, { sha256: row.sha256, writtenBy: row.written_by }])),
+    };
 };
+
+/** The entry for a file the record answers for without parsing it: applied, changed, or changed by a rename. */
+const answeredByRecord = (file: SqlMigrationFile, hash: string, state: SqlMigrationState, renamedFrom?: string): PlannedFile => {
+    return {
+        entry: { destructive: [], name: file.name, rootOnly: [], skipped: [], state, statements: [] },
+        file,
+        hash,
+        ...(renamedFrom === undefined ? {} : { renamedFrom }),
+        replayUnsafe: false,
+    };
+};
+
+/**
+ * The recorded hashes whose name is no longer sent, so a file with one of those hashes was renamed. A migrations-scoped
+ * row can hold SQL under any name, so it is never evidence of a rename.
+ */
+const renamedSources = (recorded: ReadonlyMap<string, RecordedRow>, sent: ReadonlySet<string>): Map<string, string> => {
+    const vanished = new Map<string, string>();
+
+    for (const [name, row] of recorded) {
+        if (!sent.has(name) && row.writtenBy === "root") {
+            vanished.set(row.sha256, name);
+        }
+    }
+
+    return vanished;
+};
+
+/**
+ * The hash of the row a root run replaces with this file: a row a migrations-scoped run recorded under the same name with
+ * other SQL. So a scoped run cannot block a root file. A scoped run never replaces a row, so a mismatch it meets stays drift.
+ */
+const replacedHash = (previous: RecordedRow | undefined, hash: string, replaceScoped: boolean): string | undefined =>
+    previous?.writtenBy === "migrations" && replaceScoped && previous.sha256 !== hash ? previous.sha256 : undefined;
 
 /**
  * Decide each file's state against what is recorded. Pending files are parsed, which can refuse one outright. A pending
@@ -434,48 +486,31 @@ const readRecorded = async (client: D1Client, dryRun: boolean): Promise<{ fresh:
 const planFiles = async (
     client: D1Client,
     files: ReadonlyArray<SqlMigrationFile>,
-    recorded: ReadonlyMap<string, string>,
+    recorded: ReadonlyMap<string, RecordedRow>,
     refuseTransactionControl: boolean,
+    replaceScoped: boolean,
 ): Promise<PlannedFile[]> => {
     const hashed = await Promise.all(
         files.map(async (file) => {
             return { file, hash: await sha256Hex(normalizeMigrationText(file.sql)) };
         }),
     );
-    const sent = new Set(files.map((file) => file.name));
-    const vanished = new Map<string, string>();
-
-    for (const [name, hash] of recorded) {
-        if (!sent.has(name)) {
-            vanished.set(hash, name);
-        }
-    }
-
+    const vanished = renamedSources(recorded, new Set(files.map((file) => file.name)));
     const planned: PlannedFile[] = [];
 
     for (const { file, hash } of hashed) {
         const previous = recorded.get(file.name);
+        const replaces = replacedHash(previous, hash, replaceScoped);
 
-        if (previous !== undefined) {
-            planned.push({
-                entry: { destructive: [], name: file.name, rootOnly: [], skipped: [], state: previous === hash ? "applied" : "changed", statements: [] },
-                file,
-                hash,
-                replayUnsafe: false,
-            });
+        if (previous !== undefined && replaces === undefined) {
+            planned.push(answeredByRecord(file, hash, previous.sha256 === hash ? "applied" : "changed"));
             continue;
         }
 
-        const renamedFrom = vanished.get(hash);
+        const renamedFrom = replaces === undefined ? vanished.get(hash) : undefined;
 
         if (renamedFrom !== undefined) {
-            planned.push({
-                entry: { destructive: [], name: file.name, rootOnly: [], skipped: [], state: "changed", statements: [] },
-                file,
-                hash,
-                renamedFrom,
-                replayUnsafe: false,
-            });
+            planned.push(answeredByRecord(file, hash, "changed", renamedFrom));
             continue;
         }
 
@@ -493,6 +528,7 @@ const planFiles = async (
             },
             file,
             hash,
+            ...(replaces === undefined ? {} : { replaces }),
             replayUnsafe: plan.replayUnsafe,
         });
     }
@@ -629,7 +665,7 @@ const recordedRow = async (client: D1Client, name: string): Promise<{ baselined:
 /**
  * Run one file's statements and its tracking row in one batch, so the file either runs whole or not at all. The row
  * goes first: a concurrent runner that recorded the file already fails the batch before any DDL runs. With no
- * statements it only records the file. `origin` says whether this call ran the SQL (`applied`) or only records the file
+ * statements it only records the file. `write.origin` says whether this call ran the SQL (`applied`) or only records the file
  * (`baselined`). Returns `applied` when a concurrent runner recorded the same SQL first. That holds only for an
  * executed row: a concurrent baseline recorded the file without running it, so an apply that planned to run it fails.
  */
@@ -638,15 +674,25 @@ const commitFile = async (
     file: SqlMigrationFile,
     hash: string,
     runs: ReadonlyArray<string>,
-    origin: "applied" | "baselined",
+    write: { origin: "applied" | "baselined"; replaces?: string; writtenBy: WrittenBy },
 ): Promise<SqlMigrationState> => {
-    const baselined = origin === "baselined" ? 1 : 0;
+    const baselined = write.origin === "baselined" ? 1 : 0;
     const record = client.drizzle.run(
         sql.raw(
-            `INSERT INTO ${SQL_TRACKING_TABLE} (name, sha256, applied_at, baselined) VALUES ('${file.name}', '${hash}', ${String(Date.now())}, ${String(baselined)})`,
+            `INSERT INTO ${SQL_TRACKING_TABLE} (name, sha256, applied_at, baselined, written_by) VALUES ('${file.name}', '${hash}', ${String(Date.now())}, ${String(baselined)}, '${write.writtenBy}')`,
         ),
     );
-    const items: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [record, ...runs.map((statement) => client.drizzle.run(sql.raw(statement)))];
+    // The DELETE matches the row the plan saw, so a row a concurrent run changed meanwhile survives and the INSERT fails as drift.
+    const leading: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] =
+        write.replaces === undefined
+            ? [record]
+            : [
+                  client.drizzle.run(
+                      sql.raw(`DELETE FROM ${SQL_TRACKING_TABLE} WHERE name = '${file.name}' AND sha256 = '${write.replaces}' AND written_by = 'migrations'`),
+                  ),
+                  record,
+              ];
+    const items: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [...leading, ...runs.map((statement) => client.drizzle.run(sql.raw(statement)))];
 
     try {
         await client.batch(items);
@@ -666,7 +712,7 @@ const commitFile = async (
         const recorded = await recordedRow(client, file.name);
 
         if (recorded?.sha256 === hash) {
-            if (origin === "applied" && recorded.baselined === 1) {
+            if (write.origin === "applied" && recorded.baselined === 1) {
                 throw new LunoraError(
                     "CONFLICT",
                     `${file.name} was recorded as a baseline by a concurrent run, which records a file without running it. Its SQL did not run here, so this apply stopped; run it again to see the file's state.`,
@@ -686,10 +732,15 @@ const commitFile = async (
 };
 
 /** Plan a pending file against the catalog as it is now, then commit it. */
-const commitPlanned = async (client: D1Client, item: PlannedFile): Promise<Pick<SqlMigrationEntry, "skipped" | "state" | "statements">> => {
+const commitPlanned = async (
+    client: D1Client,
+    item: PlannedFile,
+    writtenBy: WrittenBy,
+): Promise<Pick<SqlMigrationEntry, "skipped" | "state" | "statements">> => {
     const plan = await planPendingFile(client, item.file, true);
+    const write = { origin: "applied" as const, writtenBy, ...(item.replaces === undefined ? {} : { replaces: item.replaces }) };
 
-    return { skipped: plan.skipped, state: await commitFile(client, item.file, item.hash, plan.runs, "applied"), statements: plan.statements };
+    return { skipped: plan.skipped, state: await commitFile(client, item.file, item.hash, plan.runs, write), statements: plan.statements };
 };
 
 /**
@@ -699,15 +750,15 @@ const commitPlanned = async (client: D1Client, item: PlannedFile): Promise<Pick<
  * When the runtime adds the column between that read and the batch, the batch fails on the duplicate and rolls back.
  * Re-planning once then skips the column, since it is now present.
  */
-const runPending = async (client: D1Client, item: PlannedFile): Promise<Pick<SqlMigrationEntry, "skipped" | "state" | "statements">> => {
+const runPending = async (client: D1Client, item: PlannedFile, writtenBy: WrittenBy): Promise<Pick<SqlMigrationEntry, "skipped" | "state" | "statements">> => {
     try {
-        return await commitPlanned(client, item);
+        return await commitPlanned(client, item, writtenBy);
     } catch (error: unknown) {
         if (!(error instanceof Error) || !DUPLICATE_COLUMN_RE.test(error.message)) {
             throw error;
         }
 
-        return commitPlanned(client, item);
+        return commitPlanned(client, item, writtenBy);
     }
 };
 
@@ -734,8 +785,10 @@ const baselineBound = (files: ReadonlyArray<SqlMigrationFile>, options: ApplySql
 const recordPending = async (client: D1Client, planned: ReadonlyArray<PlannedFile>, through: number): Promise<void> => {
     for (const [index, item] of planned.entries()) {
         if (item.entry.state === "pending" && index <= through) {
+            const write = { origin: "baselined" as const, writtenBy: "root" as const, ...(item.replaces === undefined ? {} : { replaces: item.replaces }) };
+
             // eslint-disable-next-line no-await-in-loop -- each record must commit before the next file is checked against the table
-            item.entry.state = (await commitFile(client, item.file, item.hash, [], "baselined")) === "ran" ? "baselined" : "applied";
+            item.entry.state = (await commitFile(client, item.file, item.hash, [], write)) === "ran" ? "baselined" : "applied";
         }
     }
 };
@@ -765,7 +818,8 @@ const applySqlMigrationFiles = async (
     const dryRun = options.dryRun === true;
     const { fresh, recorded } = await readRecorded(client, dryRun);
     // Transaction control is refused only where the file would run; a baseline or a dry run never executes it.
-    const planned = await planFiles(client, files, recorded, !dryRun && !recordOnly);
+    const writtenBy: WrittenBy = options.additiveOnly === true ? "migrations" : "root";
+    const planned = await planFiles(client, files, recorded, !dryRun && !recordOnly, writtenBy === "root");
 
     if (dryRun) {
         return { files: planned.map((item) => item.entry), refused: refusedOnApply(planned, options, fresh) };
@@ -791,7 +845,7 @@ const applySqlMigrationFiles = async (
     for (const item of planned) {
         if (item.entry.state === "pending") {
             // eslint-disable-next-line no-await-in-loop -- each file's tracking row must commit before the next file is planned against it
-            const outcome = await runPending(client, item);
+            const outcome = await runPending(client, item, writtenBy);
 
             // The re-plan at commit time is the one that ran, so its statements are what the entry reports.
             item.entry.skipped = outcome.skipped;
