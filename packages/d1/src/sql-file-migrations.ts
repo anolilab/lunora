@@ -64,6 +64,8 @@ const ADDITIVE_CREATE_RE = new RegExp(
     String.raw`^CREATE${GAP}(?:TABLE(?:${GAP}IF${GAP}NOT${GAP}EXISTS)?${GAP}${SCHEMA_PREFIX}(?:${IDENTIFIER})${GAP_OPT}\(|(?:UNIQUE${GAP})?INDEX\b)`,
     "iu",
 );
+/** A column's DEFAULT clause, which an added column carries into every row that already exists. */
+const DEFAULT_CLAUSE_RE = /\bDEFAULT\b/iu;
 
 /**
  * Foreign-key enforcement is a connection setting, not data a file changes, so a file may not assign it. Reading it
@@ -197,11 +199,15 @@ const columnExists = async (client: D1Client, table: string, column: string): Pr
     return rows.some((row) => foldIdentifier(row.name) === wanted);
 };
 
-/** Whether a statement is additive: a new table or index, or a column added to one. Anything else needs the root token. */
+/**
+ * Whether a statement is additive: a new table or index, or a column added to one. Anything else needs the root token.
+ * A column added to an existing table with a DEFAULT reads that value back for every row already there, so an added
+ * column with a DEFAULT is not additive. A DEFAULT on a new table is fine, since the table has no rows.
+ */
 const isAdditiveStatement = (statementText: string): boolean => {
     const body = bodyOf(statementText);
 
-    return ADDITIVE_CREATE_RE.test(body) || ADD_COLUMN_RE.test(body);
+    return ADDITIVE_CREATE_RE.test(body) || (ADD_COLUMN_RE.test(body) && !DEFAULT_CLAUSE_RE.test(body));
 };
 
 /** Records the table a statement creates, drops or renames, so a later ADD COLUMN on it is not skipped from a stale catalog. */
