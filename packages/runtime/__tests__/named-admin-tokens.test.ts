@@ -99,7 +99,6 @@ interface ShardHooks {
 /** The createdAt a create carried, or a fixed one when it carried none. */
 const issuedAt = (value: unknown): number => (typeof value === "number" ? value : 1);
 
-/** A create as a shard answers it. An older build drops the `scopes` it was sent and does not echo them back. */
 /** The store's answer to a revoke: it deletes the row only when the issuance matches, and keeps it when `keepRow` pins it. */
 const revokeAnswer = (store: Map<string, { createdAt: number }>, name: string, createdAt: unknown, keepRow: boolean): boolean => {
     const stored = store.get(name);
@@ -107,6 +106,7 @@ const revokeAnswer = (store: Map<string, { createdAt: number }>, name: string, c
     return !keepRow && stored !== undefined && stored.createdAt === createdAt && store.delete(name);
 };
 
+/** A create as a shard answers it. An older build drops the `scopes` it was sent and does not echo them back. */
 const createAnswer = (args: Record<string, number | string>, olderShard: boolean): { answer: Record<string, unknown>; scopes: string[] } => {
     const scopes = olderShard ? [] : ((args as { scopes?: string[] }).scopes ?? []);
     const answer = { createdAt: issuedAt(args.createdAt), name: args.name, ...(olderShard ? {} : { scopes }) };
