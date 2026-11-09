@@ -450,10 +450,10 @@ const replayingStatements = (entry: SqlMigrationEntry): string[] =>
 const TRANSACTION_RE = /^(?:BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE)\b/iu;
 
 /**
- * The pending files a real run with these options would refuse, so a dry run reports what the run would stop on. A
- * baseline is root-only, so for a scoped caller it refuses every pending file. Otherwise the refusals are the ones
- * `applySqlMigrationFiles` makes for a run: the fresh-database guard, the additive-only rule, an unconfirmed
- * destructive file, and transaction control.
+ * The pending files a real run with these options would refuse for a reason no flag can lift: the fresh-database guard,
+ * the additive-only rule, transaction control, and a foreign-key pragma. A baseline is root-only, so for a scoped
+ * caller it refuses every pending file. An unconfirmed destructive file is left out on purpose. `--yes` is the
+ * operator's choice at run time, and a preflight run without it should not fail on a DROP that is meant to be applied.
  */
 const refusedOnApply = (planned: ReadonlyArray<PlannedFile>, options: ApplySqlMigrationOptions, fresh: boolean): string[] => {
     const pending = planned.filter((item) => item.entry.state === "pending");
@@ -466,7 +466,6 @@ const refusedOnApply = (planned: ReadonlyArray<PlannedFile>, options: ApplySqlMi
     const refusedByRun = (item: PlannedFile): boolean =>
         (fresh && item.replayUnsafe) ||
         (options.additiveOnly === true && item.entry.rootOnly.length > 0) ||
-        (!fresh && item.entry.destructive.length > 0 && options.confirmDestructive !== true) ||
         item.entry.statements.some((statement) => TRANSACTION_RE.test(bodyOf(statement)) || changesForeignKeys(statement));
 
     return pending.filter((item) => refusedByRun(item)).map((item) => item.entry.name);

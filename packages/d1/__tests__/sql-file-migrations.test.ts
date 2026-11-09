@@ -636,7 +636,7 @@ INSERT INTO posts (id) VALUES (1);`;
         sqlite.close();
     });
 
-    it("reports, in a dry run, the pending files a real run would refuse with the same options", async () => {
+    it("reports, in a dry run, the pending files a real run would refuse for a reason --yes cannot lift", async () => {
         expect.assertions(4);
 
         const sqlite = new DatabaseSync(":memory:");
@@ -656,7 +656,7 @@ INSERT INTO posts (id) VALUES (1);`;
         });
 
         expect(scoped.refused).toStrictEqual(["drop.sql"]);
-        expect(plain.refused).toStrictEqual(["drop.sql"]);
+        expect(plain.refused).toStrictEqual([]);
         expect(confirmed.refused).toStrictEqual([]);
 
         sqlite.close();
