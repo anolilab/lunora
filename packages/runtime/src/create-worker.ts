@@ -3,6 +3,8 @@ import type { HttpCacheLike } from "@lunora/platform";
 import { decodeWire, encodeArgsOrThrow, encodeWire } from "@lunora/wire";
 
 import { ADMIN_SIGNAL_HEADER, ADMIN_SIGNAL_MIN_TTL_MS, mintAdminSignal, parseAdminTokenHeader } from "../../../shared/admin-token";
+import type { AdminTokenScope } from "../../../shared/admin-token-scope";
+import { isAdminTokenScope } from "../../../shared/admin-token-scope";
 import type { AiRunBinding } from "../../../shared/ai-chat";
 import type { AiOptInLevel } from "../../../shared/ai-opt-in";
 import { asOptInLevel } from "../../../shared/ai-opt-in";
@@ -101,6 +103,8 @@ import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 import type { AssetsFetcherLike } from "./spa-assets";
 import { serveSpaAsset, serveSpaShell } from "./spa-assets";
+import type { SqlMigrationApplier } from "./sql-migration-admin-routes";
+import { buildSqlMigrationAdminRoutes, SQL_MIGRATION_BODY_BYTES, SQL_MIGRATIONS_PATH } from "./sql-migration-admin-routes";
 import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
 import { buildTenantFanoutRoutes, QUEUE_DISPATCH_MAX_BODY_BYTES, QUEUE_DISPATCH_PATH } from "./tenant-fanout-routes";
 import type { TrustInboundTraceContext } from "./trace-trust";
@@ -139,6 +143,7 @@ type Route = (request: Request, env: unknown, context: ExecutionContextLike) => 
 const ROUTE_BODY_BUDGETS: Record<string, number> = {
     [KV_VALUE_PATH]: KV_VALUE_MAX_BODY_BYTES,
     [QUEUE_DISPATCH_PATH]: QUEUE_DISPATCH_MAX_BODY_BYTES,
+    [SQL_MIGRATIONS_PATH]: SQL_MIGRATION_BODY_BYTES,
     [STORAGE_PATH]: STORAGE_UPLOAD_MAX_BODY_BYTES,
 };
 
@@ -1091,6 +1096,12 @@ interface WorkerOptions {
      * (point-in-time recovery). When omitted, apply covers only shard-local tables.
      */
     applyGlobals?: GlobalCdcApplyFunction;
+
+    /**
+     * Runs the SQL migration files `lunora migrate apply` sends (`POST /_lunora/admin/sql-migrations`). Codegen sets it
+     * for a D1 global plane. Absent, the route refuses, since a file that drops a table has no binding to run against.
+     */
+    applySqlMigrations?: SqlMigrationApplier;
 
     /**
      * The generated architecture manifest (module catalog + static call graph).
@@ -3268,7 +3279,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // every extracted admin-route builder. A `WeakMap` keyed by the request lets the
     // entry be collected with the request, and concurrent requests never alias.
     // A named-token grant carries the token's name; an `adminGate` grant carries none.
-    const adminGrants = new WeakMap<Request, { tokenName?: string }>();
+    const adminGrants = new WeakMap<Request, { scopes?: ReadonlyArray<AdminTokenScope>; tokenName?: string }>();
 
     // The unified admin predicate every `/_lunora/admin/*` gate routes through: the
     // static bearer, OR a grant `handle` recorded from `options.adminGate` or a
@@ -3282,6 +3293,24 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const grant = adminGrants.get(request);
 
         return checkBearerToken(request, effectiveAdminToken()) || (grant !== undefined && grant.tokenName === undefined);
+    };
+
+    // The SQL migration route's gate: the root token, or a named token minted with the `migrations` scope. The route
+    // then runs only additive statements for a scoped caller (see `isRootAdmin` on the route). Anything else is refused
+    // by name, so the caller knows which token to mint.
+    const assertMigrationsAdmin = (request: Request): void => {
+        if (requestIsRootAdmin(request) || (adminGrants.get(request)?.scopes ?? []).includes("migrations")) {
+            return;
+        }
+
+        if (!requestIsAdmin(request)) {
+            throw new LunoraError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        throw new LunoraError(
+            "this named admin token has no `migrations` scope, so it cannot run SQL migrations. Mint one with `lunora admin-token create <name> --scope migrations`.",
+            { code: "ADMIN_SCOPE_REQUIRED", status: 403 },
+        );
     };
 
     // The named-token store lives on the default shard; the worker asks it under
@@ -3335,6 +3364,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     expiresAt?: unknown;
                     known?: unknown;
                     ok?: unknown;
+                    scopes?: unknown;
                 };
 
                 if (answer.ok !== true) {
@@ -3351,7 +3381,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     return { live: false, nameKnown: true };
                 }
 
-                return typeof answer.expiresAt === "number" ? { expiresAt: answer.expiresAt, live: true } : { live: true };
+                // Scopes are read from the store's answer and kept only if recognised, so an unknown one grants nothing.
+                const scopes = Array.isArray(answer.scopes) ? answer.scopes.filter(isAdminTokenScope) : [];
+
+                return typeof answer.expiresAt === "number" ? { expiresAt: answer.expiresAt, live: true, scopes } : { live: true, scopes };
             } catch (error) {
                 // An unreachable store refuses rather than 500s (the root token still
                 // works), uncached so the token recovers with the store. Logged, or an
@@ -3385,7 +3418,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const grant = isNamedAdminBearer(request, effectiveAdminToken()) ? await adminTokenVerifier.verify(request.headers.get("authorization")) : undefined;
 
         if (grant !== undefined) {
-            adminGrants.set(request, { tokenName: grant.name });
+            adminGrants.set(request, { scopes: grant.scopes, tokenName: grant.name });
 
             return;
         }
@@ -4465,6 +4498,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         streamingImport: (request, resolveHeaders, dryRun, onConflict) =>
             streamingImport(request, options, queryCoordinator, resolveHeaders, shardDO, dryRun, onConflict),
         syncGlobals: options.syncGlobals,
+    });
+
+    // `lunora migrate apply`: the generated SQL files, run against the D1 global plane. A named token needs the
+    // `migrations` scope, and a scoped caller runs additive statements only; the root token runs anything.
+    const sqlMigrationAdminRoutes = buildSqlMigrationAdminRoutes({
+        applySqlMigrations: options.applySqlMigrations,
+        assertAdmin: assertMigrationsAdmin,
+        isAdmin: requestIsAdmin,
+        isRootAdmin: requestIsRootAdmin,
     });
 
     /** Read a query param, collapsing missing (`null`) and empty (`""`) to `undefined`. */
@@ -6658,6 +6700,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // (functions / cron-jobs / openapi / openrpc / global tables).
         ...orchestrationAdminRoutes,
         ...dataMovementAdminRoutes,
+        ...sqlMigrationAdminRoutes,
         ...scheduledAdminRoutes,
         ...workflowsAdminRoutes,
         ...storageAdminRoutes,

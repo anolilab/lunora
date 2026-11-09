@@ -280,6 +280,7 @@ import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
 import { ADMIN_SIGNAL_HEADER, isValidAdminTokenName, verifyAdminSignal } from "../../../shared/admin-token";
+import { ADMIN_TOKEN_SCOPES, isAdminTokenScope } from "../../../shared/admin-token-scope";
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { canonicalClaims, claimsFingerprint } from "../../../shared/claims-fingerprint";
@@ -12753,17 +12754,23 @@ abstract class ShardDO {
             throw new LunoraError("BAD_REQUEST", "createAdminToken: `expiresAt` must be an epoch-ms number", { status: 400 });
         }
 
+        if (args.scopes !== undefined && (!Array.isArray(args.scopes) || !args.scopes.every(isAdminTokenScope))) {
+            throw new LunoraError("BAD_REQUEST", `createAdminToken: \`scopes\` must be a list of ${ADMIN_TOKEN_SCOPES.join(", ")}`, { status: 400 });
+        }
+
+        const scopes = Array.isArray(args.scopes) ? args.scopes : [];
+
         // The worker picks the issuance's identity so it can place it past every revoked one; a direct
         // root call without one is stamped now.
         const createdAt = typeof args.createdAt === "number" && Number.isSafeInteger(args.createdAt) ? args.createdAt : Date.now();
 
-        if (!createAdminTokenRecord(this.shardHost.sql, { createdAt, digest, expiresAt, name })) {
+        if (!createAdminTokenRecord(this.shardHost.sql, { createdAt, digest, expiresAt, name, scopes })) {
             throw new LunoraError("ADMIN_TOKEN_EXISTS", `an admin token named "${name}" already exists — revoke it first`, { status: 409 });
         }
 
         this.recordAuditAfterTokenChange(args, "createAdminToken", name);
 
-        return adminResponse({ createdAt, name, ...(expiresAt === undefined ? {} : { expiresAt }) });
+        return adminResponse({ createdAt, name, scopes, ...(expiresAt === undefined ? {} : { expiresAt }) });
     }
 
     /**

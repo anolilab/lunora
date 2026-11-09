@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createAdminTokenRecord, listAdminTokens, revokeAdminTokenRecord, verifyAdminTokenDigest } from "../../src/admin-tokens";
+import { ADMIN_TOKEN_TABLE, createAdminTokenRecord, listAdminTokens, revokeAdminTokenRecord, verifyAdminTokenDigest } from "../../src/admin-tokens";
+import { runSql } from "../../src/do-exec";
 import type { SqlHarness } from "../_helpers/sql-harness";
 
 const DIGEST = "a".repeat(64);
@@ -27,7 +28,7 @@ const runAdminTokenScenarios = (factory: () => SqlHarness): void => {
             expect.assertions(3);
 
             expect(createAdminTokenRecord(harness.sql, { createdAt: NOW, digest: DIGEST, name: "ci" })).toBe(true);
-            expect(verifyAdminTokenDigest(harness.sql, "ci", DIGEST, NOW)).toStrictEqual({ createdAt: NOW });
+            expect(verifyAdminTokenDigest(harness.sql, "ci", DIGEST, NOW)).toStrictEqual({ createdAt: NOW, scopes: [] });
             expect(verifyAdminTokenDigest(harness.sql, "ci", "b".repeat(64), NOW)).toBeUndefined();
         });
 
@@ -49,7 +50,7 @@ const runAdminTokenScenarios = (factory: () => SqlHarness): void => {
 
             // A second revoke of the first issuance, arriving after the name was re-created.
             expect(revokeAdminTokenRecord(harness.sql, "ci", NOW)).toBe(false);
-            expect(verifyAdminTokenDigest(harness.sql, "ci", "c".repeat(64), NOW + 2)).toStrictEqual({ createdAt: NOW + 1 });
+            expect(verifyAdminTokenDigest(harness.sql, "ci", "c".repeat(64), NOW + 2)).toStrictEqual({ createdAt: NOW + 1, scopes: [] });
             expect(revokeAdminTokenRecord(harness.sql, "ci", NOW + 1)).toBe(true);
         });
 
@@ -68,7 +69,7 @@ const runAdminTokenScenarios = (factory: () => SqlHarness): void => {
 
             createAdminTokenRecord(harness.sql, { createdAt: NOW, digest: DIGEST, expiresAt: NOW + 1000, name: "ci" });
 
-            expect(verifyAdminTokenDigest(harness.sql, "ci", DIGEST, NOW + 999)).toStrictEqual({ createdAt: NOW, expiresAt: NOW + 1000 });
+            expect(verifyAdminTokenDigest(harness.sql, "ci", DIGEST, NOW + 999)).toStrictEqual({ createdAt: NOW, expiresAt: NOW + 1000, scopes: [] });
             expect(verifyAdminTokenDigest(harness.sql, "ci", DIGEST, NOW + 1000)).toBeUndefined();
         });
 
@@ -79,12 +80,26 @@ const runAdminTokenScenarios = (factory: () => SqlHarness): void => {
             verifyAdminTokenDigest(harness.sql, "ci", DIGEST, NOW + 10);
             verifyAdminTokenDigest(harness.sql, "ci", DIGEST, NOW + 20);
 
-            expect(listAdminTokens(harness.sql)).toStrictEqual([{ createdAt: NOW, expiresAt: NOW + 3_600_000, lastUsedAt: NOW + 10, name: "ci" }]);
+            expect(listAdminTokens(harness.sql)).toStrictEqual([{ createdAt: NOW, expiresAt: NOW + 3_600_000, lastUsedAt: NOW + 10, name: "ci", scopes: [] }]);
             expect(JSON.stringify(listAdminTokens(harness.sql))).not.toContain(DIGEST);
 
             verifyAdminTokenDigest(harness.sql, "ci", DIGEST, NOW + 60_010);
 
             expect(listAdminTokens(harness.sql)[0]?.lastUsedAt).toBe(NOW + 60_010);
+        });
+
+        it("adds the scopes column to a token table from before scopes, and that table's tokens read with none", () => {
+            expect.assertions(2);
+
+            // The table as a shard created it before scopes: `CREATE TABLE IF NOT EXISTS` never adds a column to it.
+            runSql(
+                harness.sql,
+                `CREATE TABLE "${ADMIN_TOKEN_TABLE}" (name TEXT PRIMARY KEY, digest TEXT NOT NULL, created_at REAL NOT NULL, last_used_at REAL, expires_at REAL)`,
+            );
+            runSql(harness.sql, `INSERT INTO "${ADMIN_TOKEN_TABLE}" (name, digest, created_at) VALUES (?, ?, ?)`, "ci", DIGEST, NOW);
+
+            expect(verifyAdminTokenDigest(harness.sql, "ci", DIGEST, NOW)).toStrictEqual({ createdAt: NOW, scopes: [] });
+            expect(createAdminTokenRecord(harness.sql, { createdAt: NOW + 1, digest: DIGEST, name: "migrate", scopes: ["migrations"] })).toBe(true);
         });
     });
 };

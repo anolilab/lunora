@@ -84,14 +84,18 @@ data export/import, migrations, the Studio, scheduled-job admin.
       worker stores only its SHA-256. A named token works for the HTTP admin
       API operations that are not root-only (CLI `--token`, the MCP server), and
       the shard audit log records its name. The root-only operations listed
-      below need `LUNORA_ADMIN_TOKEN`. Revoke one with
+      below need `LUNORA_ADMIN_TOKEN`. A pipeline that runs `deploy --migrate`
+      runs `migrate apply` as its first step: give that pipeline a token minted
+      with `--scope migrations`, which runs only additive SQL, and keep the root
+      token for a file that drops or rewrites rows or adds a unique index (a
+      `.unique()` field generates one). Revoke one with
       `lunora admin-token revoke <name>`: the revoking isolate refuses it at once,
       and every other isolate within 30 seconds (its verification cache); an
       expiring token stops at its expiry everywhere. Anything that would outlive
       a revocation needs the root token: managing tokens, admin WebSockets and WS
       sub-tokens (so the Studio's live panels), `pitrRestore`, `runAs`, storage
       signed URLs (so `lunora import` of a blob above the verified-upload cap),
-      the auth jurisdiction copy and purge, and every auth admin op except the
+      the auth jurisdiction copy and purge, every auth admin op except the
       reads and the ones that only take access away (ban, revoke a session or
       invitation). Named tokens
       require `LUNORA_ADMIN_TOKEN` to be set (the worker signs its hop to the
@@ -163,11 +167,19 @@ data export/import, migrations, the Studio, scheduled-job admin.
 Lunora has two migration surfaces; see [Migrations](/docs/concepts/migrations).
 
 - [ ] **D1 schema migrations** for `.global()` tables are generated
-      (`lunora migrate generate`) and committed as a review artifact. Nothing
-      applies them: the runtime provisions global tables from the schema on
-      first use (`CREATE TABLE IF NOT EXISTS` + additive `ADD COLUMN`), so any
-      hand-written SQL in a generated file must be applied yourself
-      (`wrangler d1 execute <DB> --remote --file=…`) before the deploy.
+      (`lunora migrate generate`) and committed as a review artifact. The
+      runtime provisions additive changes on first use, so the drops and
+      hand-written SQL in a generated file are run with
+      `lunora migrate apply --url <worker> --yes` before the deploy that depends
+      on them. `lunora deploy --migrate` runs them after the new code is live,
+      so it is not a substitute for a change the new code needs. A project that
+      predates this tracking records the files that already ran with
+      `lunora migrate apply --baseline`, or `--baseline-through <file>` when a
+      later file has not run yet, before its first deploy (see Migrations).
+      `migrate apply` needs the root admin token, or a token minted with
+      `--scope migrations`, which runs only additive files (a new table or index,
+      an added column) and refuses anything else. `lunora migrate status --sql`
+      shows what has run.
 - [ ] **Data migrations** (`lunora migrate create <name> --table <table>`, run with
       `lunora migrate up`) have been dry-run against a copy where the change
       is destructive. Runs are admin-gated: set `LUNORA_ADMIN_TOKEN` or pass
