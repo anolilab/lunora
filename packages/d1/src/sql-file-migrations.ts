@@ -565,6 +565,37 @@ const planFiles = async (
     return planned;
 };
 
+/** Pending files whose SQL matches an earlier pending file in the same run, as `[earlier, later]` pairs. */
+const duplicatePending = (planned: ReadonlyArray<PlannedFile>): [PlannedFile, PlannedFile][] => {
+    const firstByHash = new Map<string, PlannedFile>();
+    const pairs: [PlannedFile, PlannedFile][] = [];
+
+    for (const item of planned.filter((candidate) => candidate.entry.state === "pending")) {
+        const first = firstByHash.get(item.hash);
+
+        if (first === undefined) {
+            firstByHash.set(item.hash, item);
+        } else {
+            pairs.push([first, item]);
+        }
+    }
+
+    return pairs;
+};
+
+/** Refuse a run whose pending files repeat one another's SQL: each copy would run, so a row write would apply twice. */
+const assertNoDuplicatePending = (planned: ReadonlyArray<PlannedFile>): void => {
+    const pairs = duplicatePending(planned);
+
+    if (pairs.length === 0) {
+        return;
+    }
+
+    const listed = pairs.map(([first, later]) => `${later.entry.name} repeats ${first.entry.name}`).join("; ");
+
+    throw new LunoraError("VALIDATION_ERROR", `${listed}. Identical SQL would run once per name. Delete the extra file, or change its SQL.`);
+};
+
 /** Refuse the run before anything is applied, when an applied file's SQL has changed or moved to another name. */
 const assertNoDrift = (planned: ReadonlyArray<PlannedFile>): void => {
     const changed = planned.filter((item) => item.entry.state === "changed");
@@ -618,7 +649,12 @@ const refusedOnApply = (planned: ReadonlyArray<PlannedFile>, options: ApplySqlMi
         (options.additiveOnly === true && item.entry.rootOnly.length > 0) ||
         item.entry.statements.some((statement) => TRANSACTION_RE.test(bodyOf(statement)) || changesForeignKeys(statement));
 
-    return pending.filter((item) => refusedByRun(item)).map((item) => item.entry.name);
+    const refusedNames = pending.filter((item) => refusedByRun(item)).map((item) => item.entry.name);
+    const duplicateNames = duplicatePending(planned)
+        .flat()
+        .map((item) => item.entry.name);
+
+    return [...new Set([...refusedNames, ...duplicateNames])];
 };
 
 /**
@@ -878,6 +914,7 @@ const applySqlMigrationFiles = async (
         return { files: planned.map((item) => item.entry) };
     }
 
+    assertNoDuplicatePending(planned);
     assertAdditiveOnly(planned, options.additiveOnly === true);
     assertDestructiveConfirmed(planned, options.confirmDestructive === true, fresh);
 

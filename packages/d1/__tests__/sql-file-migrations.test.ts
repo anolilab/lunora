@@ -760,6 +760,50 @@ INSERT INTO posts (id) VALUES (1);`;
         sqlite.close();
     });
 
+    it("refuses two pending files that repeat the same row write, so the write does not apply twice", async () => {
+        expect.assertions(4);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        sqlite.exec('CREATE TABLE "counters" ("id" TEXT, "value" INTEGER)');
+        sqlite.exec(`INSERT INTO "counters" ("id", "value") VALUES ('c', 0)`);
+        await applySqlMigrationFiles(database, [{ name: "base.sql", sql: "CREATE TABLE IF NOT EXISTS other (id TEXT);" }]);
+
+        const increment = 'UPDATE "counters" SET "value" = "value" + 1;';
+        const files = [
+            { name: "inc_a.sql", sql: increment },
+            { name: "inc_b.sql", sql: increment },
+        ];
+
+        await expect(applySqlMigrationFiles(database, files)).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(applySqlMigrationFiles(database, files)).rejects.toThrow("inc_b.sql repeats inc_a.sql");
+        expect((sqlite.prepare('SELECT "value" FROM "counters"').get() as { value: number }).value).toBe(0);
+
+        const plan = await applySqlMigrationFiles(database, files, { dryRun: true });
+
+        expect(plan.refused?.toSorted()).toStrictEqual(["inc_a.sql", "inc_b.sql"]);
+
+        sqlite.close();
+    });
+
+    it("refuses two pending files with identical SQL even when that SQL changes nothing", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+        const database = createSqliteDatabase(sqlite);
+
+        await expect(
+            applySqlMigrationFiles(database, [
+                { name: "a.sql", sql: "CREATE TABLE IF NOT EXISTS t (id TEXT);" },
+                { name: "b.sql", sql: "CREATE TABLE IF NOT EXISTS t (id TEXT);" },
+            ]),
+        ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        expect(tables(sqlite)).not.toContain("t");
+
+        sqlite.close();
+    });
+
     it("an additive-only run treats the framework's change log and companion tables as root-only", async () => {
         expect.assertions(1);
 
