@@ -632,7 +632,7 @@ const TRANSACTION_RE = /^(?:BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE)\b/iu;
 
 /**
  * The pending files a real run with these options would refuse for a reason no flag can lift: the fresh-database guard,
- * the additive-only rule, transaction control, and a foreign-key pragma. A baseline is root-only, so for a scoped
+ * the additive-only rule, transaction control, a foreign-key pragma, and SQL that repeats another pending file's. A baseline is root-only, so for a scoped
  * caller it refuses every pending file. An unconfirmed destructive file is left out on purpose. `--yes` is the
  * operator's choice at run time, and a preflight run without it should not fail on a DROP that is meant to be applied.
  */
