@@ -5,7 +5,7 @@ import type { ElementAccessExpression, Node as TsNode, ObjectLiteralExpression, 
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { IdentityClaimReadIR } from "../ir";
-import { collectNodeRows, propertyKeyName } from "./ast";
+import { collectNodeRows, isConstDeclaration, isWriteTarget, outermostValueWrapper, propertyKeyName } from "./ast";
 import { callSiteScopeOf } from "./attribution";
 import discoverAuthClaims from "./auth-claims";
 import { calleeName } from "./callee";
@@ -93,9 +93,19 @@ const identityBagAccess = (node: TsNode | undefined): TsNode | undefined => {
     return POLICY_IDENTITY_RECEIVERS.has(receiver.getText()) || isContextSurface(receiver, ["auth"]) ? node : undefined;
 };
 
-/** Looks through parentheses and `await`, so `(await ctx.auth.getIdentity())` reads as the call itself. */
+/**
+ * Looks through `await`, parentheses and type-only wrappers (`as`, `satisfies`, `<T>x`,
+ * `x!`), so `(await ctx.auth.getIdentity() as Identity)!` reads as the call itself.
+ */
 const throughAwait = (node: TsNode): TsNode =>
-    Node.isAwaitExpression(node) || Node.isParenthesizedExpression(node) ? throughAwait(node.getExpression()) : node;
+    Node.isAwaitExpression(node) ||
+    Node.isParenthesizedExpression(node) ||
+    Node.isAsExpression(node) ||
+    Node.isSatisfiesExpression(node) ||
+    Node.isTypeAssertion(node) ||
+    Node.isNonNullExpression(node)
+        ? throughAwait(node.getExpression())
+        : node;
 
 /** Whether `node` is `<auth>.getIdentity()` on an identity receiver, once `await` and parentheses are looked through. */
 const identityResultOf = (node: TsNode | undefined): TsNode | undefined => {
@@ -137,7 +147,7 @@ const accessedKey = (node: PropertyAccessExpression | ElementAccessExpression): 
  * `undefined` when the node is neither.
  */
 const claimKeyRead = (node: TsNode): string | undefined => {
-    if (!Node.isPropertyAccessExpression(node) && !Node.isElementAccessExpression(node)) {
+    if ((!Node.isPropertyAccessExpression(node) && !Node.isElementAccessExpression(node)) || isWriteTarget(node)) {
         return undefined;
     }
 
@@ -147,13 +157,15 @@ const claimKeyRead = (node: TsNode): string | undefined => {
 };
 
 /** One claim read at `node`, tagged with whether the key is in the declared allow-list. */
-const readRow = (node: TsNode, key: string, file: string, declared: ReadonlySet<string>): IdentityClaimReadIR => {return {
-    declared: key === ALWAYS_DECLARED_CLAIM || declared.has(key),
-    file,
-    key,
-    line: node.getStartLineNumber(),
-    scope: callSiteScopeOf(node),
-}};
+const readRow = (node: TsNode, key: string, file: string, declared: ReadonlySet<string>): IdentityClaimReadIR => {
+    return {
+        declared: key === ALWAYS_DECLARED_CLAIM || declared.has(key),
+        file,
+        key,
+        line: node.getStartLineNumber(),
+        scope: callSiteScopeOf(node),
+    };
+};
 
 /** The claim read one access makes, or `undefined`. */
 const claimReadOf = (node: TsNode, file: string, declared: ReadonlySet<string>): IdentityClaimReadIR | undefined => {
@@ -165,8 +177,10 @@ const claimReadOf = (node: TsNode, file: string, declared: ReadonlySet<string>):
 /**
  * The claim reads a `const x = await ctx.auth.getIdentity()` declaration makes: each
  * destructured key (`const { plan } = …`), and each property read on `x` (`x.plan`,
- * `x["plan"]`) found through the language service. A rest element reads the whole
- * object, so it is not a claim read.
+ * `x!["plan"]`) found through the language service. A rest element reads the whole
+ * object, so it is not a claim read. Only a `const` binding is followed — a `let` can be
+ * repointed at another value, after which its reads are not identity reads — and a write
+ * (`x.plan = …`) is not a read.
  */
 const resultBindingReads = (declaration: VariableDeclaration, file: string, declared: ReadonlySet<string>): IdentityClaimReadIR[] => {
     if (identityResultOf(declaration.getInitializer()) === undefined) {
@@ -182,7 +196,7 @@ const resultBindingReads = (declaration: VariableDeclaration, file: string, decl
             .map((element) => readRow(element, propertyNameText(element.getPropertyNameNode() ?? element.getNameNode()), file, declared));
     }
 
-    if (!Node.isIdentifier(name)) {
+    if (!Node.isIdentifier(name) || !isConstDeclaration(declaration)) {
         return [];
     }
 
@@ -190,13 +204,14 @@ const resultBindingReads = (declaration: VariableDeclaration, file: string, decl
         .findReferencesAsNodes()
         .filter((reference) => reference !== name)
         .flatMap((reference) => {
-            const access = reference.getParent();
+            const receiver = outermostValueWrapper(reference);
+            const access = receiver.getParent();
 
-            if (!Node.isPropertyAccessExpression(access) && !Node.isElementAccessExpression(access)) {
+            if ((!Node.isPropertyAccessExpression(access) && !Node.isElementAccessExpression(access)) || isWriteTarget(access)) {
                 return [];
             }
 
-            const key = access.getExpression() === reference ? accessedKey(access) : undefined;
+            const key = access.getExpression() === receiver ? accessedKey(access) : undefined;
 
             return key === undefined ? [] : [readRow(access, key, file, declared)];
         });
@@ -210,7 +225,7 @@ const resultBindingReads = (declaration: VariableDeclaration, file: string, decl
  *
  * Tracked shapes: `<receiver>.identity.<key>` and `["<key>"]`; a key read straight off a
  * `getIdentity()` result (`(await ctx.auth.getIdentity())?.<key>`); a destructuring of that
- * result; and the property reads on a variable bound to it. Other flows (passed to a helper,
+ * result; and the property reads on a `const` bound to it. Other flows (passed to a helper,
  * spread, reassigned) are not followed, to keep the false-positive rate low.
  *
  * Runs only when the project declares a resolvable `defineIdentity({ ... })` contract in

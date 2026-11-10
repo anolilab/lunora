@@ -40,6 +40,29 @@ const opaque = (reason: string): AuthClaimDiscovery => {
 /** Follows parentheses and `as` casts to the expression underneath. */
 const unwrap = (node: TsNode): TsNode => (Node.isParenthesizedExpression(node) || Node.isAsExpression(node) ? unwrap(node.getExpression()) : node);
 
+/** A property that is present but has no expression codegen can read (a method or accessor). */
+const UNREADABLE = "unreadable";
+
+/**
+ * The expression behind a named property: a `key: value` initializer, or the name of a
+ * shorthand `{ key }`, which {@link objectLiteralOf} follows to the binding it names.
+ * `undefined` when the key is absent; {@link UNREADABLE} when it is present but is a
+ * method or accessor, so the caller can say so instead of treating it as absent.
+ */
+const propertyValue = (object: ObjectLiteralExpression, name: string): TsNode | typeof UNREADABLE | undefined => {
+    const property = object.getProperty(name);
+
+    if (property === undefined) {
+        return undefined;
+    }
+
+    if (Node.isPropertyAssignment(property)) {
+        return property.getInitializer() ?? UNREADABLE;
+    }
+
+    return Node.isShorthandPropertyAssignment(property) ? property.getNameNode() : UNREADABLE;
+};
+
 /** Whether an object literal has a spread, which can hide any key. */
 const hasSpread = (object: ObjectLiteralExpression): boolean => object.getProperties().some((property) => Node.isSpreadAssignment(property));
 
@@ -80,7 +103,9 @@ const objectLiteralOf = (node: TsNode, depth = 0): ObjectLiteralExpression | und
         return undefined;
     }
 
-    const symbol = expression.getSymbol();
+    // The name of a shorthand `{ options }` resolves to the property; the value is the binding it names.
+    const shorthand = expression.getParent();
+    const symbol = Node.isShorthandPropertyAssignment(shorthand) ? shorthand.getValueSymbol() : expression.getSymbol();
     const resolved: TsSymbol | undefined = symbol?.isAlias() ? symbol.getAliasedSymbol() : symbol;
     const [declaration] = resolved?.getDeclarations() ?? [];
 
@@ -161,12 +186,16 @@ const claimOf = (name: string, init: TsNode): { claim?: AuthClaim; reason?: stri
 
 /** One `additionalFields` entry read as a claim, a reason it is left out, or nothing when the session does not return it. */
 const entryClaim = (property: ObjectLiteralElementLike): { claim?: AuthClaim; reason?: string } | undefined => {
-    if (!Node.isPropertyAssignment(property)) {
+    if (Node.isSpreadAssignment(property)) {
         return undefined;
     }
 
-    const name = propertyKeyName(property);
-    const init = property.getInitializer();
+    if (!Node.isPropertyAssignment(property) && !Node.isShorthandPropertyAssignment(property)) {
+        return { reason: `\`${property.getName()}\` is a method or accessor, not a field definition` };
+    }
+
+    const name = Node.isPropertyAssignment(property) ? propertyKeyName(property) : property.getName();
+    const init = Node.isPropertyAssignment(property) ? property.getInitializer() : property.getNameNode();
     const field = init === undefined ? undefined : objectLiteralOf(init);
 
     // Not returned by the session, so it is not a claim and needs no diagnostic.
@@ -205,13 +234,13 @@ const userClaims = (user: ObjectLiteralExpression): AuthClaimDiscovery => {
         return opaque("`user` has a spread, so the user columns cannot be read");
     }
 
-    const fieldsNode = propertyInitializer(user, "additionalFields");
+    const fieldsNode = propertyValue(user, "additionalFields");
 
     if (fieldsNode === undefined) {
         return NONE;
     }
 
-    const fields = objectLiteralOf(fieldsNode);
+    const fields = fieldsNode === UNREADABLE ? undefined : objectLiteralOf(fieldsNode);
 
     return fields === undefined || hasSpread(fields)
         ? opaque("`user.additionalFields` is not an object literal, so the user columns cannot be read")
@@ -224,13 +253,13 @@ const readAuthClaims = (options: ObjectLiteralExpression): AuthClaimDiscovery =>
         return opaque("the auth options contain a spread, so the user columns cannot be read");
     }
 
-    const userNode = propertyInitializer(options, "user");
+    const userNode = propertyValue(options, "user");
 
     if (userNode === undefined) {
         return NONE;
     }
 
-    const user = objectLiteralOf(userNode);
+    const user = userNode === UNREADABLE ? undefined : objectLiteralOf(userNode);
 
     return user === undefined ? opaque("`user` is not an object literal, so the user columns cannot be read") : userClaims(user);
 };
@@ -248,13 +277,13 @@ const authOptionsOf = (call: CallExpression): AuthClaimDiscovery | undefined => 
         return opaque(".auth() is not called with an object literal, so its user columns cannot be read");
     }
 
-    const optionsNode = propertyInitializer(argument, "options");
+    const optionsNode = propertyValue(argument, "options");
 
     if (optionsNode === undefined) {
         return undefined;
     }
 
-    const options = objectLiteralOf(optionsNode);
+    const options = optionsNode === UNREADABLE ? undefined : objectLiteralOf(optionsNode);
 
     return options === undefined
         ? opaque("`.auth({ options })` does not resolve to an object literal, so the user columns cannot be read")

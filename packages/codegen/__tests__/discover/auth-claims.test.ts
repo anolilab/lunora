@@ -158,6 +158,62 @@ describe("discoverAuthClaims", () => {
         expect(result.diagnostics).toHaveLength(1);
     });
 
+    it("reads shorthand options, user, additionalFields and field entries", () => {
+        expect.assertions(1);
+
+        write(
+            "src/server/index.ts",
+            `import { defineApp } from "lunorash";
+const plan = { type: "string" };
+const additionalFields = { plan, seats: { type: "number" } };
+const user = { additionalFields };
+const options = { user };
+export default defineApp().auth({ d1: (env) => env.DB, options });
+`,
+        );
+
+        expect(run()).toStrictEqual({
+            claims: [
+                { name: "plan", type: "string", writable: true },
+                { name: "seats", type: "number", writable: true },
+            ],
+            diagnostics: [],
+        });
+    });
+
+    it("reports a present but unreadable options property instead of treating it as absent", () => {
+        expect.assertions(2);
+
+        write(
+            "src/server/index.ts",
+            `import { defineApp } from "lunorash";\nexport default defineApp().auth({ d1: (env) => env.DB, get options() { return {}; } });\n`,
+        );
+
+        const result = run();
+
+        expect(result.claims).toStrictEqual([]);
+        expect(result.diagnostics).toHaveLength(1);
+    });
+
+    it("reports a method-shaped field entry", () => {
+        expect.assertions(1);
+
+        write("src/server/index.ts", entry(`{ user: { additionalFields: { plan() { return { type: "string" }; } } } }`));
+
+        expect(run().diagnostics).toStrictEqual(["`plan` is a method or accessor, not a field definition; it is not added to ctx.auth"]);
+    });
+
+    it("refuses a __proto__ column, which the runtime can never forward", () => {
+        expect.assertions(2);
+
+        write("src/server/index.ts", entry(`{ user: { additionalFields: { ["__proto__"]: { type: "string" }, plan: { type: "string" } } } }`));
+
+        const result = run();
+
+        expect(result.claims).toStrictEqual([{ name: "plan", type: "string", writable: true }]);
+        expect(result.diagnostics).toStrictEqual(["`__proto__` is reserved or secret-bearing, so the session never forwards it; it is not added to ctx.auth"]);
+    });
+
     it("yields no claims when the config declares no additionalFields", () => {
         expect.assertions(1);
 

@@ -85,6 +85,39 @@ describe("discoverIdentityClaimReads: reads off the getIdentity() result", () =>
         expect(run()).toStrictEqual([]);
     });
 
+    it("sees a claim read through a cast or non-null assertion on the result", () => {
+        expect.assertions(1);
+
+        write("identity.ts", CONTRACT);
+        write(
+            "mutations.ts",
+            `export const m = async (ctx) => { const who = (await ctx.auth.getIdentity()) as Who; return [(await ctx.auth.getIdentity())!.role, (ctx.auth.getIdentity() satisfies unknown as Who).plan, who!.seats]; };`,
+        );
+
+        expect(run().map((row) => row.key)).toStrictEqual(["role", "plan", "seats"]);
+    });
+
+    it("does not count a write to a bound result as a claim read", () => {
+        expect.assertions(1);
+
+        write("identity.ts", CONTRACT);
+        write(
+            "mutations.ts",
+            `export const m = async (ctx) => { const who = await ctx.auth.getIdentity(); who.role = "x"; delete who["plan"]; return who.tenantId; };`,
+        );
+
+        expect(run().map((row) => row.key)).toStrictEqual(["tenantId"]);
+    });
+
+    it("does not follow a let binding, which can be repointed at another value", () => {
+        expect.assertions(1);
+
+        write("identity.ts", CONTRACT);
+        write("mutations.ts", `export const m = async (ctx, other) => { let who = await ctx.auth.getIdentity(); who = other; return who.role; };`);
+
+        expect(run()).toStrictEqual([]);
+    });
+
     it("tracks nothing without a declared contract", () => {
         expect.assertions(1);
 
