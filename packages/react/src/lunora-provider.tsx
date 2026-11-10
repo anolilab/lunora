@@ -4,11 +4,13 @@ import type { LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 import { QueryClient, QueryClientContext, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";
-import { createContext, use, useEffect, useRef, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 
 import { getSubscriptionRegistry } from "./cache";
+import sharedContext from "./shared-context";
 
-const LunoraContext = createContext<LunoraClient | null>(null);
+// Shared by name, not created here: a second copy of this package must read the same context (see `shared-context.ts`).
+const LunoraContext = sharedContext<LunoraClient | null>("lunora-client", null);
 
 /**
  * Whether the provider's `client` differs from the one it first rendered with.
@@ -16,7 +18,7 @@ const LunoraContext = createContext<LunoraClient | null>(null);
  * mounts after a swap must not seed it: its own `useState` only ever saw the
  * new client.
  */
-const LunoraClientSwappedContext = createContext(false);
+const LunoraClientSwappedContext = sharedContext("lunora-client-swapped", false);
 
 interface LunoraProviderProps {
     children: ReactNode;
