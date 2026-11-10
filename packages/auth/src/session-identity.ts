@@ -55,8 +55,14 @@ interface SessionLike {
 
 const nonEmpty = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 
-/** Claims the session already writes; an app claim with one of these names is ignored, never overwritten. */
+/**
+ * Claims the session already writes, or that the runtime reads as credential expiry
+ * or policy roles; an app claim with one of these names is ignored, never overwritten.
+ * `__proto__` is here because assigning it on a plain object never creates an own
+ * property, so a column of that name could never arrive as a claim anyway.
+ */
 const RESERVED_CLAIMS: ReadonlySet<string> = new Set([
+    "__proto__",
     "email",
     "exp",
     "expiresAtMs",
@@ -108,6 +114,15 @@ const MAX_CLAIM_NAMES = 32;
 const CLAIM_NAME = /^[A-Z_]\w{0,63}$/i;
 
 /**
+ * Keep only well-formed column names, at most {@link MAX_CLAIM_NAMES} of them. Each
+ * entry is checked as one name, so an entry that smuggles a separator (`"plan,secret"`)
+ * is dropped whole rather than split into two accepted names.
+ * @param names The candidate names.
+ * @returns The names to forward.
+ */
+const validClaimNames = (names: ReadonlyArray<string> | undefined): string[] => (names ?? []).filter((name) => CLAIM_NAME.test(name)).slice(0, MAX_CLAIM_NAMES);
+
+/**
  * Parse a comma-separated claim list (the internal session route's `claims` query
  * parameter), keeping only well-formed column names. A malformed name is dropped, not
  * an error: the list only ever narrows what is forwarded.
@@ -119,11 +134,7 @@ const parseClaimNames = (raw: null | string | undefined): string[] => {
         return [];
     }
 
-    return raw
-        .split(",")
-        .map((name) => name.trim())
-        .filter((name) => CLAIM_NAME.test(name))
-        .slice(0, MAX_CLAIM_NAMES);
+    return validClaimNames(raw.split(",").map((name) => name.trim()));
 };
 
 /** The app-declared claims a session user carries, keyed by column name. */
@@ -252,4 +263,4 @@ const resolveSessionIdentity = async (auth: LunoraAuth, headers: Headers, claims
 };
 
 export type { SessionIdentity };
-export { identityFromSession, parseClaimNames, resolveSessionIdentity };
+export { identityFromSession, parseClaimNames, resolveSessionIdentity, validClaimNames };

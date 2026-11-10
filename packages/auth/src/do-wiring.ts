@@ -19,12 +19,15 @@ import { DEFAULT_AUTH_BASE_PATH, isAuthRoutePath } from "./handler";
 import type { AuthJurisdictionMove } from "./jurisdiction-move";
 import { createAuthJurisdictionMove, MOVE_PATH } from "./jurisdiction-move";
 import type { SessionIdentity } from "./session-identity";
-import { parseClaimNames } from "./session-identity";
+import { validClaimNames } from "./session-identity";
 
 /**
  * Copy the declared claims the object answered with onto the identity. The reply is a
- * JSON body, so each value is narrowed here rather than trusted. A name the session
- * already sets is left alone.
+ * JSON body, so each value is narrowed here rather than trusted — to the same
+ * string / boolean / finite-number set `resolveSessionIdentity` emits, the empty
+ * string included, so both wirings return the same identity. A name the session
+ * already sets is left alone; only own properties count, so a column named
+ * `constructor` or `toString` is not mistaken for one.
  * @param identity The identity built from the session claims.
  * @param body The object's reply.
  * @param claims The declared column names the object was asked for.
@@ -36,11 +39,11 @@ const copyDeclaredClaims = (identity: SessionIdentity, body: Record<string, unkn
     for (const claim of claims) {
         const value = body[claim];
 
-        if (claim in identity) {
+        if (Object.hasOwn(identity, claim)) {
             continue;
         }
 
-        if (typeof value === "boolean" || (typeof value === "string" && value.length > 0) || (typeof value === "number" && Number.isFinite(value))) {
+        if (typeof value === "boolean" || typeof value === "string" || (typeof value === "number" && Number.isFinite(value))) {
             extra[claim] = value;
         }
     }
@@ -165,7 +168,7 @@ export interface DoAuthWiring {
  */
 export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring => {
     const { internalSecret, jurisdiction, objectName = "auth" } = options;
-    const claims: ReadonlyArray<string> = parseClaimNames(options.claims?.join(","));
+    const claims: ReadonlyArray<string> = validClaimNames(options.claims);
     const discoveryPaths: ReadonlySet<string> = new Set(options.discoveryPaths);
     const unpinned = options.namespace;
     let { namespace } = options;

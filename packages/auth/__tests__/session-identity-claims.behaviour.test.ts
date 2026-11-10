@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { identityFromSession, parseClaimNames } from "../src/session-identity";
+import { identityFromSession, parseClaimNames, validClaimNames } from "../src/session-identity";
 
 /**
  * App-declared user columns forwarded onto the identity. Only the names a caller
@@ -125,6 +125,13 @@ describe("identityFromSession with app claims", () => {
         expect(parseClaimNames("plan, tier,bad-name,1leading,ok_name,__proto__")).toStrictEqual(["plan", "tier", "ok_name", "__proto__"]);
         expect(parseClaimNames("")).toStrictEqual([]);
         expect(parseClaimNames(null)).toStrictEqual([]);
+    });
+
+    it("checks each declared entry as one name, so a separator cannot split it into two", () => {
+        expect.hasAssertions();
+
+        expect(validClaimNames(["plan", "tier,privateNote", " padded", "ok_name"])).toStrictEqual(["plan", "ok_name"]);
+        expect(validClaimNames(undefined)).toStrictEqual([]);
     });
 
     it("caps the claim list so a crafted query cannot widen the identity without bound", () => {
