@@ -56,7 +56,20 @@ interface SessionLike {
 const nonEmpty = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 
 /** Claims the session already writes; an app claim with one of these names is ignored, never overwritten. */
-const RESERVED_CLAIMS: ReadonlySet<string> = new Set(["email", "exp", "expiresAtMs", "iat", "name", "nbf", "orgId", "role", "sub", "teamId", "userId"]);
+const RESERVED_CLAIMS: ReadonlySet<string> = new Set([
+    "email",
+    "exp",
+    "expiresAtMs",
+    "iat",
+    "name",
+    "nbf",
+    "orgId",
+    "role",
+    "roles",
+    "sub",
+    "teamId",
+    "userId",
+]);
 
 /**
  * The JSON-safe value of one app-declared user column, or `undefined` when the

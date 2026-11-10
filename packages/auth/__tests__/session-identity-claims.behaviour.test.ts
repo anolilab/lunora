@@ -108,4 +108,14 @@ describe("identityFromSession with app claims", () => {
         expect(identity).not.toHaveProperty("sub");
         expect(identity).not.toHaveProperty("iat");
     });
+
+    it("never lets a declared roles column grant roles RLS reads as identity roles", () => {
+        expect.hasAssertions();
+
+        // RLS reads the `roles` and `role` identity claims as policy roles, so a user-writable
+        // `roles: "admin"` column must not reach the identity.
+        const identity = identityFromSession({ session: {}, user: { id: "user-1", roles: "admin" } }, ["roles"]);
+
+        expect(identity).not.toHaveProperty("roles");
+    });
 });
