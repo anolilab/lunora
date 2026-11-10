@@ -1,3 +1,7 @@
+## @lunora/react [1.0.0-alpha.298](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.297...@lunora/react@1.0.0-alpha.298) (2026-11-10)
+
+- fix(react): share the provider contexts across copies of the package (#1523)
+
 ## @lunora/react [1.0.0-alpha.297](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.296...@lunora/react@1.0.0-alpha.297) (2026-11-05)
 
 - fix(client): restart a paginated feed when the server refuses its cursor (#1496)
