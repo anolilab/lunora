@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { identityFromSession } from "../src/session-identity";
+import type { SessionIdentity } from "../src/session-identity";
+import { identityFromSession, parseClaimNames, validClaimNames } from "../src/session-identity";
 
 /**
  * App-declared user columns forwarded onto the identity. Only the names a caller
@@ -117,5 +118,58 @@ describe("identityFromSession with app claims", () => {
         const identity = identityFromSession({ session: {}, user: { id: "user-1", roles: "admin" } }, ["roles"]);
 
         expect(identity).not.toHaveProperty("roles");
+    });
+
+    it("keeps only well-formed column names from the claim list", () => {
+        expect.hasAssertions();
+
+        expect(parseClaimNames("plan, tier,bad-name,1leading,ok_name,__proto__,role,password")).toStrictEqual(["plan", "tier", "ok_name"]);
+        expect(parseClaimNames("")).toStrictEqual([]);
+        expect(parseClaimNames(null)).toStrictEqual([]);
+    });
+
+    it("reserves every claim the session sets, so a same-named column can never stand in for it", () => {
+        expect.hasAssertions();
+
+        // `satisfies Record<keyof SessionIdentity, true>` stops compiling when a claim is
+        // added to `SessionIdentity`, so a new claim cannot ship without being checked here.
+        const sessionClaims = {
+            email: true,
+            expiresAtMs: true,
+            name: true,
+            orgId: true,
+            role: true,
+            teamId: true,
+            userId: true,
+        } satisfies Record<keyof SessionIdentity, true>;
+        const names = Object.keys(sessionClaims);
+        // No active org, team or expiry, so no built-in claim would win over a forwarded column.
+        const bare = { session: {}, user: { id: "user-1", ...Object.fromEntries(names.map((name) => [name, "forged"])) } };
+
+        expect(identityFromSession(bare, names)).toStrictEqual(identityFromSession(bare, []));
+    });
+
+    it("checks each declared entry as one name, so a separator cannot split it into two", () => {
+        expect.hasAssertions();
+
+        expect(validClaimNames(["plan", "tier,privateNote", " padded", "ok_name"])).toStrictEqual(["plan", "ok_name"]);
+        expect(validClaimNames(undefined)).toStrictEqual([]);
+    });
+
+    it("caps the claim list so a crafted query cannot widen the identity without bound", () => {
+        expect.hasAssertions();
+
+        const names = Array.from({ length: 50 }, (_, index) => `col${String(index)}`).join(",");
+
+        expect(parseClaimNames(names)).toHaveLength(32);
+    });
+
+    it("rejects a claim name longer than 64 characters", () => {
+        expect.hasAssertions();
+
+        const long = "a".repeat(65);
+
+        expect(parseClaimNames(long)).toStrictEqual([]);
+        expect(parseClaimNames("a".repeat(64))).toStrictEqual(["a".repeat(64)]);
     });
 });

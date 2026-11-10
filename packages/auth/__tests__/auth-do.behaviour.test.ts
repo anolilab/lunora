@@ -234,6 +234,48 @@ describe("lunoraAuthDO", () => {
         expect(identity?.["name"]).toBe("Linus");
     });
 
+    it("forwards declared user columns through the object route, and only those", async () => {
+        expect.assertions(3);
+
+        const { authDo } = createDo({
+            emailAndPassword: { enabled: true },
+            user: {
+                additionalFields: {
+                    nickname: { required: false, type: "string" },
+                    note: { required: false, type: "string" },
+                    plan: { required: false, type: "string" },
+                },
+            },
+        });
+
+        const signUp = await authDo.fetch(
+            new Request("https://example.test/api/auth/sign-up/email", {
+                body: JSON.stringify({ email: "ada@acme.test", name: "Ada", nickname: "", note: "private", password: "correct-horse-battery", plan: "pro" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+        const cookie = (signUp.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+
+        const { resolveIdentity } = createDoAuthWiring({
+            claims: ["plan", "nickname"],
+            internalSecret: INTERNAL_SECRET,
+            namespace: {
+                get: () => {
+                    return { fetch: (request: Request) => authDo.fetch(request) };
+                },
+                idFromName: (name: string) => name,
+            },
+        });
+
+        const identity: Record<string, unknown> = { ...(await resolveIdentity(new Request("https://example.test/_lunora/rpc", { headers: { cookie } }))) };
+
+        expect(identity["plan"]).toBe("pro");
+        // An empty string is a value, not an absent claim — the D1 wiring keeps it too.
+        expect(identity["nickname"]).toBe("");
+        expect(identity).not.toHaveProperty("note");
+    });
+
     it("serves the audit log to a trusted caller, creating its table on demand", async () => {
         expect.assertions(2);
 
