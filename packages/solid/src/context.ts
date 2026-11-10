@@ -1,7 +1,9 @@
 import type { LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 import type { Context } from "solid-js";
-import { createContext, useContext } from "solid-js";
+import { useContext } from "solid-js";
+
+import sharedContext from "./shared-context";
 
 /**
  * Solid context carrying the framework-neutral {@link LunoraClient}. Every
@@ -13,7 +15,7 @@ import { createContext, useContext } from "solid-js";
  * primitive is used outside a provider rather than dereferencing it. Solid 2
  * refuses to hand back an `undefined` default at all — see {@link useLunora}.
  */
-export const LunoraContext: Context<LunoraClient | undefined> = createContext<LunoraClient | undefined>();
+export const LunoraContext: Context<LunoraClient | undefined> = sharedContext<LunoraClient | undefined>("lunora-client", undefined);
 
 /**
  * `true` under a `<LunoraProvider>` whose `client` has changed since it first
@@ -21,7 +23,7 @@ export const LunoraContext: Context<LunoraClient | undefined> = createContext<Lu
  * that first client and is stale after any swap, so `hydratePreloaded` must not
  * seed it. Internal: not re-exported.
  */
-export const LunoraClientSwappedContext: Context<boolean> = createContext<boolean>(false);
+export const LunoraClientSwappedContext: Context<boolean> = sharedContext<boolean>("lunora-client-swapped", false);
 
 /** Whether the nearest `<LunoraProvider>` has swapped its `client` since it first rendered. */
 export const useLunoraClientSwapped = (): boolean => {
