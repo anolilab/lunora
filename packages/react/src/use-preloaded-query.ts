@@ -1,11 +1,11 @@
 "use client";
 
 import type { FunctionReference, Preloaded, SubscriptionErrorCallback } from "@lunora/client";
-import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery as useTanStackQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
-import { useLunora, useLunoraClientSwapped } from "./lunora-provider";
+import { useLunora, useLunoraClientSwapped, useLunoraQueryClient } from "./lunora-provider";
 
 /**
  * Hydrate a query from a {@link Preloaded} token produced by `preloadQuery`
@@ -38,7 +38,7 @@ import { useLunora, useLunoraClientSwapped } from "./lunora-provider";
  */
 const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): T | undefined {
     const client = useLunora();
-    const queryClient = useQueryClient();
+    const queryClient = useLunoraQueryClient();
 
     // The attach effect keys on the serialized query key, so an inline `onError`
     // must not change its identity — register a stable wrapper and read the
@@ -81,20 +81,25 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
     const queryKey = lunoraQueryKey(functionRef, args, shardKey);
 
     // The client is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Swapping the provider's `client` does not remount this subtree; `LunoraProvider` clears the `["lunora", …]` entries on a swap instead.
-    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- neither flagged dependency can be a queryKey member: `queryClient` is the provider-stable, non-serializable client the comment above covers, and `queryKey` IS this key — the queryFn reads the live value under it.
-    const { data } = useTanStackQuery<T>({
-        // Seed the cache with the server value so the first paint doesn't
-        // re-fetch. TanStack treats `initialData` as fresh — the WS push from
-        // the registry is what supplies subsequent updates.
-        initialData: value,
-        // Runs only once the preloaded value is withheld (a user switch or a
-        // client swap): the live subscription's first push supplies it, and
-        // HTTP only when there is no socket.
-        queryFn: async ({ signal }) =>
-            registry.liveValue(queryClient, queryKey, signal, { fetch: async () => client.query(functionRef, args, { shardKey }) as Promise<T>, shardKey }),
-        queryKey,
-        staleTime: Number.POSITIVE_INFINITY,
-    });
+
+    /* eslint-disable @tanstack/query/exhaustive-deps -- queryClient is provider-stable and not serializable, so it cannot be a queryKey member; queryKey is this key */
+    const { data } = useTanStackQuery<T>(
+        {
+            // Seed the cache with the server value so the first paint doesn't
+            // re-fetch. TanStack treats `initialData` as fresh — the WS push from
+            // the registry is what supplies subsequent updates.
+            initialData: value,
+            // Runs only once the preloaded value is withheld (a user switch or a
+            // client swap): the live subscription's first push supplies it, and
+            // HTTP only when there is no socket.
+            queryFn: async ({ signal }) =>
+                registry.liveValue(queryClient, queryKey, signal, { fetch: async () => client.query(functionRef, args, { shardKey }) as Promise<T>, shardKey }),
+            queryKey,
+            staleTime: Number.POSITIVE_INFINITY,
+        },
+        queryClient,
+    );
+    /* eslint-enable @tanstack/query/exhaustive-deps */
 
     useEffect(
         () => registry.attach(queryClient, queryKey, functionRef, args, shardKey, { onError: stableOnError }),

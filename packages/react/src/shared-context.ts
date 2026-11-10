@@ -12,16 +12,16 @@ import { createContext } from "react";
  */
 const REGISTRY = Symbol.for("@lunora/react/contexts");
 
-interface RegisteredContext {
+interface SharedContextEntry {
     context: Context<unknown>;
     /** The kind of the default value it was created with, so a reused name cannot hand back a context of another type. */
     kind: string;
 }
 
-const registryOf = (): Map<string, RegisteredContext> => {
-    const host = globalThis as unknown as Record<symbol, Map<string, RegisteredContext> | undefined>;
+const registryOf = (): Map<string, SharedContextEntry> => {
+    const host = globalThis as unknown as Record<symbol, Map<string, SharedContextEntry> | undefined>;
 
-    host[REGISTRY] ??= new Map<string, RegisteredContext>();
+    host[REGISTRY] ??= new Map<string, SharedContextEntry>();
 
     return host[REGISTRY];
 };

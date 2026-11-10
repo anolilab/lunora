@@ -24,6 +24,46 @@ import { LunoraClient } from "@lunora/client";
  */
 const sameOriginUrl = (): string => (globalThis as { location?: Location }).location?.origin ?? "";
 
+const TOKEN_REGISTRY = Symbol.for("@lunora/angular/tokens");
+
+/**
+ * The tokens live in a realm-wide registry keyed by name. Two copies of this package (pnpm installs one per peer variant) would
+ * otherwise each create their own `InjectionToken`, and a provider from one copy would never satisfy an injection from the other.
+ * A name already holding something that is not an `InjectionToken` is refused rather than handed back as one.
+ */
+const sharedToken = function <T>(name: string, create: () => InjectionToken<T>): InjectionToken<T> {
+    const host = globalThis as unknown as Record<symbol, Map<string, unknown> | undefined>;
+
+    host[TOKEN_REGISTRY] ??= new Map<string, unknown>();
+
+    const registry = host[TOKEN_REGISTRY];
+    const existing = registry.get(name);
+
+    if (existing !== undefined) {
+        if (!(existing instanceof InjectionToken)) {
+            throw new TypeError(`"${name}" is registered as something other than an InjectionToken.`);
+        }
+
+        return existing as InjectionToken<T>;
+    }
+
+    const created = create();
+
+    registry.set(name, created);
+
+    return created;
+};
+
+const sharedClientToken = (): InjectionToken<LunoraClient> =>
+    sharedToken<LunoraClient>(
+        "lunora.client",
+        () =>
+            new InjectionToken<LunoraClient>("lunora.client", {
+                factory: (): LunoraClient => new LunoraClient({ url: sameOriginUrl() }),
+                providedIn: "root",
+            }),
+    );
+
 /**
  * DI token carrying the framework-neutral {@link LunoraClient}. Every reactive
  * primitive in this adapter (`liveQuery`, `mutate`, `connectionStatus`) reads the
@@ -36,10 +76,7 @@ const sameOriginUrl = (): string => (globalThis as { location?: Location }).loca
  * point it at a remote URL or hand it a pre-built client.
  * @experimental
  */
-export const LUNORA_CLIENT: InjectionToken<LunoraClient> = new InjectionToken<LunoraClient>("lunora.client", {
-    factory: (): LunoraClient => new LunoraClient({ url: sameOriginUrl() }),
-    providedIn: "root",
-});
+export const LUNORA_CLIENT: InjectionToken<LunoraClient> = sharedClientToken();
 
 /**
  * Options accepted by {@link provideLunora}. Identical to {@link LunoraClientOptions}
