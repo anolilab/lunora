@@ -38,4 +38,47 @@ describe("lunoraProvider across copies of the package", () => {
 
         expect(screen.getByTestId("probe").textContent).toBe("same");
     });
+
+    it("a client swap made through one copy is seen by a swap hook from another copy", async () => {
+        expect.assertions(2);
+
+        const providerCopy = await loadCopy();
+        const hookCopy = await loadCopy();
+        const first = createMockClient();
+        const second = createMockClient();
+
+        const Probe = (): ReactElement => {
+            const swapped = hookCopy.useLunoraClientSwapped();
+
+            return <div data-testid="swapped">{swapped ? "swapped" : "first"}</div>;
+        };
+
+        const { rerender } = render(
+            <providerCopy.LunoraProvider client={first.asClient}>
+                <Probe />
+            </providerCopy.LunoraProvider>,
+        );
+
+        expect(screen.getByTestId("swapped").textContent).toBe("first");
+
+        rerender(
+            <providerCopy.LunoraProvider client={second.asClient}>
+                <Probe />
+            </providerCopy.LunoraProvider>,
+        );
+
+        expect(screen.getByTestId("swapped").textContent).toBe("swapped");
+    });
+});
+
+describe("sharedContext", () => {
+    it("refuses a name registered again with a default of another kind", async () => {
+        expect.assertions(1);
+
+        const { default: sharedContext } = await import("../src/shared-context");
+
+        sharedContext("kind-guard-test", null);
+
+        expect(() => sharedContext("kind-guard-test", false)).toThrow(/registered with a null default/);
+    });
 });
