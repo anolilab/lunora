@@ -416,7 +416,9 @@ ${authClaims.map((claim) => `    ${claim.name}?: ${claim.type};`).join("\n")}
     let identityDeclaration: string;
 
     if (identity === undefined) {
-        identityDeclaration = "export type Identity = SessionIdentity & AuthClaims;";
+        // With no contract the identity is still an open claim bag at runtime (a JWT `sub`, a
+        // test harness claim, a column codegen refused), so keys outside the typed ones read as `unknown`.
+        identityDeclaration = "export type Identity = SessionIdentity & AuthClaims & Record<string, unknown>;";
     } else if (authClaims.length === 0) {
         identityDeclaration = `export type Identity = InferIdentity<typeof lunoraIdentityContract.${identity.exportName}>;`;
     } else {

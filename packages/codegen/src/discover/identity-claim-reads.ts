@@ -5,13 +5,13 @@ import type { ElementAccessExpression, Node as TsNode, ObjectLiteralExpression, 
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { IdentityClaimReadIR } from "../ir";
-import { collectNodeRows, isConstDeclaration, isWriteTarget, outermostValueWrapper, propertyKeyName } from "./ast";
+import { collectNodeRows, isConstDeclaration, isWriteTarget, outermostValueWrapper, propertyKeyName, unwrapExpression } from "./ast";
 import { callSiteScopeOf } from "./attribution";
 import discoverAuthClaims from "./auth-claims";
 import { calleeName } from "./callee";
 import { isContextSurface } from "./context-root";
 import { IDENTITY_FILENAME } from "./identity";
-import { propertyNameText } from "./property-name";
+import { staticPropertyName } from "./property-name";
 
 /**
  * Receiver texts a `.identity` member access sits on in an RLS / mask POLICY
@@ -93,29 +93,36 @@ const identityBagAccess = (node: TsNode | undefined): TsNode | undefined => {
     return POLICY_IDENTITY_RECEIVERS.has(receiver.getText()) || isContextSurface(receiver, ["auth"]) ? node : undefined;
 };
 
-/**
- * Looks through `await`, parentheses and type-only wrappers (`as`, `satisfies`, `<T>x`,
- * `x!`), so `(await ctx.auth.getIdentity() as Identity)!` reads as the call itself.
- */
-const throughAwait = (node: TsNode): TsNode =>
-    Node.isAwaitExpression(node) ||
+/** Whether `node` is a type-only wrapper or parentheses: `(x)`, `x as T`, `x satisfies T`, `<T>x`, `x!`. */
+const isValueWrapper = (node: TsNode): node is TsNode & { getExpression: () => TsNode } =>
     Node.isParenthesizedExpression(node) ||
     Node.isAsExpression(node) ||
     Node.isSatisfiesExpression(node) ||
     Node.isTypeAssertion(node) ||
-    Node.isNonNullExpression(node)
-        ? throughAwait(node.getExpression())
-        : node;
+    Node.isNonNullExpression(node);
 
-/** Whether `node` is `<auth>.getIdentity()` on an identity receiver, once `await` and parentheses are looked through. */
+/**
+ * Looks through `await` and type-only wrappers, so `(await ctx.auth.getIdentity() as Identity)!`
+ * reads as the call itself. `awaited` says whether an `await` was crossed: without one the
+ * value is the pending promise, and `.then` on it is not a claim.
+ */
+const throughAwait = (node: TsNode, awaited = false): { awaited: boolean; value: TsNode } => {
+    if (Node.isAwaitExpression(node)) {
+        return throughAwait(node.getExpression(), true);
+    }
+
+    return isValueWrapper(node) ? throughAwait(node.getExpression(), awaited) : { awaited, value: node };
+};
+
+/** Whether `node` is an awaited `<auth>.getIdentity()` on an identity receiver, once wrappers are looked through. */
 const identityResultOf = (node: TsNode | undefined): TsNode | undefined => {
     if (node === undefined) {
         return undefined;
     }
 
-    const value = throughAwait(node);
+    const { awaited, value } = throughAwait(node);
 
-    if (!Node.isCallExpression(value)) {
+    if (!awaited || !Node.isCallExpression(value)) {
         return undefined;
     }
 
@@ -130,15 +137,18 @@ const identityResultOf = (node: TsNode | undefined): TsNode | undefined => {
     return POLICY_IDENTITY_RECEIVERS.has(receiver.getText()) || isContextSurface(receiver, ["auth"]) ? value : undefined;
 };
 
-/** The key an access reads: a `.<key>` property name, or a `["<key>"]` string-literal index. `undefined` for any other index. */
+/**
+ * The key an access reads: a `.<key>` property name, or a static index (`["<key>"]`,
+ * `` [`<key>`] ``, `["<key>" as const]`). `undefined` for any other index.
+ */
 const accessedKey = (node: PropertyAccessExpression | ElementAccessExpression): string | undefined => {
     if (Node.isPropertyAccessExpression(node)) {
         return node.getName();
     }
 
-    const argument = node.getArgumentExpression();
+    const argument = unwrapExpression(node.getArgumentExpression());
 
-    return argument && Node.isStringLiteral(argument) ? argument.getLiteralValue() : undefined;
+    return Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument) ? argument.getLiteralValue() : undefined;
 };
 
 /**
@@ -178,7 +188,8 @@ const claimReadOf = (node: TsNode, file: string, declared: ReadonlySet<string>):
  * The claim reads a `const x = await ctx.auth.getIdentity()` declaration makes: each
  * destructured key (`const { plan } = …`), and each property read on `x` (`x.plan`,
  * `x!["plan"]`) found through the language service. A rest element reads the whole
- * object, so it is not a claim read. Only a `const` binding is followed — a `let` can be
+ * object, and a computed key (`{ [key]: v }`) names no claim statically, so neither is a
+ * claim read. Only a `const` binding is followed — a `let` can be
  * repointed at another value, after which its reads are not identity reads — and a write
  * (`x.plan = …`) is not a read.
  */
@@ -193,7 +204,11 @@ const resultBindingReads = (declaration: VariableDeclaration, file: string, decl
         return name
             .getElements()
             .filter((element) => element.getDotDotDotToken() === undefined)
-            .map((element) => readRow(element, propertyNameText(element.getPropertyNameNode() ?? element.getNameNode()), file, declared));
+            .flatMap((element) => {
+                const key = staticPropertyName(element.getPropertyNameNode() ?? element.getNameNode());
+
+                return key === undefined ? [] : [readRow(element, key, file, declared)];
+            });
     }
 
     if (!Node.isIdentifier(name) || !isConstDeclaration(declaration)) {

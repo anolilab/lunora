@@ -1,8 +1,9 @@
-import type { CallExpression, Node as TsNode, ObjectLiteralElementLike, ObjectLiteralExpression, Project, Symbol as TsSymbol } from "ts-morph";
+import type { CallExpression, Node as TsNode, ObjectLiteralElementLike, ObjectLiteralExpression, Project, SourceFile, Symbol as TsSymbol } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { CLAIM_NAME, MAX_CLAIM_NAMES, RESERVED_CLAIMS, SENSITIVE_FIELDS } from "../../../../shared/identity-claims";
-import { descendantsOfKind, listSecurityScanFiles, propertyInitializer } from "./ast";
+import { descendantsOfKind, findObjectProperty, listSecurityScanFiles, propertyInitializer } from "./ast";
+import { isAppBuilderReceiver, isAppBuilderType } from "./platform-signals";
 import { propertyKeyName } from "./property-name";
 
 /** The scalar types a claim can carry: the runtime forwards only JSON scalars. */
@@ -37,8 +38,16 @@ const opaque = (reason: string): AuthClaimDiscovery => {
     return { claims: [], diagnostics: [reason] };
 };
 
-/** Follows parentheses and `as` casts to the expression underneath. */
-const unwrap = (node: TsNode): TsNode => (Node.isParenthesizedExpression(node) || Node.isAsExpression(node) ? unwrap(node.getExpression()) : node);
+/** Follows parentheses, `as` and `satisfies` to the expression underneath. */
+const unwrap = (node: TsNode): TsNode =>
+    Node.isParenthesizedExpression(node) || Node.isAsExpression(node) || Node.isSatisfiesExpression(node) ? unwrap(node.getExpression()) : node;
+
+/** Whether a field flag (`returned`, `input`) is `false`, written bare, parenthesized or cast (`false as const`). */
+const isFalseFlag = (field: ObjectLiteralExpression, name: string): boolean => {
+    const value = propertyInitializer(field, name);
+
+    return value !== undefined && unwrap(value).getKind() === SyntaxKind.FalseKeyword;
+};
 
 /** A property that is present but has no expression codegen can read (a method or accessor). */
 const UNREADABLE = "unreadable";
@@ -50,7 +59,8 @@ const UNREADABLE = "unreadable";
  * method or accessor, so the caller can say so instead of treating it as absent.
  */
 const propertyValue = (object: ObjectLiteralExpression, name: string): TsNode | typeof UNREADABLE | undefined => {
-    const property = object.getProperty(name);
+    // Matched on the runtime key, so a quoted `"options"` is the same property.
+    const property = findObjectProperty(object, name);
 
     if (property === undefined) {
         return undefined;
@@ -157,7 +167,7 @@ const claimTypeOf = (typeNode: TsNode | undefined): AuthClaimType | undefined =>
 };
 
 /** Whether the column's `returned` is `false`: better-auth then keeps it out of the session, so it can never be a claim. */
-const isNotReturned = (field: ObjectLiteralExpression): boolean => propertyInitializer(field, "returned")?.getKind() === SyntaxKind.FalseKeyword;
+const isNotReturned = (field: ObjectLiteralExpression): boolean => isFalseFlag(field, "returned");
 
 /** Reads one `additionalFields` entry, or the reason it cannot be a claim. */
 const claimOf = (name: string, init: TsNode): { claim?: AuthClaim; reason?: string } => {
@@ -181,7 +191,7 @@ const claimOf = (name: string, init: TsNode): { claim?: AuthClaim; reason?: stri
         return { reason: `\`${name}\` is not a scalar (string, number, boolean or date) column` };
     }
 
-    return { claim: { name, type, writable: propertyInitializer(field, "input")?.getKind() !== SyntaxKind.FalseKeyword } };
+    return { claim: { name, type, writable: !isFalseFlag(field, "input") } };
 };
 
 /** One `additionalFields` entry read as a claim, a reason it is left out, or nothing when the session does not return it. */
@@ -264,13 +274,33 @@ const readAuthClaims = (options: ObjectLiteralExpression): AuthClaimDiscovery =>
     return user === undefined ? opaque("`user` is not an object literal, so the user columns cannot be read") : userClaims(user);
 };
 
-/** The claims for one `.auth(...)` call, or `undefined` when the call is not an auth declaration. */
-const authOptionsOf = (call: CallExpression): AuthClaimDiscovery | undefined => {
+/** Whether `call` is `<app builder>.auth(…)`: a `.auth` method on any other object is not the auth declaration. */
+const isBuilderAuthCall = (sourceFile: SourceFile, call: CallExpression): boolean => {
     const callee = call.getExpression();
+
+    if (!Node.isPropertyAccessExpression(callee) || callee.getName() !== "auth") {
+        return false;
+    }
+
+    const receiver = callee.getExpression();
+
+    return isAppBuilderReceiver(sourceFile, receiver) || isAppBuilderType(receiver);
+};
+
+/** Whether a spread follows `options` in the `.auth()` argument, so it may replace the options the literal names. */
+const optionsMayBeReplaced = (argument: ObjectLiteralExpression): boolean => {
+    const properties = argument.getProperties();
+    const optionsIndex = properties.findIndex((property) => !Node.isSpreadAssignment(property) && propertyKeyName(property) === "options");
+
+    return properties.some((property, index) => index > optionsIndex && Node.isSpreadAssignment(property));
+};
+
+/** The claims of one app-builder `.auth(...)` declaration. */
+const authOptionsOf = (call: CallExpression): AuthClaimDiscovery => {
     const [argument] = call.getArguments();
 
-    if (!Node.isPropertyAccessExpression(callee) || callee.getName() !== "auth" || argument === undefined) {
-        return undefined;
+    if (argument === undefined) {
+        return NONE;
     }
 
     if (!Node.isObjectLiteralExpression(argument)) {
@@ -280,7 +310,11 @@ const authOptionsOf = (call: CallExpression): AuthClaimDiscovery | undefined => 
     const optionsNode = propertyValue(argument, "options");
 
     if (optionsNode === undefined) {
-        return undefined;
+        return hasSpread(argument) ? opaque("the .auth() argument has a spread, so its options cannot be read") : NONE;
+    }
+
+    if (optionsMayBeReplaced(argument)) {
+        return opaque("a spread after `options` in .auth() may replace it, so the user columns cannot be read");
     }
 
     const options = optionsNode === UNREADABLE ? undefined : objectLiteralOf(optionsNode);
@@ -291,25 +325,33 @@ const authOptionsOf = (call: CallExpression): AuthClaimDiscovery | undefined => 
 };
 
 /**
- * The first `.auth({ options })` call in the worker entry or `lunora/`. Returns its
- * user-column claims, or an empty set with diagnostics when the options cannot be read
- * statically. An opaque config yields no claims, never a guess: the typed claims must
- * match what the runtime forwards.
+ * The app builder's `.auth({ options })` declaration in the worker entry, `lunora/` or
+ * `lunora.config`. Returns its user-column claims, or an empty set with diagnostics when
+ * the options cannot be read statically. An opaque config yields no claims, never a
+ * guess: the typed claims must match what the runtime forwards.
+ *
+ * Only `.auth` on the app builder counts (see {@link isBuilderAuthCall}). Each call
+ * replaces the builder's auth declaration, and scan order says nothing about call
+ * order, so more than one is reported and yields no claims rather than a pick.
  */
 const discoverAuthClaims = (project: Project, lunoraDirectory: string): AuthClaimDiscovery => {
+    const declarations: CallExpression[] = [];
+
     for (const { filePath } of listSecurityScanFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
-        for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
-            const found = authOptionsOf(call);
-
-            if (found !== undefined) {
-                return found;
-            }
-        }
+        declarations.push(...descendantsOfKind(sourceFile, SyntaxKind.CallExpression).filter((call) => isBuilderAuthCall(sourceFile, call)));
     }
 
-    return NONE;
+    const [declaration, ...others] = declarations;
+
+    if (declaration === undefined) {
+        return NONE;
+    }
+
+    return others.length === 0
+        ? authOptionsOf(declaration)
+        : opaque(`the app builder's .auth() is called ${declarations.length.toString()} times, so which declaration applies cannot be read`);
 };
 
 export type { AuthClaim, AuthClaimDiscovery, AuthClaimType };

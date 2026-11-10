@@ -91,7 +91,7 @@ describe("discoverIdentityClaimReads: reads off the getIdentity() result", () =>
         write("identity.ts", CONTRACT);
         write(
             "mutations.ts",
-            `export const m = async (ctx) => { const who = (await ctx.auth.getIdentity()) as Who; return [(await ctx.auth.getIdentity())!.role, (ctx.auth.getIdentity() satisfies unknown as Who).plan, who!.seats]; };`,
+            `export const m = async (ctx) => { const who = (await ctx.auth.getIdentity()) as Who; return [(await ctx.auth.getIdentity())!.role, (await ctx.auth.getIdentity() satisfies unknown as Who).plan, who!.seats]; };`,
         );
 
         expect(run().map((row) => row.key)).toStrictEqual(["role", "plan", "seats"]);
@@ -114,6 +114,36 @@ describe("discoverIdentityClaimReads: reads off the getIdentity() result", () =>
 
         write("identity.ts", CONTRACT);
         write("mutations.ts", `export const m = async (ctx, other) => { let who = await ctx.auth.getIdentity(); who = other; return who.role; };`);
+
+        expect(run()).toStrictEqual([]);
+    });
+
+    it("reads a static bracket key written as a cast or template literal", () => {
+        expect.assertions(1);
+
+        write("identity.ts", CONTRACT);
+        write("mutations.ts", 'export const m = async (ctx) => { const who = await ctx.auth.getIdentity(); return [who["role" as const], who[`seats`]]; };');
+
+        expect(run().map((row) => row.key)).toStrictEqual(["role", "seats"]);
+    });
+
+    it("does not report a computed destructuring key as a claim", () => {
+        expect.assertions(1);
+
+        write("identity.ts", CONTRACT);
+        write(
+            "mutations.ts",
+            `export const m = async (ctx, key) => { const { [key]: value, ["role"]: role } = await ctx.auth.getIdentity(); return [value, role]; };`,
+        );
+
+        expect(run().map((row) => row.key)).toStrictEqual(["role"]);
+    });
+
+    it("does not treat promise methods on an unawaited getIdentity() as claim reads", () => {
+        expect.assertions(1);
+
+        write("identity.ts", CONTRACT);
+        write("mutations.ts", `export const m = (ctx) => ctx.auth.getIdentity().then((who) => who).finally(() => undefined);`);
 
         expect(run()).toStrictEqual([]);
     });

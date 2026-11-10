@@ -41,7 +41,7 @@ describe("emitServer types ctx.auth from the declared claims", () => {
         const server = emitServer({ authClaims: CLAIM_TYPES, schema: SCHEMA });
 
         expect(server).toContain("export type AuthClaims = {\n    plan?: string;\n    seats?: number;\n};");
-        expect(server).toContain("export type Identity = SessionIdentity & AuthClaims;");
+        expect(server).toContain("export type Identity = SessionIdentity & AuthClaims & Record<string, unknown>;");
         expect(server).toContain('import type { SessionIdentity } from "@lunora/auth";');
     });
 

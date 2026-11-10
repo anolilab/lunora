@@ -214,6 +214,92 @@ export default defineApp().auth({ d1: (env) => env.DB, options });
         expect(result.diagnostics).toStrictEqual(["`__proto__` is reserved or secret-bearing, so the session never forwards it; it is not added to ctx.auth"]);
     });
 
+    it("reads quoted options, user and additionalFields keys", () => {
+        expect.assertions(1);
+
+        write("src/server/index.ts", entry(`{ "user": { "additionalFields": { plan: { type: "string" } } } }`).replace("options:", `"options":`));
+
+        expect(run().claims).toStrictEqual([{ name: "plan", type: "string", writable: true }]);
+    });
+
+    it("reads an options binding declared with satisfies", () => {
+        expect.assertions(1);
+
+        write("lunora/auth.ts", `export const authOptions = { user: { additionalFields: { plan: { type: "string" } } } } satisfies object;\n`);
+        write("src/server/index.ts", entry("authOptions"));
+
+        expect(run().claims).toStrictEqual([{ name: "plan", type: "string", writable: true }]);
+    });
+
+    it("reads a cast or parenthesized false for returned and input", () => {
+        expect.assertions(1);
+
+        write(
+            "src/server/index.ts",
+            entry(`{ user: { additionalFields: { hidden: { type: "string", returned: false as const }, locked: { type: "string", input: (false) } } } }`),
+        );
+
+        expect(run().claims).toStrictEqual([{ name: "locked", type: "string", writable: false }]);
+    });
+
+    it("refuses options a later spread may replace, but reads them after an earlier spread", () => {
+        expect.assertions(2);
+
+        write(
+            "src/server/index.ts",
+            `import { defineApp } from "lunorash";
+const base = { options: { user: { additionalFields: { other: { type: "string" } } } } };
+export default defineApp().auth({ options: { user: { additionalFields: { plan: { type: "string" } } } }, ...base });
+`,
+        );
+
+        expect(run()).toStrictEqual({ claims: [], diagnostics: ["a spread after `options` in .auth() may replace it, so the user columns cannot be read"] });
+
+        write(
+            "src/server/index.ts",
+            `import { defineApp } from "lunorash";
+const base = { d1: (env) => env.DB };
+export default defineApp().auth({ ...base, options: { user: { additionalFields: { plan: { type: "string" } } } } });
+`,
+        );
+        project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+        expect(run().claims).toStrictEqual([{ name: "plan", type: "string", writable: true }]);
+    });
+
+    it("ignores an .auth() call on anything but the app builder", () => {
+        expect.assertions(1);
+
+        write(
+            "lunora/client.ts",
+            `export const login = (client) => client.auth("token");\nexport const other = (sdk) => sdk.auth({ options: { user: { additionalFields: { wrong: { type: "string" } } } } });\n`,
+        );
+        write(
+            "src/server/index.ts",
+            `import { defineApp } from "lunorash";
+const app = defineApp();
+export default app.auth({ d1: (env) => env.DB, options: { user: { additionalFields: { plan: { type: "string" } } } } });
+`,
+        );
+
+        expect(run()).toStrictEqual({ claims: [{ name: "plan", type: "string", writable: true }], diagnostics: [] });
+    });
+
+    it("yields no claims, with a diagnostic, when the builder's .auth() is called more than once", () => {
+        expect.assertions(1);
+
+        write(
+            "src/server/index.ts",
+            `import { defineApp } from "lunorash";
+export default defineApp()
+    .auth({ options: { user: { additionalFields: { plan: { type: "string" } } } } })
+    .auth({ options: { user: { additionalFields: { tier: { type: "string" } } } } });
+`,
+        );
+
+        expect(run()).toStrictEqual({ claims: [], diagnostics: ["the app builder's .auth() is called 2 times, so which declaration applies cannot be read"] });
+    });
+
     it("yields no claims when the config declares no additionalFields", () => {
         expect.assertions(1);
 
