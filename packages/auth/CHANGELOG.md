@@ -1,3 +1,8 @@
+## @lunora/auth [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.258...@lunora/auth@1.0.0-alpha.259) (2026-11-10)
+
+- feat(auth): forward declared identity claims through the auth object route (#1521)
+- feat(auth): forward declared app user columns onto the session identity (#1520)
+
 ## @lunora/auth [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.257...@lunora/auth@1.0.0-alpha.258) (2026-11-05)
 
 - feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)
