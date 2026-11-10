@@ -1,3 +1,7 @@
+## @lunora/angular [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.269...@lunora/angular@1.0.0-alpha.270) (2026-11-10)
+
+- fix(react): pass the provider's query client to TanStack; extend the cross-copy fix to other frameworks (#1524)
+
 ## @lunora/angular [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.268...@lunora/angular@1.0.0-alpha.269) (2026-11-05)
 
 - fix(client): restart a paginated feed when the server refuses its cursor (#1496)

@@ -43,7 +43,7 @@ import { handleAuthRequest } from "./handler";
 import type { MoveOrder } from "./jurisdiction-move";
 import { handleMoveRequest, MOVE_PATH } from "./jurisdiction-move";
 import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
-import { resolveSessionIdentity } from "./session-identity";
+import { parseClaimNames, resolveSessionIdentity } from "./session-identity";
 import type { SqlExecutor } from "./sql-store";
 
 /**
@@ -435,7 +435,9 @@ class LunoraAuthDO {
 
         // The worker forwards the original request's headers, so the session cookie
         // arrives here intact.
-        return Response.json((await resolveSessionIdentity(this.#ensureReady(), request.headers)) ?? {});
+        const claims = parseClaimNames(new URL(request.url).searchParams.get("claims"));
+
+        return Response.json((await resolveSessionIdentity(this.#ensureReady(), request.headers, claims)) ?? {});
     }
 
     /**

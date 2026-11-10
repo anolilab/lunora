@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import { getAuthTables } from "better-auth/db";
 
+import { SENSITIVE_FIELDS } from "../../../shared/identity-claims";
 import type { LunoraAuth } from "./create-auth";
 // Aliased: this module exposes methods of the same names, and a method body
 // calling an identically-named import is a needless double-take.
@@ -456,15 +457,6 @@ const USER_CASCADE = [
     { field: "userId", model: "walletAddress" },
     { field: "inviterId", model: "invitation" },
 ] as const;
-
-/**
- * Columns never handed back to a browser across any model: bearer credentials,
- * password hashes, OAuth tokens, and 2FA secrets. A denylist (not an allowlist)
- * so app-defined `additionalFields` still pass through; the names cover the
- * secret-bearing columns of better-auth core + the admin/organization/passkey/
- * two-factor plugin tables.
- */
-const SENSITIVE_FIELDS = new Set(["accessToken", "backupCodes", "idToken", "password", "publicKey", "refreshToken", "secret", "token", "tokenHash"]);
 
 const clampLimit = (limit?: number): number => Math.min(Math.max(Math.trunc(limit ?? DEFAULT_LIMIT), 1), MAX_LIMIT);
 const clampOffset = (offset?: number): number => Math.max(0, Math.trunc(offset ?? 0));

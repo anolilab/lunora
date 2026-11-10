@@ -1,3 +1,7 @@
+## @lunora/client [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.288...@lunora/client@1.0.0-alpha.289) (2026-11-09)
+
+- feat(cli): apply generated SQL migrations per stage (#1516)
+
 ## @lunora/client [1.0.0-alpha.288](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.287...@lunora/client@1.0.0-alpha.288) (2026-11-05)
 
 - fix(client): restart a paginated feed when the server refuses its cursor (#1496)
