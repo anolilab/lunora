@@ -14,6 +14,10 @@ const LunoraContext = sharedContext<LunoraClient | null>("lunora-client", null);
 
 const LunoraQueryClientContext = sharedContext<QueryClient | null>("lunora-query-client", null);
 
+// The TanStack context object the nearest Lunora provider wrapped its children with. A hook trusts its own TanStack context only
+// when it is this same object, since a context from another TanStack copy can only show a provider outside the Lunora one.
+const LunoraTanStackOwnerContext = sharedContext<typeof QueryClientContext | null>("lunora-tanstack-owner", null);
+
 /**
  * Whether the provider's `client` differs from the one it first rendered with.
  * A value preloaded on the server belongs to that first client, so a hook that
@@ -110,11 +114,13 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
     // The TanStack client rides the shared registry as well as TanStack's own context: a hook from another copy of this
     // package reads its TanStack context from that copy's module, which the provider's `QueryClientProvider` never reaches.
     const content = (
-        <LunoraQueryClientContext value={effectiveClient}>
-            <LunoraContext value={client}>
-                <LunoraClientSwappedContext value={client !== firstClient}>{children}</LunoraClientSwappedContext>
-            </LunoraContext>
-        </LunoraQueryClientContext>
+        <LunoraTanStackOwnerContext value={QueryClientContext}>
+            <LunoraQueryClientContext value={effectiveClient}>
+                <LunoraContext value={client}>
+                    <LunoraClientSwappedContext value={client !== firstClient}>{children}</LunoraClientSwappedContext>
+                </LunoraContext>
+            </LunoraQueryClientContext>
+        </LunoraTanStackOwnerContext>
     );
 
     // Don't double-wrap when a parent already provides the client.
@@ -131,8 +137,12 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
  * a copy that cannot see a provider falls back to the client the Lunora provider shares through the registry.
  */
 const useLunoraQueryClient = (): QueryClient => {
-    const nearest = use(QueryClientContext);
+    const owner = use(LunoraTanStackOwnerContext);
+    const visibleNearest = use(QueryClientContext);
     const shared = use(LunoraQueryClientContext);
+    // Only a TanStack context this copy shares with the nearest Lunora provider can see inside it. Any other provider this copy
+    // sees may sit outside that Lunora provider, and must not take precedence over it.
+    const nearest = owner === QueryClientContext ? visibleNearest : undefined;
     const queryClient = nearest ?? shared;
 
     if (!queryClient) {
