@@ -114,13 +114,16 @@ const MAX_CLAIM_NAMES = 32;
 const CLAIM_NAME = /^[A-Z_]\w{0,63}$/i;
 
 /**
- * Keep only well-formed column names, at most {@link MAX_CLAIM_NAMES} of them. Each
- * entry is checked as one name, so an entry that smuggles a separator (`"plan,secret"`)
- * is dropped whole rather than split into two accepted names.
+ * Keep only well-formed column names that may become claims, at most
+ * {@link MAX_CLAIM_NAMES} of them. Each entry is checked as one name, so an entry that
+ * smuggles a separator (`"plan,secret"`) is dropped whole rather than split into two
+ * accepted names. Reserved and secret-bearing names are dropped here too, so the worker
+ * never asks for, or copies, a name the session owns.
  * @param names The candidate names.
  * @returns The names to forward.
  */
-const validClaimNames = (names: ReadonlyArray<string> | undefined): string[] => (names ?? []).filter((name) => CLAIM_NAME.test(name)).slice(0, MAX_CLAIM_NAMES);
+const validClaimNames = (names: ReadonlyArray<string> | undefined): string[] =>
+    (names ?? []).filter((name) => CLAIM_NAME.test(name) && !RESERVED_CLAIMS.has(name) && !SENSITIVE_FIELDS.has(name)).slice(0, MAX_CLAIM_NAMES);
 
 /**
  * Parse a comma-separated claim list (the internal session route's `claims` query

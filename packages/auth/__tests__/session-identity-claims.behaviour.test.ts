@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { SessionIdentity } from "../src/session-identity";
 import { identityFromSession, parseClaimNames, validClaimNames } from "../src/session-identity";
 
 /**
@@ -122,9 +123,30 @@ describe("identityFromSession with app claims", () => {
     it("keeps only well-formed column names from the claim list", () => {
         expect.hasAssertions();
 
-        expect(parseClaimNames("plan, tier,bad-name,1leading,ok_name,__proto__")).toStrictEqual(["plan", "tier", "ok_name", "__proto__"]);
+        expect(parseClaimNames("plan, tier,bad-name,1leading,ok_name,__proto__,role,password")).toStrictEqual(["plan", "tier", "ok_name"]);
         expect(parseClaimNames("")).toStrictEqual([]);
         expect(parseClaimNames(null)).toStrictEqual([]);
+    });
+
+    it("reserves every claim the session sets, so a same-named column can never stand in for it", () => {
+        expect.hasAssertions();
+
+        // `satisfies Record<keyof SessionIdentity, true>` stops compiling when a claim is
+        // added to `SessionIdentity`, so a new claim cannot ship without being checked here.
+        const sessionClaims = {
+            email: true,
+            expiresAtMs: true,
+            name: true,
+            orgId: true,
+            role: true,
+            teamId: true,
+            userId: true,
+        } satisfies Record<keyof SessionIdentity, true>;
+        const names = Object.keys(sessionClaims);
+        // No active org, team or expiry, so no built-in claim would win over a forwarded column.
+        const bare = { session: {}, user: { id: "user-1", ...Object.fromEntries(names.map((name) => [name, "forged"])) } };
+
+        expect(identityFromSession(bare, names)).toStrictEqual(identityFromSession(bare, []));
     });
 
     it("checks each declared entry as one name, so a separator cannot split it into two", () => {
