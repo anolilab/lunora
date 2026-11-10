@@ -1154,7 +1154,7 @@ const resolveAuthOptions: (options: LunoraAuthOptions) => LunoraAuthOptions;
 ### `resolveSessionIdentity` (const)
 
 ```ts
-const resolveSessionIdentity: (auth: LunoraAuth, headers: Headers) => Promise<SessionIdentity | null>;
+const resolveSessionIdentity: (auth: LunoraAuth, headers: Headers, claims?: ReadonlyArray<string>) => Promise<SessionIdentity | null>;
 ```
 
 ### `revokeSignUpInvitation` (const)
