@@ -647,6 +647,7 @@ interface DoAuthWiring {
 
 ```ts
 interface DoAuthWiringOptions {
+    claims?: ReadonlyArray<string>;
     discoveryPaths?: ReadonlyArray<string>;
     internalSecret: string | undefined;
     jurisdiction?: AuthJurisdiction;
