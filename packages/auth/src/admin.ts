@@ -1,11 +1,11 @@
 import { LunoraError } from "@lunora/errors";
 import { getAuthTables } from "better-auth/db";
 
+import { SENSITIVE_FIELDS } from "../../../shared/identity-claims";
 import type { LunoraAuth } from "./create-auth";
 // Aliased: this module exposes methods of the same names, and a method body
 // calling an identically-named import is a needless double-take.
 import { createSignUpInvitation as issueSignUpInvitation, revokeSignUpInvitation as withdrawSignUpInvitation } from "./invite-only";
-import SENSITIVE_FIELDS from "./sensitive-fields";
 
 /**
  * A timestamp as it leaves the admin API: epoch-ms (better-auth stores `Date`s,

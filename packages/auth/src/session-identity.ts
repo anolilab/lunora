@@ -1,5 +1,5 @@
+import { CLAIM_NAME, MAX_CLAIM_NAMES, RESERVED_CLAIMS, SENSITIVE_FIELDS } from "../../../shared/identity-claims";
 import type { LunoraAuth } from "./create-auth";
-import SENSITIVE_FIELDS from "./sensitive-fields";
 
 /**
  * The claims both built-in wirings (D1 and the auth Durable Object) put on the
@@ -56,28 +56,6 @@ interface SessionLike {
 const nonEmpty = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 
 /**
- * Claims the session already writes, or that the runtime reads as credential expiry
- * or policy roles; an app claim with one of these names is ignored, never overwritten.
- * `__proto__` is here because assigning it on a plain object never creates an own
- * property, so a column of that name could never arrive as a claim anyway.
- */
-const RESERVED_CLAIMS: ReadonlySet<string> = new Set([
-    "__proto__",
-    "email",
-    "exp",
-    "expiresAtMs",
-    "iat",
-    "name",
-    "nbf",
-    "orgId",
-    "role",
-    "roles",
-    "sub",
-    "teamId",
-    "userId",
-]);
-
-/**
  * The JSON-safe value of one app-declared user column, or `undefined` when the
  * column must not be forwarded: a `null` or unset column (an older user created
  * before the column existed), a secret-bearing column, a reserved claim name, or a
@@ -106,12 +84,6 @@ const forwardableClaim = (column: string, value: unknown): string | number | boo
 
     return undefined;
 };
-
-/** Most claim names one resolution may forward; a list longer than this is truncated. */
-const MAX_CLAIM_NAMES = 32;
-
-/** A column name the claim list may carry: an identifier, bounded in length. */
-const CLAIM_NAME = /^[A-Z_]\w{0,63}$/i;
 
 /**
  * Keep only well-formed column names that may become claims, at most

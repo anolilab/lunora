@@ -7,6 +7,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import type { IdentityClaimReadIR } from "../ir";
 import { collectNodeRows, propertyKeyName } from "./ast";
 import { callSiteScopeOf } from "./attribution";
+import discoverAuthClaims from "./auth-claims";
 import { calleeName } from "./callee";
 import { isContextSurface } from "./context-root";
 import { IDENTITY_FILENAME } from "./identity";
@@ -133,11 +134,19 @@ const claimReadOf = (node: TsNode, file: string, declared: ReadonlySet<string>):
  * keep the false-positive rate low.
  */
 const discoverIdentityClaimReads = (project: Project, lunoraDirectory: string): IdentityClaimReadIR[] => {
-    const declared = resolveDeclaredClaims(project, lunoraDirectory);
+    const contract = resolveDeclaredClaims(project, lunoraDirectory);
 
-    if (declared === undefined) {
+    if (contract === undefined) {
         return [];
     }
+
+    // A user column the user cannot write (`input: false`) is as trustworthy as a declared
+    // claim. A writable one (better-auth's default) is set by the user at sign-up or update,
+    // so reading it for authorization still fires the lint.
+    const trusted = discoverAuthClaims(project, lunoraDirectory)
+        .claims.filter((claim) => !claim.writable)
+        .map((claim) => claim.name);
+    const declared = new Set([...contract, ...trusted]);
 
     // `.identity.<key>` and `.identity["<key>"]` — the two access shapes `claimKeyRead` reads.
     return [

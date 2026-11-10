@@ -40,6 +40,8 @@ import assertRequiredPackages from "./assert-required-packages";
 import type { CapabilityKey } from "./capabilities";
 import { usedCapabilities } from "./capabilities";
 import { discoverAgents } from "./discover/agents";
+import type { AuthClaim } from "./discover/auth-claims";
+import discoverAuthClaims from "./discover/auth-claims";
 import { discoverContainers } from "./discover/containers";
 import discoverCrons from "./discover/crons";
 import { discoverEnv } from "./discover/env";
@@ -139,6 +141,8 @@ const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, ag
  */
 interface DeclarationSurface {
     agents: ReadonlyArray<AgentIR>;
+    /** App-declared user columns the session forwards as claims (`user.additionalFields` of `.auth()`), typed onto `ctx.auth`. */
+    authClaims: ReadonlyArray<AuthClaim>;
     /** {@link DeclarationSurface.featureUsage} as the capability set every emitter takes — derived once, here. */
     capabilities: ReadonlySet<CapabilityKey>;
     containers: ReadonlyArray<ContainerIR>;
@@ -148,6 +152,7 @@ interface DeclarationSurface {
     dataModelContent: string;
     /** Declared dependency names, or `undefined` when the manifest is absent/unreadable. */
     declaredDependencies: ReadonlySet<string> | undefined;
+
     /** The same names with the absent case flattened to an empty set. */
     dependencies: ReadonlySet<string>;
 
@@ -158,6 +163,7 @@ interface DeclarationSurface {
      * reach wrangler's `triggers.crons`.
      */
     entryCronTriggers: ReadonlyArray<string>;
+
     env: EnvIR | undefined;
 
     /**
@@ -225,6 +231,14 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     const { lunoraDirectory, project, projectRoot, schema } = options;
 
     const identity = discoverIdentity(project, lunoraDirectory);
+    const authClaimDiscovery = discoverAuthClaims(project, lunoraDirectory);
+    const authClaims = authClaimDiscovery.claims;
+
+    // A column left out must say so: the typed claims would otherwise silently lack it.
+    for (const diagnostic of authClaimDiscovery.diagnostics) {
+        // eslint-disable-next-line no-console -- matches the other skip warnings in this package; there is no diagnostic sink here.
+        console.warn(`@lunora/codegen: ${diagnostic}.`);
+    }
     const env = discoverEnv(project, lunoraDirectory);
 
     // Workflows before agents before the collision guard: each discoverer dedups
@@ -382,6 +396,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         featureUsage,
         hasFlags,
         hasNotify,
+        authClaims,
         identity,
         platformGate: {
             ...platformGate,
@@ -406,6 +421,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
             // never sees it. The emitter AND's it with `schema.vectorIndexes`.
             hasVectors: vectorStoreSupported,
             hasFlags,
+            authClaims,
             hasNotify,
             identity,
             queues,

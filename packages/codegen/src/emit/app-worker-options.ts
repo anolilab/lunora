@@ -9,6 +9,26 @@ import { assertIdentifier, IMPORT_PATH_RE } from "./shared";
  * users, sessions, and credentials, so it must live where every other DO does.
  * Only once the move is acknowledged — see `EmitAppOptions.jurisdictionPinsAuth`.
  */
+/** The declared claim names as a TS array literal, or `undefined` when the app declares none. */
+const authClaimsLiteral = (options: ResolvedAppOptions): string | undefined =>
+    options.authClaims === undefined || options.authClaims.length === 0 ? undefined : JSON.stringify(options.authClaims);
+
+/** The trailing `, [...]` argument for the D1 `resolveSessionIdentity` call, or empty when the app declares none. */
+const d1ClaimsArgument = (options: ResolvedAppOptions): string => {
+    const literal = authClaimsLiteral(options);
+
+    return literal === undefined ? "" : `, ${literal}`;
+};
+
+const doAuthClaimsLine = (options: ResolvedAppOptions): string => {
+    const literal = authClaimsLiteral(options);
+
+    return literal === undefined
+        ? ""
+        : `
+                claims: ${literal},`;
+};
+
 const doAuthJurisdictionLine = (options: ResolvedAppOptions): string =>
     options.jurisdiction && options.jurisdictionPinsAuth === true
         ? `
@@ -348,7 +368,7 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 // Memoised on the declaration: each worker built for a new \`env\` runs
                 // these options again, and \`options(env)\` rebuilds every plugin.
                 discoveryPaths,
-                internalSecret,${doAuthJurisdictionLine(options)}
+                internalSecret,${doAuthJurisdictionLine(options)}${doAuthClaimsLine(options)}
                 namespace,
                 ...(objectName === undefined ? {} : { objectName }),
             });
@@ -390,7 +410,7 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 // the same claims (role, expiry, profile, and the active organization and
                 // team checked against membership) on the identity, and it is unit-tested
                 // where this template cannot be.
-                return resolveSessionIdentity(auth, (request as Request).headers);
+                return resolveSessionIdentity(auth, (request as Request).headers${d1ClaimsArgument(options)});
             };
             const authInstance = getAuth();
 
