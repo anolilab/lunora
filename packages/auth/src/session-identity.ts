@@ -101,6 +101,31 @@ const forwardableClaim = (column: string, value: unknown): string | number | boo
     return undefined;
 };
 
+/** Most claim names one resolution may forward; a list longer than this is truncated. */
+const MAX_CLAIM_NAMES = 32;
+
+/** A column name the claim list may carry: an identifier, bounded in length. */
+const CLAIM_NAME = /^[A-Z_]\w{0,63}$/i;
+
+/**
+ * Parse a comma-separated claim list (the internal session route's `claims` query
+ * parameter), keeping only well-formed column names. A malformed name is dropped, not
+ * an error: the list only ever narrows what is forwarded.
+ * @param raw The comma-separated list, or `null` when absent.
+ * @returns The names to forward, at most {@link MAX_CLAIM_NAMES}.
+ */
+const parseClaimNames = (raw: null | string | undefined): string[] => {
+    if (raw === null || raw === undefined || raw === "") {
+        return [];
+    }
+
+    return raw
+        .split(",")
+        .map((name) => name.trim())
+        .filter((name) => CLAIM_NAME.test(name))
+        .slice(0, MAX_CLAIM_NAMES);
+};
+
 /** The app-declared claims a session user carries, keyed by column name. */
 const forwardedClaims = (user: SessionLike["user"], claims: ReadonlyArray<string>): Record<string, string | number | boolean> => {
     const out: Record<string, string | number | boolean> = {};
@@ -227,4 +252,4 @@ const resolveSessionIdentity = async (auth: LunoraAuth, headers: Headers, claims
 };
 
 export type { SessionIdentity };
-export { identityFromSession, resolveSessionIdentity };
+export { identityFromSession, parseClaimNames, resolveSessionIdentity };

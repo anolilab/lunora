@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { identityFromSession } from "../src/session-identity";
+import { identityFromSession, parseClaimNames } from "../src/session-identity";
 
 /**
  * App-declared user columns forwarded onto the identity. Only the names a caller
@@ -117,5 +117,30 @@ describe("identityFromSession with app claims", () => {
         const identity = identityFromSession({ session: {}, user: { id: "user-1", roles: "admin" } }, ["roles"]);
 
         expect(identity).not.toHaveProperty("roles");
+    });
+
+    it("keeps only well-formed column names from the claim list", () => {
+        expect.hasAssertions();
+
+        expect(parseClaimNames("plan, tier,bad-name,1leading,ok_name,__proto__")).toStrictEqual(["plan", "tier", "ok_name", "__proto__"]);
+        expect(parseClaimNames("")).toStrictEqual([]);
+        expect(parseClaimNames(null)).toStrictEqual([]);
+    });
+
+    it("caps the claim list so a crafted query cannot widen the identity without bound", () => {
+        expect.hasAssertions();
+
+        const names = Array.from({ length: 50 }, (_, index) => `col${String(index)}`).join(",");
+
+        expect(parseClaimNames(names)).toHaveLength(32);
+    });
+
+    it("rejects a claim name longer than 64 characters", () => {
+        expect.hasAssertions();
+
+        const long = "a".repeat(65);
+
+        expect(parseClaimNames(long)).toStrictEqual([]);
+        expect(parseClaimNames("a".repeat(64))).toStrictEqual(["a".repeat(64)]);
     });
 });
