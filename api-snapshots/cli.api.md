@@ -138,6 +138,7 @@ interface DeployCommandOptions {
     lazyFunctions?: boolean;
     logger: Logger;
     migrate?: boolean;
+    migrateAllowDestructive?: boolean;
     migrateToken?: string;
     migrateUrl?: string;
     migrateYes?: boolean;
