@@ -4,11 +4,6 @@ import type { ResolvedAppOptions } from "./app-helpers";
 import { hasLiveStreamMounts, hasShardedTables } from "./app-helpers";
 import { assertIdentifier, IMPORT_PATH_RE } from "./shared";
 
-/**
- * The schema's jurisdiction, pinned onto the DO-backed auth object: it holds
- * users, sessions, and credentials, so it must live where every other DO does.
- * Only once the move is acknowledged — see `EmitAppOptions.jurisdictionPinsAuth`.
- */
 /** The declared claim names as a TS array literal, or `undefined` when the app declares none. */
 const authClaimsLiteral = (options: ResolvedAppOptions): string | undefined =>
     options.authClaims === undefined || options.authClaims.length === 0 ? undefined : JSON.stringify(options.authClaims);
@@ -20,6 +15,7 @@ const d1ClaimsArgument = (options: ResolvedAppOptions): string => {
     return literal === undefined ? "" : `, ${literal}`;
 };
 
+/** The `claims:` line of the object-route wiring, or empty when the app declares none. */
 const doAuthClaimsLine = (options: ResolvedAppOptions): string => {
     const literal = authClaimsLiteral(options);
 
@@ -29,6 +25,11 @@ const doAuthClaimsLine = (options: ResolvedAppOptions): string => {
                 claims: ${literal},`;
 };
 
+/**
+ * The schema's jurisdiction, pinned onto the DO-backed auth object: it holds
+ * users, sessions, and credentials, so it must live where every other DO does.
+ * Only once the move is acknowledged — see `EmitAppOptions.jurisdictionPinsAuth`.
+ */
 const doAuthJurisdictionLine = (options: ResolvedAppOptions): string =>
     options.jurisdiction && options.jurisdictionPinsAuth === true
         ? `

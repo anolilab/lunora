@@ -73,7 +73,6 @@ interface EmitServerOptions {
      * field off the same set.
      */
     capabilities?: ReadonlySet<CapabilityKey>;
-
     containers?: ReadonlyArray<ContainerIR>;
 
     /**
@@ -83,11 +82,11 @@ interface EmitServerOptions {
      * the base optional binding record — byte-identical to today.
      */
     env?: EnvIR;
+
     /** The project declares `lunora/flags.ts` — wires `ctx.flags` (OpenFeature) onto every ctx. */
     hasFlags?: boolean;
     /** The project declares `lunora/notify.ts` — wires `ctx.notify` + its `ctx.push` alias (`@lunora/notify`) onto every ctx. */
     hasNotify?: boolean;
-
     /** The target platform supports a vector store. `false` withholds `ctx.vectors` even when the schema declares an index. */
     hasVectors?: boolean;
 

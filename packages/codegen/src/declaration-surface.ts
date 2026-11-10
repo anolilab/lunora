@@ -152,7 +152,6 @@ interface DeclarationSurface {
     dataModelContent: string;
     /** Declared dependency names, or `undefined` when the manifest is absent/unreadable. */
     declaredDependencies: ReadonlySet<string> | undefined;
-
     /** The same names with the absent case flattened to an empty set. */
     dependencies: ReadonlySet<string>;
 
@@ -163,7 +162,6 @@ interface DeclarationSurface {
      * reach wrangler's `triggers.crons`.
      */
     entryCronTriggers: ReadonlyArray<string>;
-
     env: EnvIR | undefined;
 
     /**
