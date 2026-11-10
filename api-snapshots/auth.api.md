@@ -825,7 +825,6 @@ type SessionIdentity = {
     role?: string;
     teamId?: string;
     userId: string;
-    [claim: string]: string | number | boolean | undefined;
 };
 ```
 
@@ -1155,7 +1154,7 @@ const resolveAuthOptions: (options: LunoraAuthOptions) => LunoraAuthOptions;
 ### `resolveSessionIdentity` (const)
 
 ```ts
-const resolveSessionIdentity: (auth: LunoraAuth, headers: Headers, claims?: readonly string[]) => Promise<SessionIdentity | null>;
+const resolveSessionIdentity: (auth: LunoraAuth, headers: Headers, claims?: ReadonlyArray<string>) => Promise<SessionIdentity | null>;
 ```
 
 ### `revokeSignUpInvitation` (const)

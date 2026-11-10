@@ -96,4 +96,16 @@ describe("identityFromSession with app claims", () => {
 
         expect(identity).toStrictEqual({ expiresAtMs: new Date("2030-01-01T00:00:00Z").getTime(), userId: "user-1" });
     });
+
+    it("never lets an app column set the credential expiry the runtime reads", () => {
+        expect.hasAssertions();
+
+        // `exp` is the JWT-style expiry the runtime reads when `expiresAtMs` is absent; an
+        // experience-points column named `exp` must not be read as a 1970 timestamp.
+        const identity = identityFromSession({ session: {}, user: { id: "user-1", exp: 1200, sub: "x", iat: 1 } }, ["exp", "sub", "iat"]);
+
+        expect(identity).not.toHaveProperty("exp");
+        expect(identity).not.toHaveProperty("sub");
+        expect(identity).not.toHaveProperty("iat");
+    });
 });

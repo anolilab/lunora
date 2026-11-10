@@ -1,5 +1,5 @@
-import { SENSITIVE_FIELDS } from "./admin";
 import type { LunoraAuth } from "./create-auth";
+import SENSITIVE_FIELDS from "./sensitive-fields";
 
 /**
  * The claims both built-in wirings (D1 and the auth Durable Object) put on the
@@ -10,9 +10,6 @@ import type { LunoraAuth } from "./create-auth";
 // A type alias, not an interface: only an alias gets the implicit index signature that
 // lets it stand where the runtime's `ResolvedIdentity` (`[key: string]: unknown`) is expected.
 type SessionIdentity = {
-    /** App-declared user columns forwarded by {@link resolveSessionIdentity}'s `claims`. */
-    [claim: string]: string | number | boolean | undefined;
-
     /** Profile claim `ctx.auth.getIdentity()` is documented to carry. */
     email?: string;
 
@@ -59,7 +56,7 @@ interface SessionLike {
 const nonEmpty = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 
 /** Claims the session already writes; an app claim with one of these names is ignored, never overwritten. */
-const RESERVED_CLAIMS: ReadonlySet<string> = new Set(["email", "expiresAtMs", "name", "orgId", "role", "teamId", "userId"]);
+const RESERVED_CLAIMS: ReadonlySet<string> = new Set(["email", "exp", "expiresAtMs", "iat", "name", "nbf", "orgId", "role", "sub", "teamId", "userId"]);
 
 /**
  * The JSON-safe value of one app-declared user column, or `undefined` when the
