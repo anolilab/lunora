@@ -7,7 +7,7 @@ const loadCopy = async (): Promise<typeof import("../src/client")> => {
     return import("../src/client");
 };
 
-describe("lUNORA_CLIENT across copies of the package", () => {
+describe("the LUNORA_CLIENT token across copies of the package", () => {
     it("two copies share one injection token, so a provider from one satisfies an injection from the other", async () => {
         expect.assertions(2);
 
