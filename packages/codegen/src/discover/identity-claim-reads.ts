@@ -93,25 +93,28 @@ const identityBagAccess = (node: TsNode | undefined): TsNode | undefined => {
     return POLICY_IDENTITY_RECEIVERS.has(receiver.getText()) || isContextSurface(receiver, ["auth"]) ? node : undefined;
 };
 
-/** Whether `node` is a type-only wrapper or parentheses: `(x)`, `x as T`, `x satisfies T`, `<T>x`, `x!`. */
-const isValueWrapper = (node: TsNode): node is TsNode & { getExpression: () => TsNode } =>
-    Node.isParenthesizedExpression(node) ||
-    Node.isAsExpression(node) ||
-    Node.isSatisfiesExpression(node) ||
-    Node.isTypeAssertion(node) ||
-    Node.isNonNullExpression(node);
-
 /**
- * Looks through `await` and type-only wrappers, so `(await ctx.auth.getIdentity() as Identity)!`
- * reads as the call itself. `awaited` says whether an `await` was crossed: without one the
- * value is the pending promise, and `.then` on it is not a claim.
+ * Looks through `await`, parentheses and type-only wrappers (`as`, `satisfies`, `<T>x`,
+ * `x!`), so `(await ctx.auth.getIdentity() as Identity)!` reads as the call itself.
+ * `awaited` says whether an `await` was crossed: without one the value is the pending
+ * promise, and `.then` on it is not a claim.
  */
 const throughAwait = (node: TsNode, awaited = false): { awaited: boolean; value: TsNode } => {
     if (Node.isAwaitExpression(node)) {
         return throughAwait(node.getExpression(), true);
     }
 
-    return isValueWrapper(node) ? throughAwait(node.getExpression(), awaited) : { awaited, value: node };
+    if (
+        Node.isParenthesizedExpression(node) ||
+        Node.isAsExpression(node) ||
+        Node.isSatisfiesExpression(node) ||
+        Node.isTypeAssertion(node) ||
+        Node.isNonNullExpression(node)
+    ) {
+        return throughAwait(node.getExpression(), awaited);
+    }
+
+    return { awaited, value: node };
 };
 
 /** Whether `node` is an awaited `<auth>.getIdentity()` on an identity receiver, once wrappers are looked through. */
