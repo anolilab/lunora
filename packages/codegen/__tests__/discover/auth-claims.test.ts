@@ -253,7 +253,10 @@ export default defineApp().auth({ options: { user: { additionalFields: { plan: {
 `,
         );
 
-        expect(run()).toStrictEqual({ claims: [], diagnostics: ["a spread after `options` in .auth() may replace it, so the user columns cannot be read"] });
+        expect(run()).toStrictEqual({
+            claims: [],
+            diagnostics: ["a spread or computed key after `options` in .auth() may replace it, so the user columns cannot be read"],
+        });
 
         write(
             "src/server/index.ts",
@@ -265,6 +268,84 @@ export default defineApp().auth({ ...base, options: { user: { additionalFields: 
         project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
 
         expect(run().claims).toStrictEqual([{ name: "plan", type: "string", writable: true }]);
+    });
+
+    it("never trusts a column whose input flag a computed key may override", () => {
+        expect.assertions(1);
+
+        write(
+            "src/server/index.ts",
+            `import { defineApp } from "lunorash";
+const INPUT = "input";
+export default defineApp().auth({ options: { user: { additionalFields: {
+    plan: { type: "string", input: false, [INPUT]: true },
+    hidden: { type: "string", returned: false, [INPUT]: true },
+    tier: { type: "string", input: false },
+} } } });
+`,
+        );
+
+        expect(run()).toStrictEqual({
+            claims: [{ name: "tier", type: "string", writable: false }],
+            diagnostics: [
+                "`plan` is not a literal field definition; it is not added to ctx.auth",
+                "`hidden` is not a literal field definition; it is not added to ctx.auth",
+            ],
+        });
+    });
+
+    it("reads the last of duplicate keys, which is the one the runtime keeps", () => {
+        expect.assertions(1);
+
+        write("src/server/index.ts", entry(`{ user: { additionalFields: { plan: { type: "number", input: false, type: "string", input: true } } } }`));
+
+        expect(run().claims).toStrictEqual([{ name: "plan", type: "string", writable: true }]);
+    });
+
+    it("reports a computed key that may name options, user or additionalFields instead of reading no claims", () => {
+        expect.assertions(4);
+
+        const fields = `{ plan: { type: "string" } }`;
+        const cases: [string, string][] = [
+            [`{ [KEY]: { user: { additionalFields: ${fields} } } }`, "the .auth() argument has a spread or a computed key, so its options cannot be read"],
+            [
+                `{ options: { [KEY]: { additionalFields: ${fields} } } }`,
+                "the auth options contain a spread or a computed key, so the user columns cannot be read",
+            ],
+            [`{ options: { user: { [KEY]: ${fields} } } }`, "`user` has a spread or a computed key, so the user columns cannot be read"],
+            [
+                `{ options: { user: { additionalFields: ${fields} } }, [KEY]: {} }`,
+                "a spread or computed key after `options` in .auth() may replace it, so the user columns cannot be read",
+            ],
+        ];
+
+        for (const [argument, diagnostic] of cases) {
+            write(
+                "src/server/index.ts",
+                `import { defineApp } from "lunorash";
+const KEY = "options" as string;
+export default defineApp().auth(${argument});
+`,
+            );
+            project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(run()).toStrictEqual({ claims: [], diagnostics: [diagnostic] });
+        }
+    });
+
+    it("reads a type written as const, parenthesized or as a template literal", () => {
+        expect.assertions(1);
+
+        write(
+            "src/server/index.ts",
+            entry('{ user: { additionalFields: { plan: { type: "string" as const }, seats: { type: ("number") }, ok: { type: `boolean` } } } }'),
+        );
+
+        expect(run().claims).toStrictEqual([
+            { name: "plan", type: "string", writable: true },
+            { name: "seats", type: "number", writable: true },
+            { name: "ok", type: "boolean", writable: true },
+        ]);
     });
 
     it("ignores an .auth() call on anything but the app builder", () => {

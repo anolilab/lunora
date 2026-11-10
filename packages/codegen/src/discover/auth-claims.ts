@@ -2,9 +2,9 @@ import type { CallExpression, Node as TsNode, ObjectLiteralElementLike, ObjectLi
 import { Node, SyntaxKind } from "ts-morph";
 
 import { CLAIM_NAME, MAX_CLAIM_NAMES, RESERVED_CLAIMS, SENSITIVE_FIELDS } from "../../../../shared/identity-claims";
-import { descendantsOfKind, findObjectProperty, listSecurityScanFiles, propertyInitializer } from "./ast";
+import { descendantsOfKind, listSecurityScanFiles } from "./ast";
 import { isAppBuilderReceiver, isAppBuilderType } from "./platform-signals";
-import { propertyKeyName } from "./property-name";
+import { propertyKeyName, staticPropertyName } from "./property-name";
 
 /** The scalar types a claim can carry: the runtime forwards only JSON scalars. */
 type AuthClaimType = "boolean" | "number" | "string";
@@ -42,9 +42,37 @@ const opaque = (reason: string): AuthClaimDiscovery => {
 const unwrap = (node: TsNode): TsNode =>
     Node.isParenthesizedExpression(node) || Node.isAsExpression(node) || Node.isSatisfiesExpression(node) ? unwrap(node.getExpression()) : node;
 
+/**
+ * Whether a member may set a key codegen cannot name: a spread, or a computed key
+ * (`[KEY]`) that does not resolve to a literal. Either can replace any key at runtime.
+ */
+const hidesKey = (property: ObjectLiteralElementLike): boolean => {
+    if (Node.isSpreadAssignment(property)) {
+        return true;
+    }
+
+    const nameNode = property.getNameNode();
+
+    return Node.isComputedPropertyName(nameNode) && staticPropertyName(nameNode) === undefined;
+};
+
+/** Whether any member of an object literal may set a key codegen cannot name (see {@link hidesKey}). */
+const hasHiddenKey = (object: ObjectLiteralExpression): boolean => object.getProperties().some((property) => hidesKey(property));
+
+/** The member that sets `name`: the last one, since a later duplicate key wins at runtime. */
+const lastProperty = (object: ObjectLiteralExpression, name: string): ObjectLiteralElementLike | undefined =>
+    object.getProperties().findLast((property) => !Node.isSpreadAssignment(property) && propertyKeyName(property) === name);
+
+/** The initializer of the `key: value` member that sets `name`, or `undefined` for any other shape. */
+const initializerOf = (object: ObjectLiteralExpression, name: string): TsNode | undefined => {
+    const property = lastProperty(object, name);
+
+    return Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
+};
+
 /** Whether a field flag (`returned`, `input`) is `false`, written bare, parenthesized or cast (`false as const`). */
 const isFalseFlag = (field: ObjectLiteralExpression, name: string): boolean => {
-    const value = propertyInitializer(field, name);
+    const value = initializerOf(field, name);
 
     return value !== undefined && unwrap(value).getKind() === SyntaxKind.FalseKeyword;
 };
@@ -60,7 +88,7 @@ const UNREADABLE = "unreadable";
  */
 const propertyValue = (object: ObjectLiteralExpression, name: string): TsNode | typeof UNREADABLE | undefined => {
     // Matched on the runtime key, so a quoted `"options"` is the same property.
-    const property = findObjectProperty(object, name);
+    const property = lastProperty(object, name);
 
     if (property === undefined) {
         return undefined;
@@ -72,9 +100,6 @@ const propertyValue = (object: ObjectLiteralExpression, name: string): TsNode | 
 
     return Node.isShorthandPropertyAssignment(property) ? property.getNameNode() : UNREADABLE;
 };
-
-/** Whether an object literal has a spread, which can hide any key. */
-const hasSpread = (object: ObjectLiteralExpression): boolean => object.getProperties().some((property) => Node.isSpreadAssignment(property));
 
 /** The expression a function body yields: the body itself for an arrow's expression form, or the expression of its only `return`. */
 const yieldedExpression = (body: TsNode | undefined): TsNode | undefined => {
@@ -140,16 +165,19 @@ const claimTypeOf = (typeNode: TsNode | undefined): AuthClaimType | undefined =>
         return undefined;
     }
 
+    // `type: "string" as const` keeps better-auth's literal inference and is the same value.
+    const value = unwrap(typeNode);
+
     // An enum-like `type: ["a", "b"]` is a string at runtime.
-    if (Node.isArrayLiteralExpression(typeNode)) {
+    if (Node.isArrayLiteralExpression(value)) {
         return "string";
     }
 
-    if (!Node.isStringLiteral(typeNode)) {
+    if (!Node.isStringLiteral(value) && !Node.isNoSubstitutionTemplateLiteral(value)) {
         return undefined;
     }
 
-    switch (typeNode.getLiteralValue()) {
+    switch (value.getLiteralValue()) {
         case "boolean": {
             return "boolean";
         }
@@ -181,11 +209,12 @@ const claimOf = (name: string, init: TsNode): { claim?: AuthClaim; reason?: stri
 
     const field = objectLiteralOf(init);
 
-    if (field === undefined || hasSpread(field)) {
+    // A hidden key may set `type`, `input` or `returned`, so none of the three can be trusted.
+    if (field === undefined || hasHiddenKey(field)) {
         return { reason: `\`${name}\` is not a literal field definition` };
     }
 
-    const type = claimTypeOf(propertyInitializer(field, "type"));
+    const type = claimTypeOf(initializerOf(field, "type"));
 
     if (type === undefined) {
         return { reason: `\`${name}\` is not a scalar (string, number, boolean or date) column` };
@@ -209,7 +238,7 @@ const entryClaim = (property: ObjectLiteralElementLike): { claim?: AuthClaim; re
     const field = init === undefined ? undefined : objectLiteralOf(init);
 
     // Not returned by the session, so it is not a claim and needs no diagnostic.
-    if (field !== undefined && isNotReturned(field)) {
+    if (field !== undefined && !hasHiddenKey(field) && isNotReturned(field)) {
         return undefined;
     }
 
@@ -240,8 +269,8 @@ const claimsFromFields = (fields: ObjectLiteralExpression): AuthClaimDiscovery =
 
 /** Reads the `user.additionalFields` of a `user` object literal: none, opaque, or the claims it declares. */
 const userClaims = (user: ObjectLiteralExpression): AuthClaimDiscovery => {
-    if (hasSpread(user)) {
-        return opaque("`user` has a spread, so the user columns cannot be read");
+    if (hasHiddenKey(user)) {
+        return opaque("`user` has a spread or a computed key, so the user columns cannot be read");
     }
 
     const fieldsNode = propertyValue(user, "additionalFields");
@@ -252,15 +281,15 @@ const userClaims = (user: ObjectLiteralExpression): AuthClaimDiscovery => {
 
     const fields = fieldsNode === UNREADABLE ? undefined : objectLiteralOf(fieldsNode);
 
-    return fields === undefined || hasSpread(fields)
+    return fields === undefined || hasHiddenKey(fields)
         ? opaque("`user.additionalFields` is not an object literal, so the user columns cannot be read")
         : claimsFromFields(fields);
 };
 
 /** Reads `user.additionalFields` out of a resolved `options` object literal. */
 const readAuthClaims = (options: ObjectLiteralExpression): AuthClaimDiscovery => {
-    if (hasSpread(options)) {
-        return opaque("the auth options contain a spread, so the user columns cannot be read");
+    if (hasHiddenKey(options)) {
+        return opaque("the auth options contain a spread or a computed key, so the user columns cannot be read");
     }
 
     const userNode = propertyValue(options, "user");
@@ -287,12 +316,12 @@ const isBuilderAuthCall = (sourceFile: SourceFile, call: CallExpression): boolea
     return isAppBuilderReceiver(sourceFile, receiver) || isAppBuilderType(receiver);
 };
 
-/** Whether a spread follows `options` in the `.auth()` argument, so it may replace the options the literal names. */
+/** Whether a spread or computed key follows `options` in the `.auth()` argument, so it may replace the options the literal names. */
 const optionsMayBeReplaced = (argument: ObjectLiteralExpression): boolean => {
     const properties = argument.getProperties();
-    const optionsIndex = properties.findIndex((property) => !Node.isSpreadAssignment(property) && propertyKeyName(property) === "options");
+    const optionsIndex = properties.findLastIndex((property) => !Node.isSpreadAssignment(property) && propertyKeyName(property) === "options");
 
-    return properties.some((property, index) => index > optionsIndex && Node.isSpreadAssignment(property));
+    return properties.some((property, index) => index > optionsIndex && hidesKey(property));
 };
 
 /** The claims of one app-builder `.auth(...)` declaration. */
@@ -310,11 +339,11 @@ const authOptionsOf = (call: CallExpression): AuthClaimDiscovery => {
     const optionsNode = propertyValue(argument, "options");
 
     if (optionsNode === undefined) {
-        return hasSpread(argument) ? opaque("the .auth() argument has a spread, so its options cannot be read") : NONE;
+        return hasHiddenKey(argument) ? opaque("the .auth() argument has a spread or a computed key, so its options cannot be read") : NONE;
     }
 
     if (optionsMayBeReplaced(argument)) {
-        return opaque("a spread after `options` in .auth() may replace it, so the user columns cannot be read");
+        return opaque("a spread or computed key after `options` in .auth() may replace it, so the user columns cannot be read");
     }
 
     const options = optionsNode === UNREADABLE ? undefined : objectLiteralOf(optionsNode);
