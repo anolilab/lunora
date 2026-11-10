@@ -1,7 +1,7 @@
 import type { Context } from "solid-js";
 import { createContext } from "solid-js";
 
-interface RegisteredContext {
+interface SharedContextEntry {
     context: Context<unknown>;
     /** The kind of the default value it was created with, so a reused name cannot hand back a context of another type. */
     kind: string;
@@ -19,10 +19,10 @@ type ContextFactory = <T>(defaultValue: T) => Context<T>;
  */
 const REGISTRY = Symbol.for("@lunora/solid/contexts");
 
-const runtimesOf = (): WeakMap<ContextFactory, Map<string, RegisteredContext>> => {
-    const host = globalThis as unknown as Record<symbol, WeakMap<ContextFactory, Map<string, RegisteredContext>> | undefined>;
+const runtimesOf = (): WeakMap<ContextFactory, Map<string, SharedContextEntry>> => {
+    const host = globalThis as unknown as Record<symbol, WeakMap<ContextFactory, Map<string, SharedContextEntry>> | undefined>;
 
-    host[REGISTRY] ??= new WeakMap<ContextFactory, Map<string, RegisteredContext>>();
+    host[REGISTRY] ??= new WeakMap<ContextFactory, Map<string, SharedContextEntry>>();
 
     return host[REGISTRY];
 };
@@ -38,7 +38,7 @@ const sharedContextFor = function <T>(create: ContextFactory, name: string, defa
     let registry = runtimes.get(create);
 
     if (!registry) {
-        registry = new Map<string, RegisteredContext>();
+        registry = new Map<string, SharedContextEntry>();
         runtimes.set(create, registry);
     }
 
