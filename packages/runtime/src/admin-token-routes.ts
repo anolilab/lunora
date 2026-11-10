@@ -148,6 +148,7 @@ const buildAdminTokenRoutes = (deps: AdminTokenRouteDeps): Record<string, (reque
             } catch (error) {
                 removed = false;
                 // The response says what to do; the cause is only here, in the Worker logs. The secret is never in this path.
+                // eslint-disable-next-line no-console -- the Worker log is the only place this cause is recorded
                 console.warn(
                     `[lunora] admin token "${name}" was refused for its dropped scopes and its row was not removed: ${error instanceof Error ? error.message : String(error)}`,
                 );
