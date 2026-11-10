@@ -21,7 +21,7 @@ const registryOf = (): Map<string, unknown> => {
 };
 
 /** The context registered under `name`, created with `defaultValue` the first time any copy of this package asks for it. */
-const sharedContext = <T>(name: string, defaultValue: T): Context<T> => {
+const sharedContext = function <T>(name: string, defaultValue: T): Context<T> {
     const registry = registryOf();
     const existing = registry.get(name);
 
