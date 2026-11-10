@@ -143,7 +143,9 @@ const useLunoraQueryClient = (): QueryClient => {
     // Only a TanStack context this copy shares with the nearest Lunora provider can see inside it. Any other provider this copy
     // sees may sit outside that Lunora provider, and must not take precedence over it.
     const nearest = owner === QueryClientContext ? visibleNearest : undefined;
-    const queryClient = nearest ?? shared;
+    // A provider from an older copy shares the Lunora client but not these markers. Its TanStack provider is then the only client
+    // this hook can reach, as it was before the shared context existed.
+    const queryClient = nearest ?? shared ?? visibleNearest;
 
     if (!queryClient) {
         throw new LunoraError("INTERNAL", "useLunoraQueryClient must be used inside <LunoraProvider />");
