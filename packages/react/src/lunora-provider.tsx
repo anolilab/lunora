@@ -12,6 +12,8 @@ import sharedContext from "./shared-context";
 // Shared by name, not created here: a second copy of this package must read the same context (see `shared-context.ts`).
 const LunoraContext = sharedContext<LunoraClient | null>("lunora-client", null);
 
+const LunoraQueryClientContext = sharedContext<QueryClient | null>("lunora-query-client", null);
+
 /**
  * Whether the provider's `client` differs from the one it first rendered with.
  * A value preloaded on the server belongs to that first client, so a hook that
@@ -105,10 +107,14 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
     // react-doctor-disable-next-line react-doctor/no-derived-useState -- intentional: the FIRST `client` is the point, never re-synced to the prop
     const [firstClient] = useState(client);
 
+    // The TanStack client rides the shared registry as well as TanStack's own context: a hook from another copy of this
+    // package reads its TanStack context from that copy's module, which the provider's `QueryClientProvider` never reaches.
     const content = (
-        <LunoraContext value={client}>
-            <LunoraClientSwappedContext value={client !== firstClient}>{children}</LunoraClientSwappedContext>
-        </LunoraContext>
+        <LunoraQueryClientContext value={effectiveClient}>
+            <LunoraContext value={client}>
+                <LunoraClientSwappedContext value={client !== firstClient}>{children}</LunoraClientSwappedContext>
+            </LunoraContext>
+        </LunoraQueryClientContext>
     );
 
     // Don't double-wrap when a parent already provides the client.
@@ -117,6 +123,20 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
     }
 
     return <QueryClientProvider client={effectiveClient}>{content}</QueryClientProvider>;
+};
+
+/**
+ * The TanStack `QueryClient` the nearest `<LunoraProvider>` renders with. Lunora's hooks pass it explicitly to the TanStack
+ * hooks, so they work whichever copy of TanStack Query the caller's tree resolved.
+ */
+const useLunoraQueryClient = (): QueryClient => {
+    const queryClient = use(LunoraQueryClientContext);
+
+    if (!queryClient) {
+        throw new LunoraError("INTERNAL", "useLunoraQueryClient must be used inside <LunoraProvider />");
+    }
+
+    return queryClient;
 };
 
 /** Whether the nearest `<LunoraProvider>` has swapped its `client` since it first rendered. */
@@ -138,4 +158,4 @@ const useLunora = (): LunoraClient => {
 
 export type { LunoraProviderProps };
 // eslint-disable-next-line react-refresh/only-export-components -- useLunora is a hook kept colocated with the provider component for back-compat; splitting it into its own module would break existing imports.
-export { LunoraProvider, useLunora, useLunoraClientSwapped };
+export { LunoraProvider, useLunora, useLunoraClientSwapped, useLunoraQueryClient };

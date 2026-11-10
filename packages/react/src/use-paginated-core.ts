@@ -4,11 +4,11 @@ import type { FunctionReference, SubscriptionError, SubscriptionErrorCallback } 
 import type { Page, PaginatedCoreResult, PaginationResult } from "@lunora/client/pagination";
 import { applyLoadMore, classifyPageFailure, derivePaginationStatus, headPage, initialPages, isHeadPage, rebalance } from "@lunora/client/pagination";
 import type { QueryKey } from "@tanstack/react-query";
-import { CancelledError, useQueryClient } from "@tanstack/react-query";
+import { CancelledError } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
-import { useLunora } from "./lunora-provider";
+import { useLunora, useLunoraQueryClient } from "./lunora-provider";
 import useLazyRef from "./use-lazy-ref";
 
 /**
@@ -75,7 +75,7 @@ const usePaginatedCore = function <T>(
     options: { initialNumItems: number; onError?: SubscriptionErrorCallback; shardKey?: string },
 ): PaginatedCoreReactResult<T> {
     const client = useLunora();
-    const queryClient = useQueryClient();
+    const queryClient = useLunoraQueryClient();
     const { initialNumItems, shardKey } = options;
 
     const skipped = args === "skip";
