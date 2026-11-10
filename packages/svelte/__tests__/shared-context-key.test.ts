@@ -6,13 +6,17 @@ const { store } = vi.hoisted(() => {
     return { store: new Map<unknown, unknown>() };
 });
 
-vi.mock(import("svelte"), async () => {
+vi.mock(import("svelte"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    // Every real export is kept; only the two context functions read and write the store.
     return {
+        ...actual,
         getContext: (key: unknown): unknown => store.get(key),
         setContext: (key: unknown, value: unknown): void => {
             store.set(key, value);
         },
-    };
+    } as typeof actual;
 });
 
 // Two module instances of this package, as a bundle holding two pnpm peer variants has them.
