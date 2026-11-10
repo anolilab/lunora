@@ -126,11 +126,14 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
 };
 
 /**
- * The TanStack `QueryClient` the nearest `<LunoraProvider>` renders with. Lunora's hooks pass it explicitly to the TanStack
- * hooks, so they work whichever copy of TanStack Query the caller's tree resolved.
+ * The TanStack `QueryClient` a Lunora hook should use. A `QueryClientProvider` nearer than the Lunora provider wins, as it does for
+ * TanStack's own hooks: the nested cache is where the caller's ordinary queries live. Read from this copy's own TanStack context, so
+ * a copy that cannot see a provider falls back to the client the Lunora provider shares through the registry.
  */
 const useLunoraQueryClient = (): QueryClient => {
-    const queryClient = use(LunoraQueryClientContext);
+    const nearest = use(QueryClientContext);
+    const shared = use(LunoraQueryClientContext);
+    const queryClient = nearest ?? shared;
 
     if (!queryClient) {
         throw new LunoraError("INTERNAL", "useLunoraQueryClient must be used inside <LunoraProvider />");
