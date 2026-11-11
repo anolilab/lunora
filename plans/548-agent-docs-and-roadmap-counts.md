@@ -8,7 +8,7 @@
 > nothing. Any change is a STOP.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** TODO
+**Status:** DONE (review APPROVED; branch `docs/improve-548-agent-docs-counts`, commit `3e8f4f6ed`; not merged)
 **Priority / effort / risk:** P3 / S / LOW. **Category:** docs. **Depends on:** none.
 (The plans-index half of this audit row was done in the plans commit.)
 

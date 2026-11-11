@@ -11,7 +11,7 @@
 > excerpts in §1 match. Any other mismatch is a STOP.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** TODO
+**Status:** DONE (review APPROVED; branch `fix/improve-542-harness-wire-round-trip`, commit `7ddac23da` on top of 543's `5e8333fc2`; no existing test changed; seed + 9 examples match baseline; not merged)
 **Priority / effort / risk:** P2 / S / MED. **Category:** tests (harness fidelity).
 **Depends on:** land after plan 543 (same file, adjacent block). Land on its own: it can change what
 existing tests observe.
