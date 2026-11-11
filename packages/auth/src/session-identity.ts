@@ -166,6 +166,24 @@ const identityFromSession = (session: SessionLike | null | undefined, claims: Re
 };
 
 /**
+ * Read the session the request presents. A bad cookie reads as no session, but a
+ * presented API key that is revoked, expired or unknown makes better-auth throw a
+ * 401 or 403. Both mean "no identity"; any other failure (a store outage, a rate
+ * limit) still propagates so it is not mistaken for an anonymous caller.
+ */
+const readSession = async (auth: LunoraAuth, headers: Headers): Promise<Awaited<ReturnType<LunoraAuth["api"]["getSession"]>> | undefined> => {
+    try {
+        return await auth.api.getSession({ headers });
+    } catch (error) {
+        if (isAPIError(error) && (error.statusCode === 401 || error.statusCode === 403)) {
+            return undefined;
+        }
+
+        throw error;
+    }
+};
+
+/**
  * Resolve a request's session to the Lunora identity: `ctx.auth.userId` plus the
  * claims `ctx.auth.getIdentity()` returns. Both built-in wirings (the D1 resolver
  * codegen emits and the auth Durable Object) call this.
@@ -189,24 +207,6 @@ const identityFromSession = (session: SessionLike | null | undefined, claims: Re
  * @param headers The request headers carrying the session.
  * @returns The identity, or `null` for an anonymous request.
  */
-
-/**
- * Read the session the request presents. A bad cookie reads as no session, but a
- * presented API key that is revoked, expired or unknown makes better-auth throw a
- * 401 or 403. Both mean "no identity"; any other failure (a store outage, a rate
- * limit) still propagates so it is not mistaken for an anonymous caller.
- */
-const readSession = async (auth: LunoraAuth, headers: Headers): Promise<Awaited<ReturnType<LunoraAuth["api"]["getSession"]>> | undefined> => {
-    try {
-        return await auth.api.getSession({ headers });
-    } catch (error) {
-        if (isAPIError(error) && (error.statusCode === 401 || error.statusCode === 403)) {
-            return undefined;
-        }
-
-        throw error;
-    }
-};
 
 const resolveSessionIdentity = async (auth: LunoraAuth, headers: Headers, claims: ReadonlyArray<string> = []): Promise<SessionIdentity | null> => {
     const identity = identityFromSession(await readSession(auth, headers), claims);
