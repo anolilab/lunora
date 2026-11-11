@@ -67,7 +67,7 @@ celld TCK, the MySQL parity suites, the eight non-JS SDK conformance legs, and t
 
 **Step 2 — copy the jobs.** After the `e2e` job, add `test-celld`, `test-mysql` and `sdk-conformance`
 copied verbatim from `test.yml` (step order, comments, env, pinned SHAs), removing only the `"if"` and
-`"needs"` keys, and give each a one-line comment above it, in the form "test.yml's <job> without the paths-filter gate".
+`"needs"` keys, keep test.yml's own comment block above each job verbatim, and put a one-line comment above that, in the form "test.yml's <job> without the paths-filter gate".
 In `sdk-conformance`'s "Assert the matrix covers every SDK on disk" message, leave the text as is.
 
 **Step 3 — extend the nightly `e2e` job.** Set `"timeout-minutes": 45` with test.yml's comment; add the
@@ -81,7 +81,7 @@ to list the new suites.
 
 **Step 5 — verify.** Run oxfmt `--check` (if it reports a diff, run `pnpm exec oxfmt .github/workflows/nightly.yml`
 and re-check), then actionlint.
-Verify: actionlint prints exactly the baseline finding (the `"parallel":` step, at whatever line it now
+Verify: actionlint prints exactly the baseline finding plus SC2016 on the `# jactionlint ignore=SC2016` step (the `"parallel":` step, at whatever line it now
 sits) and nothing else; `grep -c '^    "[a-z-]*":$' .github/workflows/nightly.yml` is 3 higher than at
 baseline; `grep -n "e2e:saas\|playwright-report-saas" .github/workflows/nightly.yml` prints two lines.
 
@@ -113,7 +113,9 @@ Not applicable.
 ## 8. STOP conditions
 
 - **STOP** on drift.
-- **STOP** if actionlint reports any finding other than the baseline `"parallel":` one.
+- **STOP** if actionlint reports any finding other than the baseline `"parallel":` one and SC2016 on the copied
+  step that carries `# jactionlint ignore=SC2016` (plain actionlint flags the same step in `test.yml:635`;
+  CI's jactionlint honours the directive). Revision 1 decision.
 - **STOP** if a copied job references a secret, an `outputs` of `files-changed`, or another job that
   does not exist in `nightly.yml` (search the copy for `needs.` and `secrets.`).
 - **STOP** after two failed attempts at any one verification.
