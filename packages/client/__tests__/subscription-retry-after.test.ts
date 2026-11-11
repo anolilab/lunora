@@ -154,15 +154,17 @@ const openSubscription = (subscribers = 1) => {
     return { client, id, socket, unsubscribes };
 };
 
-const refreshFailure = (id: string, retryAfterMs?: number) => {return {
-    error: {
-        code: "SUBSCRIPTION_REFRESH_FAILED",
-        message: "x",
-        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
-    },
-    id,
-    type: "error",
-}};
+const refreshFailure = (id: string, retryAfterMs?: number) => {
+    return {
+        error: {
+            code: "SUBSCRIPTION_REFRESH_FAILED",
+            message: "x",
+            ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+        },
+        id,
+        type: "error",
+    };
+};
 
 describe("lunoraClient — retry hint on a failing subscription", () => {
     beforeEach(() => {
