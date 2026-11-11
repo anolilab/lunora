@@ -543,7 +543,12 @@ public final class Client {
             credential = credentialGeneration;
         }
 
-        sender.send(buildConnectFrame(clientId, context, resolve(provider)));
+        sender.send(
+                buildConnectFrame(
+                        clientId,
+                        context,
+                        resolve(provider),
+                        List.of(DeltaMerge.PAGE_DELTA_CAPABILITY)));
 
         // A detach or a newer attach during the send supersedes this one: installing this sender
         // would undo it, so it is not installed and its whisper joins are not sent. The joins are
@@ -1112,9 +1117,12 @@ public final class Client {
         return cursor instanceof Number number ? number.longValue() : null;
     }
 
-    /** The {@code connect} frame. {@code token} is the session credential; null omits it. */
+    /**
+     * The {@code connect} frame. {@code token} is the session credential; null omits it. {@code
+     * caps} announces optional server behaviours and is omitted when null or empty.
+     */
     public static Map<String, Object> buildConnectFrame(
-            String clientId, Map<String, Object> context, String token) {
+            String clientId, Map<String, Object> context, String token, List<String> caps) {
         Map<String, Object> frame = new LinkedHashMap<>();
 
         frame.put("id", "connect");
@@ -1130,6 +1138,10 @@ public final class Client {
 
         if (token != null) {
             frame.put("token", token);
+        }
+
+        if (caps != null && !caps.isEmpty()) {
+            frame.put("caps", caps);
         }
 
         return frame;
@@ -1558,7 +1570,23 @@ public final class Client {
                     }
 
                     advance(entry, frame);
-                    entry.state.serverBase = value;
+
+                    // The merge applies to the SERVER base, not the displayed value: the layers
+                    // are re-folded onto the merged result below, as for a data frame. A row
+                    // change that cannot be merged leaves the base as it was; the reference
+                    // re-snapshots here, this port has no such path, so the next data frame
+                    // reconciles it.
+                    if (frame.get("data") != null) {
+                        entry.state.serverBase = value;
+                    } else {
+                        if (DeltaMerge.resolve(entry.state.serverBase, value)
+                                instanceof DeltaMerge.Outcome.Publish publish) {
+                            entry.state.serverBase = publish.value();
+                        } else {
+                            // Nothing changed, so nothing is published.
+                            return kind;
+                        }
+                    }
 
                     // `cursor` is OPTIONAL on data/delta frames, so a frame without one LEAVES the
                     // tracked cursor where it was. Nulling it strands every pending layer: the

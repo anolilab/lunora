@@ -30,6 +30,19 @@ final class SocketSessionTest {
         supersededAttachStopsWritingJoins();
     }
 
+    /**
+     * A connect golden plus the one capability this port announces. {@code refreshBatch} is not
+     * announced: batchStart/batchEnd frames are not handled.
+     */
+    private static Map<String, Object> withPageDeltaCaps(Object golden) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> frame = new LinkedHashMap<>((Map<String, Object>) golden);
+
+        frame.put("caps", List.of("pageDelta"));
+
+        return frame;
+    }
+
     /** The first frame of every open is {@code connect}, carrying the session credential. */
     @SuppressWarnings("unchecked")
     private static void connectFrameFirstAndCarriesSessionToken() throws IOException {
@@ -58,14 +71,29 @@ final class SocketSessionTest {
                 "connect must carry the session credential as token");
         check(
                 Key.stableStringify(sent.get(0))
-                        .equals(Key.stableStringify(golden.get("connect-with-token"))),
-                "the connect frame must match the connect-with-token golden");
+                        .equals(
+                                Key.stableStringify(
+                                        withPageDeltaCaps(golden.get("connect-with-token")))),
+                "the connect frame must match the connect-with-token golden plus pageDelta caps");
         check(
-                Key.stableStringify(Client.buildConnectFrame("client-test", null, "session-token"))
+                Key.stableStringify(
+                                Client.buildConnectFrame(
+                                        "client-test", null, "session-token", null))
                         .equals(Key.stableStringify(golden.get("connect-with-token"))),
                 "buildConnectFrame must produce the connect-with-token golden");
 
         String url = client.wsUrl(null);
+
+        Client announcing = new Client("https://app.example", null);
+        List<Map<String, Object>> announced = new ArrayList<>();
+
+        announcing.clientId = "client-test";
+        announcing.attachSocket(announced::add, null);
+
+        check(
+                Key.stableStringify(announced.get(0))
+                        .equals(Key.stableStringify(golden.get("connect-with-page-delta-caps"))),
+                "an attach must announce pageDelta, matching connect-with-page-delta-caps");
 
         check(
                 !url.contains("session-token") && !url.contains("rpc-bearer"),
@@ -127,8 +155,8 @@ final class SocketSessionTest {
 
         check(
                 Key.stableStringify(withContext.get(0))
-                        .equals(Key.stableStringify(connectWithContext)),
-                "connect with a context must match the connect-with-context golden");
+                        .equals(Key.stableStringify(withPageDeltaCaps(connectWithContext))),
+                "connect with a context must match the connect-with-context golden plus caps");
 
         List<Map<String, Object>> withoutContext = new ArrayList<>();
 
