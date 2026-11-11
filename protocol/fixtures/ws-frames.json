@@ -12,6 +12,7 @@
             "id": "connect",
             "type": "connect"
         },
+        "connect-with-page-delta-caps": { "caps": ["pageDelta"], "clientId": "client-test", "id": "connect", "type": "connect" },
         "connect-with-context": {
             "clientId": "client-test",
             "id": "connect",
@@ -395,6 +396,133 @@
                     ]
                 }
             }
+        },
+        {
+            "name": "delta-page-insert-ascending-middle",
+            "$comment": "Ascending list (oldest-first). The new row's _creationTime falls between two neighbours, so it splices before the first larger one (README 5.1.1).",
+            "baseWire": {
+                "continueCursor": "c_2",
+                "isDone": false,
+                "page": [
+                    { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                    { "_creationTime": 1003, "_id": "m3", "text": "three" }
+                ]
+            },
+            "frame": {
+                "id": "sub_1",
+                "type": "delta",
+                "delta": { "key": "m2", "op": "insert", "row": { "_creationTime": 1002, "_id": "m2", "text": "two" }, "table": "messages" }
+            },
+            "expect": {
+                "kind": "delta",
+                "id": "sub_1",
+                "valueWire": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" },
+                        { "_creationTime": 1003, "_id": "m3", "text": "three" }
+                    ]
+                }
+            }
+        },
+        {
+            "name": "delta-page-delete",
+            "$comment": "A delete removes the row with that _id and leaves every other field of the page wrapper untouched.",
+            "baseWire": {
+                "continueCursor": "c_2",
+                "isDone": false,
+                "page": [
+                    { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                    { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                ]
+            },
+            "frame": { "id": "sub_1", "type": "delta", "delta": { "key": "m1", "op": "delete", "table": "messages" } },
+            "expect": {
+                "kind": "delta",
+                "id": "sub_1",
+                "valueWire": { "continueCursor": "c_2", "isDone": false, "page": [{ "_creationTime": 1002, "_id": "m2", "text": "two" }] }
+            }
+        },
+        {
+            "name": "delta-page-delete-absent-row",
+            "$comment": "A delete for a row this list never held is a no-op, not a failure.",
+            "baseWire": {
+                "continueCursor": "c_2",
+                "isDone": false,
+                "page": [
+                    { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                    { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                ]
+            },
+            "frame": { "id": "sub_1", "type": "delta", "delta": { "key": "m9", "op": "delete", "table": "messages" } },
+            "expect": {
+                "kind": "delta",
+                "id": "sub_1",
+                "valueWire": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                }
+            }
+        },
+        {
+            "name": "delta-bare-array-update",
+            "$comment": "A bare-array result merges the same way as a paginated one; the value stays a bare array.",
+            "baseWire": [
+                { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                { "_creationTime": 1002, "_id": "m2", "text": "two" }
+            ],
+            "frame": {
+                "id": "sub_1",
+                "type": "delta",
+                "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "messages" }
+            },
+            "expect": {
+                "kind": "delta",
+                "id": "sub_1",
+                "valueWire": [
+                    { "_creationTime": 1001, "_id": "m1", "text": "ONE" },
+                    { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                ]
+            }
+        },
+        {
+            "name": "delta-page-insert-without-creation-time",
+            "$comment": "A row with no numeric _creationTime has no position to honour, so it appends (the list keeps its own order).",
+            "baseWire": {
+                "continueCursor": "c_2",
+                "isDone": false,
+                "page": [
+                    { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                    { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                ]
+            },
+            "frame": { "id": "sub_1", "type": "delta", "delta": { "key": "m5", "op": "insert", "row": { "_id": "m5", "text": "five" }, "table": "messages" } },
+            "expect": {
+                "kind": "delta",
+                "id": "sub_1",
+                "valueWire": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" },
+                        { "_id": "m5", "text": "five" }
+                    ]
+                }
+            }
+        },
+        {
+            "name": "delta-unrecognised-payload-replaces",
+            "$comment": "An opaque payload that is not a row delta (no key/op/table) is not merged: it replaces the cached value, as a plain data frame would.",
+            "baseWire": { "continueCursor": "c_2", "isDone": false, "page": [{ "_creationTime": 1001, "_id": "m1", "text": "one" }] },
+            "frame": { "id": "sub_1", "type": "delta", "delta": { "count": 1 } },
+            "expect": { "kind": "delta", "id": "sub_1", "valueWire": { "count": 1 } }
         }
     ],
     "refreshBatchFrames": {
