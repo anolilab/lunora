@@ -187,4 +187,84 @@ describe("restore", () => {
 
         await expect(operator.restore({ restoredSubjectIds: ["u1"] })).rejects.toBeInstanceOf(LunoraError);
     });
+
+    describe("re-erased erasure requests", () => {
+        const key = () => tombstoneKeyOf("u1", SECRET);
+
+        it.each(["grace", "received", "processing"] as const)("moves a restored erasure in %s to restored", async (status) => {
+            const { operator, privacy, rows, runErasureWorkflow, store } = build(memoryTombstones());
+            const erased = await privacy.requestErasure();
+
+            await runErasureWorkflow(erased.id);
+            // The backup brings the erasure back in the state it had before the erasure, with the raw id.
+            rows.tasks = 150;
+            store.rows.set(erased.id, { ...store.rows.get(erased.id)!, status, subjectId: "u1" });
+
+            await operator.restore({ restoredSubjectIds: ["u1"] });
+
+            expect(store.rows.get(erased.id)).toMatchObject({ status: "restored", subjectId: key() });
+        });
+
+        it("keeps a cancelled erasure cancelled", async () => {
+            const { operator, privacy, rows, runErasureWorkflow, store } = build(memoryTombstones());
+            const erased = await privacy.requestErasure();
+
+            await runErasureWorkflow(erased.id);
+            rows.tasks = 150;
+            store.rows.set(erased.id, { ...store.rows.get(erased.id)!, status: "cancelled", subjectId: "u1" });
+
+            await operator.restore({ restoredSubjectIds: ["u1"] });
+
+            expect(store.rows.get(erased.id)).toMatchObject({ status: "cancelled", subjectId: key() });
+        });
+
+        it("keeps a restored request out of the open list and the deadline sweep", async () => {
+            const { operator, privacy, rows, runErasureWorkflow, store } = build(memoryTombstones());
+            const erased = await privacy.requestErasure();
+
+            await runErasureWorkflow(erased.id);
+            rows.tasks = 150;
+            // A deadline in the past: an open request here would be listed as overdue.
+            store.rows.set(erased.id, { ...store.rows.get(erased.id)!, dueAt: new Date(0), extendedDueAt: undefined, status: "grace", subjectId: "u1" });
+
+            await operator.restore({ restoredSubjectIds: ["u1"] });
+
+            expect(store.rows.get(erased.id)?.status).toBe("restored");
+            await expect(operator.admin.open()).resolves.not.toContainEqual(expect.objectContaining({ id: erased.id }));
+
+            const swept = await operator.tick();
+
+            expect(swept.overdue).not.toContainEqual(expect.objectContaining({ id: erased.id }));
+            expect(swept.approaching).not.toContainEqual(expect.objectContaining({ id: erased.id }));
+        });
+
+        it("refuses to retry a restored request", async () => {
+            const { operator, privacy, rows, runErasureWorkflow, store } = build(memoryTombstones());
+            const erased = await privacy.requestErasure();
+
+            await runErasureWorkflow(erased.id);
+            rows.tasks = 150;
+            store.rows.set(erased.id, { ...store.rows.get(erased.id)!, status: "failed", subjectId: "u1" });
+            await operator.restore({ restoredSubjectIds: ["u1"] });
+
+            await expect(operator.admin.retry(erased.id)).rejects.toMatchObject({ code: "UNPROCESSABLE" });
+            expect(store.rows.get(erased.id)?.status).toBe("restored");
+        });
+
+        it("leaves a restored request restored when the same subject is restored again", async () => {
+            const { operator, privacy, rows, runErasureWorkflow, store } = build(memoryTombstones());
+            const erased = await privacy.requestErasure();
+
+            await runErasureWorkflow(erased.id);
+            rows.tasks = 150;
+            store.rows.set(erased.id, { ...store.rows.get(erased.id)!, status: "processing", subjectId: "u1" });
+            await operator.restore({ restoredSubjectIds: ["u1"] });
+
+            rows.tasks = 150;
+            store.rows.set(erased.id, { ...store.rows.get(erased.id)!, subjectId: "u1" });
+            await operator.restore({ restoredSubjectIds: ["u1"] });
+
+            expect(store.rows.get(erased.id)).toMatchObject({ status: "restored", subjectId: key() });
+        });
+    });
 });

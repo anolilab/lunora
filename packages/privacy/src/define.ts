@@ -31,6 +31,7 @@ import {
     inlineSteps,
     requireTombstones,
     retireSubjectRequests,
+    setStatus,
 } from "./run";
 import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
 
@@ -336,10 +337,38 @@ const downloadUrlFor = async (scope: Scope, requestId: string): Promise<string> 
     return scope.ports.files.signedUrl(record.storageKey, DOWNLOAD_TTL_SECONDS);
 };
 
+/**
+ * Mark each erasure request a restore brought back as `restored`, so an operator can tell a re-erased request from
+ * an original one. A cancelled request never erased anything and stays cancelled; a restored one stays restored.
+ */
+const markReErased = async (scope: Scope, requestIds: ReadonlyArray<string>): Promise<void> => {
+    await Promise.all(
+        requestIds.map(async (requestId) => {
+            const current = await requireRequest(scope.ports.store, requestId);
+
+            if (current.status === "cancelled" || current.status === "restored") {
+                return;
+            }
+
+            await setStatus(scope.ports, requestId, { detail: "re-erased after a backup restore", from: current.status, to: "restored" });
+        }),
+    );
+};
+
+/** The ids of a subject's erasure requests, read while they still carry the raw subject id. */
+const erasureIdsOf = async (scope: Scope, subjectId: string): Promise<ReadonlyArray<string>> => {
+    const requests = await scope.ports.store.listForSubject(subjectId);
+
+    return requests.filter((request) => request.type === "erasure").map((request) => request.id);
+};
+
 /** Erase again the subjects a restore brought back, each in the same dataset order as a first erasure. */
 const restoreSubjects = async (scope: Scope, restoredSubjectIds: ReadonlyArray<string>): Promise<ReadonlyArray<string>> => {
     const tombstones = requireTombstones(scope);
     const subjects = await subjectsToReerase(restoredSubjectIds, tombstones.port, tombstones.secret);
+    // Listed before the loop: the rekey below takes the raw id off these requests, and each subject's rows are only its own.
+    const erasureIdsBySubject = await Promise.all(subjects.map(async (subjectId) => erasureIdsOf(scope, subjectId)));
+    const erasureIds = erasureIdsBySubject.flat();
 
     for (const subjectId of subjects) {
         for (const dataset of erasureOrder(scope.datasets)) {
@@ -353,6 +382,8 @@ const restoreSubjects = async (scope: Scope, restoredSubjectIds: ReadonlyArray<s
         // eslint-disable-next-line no-await-in-loop -- one subject at a time, like the erasure above
         await retireSubjectRequests(scope.ports, subjectId, key);
     }
+
+    await markReErased(scope, erasureIds);
 
     return subjects;
 };
