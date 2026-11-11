@@ -878,6 +878,9 @@ class LunoraClient {
 
     private readonly subscriptions = new SubscriptionRegistry();
 
+    /** The re-subscribe a server retry hint asked for, per subscription id, until any frame for it shows the server has answered. */
+    private readonly pendingSubscriptionRetries = new Map<string, ReturnType<typeof setTimeout>>();
+
     /**
      * Cross-tab coordinator; created only when `crossTabSync: true`. When the
      * client is not the elected leader, all WebSocket operations are skipped.
@@ -3453,6 +3456,7 @@ class LunoraClient {
                 this.sendOrQueueUnsubscribe(subscriptionState.shardKey, subscriptionState.id, "unsubscribe");
                 this.returnCacheSeed(SubscriptionRegistry.keyOf(subscriptionState));
                 this.subscriptions.remove(subscriptionState);
+                this.cancelSubscriptionRetry(subscriptionState.id);
 
                 // Its frame will never be answered now: stand the watchdog down and free the pacing slot it holds.
                 const conn = this.getConnection(subscriptionState.shardKey);
@@ -3849,6 +3853,12 @@ class LunoraClient {
 
     public close(): void {
         this.closed = true;
+
+        for (const timer of this.pendingSubscriptionRetries.values()) {
+            clearTimeout(timer);
+        }
+
+        this.pendingSubscriptionRetries.clear();
 
         for (const key of this.whisperJoins.keys()) {
             this.dropWhisperJoinWaiters(key);
@@ -7003,6 +7013,7 @@ class LunoraClient {
 
         for (const state of this.subscriptions.all()) {
             if (connectionKey(state.shardKey) === key) {
+                this.cancelSubscriptionRetry(state.id);
                 setSubscriptionAck(state, "idle");
                 // A delta run is one socket's stream: whatever of it arrived ends with that socket.
                 state.pendingDeltaRun = undefined;
@@ -7481,6 +7492,7 @@ class LunoraClient {
             this.markQueryRejected(state);
 
             failSubscription(state, subscriptionError);
+            this.scheduleSubscriptionRetry(state, (message.error as { retryAfterMs?: unknown } | undefined)?.retryAfterMs);
 
             // Fan it to follower tabs too. `broadcastSubscriptionError` existed
             // with no caller, so the follower error handler wired to it
@@ -7604,6 +7616,39 @@ class LunoraClient {
     }
 
     /**
+     * Re-subscribe once after the server's retry hint. The server keeps the failure streak across this re-subscribe, so
+     * a re-run that fails again is answered with a longer hint rather than retried on every write.
+     */
+    private scheduleSubscriptionRetry(state: SubscriptionState, retryAfterMs: unknown): void {
+        if (typeof retryAfterMs !== "number" || !Number.isFinite(retryAfterMs) || retryAfterMs < 0) {
+            return;
+        }
+
+        this.cancelSubscriptionRetry(state.id);
+
+        const timer = setTimeout(() => {
+            this.pendingSubscriptionRetries.delete(state.id);
+
+            if (this.subscriptions.getById(state.id) === state) {
+                this.resnapshotSubscription(state);
+            }
+        }, retryAfterMs);
+
+        this.pendingSubscriptionRetries.set(state.id, timer);
+    }
+
+    private cancelSubscriptionRetry(id: string): void {
+        const timer = this.pendingSubscriptionRetries.get(id);
+
+        if (timer === undefined) {
+            return;
+        }
+
+        clearTimeout(timer);
+        this.pendingSubscriptionRetries.delete(id);
+    }
+
+    /**
      * Apply one `data` frame. `snapshotMark` is set only for a frame synthesized
      * by a poll, which carries no cursor: see {@link pollSubscriptions}.
      */
@@ -7614,6 +7659,8 @@ class LunoraClient {
         if (!state) {
             return;
         }
+
+        this.cancelSubscriptionRetry(state.id);
 
         // The older of two seeds from a re-sent `subscribe`, arriving last: it would roll the value and the resume cursor back.
         if (message.type === "data" && isStaleDataFrame(state, message)) {
@@ -8051,6 +8098,8 @@ class LunoraClient {
      * status is only recomputed when this is the acknowledgement that changes it.
      */
     private ackAndAdvanceCursor(state: SubscriptionState, cursor: number | undefined, epoch: string | undefined): void {
+        this.cancelSubscriptionRetry(state.id);
+
         /* eslint-disable no-param-reassign -- advance the shared subscription state in place (same pattern as the optimistic-update path above) */
         const newlyAcked = state.ack !== "acked";
 
