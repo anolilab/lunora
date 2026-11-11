@@ -431,7 +431,11 @@ public final class LunoraClient {
     public func attachSocket(_ sender: @escaping LunoraFrameSender, context: [String: Any]? = nil) {
         withLock {
             socketGeneration = credentialGeneration
-            sender(LunoraClient.buildConnectFrame(clientID: storedClientID, context: context, token: storedSessionToken))
+            sender(
+                LunoraClient.buildConnectFrame(
+                    clientID: storedClientID, context: context, token: storedSessionToken, caps: [LunoraRowDelta.pageDeltaCapability]
+                )
+            )
 
             for topic in whispers.keys.sorted() {
                 sender(LunoraClient.buildWhisperSubscribeFrame(topic: topic))
@@ -863,8 +867,9 @@ public final class LunoraClient {
     /// The `connect` frame ``attachSocket(_:context:)`` sends first on every open.
     /// `token` is the session credential: it rides here, never in the socket URL,
     /// and is omitted when nil or empty.
-    public static func buildConnectFrame(clientID: String? = nil, context: [String: Any]? = nil, token: String? = nil) -> [String: Any] {
+    public static func buildConnectFrame(clientID: String? = nil, context: [String: Any]? = nil, token: String? = nil, caps: [String] = []) -> [String: Any] {
         var frame: [String: Any] = ["id": "connect", "type": "connect"]
+        if !caps.isEmpty { frame["caps"] = caps }
         if let clientID { frame["clientId"] = clientID }
         if let context { frame["context"] = context }
         // Empty is absent, matching `wsURL` and `buildRPCBody`.
@@ -1217,11 +1222,19 @@ public final class LunoraClient {
             let deferred = withLock { () -> LunoraOptimistic.Deferred in
                 guard let id, let entry = subscriptions[id] else { return [] }
 
+                // A row-change delta merges into the SERVER base, not into what the
+                // user sees; the pending layers are re-folded onto the result below.
+                let resolution = LunoraRowDelta.resolve(
+                    kind: kind, payload: value, base: entry.state.serverBase, hasBase: entry.state.hasServerBase
+                )
+                guard case .value(let merged) = resolution else { return [] }
+
                 advance(entry, frame)
 
                 var queued: LunoraOptimistic.Deferred = []
 
-                entry.state.serverBase = value
+                entry.state.serverBase = merged
+                entry.state.hasServerBase = true
                 // Only when the frame CARRIES one: `cursor` is optional on
                 // data/delta frames, and nulling the tracked cursor strands every
                 // pending layer — a later `confirm(commitCursor)` has nothing to
