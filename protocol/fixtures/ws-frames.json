@@ -525,6 +525,115 @@
             "expect": { "kind": "delta", "id": "sub_1", "valueWire": { "count": 1 } }
         }
     ],
+    "pageDeltaPoisonCases": [
+        {
+            "name": "unmergeable-run-freezes-the-cursor",
+            "$comment": "A row change that cannot be merged (an update with no row) poisons the subscription: later delta frames are not merged, published or allowed to advance the resume cursor, even when they carry one. Only a data frame or a resubscribe clears the poison. Without this a later frame's cursor would move the resume position past the dropped change, so a reconnect would not replay it (protocol README 5.4).",
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": {
+                            "key": "m1",
+                            "op": "update",
+                            "table": "messages"
+                        },
+                        "more": true
+                    },
+                    "publishes": 0
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": {
+                            "key": "m2",
+                            "op": "update",
+                            "row": {
+                                "_creationTime": 1002,
+                                "_id": "m2",
+                                "text": "TWO"
+                            },
+                            "table": "messages"
+                        },
+                        "cursor": 9,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0
+                },
+                {
+                    "resume": {
+                        "sinceSeq": 5,
+                        "sinceEpoch": "e1"
+                    }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "data",
+                        "data": {
+                            "continueCursor": "c_3",
+                            "isDone": false,
+                            "page": [
+                                {
+                                    "_creationTime": 1001,
+                                    "_id": "m1",
+                                    "text": "one"
+                                },
+                                {
+                                    "_creationTime": 1002,
+                                    "_id": "m2",
+                                    "text": "TWO"
+                                }
+                            ]
+                        },
+                        "cursor": 12,
+                        "epoch": "e2"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_3",
+                        "isDone": false,
+                        "page": [
+                            {
+                                "_creationTime": 1001,
+                                "_id": "m1",
+                                "text": "one"
+                            },
+                            {
+                                "_creationTime": 1002,
+                                "_id": "m2",
+                                "text": "TWO"
+                            }
+                        ]
+                    }
+                }
+            ],
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        {
+                            "_creationTime": 1001,
+                            "_id": "m1",
+                            "text": "one"
+                        },
+                        {
+                            "_creationTime": 1002,
+                            "_id": "m2",
+                            "text": "two"
+                        }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            }
+        }
+    ],
     "refreshBatchFrames": {
         "$comment": "refreshBatch only. Nothing is delivered until `batchEnd`; then each subscription's callback runs once, with its last value in the bracket.",
         "frames": [
