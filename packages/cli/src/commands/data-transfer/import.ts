@@ -21,7 +21,7 @@ import { CONVEX_STORAGE_TABLE } from "../convex-snapshot";
 import type { ImportBatcher, ImportRowError, ImportShardFailure, ImportTotals } from "./import-batcher";
 import { createImportBatcher } from "./import-batcher";
 import type { ImportMode, ImportPlan, SourceIndex, TablePlan } from "./import-plan";
-import { overwrites, planDestroysRows, planImport, recordSourceRow, reportPlan } from "./import-plan";
+import { overwrites, planDestroysRows, planImport, recordSourceRow, reportPlan, unkeyedRows } from "./import-plan";
 import { createRowTransformer } from "./import-rows";
 import type { ImportSource, ImportSourceName } from "./import-source";
 import { readConvexExport, resolveImportSource } from "./import-source";
@@ -478,6 +478,24 @@ const createSourceRowTransformer = (config: {
 };
 
 /**
+ * What the operator is told to do after a failed drain. `unkeyed` is the file's rows without an `_id`: the target gives each a fresh id,
+ * so a re-run writes those already imported a second time, and "conflict rather than duplicate" would be false.
+ */
+const drainFailureAdvice = (received: number, unkeyed: number): string => {
+    if (unkeyed === 0) {
+        return received === 0
+            ? "re-run the same command once the worker is reachable (existing rows conflict rather than duplicate)"
+            : "the rows below had already been written — re-run the same command to resume (existing rows conflict rather than duplicate)";
+    }
+
+    const keyless = `${String(unkeyed)} row(s) without an _id`;
+
+    return received === 0
+        ? `re-run the same command once the worker is reachable; any of the ${keyless} that did land are written a second time`
+        : `the rows below had already been written — re-running the same command duplicates the ${keyless} that already landed; give every row an _id (or remove the imported ones) before re-running`;
+};
+
+/**
  * Feed a source's text chunks through the row transform into the batcher,
  * returning the error that stopped it (or `undefined`).
  *
@@ -489,12 +507,15 @@ const createSourceRowTransformer = (config: {
  * on batch 900 of 2,000 has already written 899 batches, and the operator needs
  * to know how far it got before deciding whether to resume. Letting the error
  * escape prints one line and discards every tally.
+ *
+ * `unkeyed` is the whole file's rows without an `_id` (zero for the check pass, which writes nothing).
  */
 const drainIntoBatcher = async (
     stream: AsyncIterable<Buffer | string>,
     toWireRow: (line: string, lineNumber: number) => string | undefined,
     batcher: ImportBatcher,
     logger: Logger,
+    unkeyed: number,
 ): Promise<unknown> => {
     let buffer = "";
     let lineNumber = 0;
@@ -536,13 +557,10 @@ const drainIntoBatcher = async (
         // `received` grows only once a batch's response is read, so zero means no
         // write was CONFIRMED, not that none landed: a batch the server committed
         // and then lost the connection on still counts zero here.
-        if (batcher.totals.received === 0) {
-            logger.error(`import failed before any batch was acknowledged: ${message}`);
-            logger.error("re-run the same command once the worker is reachable (existing rows conflict rather than duplicate)");
-        } else {
-            logger.error(`import failed part-way through: ${message}`);
-            logger.error("the rows below had already been written — re-run the same command to resume (existing rows conflict rather than duplicate)");
-        }
+        const { received } = batcher.totals;
+
+        logger.error(received === 0 ? `import failed before any batch was acknowledged: ${message}` : `import failed part-way through: ${message}`);
+        logger.error(drainFailureAdvice(received, unkeyed));
 
         return error;
     }
@@ -763,6 +781,7 @@ const runImportPass = async (
     storage: StoragePhaseResult,
     target: ImportPassTarget,
     sourceIndex?: SourceIndex,
+    unkeyed = 0,
 ): Promise<ImportPass> => {
     const unresolvedPaths = new Set<string>();
     const remapReport: StorageRemapReport = { ambiguous: [], rewritten: 0, unmigrated: [] };
@@ -824,7 +843,7 @@ const runImportPass = async (
               };
     // Every source is a `for await`-able of text, so one drain loop drives all of
     // them and the POST size stays bounded by `batchSize`.
-    const drained = await drainIntoBatcher(stream, indexedToRow, batcher, options.logger);
+    const drained = await drainIntoBatcher(stream, indexedToRow, batcher, options.logger, unkeyed);
     const incomplete = drained === undefined ? ended?.problem() : undefined;
     const streamFailure = incomplete === undefined ? drained : new Error(`${options.file}: ${incomplete}`);
 
@@ -1191,6 +1210,27 @@ const planUnlessAppend = async (
         ? { plan: undefined }
         : planAndConfirm(options, request, sourceIndex, mode);
 
+/**
+ * Warn before the first write when `append` or `upsert` will insert rows without an `_id`. `replace` refuses them in the plan, so it never
+ * reaches a write that needs the warning.
+ */
+const warnUnkeyedRows = (logger: Logger, mode: ImportMode, index: SourceIndex): void => {
+    const total = unkeyedRows(index);
+
+    if (total === 0 || !(mode === "append" || mode === "upsert")) {
+        return;
+    }
+
+    const perTable = [...index]
+        .filter(([, entry]) => entry.unkeyed > 0)
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([table, entry]) => `${table}: ${String(entry.unkeyed)}`);
+
+    logger.warn(
+        `${String(total)} row(s) have no _id (${perTable.join(", ")}): the target gives each a fresh id, so if this import stops part-way, re-running it writes the ones already imported a second time`,
+    );
+};
+
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     // Route the human/progress channel once, here: every helper below is handed
@@ -1254,6 +1294,8 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
         return refuseFile(options, check, refusal, undefined);
     }
 
+    warnUnkeyedRows(options.logger, mode, sourceIndex);
+
     // Planned after the check, so a file the worker would refuse never costs a read of the target, and before any blob moves.
     const planned = await planUnlessAppend(options, request, sourceIndex, mode);
 
@@ -1296,6 +1338,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
         storage,
         { ...target, requestUrl },
         written,
+        unkeyedRows(sourceIndex),
     );
 
     // Parity over an aborted run only restates the abort, so skip it there and

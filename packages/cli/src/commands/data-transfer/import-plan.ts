@@ -177,9 +177,12 @@ const reportPlan = (logger: Logger, plan: ImportPlan, mode: ImportMode): void =>
     }
 };
 
+/** The file's rows that carry no `_id`, summed over its tables. */
+const unkeyedRows = (index: SourceIndex): number => [...index.values()].reduce((total, entry) => total + entry.unkeyed, 0);
+
 /** Whether the plan overwrites or deletes a stored row, which is what a confirmation guards. */
 const planDestroysRows = (plan: ImportPlan, mode: ImportMode): boolean =>
     overwrites(mode) && plan.tables.some((table) => table.matched > 0 || table.delete > 0);
 
 export type { ImportMode, ImportPlan, SourceIndex, TablePlan };
-export { IMPORT_MODES, overwrites, parseImportMode, planDestroysRows, planImport, recordSourceRow, reportPlan };
+export { IMPORT_MODES, overwrites, parseImportMode, planDestroysRows, planImport, recordSourceRow, reportPlan, unkeyedRows };

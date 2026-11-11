@@ -33,6 +33,8 @@ const fakeWorker = (
     initial: Record<string, Doc[]>,
     options: {
         canDelete?: boolean;
+        /** The n-th write request (the check pass's dry runs do not count) rejects, as a dropped connection does. */
+        failWriteAt?: number;
         onExport?: () => void;
         refuse?: ReadonlyArray<string>;
         /** Tables whose delete rows fail the whole request, as a `.global()` importer without delete support does. */
@@ -44,6 +46,7 @@ const fakeWorker = (
 ) => {
     const stored = new Map(Object.entries(initial).map(([table, docs]) => [table, new Map(docs.map((doc) => [doc._id, doc]))]));
     const writes: string[] = [];
+    let writeRequests = 0;
 
     /** Apply one row to the store and name what happened to it. */
     const apply = (row: { doc: Doc; op?: string; table: string }, replace: boolean): "conflict" | "deleted" | "inserted" | "noop" | "refused" | "replaced" => {
@@ -113,6 +116,14 @@ const fakeWorker = (
 
         result.received = rows.length;
 
+        if (!dryRun) {
+            writeRequests += 1;
+
+            if (writeRequests === options.failWriteAt) {
+                throw new TypeError("fetch failed");
+            }
+        }
+
         if (dryRun && options.unreachableOnDeleteCheck === true && rows.some((raw) => (JSON.parse(raw) as { op?: string }).op === "delete")) {
             return json({ ...result, dryRun: true, failed: [{ message: "shard did not answer", shardKey: "s2" }], onConflict: "replace" });
         }
@@ -172,10 +183,10 @@ const capture = (): { lines: string[]; logger: Logger } => {
 let workDir: string;
 
 /** The rows as an export file: one per line, then the end marker that says how many there are. */
-const render = (rows: ReadonlyArray<{ doc: Doc; table: string }>): string =>
+const render = (rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>): string =>
     `${rows.map((row) => `${JSON.stringify(row)}\n`).join("")}${exportEndLine(rows.length)}`;
 
-const writeFile = (rows: ReadonlyArray<{ doc: Doc; table: string }>): string => {
+const writeFile = (rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>): string => {
     const file = join(workDir, "snapshot.ndjson");
 
     writeFileSync(file, render(rows), "utf8");
@@ -430,5 +441,62 @@ describe("lunora import --mode", () => {
         });
 
         expect(confirmed.code).toBe(0);
+    });
+
+    it("a failed append that wrote rows without an _id does not promise a conflict-safe re-run", async () => {
+        expect.assertions(3);
+
+        const worker = fakeWorker({}, { failWriteAt: 2 });
+        const { lines, logger } = capture();
+        const file = writeFile([
+            { doc: { name: "first" }, table: "users" },
+            { doc: { name: "second" }, table: "users" },
+            { doc: { name: "third" }, table: "users" },
+        ]);
+
+        const result = await runImportCommand({ batchSize: 1, fetchImpl: worker.fetchImpl, file, logger, token: "t" });
+
+        expect(result.code).toBe(1);
+        expect(lines.join("\n")).toMatch(/duplicates|a second time/u);
+        expect(lines.join("\n")).not.toContain("conflict rather than duplicate");
+    });
+
+    it("an append of rows without an _id warns, before anything is written, with the count", async () => {
+        expect.assertions(3);
+
+        const worker = fakeWorker({});
+        const { lines, logger } = capture();
+        const file = writeFile([
+            { doc: { _id: "u1" }, table: "users" },
+            { doc: { name: "no id" }, table: "users" },
+            { doc: { name: "no id either" }, table: "logs" },
+        ]);
+
+        const result = await runImportCommand({ fetchImpl: worker.fetchImpl, file, logger, token: "t" });
+
+        const warning = lines.findIndex((line) => /^warn: 2 row\(s\) have no _id \(logs: 1, users: 1\)/u.test(line));
+        const firstPost = lines.findIndex((line) => line.startsWith("POST "));
+
+        expect(result.code).toBe(0);
+        expect(warning).toBeGreaterThanOrEqual(0);
+        expect(warning).toBeLessThan(firstPost);
+    });
+
+    it("a failed append of rows that all carry an _id still says a re-run conflicts rather than duplicates, with no warning", async () => {
+        expect.assertions(3);
+
+        const worker = fakeWorker({}, { failWriteAt: 2 });
+        const { lines, logger } = capture();
+        const file = writeFile([
+            { doc: { _id: "u1" }, table: "users" },
+            { doc: { _id: "u2" }, table: "users" },
+            { doc: { _id: "u3" }, table: "users" },
+        ]);
+
+        const result = await runImportCommand({ batchSize: 1, fetchImpl: worker.fetchImpl, file, logger, token: "t" });
+
+        expect(result.code).toBe(1);
+        expect(lines.join("\n")).toContain("conflict rather than duplicate");
+        expect(lines.some((line) => line.includes("have no _id"))).toBe(false);
     });
 });

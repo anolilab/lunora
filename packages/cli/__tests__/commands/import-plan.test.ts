@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { exportEndLine } from "../../../../shared/export-end";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import type { SourceIndex } from "../../src/commands/data-transfer/import-plan";
-import { planDestroysRows, planImport, recordSourceRow } from "../../src/commands/data-transfer/import-plan";
+import { planDestroysRows, planImport, recordSourceRow, unkeyedRows } from "../../src/commands/data-transfer/import-plan";
 
 const wireRow = (id: string): string => JSON.stringify({ doc: { _id: id }, table: "users" });
 
@@ -36,6 +36,21 @@ const storing = (ids: ReadonlyArray<string>): { baseUrl: string; fetchImpl: Stre
 
     return { baseUrl: "https://app.example", fetchImpl, token: "t" };
 };
+
+describe(unkeyedRows, () => {
+    it("sums the rows without an _id over every table", () => {
+        expect.assertions(2);
+
+        const index = indexOf(["a"]);
+
+        recordSourceRow(index, JSON.stringify({ doc: { name: "no id" }, table: "users" }));
+        recordSourceRow(index, JSON.stringify({ doc: { name: "no id" }, table: "logs" }));
+        recordSourceRow(index, JSON.stringify({ doc: { name: "no id" }, table: "logs" }));
+
+        expect(unkeyedRows(index)).toBe(3);
+        expect(unkeyedRows(indexOf(["a", "b"]))).toBe(0);
+    });
+});
 
 describe(planImport, () => {
     it("counts a repeated _id's later copies as overwrites of the first, never as additions", async () => {
