@@ -32,6 +32,7 @@ import type {
     FeatureBalance,
     Money,
     PaymentSession,
+    ProviderCapabilities,
     ProviderId,
     RefundInput,
     Subscription,
@@ -190,8 +191,6 @@ export interface CreatePaymentOptions {
 }
 
 export interface LunoraPayment {
-    readonly adapter: PaymentAdapter;
-
     /**
      * Subscribe a reference to a plan — a plan-oriented alias of {@link LunoraPayment.createCheckout}
      * with `mode` defaulting to `"subscription"`. Returns a hosted-checkout URL to redirect to.
@@ -221,6 +220,13 @@ export interface LunoraPayment {
     /** Resolve every configured feature's allowance for a reference in one call. Requires `entitlements`. */
     listBalances: (referenceId: string) => Promise<FeatureBalance[]>;
     listSubscriptions: (referenceId: string) => Promise<Subscription[]>;
+
+    /**
+     * Who the provider is and what it supports, for checks an app makes before it starts an
+     * operation (e.g. refusing a checkout that needs session expiry before taking a hold).
+     * Read-only data: no operation and no reference to the adapter is reachable from it.
+     */
+    readonly provider: { readonly capabilities: ProviderCapabilities; readonly identifier: ProviderId };
 
     /**
      * Refund the caller's own captured payment (authorized, derived idempotency key, store synced).
@@ -466,9 +472,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         return merged;
     };
 
-    return {
-        adapter,
+    // Copies, not the adapter's own objects: nothing reachable from `provider` can call an operation or change
+    // what the facade reads from the adapter.
+    const provider = Object.freeze({
+        capabilities: Object.freeze({ ...adapter.capabilities }),
+        identifier: adapter.identifier,
+    });
 
+    return {
         attach: async (input) => startCheckout({ ...input, mode: input.mode ?? "subscription" }),
 
         cancelPayment: async (sessionId, cancelOptions) => {
@@ -691,6 +702,8 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             return store.listSubscriptionsByReference(referenceId);
         },
+
+        provider,
 
         resumeSubscription: async (subscriptionId, resumeOptions) => {
             const existing = await ownedSubscription(subscriptionId);

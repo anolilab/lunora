@@ -213,7 +213,6 @@ interface LunoraDatabaseLike {
 
 ```ts
 interface LunoraPayment {
-    readonly adapter: PaymentAdapter;
     attach: (input: AttachInput) => Promise<CheckoutResult>;
     cancelPayment: (sessionId: string, options?: {
         idempotencyKey?: string;
@@ -228,6 +227,10 @@ interface LunoraPayment {
     handleWebhook: (request: Request) => Promise<Response>;
     listBalances: (referenceId: string) => Promise<FeatureBalance[]>;
     listSubscriptions: (referenceId: string) => Promise<Subscription[]>;
+    readonly provider: {
+        readonly capabilities: ProviderCapabilities;
+        readonly identifier: ProviderId;
+    };
     refundPayment: (input: RefundInput) => Promise<PaymentSession>;
     resumeSubscription: (subscriptionId: string, options?: {
         idempotencyKey?: string;

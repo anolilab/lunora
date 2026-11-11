@@ -2363,3 +2363,52 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ priceId: "price_1" });
     });
 });
+
+describe("createPayment — provider info", () => {
+    it("exposes the configured provider's identifier and capabilities", () => {
+        expect.assertions(1);
+
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, store: new MemoryPaymentStore() });
+
+        expect(payment.provider).toStrictEqual({
+            capabilities: { checkoutExpiry: true, merchantOfRecord: false, portal: true, usageMetering: true },
+            identifier: "stripe",
+        });
+    });
+
+    it("does not hand out the adapter", () => {
+        expect.assertions(4);
+
+        const adapter = fakeAdapter();
+        const payment = createPayment({ adapter, authorize: () => true, store: new MemoryPaymentStore() });
+
+        expect("adapter" in payment).toBe(false);
+        expect(Object.values(payment)).not.toContain(adapter);
+        expect(payment.provider.capabilities).not.toBe(adapter.capabilities);
+        expect(Object.values(payment.provider).some((value) => typeof value === "function")).toBe(false);
+    });
+
+    it("is frozen, and changing it does not change what the facade does", async () => {
+        expect.assertions(4);
+
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, store: new MemoryPaymentStore() });
+
+        expect(Object.isFrozen(payment.provider)).toBe(true);
+        expect(Object.isFrozen(payment.provider.capabilities)).toBe(true);
+        expect(() => {
+            (payment.provider.capabilities as { checkoutExpiry?: boolean }).checkoutExpiry = false;
+        }).toThrow(TypeError);
+
+        // The facade reads the adapter, not the copy, so the expiry it refuses or allows is unchanged.
+        await expect(
+            payment.createCheckout({
+                cancelUrl: "https://x/cancel",
+                expiresAt: Date.now() + 60_000,
+                mode: "payment",
+                priceId: "price_1",
+                referenceId: "user_1",
+                successUrl: "https://x/ok",
+            }),
+        ).resolves.toMatchObject({ id: "cs_1" });
+    });
+});

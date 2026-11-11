@@ -275,11 +275,9 @@ Call the facade from an action. Every method authorizes the caller against the
 | `handleWebhook(request)`                       | `Response`         | Verify + normalize + apply a provider webhook.                                                                  |
 
 <Callout type="warn">
-    `ctx.payments.adapter` is the provider adapter, exposed for provider-specific extras the facade does not wrap. **Do not move money or change a subscription
-    through it.** `adapter.refundPayment` / `capturePayment` / `cancelPayment` skip everything the facade methods above do first: the caller authorization, the
-    over-refund guard, the local refund ledger (the only thing stopping a retry from issuing a second real refund on a provider whose API takes no idempotency
-    key), the derived idempotency key, and the store write. `adapter.cancelSubscription` / `updateSubscription` / `resumeSubscription` skip the caller
-    authorization and the store write. The facade ends in the same provider call.
+    The provider adapter is not reachable from `ctx.payments`. Every money and subscription operation goes through the facade methods above, which authorize the
+    caller and write the store. `ctx.payments.provider` gives the provider's `identifier` and `capabilities` (read-only) for checks an app makes before it
+    starts an operation, for example `if (!ctx.payments.provider.capabilities.checkoutExpiry) throw new Error("this provider cannot expire a checkout");`.
 </Callout>
 
 ```ts

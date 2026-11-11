@@ -25,25 +25,18 @@ describe("payment docs", () => {
     });
 
     /**
-     * The guarded money operations must be shown on the facade, not on `ctx.payments.adapter`. The
-     * adapter is the raw provider call: it skips the caller authorization, the over-refund check, the
-     * local refund ledger (the only thing stopping a double Polar refund — see `idempotency.ts`), the
-     * derived idempotency key, and the store write. Three provider guides documented the adapter as
-     * the supported refund path, one of them asserting the facade had no refund method at all.
-     * Subscription changes need the owner check and the store write for the same reason.
+     * `ctx.payments.adapter` was removed: the raw provider adapter let a caller reach a money or
+     * subscription operation without the caller authorization, the over-refund check, the local refund
+     * ledger (the only thing stopping a double Polar refund — see `idempotency.ts`), the derived
+     * idempotency key, or the store write. Every operation goes through the facade, so the docs must
+     * not name the removed property at all.
      */
-    it("never documents a money operation on ctx.payments.adapter", () => {
+    it("never mentions ctx.payments.adapter, which the facade no longer exposes", () => {
         expect.hasAssertions();
 
         const offenders = readdirSync(DOCS_DIRECTORY)
             .filter((name) => name.endsWith(".mdx"))
-            // A call, not a mention: the guides are free to name the adapter method in prose that
-            // steers readers away from it.
-            .filter((name) =>
-                /ctx\.payments\.adapter\.(?:(?:cancel|capture|refund)Payment|(?:cancel|resume|update)Subscription)\(/.test(
-                    readFileSync(join(DOCS_DIRECTORY, name), "utf8"),
-                ),
-            );
+            .filter((name) => /ctx\.payments\.adapter\b/.test(readFileSync(join(DOCS_DIRECTORY, name), "utf8")));
 
         expect(offenders).toStrictEqual([]);
     });
