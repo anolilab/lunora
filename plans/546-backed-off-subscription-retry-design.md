@@ -55,7 +55,8 @@ stays on its error state for the life of the socket.
 - No per-flush re-run storm: a deterministically failing query runs at most once per backoff step.
 - Exactly one `subscribe` frame per key per retry, regardless of subscriber count (dedupe holds).
 - A client that ignores `retryAfterMs` (every `sdks/*` port today) behaves exactly as now.
-- The streak's first failure still retries on the next flush too (unchanged); the hint is additive.
+- The streak's first failure still retries on the next flush too (unchanged); the hint is an additive
+  field on frames already sent, so a client that ignores it sees today's frames exactly.
 
 ## 4. Design decisions
 
@@ -63,14 +64,17 @@ stays on its error state for the life of the socket.
   mirroring the RPC envelope's `retryAfterMs`. Additive, no protocol version bump and no `caps` token:
   a server never changes behaviour based on whether a client understands it (Q1's answer keeps that
   true).
-- **When the server sends it:** on EVERY latched refresh failure (not only at streak start), with
-  `retryAfterMs = max(backoffDelay(failures), 1000)` — the first failure's flush-retry delay is 0, but a
-  quiet table needs a real wake-up. Later failures in a streak now each send one frame (one per backoff
-  step, so bounded by the backoff itself). Guarded sockets (`deliveryAuthorization`) keep sending
-  nothing, as today.
+- **When the server sends it:** only on frames the server ALREADY sends, so a client that ignores the
+  field sees exactly today's frames: (a) the existing streak-start refresh `error` frame
+  (`noteFailingSubscription`) gains `retryAfterMs = 1000` (the first failure's flush-retry delay is 0,
+  but a quiet table needs a real wake-up; 1000 ms is the latch's base step); (b) the reply to a FAILED
+  hinted re-subscribe (Q1) carries `retryAfterMs = backoffDelay(failures)` for the continued streak.
+  Flush-driven later failures stay silent, as today. The exponential growth comes from the client's own
+  hinted retries. Guarded sockets (`deliveryAuthorization`) keep sending nothing.
 - **Client:** on an `error` frame with a finite `retryAfterMs` for a query subscription, schedule ONE
   re-subscribe for that key at `now + retryAfterMs` (a later hint for the same key replaces the pending
-  one; unsubscribe of the last subscriber, socket close/reconnect and `close()` cancel it); when it fires
+  one; unsubscribe of the last subscriber, socket close/reconnect, `close()`, and any `data`, `delta`,
+  `resume` or `settled` frame for that key (a flush-driven recovery got there first) cancel it); when it fires
   and the state is still registered and the socket open, call the `resnapshotSubscription`-style path
   (`idle` → one `subscribe` frame). Composition with plan 541: the hinted error is still a refusal for
   late joiners until the retry re-arms the state (`setSubscriptionAck` clears `refusal`).
@@ -91,8 +95,8 @@ proving an SDK ignores or honours it), `api-snapshots/client.api.md` if a client
 
 Tests (each must fail without its change):
 
-1. server: a subscription failing twice on a quiet table — the second failure's `error` frame carries
-   `retryAfterMs` equal to `backoffDelay(2)`; the first carries 1000.
+1. server: a subscription whose refresh fails on a quiet table sends exactly one `error` frame carrying
+   `retryAfterMs: 1000`; a second flush-driven failure sends no frame (today's behaviour).
 2. server: after the hint, a re-subscribe of the same id with the same args re-runs the query (run count
    +1) even though `retryAt` has not passed for flushes, and a SUCCESSFUL re-run clears the streak and
    delivers data.
@@ -102,7 +106,7 @@ Tests (each must fail without its change):
 5. client (injected clock): an error frame with `retryAfterMs: 5000` schedules exactly one re-subscribe;
    advancing the injected clock to 4999 sends nothing, to 5000 sends exactly one `subscribe` frame for
    the key even with three subscribers; unsubscribing all before 5000 cancels it; a socket close cancels
-   it; a second hint replaces the first.
+   it; a second hint replaces the first; a `data` frame for the key before 5000 cancels it.
 6. client: an `error` frame without `retryAfterMs` schedules nothing (today's behaviour).
 
 Gates: do + client `test`, `lint:types`, `lint:eslint`; protocol fixtures consumed by the client's
@@ -150,15 +154,14 @@ Merge with plan 541 (`fix/improve-541-replay-subscription-refusal`, PR #1530): b
 
 ## 9. Open questions
 
-1. **(Owner, blocking phase 1)** What does a hinted re-subscribe do when its re-run FAILS? Today a
-   re-subscribe clears the streak (`subscribe`, `shard-do.ts:6534-6535`) and a failing seed DEREGISTERS
-   the subscription with a terminal `SUBSCRIPTION_SEED_FAILED` (`seedSubscriptionGuarded`,
-   `:14981-14990`). Taken as is, the first failed retry would turn a latched-but-recoverable
-   subscription into a dead one. **Recommended:** the server treats a re-subscribe of an id that has a
-   live failure streak AND unchanged args as a retry — it keeps the streak (does not clear it), and if
-   the re-run fails it stays registered, records the failure, and answers with the next
-   `retryAfterMs`, exactly like a failed refresh. No client→server field is needed (the server infers
-   "retry" from the streak + unchanged args), so the protocol change stays one additive server field.
-   Alternative: an explicit `retry: true` on the client's `subscribe` frame (a second, client→server
-   protocol addition).
-2. Should the first failure's hint be 1000 ms (proposed) or 0 (immediate)?
+1. **(Owner, the one blocking question — yes/no)** When a hinted re-subscribe's re-run FAILS, should the
+   server keep the subscription registered and latched, and answer with the next `retryAfterMs`, instead
+   of today's terminal `SUBSCRIPTION_SEED_FAILED` + deregistration? Today a re-subscribe clears the
+   streak (`subscribe`, `shard-do.ts:6534-6535`) and a failing seed deregisters
+   (`seedSubscriptionGuarded`, `:14981-14990`), so without this the first failed retry turns a
+   latched-but-recoverable subscription into a dead one. **Recommended: yes**, with the server inferring
+   "retry" from a live failure streak plus unchanged args (no client→server field). The alternative — an
+   explicit `retry: true` on the client's `subscribe` frame — costs a second, client→server protocol
+   field and phase-2 work in all 8 SDKs to send it.
+
+Decided by the reviewer (not blocking): the first hint is 1000 ms (the latch's base step).
