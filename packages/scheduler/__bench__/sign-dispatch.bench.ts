@@ -2,6 +2,7 @@ import { bench, describe } from "vitest";
 
 import { toBase64Url } from "../../../shared/base64";
 import { signCanonical } from "../../../shared/hmac-url";
+import { schedulerDispatchCanonical } from "../../../shared/scheduler-dispatch";
 
 /*
  * Every alarm-fired dispatch HMAC-signs its JSON body with
@@ -23,6 +24,6 @@ describe("SchedulerDO.signDispatch", () => {
     });
 
     bench("memoized key via signCanonical (new)", async () => {
-        await signCanonical(secret, body);
+        await signCanonical(secret, schedulerDispatchCanonical({ body, timestamp: 1_700_000_000_000 }));
     });
 });
