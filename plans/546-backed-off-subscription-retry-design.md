@@ -3,7 +3,7 @@
 **Baseline:** `origin/alpha` at `e793b60e7` (2026-11-11); evidence below re-read at `4a7c48bfd`, which
 does not differ in `packages/do/src/shard-do.ts`, `packages/do/src/subscription-backoff.ts`,
 `packages/client/src/*` or `protocol/` for the cited lines.
-**Status:** IN PROGRESS (Q1 answered YES; phase 1 dispatched on `fix/improve-546-backoff-client-retry`)
+**Status:** Phase 1 DONE (review APPROVED after 1 revision; branch `fix/improve-546-backoff-client-retry`, 5 commits, head 1f55a1679; do workerd green; api:check clean; not pushed). Phase 2 TODO (plan only).
 fully specified for that answer and dispatches as soon as it is confirmed)
 **Priority / effort / risk:** P2 / M / MED. **Category:** bug. **Depends on:** none to start; merges
 with plan 541 (see §7).
@@ -226,3 +226,14 @@ retryHintMs(ws, subId)`; else keep today's deregister + `SUBSCRIPTION_SEED_FAILE
   branch; 541 inserts `state.refusal = subscriptionError;` between `markQueryRejected(state)` and
   `failSubscription(...)`, 546 inserts after `failSubscription(...)`, separated by an unchanged line, so
   git should merge both without a conflict; if a reviewer sees one, keep both insertions in that order.
+
+**Phase 1 review (2026-11-11).** APPROVED after 1 revision. Branch `fix/improve-546-backoff-client-retry`
+(from `e793b60e7`): `abefb4247` (server hint + retry inference), `88c9dff20` (client), `8fded385f`
+(protocol README), `bdd03e7ac` (format), `1f55a1679` (revision: errors a retry cannot fix —
+access denial, result too large, guarded persist failure — end the subscription on a retry exactly as
+on a refresh; one shared predicate). Reviewer re-ran: backoff tests 12/12 and client retry tests 6/6;
+red checks (server 3 red, client 2 red with source reverted); full do 1554 and client 1780 tests;
+`lint:types` for both; `@lunora/do` workerd project 193 passed (17 skipped, pre-existing); full build +
+`api:check` clean (no exported shape or fixture changed). `git merge-tree` against plan 541's branch
+(`2d755d3bd`): no conflict. Not covered by a test: access denial during a retry (calls
+`revokeSubscription`, as the refresh path does).
