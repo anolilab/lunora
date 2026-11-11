@@ -780,7 +780,7 @@ const runImportPass = async (
     source: ImportSource,
     storage: StoragePhaseResult,
     target: ImportPassTarget,
-    sourceIndex?: SourceIndex,
+    sourceIndex?: { index: SourceIndex; keepIds: boolean },
     unkeyed = 0,
 ): Promise<ImportPass> => {
     const unresolvedPaths = new Set<string>();
@@ -828,7 +828,7 @@ const runImportPass = async (
                   return toRow(line, lineNumber);
               };
     // Both passes index what they send: the check pass so the plan can match the file's `_id`s against the target's without a
-    // third read, the write pass so the prune never deletes a row it just wrote.
+    // third read, the write pass so the prune never deletes a row it just wrote. A check whose plan is skipped keeps only the counts.
     const indexedToRow =
         sourceIndex === undefined
             ? markedToRow
@@ -836,7 +836,7 @@ const runImportPass = async (
                   const row = markedToRow(line, lineNumber);
 
                   if (row !== undefined) {
-                      recordSourceRow(sourceIndex, row);
+                      recordSourceRow(sourceIndex.index, row, { keepIds: sourceIndex.keepIds });
                   }
 
                   return row;
@@ -1195,20 +1195,25 @@ const withPruneTotals = (write: ImportTotals, prune: ImportTotals | undefined): 
         : { ...write, deleted: write.deleted + prune.deleted, errors: [...write.errors, ...prune.errors], failed: [...write.failed, ...prune.failed] };
 
 /**
- * The plan the run acts on, or the result to stop on. `append` without `--dry-run` reads nothing: it never overwrites or deletes,
- * and reading every stored row of a large table only to report the conflicts the write reports anyway is not worth its cost.
+ * Whether the run reads the target to plan, and so needs the file's `_id`s. `append` without `--dry-run` reads nothing: it never overwrites
+ * or deletes, and reading every stored row of a large table only to report the conflicts the write reports anyway is not worth its cost.
+ * An upsert's plan only feeds its confirmation, so `--yes` skips it too. A mode that plans is added here; a mode that prunes must also be added to `writeIndexing`.
  */
+const needsPlan = (options: Pick<ImportCommandOptions, "dryRun" | "yes">, mode: ImportMode): boolean =>
+    !((mode === "append" || (mode === "upsert" && options.yes === true)) && options.dryRun !== true);
+
+/** What the write pass indexes: only `--mode replace` prunes, so only it keeps what the write sent. */
+const writeIndexing = (mode: ImportMode, written: SourceIndex): { index: SourceIndex; keepIds: boolean } | undefined =>
+    mode === "replace" ? { index: written, keepIds: true } : undefined;
+
+/** The plan the run acts on, or the result to stop on. */
 const planUnlessAppend = async (
     options: ImportCommandOptions,
     request: ImportRequest,
     sourceIndex: SourceIndex,
     mode: ImportMode,
 ): Promise<{ plan: ImportPlan | undefined } | { stop: ImportCommandResult }> =>
-    // An upsert's plan only feeds its confirmation, so `--yes` skips it: reading every stored row of a large table to
-    // count `_id` matches nobody will be asked about is a full export for nothing.
-    (mode === "append" || (mode === "upsert" && options.yes === true)) && options.dryRun !== true
-        ? { plan: undefined }
-        : planAndConfirm(options, request, sourceIndex, mode);
+    needsPlan(options, mode) ? planAndConfirm(options, request, sourceIndex, mode) : { plan: undefined };
 
 /**
  * Warn before the first write when `append` or `upsert` will insert rows without an `_id`. `replace` refuses them in the plan, so it never
@@ -1284,7 +1289,13 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     // The check carries the mode too: a worker whose global importer cannot replace refuses those rows here,
     // before any blob or shard row is written, rather than after the shard plane has already been overwritten.
     const sourceIndex: SourceIndex = new Map();
-    const check = await runImportPass(quietOptions(options), source, plan, { ...target, requestUrl: urls.check }, sourceIndex);
+    const check = await runImportPass(
+        quietOptions(options),
+        source,
+        plan,
+        { ...target, requestUrl: urls.check },
+        { index: sourceIndex, keepIds: needsPlan(options, mode) },
+    );
     const refusal = checkRefusal(check, options.verify === true);
 
     if (refusal !== undefined) {
@@ -1331,13 +1342,14 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
             : `POST ${requestUrl} -> import ${options.file}`,
     );
 
+    // Only the prune reads what the write sent, and only `--mode replace` prunes; any other mode leaves `written` empty.
     const written: SourceIndex = new Map();
     const { batcher, remapReport, sourceRows, streamFailure, unresolvedPaths } = await runImportPass(
         options,
         source,
         storage,
         { ...target, requestUrl },
-        written,
+        writeIndexing(mode, written),
         unkeyedRows(sourceIndex),
     );
 
@@ -1398,4 +1410,4 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 };
 
 export type { ImportCommandData, ImportCommandOptions, ImportCommandResult };
-export { DEFAULT_IMPORT_BATCH_SIZE, runImportCommand };
+export { DEFAULT_IMPORT_BATCH_SIZE, needsPlan, runImportCommand };

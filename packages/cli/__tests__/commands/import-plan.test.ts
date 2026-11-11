@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { exportEndLine } from "../../../../shared/export-end";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
+import { needsPlan } from "../../src/commands/data-transfer/import";
 import type { SourceIndex } from "../../src/commands/data-transfer/import-plan";
 import { planDestroysRows, planImport, recordSourceRow, unkeyedRows } from "../../src/commands/data-transfer/import-plan";
 
@@ -36,6 +37,38 @@ const storing = (ids: ReadonlyArray<string>): { baseUrl: string; fetchImpl: Stre
 
     return { baseUrl: "https://app.example", fetchImpl, token: "t" };
 };
+
+describe("recordSourceRow with keepIds: false", () => {
+    it("counts rows and unkeyed rows, but keeps no ids and no duplicates", () => {
+        expect.assertions(4);
+
+        const index: SourceIndex = new Map();
+
+        recordSourceRow(index, wireRow("a"), { keepIds: false });
+        recordSourceRow(index, wireRow("a"), { keepIds: false });
+        recordSourceRow(index, JSON.stringify({ doc: { name: "no id" }, table: "users" }), { keepIds: false });
+
+        const entry = index.get("users");
+
+        expect(entry?.rows).toBe(3);
+        expect(entry?.unkeyed).toBe(1);
+        expect(entry?.ids.size).toBe(0);
+        expect(entry?.duplicates).toBe(0);
+    });
+});
+
+describe(needsPlan, () => {
+    it("plans exactly when the run would confirm or read the target", () => {
+        expect.assertions(6);
+
+        expect(needsPlan({}, "append")).toBe(false);
+        expect(needsPlan({ dryRun: true }, "append")).toBe(true);
+        expect(needsPlan({ yes: true }, "upsert")).toBe(false);
+        expect(needsPlan({}, "upsert")).toBe(true);
+        expect(needsPlan({}, "replace")).toBe(true);
+        expect(needsPlan({}, "require-empty")).toBe(true);
+    });
+});
 
 describe(unkeyedRows, () => {
     it("sums the rows without an _id over every table", () => {

@@ -46,8 +46,11 @@ type SourceIndex = Map<string, { duplicates: number; ids: Set<string>; rows: num
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
     typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 
-/** Record one wire row (`{"table":…,"doc":…}`) the import will send. */
-const recordSourceRow = (index: SourceIndex, wireRow: string): void => {
+/**
+ * Record one wire row (`{"table":…,"doc":…}`) the import will send. `keepIds: false` counts it without keeping its `_id`, for a run that
+ * never reads the ids: a file of millions of rows would otherwise hold every id for nothing.
+ */
+const recordSourceRow = (index: SourceIndex, wireRow: string, { keepIds = true }: { keepIds?: boolean } = {}): void => {
     // The line was built by the row transformer, but a malformed one must not take the plan down with a bare SyntaxError.
     let parsed: unknown;
 
@@ -74,16 +77,22 @@ const recordSourceRow = (index: SourceIndex, wireRow: string): void => {
 
     entry.rows += 1;
 
-    if (typeof id === "string") {
-        // A later copy of an `_id` the file already carried overwrites the first (or is a conflict under `append`); it adds nothing.
-        if (entry.ids.has(id)) {
-            entry.duplicates += 1;
-        }
-
-        entry.ids.add(id);
-    } else {
+    if (typeof id !== "string") {
         entry.unkeyed += 1;
+
+        return;
     }
+
+    if (!keepIds) {
+        return;
+    }
+
+    // A later copy of an `_id` the file already carried overwrites the first (or is a conflict under `append`); it adds nothing.
+    if (entry.ids.has(id)) {
+        entry.duplicates += 1;
+    }
+
+    entry.ids.add(id);
 };
 
 interface TablePlan {
