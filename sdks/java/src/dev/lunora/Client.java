@@ -246,6 +246,12 @@ public final class Client {
         Object cursor;
         Object epoch;
 
+        /**
+         * Set by a row change that could not be merged into the held base. While set, delta frames
+         * are ignored entirely (no cursor advance); a data frame or a resubscribe clears it.
+         */
+        boolean poisoned;
+
         /** The displayed value and its optimistic overlays. See {@link Optimistic}. */
         final Optimistic.State state = new Optimistic.State(null);
 
@@ -1466,6 +1472,9 @@ public final class Client {
             for (Map.Entry<String, Subscription> entry : subscriptions.entrySet()) {
                 Subscription subscription = entry.getValue();
 
+                // The replay from the old cursor re-applies the dropped change, and poisons again
+                // if it is still unmergeable.
+                subscription.poisoned = false;
                 frames.add(
                         buildSubscribeFrame(
                                 entry.getKey(),
@@ -1575,20 +1584,30 @@ public final class Client {
                     // re-snapshots here, this port has no such path, so the next data frame
                     // reconciles it.
                     if (frame.get("data") != null) {
+                        // A snapshot is authoritative, so it ends any poisoning.
+                        entry.poisoned = false;
                         entry.state.serverBase = value;
                     } else {
+                        if (entry.poisoned) {
+                            // A dropped row change is only replayed if the resume cursor stays
+                            // before it, and only the last frame of a run carries a cursor.
+                            return kind;
+                        }
+
                         if (DeltaMerge.resolve(entry.state.serverBase, value)
                                 instanceof DeltaMerge.Outcome.Publish publish) {
                             entry.state.serverBase = publish.value();
                         } else {
-                            // Nothing changed, so nothing is published.
+                            // Nothing changed, so nothing is published. Poisoned until a data
+                            // frame or a resubscribe, so a later frame's cursor cannot move the
+                            // resume position past the dropped change.
+                            entry.poisoned = true;
                             return kind;
                         }
                     }
 
-                    // Advanced only once the frame is applied: an unmergeable row change returned
-                    // above
-                    // must leave the resume cursor where it was, so a reconnect replays it.
+                    // Advanced only once the frame is applied: a poisoned subscription returned
+                    // above and leaves the resume cursor where it was.
                     advance(entry, frame);
 
                     // `cursor` is OPTIONAL on data/delta frames, so a frame without one LEAVES the

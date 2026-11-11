@@ -56,6 +56,7 @@ public final class ConformanceTest {
         serverFrameConsumer();
         pageDeltaFramesMergeIntoTheCachedResult();
         rowDeltaWithoutMergeableBaseIsNotPublishedAsAnEnvelope();
+        unmergeableRunFreezesTheCursor();
         subscriptionStreamYieldsFrameValuesInOrder();
         shapeSubscribeFrame();
         shapeSubscriptionsResendAfterReconnect();
@@ -976,6 +977,64 @@ public final class ConformanceTest {
             check(
                     canonical(Wire.encode(seen.get(1))).equals(canonical(expect.get("valueWire"))),
                     "merged value for " + testCase.get("name"));
+        }
+    }
+
+    /**
+     * An unmergeable row change poisons the subscription: later deltas neither publish nor move the
+     * resume cursor, until a resubscribe or a data frame clears it.
+     */
+    @SuppressWarnings("unchecked")
+    private static void unmergeableRunFreezesTheCursor() throws IOException {
+        List<Object> cases = (List<Object>) fixture("ws-frames.json").get("pageDeltaPoisonCases");
+
+        check(cases.size() == 1, "ws-frames.json must carry 1 pageDeltaPoisonCase");
+
+        for (Object entry : cases) {
+            Map<String, Object> testCase = (Map<String, Object>) entry;
+            String name = (String) testCase.get("name");
+            Client client = new Client("https://app.example", null);
+            List<Map<String, Object>> sent = new ArrayList<>();
+            List<Object> seen = new ArrayList<>();
+
+            client.attachSocket(sent::add, null);
+            client.subscribe("messages:list", new LinkedHashMap<>(), seen::add, null, null);
+            client.handleFrame(Json.write(testCase.get("seedFrame")));
+            seen.clear();
+
+            for (Object stepEntry : (List<Object>) testCase.get("steps")) {
+                Map<String, Object> step = (Map<String, Object>) stepEntry;
+
+                if (step.containsKey("resume")) {
+                    Map<String, Object> resume = (Map<String, Object>) step.get("resume");
+
+                    sent.clear();
+                    client.resendSubscriptions();
+
+                    Map<String, Object> query =
+                            (Map<String, Object>) resent(sent, "sub_1").get("query");
+
+                    check(
+                            sameNumber(query.get("sinceSeq"), resume.get("sinceSeq"))
+                                    && resume.get("sinceEpoch").equals(query.get("sinceEpoch")),
+                            name + ": the resume must carry the pre-run position, sent " + query);
+
+                    continue;
+                }
+
+                seen.clear();
+                client.handleFrame(Json.write(step.get("frame")));
+                check(
+                        seen.size() == ((Number) step.get("publishes")).intValue(),
+                        name + ": publishes, got " + seen.size());
+
+                if (step.containsKey("valueWire")) {
+                    check(
+                            canonical(Wire.encode(seen.get(0)))
+                                    .equals(canonical(step.get("valueWire"))),
+                            name + ": value");
+                }
+            }
         }
     }
 
