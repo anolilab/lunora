@@ -8,7 +8,7 @@
 > must print nothing. Any change is a STOP.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** TODO
+**Status:** DONE (review APPROVED after revision 1, finished by a second executor; branch `ci/improve-549-nightly-path-gated`, commit `b4889fa4b`; lint-only locally; not merged)
 **Priority / effort / risk:** P2 / S / LOW. **Category:** ci. **Depends on:** none.
 
 ## 0. Headline finding
