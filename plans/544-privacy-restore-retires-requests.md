@@ -9,7 +9,7 @@
 > must print nothing. Then confirm the excerpts in §1 match. Any mismatch is a STOP.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** TODO
+**Status:** DONE (review APPROVED; branch `fix/improve-544-privacy-restore-retires`, commit `e4c02bfc9`; privacy workerd project green; not merged)
 **Priority / effort / risk:** P2 / S-M / LOW. **Category:** bug (data-subject rights). **Depends on:** none.
 
 ## 0. Headline finding
