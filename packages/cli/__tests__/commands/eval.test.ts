@@ -163,6 +163,22 @@ describe("lunora eval", () => {
         expect(recorded.errors.some((line) => line.includes("1/1"))).toBe(true);
     });
 
+    it("fails an eval whose run resolves without a finite average, and still renders the table", async () => {
+        expect.assertions(4);
+
+        const { logger } = recordingLogger();
+        const cwd = join(fixtureRoot, "eval-nan-average-sample");
+
+        const result = await runEvalCommand({ cwd, logger });
+        const nan = result.evals.find((entry) => entry.name === "nan");
+        const missing = result.evals.find((entry) => entry.name === "missing");
+
+        expect(result.code).toBe(1);
+        expect(nan?.error).toContain("average");
+        expect(missing?.error).toContain("average");
+        expect(result.evals.every((entry) => !entry.passed)).toBe(true);
+    });
+
     // Through `execute`, the only path that writes the envelope: `runEvalCommand`
     // hands back the outcomes and `defineHandler` serializes them.
     it("--format json prints one structured document to stdout, flat per the documented per-eval shape", async () => {

@@ -219,7 +219,23 @@ const runOneEval = async (filePath: string, globalThreshold: number | undefined)
 
     try {
         const result = await evalModule.run();
-        const passed = effectiveThreshold === undefined || result.average >= effectiveThreshold;
+
+        // `run()` is untrusted user code: a missing or NaN average would otherwise
+        // pass a threshold-less run or crash the score column, so it is a failure.
+        // The `EvalResult` type says `result` is never undefined, but the file can't keep that.
+        const average: unknown = (result as EvalResult | undefined)?.average;
+
+        if (typeof average !== "number" || !Number.isFinite(average)) {
+            return {
+                error: "run() must resolve to an EvalResult with a finite `average`",
+                name,
+                passed: false,
+                path: filePath,
+                threshold: effectiveThreshold,
+            };
+        }
+
+        const passed = effectiveThreshold === undefined || average >= effectiveThreshold;
 
         return { name, passed, path: filePath, result, threshold: effectiveThreshold };
     } catch (error: unknown) {
