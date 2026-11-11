@@ -11,7 +11,7 @@
 
 **Baseline:** `a57c2b565`, tip of `security/improve-559-payment-subscription-facade` (PR #1544).
 This plan is the addendum to plan 559 and adds commits on that branch.
-**Status:** TODO (unblocked 2026-11-11: owner chose option (a), §9.1)
+**Status:** DONE (APPROVED on review 2026-11-11; commit `5e7b80021` on top of `a57c2b565` on `security/improve-559-payment-subscription-facade`, not pushed; reviewer ran `build:packages` + `api:check` (pass), the bench `lint:types` (pass) and regenerated `examples/payment-demo` (no drift); the saas template itself has no gate short of `test:templates`, which was not run)
 **Priority / Effort / Risk:** P1 / S / LOW. **Category:** security. **Depends on:** plan 559.
 
 ## 0. Headline finding
