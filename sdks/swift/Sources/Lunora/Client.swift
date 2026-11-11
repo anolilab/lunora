@@ -250,6 +250,11 @@ public final class LunoraClient {
         let onError: ((LunoraSubscriptionError) -> Void)?
         var cursor: Any?
         var epoch: Any?
+        /// Set by a row change that could not be merged into the held base. While
+        /// set, delta frames are ignored whole so a later frame's cursor cannot move
+        /// the resume position past the dropped change. A `data` frame or a
+        /// resubscribe clears it.
+        var poisoned = false
         /// The displayed value and its optimistic overlays. See ``LunoraOptimistic``.
         let state = LunoraOptimisticState()
 
@@ -1070,7 +1075,11 @@ public final class LunoraClient {
             guard send != nil else { return (nil, []) }
 
             var frames = subscriptions.compactMap { id, entry in
-                try? LunoraClient.buildSubscribeFrame(
+                // The resume cursor sits before the dropped change, so the replay
+                // re-applies it; if it is still unmergeable the flag is set again.
+                entry.poisoned = false
+
+                return try? LunoraClient.buildSubscribeFrame(
                     id: id,
                     functionPath: entry.functionPath,
                     args: entry.args,
@@ -1222,12 +1231,20 @@ public final class LunoraClient {
             let deferred = withLock { () -> LunoraOptimistic.Deferred in
                 guard let id, let entry = subscriptions[id] else { return [] }
 
+                // A snapshot is authoritative; a delta behind an unmergeable change
+                // is dropped whole, cursor included.
+                if kind == "data" { entry.poisoned = false } else if entry.poisoned { return [] }
+
                 // A row-change delta merges into the SERVER base, not into what the
                 // user sees; the pending layers are re-folded onto the result below.
                 let resolution = LunoraRowDelta.resolve(
                     kind: kind, payload: value, base: entry.state.serverBase, hasBase: entry.state.hasServerBase
                 )
-                guard case .value(let merged) = resolution else { return [] }
+                guard case .value(let merged) = resolution else {
+                    entry.poisoned = true
+
+                    return []
+                }
 
                 advance(entry, frame)
 

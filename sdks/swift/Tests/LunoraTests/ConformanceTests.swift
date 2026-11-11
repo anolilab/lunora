@@ -685,6 +685,60 @@ final class ConformanceTests: XCTestCase {
         try feed(gap, ["id": "sub_1", "type": "data", "data": rows])
         try feed(gap, ["id": "sub_1", "type": "delta", "delta": envelope])
         XCTAssertEqual(gapSeen.count, 1, "an unmergeable delta publishes nothing")
+
+        try casePageDeltaPoison()
+    }
+
+    /// An unmergeable row change freezes the resume cursor until a data frame or a
+    /// resubscribe; see `pageDeltaPoisonCases`.
+    func casePageDeltaPoison() throws {
+        let cases = try XCTUnwrap(fixture("ws-frames.json")["pageDeltaPoisonCases"] as? [[String: Any]])
+
+        XCTAssertEqual(cases.count, 1, "pageDeltaPoisonCases must carry its one case")
+
+        for testCase in cases {
+            let name = testCase["name"] as? String ?? "?"
+            let client = LunoraClient(url: "https://app.example")
+            var sent: [[String: Any]] = []
+            client.attachSocket { sent.append($0) }
+
+            var seen: [Any] = []
+            client.subscribe("messages:list", args: ["channel": "general"], onData: { seen.append($0) }, onError: { _ in })
+
+            func feed(_ frame: Any?) throws {
+                let raw = try JSONSerialization.data(withJSONObject: try XCTUnwrap(frame))
+                client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+            }
+
+            try feed(testCase["seedFrame"])
+            XCTAssertEqual(seen.count, 1, "\(name): the seed publishes once")
+
+            for (index, step) in try XCTUnwrap(testCase["steps"] as? [[String: Any]]).enumerated() {
+                let label = "\(name) step \(index + 1)"
+
+                if let resume = step["resume"] as? [String: Any] {
+                    sent.removeAll()
+                    client.resendSubscriptions()
+
+                    let subscribe = try XCTUnwrap(sent.first { $0["type"] as? String == "subscribe" }, label)
+
+                    let query = try XCTUnwrap(subscribe["query"] as? [String: Any], label)
+
+                    XCTAssertEqual(query["sinceSeq"] as? Int, resume["sinceSeq"] as? Int, label)
+                    XCTAssertEqual(query["sinceEpoch"] as? String, resume["sinceEpoch"] as? String, label)
+                    continue
+                }
+
+                let before = seen.count
+
+                try feed(step["frame"])
+                XCTAssertEqual(seen.count - before, step["publishes"] as? Int, label)
+
+                if let wire = step["valueWire"] {
+                    XCTAssertEqual(canonical(try Wire.encode(seen.last)), canonical(wire), label)
+                }
+            }
+        }
     }
 
     /// The `AsyncStream` form of a live query: same subscription, same decode,
