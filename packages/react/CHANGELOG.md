@@ -1,3 +1,7 @@
+## @lunora/react [1.0.0-alpha.300](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.299...@lunora/react@1.0.0-alpha.300) (2026-11-11)
+
+- feat(client): move admin auth hook logic into @lunora/client (#1552)
+
 ## @lunora/react [1.0.0-alpha.299](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.298...@lunora/react@1.0.0-alpha.299) (2026-11-10)
 
 - fix(react): pass the provider's query client to TanStack; extend the cross-copy fix to other frameworks (#1524)

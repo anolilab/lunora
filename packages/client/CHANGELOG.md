@@ -1,3 +1,7 @@
+## @lunora/client [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.290...@lunora/client@1.0.0-alpha.291) (2026-11-11)
+
+- feat(client): move admin auth hook logic into @lunora/client (#1552)
+
 ## @lunora/client [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.289...@lunora/client@1.0.0-alpha.290) (2026-11-11)
 
 - feat(auth): add API keys via the apiKey() plugin (#1526)
