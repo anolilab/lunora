@@ -120,9 +120,11 @@ const authAdmin = (): AuthAdmin => {
             return { ...USER, banned: true };
         }),
         createUser: vi.fn<NonNullable<AuthAdmin["createUser"]>>(async () => USER),
+        deleteApiKey: vi.fn<NonNullable<AuthAdmin["deleteApiKey"]>>(async () => undefined),
         impersonateUser: vi.fn<NonNullable<AuthAdmin["impersonateUser"]>>(async () => {
             return { expiresAt: 1, token: "tok_u1", user: USER };
         }),
+        listApiKeys: vi.fn<NonNullable<AuthAdmin["listApiKeys"]>>(async () => [{ id: "k1", name: "ci", referenceId: "u1", start: "lnr_k1" }]),
         listSessions: vi.fn<AuthAdmin["listSessions"]>(async () => SESSIONS),
         listUsers: vi.fn<AuthAdmin["listUsers"]>(async () => USERS),
         removeUser: vi.fn<NonNullable<AuthAdmin["removeUser"]>>(async () => undefined),
@@ -135,7 +137,7 @@ const authAdmin = (): AuthAdmin => {
         unbanUser: vi.fn<NonNullable<AuthAdmin["unbanUser"]>>(async () => USER),
 
         capabilities: vi.fn<NonNullable<AuthAdmin["capabilities"]>>(async () => {
-            return { accounts: true, admin: true, inviteOnly: false, organization: false, passkey: false, twoFactor: false };
+            return { accounts: true, apiKey: false, admin: true, inviteOnly: false, organization: false, passkey: false, twoFactor: false };
         }),
     };
 };
@@ -187,6 +189,30 @@ describe("createWorker — auth admin mutation endpoints", () => {
         const users = await worker.fetch(authed("https://app.example/_lunora/admin/auth/users"), {}, fakeContext);
 
         expect(users.headers.get("cache-control")).toBe("no-store");
+    });
+
+    it("lists a user's API keys by userId", async () => {
+        expect.assertions(2);
+
+        const admin = authAdmin();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: admin, shardDO: noopNamespace });
+
+        const response = await worker.fetch(authed("https://app.example/_lunora/admin/auth/api-keys?userId=u1"), {}, fakeContext);
+
+        expect(response.status).toBe(200);
+        expect(admin.listApiKeys).toHaveBeenCalledWith({ userId: "u1" });
+    });
+
+    it("revokes an API key by id with a POST", async () => {
+        expect.assertions(2);
+
+        const admin = authAdmin();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: admin, shardDO: noopNamespace });
+
+        const response = await worker.fetch(post("https://app.example/_lunora/admin/auth/api-keys/delete", { apiKeyId: "k1" }), {}, fakeContext);
+
+        expect(response.status).toBe(200);
+        expect(admin.deleteApiKey).toHaveBeenCalledWith({ apiKeyId: "k1" });
     });
 
     it("revokes a single session by id", async () => {

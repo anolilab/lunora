@@ -6,7 +6,8 @@ import { getContext, setContext } from "svelte";
  * Context key for the per-app {@link LunoraClient}. A `Symbol` (not a string)
  * so it can never collide with another library's context entry.
  */
-const LUNORA_CONTEXT_KEY = Symbol("lunora.client");
+// A registered symbol, not a fresh one: a second copy of this package must read the key the first copy wrote (see `react/src/shared-context.ts`).
+const LUNORA_CONTEXT_KEY = Symbol.for("@lunora/svelte/client");
 
 /**
  * Publish a {@link LunoraClient} on the Svelte component context so that

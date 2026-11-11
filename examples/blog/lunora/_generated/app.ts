@@ -712,9 +712,16 @@ class AppBuilder<Env extends object> {
                 memo = memoizeIdentity(options.resolveIdentity, {
                     // better-auth resolves the session from ALL request headers, so the key
                     // must cover every header a supported plugin authenticates on: the
-                    // session cookie, `Authorization` (bearer / jwt) and `x-api-key` (apiKey).
+                    // session cookie and `Authorization` (bearer / jwt). `x-api-key` requests are never keyed (see below).
                     cacheKey: (request: Request) => {
-                        const parts = ["authorization", "cookie", "x-api-key"].map((name) => request.headers.get(name) ?? "");
+                        // A revoked API key must stop resolving on its next call. Revocation is a row
+                        // delete with nothing in the cookie to change, so a key request is never
+                        // memoised across requests; the lookup is one row read per call.
+                        if (request.headers.get("x-api-key") !== null) {
+                            return undefined;
+                        }
+
+                        const parts = ["authorization", "cookie"].map((name) => request.headers.get(name) ?? "");
 
                         if (parts.every((part) => part === "")) {
                             return undefined;

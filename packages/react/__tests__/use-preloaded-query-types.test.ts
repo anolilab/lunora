@@ -1,7 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import type usePreloadedQuery from "../src/use-preloaded-query";
-import type { hydratePreloaded } from "../src/use-preloaded-query";
+import type { hydratePreloaded, usePreloadedQuery } from "../src/use-preloaded-query";
 
 type Post = { title: string };
 

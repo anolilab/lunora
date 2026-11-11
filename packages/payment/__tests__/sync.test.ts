@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { LunoraPaymentError } from "../src/errors";
 import { money } from "../src/money";
+import type { PaymentObserver } from "../src/observability";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
 import type { PaymentSession, WebhookAction } from "../src/types";
@@ -44,6 +45,240 @@ describe("applyWebhookAction", () => {
             applyWebhookAction(store, { eventId: "e2", priceId: "prod_team", provider: "creem", subscriptionId: "sub_1", type: "subscription.active" }),
         ).resolves.toEqual({ applied: true, reason: "ok" });
         await expect(store.getSubscription("creem", "sub_1")).resolves.toMatchObject({ referenceId: "org_1" });
+    });
+
+    it("refuses a second live subscription on one reference when the policy is on, and alerts the operator", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+        const observer = vi.fn<PaymentObserver>();
+        const live = {
+            eventId: "e1",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        } as const;
+        const second = {
+            eventId: "e2",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_2",
+            type: "subscription.active",
+        } as const;
+
+        await applyWebhookAction(store, live, observer, true);
+
+        await expect(applyWebhookAction(store, second, observer, true)).resolves.toEqual({ applied: false, reason: "duplicate_subscription" });
+        await expect(store.getSubscription("creem", "sub_2")).resolves.toMatchObject({ referenceId: "org_1", state: "paused" });
+        // The refusal is recorded as past due, so the operator and the customer can both see it; access stays with sub_1.
+        await expect(store.listSubscriptionsByReference("org_1")).resolves.toHaveLength(2);
+        expect(observer).toHaveBeenCalledWith({ provider: "creem", subscriptionId: "sub_2", type: "subscription.duplicate" });
+    });
+
+    it("counts a subscription with the same id from another provider as a second live one", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const live = {
+            eventId: "e1",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        } as const;
+        const sameIdElsewhere = {
+            eventId: "e2",
+            priceId: "prod_team",
+            provider: "stripe",
+            referenceId: "org_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        } as const;
+
+        await applyWebhookAction(store, live, undefined, true);
+
+        await expect(applyWebhookAction(store, sameIdElsewhere, undefined, true)).resolves.toEqual({ applied: false, reason: "duplicate_subscription" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ provider: "stripe", state: "paused" });
+    });
+
+    it("stores a cancellation that arrives first on a reference without reporting a duplicate", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const observer = vi.fn<PaymentObserver>();
+        const live = {
+            eventId: "e1",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        } as const;
+        const canceled = { eventId: "e2", provider: "creem", referenceId: "org_1", subscriptionId: "sub_2", type: "subscription.canceled" } as const;
+
+        await applyWebhookAction(store, live, observer, true);
+
+        await expect(applyWebhookAction(store, canceled, observer, true)).resolves.toEqual({ applied: true, reason: "ok" });
+        expect(observer).not.toHaveBeenCalledWith(expect.objectContaining({ type: "subscription.duplicate" }));
+    });
+
+    it("refuses a past-due subscription that becomes active while another live one holds the reference", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const live = {
+            eventId: "e1",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        } as const;
+        const pastDue = { eventId: "e2", provider: "creem", referenceId: "org_1", subscriptionId: "sub_2", type: "subscription.past_due" } as const;
+        const activated = {
+            eventId: "e3",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_2",
+            type: "subscription.active",
+        } as const;
+
+        await applyWebhookAction(store, live, undefined, true);
+
+        await expect(applyWebhookAction(store, pastDue, undefined, true)).resolves.toEqual({ applied: true, reason: "ok" });
+
+        await expect(applyWebhookAction(store, activated, undefined, true)).resolves.toEqual({ applied: false, reason: "duplicate_subscription" });
+        await expect(store.getSubscription("creem", "sub_2")).resolves.toMatchObject({ state: "past_due" });
+    });
+
+    it("does not adopt a capture's organisation onto an active subscription that another live one holds", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const observer = vi.fn<PaymentObserver>();
+        const live = {
+            eventId: "e1",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        } as const;
+        const blankOwner = { eventId: "e2", priceId: "prod_team", provider: "creem", subscriptionId: "sub_2", type: "subscription.active" } as const;
+        const capture = { ...captureEvent("e3"), provider: "creem", referenceId: "org_1", sessionId: "ch_9", subscriptionId: "sub_2" } as const;
+
+        await applyWebhookAction(store, live, observer, true);
+        await applyWebhookAction(store, blankOwner, observer, true);
+        await applyWebhookAction(store, capture, observer, true);
+
+        // The refused adoption is recorded under the owner the capture named, paused: it grants nothing.
+        await expect(store.getSubscription("creem", "sub_2")).resolves.toMatchObject({ referenceId: "org_1", state: "paused" });
+        expect(observer).toHaveBeenCalledWith({ provider: "creem", subscriptionId: "sub_2", type: "subscription.duplicate" });
+        await expect(store.listSubscriptionsByReference("org_1")).resolves.toHaveLength(2);
+    });
+
+    it("does not let a paused subscription block a second one that grants access", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const paused = { eventId: "e1", provider: "creem", referenceId: "org_1", subscriptionId: "sub_1", type: "subscription.paused" } as const;
+        const active = {
+            eventId: "e2",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_2",
+            type: "subscription.active",
+        } as const;
+
+        await applyWebhookAction(store, paused, undefined, true);
+
+        await expect(applyWebhookAction(store, active, undefined, true)).resolves.toEqual({ applied: true, reason: "ok" });
+        await expect(store.getSubscription("creem", "sub_2")).resolves.toMatchObject({ state: "active" });
+    });
+
+    it("does not treat a whitespace-only owner as an owner when checking for a duplicate", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const created = { eventId: "e1", priceId: "prod_team", provider: "creem", subscriptionId: "sub_1", type: "subscription.active" } as const;
+        const second = { eventId: "e2", priceId: "prod_team", provider: "creem", subscriptionId: "sub_2", type: "subscription.active" } as const;
+
+        await applyWebhookAction(store, created, undefined, true);
+        await applyWebhookAction(store, second, undefined, true);
+
+        // Both rows take the same whitespace-only owner on an update: that is no owner, so neither is a duplicate.
+        await expect(
+            applyWebhookAction(store, { ...created, eventId: "e3", occurredAt: 1, referenceId: "  ", type: "subscription.updated" }, undefined, true),
+        ).resolves.toEqual({ applied: true, reason: "ok" });
+        await expect(
+            applyWebhookAction(store, { ...second, eventId: "e4", occurredAt: 2, referenceId: "  ", type: "subscription.updated" }, undefined, true),
+        ).resolves.toEqual({ applied: true, reason: "ok" });
+        await expect(store.getSubscription("creem", "sub_2")).resolves.toMatchObject({ state: "active" });
+    });
+
+    it("applies the rest of an update when only the owner change is refused", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const live = {
+            eventId: "e1",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        } as const;
+        const blank = { eventId: "e2", priceId: "prod_team", provider: "creem", subscriptionId: "sub_2", type: "subscription.active" } as const;
+
+        await applyWebhookAction(store, live, undefined, true);
+        await applyWebhookAction(store, blank, undefined, true);
+
+        // The blank row learns its owner, which the policy refuses, and it also changes its quantity.
+        const update = {
+            eventId: "e3",
+            occurredAt: 1,
+            provider: "creem",
+            quantity: 5,
+            referenceId: "org_1",
+            subscriptionId: "sub_2",
+            type: "subscription.updated",
+        } as const;
+
+        await expect(applyWebhookAction(store, update, undefined, true)).resolves.toEqual({ applied: false, reason: "duplicate_subscription" });
+        await expect(store.getSubscription("creem", "sub_2")).resolves.toMatchObject({ quantity: 5, referenceId: "org_1", state: "paused" });
+    });
+
+    it("keeps a second subscription on one reference when the policy is off, as before", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const live = {
+            eventId: "e1",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        } as const;
+        const second = {
+            eventId: "e2",
+            priceId: "prod_team",
+            provider: "creem",
+            referenceId: "org_1",
+            subscriptionId: "sub_2",
+            type: "subscription.active",
+        } as const;
+
+        await applyWebhookAction(store, live);
+
+        await expect(applyWebhookAction(store, second)).resolves.toEqual({ applied: true, reason: "ok" });
+        await expect(store.listSubscriptionsByReference("org_1")).resolves.toHaveLength(2);
     });
 
     it("lets a stale event fill a blank owner, but nothing else", async () => {

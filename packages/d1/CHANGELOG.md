@@ -1,3 +1,7 @@
+## @lunora/d1 [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.235...@lunora/d1@1.0.0-alpha.236) (2026-11-09)
+
+- feat(cli): apply generated SQL migrations per stage (#1516)
+
 ## @lunora/d1 [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.234...@lunora/d1@1.0.0-alpha.235) (2026-11-05)
 
 - fix(deps): raise the @lunora/errors floor where new codes are thrown (#1502)

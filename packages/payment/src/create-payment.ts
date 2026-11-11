@@ -18,6 +18,8 @@ import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription } from "./store";
+import type { SubscriptionWrite } from "./subscription-policy";
+import { storeSubscription } from "./subscription-policy";
 import applyWebhookAction from "./sync";
 import type {
     AttachInput,
@@ -55,6 +57,46 @@ import { readWebhookBody } from "./webhook-body";
  * they cannot BOTH apply, which absolute markers guarantee.
  */
 let lastUsageStamp = 0;
+
+/** How many guarded writes record a cancel answer over a row that keeps moving under it, before the conflict is raised. */
+const CANCEL_RECORD_ATTEMPTS = 3;
+
+/**
+ * Record the provider's cancel answer over `current`, the row as it stands now. The lifecycle state of a row a webhook
+ * moved stands, and the cancellation is recorded on top of it. Every write is guarded, so no webhook's state is ever
+ * overwritten. A write that loses a race re-reads the row and tries again; when every attempt loses, the conflict is
+ * raised rather than the cancel dropped silently. Reconciliation then records the provider's state for that row.
+ */
+const recordCancelAnswer = async (
+    store: PaymentStore,
+    policy: boolean,
+    synced: Subscription,
+    current: Subscription,
+    attempts: number,
+): Promise<SubscriptionWrite> => {
+    const merged: Subscription = {
+        ...current,
+        cancelAtPeriodEnd: synced.cancelAtPeriodEnd,
+        state: synced.state === "canceled" ? "canceled" : current.state,
+        updatedAt: Date.now(),
+    };
+    const outcome = await storeSubscription(store, policy, current, merged, { ifRevision: current.revision });
+
+    if (outcome !== "rejected") {
+        return outcome;
+    }
+
+    if (attempts <= 1) {
+        throw new LunoraPaymentError(
+            "INVALID_TRANSITION",
+            "the subscription changed while it was being cancelled; the provider has accepted the cancel, so reconcile this subscription",
+        );
+    }
+
+    const latest = (await store.getSubscription(current.provider, current.id)) ?? current;
+
+    return recordCancelAnswer(store, policy, synced, latest, attempts - 1);
+};
 
 const nextUsageStamp = (): number => {
     const now = Date.now();
@@ -134,6 +176,15 @@ export interface CreatePaymentOptions {
     readonly entitlements?: EntitlementsConfig;
     /** Optional telemetry sink — fired on webhook apply, failed payments, and past-due subscriptions. */
     readonly observability?: PaymentObserver;
+
+    /**
+     * Refuse a second subscription that grants access on one reference. Off by default: some apps sell several
+     * subscriptions per customer. When on, a write that would give a second subscription access is refused. The
+     * refused subscription is recorded in a non-granting state, so it can be cancelled in the app, and `subscription.duplicate`
+     * tells the operator to cancel it at the provider, which still bills it. A paused or past-due subscription grants
+     * nothing, so it does not count.
+     */
+    readonly singleSubscriptionPerReference?: boolean;
     readonly store: PaymentStore;
 }
 
@@ -391,9 +442,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             // Already in the requested end state: a retry after a successful cancel. Calling the
             // provider again would be a fresh key (the row's `updatedAt` moved) on a canceled sub.
-            const done = cancelOptions?.atPeriodEnd
-                ? existing.cancelAtPeriodEnd && (existing.state === "active" || existing.state === "trialing")
-                : existing.state === "canceled";
+            const done = cancelOptions?.atPeriodEnd ? existing.cancelAtPeriodEnd && existing.state !== "canceled" : existing.state === "canceled";
 
             if (done) {
                 return existing;
@@ -407,9 +456,25 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             ]);
             const synced = overlayProviderSubscription(existing, await adapter.cancelSubscription(subscriptionId, { ...cancelOptions, idempotencyKey: key }));
 
-            await store.upsertSubscription(synced);
+            // The provider's answer goes through the policy, so a second live subscription is refused rather than
+            // granted. It is guarded by the revision read before the call. If a webhook landed during the call, that
+            // webhook's lifecycle state stands, and the cancellation itself is recorded on top of it: a cancel is never
+            // dropped because the row moved.
+            const policy = options.singleSubscriptionPerReference ?? false;
+            let outcome = await storeSubscription(store, policy, existing, synced, { ifRevision: existing.revision });
 
-            return synced;
+            if (outcome === "rejected") {
+                const current = (await store.getSubscription(adapter.identifier, subscriptionId)) ?? existing;
+
+                outcome = await recordCancelAnswer(store, policy, synced, current, CANCEL_RECORD_ATTEMPTS);
+            }
+
+            if (outcome === "refused") {
+                notifyObserver(options.observability, { provider: synced.provider, subscriptionId: synced.id, type: "subscription.duplicate" });
+            }
+
+            // Whatever the store now holds is what the caller gets, so a refused or merged cancel is reported as stored.
+            return (await store.getSubscription(adapter.identifier, subscriptionId)) ?? synced;
         },
 
         capturePayment: async (input) => {
@@ -513,7 +578,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // WEBHOOK_EVENT_ID_MISSING) surfaces uncaught as a 5xx rather than its catalog 400, so
             // every provider retries the transient malformed delivery instead of some providers
             // treating a 400 as "stop retrying". Do not wrap this call in the parseWebhook try/catch.
-            const result = await applyWebhookAction(store, action, options.observability);
+            const result = await applyWebhookAction(store, action, options.observability, options.singleSubscriptionPerReference ?? false);
 
             // Deliberate non-200: the row this event patches hasn't been created yet (out-of-order
             // delivery), and its claim was released — the provider must retry so the update applies

@@ -440,6 +440,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // pass 1 infer against the previous run's declarations.
     const {
         agents,
+        authClaims,
         capabilities,
         containers,
         crons,
@@ -812,6 +813,9 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const authModuleContent = emitAuthModule(dependencies.has("@lunora/auth"));
     const appContent = emitApp({
         agentWorkflows: agents.map((agent) => agent.className),
+        // Forwarded to the object route and the D1 resolver, which pick the same
+        // columns out of the session. The types on `ctx.auth` come from the same list.
+        authClaims: authClaims.map((claim) => claim.name),
         // Usage-only, never a dependency signal: each long-tail method's
         // parameter type reads `ShardConfig[configKey]` (e.g. `.kv()` reads
         // `ShardConfig["kv"]`), and the shard emits that config field on the

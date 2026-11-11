@@ -123,6 +123,9 @@ interface AuthAdmin {
         password?: string;
         role?: string | string[];
     }) => Promise<AuthAdminUser>;
+    deleteApiKey: (input: {
+        apiKeyId: string;
+    }) => Promise<void>;
     deleteOrganization: (input: {
         organizationId: string;
     }) => Promise<void>;
@@ -147,6 +150,9 @@ interface AuthAdmin {
     listAccounts: (input: {
         userId: string;
     }) => Promise<AuthAccount[]>;
+    listApiKeys: (input: {
+        userId: string;
+    }) => Promise<AuthApiKey[]>;
     listInvitations: (options: {
         limit?: number;
         offset?: number;
@@ -285,6 +291,23 @@ interface AuthAdminUser {
 }
 ```
 
+### `AuthApiKey` (interface)
+
+```ts
+interface AuthApiKey {
+    [key: string]: unknown;
+    createdAt?: AuthTimestamp;
+    enabled?: boolean;
+    expiresAt?: AuthTimestamp | null;
+    id: string;
+    lastRequest?: AuthTimestamp | null;
+    name?: null | string;
+    prefix?: null | string;
+    referenceId: string;
+    start?: null | string;
+}
+```
+
 ### `AuthAuditEntry` (interface)
 
 ```ts
@@ -338,6 +361,7 @@ interface AuthAuditReader {
 interface AuthCapabilities {
     accounts: boolean;
     admin: boolean;
+    apiKey: boolean;
     inviteOnly: boolean;
     organization: boolean;
     passkey: boolean;
@@ -647,6 +671,7 @@ interface DoAuthWiring {
 
 ```ts
 interface DoAuthWiringOptions {
+    claims?: ReadonlyArray<string>;
     discoveryPaths?: ReadonlyArray<string>;
     internalSecret: string | undefined;
     jurisdiction?: AuthJurisdiction;
@@ -1154,7 +1179,7 @@ const resolveAuthOptions: (options: LunoraAuthOptions) => LunoraAuthOptions;
 ### `resolveSessionIdentity` (const)
 
 ```ts
-const resolveSessionIdentity: (auth: LunoraAuth, headers: Headers) => Promise<SessionIdentity | null>;
+const resolveSessionIdentity: (auth: LunoraAuth, headers: Headers, claims?: ReadonlyArray<string>) => Promise<SessionIdentity | null>;
 ```
 
 ### `revokeSignUpInvitation` (const)
@@ -1605,6 +1630,7 @@ type LunoraAuthClientPlugin = ReturnType<typeof organizationClient>;
 interface LunoraAuthPluginToggles {
     admin?: boolean;
     anonymous?: boolean;
+    apiKey?: boolean;
     deviceAuthorization?: boolean;
     emailOtp?: boolean;
     lastLoginMethod?: boolean;

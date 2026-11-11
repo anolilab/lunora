@@ -24,7 +24,7 @@ interface AdapterRegistry {
 ```ts
 interface ApplyResult {
     readonly applied: boolean;
-    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled" | "unstorable";
+    readonly reason?: "duplicate" | "duplicate_subscription" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled" | "unstorable";
 }
 ```
 
@@ -119,6 +119,7 @@ interface CreatePaymentOptions {
     readonly authorize: AuthorizeReference;
     readonly entitlements?: EntitlementsConfig;
     readonly observability?: PaymentObserver;
+    readonly singleSubscriptionPerReference?: boolean;
     readonly store: PaymentStore;
 }
 ```
@@ -374,6 +375,10 @@ type PaymentEvent = {
     provider: ProviderId;
     type: "webhook.duplicate";
 } | {
+    provider: ProviderId;
+    subscriptionId: string;
+    type: "subscription.duplicate";
+} | {
     error: unknown;
     id: string;
     kind: "payment" | "subscription";
@@ -496,6 +501,7 @@ interface PaymentsFromContextOptions {
     readonly authorize?: AuthorizeContextReference;
     readonly entitlements?: EntitlementsConfig;
     readonly observability?: PaymentObserver;
+    readonly singleSubscriptionPerReference?: boolean;
 }
 ```
 
@@ -543,6 +549,7 @@ interface ReconcileInput {
     readonly adapter: PaymentAdapter;
     readonly observability?: PaymentObserver;
     readonly paymentSessionIds?: ReadonlyArray<string>;
+    readonly singleSubscriptionPerReference: boolean;
     readonly store: PaymentStore;
     readonly subscriptionIds?: ReadonlyArray<string>;
     readonly usageReportLimit?: number;
@@ -790,7 +797,7 @@ const allocateMoney: (amount: Money, ratios: ReadonlyArray<bigint>) => Money[];
 ### `applyWebhookAction` (const)
 
 ```ts
-const applyWebhookAction: (store: PaymentStore, action: WebhookAction, observer?: PaymentObserver) => Promise<ApplyResult>;
+const applyWebhookAction: (store: PaymentStore, action: WebhookAction, observer?: PaymentObserver, singleSubscriptionPerReference?: boolean) => Promise<ApplyResult>;
 ```
 
 ### `canTransitionPayment` (const)

@@ -156,6 +156,7 @@ interface AdminTokenSummary {
     expiresAt?: number;
     lastUsedAt?: number;
     name: string;
+    scopes: AdminTokenScope[];
 }
 ```
 
@@ -4119,6 +4120,7 @@ const createAdminTokenRecord: (sql: SqlExec, record: {
     digest: string;
     expiresAt?: number;
     name: string;
+    scopes?: ReadonlyArray<AdminTokenScope>;
 }) => boolean;
 ```
 
@@ -5664,6 +5666,7 @@ const validateImportRow: (schema: SchemaLike, table: string, record: Record<stri
 const verifyAdminTokenDigest: (sql: SqlExec, name: string, digest: string, now: number) => undefined | {
     createdAt: number;
     expiresAt?: number;
+    scopes: AdminTokenScope[];
 };
 ```
 
@@ -5783,6 +5786,20 @@ const defineEngineContractSuite: (name: string, factory: EngineHostFactory, vite
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `ADMIN_TOKEN_SCOPES` (const)
+
+```ts
+const ADMIN_TOKEN_SCOPES: readonly [
+    "migrations"
+];
+```
+
+### `AdminTokenScope` (type)
+
+```ts
+type AdminTokenScope = (typeof ADMIN_TOKEN_SCOPES)[number];
+```
 
 ### `BackfillState` (interface)
 

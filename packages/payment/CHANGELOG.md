@@ -1,3 +1,7 @@
+## @lunora/payment [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.270...@lunora/payment@1.0.0-alpha.271) (2026-11-08)
+
+- feat(payment): refuse a second live subscription per reference when asked (#1510)
+
 ## @lunora/payment [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.269...@lunora/payment@1.0.0-alpha.270) (2026-11-05)
 
 - fix: resolve registry and saas kit defects found reviewing the bench (#1481)

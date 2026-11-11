@@ -1895,6 +1895,7 @@ class LunoraAdminClient extends LunoraClient {
     createAdminToken(options: {
         expiresAt?: number;
         name: string;
+        scopes?: ReadonlyArray<string>;
     }): Promise<CreatedAdminToken>;
     revokeAdminToken(name: string): Promise<void>;
     listKvNamespaces(): Promise<KvNamespaceSummary[]>;
@@ -1976,6 +1977,12 @@ class LunoraAdminClient extends LunoraClient {
     unlinkAuthAccount(input: {
         accountId: string;
         userId: string;
+    }): Promise<void>;
+    listAuthApiKeys(input: {
+        userId: string;
+    }): Promise<Record<string, unknown>[]>;
+    deleteAuthApiKey(input: {
+        apiKeyId: string;
     }): Promise<void>;
     listAuthPasskeys(input: {
         userId: string;

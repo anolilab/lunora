@@ -110,6 +110,10 @@ const AUTH_PASSKEYS_PATH = "/_lunora/admin/auth/passkeys";
 
 const AUTH_DELETE_PASSKEY_PATH = "/_lunora/admin/auth/passkeys/delete";
 
+const AUTH_API_KEYS_PATH = "/_lunora/admin/auth/api-keys";
+
+const AUTH_DELETE_API_KEY_PATH = "/_lunora/admin/auth/api-keys/delete";
+
 const AUTH_DISABLE_2FA_PATH = "/_lunora/admin/auth/two-factor/disable";
 
 const AUTH_ORGS_PATH = "/_lunora/admin/auth/organizations";
@@ -189,6 +193,7 @@ export {
     AUTH_ACCOUNTS_PATH,
     AUTH_ADD_MEMBER_PATH,
     AUTH_ADD_TEAM_MEMBER_PATH,
+    AUTH_API_KEYS_PATH,
     AUTH_BAN_PATH,
     AUTH_CANCEL_INVITATION_PATH,
     AUTH_CAPABILITIES_PATH,
@@ -198,6 +203,7 @@ export {
     AUTH_CREATE_SIGN_UP_INVITATION_PATH,
     AUTH_CREATE_TEAM_PATH,
     AUTH_CREATE_USER_PATH,
+    AUTH_DELETE_API_KEY_PATH,
     AUTH_DELETE_PASSKEY_PATH,
     AUTH_DISABLE_2FA_PATH,
     AUTH_IMPERSONATE_PATH,

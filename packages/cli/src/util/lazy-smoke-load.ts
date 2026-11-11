@@ -1206,5 +1206,4 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     }
 };
 
-export { killWindowsTreeOnExit, taskkillEndedTree };
-export default runLazySmokeLoad;
+export { killWindowsTreeOnExit, runLazySmokeLoad, taskkillEndedTree };

@@ -1,15 +1,17 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import type { Node as TsNode, ObjectLiteralExpression, Project } from "ts-morph";
+import type { ElementAccessExpression, Node as TsNode, ObjectLiteralExpression, Project, PropertyAccessExpression, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { IdentityClaimReadIR } from "../ir";
-import { collectNodeRows, propertyKeyName } from "./ast";
+import { collectNodeRows, isConstDeclaration, isWriteTarget, outermostValueWrapper, propertyKeyName, unwrapExpression } from "./ast";
 import { callSiteScopeOf } from "./attribution";
+import discoverAuthClaims from "./auth-claims";
 import { calleeName } from "./callee";
 import { isContextSurface } from "./context-root";
 import { IDENTITY_FILENAME } from "./identity";
+import { staticPropertyName } from "./property-name";
 
 /**
  * Receiver texts a `.identity` member access sits on in an RLS / mask POLICY
@@ -91,58 +93,185 @@ const identityBagAccess = (node: TsNode | undefined): TsNode | undefined => {
     return POLICY_IDENTITY_RECEIVERS.has(receiver.getText()) || isContextSurface(receiver, ["auth"]) ? node : undefined;
 };
 
-/** The claim key a node reads off the identity bag — a `.identity.<key>` property name, or a `.identity["<key>"]` string-literal index. `undefined` when the node is neither. */
-const claimKeyRead = (node: TsNode): string | undefined => {
-    if (Node.isPropertyAccessExpression(node) && identityBagAccess(node.getExpression()) !== undefined) {
-        return node.getName();
+/**
+ * Looks through `await`, parentheses and type-only wrappers (`as`, `satisfies`, `<T>x`,
+ * `x!`), so `(await ctx.auth.getIdentity() as Identity)!` reads as the call itself.
+ * `awaited` says whether an `await` was crossed: without one the value is the pending
+ * promise, and `.then` on it is not a claim.
+ */
+const throughAwait = (node: TsNode, awaited = false): { awaited: boolean; value: TsNode } => {
+    if (Node.isAwaitExpression(node)) {
+        return throughAwait(node.getExpression(), true);
     }
 
-    if (Node.isElementAccessExpression(node) && identityBagAccess(node.getExpression()) !== undefined) {
-        const argument = node.getArgumentExpression();
-
-        return argument && Node.isStringLiteral(argument) ? argument.getLiteralValue() : undefined;
+    if (
+        Node.isParenthesizedExpression(node) ||
+        Node.isAsExpression(node) ||
+        Node.isSatisfiesExpression(node) ||
+        Node.isTypeAssertion(node) ||
+        Node.isNonNullExpression(node)
+    ) {
+        return throughAwait(node.getExpression(), awaited);
     }
 
-    return undefined;
+    return { awaited, value: node };
 };
 
-/** The claim read one access makes, tagged with whether the key is in the declared allow-list, or `undefined`. */
-const claimReadOf = (node: TsNode, file: string, declared: ReadonlySet<string>): IdentityClaimReadIR | undefined => {
-    const key = claimKeyRead(node);
+/** Whether `node` is an awaited `<auth>.getIdentity()` on an identity receiver, once wrappers are looked through. */
+const identityResultOf = (node: TsNode | undefined): TsNode | undefined => {
+    if (node === undefined) {
+        return undefined;
+    }
 
-    return key === undefined
-        ? undefined
-        : { declared: key === ALWAYS_DECLARED_CLAIM || declared.has(key), file, key, line: node.getStartLineNumber(), scope: callSiteScopeOf(node) };
+    const { awaited, value } = throughAwait(node);
+
+    if (!awaited || !Node.isCallExpression(value)) {
+        return undefined;
+    }
+
+    const callee = value.getExpression();
+
+    if (!Node.isPropertyAccessExpression(callee) || callee.getName() !== "getIdentity") {
+        return undefined;
+    }
+
+    const receiver = callee.getExpression();
+
+    return POLICY_IDENTITY_RECEIVERS.has(receiver.getText()) || isContextSurface(receiver, ["auth"]) ? value : undefined;
 };
 
 /**
- * Discover `ctx.auth.identity.<key>` / `auth.identity.<key>` claim reads in
- * `lunora/` — the `identity_undeclared_claim_trusted` lint input. `defineIdentity`
- * validates only its *declared* claims at the trust boundary and forwards
- * undeclared claims verbatim, so an authorization decision that reads a claim
- * outside the declared contract is trusting an unvalidated, forgeable value.
- *
- * Runs only when the project declares a resolvable `defineIdentity({ ... })`
- * contract in `lunora/identity.ts` (the allow-list to diff against); without one
- * — or when the allow-list is opaque (a spread / non-object argument) — it
- * returns `[]`, so a project with no typed identity contract is never flagged.
- * Each read is tagged `declared` (in the contract, or the always-present
- * `userId`) so the lint flags only the undeclared reads. Deliberately narrow:
- * only the direct `<receiver>.identity.<key>` member/bracket chains are tracked
- * (not a `const bag = auth.identity; bag.x` hop or a `getIdentity()` result), to
- * keep the false-positive rate low.
+ * The key an access reads: a `.<key>` property name, or a static index (`["<key>"]`,
+ * `` [`<key>`] ``, `["<key>" as const]`). `undefined` for any other index.
  */
-const discoverIdentityClaimReads = (project: Project, lunoraDirectory: string): IdentityClaimReadIR[] => {
-    const declared = resolveDeclaredClaims(project, lunoraDirectory);
+const accessedKey = (node: PropertyAccessExpression | ElementAccessExpression): string | undefined => {
+    if (Node.isPropertyAccessExpression(node)) {
+        return node.getName();
+    }
 
-    if (declared === undefined) {
+    const argument = unwrapExpression(node.getArgumentExpression());
+
+    return Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument) ? argument.getLiteralValue() : undefined;
+};
+
+/**
+ * The claim key a node reads off the identity: a `.identity.<key>` read on the bag, or a
+ * `<key>` read straight off the `getIdentity()` result (`(await ctx.auth.getIdentity())?.plan`).
+ * `undefined` when the node is neither.
+ */
+const claimKeyRead = (node: TsNode): string | undefined => {
+    if ((!Node.isPropertyAccessExpression(node) && !Node.isElementAccessExpression(node)) || isWriteTarget(node)) {
+        return undefined;
+    }
+
+    const receiver = node.getExpression();
+
+    return identityBagAccess(receiver) !== undefined || identityResultOf(receiver) !== undefined ? accessedKey(node) : undefined;
+};
+
+/** One claim read at `node`, tagged with whether the key is in the declared allow-list. */
+const readRow = (node: TsNode, key: string, file: string, declared: ReadonlySet<string>): IdentityClaimReadIR => {
+    return {
+        declared: key === ALWAYS_DECLARED_CLAIM || declared.has(key),
+        file,
+        key,
+        line: node.getStartLineNumber(),
+        scope: callSiteScopeOf(node),
+    };
+};
+
+/** The claim read one access makes, or `undefined`. */
+const claimReadOf = (node: TsNode, file: string, declared: ReadonlySet<string>): IdentityClaimReadIR | undefined => {
+    const key = claimKeyRead(node);
+
+    return key === undefined ? undefined : readRow(node, key, file, declared);
+};
+
+/**
+ * The claim reads a `const x = await ctx.auth.getIdentity()` declaration makes: each
+ * destructured key (`const { plan } = …`), and each property read on `x` (`x.plan`,
+ * `x!["plan"]`) found through the language service. A rest element reads the whole
+ * object, and a computed key (`{ [key]: v }`) names no claim statically, so neither is a
+ * claim read. Only a `const` binding is followed — a `let` can be
+ * repointed at another value, after which its reads are not identity reads — and a write
+ * (`x.plan = …`) is not a read.
+ */
+const resultBindingReads = (declaration: VariableDeclaration, file: string, declared: ReadonlySet<string>): IdentityClaimReadIR[] => {
+    if (identityResultOf(declaration.getInitializer()) === undefined) {
         return [];
     }
 
-    // `.identity.<key>` and `.identity["<key>"]` — the two access shapes `claimKeyRead` reads.
+    const name = declaration.getNameNode();
+
+    if (Node.isObjectBindingPattern(name)) {
+        return name
+            .getElements()
+            .filter((element) => element.getDotDotDotToken() === undefined)
+            .flatMap((element) => {
+                const key = staticPropertyName(element.getPropertyNameNode() ?? element.getNameNode());
+
+                return key === undefined ? [] : [readRow(element, key, file, declared)];
+            });
+    }
+
+    if (!Node.isIdentifier(name) || !isConstDeclaration(declaration)) {
+        return [];
+    }
+
+    return name
+        .findReferencesAsNodes()
+        .filter((reference) => reference !== name)
+        .flatMap((reference) => {
+            const receiver = outermostValueWrapper(reference);
+            const access = receiver.getParent();
+
+            if ((!Node.isPropertyAccessExpression(access) && !Node.isElementAccessExpression(access)) || isWriteTarget(access)) {
+                return [];
+            }
+
+            const key = access.getExpression() === receiver ? accessedKey(access) : undefined;
+
+            return key === undefined ? [] : [readRow(access, key, file, declared)];
+        });
+};
+
+/**
+ * Discover claim reads on the identity in `lunora/` — the `identity_undeclared_claim_trusted`
+ * lint input. `defineIdentity` validates only its *declared* claims at the trust boundary and
+ * forwards undeclared claims verbatim, so an authorization decision that reads a claim outside
+ * the declared contract is trusting an unvalidated, forgeable value.
+ *
+ * Tracked shapes: `<receiver>.identity.<key>` and `["<key>"]`; a key read straight off a
+ * `getIdentity()` result (`(await ctx.auth.getIdentity())?.<key>`); a destructuring of that
+ * result; and the property reads on a `const` bound to it. Other flows (passed to a helper,
+ * spread, reassigned) are not followed, to keep the false-positive rate low.
+ *
+ * Runs only when the project declares a resolvable `defineIdentity({ ... })` contract in
+ * `lunora/identity.ts` (the allow-list to diff against); without one — or when the allow-list
+ * is opaque (a spread / non-object argument) — it returns `[]`, so a project with no typed
+ * identity contract is never flagged. Each read is tagged `declared` (in the contract, in the
+ * always-present `userId`, or a user column the user cannot write) so the lint flags only the
+ * undeclared reads.
+ */
+const discoverIdentityClaimReads = (project: Project, lunoraDirectory: string): IdentityClaimReadIR[] => {
+    const contract = resolveDeclaredClaims(project, lunoraDirectory);
+
+    if (contract === undefined) {
+        return [];
+    }
+
+    // A user column the user cannot write (`input: false`) is as trustworthy as a declared
+    // claim. A writable one (better-auth's default) is set by the user at sign-up or update,
+    // so reading it for authorization still fires the lint.
+    const trusted = discoverAuthClaims(project, lunoraDirectory)
+        .claims.filter((claim) => !claim.writable)
+        .map((claim) => claim.name);
+    const declared = new Set([...contract, ...trusted]);
+
     return [
         ...collectNodeRows(project, lunoraDirectory, SyntaxKind.PropertyAccessExpression, (node, file) => claimReadOf(node, file, declared)),
         ...collectNodeRows(project, lunoraDirectory, SyntaxKind.ElementAccessExpression, (node, file) => claimReadOf(node, file, declared)),
+        ...collectNodeRows(project, lunoraDirectory, SyntaxKind.VariableDeclaration, (node, file) => resultBindingReads(node, file, declared)),
     ];
 };
 

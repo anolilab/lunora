@@ -314,6 +314,7 @@ const ENV_FILENAME = "env.ts";
 ```ts
 interface EmitAppOptions {
     agentWorkflows?: ReadonlyArray<string>;
+    authClaims?: ReadonlyArray<string>;
     capabilities: ReadonlySet<CapabilityKey>;
     emailAgents?: ReadonlyArray<{
         className: string;
@@ -1568,7 +1569,7 @@ const emitScheduler: (hasScheduler: boolean) => string;
 ### `emitServer` (const)
 
 ```ts
-const emitServer: ({ agents, capabilities, containers, env, hasVectors, hasFlags, hasNotify, identity, queues, schema, services, storageRuleBuckets, topics, useUmbrella, workflows }?: EmitServerOptions) => string;
+const emitServer: ({ agents, authClaims, capabilities, containers, env, hasVectors, hasFlags, hasNotify, identity, queues, schema, services, storageRuleBuckets, topics, useUmbrella, workflows }?: EmitServerOptions) => string;
 ```
 
 ### `emitShard` (const)
@@ -2119,6 +2120,22 @@ interface ArgumentValidatorIR {
     line: number;
     unboundedStringArgs: string[];
 }
+```
+
+### `AuthClaim` (interface)
+
+```ts
+interface AuthClaim {
+    name: string;
+    type: AuthClaimType;
+    writable: boolean;
+}
+```
+
+### `AuthClaimType` (type)
+
+```ts
+type AuthClaimType = "boolean" | "number" | "string";
 ```
 
 ### `AuthConfigIR` (interface)
@@ -2714,6 +2731,7 @@ interface EmitFunctionsOptions {
 ```ts
 interface EmitServerOptions {
     agents?: ReadonlyArray<AgentIR>;
+    authClaims?: ReadonlyArray<AuthClaim>;
     capabilities?: ReadonlySet<CapabilityKey>;
     containers?: ReadonlyArray<ContainerIR>;
     env?: EnvIR;

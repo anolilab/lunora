@@ -1,3 +1,16 @@
+## @lunora/auth [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.260...@lunora/auth@1.0.0-alpha.261) (2026-11-11)
+
+- feat(auth): add API keys via the apiKey() plugin (#1526)
+
+## @lunora/auth [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.259...@lunora/auth@1.0.0-alpha.260) (2026-11-10)
+
+- feat(codegen): type user-column claims on ctx.auth from the auth config (#1525)
+
+## @lunora/auth [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.258...@lunora/auth@1.0.0-alpha.259) (2026-11-10)
+
+- feat(auth): forward declared identity claims through the auth object route (#1521)
+- feat(auth): forward declared app user columns onto the session identity (#1520)
+
 ## @lunora/auth [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.257...@lunora/auth@1.0.0-alpha.258) (2026-11-05)
 
 - feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)

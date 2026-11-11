@@ -20,11 +20,37 @@ import { ensureVectorMetadataIndexes, metadataTypeFor } from "../../util/vectori
 import readWranglerName from "../../util/wrangler-name";
 import type { MigrateDataCommandOptions } from "../migrate/handler";
 import { runMigrateDataCommand } from "../migrate/handler";
+import { runMigrateSqlCommand } from "../migrate/sql";
 import type { DeployCommandOptions, DeployCommandResult, DeployedIdentity } from "./types";
 
 /**
- * Discover migration ids from `lunora/migrations.ts` and run them in declared
- * order against the now-live worker. The worker's `MigrationRunner` is
+ * The generated SQL files (`lunora/migrations/*.sql`), applied against the now-live worker before any data migration.
+ * A data migration can read a table a generated file creates, so the files go first. The worker records each file, so
+ * a file that already ran is a no-op.
+ */
+const runPostDeploySqlMigrations = async (options: DeployCommandOptions, cwd: string): Promise<number> => {
+    const result = await runMigrateSqlCommand({
+        cwd,
+        fetchImpl: options.fetchImpl,
+        logger: options.logger,
+        allowDestructive: options.migrateAllowDestructive === true,
+        // Same production gate as the data migrations below: `--migrate-url` is set, and `--migrate-yes` confirms it.
+        prod: true,
+        token: options.migrateToken,
+        url: options.migrateUrl,
+        yes: options.migrateYes === true,
+    });
+
+    if (result.code !== 0) {
+        options.logger.error("--migrate: the SQL migration files failed — see output above");
+    }
+
+    return result.code;
+};
+
+/**
+ * Runs the generated SQL files first (`runPostDeploySqlMigrations`), then discovers migration ids from
+ * `lunora/migrations.ts` and runs them in declared order against the now-live worker. The worker's `MigrationRunner` is
  * idempotent — running `up` on an already-applied migration is a no-op —
  * so iterating every declared id is safe even when some were previously applied.
  *
@@ -35,6 +61,12 @@ import type { DeployCommandOptions, DeployCommandResult, DeployedIdentity } from
  * auditable, and safe.
  */
 const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: string): Promise<number> => {
+    const sqlCode = await runPostDeploySqlMigrations(options, cwd);
+
+    if (sqlCode !== 0) {
+        return sqlCode;
+    }
+
     const project = new Project({ skipAddingFilesFromTsConfig: true });
     const lunoraDirectory = join(cwd, "lunora");
     let migrations: ReadonlyArray<{ id: string; table: string }>;
