@@ -112,6 +112,14 @@ class FlakyShard extends ShardDO {
 const frames = (ws: FakeWebSocket, type: string): { code?: string; id: string }[] =>
     ws.sent.map((line) => JSON.parse(line) as { code?: string; id: string; type: string }).filter((frame) => frame.type === type);
 
+interface ErrorFrame {
+    error?: { code: string; retryAfterMs?: number };
+    id: string;
+    type: string;
+}
+
+const errorFrames = (ws: FakeWebSocket): ErrorFrame[] => ws.sent.map((line) => JSON.parse(line) as ErrorFrame).filter((frame) => frame.type === "error");
+
 describe("shardDO: failing subscription backoff", () => {
     let shard: FlakyShard;
     let ws: FakeWebSocket;
@@ -229,5 +237,92 @@ describe("shardDO: failing subscription backoff", () => {
         await shard.write();
 
         expect(shard.runs).toBe(runsBefore + 1);
+    });
+
+    it("hints the client on the first failure and stays silent while the streak continues", async () => {
+        expect.assertions(2);
+
+        await shard.write();
+        await shard.write();
+
+        const errors = errorFrames(ws);
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]?.error?.retryAfterMs).toBe(1000);
+    });
+
+    it("re-runs a same-args re-subscribe of a failing query and starts a new streak once it has healed", async () => {
+        expect.assertions(3);
+
+        await shard.write();
+
+        shard.failing = false;
+        shard.value = 2;
+        const runsBefore = shard.runs;
+
+        await shard.subscribeFlaky(ws);
+
+        expect(shard.runs).toBe(runsBefore + 1);
+        expect(frames(ws, "data")).toHaveLength(2);
+
+        // The seed succeeded, so the streak is over: the next failure is a first failure again, with the first hint.
+        shard.failing = true;
+        await shard.write();
+
+        const errors = errorFrames(ws);
+
+        expect(errors.at(-1)?.error?.retryAfterMs).toBe(1000);
+    });
+
+    it("keeps a failing re-subscribe registered and answers with the next, longer hint", async () => {
+        expect.assertions(5);
+
+        await shard.write();
+        await shard.subscribeFlaky(ws);
+
+        const afterRetry = errorFrames(ws);
+
+        expect(afterRetry.map((frame) => frame.error?.code)).toStrictEqual(["SUBSCRIPTION_REFRESH_FAILED", "SUBSCRIPTION_REFRESH_FAILED"]);
+        expect(afterRetry[1]?.error?.retryAfterMs).toBe(1000);
+
+        await shard.subscribeFlaky(ws);
+
+        expect(errorFrames(ws).at(-1)?.error?.retryAfterMs).toBe(2000);
+        expect(Object.hasOwn(ws.attachment?.subs ?? {}, "sub")).toBe(true);
+
+        shard.failing = false;
+        vi.setSystemTime(Date.now() + 120_000);
+        const runsBefore = shard.runs;
+        await shard.write();
+
+        expect(shard.runs).toBe(runsBefore + 1);
+    });
+
+    it("runs a backed-off subscription zero times across writes inside its window", async () => {
+        expect.assertions(1);
+
+        await shard.write();
+        await shard.write();
+
+        const latchedRuns = shard.runs;
+
+        await shard.write();
+        await shard.write();
+        await shard.write();
+
+        expect(shard.runs).toBe(latchedRuns);
+    });
+
+    it("clears the streak on a re-subscribe with different args, so a failing seed is refused as a seed failure", async () => {
+        expect.assertions(3);
+
+        await shard.write();
+        await shard.subscribeFlaky(ws, "sub", { other: true });
+
+        const last = errorFrames(ws).at(-1);
+
+        expect(last?.error?.code).toBe("SUBSCRIPTION_SEED_FAILED");
+        expect(last?.error?.retryAfterMs).toBeUndefined();
+        expect(Object.hasOwn(ws.attachment?.subs ?? {}, "sub")).toBe(false);
     });
 });

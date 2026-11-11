@@ -32,6 +32,18 @@ class SubscriptionFailureLatch {
         return (this.bySocket.get(socket)?.size ?? 0) > 0;
     }
 
+    /** Whether the subscription is in a failure streak, so a re-subscribe of it counts as a retry rather than a fresh start. */
+    public hasStreak(socket: object, subId: string): boolean {
+        return this.bySocket.get(socket)?.has(subId) ?? false;
+    }
+
+    /** The delay to tell the client to wait before re-subscribing, or `undefined` when the subscription is not in a streak. */
+    public retryHintMs(socket: object, subId: string): number | undefined {
+        const entry = this.bySocket.get(socket)?.get(subId);
+
+        return entry === undefined ? undefined : Math.max(backoffDelay(entry.failures), BACKOFF_BASE_MS);
+    }
+
     /** Whether the subscription is inside its backoff window for this identity and must not be re-run. */
     public isBackingOff(socket: object, subId: string, identity: string, now: number): boolean {
         const entry = this.bySocket.get(socket)?.get(subId);
