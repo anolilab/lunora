@@ -33,6 +33,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 
+import 'delta_merge.dart';
 import 'errors.dart';
 import 'key.dart';
 import 'offline_queue.dart';
@@ -72,6 +73,10 @@ class _Subscription implements OptimisticTarget {
 
   @override
   Object? serverBase;
+
+  /// Whether [serverBase] has been set by a frame. A null base is a real value
+  /// (a query may return null), so this cannot be read off the value itself.
+  bool hasServerBase = false;
 
   @override
   Object? lastValue;
@@ -633,8 +638,15 @@ class LunoraClient {
 
   // ─── Frame builders ───────────────────────────────────────────────────────
 
+  /// Always announces `pageDelta`: the server only sends row deltas to a client
+  /// that does, and [_dispatch] merges them. `refreshBatch` is deliberately not
+  /// announced, since batchStart/batchEnd are not handled.
   static Map<String, Object?> buildConnectFrame({String? clientId, Map<String, Object?>? context, String? token}) {
-    final frame = <String, Object?>{'id': 'connect', 'type': 'connect'};
+    final frame = <String, Object?>{
+      'id': 'connect',
+      'type': 'connect',
+      'caps': <String>['pageDelta']
+    };
 
     if (clientId != null) {
       frame['clientId'] = clientId;
@@ -870,7 +882,7 @@ class LunoraClient {
       case 'data':
       case 'delta':
         final entry = id == null ? null : _subscriptions[id];
-        final Object? value;
+        Object? value;
 
         try {
           value = decodeWire(frame['data'] ?? frame['delta']);
@@ -884,6 +896,24 @@ class LunoraClient {
           return 'error';
         }
 
+        // A `delta` that is a row change merges into the server base, not the
+        // displayed value, which may carry an optimistic overlay re-folded below.
+        // `data` wins when both are present, as it does for the decode above.
+        if (frame['data'] == null && entry != null && isMutationDelta(value) && entry.hasServerBase) {
+          final merged = applyDelta(entry.serverBase, value! as Map<String, Object?>);
+
+          // Unmergeable against a base we hold. The reference re-snapshots here;
+          // this port has no resubscribe-for-snapshot path, so the previous value
+          // is kept. The cursor is NOT advanced either, so a reconnect resumes
+          // from before this change and the server can replay it, rather than
+          // skipping past a change that was never applied.
+          if (merged == null) {
+            return kind;
+          }
+
+          value = merged;
+        }
+
         if (entry != null) {
           // Order matters, and matches the reference client: record the
           // authoritative value, advance the cursor, drop the layers the server
@@ -892,6 +922,7 @@ class LunoraClient {
           // confirmed write twice — once in the new base and once in its own
           // overlay.
           entry.serverBase = value;
+          entry.hasServerBase = true;
           _advance(entry, frame);
           dropConfirmedLayers(entry, entry.serverCursor);
           notifyTarget(entry, foldOptimistic(value, entry.layers));

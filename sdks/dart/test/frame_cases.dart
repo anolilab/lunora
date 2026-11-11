@@ -17,7 +17,8 @@ void caseClientFrameBuilders() {
 
   final frames = fixture('ws-frames.json')['clientFrames'] as Map<String, Object?>;
 
-  equals(canonical(LunoraClient.buildConnectFrame(clientId: 'client-test')), canonical(frames['connect']), 'connect frame');
+  equals(canonical(LunoraClient.buildConnectFrame(clientId: 'client-test')), canonical(frames['connect-with-page-delta-caps']),
+      'connect frame announces pageDelta');
   // protocol/README.md 5.1: the session credential is sent in connect, and only when held.
   equals(
     LunoraClient.buildConnectFrame(clientId: 'client-test', token: 'sess-SECRET-1')['token'],
@@ -27,7 +28,10 @@ void caseClientFrameBuilders() {
   check(!LunoraClient.buildConnectFrame(clientId: 'client-test').containsKey('token'), 'connect omits token when no session credential is held');
   equals(
     canonical(LunoraClient.buildConnectFrame(clientId: 'client-test', context: <String, Object?>{'roomId': 'general'})),
-    canonical(frames['connect-with-context']),
+    canonical(<String, Object?>{
+      ...frames['connect-with-context']! as Map<String, Object?>,
+      'caps': <Object?>['pageDelta']
+    }),
     'connect frame with context',
   );
   equals(
@@ -101,6 +105,74 @@ void caseServerFrameConsumer() {
   // A conditional assertion that never runs is worse than none: without this,
   // renaming the fixture key would leave every suite green.
   equals(cancellations, 1, 'serverFrames must carry one cancelling case');
+}
+
+/// `pageDeltaFrames`: each case seeds the subscription with `baseWire` as a
+/// `data` frame, applies `frame`, and expects the published value to be the row
+/// change merged into the base, never the `{ key, op, table, row }` envelope.
+void casePageDeltaFramesMergeIntoTheBase() {
+  final cases = objectList(fixture('ws-frames.json')['pageDeltaFrames']);
+
+  equals(cases.length, 8, 'pageDeltaFrames must carry its eight cases');
+
+  for (final testCase in cases) {
+    final name = testCase['name'];
+    final frame = testCase['frame'] as Map<String, Object?>;
+    final expect = testCase['expect'] as Map<String, Object?>;
+    final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+    final seen = <Object?>[];
+
+    client.subscribe('messages:list', args: <String, Object?>{'channel': 'general'}, onData: seen.add);
+    pushData(client, frame['id']! as String, testCase['baseWire']);
+    seen.clear();
+
+    equals(client.handleFrame(jsonEncode(frame)), expect['kind'], 'frame kind for $name');
+    equals(seen.length, 1, 'onData should fire once for $name');
+    equals(canonical(encodeWire(seen.isEmpty ? null : seen.first)), canonical(expect['valueWire']), 'merged value for $name');
+  }
+}
+
+/// A row change that cannot be merged is not published: the previous value
+/// stays, and the next row change still merges against it.
+void caseUnmergeableRowDeltaKeepsThePreviousValue() {
+  final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+  final seen = <Object?>[];
+  final change = <String, Object?>{'key': 'm1', 'op': 'update', 'table': 'messages'};
+
+  client.subscribe('messages:list', onData: seen.add);
+
+  // No cached base yet: the legacy broadcast is published as it arrived.
+  client.handleFrame(jsonEncode(<String, Object?>{'type': 'delta', 'id': 'sub_1', 'delta': change}));
+  equals(canonical(seen), canonical(<Object?>[change]), 'a row change with no base is published as is');
+
+  pushData(client, 'sub_1', <Object?>[
+    <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'one'},
+  ]);
+  seen.clear();
+
+  // An update with no `row` cannot be spliced in.
+  client.handleFrame(jsonEncode(<String, Object?>{'type': 'delta', 'id': 'sub_1', 'delta': change}));
+  equals(seen.length, 0, 'an unmergeable row change is not published over the base');
+
+  client.handleFrame(
+    jsonEncode(<String, Object?>{
+      'type': 'delta',
+      'id': 'sub_1',
+      'delta': <String, Object?>{
+        ...change,
+        'row': <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'ONE'},
+      },
+    }),
+  );
+  equals(
+    canonical(seen),
+    canonical(<Object?>[
+      <Object?>[
+        <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'ONE'},
+      ],
+    ]),
+    'the base survived the refused change',
+  );
 }
 
 /// The `Stream` form of a live query: same subscription, same decode, same order
