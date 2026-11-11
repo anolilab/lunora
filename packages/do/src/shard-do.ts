@@ -14740,6 +14740,18 @@ abstract class ShardDO {
     }
 
     /**
+     * A failure no retry can change: an access denial (revoked), a result past the size cap, and on a guarded socket a
+     * persist failure. A subscription hitting one ends rather than latching for backoff.
+     */
+    private isDeterministicSubscriptionFailure(error: unknown): boolean {
+        return (
+            isDeliveryAccessDenied(error) ||
+            (isLunoraError(error) &&
+                (error.code === "SUBSCRIPTION_RESULT_TOO_LARGE" || (this.deliveryAuthorization !== undefined && error.code === "SUBSCRIPTION_PERSIST_FAILED")))
+        );
+    }
+
+    /**
      * A subscription's refresh threw: count and log it, latch it for backoff, and
      * tell the client the first time of a streak. The subscription stays
      * registered, so it recovers by itself once a retry succeeds.
@@ -14889,20 +14901,18 @@ abstract class ShardDO {
                     // retried — but not on every flush: a failure that repeats
                     // (a bad handler cast, say) is latched with a growing backoff
                     // and announced to the client once. See `noteFailingSubscription`.
-                    if (isDeliveryAccessDenied(error)) {
-                        this.revokeSubscription(ws, subId);
-                        return;
-                    }
-                    // A result that grew past the cap will not shrink by retrying: end the subscription as the seed does, on
-                    // guarded sockets too (the refusal names a size and a limit, never data).
-                    if (
-                        isLunoraError(error) &&
-                        (error.code === "SUBSCRIPTION_RESULT_TOO_LARGE" || (this.deliveryAuthorization && error.code === "SUBSCRIPTION_PERSIST_FAILED"))
-                    ) {
+                    // Errors a retry cannot fix end the subscription rather than latch it.
+                    if (this.isDeterministicSubscriptionFailure(error)) {
+                        if (isDeliveryAccessDenied(error)) {
+                            this.revokeSubscription(ws, subId);
+                            return;
+                        }
                         this.unsubscribe(ws, subId);
                         // `toErrorBody` resolves the catalog hint (and redacts as the other paths do); the client no longer
                         // falls back to one when it rebuilds the error.
-                        this.sendSubscriptionError(ws, subId, error.code, error.message, toErrorBody(error).body);
+                        const { body } = toErrorBody(error);
+
+                        this.sendSubscriptionError(ws, subId, body.code, body.message, body);
                         this.recordSubscriptionRefreshError(functionPath, error, { subId });
                         return;
                     }
@@ -14995,6 +15005,20 @@ abstract class ShardDO {
      * of the same path, and `handleShapeSubscribe`'s rollback-then-error on a
      * failed shape seed.
      */
+    /** A retried seed that failed again: the subscription stays registered and is answered with the next hint. */
+    private retryFailedSeed(ws: ShardSocketLike, subId: string, functionPath: string, error: unknown): void {
+        this.recordSubscriptionRefreshError(functionPath, error, { subId });
+        this.subscriptionFailures.recordFailure(ws, subId, subscriptionIdentityKey(socketIdentity(this.readAttachment(ws))), Date.now());
+
+        if (this.deliveryAuthorization) {
+            return;
+        }
+
+        const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_REFRESH_FAILED", redactedMessage: "subscription refresh failed" });
+
+        this.sendSubscriptionError(ws, subId, body.code, body.message, body, this.subscriptionFailures.retryHintMs(ws, subId));
+    }
+
     private async seedSubscriptionGuarded(ws: ShardSocketLike, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
         try {
             await this.seedSubscription(ws, subId, query, functionPath, isAdmin);
@@ -15003,18 +15027,20 @@ abstract class ShardDO {
             // A same-args re-subscribe of a failing subscription is the client's retry at the hint: it stays registered
             // and answers with the next hint, so the backoff keeps growing. Only a seed with no streak behind it is refused.
             if (this.subscriptionFailures.hasStreak(ws, subId)) {
-                this.recordSubscriptionRefreshError(functionPath, error, { subId });
-                this.subscriptionFailures.recordFailure(ws, subId, subscriptionIdentityKey(socketIdentity(this.readAttachment(ws))), Date.now());
+                if (!this.isDeterministicSubscriptionFailure(error)) {
+                    this.retryFailedSeed(ws, subId, functionPath, error);
 
-                if (this.deliveryAuthorization) {
                     return;
                 }
 
-                const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_REFRESH_FAILED", redactedMessage: "subscription refresh failed" });
+                // A retry cannot fix this error, so the streak ends here and the seed is refused as a first seed is.
+                this.subscriptionFailures.clear(ws, subId);
 
-                this.sendSubscriptionError(ws, subId, body.code, body.message, body, this.subscriptionFailures.retryHintMs(ws, subId));
+                if (isDeliveryAccessDenied(error)) {
+                    this.revokeSubscription(ws, subId);
 
-                return;
+                    return;
+                }
             }
 
             // Deregister first: a subscription that never seeded must not be

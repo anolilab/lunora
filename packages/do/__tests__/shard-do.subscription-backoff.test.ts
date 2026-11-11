@@ -313,6 +313,21 @@ describe("shardDO: failing subscription backoff", () => {
         expect(shard.runs).toBe(latchedRuns);
     });
 
+    it("ends a retried subscription whose re-run throws a result too large to deliver", async () => {
+        expect.assertions(3);
+
+        await shard.write();
+
+        shard.failure = new LunoraError("SUBSCRIPTION_RESULT_TOO_LARGE", "this result is over the size limit");
+        await shard.subscribeFlaky(ws);
+
+        const last = errorFrames(ws).at(-1);
+
+        expect(last?.error?.code).toBe("SUBSCRIPTION_RESULT_TOO_LARGE");
+        expect(last?.error?.retryAfterMs).toBeUndefined();
+        expect(Object.hasOwn(ws.attachment?.subs ?? {}, "sub")).toBe(false);
+    });
+
     it("clears the streak on a re-subscribe with different args, so a failing seed is refused as a seed failure", async () => {
         expect.assertions(3);
 
