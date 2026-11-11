@@ -1569,8 +1569,6 @@ public final class Client {
                         return kind;
                     }
 
-                    advance(entry, frame);
-
                     // The merge applies to the SERVER base, not the displayed value: the layers
                     // are re-folded onto the merged result below, as for a data frame. A row
                     // change that cannot be merged leaves the base as it was; the reference
@@ -1587,6 +1585,11 @@ public final class Client {
                             return kind;
                         }
                     }
+
+                    // Advanced only once the frame is applied: an unmergeable row change returned
+                    // above
+                    // must leave the resume cursor where it was, so a reconnect replays it.
+                    advance(entry, frame);
 
                     // `cursor` is OPTIONAL on data/delta frames, so a frame without one LEAVES the
                     // tracked cursor where it was. Nulling it strands every pending layer: the
