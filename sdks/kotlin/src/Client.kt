@@ -398,7 +398,19 @@ class Client(
             throw ApiException(WIRE_DECODE_FAILED, "the call succeeded but its result could not be decoded: ${error.message}")
         }
 
-        fun buildConnectFrame(clientId: String? = null, context: Map<String, Any?>? = null, token: String? = null): Map<String, Any?> {
+        /**
+         * The capability tokens this client announces. Only `pageDelta`: the server sends row-change
+         * deltas to a client that announces it, and [RowDelta] merges them. `refreshBatch` is not
+         * announced because batchStart/batchEnd frames are not handled.
+         */
+        val CAPABILITIES: List<String> = listOf("pageDelta")
+
+        fun buildConnectFrame(
+            clientId: String? = null,
+            context: Map<String, Any?>? = null,
+            token: String? = null,
+            caps: List<String>? = null,
+        ): Map<String, Any?> {
             val frame = LinkedHashMap<String, Any?>()
 
             frame["id"] = "connect"
@@ -406,6 +418,7 @@ class Client(
             clientId?.let { frame["clientId"] = it }
             context?.let { frame["context"] = it }
             token?.let { frame["token"] = it }
+            caps?.let { frame["caps"] = it }
 
             return frame
         }
@@ -567,7 +580,7 @@ class Client(
             send = null
             Triple(++attachGeneration, credentialGeneration, wsToken)
         }
-        sender(buildConnectFrame(clientId = clientId, context = context, token = provider?.invoke()))
+        sender(buildConnectFrame(clientId = clientId, context = context, token = provider?.invoke(), caps = CAPABILITIES))
         // A detach or a newer attach during the send supersedes this one: installing this sender would undo it,
         // so it is not installed and its whisper joins are not sent. The joins are written under the lock, so a
         // last-listener leave cannot unsubscribe between this snapshot and its join. A join that throws leaves
@@ -1112,6 +1125,7 @@ class Client(
         // the lock exists to protect.
         when (kind) {
             "data", "delta" -> {
+                val isDelta = frame["data"] == null && frame["delta"] != null
                 val payload = frame["data"] ?: frame["delta"]
                 val value = try {
                     Wire.decode(payload)
@@ -1132,7 +1146,20 @@ class Client(
                 synchronized(lock) {
                     subscriptions[id]?.let { entry ->
                         advance(entry, frame)
-                        entry.state.serverBase = value
+
+                        // The merge applies to the server base, never to the value the caller
+                        // sees: the overlays are re-folded onto the result below.
+                        val resolved = if (isDelta) {
+                            RowDelta.resolve(value, if (entry.state.hasBase) entry.state.serverBase else null)
+                        } else {
+                            RowDelta.Resolution.Publish(value)
+                        }
+
+                        // An unmergeable row change keeps the previous value; see RowDelta.resolve.
+                        if (resolved !is RowDelta.Resolution.Publish) return@let
+
+                        entry.state.serverBase = resolved.value
+                        entry.state.hasBase = true
                         // `cursor` is OPTIONAL on data/delta frames, and a frame
                         // that omits it — or sends an explicit null — must LEAVE
                         // the tracked cursor where it is: nulling it strands every
