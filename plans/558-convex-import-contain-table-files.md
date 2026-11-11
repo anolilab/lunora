@@ -11,7 +11,7 @@
 > any mismatch is a STOP condition.
 
 **Baseline:** `36c32cc1b` (2026-11-11)
-**Status:** DONE (APPROVED on review 2026-11-11; branch `security/improve-558-convex-table-containment`, commit `97a7129a9`, not merged; full `@lunora/cli` run had unrelated load timeouts, see commit body)
+**Status:** DONE (APPROVED on review 2026-11-11; branch `security/improve-558-convex-table-containment`, commit `97a7129a9`, not merged; full `@lunora/cli` run fails with 30 s timeouts in `mcp-serve.test.ts` / `codegen-watch.test.ts`; the same suite on unchanged CLI code (base `36c32cc1b`) also times out in `mcp-serve.test.ts`, so the failures predate this change)
 **Priority / Effort / Risk:** P2 / S / LOW. **Category:** security. **Depends on:** none.
 **Finding:** audit 2026-11-11, row 28.
 
