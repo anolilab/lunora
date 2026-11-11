@@ -3,7 +3,7 @@
 **Baseline:** `origin/alpha` at `e793b60e7` (2026-11-11); evidence below re-read at `4a7c48bfd`, which
 does not differ in `packages/do/src/shard-do.ts`, `packages/do/src/subscription-backoff.ts`,
 `packages/client/src/*` or `protocol/` for the cited lines.
-**Status:** BLOCKED (one protocol-behaviour question, §9 Q1, with a recommended answer; phase 1 fully specified)
+**Status:** IN PROGRESS (Q1 answered YES; phase 1 dispatched on `fix/improve-546-backoff-client-retry`)
 fully specified for that answer and dispatches as soon as it is confirmed)
 **Priority / effort / risk:** P2 / M / MED. **Category:** bug. **Depends on:** none to start; merges
 with plan 541 (see §7).
@@ -165,3 +165,64 @@ Merge with plan 541 (`fix/improve-541-replay-subscription-refusal`, PR #1530): b
    field and phase-2 work in all 8 SDKs to send it.
 
 Decided by the reviewer (not blocking): the first hint is 1000 ms (the latch's base step).
+
+## Phase 1 — executable specification (after Q1 = YES)
+
+**Base:** `origin/alpha` at `e793b60e7`. **Branch:** `fix/improve-546-backoff-client-retry`.
+
+**Server (`packages/do`).**
+
+- `src/subscription-backoff.ts` (sole default export `SubscriptionFailureLatch`; keep it the sole
+  export): add `hasStreak(socket, subId): boolean` and `retryHintMs(socket, subId): number | undefined`
+  = `Math.max(backoffDelay(entry.failures), BACKOFF_BASE_MS)` for a live entry, else `undefined`.
+- `src/shard-do.ts`:
+    - `sendSubscriptionError` (~15166) gains an optional `retryAfterMs?: number`, emitted as
+      `error.retryAfterMs` only when defined.
+    - `noteFailingSubscription` (~14731): the existing streak-start frame passes
+      `retryAfterMs: this.subscriptionFailures.retryHintMs(ws, subId)`; later failures stay silent.
+    - `subscribe` (~6477-6537): replace the unconditional `this.subscriptionFailures.clear(ws, subId)`
+      with: keep the streak when `previous !== undefined`, the previous query has the same `functionPath`
+      and the same args (`stableStringify(previous.args ?? {}) === stableStringify(query.args ?? {})`,
+      `stableStringify` from `@lunora/wire`, already a dependency) and `hasStreak(ws, subId)`; otherwise
+      clear as today. Rewrite its comment (why: a hinted retry must keep counting).
+    - `seedSubscriptionGuarded` (~14981): on success, clear the streak (`subscriptionFailures.clear`). On
+      failure, if `hasStreak(ws, subId)` (only true for a kept retry), do NOT deregister: record the
+      refresh error, `recordFailure(...)`, and send the error frame with `retryAfterMs:
+retryHintMs(ws, subId)`; else keep today's deregister + `SUBSCRIPTION_SEED_FAILED` path unchanged.
+      **Client (`packages/client`)** — `setTimeout`/`clearTimeout` as the rest of the client does (tests use
+      `vi.useFakeTimers()`; no new option, so no public API change):
+- `src/lunora-client.ts`: a private `Map<string, ReturnType<typeof setTimeout>>` of pending retries by
+  subscription id; `private scheduleSubscriptionRetry(state, retryAfterMs)` (replaces any pending one,
+  ignores a non-finite or negative value); `private cancelSubscriptionRetry(id)`. In the query-
+  subscription `error` branch, add ONE line right AFTER `failSubscription(state, subscriptionError);`
+  (not between `markQueryRejected` and `failSubscription` — plan 541 inserts there):
+  `this.scheduleSubscriptionRetry(state, (message.error as { retryAfterMs?: unknown } | undefined)?.retryAfterMs);`.
+  On fire: if `this.subscriptions.getById(state.id) === state`, call `this.resnapshotSubscription(state)`
+  (idle → exactly one `subscribe` frame for the key). Cancel in: `handleDataMessage`,
+  `ackAndAdvanceCursor` (ack/resume/settled), `markShardPendingAck` (socket opened/closed: the
+  reconnect resubscribes anyway), the last-subscriber removal in `subscribe`'s unsubscribe
+  (`this.subscriptions.remove(...)`, ~3455), and `close()`.
+- `src/types.ts` `ServerErrorMessage` is unchanged (`error?: unknown`).
+  **Protocol:** `protocol/README.md` §5.2 `error` row gains `retryAfterMs?` and a short paragraph (when it
+  is sent; a client that ignores it sees today's frames; a capable client re-subscribes once at the hint;
+  the server treats that re-subscribe as a retry). The `ws-frames.json` case moves to PHASE 2 with the
+  SDK conformance work (all 8 SDK suites read that fixture group).
+  **Tests:** server — `packages/do/__tests__/shard-do.subscription-backoff.test.ts` (model on its harness):
+  (1) first refresh failure frame carries `retryAfterMs: 1000`, a second flush failure sends no frame;
+  (2) a same-args re-subscribe after a failure re-runs the query and, on success, delivers data and clears
+  the streak (a later failure starts a new streak with a frame); (3) a failing hinted re-run keeps the
+  registration (a later write flush still refreshes it — or the socket still holds the sub) and answers
+  `retryAfterMs` equal to the next step (1000 for failures=2, then 2000); (4) during a backoff window, N
+  flushes run the query 0 times; (5) a re-subscribe with DIFFERENT args clears the streak and a failing
+  seed takes today's deregister path (`SUBSCRIPTION_SEED_FAILED`). Client — new
+  `packages/client/__tests__/subscription-retry-after.test.ts` (copy the mock-socket helpers from
+  `lunora-client.test.ts`): (6) `retryAfterMs: 5000` + fake timers → nothing at 4999 ms, exactly one
+  `subscribe` for the key at 5000 with three subscribers; (7) unsubscribing all before 5000 cancels;
+  (8) socket close cancels; (9) a second hint replaces the first (one frame, at the second time);
+  (10) a `data` frame for the key before 5000 cancels; (11) no `retryAfterMs` → no re-subscribe.
+  **Gates:** do + client `test`, `lint:types`, `lint:eslint`; oxfmt; prettier on the README. Reviewer:
+  `@lunora/do` workerd project; `api:check` after a full build (expected unchanged).
+  **Merge with 541 (PR #1530):** merge 541 first. Both edit the client's query-subscription `error`
+  branch; 541 inserts `state.refusal = subscriptionError;` between `markQueryRejected(state)` and
+  `failSubscription(...)`, 546 inserts after `failSubscription(...)`, separated by an unchanged line, so
+  git should merge both without a conflict; if a reviewer sees one, keep both insertions in that order.
