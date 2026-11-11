@@ -9,7 +9,7 @@
 > must print nothing. Then confirm the excerpts in §1 match. Any mismatch is a STOP.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** DONE (review APPROVED; branch `fix/improve-544-privacy-restore-retires`, commit `e4c02bfc9`; privacy workerd project green; not merged)
+**Status:** IN PROGRESS (first part APPROVED, e4c02bfc9, PR #1533; addendum: terminal `restored` status per owner decision)
 **Priority / effort / risk:** P2 / S-M / LOW. **Category:** bug (data-subject rights). **Depends on:** none.
 
 ## 0. Headline finding
@@ -186,3 +186,63 @@ it once.
 - [ ] Tests 1-2 pass and failed with `define.ts` reverted (Step 4).
 - [ ] `pnpm --filter "@lunora/privacy" run test`, `run lint:types`, `run lint:eslint` exit 0.
 - [ ] One commit with the message above.
+
+## Addendum 2026-11-11 — restored erasure requests get a terminal `restored` status (owner decision)
+
+**Status of this part:** dispatched on the existing branch `fix/improve-544-privacy-restore-retires`
+(PR #1533, open). New commits go ON TOP of `e4c02bfc9`; no amend, rebase or force.
+
+**Decision.** Add a terminal request status `restored`. After `restore()` re-erases a subject, every
+erasure-type request of that subject that the backup brought back moves to `restored`, whatever status
+it held (`received`, `grace`, `processing`, `failed`, `completed`), so operators can tell a re-erased
+request from an original one. **Reviewer's call, flag to owner:** a `cancelled` erasure row stays
+`cancelled` — a cancelled request never erased anything, and relabelling it would misstate history.
+Exports brought back keep today's retirement (fail open / expire ready / delete files), unchanged.
+
+**Surfaces (at the branch head `e4c02bfc9`):**
+
+- `shared/privacy-request-status.ts` — `REQUEST_STATUSES` (lifecycle order; put `restored` after
+  `completed`) and `TERMINAL_STATUSES` (add `restored`). `isTerminal`, `OPEN_STATUSES`
+  (`lifecycle.ts`), `awaitsResponse`/`isOverdue` (`shared/privacy-deadlines.ts`), `tick()` and
+  `admin.open()` (`define.ts:170` `listOpen` filters terminal) all derive from these, so a `restored`
+  request is terminal, never open, never overdue — assert it in tests, do not special-case it.
+- `packages/privacy/src/lifecycle.ts:34-43` `TRANSITIONS` — add `restored: []` and the edge
+  `→ "restored"` from `received`, `grace`, `processing`, `failed`, `completed`. Update the docblock.
+- `define.ts:206-211` `retryRequest` already refuses anything but `failed`; add a test that it refuses
+  `restored`.
+- `define.ts` `restoreSubjects` — list the subject's requests BEFORE `retireSubjectRequests` rekeys
+  them; after it, move each erasure-type request not `cancelled` to `restored` through the existing
+  status machinery (`transition` + `ports.store.update` + `ports.store.addEvent`, as `setStatus` in
+  `run.ts:238-252` does; export `setStatus` is already exported). Re-read each row before moving it
+  so a concurrent change is respected; a row already `restored` is left alone (idempotent restore).
+- `packages/privacy/src/tables.ts:42` — the `status` column is `v.union(...REQUEST_STATUSES…)`, so it
+  follows automatically; the example's generated files embed the union:
+  `examples/privacy/lunora/_generated/{dataModel,api,drizzle.shard,functions}.ts` — regenerate with
+  `pnpm --filter "./examples/privacy" run codegen` (after building `examples/privacy...` deps) and
+  commit only those generated changes.
+- Studio `packages/studio/src/features/privacy/privacy-requests-panel.tsx:38-47` `STATUS_VARIANT` is
+  exhaustive over `RequestStatus` (fails to compile without a variant) — add `restored: "outline"`.
+  Statuses render as raw strings; there are no locale files, so no i18n strings change.
+- Docs: `packages/privacy/docs/index.mdx:131` ("Restores.") — one sentence: re-erased erasure requests
+  end `restored`, a terminal status distinct from `completed`; a cancelled one stays cancelled.
+- `api-snapshots/privacy.api.md` (the `REQUEST_STATUSES` const) — regenerated in a reviewer phase after
+  a full build; the executor does not run `api:update`.
+- CLI/MCP: no code renders privacy statuses (checked by grep).
+
+**Tests** (`packages/privacy/__tests__/restore.test.ts`, plus `lifecycle` tests if a lifecycle test
+file exists): for each of `grace`, `received`, `processing` — run an erasure to completion, put the
+erasure row back with that status and the raw subject id (as the existing restore tests do), call
+`operator.restore`, expect `status: "restored"` and the tombstone key. Also: a `cancelled` erasure row
+stays `cancelled`; `admin.open()` and `tick()` do not list a `restored` request; `admin.retry` on it
+rejects `UNPROCESSABLE`; restoring twice leaves it `restored`; the export-retirement tests stay green.
+Red-without-fix: revert the source changes of the new commit(s) (`git diff e4c02bfc9..HEAD -- <src> |
+git apply -R`), confirm the `restored` tests fail, restore.
+
+**Gates:** privacy `test`, `lint:types`, `lint:eslint`; studio `lint:types` (exhaustive map); the
+examples/privacy tests; `node scripts/check-generated-files.mjs` is NOT run by the executor (it runs
+every generator); the reviewer runs the privacy workerd project and the snapshot phase.
+
+**Commit:** `feat(privacy): mark re-erased requests restored after a backup restore`, body noting the
+new terminal status (alpha: stored rows may now hold `restored`).
+
+**Platform parity:** not applicable (no `ctx.*` surface).
