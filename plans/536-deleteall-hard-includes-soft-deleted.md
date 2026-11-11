@@ -9,7 +9,7 @@
 > by a few lines; the code must match). Any mismatch is a STOP.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** TODO
+**Status:** DONE (review APPROVED after 1 revision; branch `fix/improve-536-deleteall-hard-soft-deleted`, commit `d93ae4424`; shard-engine workerd project green; not merged)
 **Priority / effort / risk:** P1 / S / LOW. **Category:** bug (data erasure). **Depends on:** none.
 
 ## 0. Headline finding
