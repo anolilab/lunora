@@ -410,6 +410,10 @@ pub(crate) struct Subscription {
     /// Whether a value has been adopted from the server yet. A row change merges
     /// into a base only once there is one; before that it is the legacy broadcast.
     has_base: bool,
+    /// Set when a row change could not be merged and was dropped. While set, delta
+    /// frames are ignored whole, so a later frame's cursor cannot move the resume
+    /// position past the dropped change. A `data` frame or a resubscribe clears it.
+    poisoned: bool,
     /// The displayed value and its optimistic overlays. See `crate::optimistic`.
     pub(crate) state: OptimisticState,
 }
@@ -1108,6 +1112,7 @@ impl Client {
                 epoch: None,
                 function_path: function_path.to_string(),
                 has_base: false,
+                poisoned: false,
                 on_data,
                 on_error,
                 shard_key: shard_key.map(str::to_string),
@@ -1159,7 +1164,7 @@ impl Client {
     /// BOTH registries. A resend that walked only the queries left every shape
     /// view subscribed to a socket that no longer exists — silently, and for the
     /// rest of the process's life.
-    pub fn resend_subscriptions(&self) -> Result<(), ClientError> {
+    pub fn resend_subscriptions(&mut self) -> Result<(), ClientError> {
         let Some(send) = &self.send else {
             return Ok(());
         };
@@ -1169,7 +1174,11 @@ impl Client {
         // half re-subscribed.
         let mut frames = Vec::with_capacity(self.subscriptions.len() + self.shapes.len());
 
-        for (id, entry) in &self.subscriptions {
+        for (id, entry) in &mut self.subscriptions {
+            // The resend replays from the old cursor, which re-applies the dropped
+            // change; if it is still unmergeable the flag is set again.
+            entry.poisoned = false;
+
             frames.push(build_subscribe_frame(
                 id,
                 &entry.function_path,
@@ -1277,17 +1286,31 @@ impl Client {
                 };
 
                 if let Some(entry) = self.subscriptions.get_mut(&id) {
+                    // A snapshot is authoritative, so it ends a poisoning.
+                    if kind == "data" {
+                        entry.poisoned = false;
+                    }
+
                     // A `data` frame replaces the base. A `delta` frame is merged into
                     // the SERVER base, not the displayed value, which may carry an
                     // optimistic overlay that is re-folded below.
                     let value = if is_row_change_candidate {
+                        if entry.poisoned {
+                            return Ok(Some(kind));
+                        }
+
                         let base = entry.has_base.then_some(&entry.state.server_base);
 
                         match resolve_delta(value, base) {
                             Resolved::Adopt(adopted) => adopted,
-                            // Left untouched, cursor included: advancing past a change we
-                            // did not apply would hide the gap from a resume.
-                            Resolved::Keep => return Ok(Some(kind)),
+                            // Only the last frame of a run carries the cursor, so a
+                            // later frame would advance the resume position past the
+                            // dropped change. Freeze until a snapshot or a resubscribe.
+                            Resolved::Keep => {
+                                entry.poisoned = true;
+
+                                return Ok(Some(kind));
+                            }
                         }
                     } else {
                         value

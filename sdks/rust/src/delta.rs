@@ -193,8 +193,8 @@ pub(crate) enum Resolved {
     Adopt(WireValue),
     /// A row change that cannot be merged into the base we hold. Publishing the
     /// `{ key, op, table, row }` envelope would never be reconciled, so the
-    /// previous value stays. The reference re-snapshots here; this port has no
-    /// resubscribe-for-snapshot path, so the gap is left until the next `data` frame.
+    /// previous value stays and the subscription is poisoned: later deltas are
+    /// ignored, cursor included, until a `data` frame or a resubscribe.
     Keep,
 }
 
