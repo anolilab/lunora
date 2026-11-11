@@ -263,6 +263,8 @@ Call the facade from an action. Every method authorizes the caller against the
 | `attach(input)`                                | `CheckoutResult`   | Plan alias of `createCheckout` with `mode` defaulting to `"subscription"`.                                      |
 | `createPortalSession(referenceId, returnUrl)`  | `{ url }`          | Open the provider billing portal; customer derived from the store (no insecure direct object reference (IDOR)). |
 | `cancelSubscription(subscriptionId, options?)` | `Subscription`     | Cancel now or `atPeriodEnd`; persists the result.                                                               |
+| `updateSubscription(subscriptionId, patch)`    | `Subscription`     | Change the plan (`priceId`) or seats (`quantity`) of the caller's own subscription; persists the result.        |
+| `resumeSubscription(subscriptionId, options?)` | `Subscription`     | Undo a period-end cancel (Creem: resume a paused subscription); persists the result.                            |
 | `refundPayment(input)`                         | `PaymentSession`   | Refund the caller's own captured payment, in full or in part; persists the result.                              |
 | `capturePayment(input)`                        | `PaymentSession`   | Capture the caller's own authorized payment; persists the result.                                               |
 | `cancelPayment(sessionId, options?)`           | `PaymentSession`   | Cancel the caller's own uncaptured payment; persists the result.                                                |
@@ -273,10 +275,11 @@ Call the facade from an action. Every method authorizes the caller against the
 | `handleWebhook(request)`                       | `Response`         | Verify + normalize + apply a provider webhook.                                                                  |
 
 <Callout type="warn">
-    `ctx.payments.adapter` is the provider adapter, exposed for the surfaces the facade does not wrap (`updateSubscription`, `resumeSubscription`,
-    provider-specific extras). **Do not move money through it.** `adapter.refundPayment` / `capturePayment` / `cancelPayment` skip everything the facade methods
-    above do first: the caller authorization, the over-refund guard, the local refund ledger (the only thing stopping a retry from issuing a second real refund
-    on a provider whose API takes no idempotency key), the derived idempotency key, and the store write. The facade ends in the same provider call.
+    `ctx.payments.adapter` is the provider adapter, exposed for provider-specific extras the facade does not wrap. **Do not move money or change a subscription
+    through it.** `adapter.refundPayment` / `capturePayment` / `cancelPayment` skip everything the facade methods above do first: the caller authorization, the
+    over-refund guard, the local refund ledger (the only thing stopping a retry from issuing a second real refund on a provider whose API takes no idempotency
+    key), the derived idempotency key, and the store write. `adapter.cancelSubscription` / `updateSubscription` / `resumeSubscription` skip the caller
+    authorization and the store write. The facade ends in the same provider call.
 </Callout>
 
 ```ts

@@ -229,8 +229,12 @@ interface LunoraPayment {
     listBalances: (referenceId: string) => Promise<FeatureBalance[]>;
     listSubscriptions: (referenceId: string) => Promise<Subscription[]>;
     refundPayment: (input: RefundInput) => Promise<PaymentSession>;
+    resumeSubscription: (subscriptionId: string, options?: {
+        idempotencyKey?: string;
+    }) => Promise<Subscription>;
     readonly store: PaymentStore;
     track: (input: TrackInput) => Promise<TrackResult>;
+    updateSubscription: (subscriptionId: string, patch: SubscriptionPatch) => Promise<Subscription>;
 }
 ```
 

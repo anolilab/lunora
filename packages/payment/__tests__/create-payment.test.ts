@@ -2175,3 +2175,191 @@ describe("createPayment — bug-hunt regressions", () => {
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "past_due" });
     });
 });
+
+describe("createPayment — updateSubscription / resumeSubscription", () => {
+    it("answers an unknown id and another caller's subscription with the same NOT_FOUND, without calling the provider", async () => {
+        expect.assertions(6);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_2", "active"));
+
+        const updateSubscription = vi.fn<PaymentAdapter["updateSubscription"]>(fakeAdapter().updateSubscription);
+        const resumeSubscription = vi.fn<PaymentAdapter["resumeSubscription"]>(fakeAdapter().resumeSubscription);
+        const payment = createPayment({
+            adapter: fakeAdapter({ resumeSubscription, updateSubscription }),
+            authorize: (referenceId) => referenceId === "user_1",
+            store,
+        });
+
+        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).rejects.toMatchObject({
+            code: "NOT_FOUND",
+            message: `subscription "sub_1" not found`,
+        });
+        await expect(payment.resumeSubscription("sub_absent")).rejects.toMatchObject({
+            code: "NOT_FOUND",
+            message: `subscription "sub_absent" not found`,
+        });
+        expect(updateSubscription).not.toHaveBeenCalled();
+        expect(resumeSubscription).not.toHaveBeenCalled();
+        await expect(payment.updateSubscription("sub_absent", { priceId: "price_2" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+        await expect(payment.resumeSubscription("sub_1")).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("changes the owner's plan through the provider and stores the answer", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        const adapter = fakeAdapter({
+            updateSubscription: async (id, patch) => {
+                return { ...subscription("user_1", "active"), id, priceId: patch.priceId ?? "price_1" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).resolves.toMatchObject({ priceId: "price_2" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ priceId: "price_2" });
+    });
+
+    it("forwards no idempotency key without a caller key, and a namespaced one with it", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        const received: (string | undefined)[] = [];
+        const adapter = fakeAdapter({
+            resumeSubscription: async (id, options) => {
+                received.push(options?.idempotencyKey);
+
+                return { ...subscription("user_1", "active"), id };
+            },
+            updateSubscription: async (id, patch) => {
+                received.push(patch.idempotencyKey);
+
+                return { ...subscription("user_1", "active"), id };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.updateSubscription("sub_1", { priceId: "price_2" });
+        await payment.resumeSubscription("sub_1");
+        await payment.updateSubscription("sub_1", { idempotencyKey: "k1", priceId: "price_2" });
+        await payment.resumeSubscription("sub_1", { idempotencyKey: "k1" });
+
+        expect(received[0]).toBeUndefined();
+        expect(received[1]).toBeUndefined();
+        expect(received[2]).toBe(await derivedIdempotencyKey("update_subscription", "stripe", "sub_1", "k1"));
+        expect(received[3]).toBe(await derivedIdempotencyKey("resume_subscription", "stripe", "sub_1", "k1"));
+    });
+
+    it("refuses an invalid seat count before the provider is called", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        const updateSubscription = vi.fn<PaymentAdapter["updateSubscription"]>(fakeAdapter().updateSubscription);
+        const payment = createPayment({
+            adapter: fakeAdapter({ updateSubscription }),
+            authorize: (referenceId) => referenceId === "user_1",
+            store,
+        });
+
+        await expect(payment.updateSubscription("sub_1", { quantity: -1 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        expect(updateSubscription).not.toHaveBeenCalled();
+    });
+
+    it("undoes a period-end cancel with resume, and a later period-end cancel is sent to the provider again", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        const cancelSubscription = vi.fn<PaymentAdapter["cancelSubscription"]>(async (id, options) => {
+            return { ...subscription("user_1", "active"), cancelAtPeriodEnd: options?.atPeriodEnd === true, id };
+        });
+        const adapter = fakeAdapter({
+            cancelSubscription,
+            resumeSubscription: async (id) => {
+                return { ...subscription("user_1", "active"), cancelAtPeriodEnd: false, id };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.cancelSubscription("sub_1", { atPeriodEnd: true });
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ cancelAtPeriodEnd: true });
+
+        await payment.resumeSubscription("sub_1");
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ cancelAtPeriodEnd: false });
+
+        await payment.cancelSubscription("sub_1", { atPeriodEnd: true });
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ cancelAtPeriodEnd: true });
+        expect(cancelSubscription).toHaveBeenCalledTimes(2);
+    });
+
+    it("reports a resume the single-subscription policy refuses, and leaves the row unchanged", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const observer = vi.fn<PaymentObserver>();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), id: "sub_2" });
+        await store.upsertSubscription(subscription("user_1", "paused"));
+
+        const adapter = fakeAdapter({
+            resumeSubscription: async (id) => {
+                return { ...subscription("user_1", "active"), id };
+            },
+        });
+        const payment = createPayment({
+            adapter,
+            authorize: (referenceId) => referenceId === "user_1",
+            observability: observer,
+            singleSubscriptionPerReference: true,
+            store,
+        });
+
+        await expect(payment.resumeSubscription("sub_1")).resolves.toMatchObject({ id: "sub_1" });
+        expect(observer).toHaveBeenCalledWith(expect.objectContaining({ subscriptionId: "sub_1", type: "subscription.duplicate" }));
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.not.toMatchObject({ state: "active" });
+    });
+
+    it("raises a conflict when a webhook moves the row during the provider call, and keeps the stored plan", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // Every guarded write loses a race, so the provider's answer cannot be recorded over the moved row.
+        const racing = Object.assign(Object.create(store) as object, {
+            upsertSubscription: (record: Subscription, guard?: RevisionGuard) => {
+                if (guard !== undefined) {
+                    return Promise.resolve(false);
+                }
+
+                return store.upsertSubscription(record, guard);
+            },
+        }) as PaymentStore;
+
+        const adapter = fakeAdapter({
+            updateSubscription: async (id, patch) => {
+                return { ...subscription("user_1", "active"), id, priceId: patch.priceId ?? "price_1" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: racing });
+
+        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ priceId: "price_1" });
+    });
+});

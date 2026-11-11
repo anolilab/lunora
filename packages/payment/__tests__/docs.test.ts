@@ -30,6 +30,7 @@ describe("payment docs", () => {
      * local refund ledger (the only thing stopping a double Polar refund — see `idempotency.ts`), the
      * derived idempotency key, and the store write. Three provider guides documented the adapter as
      * the supported refund path, one of them asserting the facade had no refund method at all.
+     * Subscription changes need the owner check and the store write for the same reason.
      */
     it("never documents a money operation on ctx.payments.adapter", () => {
         expect.hasAssertions();
@@ -38,7 +39,11 @@ describe("payment docs", () => {
             .filter((name) => name.endsWith(".mdx"))
             // A call, not a mention: the guides are free to name the adapter method in prose that
             // steers readers away from it.
-            .filter((name) => /ctx\.payments\.adapter\.(?:cancel|capture|refund)Payment\(/.test(readFileSync(join(DOCS_DIRECTORY, name), "utf8")));
+            .filter((name) =>
+                /ctx\.payments\.adapter\.(?:(?:cancel|capture|refund)Payment|(?:cancel|resume|update)Subscription)\(/.test(
+                    readFileSync(join(DOCS_DIRECTORY, name), "utf8"),
+                ),
+            );
 
         expect(offenders).toStrictEqual([]);
     });

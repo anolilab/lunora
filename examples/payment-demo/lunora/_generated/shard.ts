@@ -212,7 +212,13 @@ const paymentStub: LunoraPayment = {
     refundPayment: () => {
         throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
     },
+    resumeSubscription: () => {
+        throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
+    },
     track: () => {
+        throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
+    },
+    updateSubscription: () => {
         throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
     },
 } as unknown as LunoraPayment;

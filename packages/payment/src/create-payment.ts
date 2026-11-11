@@ -35,6 +35,7 @@ import type {
     ProviderId,
     RefundInput,
     Subscription,
+    SubscriptionPatch,
     TrackInput,
     TrackResult,
 } from "./types";
@@ -230,6 +231,14 @@ export interface LunoraPayment {
      * the second one, or the provider replays the first and the second moves no money.
      */
     refundPayment: (input: RefundInput) => Promise<PaymentSession>;
+
+    /**
+     * Undo a period-end cancel, or resume a paused subscription (Creem; the others clear `cancelAtPeriodEnd`).
+     * Authorized against the subscription's owner, unknown and not-owner both raise NOT_FOUND, and the provider's
+     * answer is stored. Only a caller-supplied key is forwarded: the change is absolute, so a derived key would
+     * replay a stale answer if the subscription is cancelled and resumed again inside the provider's key window.
+     */
+    resumeSubscription: (subscriptionId: string, options?: { idempotencyKey?: string }) => Promise<Subscription>;
     readonly store: PaymentStore;
 
     /**
@@ -242,6 +251,13 @@ export interface LunoraPayment {
      * billing more than the local ledger holds. Use `mode: "add"` there.
      */
     track: (input: TrackInput) => Promise<TrackResult>;
+
+    /**
+     * Change the plan (`priceId`) or seats (`quantity`) of the caller's own subscription. Authorized against the
+     * subscription's owner, unknown and not-owner both raise NOT_FOUND, and the provider's answer is stored. Only a
+     * caller-supplied key is forwarded, for the reason given on {@link SubscriptionPatch.idempotencyKey}.
+     */
+    updateSubscription: (subscriptionId: string, patch: SubscriptionPatch) => Promise<Subscription>;
 }
 
 export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
@@ -358,6 +374,49 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         return { allowed: entitlements.has(featureId), unlimited: entitlements.has(featureId) };
     };
 
+    // Shared ownership guard for the subscription operations. Collapse "doesn't exist" and "not yours"
+    // into one indistinguishable NOT_FOUND so the endpoint can't be used as a cross-tenant existence
+    // oracle. A non-owner authorizer denial is rewritten to the same 404 as a genuinely missing id.
+    const ownedSubscription = async (subscriptionId: string): Promise<Subscription> => {
+        const notFound = (): LunoraPaymentError => new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
+        const existing = await store.getSubscription(adapter.identifier, subscriptionId);
+
+        if (!existing) {
+            throw notFound();
+        }
+
+        try {
+            await ensureAuthorized(existing.referenceId);
+        } catch {
+            throw notFound();
+        }
+
+        return existing;
+    };
+
+    // Stores the provider's answer to an update or a resume. Both calls set absolute state, so a row a
+    // webhook moved during the call is not merged onto: the provider has accepted the change and its own
+    // event for it follows. The conflict is raised rather than the answer dropped silently, and a retry is
+    // safe for the same reason.
+    const recordSubscriptionAnswer = async (existing: Subscription, answer: Subscription, verb: "updated" | "resumed"): Promise<Subscription> => {
+        const synced = overlayProviderSubscription(existing, answer);
+        const policy = options.singleSubscriptionPerReference ?? false;
+        const outcome = await storeSubscription(store, policy, existing, synced, { ifRevision: existing.revision });
+
+        if (outcome === "rejected") {
+            throw new LunoraPaymentError(
+                "INVALID_TRANSITION",
+                `the subscription changed while it was being ${verb}; the provider has accepted the change, so retry or reconcile this subscription`,
+            );
+        }
+
+        if (outcome === "refused") {
+            notifyObserver(options.observability, { provider: synced.provider, subscriptionId: synced.id, type: "subscription.duplicate" });
+        }
+
+        return (await store.getSubscription(adapter.identifier, existing.id)) ?? synced;
+    };
+
     // Shared ownership guard for the money-moving session operations. Collapse "doesn't exist" and
     // "not yours" into one indistinguishable NOT_FOUND so the endpoint can't be used as a
     // cross-tenant existence oracle (same posture as `cancelSubscription`).
@@ -425,20 +484,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         },
 
         cancelSubscription: async (subscriptionId, cancelOptions) => {
-            const existing = await store.getSubscription(adapter.identifier, subscriptionId);
-
-            // Collapse "doesn't exist" and "not yours" into one indistinguishable NOT_FOUND so the
-            // endpoint can't be used as a cross-tenant existence oracle. A non-owner authorizer denial
-            // is rewritten to the same 404 as a genuinely missing id.
-            if (!existing) {
-                throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
-            }
-
-            try {
-                await ensureAuthorized(existing.referenceId);
-            } catch {
-                throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
-            }
+            const existing = await ownedSubscription(subscriptionId);
 
             // Already in the requested end state: a retry after a successful cancel. Calling the
             // provider again would be a fresh key (the row's `updatedAt` moved) on a canceled sub.
@@ -646,6 +692,17 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             return store.listSubscriptionsByReference(referenceId);
         },
 
+        resumeSubscription: async (subscriptionId, resumeOptions) => {
+            const existing = await ownedSubscription(subscriptionId);
+            // `undefined` is forwarded as-is, not derived: see the interface comment on why a derived key is wrong here.
+            const key =
+                resumeOptions?.idempotencyKey === undefined
+                    ? undefined
+                    : await outboundKey("resume_subscription", [subscriptionId], resumeOptions.idempotencyKey, () => []);
+
+            return recordSubscriptionAnswer(existing, await adapter.resumeSubscription(subscriptionId, { idempotencyKey: key }), "resumed");
+        },
+
         refundPayment: async (input) => {
             const existing = await ownedSession(input.sessionId);
 
@@ -816,6 +873,21 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
                 return { recorded: true, reportedToProvider: false };
             }
+        },
+
+        updateSubscription: async (subscriptionId, patch) => {
+            const existing = await ownedSubscription(subscriptionId);
+
+            // Validated here so every provider refuses a bad seat count before its own call. A missing quantity is
+            // not defaulted: requireQuantity's default of 1 would turn "leave the seats alone" into a seat cut.
+            if (patch.quantity !== undefined) {
+                requireQuantity("updateSubscription", patch.quantity);
+            }
+
+            const key =
+                patch.idempotencyKey === undefined ? undefined : await outboundKey("update_subscription", [subscriptionId], patch.idempotencyKey, () => []);
+
+            return recordSubscriptionAnswer(existing, await adapter.updateSubscription(subscriptionId, { ...patch, idempotencyKey: key }), "updated");
         },
     };
 };

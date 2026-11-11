@@ -773,7 +773,9 @@ const PAYMENT_METHODS = [
     "listBalances",
     "listSubscriptions",
     "refundPayment",
+    "resumeSubscription",
     "track",
+    "updateSubscription",
 ] as const;
 
 /**
