@@ -78,6 +78,11 @@ class _Subscription implements OptimisticTarget {
   /// (a query may return null), so this cannot be read off the value itself.
   bool hasServerBase = false;
 
+  /// Set when a row change could not be merged and so was dropped. While set,
+  /// `delta` frames are ignored so a later frame's cursor cannot move the resume
+  /// position past the dropped change. A `data` frame or a resend clears it.
+  bool poisoned = false;
+
   @override
   Object? lastValue;
 
@@ -782,6 +787,12 @@ class LunoraClient {
     // throws into a handler that does — would otherwise mutate `_subscriptions`
     // while it is being iterated. Swift's port serialises this under its lock
     // for the same reason.
+    for (final entry in _subscriptions.values) {
+      // The resent position predates the dropped change, so the replay
+      // re-applies it; if it is still unmergeable the flag is set again.
+      entry.poisoned = false;
+    }
+
     final frames = <Map<String, Object?>>[
       for (final entry in _subscriptions.entries)
         buildSubscribeFrame(entry.key, entry.value.functionPath, entry.value.args, sinceSeq: entry.value.cursor, sinceEpoch: entry.value.epoch),
@@ -882,6 +893,16 @@ class LunoraClient {
       case 'data':
       case 'delta':
         final entry = id == null ? null : _subscriptions[id];
+
+        if (entry != null) {
+          if (kind == 'data') {
+            // A snapshot is authoritative, so it supersedes the dropped change.
+            entry.poisoned = false;
+          } else if (entry.poisoned) {
+            return kind;
+          }
+        }
+
         Object? value;
 
         try {
@@ -904,10 +925,13 @@ class LunoraClient {
 
           // Unmergeable against a base we hold. The reference re-snapshots here;
           // this port has no resubscribe-for-snapshot path, so the previous value
-          // is kept. The cursor is NOT advanced either, so a reconnect resumes
-          // from before this change and the server can replay it, rather than
-          // skipping past a change that was never applied.
+          // is kept. The cursor is NOT advanced, and the subscription is poisoned:
+          // a later frame of the same run carries the cursor, and honouring it
+          // would resume past this change. Poisoned deltas are ignored until a
+          // `data` frame or a resend, so a reconnect replays from before it.
           if (merged == null) {
+            entry.poisoned = true;
+
             return kind;
           }
 

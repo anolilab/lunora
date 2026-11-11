@@ -132,8 +132,8 @@ void casePageDeltaFramesMergeIntoTheBase() {
   }
 }
 
-/// A row change that cannot be merged is not published: the previous value
-/// stays, and the next row change still merges against it.
+/// A row change that cannot be merged is not published, and it poisons the
+/// subscription: later row changes wait for a snapshot.
 void caseUnmergeableRowDeltaKeepsThePreviousValue() {
   final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
   final seen = <Object?>[];
@@ -154,6 +154,8 @@ void caseUnmergeableRowDeltaKeepsThePreviousValue() {
   client.handleFrame(jsonEncode(<String, Object?>{'type': 'delta', 'id': 'sub_1', 'delta': change}));
   equals(seen.length, 0, 'an unmergeable row change is not published over the base');
 
+  // The refused change poisons the subscription, so a later mergeable change is
+  // ignored rather than merged over the base.
   client.handleFrame(
     jsonEncode(<String, Object?>{
       'type': 'delta',
@@ -164,6 +166,12 @@ void caseUnmergeableRowDeltaKeepsThePreviousValue() {
       },
     }),
   );
+  equals(seen.length, 0, 'a poisoned subscription ignores a later row change');
+
+  // A snapshot clears the poison and is published as it arrived.
+  pushData(client, 'sub_1', <Object?>[
+    <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'ONE'},
+  ]);
   equals(
     canonical(seen),
     canonical(<Object?>[
@@ -171,8 +179,52 @@ void caseUnmergeableRowDeltaKeepsThePreviousValue() {
         <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'ONE'},
       ],
     ]),
-    'the base survived the refused change',
+    'a snapshot clears the poison',
   );
+}
+
+/// `pageDeltaPoisonCases`: an unmergeable row change poisons the subscription, so
+/// a later delta in the run neither publishes nor moves the resume position, a
+/// resend asks for the pre-change position, and a `data` frame clears the poison.
+void casePoisonedSubscriptionFreezesTheResumeCursor() {
+  final cases = objectList(fixture('ws-frames.json')['pageDeltaPoisonCases']);
+
+  equals(cases.length, 1, 'pageDeltaPoisonCases must carry its one case');
+
+  for (final testCase in cases) {
+    final name = testCase['name'];
+    final sent = <Map<String, Object?>>[];
+    final client = LunoraClient(url: 'https://app.example');
+    final seen = <Object?>[];
+
+    attachRecording(client, sent);
+    client.subscribe('messages:list', args: <String, Object?>{'channel': 'general'}, onData: seen.add);
+    client.handleFrame(jsonEncode(testCase['seedFrame']));
+    seen.clear();
+
+    for (final step in objectList(testCase['steps'])) {
+      final resume = step['resume'];
+
+      if (resume is Map<String, Object?>) {
+        sent.clear();
+        client.resendSubscriptions();
+
+        final subscribe = sent.singleWhere((frame) => frame['type'] == 'subscribe')['query']! as Map<String, Object?>;
+
+        equals(subscribe['sinceSeq'], resume['sinceSeq'], 'resent sinceSeq for $name');
+        equals(subscribe['sinceEpoch'], resume['sinceEpoch'], 'resent sinceEpoch for $name');
+        continue;
+      }
+
+      seen.clear();
+      client.handleFrame(jsonEncode(step['frame']));
+      equals(seen.length, step['publishes'], 'publish count for $name');
+
+      if (step.containsKey('valueWire')) {
+        equals(canonical(encodeWire(seen.single)), canonical(step['valueWire']), 'published value for $name');
+      }
+    }
+  }
 }
 
 /// The `Stream` form of a live query: same subscription, same decode, same order
