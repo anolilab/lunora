@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { checkWorkerEntry } from "../src/module";
+import { checkWorkerEntry } from "../src/module-checks";
 
 /**
  * `checkWorkerEntry` — the guard behind the module's `worker.ts` warning
