@@ -47,6 +47,46 @@ describe("restore", () => {
         expect(store.rows.get(opened.id)?.subjectId).toBe(tombstoneKeyOf("u1", SECRET));
     });
 
+    it("expires an export a backup brought back as ready, and deletes its files", async () => {
+        const { files, operator, privacy, rows, runErasureWorkflow, store } = build(memoryTombstones());
+        const exported = await privacy.requestExport();
+
+        await privacy.runExport(exported.id);
+
+        const backup = { ...store.rows.get(exported.id)! };
+        const backedUpFiles = [...files.files].filter(([key]) => key.startsWith(`${exported.id}/`));
+        const erased = await privacy.requestErasure();
+
+        await runErasureWorkflow(erased.id);
+        // The backup brings the ready export back with its files and the raw subject id.
+        rows.tasks = 150;
+        store.rows.set(exported.id, backup);
+        for (const [key, value] of backedUpFiles) {
+            files.files.set(key, value);
+        }
+
+        await operator.restore({ restoredSubjectIds: ["u1"] });
+
+        expect(store.rows.get(exported.id)).toMatchObject({ status: "expired", subjectId: tombstoneKeyOf("u1", SECRET) });
+        expect([...files.files.keys()].some((key) => key.startsWith(`${exported.id}/`))).toBe(false);
+    });
+
+    it("fails an export a backup brought back while it was still open", async () => {
+        const { operator, privacy, rows, runErasureWorkflow, store } = build(memoryTombstones());
+        const exported = await privacy.requestExport();
+        const backup = { ...store.rows.get(exported.id)! };
+        const erased = await privacy.requestErasure();
+
+        await runErasureWorkflow(erased.id);
+        // The backup holds the export as it was before the erasure: still received, with the raw id.
+        rows.tasks = 150;
+        store.rows.set(exported.id, backup);
+
+        await operator.restore({ restoredSubjectIds: ["u1"] });
+
+        expect(store.rows.get(exported.id)).toMatchObject({ status: "failed", subjectId: tombstoneKeyOf("u1", SECRET) });
+    });
+
     it("refuses to restore without the tombstone secret", async () => {
         const { operator } = build(memoryTombstones(), null);
 

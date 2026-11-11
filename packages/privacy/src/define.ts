@@ -21,7 +21,17 @@ import { cancelRequest, extendRequest, openRequest, requireRequest } from "./req
 import type { PrivacyPolicy, PrivacyPreset } from "./rules";
 import { retentionRulesOf } from "./rules";
 import type { ErasureOutcome, ExportOutcome, RunScope, StepRunner } from "./run";
-import { archiveBlocked, eraseDataset, erasureBlocksSubject, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones } from "./run";
+import {
+    archiveBlocked,
+    eraseDataset,
+    erasureBlocksSubject,
+    erasureRun,
+    expireRequestFiles,
+    exportRun,
+    inlineSteps,
+    requireTombstones,
+    retireSubjectRequests,
+} from "./run";
 import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
 
 /**
@@ -337,14 +347,11 @@ const restoreSubjects = async (scope: Scope, restoredSubjectIds: ReadonlyArray<s
             await eraseDataset(scope, dataset, subjectId);
         }
 
-        // The backup also brought back the subject's request rows with their raw id; rewrite them as a first erasure does.
+        // The backup also brought back the subject's requests with their raw id and their files; retire them as a first erasure does.
         const key = tombstoneKeyOf(subjectId, tombstones.secret);
 
         // eslint-disable-next-line no-await-in-loop -- one subject at a time, like the erasure above
-        const requests = await scope.ports.store.listForSubject(subjectId);
-
-        // eslint-disable-next-line no-await-in-loop -- one subject at a time, like the erasure above
-        await Promise.all(requests.map(async (request) => scope.ports.store.update(request.id, { subjectId: key })));
+        await retireSubjectRequests(scope.ports, subjectId, key);
     }
 
     return subjects;
