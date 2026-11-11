@@ -300,6 +300,36 @@ class TestWsFrames < Minitest::Test
     assert_empty seen, "the row-change envelope must never be published as the result"
   end
 
+  def test_unmergeable_run_freezes_the_cursor
+    fixture("ws-frames.json")["pageDeltaPoisonCases"].each do |entry|
+      client = Lunora::Client.new("https://app.example")
+      sent = []
+      client.attach_socket(->(frame) { sent << frame })
+      seen = []
+      client.subscribe("messages:list", {}, ->(value) { seen << value })
+      client.handle_frame(JSON.generate(entry["seedFrame"]))
+      seen.clear
+
+      entry["steps"].each_with_index do |step, index|
+        label = "#{entry["name"]} step #{index + 1}"
+
+        if step["resume"]
+          sent.clear
+          client.resend_subscriptions
+          subscribe = sent.find { |frame| frame["type"] == "subscribe" }
+          assert_equal step["resume"]["sinceSeq"], subscribe["query"]["sinceSeq"], label
+          assert_equal step["resume"]["sinceEpoch"], subscribe["query"]["sinceEpoch"], label
+          next
+        end
+
+        seen.clear
+        client.handle_frame(JSON.generate(step["frame"]))
+        assert_equal step["publishes"], seen.length, label
+        assert_equal canonical(step["valueWire"]), canonical(Lunora.encode_wire(seen.first)), label if step["valueWire"]
+      end
+    end
+  end
+
   def test_server_frames
     ConformanceManifest.covers("server_frame_consumer")
     ConformanceManifest.covers("complete_frame_cancels_without_dropping_the_subscription")
