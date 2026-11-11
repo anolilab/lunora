@@ -144,7 +144,7 @@ change that adds or removes a capability.
 | Rate-limit backoff            | ✅⁵    | ✅⁵  | ✅⁵  | ✅⁵  | ✅⁵   | ✅⁵  | ✅⁵    | ✅⁵  |
 | Re-flush on a new token       | ✅⁹    | ➖⁹  | ➖⁹  | ➖⁹  | ➖⁹   | ➖⁹  | ➖⁹    | ✅⁹  |
 | Unset identity = token digest | ✅¹⁰   | ✅¹⁰ | ✅¹⁰ | ✅¹⁰ | ✅¹⁰  | ✅¹⁰ | ✅¹⁰   | ✅¹⁰ |
-| Row-delta merge into a list   | ❌⁷    | ❌⁷  | ❌⁷  | ❌⁷  | ❌⁷   | ❌⁷  | ❌⁷    | ❌⁷  |
+| Row-delta merge into a list   | ✅⁷    | ✅⁷  | ✅⁷  | ✅⁷  | ✅⁷   | ✅⁷  | ✅⁷    | ✅⁷  |
 | `chunk` frames                | ❌⁸    | ❌⁸  | ❌⁸  | ❌⁸  | ❌⁸   | ❌⁸  | ❌⁸    | ❌⁸  |
 | Whisper topics and rooms      | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Session credential on connect | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
@@ -238,17 +238,7 @@ for the life of the process — silently, because a shape is only ever fed by po
 the server had stopped sending. `shape_subscriptions_resend_after_reconnect` in
 `conformance-cases.json` is what makes the claim checkable rather than asserted.
 
-⁷ **A `delta` frame REPLACES the value here; the reference MERGES it.** All eight
-route `data` and `delta` through one arm and publish `frame.data ?? frame.delta`,
-while `@lunora/client` recognises a `{ key, op, table, row }` row change
-(`delta-merge.ts`) and splices it into the cached list by `_id`, falling back to
-replacement only when it cannot. So on the `broadcastDelta` fan-out these clients
-publish the row-change envelope itself over a query result. It is a missing
-FEATURE rather than a wire divergence — the frames are decoded correctly — and it
-is a row here rather than a conformance case because `conformance-cases.json` may
-only require behaviour every port has. Closing it is one merge implementation per
-language against the placement rule in `protocol/README.md` §5.1.1, which the
-`pageDeltaFrames` goldens already carry.
+⁷ **A row-change `delta` frame is merged, once a port announces `pageDelta`.** Every port sends `caps: ["pageDelta"]` on `connect` and merges a `{ key, op, table, row }` change into the subscription's server base by `_id`, with the normative insert placement (protocol README §5.1.1). The goldens are `pageDeltaFrames` in `protocol/fixtures/ws-frames.json`. **Divergence:** when a row change cannot be merged into a base the port holds, the port keeps the previous value and does not advance its cursor; the reference re-snapshots. The ports have no resubscribe-for-snapshot path yet, so that frame's effect is deferred to the next `data` frame.
 
 ⁸ **`chunk` is not handled.** A streaming-query chunk carries a durable `seq`/`generation`
 resume watermark (`protocol/README.md` §5.2). It reaches the default arm of every port's frame
