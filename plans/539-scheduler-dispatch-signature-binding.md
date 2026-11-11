@@ -9,7 +9,7 @@
 > must print nothing. Then confirm the excerpts in §1 match. Any mismatch is a STOP.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** DONE (review APPROVED after 1 revision; branch `security/improve-539-scheduler-dispatch-signature`, commit `453db6d3b`; scheduler + runtime workerd projects green; not merged — ship SchedulerDO and Worker together)
+**Status:** DONE (review APPROVED after 1 revision; branch `security/improve-539-scheduler-dispatch-signature`, commits 453db6d3b + 4ce724b43 (platform-node snapshot); api:check clean; scheduler + runtime workerd projects green; not merged — ship SchedulerDO and Worker together)
 **Priority / effort / risk:** P1 / S-M / MED. **Category:** security. **Depends on:** none.
 
 ## 0. Headline finding

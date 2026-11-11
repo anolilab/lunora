@@ -9,7 +9,7 @@
 > must print nothing. Then confirm the excerpts in §1 match. Any mismatch is a STOP.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** DONE (review APPROVED after 1 revision; branch `fix/improve-541-replay-subscription-refusal`, commit `aa4f33dc0`; not merged)
+**Status:** DONE (review APPROVED after 1 revision; branch `fix/improve-541-replay-subscription-refusal`, commits aa4f33dc0 + 2d755d3bd (client snapshot); api:check clean; not merged)
 **Priority / effort / risk:** P2 / S-M / MED. **Category:** bug. **Depends on:** none.
 
 ## 0. Headline finding
