@@ -8,7 +8,7 @@
 > must print nothing. Any change is a STOP.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** TODO (the `packages/nuxt/src/module.ts` part is BLOCKED on an owner decision, §4)
+**Status:** IN REVIEW (code approved: 7 files fixed, AST scan shows only nuxt left; api:check after full build pending; nuxt part BLOCKED on owner)
 **Priority / effort / risk:** P3 / S / LOW. **Category:** tech-debt. **Depends on:** none.
 
 ## 0. Headline finding
