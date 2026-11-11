@@ -8,7 +8,7 @@
 > must print nothing. Any change is a STOP.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** DONE for 7 files (PR #1539, merged as e793b60e7). Nuxt module part: IN PROGRESS on `refactor/improve-550-nuxt-module-helpers` (owner decided: move helpers out)
+**Status:** DONE. 7 files merged (#1539). Nuxt part APPROVED on new branch `refactor/improve-550-nuxt-module-helpers` (4fd349f29, dc1e6a6c8 snapshot); AST scan clean; api:check clean; not pushed
 **Priority / effort / risk:** P3 / S / LOW. **Category:** tech-debt. **Depends on:** none.
 
 ## 0. Headline finding
