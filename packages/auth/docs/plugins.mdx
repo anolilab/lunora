@@ -26,6 +26,7 @@ Re-exported from `@lunora/auth/plugins`:
 import {
     admin,
     anonymous,
+    apiKey,
     bearer,
     captcha,
     createAccessControl,
@@ -101,6 +102,85 @@ behaviour and the full option reference are better-auth's, linked per row.
 | `deviceAuthorization`                                         | OAuth 2.0 device grant for CLIs, TVs, and other input-constrained clients.                                                                                                                                                                                                                                                                                                                                        | [better-auth: device authorization](https://www.better-auth.com/docs/plugins/device-authorization) |
 | `oauthDeviceAuthorization`                                    | The device grant (RFC 8628) for third-party clients of the `oauthProvider` above. Split out of `oauthProvider` in better-auth 1.7, so a provider that does not want the device endpoints no longer serves them.                                                                                                                                                                                                   | [better-auth: OAuth provider](https://www.better-auth.com/docs/plugins/oauth-provider)             |
 | `mcp` / `requireMcpAuth` / `createMcpProtectedRequestHandler` | OAuth-protect a Model Context Protocol server. Pairs with [`@lunora/mcp`](/docs/packages/mcp), whose `createAuthedMcpFetchHandler` mounts a Lunora MCP server behind `requireMcpAuth`. `withMcpAuth` was renamed `requireMcpAuth` in better-auth 1.7; `createMcpProtectedRequestHandler` is the split-deployment form (a resource server with no auth instance) and replaced 1.7.0-rc's short-lived `mcpHandler`. | [better-auth: MCP](https://www.better-auth.com/docs/plugins/mcp)                                   |
+
+### API keys
+
+`apiKey()` gives scripts, CI jobs and other machine clients a credential that is
+not a browser session. A key is stored as a hash in the `apikey` table, and its
+plaintext is returned once, from the call that creates it.
+
+```ts
+import { createAuth } from "@lunora/auth";
+import { apiKey } from "@lunora/auth/plugins";
+
+createAuth({
+    database: lunoraD1Adapter(env.DB),
+    plugins: [apiKey({ enableSessionForAPIKeys: true })],
+    secret: env.AUTH_SECRET,
+});
+```
+
+`enableSessionForAPIKeys` defaults to `false`. Without it, a key is only checked
+on better-auth's own `/api/auth/api-key/*` routes and never establishes a session,
+so `ctx.auth` stays anonymous for every Lunora function. Turn it on for any key
+that should act as its owner.
+
+The `apikey` table is part of the schema the plugin list needs. It is created by
+the same migration step as the other plugins' tables (see
+[Migrations](#migrations)), and the schema check names it when it is missing.
+
+**Creating and revoking keys** happens over the signed-in session, through the
+client half. Either pass the helper's flag to `lunoraAuthPlugins`, or add
+`apiKeyClient()` yourself:
+
+```ts
+import { createAuthClient } from "better-auth/react";
+import { createLunoraAuthClient } from "@lunora/auth/plugins/client";
+
+const authClient = createLunoraAuthClient(createAuthClient, { plugins: { apiKey: true } });
+
+const { data, error } = await authClient.apiKey.create({ name: "ci" });
+
+if (error) {
+    throw new Error(error.message);
+}
+
+// `data.key` is the only time the plaintext is available. Store it in the CI secret store.
+await authClient.apiKey.delete({ keyId: data.id });
+```
+
+**Sending a key.** Put the key in `x-api-key` and call Lunora as usual. The
+request needs no cookie, and `ctx.auth.userId` is the key's owner:
+
+```ts
+const response = await fetch(`${WORKER_ORIGIN}/_lunora/rpc`, {
+    body: JSON.stringify({ args: {}, functionPath: "notes:list" }),
+    headers: { "content-type": "application/json", origin: APP_ORIGIN, "x-api-key": process.env.LUNORA_KEY! },
+    method: "POST",
+});
+```
+
+Keep the default header name. A request that carries `x-api-key` is never served
+from the identity cache, but a custom `apiKeyHeaders` value gets no such bypass. A
+request that sends that header together with a session cookie can then resolve to
+the cookie's identity.
+
+**Rate limits.** better-auth limits each key to **10 requests per day** by default,
+and a request over the limit is refused, not anonymised. Raise it for a
+high-volume client with `apiKey({ rateLimit: { maxRequests, timeWindow } })`, or
+turn it off with `rateLimit: { enabled: false }` for a key you fully trust.
+`timeWindow` is in milliseconds.
+
+**Revocation.** `apiKey.delete` removes the row, and the key stops resolving to its
+owner on its next call. Key requests are never served from the identity cache, so
+this does not wait for a cache window. Cookie sessions are still cached for the
+identity cache window (60 seconds by default, `LUNORA_IDENTITY_CACHE_MS`). The studio's Revoke
+deletes the row directly, which needs the default `storage: "database"`; with
+secondary storage, revoke through better-auth's own endpoint.
+
+**The studio** lists a user's keys in the user drawer, with name, the leading
+characters of the key, creation time and expiry, and a Revoke action per row. The
+hash is never returned by any endpoint.
 
 #### `iss` and `aud` of a `jwt` token
 
@@ -574,6 +654,7 @@ endpoint, and the studio renders only the surfaces that apply:
 | `organization()`                 | The **Organizations** section (orgs → members → invitations)             |
 | `twoFactor()`                    | "Disable two-factor" in the user detail drawer                           |
 | `passkey()`                      | The user's passkeys (list + revoke) in the detail drawer                 |
+| `apiKey()`                       | The user's API keys (list + revoke) in the detail drawer                 |
 | _(always, core `account` table)_ | Linked accounts (providers + unlink)                                     |
 
 Turn a plugin off and its surface disappears (the Organizations tab shows an

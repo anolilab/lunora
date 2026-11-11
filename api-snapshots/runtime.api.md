@@ -164,6 +164,9 @@ interface AuthAdmin {
         password?: string;
         role?: string | string[];
     }) => Promise<AuthUser>;
+    deleteApiKey?: (input: {
+        apiKeyId: string;
+    }) => Promise<void>;
     deleteOrganization?: (input: {
         organizationId: string;
     }) => Promise<void>;
@@ -186,6 +189,9 @@ interface AuthAdmin {
         role?: string;
     }) => Promise<Record<string, unknown>>;
     listAccounts?: (input: {
+        userId: string;
+    }) => Promise<Record<string, unknown>[]>;
+    listApiKeys?: (input: {
         userId: string;
     }) => Promise<Record<string, unknown>[]>;
     listInvitations?: (options: {
@@ -298,6 +304,7 @@ interface AuthAdmin {
 interface AuthCapabilities {
     accounts: boolean;
     admin: boolean;
+    apiKey: boolean;
     inviteOnly: boolean;
     organization: boolean;
     passkey: boolean;

@@ -630,6 +630,43 @@ describe("named admin tokens", () => {
         await expect(errorCodeOf(call(worker, `${ORIGIN}/_lunora/admin/ws-token`, scopedToken, { method: "POST" }))).resolves.toBe("ADMIN_ROOT_REQUIRED");
     });
 
+    it("lets a named token list and revoke a user's API keys, the same as it revokes sessions", async () => {
+        expect.assertions(4);
+
+        const { namespace } = fakeShards();
+        const listApiKeys = vi.fn(async () => [{ id: "k1", referenceId: "u1" }]);
+        const deleteApiKey = vi.fn(async () => undefined);
+        const worker = createBareWorker({
+            adminRevocations: fakeRevocations(),
+            adminToken: ROOT,
+            authAdmin: {
+                capabilities: async () => {
+                    return {};
+                },
+                deleteApiKey,
+                listApiKeys,
+                listSessions: async () => {
+                    return { rows: [], total: 0 };
+                },
+                listUsers: async () => {
+                    return { rows: [], total: 0 };
+                },
+            } as never,
+            functions: REGISTRY,
+            shardDO: namespace,
+        });
+        const created = await call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "ci" }), method: "POST" });
+        const { token } = await created.json<{ token: string }>();
+
+        await expect(status(call(worker, `${ORIGIN}/_lunora/admin/auth/api-keys?userId=u1`, token))).resolves.toBe(200);
+        await expect(
+            status(call(worker, `${ORIGIN}/_lunora/admin/auth/api-keys/delete`, token, { body: JSON.stringify({ apiKeyId: "k1" }), method: "POST" })),
+        ).resolves.toBe(200);
+
+        expect(listApiKeys).toHaveBeenCalledWith({ userId: "u1" });
+        expect(deleteApiKey).toHaveBeenCalledWith({ apiKeyId: "k1" });
+    });
+
     it("refuses a scoped create that the store did not keep, and removes the row it wrote", async () => {
         expect.assertions(3);
 
