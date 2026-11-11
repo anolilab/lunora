@@ -8,7 +8,7 @@
 > must print nothing. Any change is a STOP.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** IN REVIEW (code approved: 7 files fixed, AST scan shows only nuxt left; api:check after full build pending; nuxt part BLOCKED on owner)
+**Status:** DONE for 7 files (review APPROVED; branch `refactor/improve-550-split-mixed-exports`, 5 commits, head b68da26f8; api:check clean after full build; not merged). Nuxt module BLOCKED on owner (§4).
 **Priority / effort / risk:** P3 / S / LOW. **Category:** tech-debt. **Depends on:** none.
 
 ## 0. Headline finding
