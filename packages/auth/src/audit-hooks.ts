@@ -59,6 +59,10 @@ interface AuditHookContext {
         session?: { session?: { impersonatedBy?: string; userId?: string }; user?: { email?: string; id?: string } } | null;
     };
     headers?: Headers;
+    /** The HTTP verb. better-auth sets it for a request over `handler`, not for a direct `auth.api.*` call. */
+    method?: string;
+    /** Path parameters, e.g. `{ userId }`. Can carry secrets, so only allow-listed keys are ever copied. */
+    params?: Record<string, unknown>;
     path?: string;
     request?: Request;
 }
@@ -106,7 +110,89 @@ const SUFFIX_EVENTS: ReadonlyArray<readonly [suffix: string, event: AuthAuditEve
     ["/sso/callback", "sign-in"],
     ["/multi-session/set-active", "session-switch"],
     ["/multi-session/revoke", "session-revoke"],
+    ["/oauth2/create-client", "oauth-client-create"], // also covers /admin/oauth2/create-client
+    ["/oauth2/register", "oauth-client-create"],
+    ["/oauth2/update-client", "oauth-client-update"], // also covers /admin/oauth2/update-client
+    ["/oauth2/delete-client", "oauth-client-delete"],
+    ["/oauth2/client/rotate-keys", "oauth-client-keys-rotate"],
+    ["/oauth2/client/rotate-secret", "oauth-client-secret-rotate"],
+    ["/oauth2/consent", "oauth-consent"],
+    ["/oauth2/update-consent", "oauth-consent-update"],
+    ["/oauth2/delete-consent", "oauth-consent-revoke"],
+    ["/oauth2/revoke", "oauth-token-revoke"],
+    // Replaces the old `ends("/token")` → `token-refresh` reading: the code-grant token endpoint issues a session.
+    ["/oauth2/token", "oauth-token-issue"],
+    // The end-session endpoint answers GET and POST, and can ask for a confirmation step; the
+    // suffix is anchored, so the confirm path needs its own row.
+    ["/oauth2/end-session", "sign-out"],
+    ["/oauth2/end-session/confirm", "sign-out"],
+    ["/organization/create", "org-create"],
+    ["/organization/update", "org-update"],
+    ["/organization/delete", "org-delete"],
+    ["/organization/invite-member", "org-invitation-create"],
+    ["/organization/accept-invitation", "org-invitation-accept"],
+    ["/organization/reject-invitation", "org-invitation-reject"],
+    ["/organization/cancel-invitation", "org-invitation-cancel"],
+    ["/organization/leave", "org-member-leave"],
+    ["/organization/remove-member", "org-member-remove"],
+    ["/organization/update-member-role", "org-member-role-change"],
+    ["/organization/set-active", "org-switch"],
+    ["/organization/set-active-team", "org-switch"],
+    ["/organization/create-team", "org-team-create"],
+    ["/organization/update-team", "org-team-update"],
+    ["/organization/remove-team", "org-team-remove"],
+    ["/organization/add-team-member", "org-team-member-add"],
+    ["/organization/remove-team-member", "org-team-member-remove"],
+    ["/sso/register", "sso-provider-register"],
+    ["/sso/update-provider", "sso-provider-update"],
+    ["/sso/delete-provider", "sso-provider-delete"],
 ];
+
+/**
+ * Compile a table suffix to a case-insensitive end-anchored pattern. A `:param`
+ * segment matches exactly one path segment, so the template path the hook receives
+ * (`/scim/v2/Users/:userId`) and a concrete path behind an app `basePath`
+ * (`/api/auth/scim/v2/Users/u-123`) classify the same way.
+ */
+const suffixPattern = (suffix: string): RegExp =>
+    new RegExp(
+        `${suffix
+            .split("/")
+            .map((segment) => (segment.startsWith(":") ? "[^/]+" : segment.toLowerCase().replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`)))
+            .join("/")}$`,
+    );
+
+/**
+ * Rows for paths that serve several endpoints, told apart only by HTTP method. Each
+ * is checked before {@link SUFFIX_EVENTS}. A row matches only when the caller
+ * supplies a method that equals its own: with no method (a direct `auth.api.*`
+ * call, which the hook never sees a verb for) these paths stay unclassified. That is
+ * deliberate, since server code is trusted and guessing a verb would turn a read into
+ * a write row.
+ */
+const METHOD_EVENTS: ReadonlyArray<readonly [method: string, suffix: string, event: AuthAuditEvent]> = [
+    ["POST", "/admin/oauth2/resources", "oauth-resource-create"],
+    ["PATCH", "/admin/oauth2/resources/:identifier", "oauth-resource-update"],
+    ["DELETE", "/admin/oauth2/resources/:identifier", "oauth-resource-delete"],
+    ["POST", "/admin/oauth2/resources/:identifier/clients/:client_id", "oauth-resource-client-link"],
+    ["DELETE", "/admin/oauth2/resources/:identifier/clients/:client_id", "oauth-resource-client-unlink"],
+    ["POST", "/scim/v2/Users", "scim-user-create"],
+    ["PATCH", "/scim/v2/Users/:userId", "scim-user-update"],
+    ["PUT", "/scim/v2/Users/:userId", "scim-user-update"],
+    ["DELETE", "/scim/v2/Users/:userId", "scim-user-delete"],
+    ["POST", "/scim/v2/Groups", "scim-group-create"],
+    ["PATCH", "/scim/v2/Groups/:groupId", "scim-group-update"],
+    ["PUT", "/scim/v2/Groups/:groupId", "scim-group-update"],
+    ["DELETE", "/scim/v2/Groups/:groupId", "scim-group-delete"],
+];
+
+const SUFFIX_PATTERNS = SUFFIX_EVENTS.map(([suffix, event]) => {
+    return { event, pattern: suffixPattern(suffix) };
+});
+
+const METHOD_PATTERNS = METHOD_EVENTS.map(([method, suffix, event]) => {
+    return { event, method, pattern: suffixPattern(suffix) };
+});
 
 // The substring and suffix branches `eventForPath` falls back to. Order matters inside:
 // an earlier match wins, so reordering a branch changes the classification.
@@ -241,12 +327,20 @@ const branchEventForPath = (normalized: string): AuthAuditEvent | undefined => {
  * endpoint it does not classify, so an upgrade cannot add one silently.
  *
  * The exact table {@link SUFFIX_EVENTS} is consulted first, then the substring branches.
+ *
+ * `method` only matters for {@link METHOD_EVENTS}, the paths that serve a read and a
+ * write under one template (SCIM users, OAuth resources). Pass it whenever the verb
+ * is known; a direct server call has none, and those paths are left unclassified.
  */
-const eventForPath = (path: string): AuthAuditEvent | undefined => {
+const eventForPath = (path: string, method?: string): AuthAuditEvent | undefined => {
     const normalized = path.toLowerCase();
-    const exactEvent = SUFFIX_EVENTS.find(([suffix]) => normalized === suffix || normalized.endsWith(suffix))?.[1];
+    const upperMethod = method?.toUpperCase();
 
-    return exactEvent ?? branchEventForPath(normalized);
+    return (
+        METHOD_PATTERNS.find((row) => row.method === upperMethod && row.pattern.test(normalized))?.event ??
+        SUFFIX_PATTERNS.find((row) => row.pattern.test(normalized))?.event ??
+        branchEventForPath(normalized)
+    );
 };
 
 /** Pull the first present header off whichever of `headers` / `request.headers` exists. */
@@ -367,34 +461,77 @@ const resolveTargetEmail = (context: AuditHookContext, event: AuthAuditEvent): s
     return candidate.length > MAX_TARGET_EMAIL_LENGTH ? candidate.slice(0, MAX_TARGET_EMAIL_LENGTH) : candidate;
 };
 
+/** Longest id copied into `detail`; a longer value is cut rather than dropped. */
+const MAX_DETAIL_ID_LENGTH = 256;
+
+const detailId = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value.slice(0, MAX_DETAIL_ID_LENGTH) : undefined);
+
 /**
- * The subject of an `admin-*` action: the account the operator acted on, so the row says
- * who was impersonated, created or changed. Taken from `ctx.body.userId` when the endpoint
- * takes one. `create-user` has no such body field, so its subject is the account the response
- * returns; `stop-impersonating` has none either, so its subject is the impersonated session's
- * user. Only the id is copied: other body fields (`set-user-password` carries the new password)
- * and the rest of the response must never reach the trail.
+ * The subject of an admin action whose body names no `userId`: `create-user` acts on the
+ * account its response returns, and `stop-impersonating` on the impersonated session's user.
  */
-const resolveTargetUserId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined => {
-    if (!event.startsWith("admin-")) {
-        return undefined;
-    }
-
-    const fromBody = stringOf(context.body?.["userId"]);
-
-    if (fromBody !== undefined) {
-        return fromBody;
-    }
-
+const adminSubject = (context: AuditHookContext, event: AuthAuditEvent): string | undefined => {
     if (event === "admin-user-create") {
-        return stringOf(fieldOf(fieldOf(context.context?.returned, "user"), "id"));
+        return detailId(fieldOf(fieldOf(context.context?.returned, "user"), "id"));
     }
 
     if (event === "admin-impersonate-stop") {
-        return stringOf(fieldOf(fieldOf(context.context?.session, "user"), "id")) ?? stringOf(fieldOf(fieldOf(context.context?.session, "session"), "userId"));
+        return detailId(fieldOf(fieldOf(context.context?.session, "user"), "id")) ?? detailId(fieldOf(fieldOf(context.context?.session, "session"), "userId"));
     }
 
     return undefined;
+};
+
+/**
+ * The ids an audit row names, per event family, copied from an allow-list only.
+ * Bodies and params carry secrets (`rotate-secret` returns one, `set-user-password`
+ * sends one) and emails (invitations), so no other field is ever copied. The
+ * `admin-*` subject stays `targetUserId`: an impersonation row says who was
+ * impersonated. `oauth-*` deliberately does not use it, so an OAuth client operation
+ * is not read as an operator acting on a user.
+ */
+const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Record<string, string> => {
+    const body = context.body ?? {};
+    const params = context.params ?? {};
+
+    const candidates = ((): ReadonlyArray<readonly [key: string, value: string | undefined]> => {
+        if (event.startsWith("admin-")) {
+            return [["targetUserId", detailId(body["userId"]) ?? adminSubject(context, event)]];
+        }
+
+        if (event.startsWith("org-")) {
+            return [
+                ["organizationId", detailId(body["organizationId"])],
+                ["teamId", detailId(body["teamId"])],
+                ["invitationId", detailId(body["invitationId"])],
+                ["memberId", detailId(body["memberId"])],
+                ["targetUserId", detailId(body["userId"])],
+            ];
+        }
+
+        if (event.startsWith("oauth-")) {
+            return [
+                ["clientId", detailId(body["client_id"]) ?? detailId(params["client_id"])],
+                ["resourceIdentifier", detailId(params["identifier"])],
+            ];
+        }
+
+        if (event.startsWith("scim-")) {
+            // A SCIM resource id, not necessarily the better-auth user id.
+            return [
+                ["scimUserId", detailId(params["userId"])],
+                ["scimGroupId", detailId(params["groupId"])],
+            ];
+        }
+
+        if (event.startsWith("sso-provider-")) {
+            return [["providerId", detailId(body["providerId"])]];
+        }
+
+        return [];
+    })();
+
+    return Object.fromEntries(candidates.flatMap(([key, value]) => (value === undefined ? [] : [[key, value] as const])));
 };
 
 /**
@@ -418,7 +555,7 @@ const buildAuditEntry = (
     context: AuditHookContext,
     { now = Date.now(), trustProxyHeaders }: { now?: number; trustProxyHeaders?: boolean } = {},
 ): AppendAuthAuditEntry | undefined => {
-    const event = context.path === undefined ? undefined : eventForPath(context.path);
+    const event = context.path === undefined ? undefined : eventForPath(context.path, context.method);
 
     if (event === undefined) {
         return undefined;
@@ -427,7 +564,6 @@ const buildAuditEntry = (
     const ip = resolveIp(context, trustProxyHeaders);
     const userAgent = header(context, "user-agent");
     const targetEmail = resolveTargetEmail(context, event);
-    const targetUserId = resolveTargetUserId(context, event);
 
     return {
         ...resolveActor(context),
@@ -437,7 +573,7 @@ const buildAuditEntry = (
         ...(ip === undefined ? {} : { ip }),
         ...(targetEmail === undefined ? {} : { targetEmail }),
         ...(userAgent === undefined ? {} : { userAgent }),
-        detail: { path: context.path, ...(targetUserId === undefined ? {} : { targetUserId }) },
+        detail: { path: context.path, ...resolveDetailIds(context, event) },
     };
 };
 
