@@ -39,12 +39,35 @@ const AUTH_AUDIT_TABLE = "__lunora_auth_audit__";
 type AuthAuditEvent =
     | "account-link"
     | "account-unlink"
+    // An operator acting on another account; the subject's id is in `detail.targetUserId`.
+    | "admin-impersonate-start"
+    | "admin-impersonate-stop"
+    | "admin-password-set" // secret-scanner:allow -- endpoint path or event name, not a credential
+    | "admin-role-change"
+    | "admin-session-revoke"
+    | "admin-user-ban"
+    | "admin-user-create"
+    | "admin-user-remove"
+    | "admin-user-unban"
+    | "admin-user-update"
+    | "api-key-create"
+    | "api-key-delete"
+    | "api-key-update"
+    | "device-approve"
+    | "device-deny"
+    | "email-change"
     | "email-verification"
+    | "mfa-backup-codes-regenerate"
     | "mfa-disable"
     | "mfa-enable"
+    | "one-time-token-create"
+    | "passkey-add"
+    | "passkey-remove"
     | "password-change"
     | "password-reset"
+    | "phone-verification"
     | "session-revoke"
+    | "session-switch"
     | "sign-in"
     // A sign-in-family endpoint that only DISPATCHES (mints a provider
     // redirect URL, or sends a magic-link email) — nobody is authenticated
@@ -54,6 +77,7 @@ type AuthAuditEvent =
     | "sign-out"
     | "sign-up"
     | "token-refresh"
+    | "user-delete"
     | (string & {});
 
 /** Whether the recorded operation succeeded or failed (e.g. a rejected sign-in). */

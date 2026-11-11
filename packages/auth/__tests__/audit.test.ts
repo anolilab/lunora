@@ -20,6 +20,9 @@ const executorFor = (database: DatabaseSync): SqlExecutor => {
 let database: DatabaseSync;
 let executor: SqlExecutor;
 
+const SET_PASSWORD_PATH = "/api/auth/admin/set-user-password"; // secret-scanner:allow -- endpoint path or event name, not a credential
+const NEW_PASSWORD = "correct-horse-42";
+
 describe("auth audit trail", () => {
     beforeEach(() => {
         database = new DatabaseSync(":memory:");
@@ -518,6 +521,35 @@ describe("auth audit trail", () => {
 
             expect(buildAuditEntry({ path: "/api/auth/get-session" })).toBeUndefined();
             expect(buildAuditEntry({ path: undefined })).toBeUndefined();
+        });
+
+        it("records the impersonated user's id on an admin action, and never other body fields", () => {
+            expect.assertions(2);
+
+            expect(buildAuditEntry({ body: { userId: "user_42" }, path: "/api/auth/admin/impersonate-user" })?.detail).toStrictEqual({
+                path: "/api/auth/admin/impersonate-user",
+                targetUserId: "user_42",
+            });
+            expect(buildAuditEntry({ body: { newPassword: NEW_PASSWORD, userId: "user_42" }, path: SET_PASSWORD_PATH })?.detail).toStrictEqual({
+                path: SET_PASSWORD_PATH,
+                targetUserId: "user_42",
+            });
+        });
+
+        it("does not add targetUserId to a non-admin event", () => {
+            expect.assertions(1);
+
+            expect(buildAuditEntry({ body: { userId: "x" }, path: "/api/auth/sign-out" })?.detail).toStrictEqual({ path: "/api/auth/sign-out" });
+        });
+
+        it("keeps targetUserId through redaction on a persisted admin row", async () => {
+            expect.assertions(1);
+
+            await appendAuthAuditEntry(executor, buildAuditEntry({ body: { userId: "user_42" }, path: "/api/auth/admin/ban-user" })!);
+
+            const rows = await readAuthAuditLog(executor);
+
+            expect(rows[0]?.detail).toStrictEqual(expect.objectContaining({ targetUserId: "user_42" }));
         });
 
         it("extracts actor, IP and User-Agent from the request + fresh session", () => {

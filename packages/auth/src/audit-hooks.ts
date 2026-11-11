@@ -64,69 +64,53 @@ interface AuditHookContext {
 }
 
 /**
- * Map a better-auth endpoint path to the security event it represents, or
- * `undefined` for endpoints not worth auditing (session reads, config, …). Match
- * is by suffix so a caller `basePath` prefix (`/api/auth`) never affects it.
- *
- * Sign-in is split by what the endpoint actually DOES (plan 280 §4):
- *
- * - `/sign-in/social`, `/sign-in/magic-link` and `@better-auth/sso`'s
- * `/sign-in/sso` only DISPATCH — the first mints a provider redirect URL, the
- * second sends an email, the third answers `{ url, redirect: true }` pointing
- * at the identity provider's authorization endpoint. Nobody is authenticated
- * yet, so these are `sign-in-initiated`, not `sign-in`. Without the `sso`
- * branch that path fell through to the `/sign-in/` substring below and every
- * SSO redirect mint was recorded as a completed, successful `sign-in` with no
- * actor — in exactly the flow where the "who authenticated" trail matters
- * most.
- * - `/callback/:id` (social + generic-oauth), `/magic-link/verify`,
- * `@better-auth/sso`'s `/sso/saml2/sp/acs/:providerId`, and every
- * `/two-factor/verify-*` (`verify-totp` / `verify-otp` / `verify-backup-code`
- * — all three complete a challenged sign-in the same way) are where a
- * session actually gets issued, so they join credential sign-ins
- * (`/sign-in/email`, `/sign-in/username`, `/sign-in/phone-number`, …) as
- * plain `sign-in`. They were NOT recorded at all before this change.
- *
- * The SAML assertion consumer service needs its own branch because it is the
- * one completion that carries no `/callback/` segment: `processSAMLResponse`
- * validates the assertion, resolves the user and calls `setSessionCookie`, all
- * under `/sso/saml2/sp/acs/:providerId`. Matching neither that substring nor
- * any other branch, it classified as `undefined` — the endpoint that issues
- * every SAML session left no audit row at all.
- *
- * SAML sign-OUT has the mirror-image problem, and two endpoints rather than
- * one. Neither ends in `/sign-out`, and both terminate the local session before
- * redirecting, so both are `sign-out` rather than an initiated event:
- *
- * - `/sso/saml2/logout/:providerId` — SP-initiated. Deletes the SAML session
- * keys, calls `deleteSession` on the current session token and
- * `deleteSessionCookie`, then redirects to the IdP's logout URL.
- * - `/sso/saml2/sp/slo/:providerId` — the SP's single-logout receiver, for the
- * IdP-initiated direction and for the response leg of an SP-initiated one.
- * Both `handleLogoutRequest` and `handleLogoutResponse` call `deleteSession`
- * and `deleteSessionCookie` the same way.
- *
- * Recording the SAML sign-in while leaving these silent is worse than either
- * gap alone: the trail would show a session opening and never closing, so a
- * reader cannot tell "still signed in" from "we stopped watching".
- *
- * There is no dedicated `/oauth2/callback/*` branch because the generic
- * `/callback/` check above already covers it, and covering it is CORRECT: an
- * OAuth callback is a completed sign-in whatever path prefix it arrives on. The
- * same substring also catches `@better-auth/sso`'s `/sso/callback/:providerId`,
- * which is where an SSO sign-in actually completes — `sso` is re-exported from
- * `@lunora/auth/plugins/enterprise`, so that path is live, not hypothetical.
- *
- * Checked against the installed `better-auth` and `@better-auth/*` dist for
- * 1.7.3: generic-oauth registers NO endpoints of its own (there is no
- * `/sign-in/oauth2`) — it registers providers used through the core
- * `/sign-in/social` and `/callback/:id`, and the one dist hit for a literal
- * `/oauth2/callback/` is inside `better-auth/plugins/oauth-popup`, which
- * `plugins.ts` does not re-export — so today the branch fires for the core
- * callback, and stays correct if the other becomes reachable.
+ * Exact-suffix endpoint table, checked before the branches in {@link eventForPath}.
+ * Suffixes are anchored to the whole segment path, never substrings like
+ * `/admin/`, so an app `basePath` cannot change the result. Checking this table
+ * first also keeps `/device/token` (a session issue) from falling into the
+ * `ends("/token")` refresh branch, which is an order-sensitive trap the
+ * substring branches cannot avoid.
  */
-const eventForPath = (path: string): AuthAuditEvent | undefined => {
-    const normalized = path.toLowerCase();
+const SUFFIX_EVENTS: ReadonlyArray<readonly [suffix: string, event: AuthAuditEvent]> = [
+    ["/admin/impersonate-user", "admin-impersonate-start"],
+    ["/admin/stop-impersonating", "admin-impersonate-stop"],
+    ["/admin/set-user-password", "admin-password-set"], // secret-scanner:allow -- endpoint path or event name, not a credential
+    ["/admin/set-role", "admin-role-change"],
+    ["/admin/revoke-user-session", "admin-session-revoke"],
+    ["/admin/revoke-user-sessions", "admin-session-revoke"],
+    ["/admin/ban-user", "admin-user-ban"],
+    ["/admin/unban-user", "admin-user-unban"],
+    ["/admin/create-user", "admin-user-create"],
+    ["/admin/update-user", "admin-user-update"],
+    ["/admin/remove-user", "admin-user-remove"],
+    ["/api-key/create", "api-key-create"],
+    ["/api-key/update", "api-key-update"],
+    ["/api-key/delete", "api-key-delete"],
+    ["/device/approve", "device-approve"],
+    ["/device/deny", "device-deny"],
+    ["/device/token", "sign-in"],
+    ["/change-email", "email-change"],
+    ["/delete-user", "user-delete"],
+    ["/delete-user/callback", "user-delete"],
+    ["/delete-anonymous-user", "user-delete"],
+    ["/forget-password/email-otp", "password-reset"],
+    ["/two-factor/generate-backup-codes", "mfa-backup-codes-regenerate"],
+    ["/one-time-token/generate", "one-time-token-create"],
+    ["/one-time-token/verify", "sign-in"],
+    ["/one-tap/callback", "sign-in"],
+    ["/passkey/verify-authentication", "sign-in"],
+    ["/passkey/verify-registration", "passkey-add"],
+    ["/passkey/delete-passkey", "passkey-remove"],
+    ["/phone-number/verify", "phone-verification"],
+    ["/siwe/verify", "sign-in"],
+    ["/sso/callback", "sign-in"],
+    ["/multi-session/set-active", "session-switch"],
+    ["/multi-session/revoke", "session-revoke"],
+];
+
+// The substring and suffix branches `eventForPath` falls back to. Order matters inside:
+// an earlier match wins, so reordering a branch changes the classification.
+const branchEventForPath = (normalized: string): AuthAuditEvent | undefined => {
     const ends = (suffix: string): boolean => normalized === suffix || normalized.endsWith(suffix);
 
     if (ends("/sign-up/email") || ends("/sign-up")) {
@@ -188,6 +172,81 @@ const eventForPath = (path: string): AuthAuditEvent | undefined => {
     }
 
     return undefined;
+};
+
+/**
+ * Map a better-auth endpoint path to the security event it represents, or
+ * `undefined` for endpoints not worth auditing (session reads, config, …). Match
+ * is by suffix so a caller `basePath` prefix (`/api/auth`) never affects it.
+ *
+ * Sign-in is split by what the endpoint actually DOES (plan 280 §4):
+ *
+ * - `/sign-in/social`, `/sign-in/magic-link` and `@better-auth/sso`'s
+ * `/sign-in/sso` only DISPATCH — the first mints a provider redirect URL, the
+ * second sends an email, the third answers `{ url, redirect: true }` pointing
+ * at the identity provider's authorization endpoint. Nobody is authenticated
+ * yet, so these are `sign-in-initiated`, not `sign-in`. Without the `sso`
+ * branch that path fell through to the `/sign-in/` substring below and every
+ * SSO redirect mint was recorded as a completed, successful `sign-in` with no
+ * actor — in exactly the flow where the "who authenticated" trail matters
+ * most.
+ * - `/callback/:id` (social + generic-oauth), `/magic-link/verify`,
+ * `@better-auth/sso`'s `/sso/saml2/sp/acs/:providerId`, and every
+ * `/two-factor/verify-*` (`verify-totp` / `verify-otp` / `verify-backup-code`
+ * — all three complete a challenged sign-in the same way) are where a
+ * session actually gets issued, so they join credential sign-ins
+ * (`/sign-in/email`, `/sign-in/username`, `/sign-in/phone-number`, …) as
+ * plain `sign-in`. They were NOT recorded at all before this change.
+ *
+ * The SAML assertion consumer service needs its own branch because it is the
+ * one completion that carries no `/callback/` segment: `processSAMLResponse`
+ * validates the assertion, resolves the user and calls `setSessionCookie`, all
+ * under `/sso/saml2/sp/acs/:providerId`. Matching neither that substring nor
+ * any other branch, it classified as `undefined` — the endpoint that issues
+ * every SAML session left no audit row at all.
+ *
+ * SAML sign-OUT has the mirror-image problem, and two endpoints rather than
+ * one. Neither ends in `/sign-out`, and both terminate the local session before
+ * redirecting, so both are `sign-out` rather than an initiated event:
+ *
+ * - `/sso/saml2/logout/:providerId` — SP-initiated. Deletes the SAML session
+ * keys, calls `deleteSession` on the current session token and
+ * `deleteSessionCookie`, then redirects to the IdP's logout URL.
+ * - `/sso/saml2/sp/slo/:providerId` — the SP's single-logout receiver, for the
+ * IdP-initiated direction and for the response leg of an SP-initiated one.
+ * Both `handleLogoutRequest` and `handleLogoutResponse` call `deleteSession`
+ * and `deleteSessionCookie` the same way.
+ *
+ * Recording the SAML sign-in while leaving these silent is worse than either
+ * gap alone: the trail would show a session opening and never closing, so a
+ * reader cannot tell "still signed in" from "we stopped watching".
+ *
+ * There is no dedicated `/oauth2/callback/*` branch because the generic
+ * `/callback/` check above already covers it, and covering it is CORRECT: an
+ * OAuth callback is a completed sign-in whatever path prefix it arrives on. The
+ * same substring also catches `@better-auth/sso`'s `/sso/callback/:providerId`,
+ * which is where an SSO sign-in actually completes — `sso` is re-exported from
+ * `@lunora/auth/plugins/enterprise`, so that path is live, not hypothetical.
+ *
+ * Checked against the installed `better-auth` and `@better-auth/*` dist for
+ * 1.7.3: generic-oauth registers NO endpoints of its own (there is no
+ * `/sign-in/oauth2`) — it registers providers used through the core
+ * `/sign-in/social` and `/callback/:id`, and the one dist hit for a literal
+ * `/oauth2/callback/` is inside `better-auth/plugins/oauth-popup`, which
+ * `plugins.ts` does not re-export — so today the branch fires for the core
+ * callback, and stays correct if the other becomes reachable.
+ *
+ * The plugin endpoints in {@link SUFFIX_EVENTS} are pinned against the installed
+ * better-auth by `__tests__/audit-endpoint-coverage.test.ts`, which fails on any
+ * endpoint it does not classify, so an upgrade cannot add one silently.
+ *
+ * The exact table {@link SUFFIX_EVENTS} is consulted first, then the substring branches.
+ */
+const eventForPath = (path: string): AuthAuditEvent | undefined => {
+    const normalized = path.toLowerCase();
+    const exactEvent = SUFFIX_EVENTS.find(([suffix]) => normalized === suffix || normalized.endsWith(suffix))?.[1];
+
+    return exactEvent ?? branchEventForPath(normalized);
 };
 
 /** Pull the first present header off whichever of `headers` / `request.headers` exists. */
@@ -294,6 +353,22 @@ const resolveTargetEmail = (context: AuditHookContext, event: AuthAuditEvent): s
 };
 
 /**
+ * The subject of an `admin-*` action — `ctx.body.userId`, the account the operator
+ * acted on, so an impersonation row says who was impersonated. Only `userId` is
+ * copied: other body fields (`set-user-password` carries the new password) must
+ * never reach the trail.
+ */
+const resolveTargetUserId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined => {
+    if (!event.startsWith("admin-")) {
+        return undefined;
+    }
+
+    const candidate = context.body?.["userId"];
+
+    return typeof candidate === "string" && candidate.length > 0 ? candidate : undefined;
+};
+
+/**
  * Build the entry a given after-hook context should record, or `undefined` when
  * the path is not an audited security event. Exported for direct unit testing of
  * the classification/extraction without spinning up better-auth.
@@ -323,6 +398,7 @@ const buildAuditEntry = (
     const ip = resolveIp(context, trustProxyHeaders);
     const userAgent = header(context, "user-agent");
     const targetEmail = resolveTargetEmail(context, event);
+    const targetUserId = resolveTargetUserId(context, event);
 
     return {
         ...resolveActor(context),
@@ -332,7 +408,7 @@ const buildAuditEntry = (
         ...(ip === undefined ? {} : { ip }),
         ...(targetEmail === undefined ? {} : { targetEmail }),
         ...(userAgent === undefined ? {} : { userAgent }),
-        detail: { path: context.path },
+        detail: { path: context.path, ...(targetUserId === undefined ? {} : { targetUserId }) },
     };
 };
 
@@ -358,6 +434,7 @@ const buildAuditEntry = (
  * | `/callback/:id` (social + generic-oauth)          | _(not recorded)_    | `sign-in`             |
  * | `/magic-link/verify`                               | _(not recorded)_    | `sign-in`             |
  * | `/two-factor/verify-totp` / `-otp` / `-backup-code`| _(not recorded)_    | `sign-in`             |
+ * | `/device/token`                                    | `token-refresh`     | `sign-in`             |
  *
  * A caller matching on `event === "sign-in"` now sees FEWER events for
  * `/sign-in/social` and `/sign-in/magic-link` (they never actually authenticated
