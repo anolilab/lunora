@@ -604,6 +604,54 @@ const assertNotLastOwner = async (context_: Awaited<LunoraAuth["$context"]>, use
 };
 
 /**
+ * Refuse a removal or demotion that would leave `organizationId` with no owner
+ * other than `memberId`.
+ *
+ * Checked per organization, not per user: a user can own one organization and
+ * merely belong to another, and removing them from the second must not be refused
+ * because of the first. {@link assertNotLastOwner} covers the whole-user case.
+ */
+const assertOrganizationKeepsOwner = async (context_: Awaited<LunoraAuth["$context"]>, organizationId: string, memberId: string): Promise<void> => {
+    const roster = await context_.adapter.findMany<{ id?: string; role?: string }>({
+        model: "member",
+        where: [{ field: "organizationId", value: organizationId }],
+    });
+
+    if (!roster.some((row) => row.id !== memberId && isOwnerRole(row.role))) {
+        throw new LunoraAuthAdminError(
+            `cannot remove or demote the last owner of organization ${organizationId} — transfer ownership or delete the organization first`,
+            "LAST_ORGANIZATION_OWNER",
+        );
+    }
+};
+
+/**
+ * Delete the `teamMember` rows that tie `userId` to any team of `organizationId`.
+ *
+ * Each team is matched on equality of `teamId` and `userId` together, because not
+ * every adapter supports an `in` operator. Teams are looked up by `organizationId`
+ * so another organization's memberships are left alone.
+ */
+const deleteOrganizationTeamMemberships = async (context_: Awaited<LunoraAuth["$context"]>, organizationId: string, userId: string): Promise<void> => {
+    const teams = await context_.adapter.findMany<{ id: string }>({
+        model: "team",
+        where: [{ field: "organizationId", value: organizationId }],
+    });
+
+    await Promise.all(
+        teams.map(({ id }) =>
+            context_.adapter.deleteMany({
+                model: "teamMember",
+                where: [
+                    { field: "teamId", value: id },
+                    { field: "userId", value: userId },
+                ],
+            }),
+        ),
+    );
+};
+
+/**
  * Re-throw an unknown error as a {@link LunoraAuthAdminError}, lifting a
  * better-auth `APIError`'s `body.code` when present so the caller sees a stable
  * machine code rather than an opaque message.
@@ -961,6 +1009,16 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
 
         updateMemberRole: ({ memberId, role }) =>
             withContext(async (context_) => {
+                const nextRole = serializeRole(role);
+                const current = await context_.adapter.findOne<{ organizationId?: string; role?: string }>({
+                    model: "member",
+                    where: [{ field: "id", value: memberId }],
+                });
+
+                if (current && isOwnerRole(current.role) && !isOwnerRole(nextRole) && typeof current.organizationId === "string") {
+                    await assertOrganizationKeepsOwner(context_, current.organizationId, memberId);
+                }
+
                 const member = await context_.adapter.update<Record<string, unknown>>({
                     model: "member",
                     update: { role: serializeRole(role) },
@@ -1258,7 +1316,22 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
 
         removeMember: ({ memberId }) =>
             withContext(async (context_) => {
+                const tables = getAuthTables(context_.options);
+                const member = await context_.adapter.findOne<{ organizationId?: string; role?: string; userId?: string }>({
+                    model: "member",
+                    where: [{ field: "id", value: memberId }],
+                });
+
+                if (member && isOwnerRole(member.role) && typeof member.organizationId === "string") {
+                    await assertOrganizationKeepsOwner(context_, member.organizationId, memberId);
+                }
+
                 await context_.adapter.delete({ model: "member", where: [{ field: "id", value: memberId }] });
+
+                // The team rows are keyed on the user, not the member, so they outlive the removal unless unwound here.
+                if (member && typeof member.organizationId === "string" && typeof member.userId === "string" && tables["teamMember"] && tables["team"]) {
+                    await deleteOrganizationTeamMemberships(context_, member.organizationId, member.userId);
+                }
             }),
 
         // `internalAdapter.deleteUser` removes only `session`/`account`/`user` rows.

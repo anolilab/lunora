@@ -21,6 +21,19 @@ const seedMemoryDatabase = (): Record<string, unknown[]> => {
     return { account: [], session: [], user: [], verification: [] };
 };
 
+/** The `member` row id for a user in one organization; throws when absent so tests stay straight-line. */
+const memberIdOf = (database: Record<string, unknown[]>, userId: string, organizationId: string): string => {
+    const row = (database["member"] as { id: string; organizationId: string; userId: string }[]).find(
+        (candidate) => candidate.userId === userId && candidate.organizationId === organizationId,
+    );
+
+    if (!row) {
+        throw new Error(`no member row for user ${userId} in organization ${organizationId}`);
+    }
+
+    return row.id;
+};
+
 describe("createAuthAdmin", () => {
     let database: Record<string, unknown[]>;
     // `any` to reach plugin-contributed endpoints without re-deriving the generic chain.
@@ -411,6 +424,148 @@ describe("createAuthAdmin", () => {
 
         await expect(orgAdmin.removeUser({ userId: plain.id })).resolves.toBeUndefined();
         expect(orgDatabase["member"]).toHaveLength(1);
+    });
+
+    /** An org-enabled plane over an in-memory database, with the `member` table present. */
+    const createOrgFixture = (tables: Record<string, unknown[]> = {}) => {
+        const orgDatabase: Record<string, unknown[]> = { ...seedMemoryDatabase(), invitation: [], member: [], organization: [], ...tables };
+        const orgAuth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(orgDatabase),
+            emailAndPassword: { enabled: true },
+            plugins: [admin(), organization()],
+            secret: SECRET,
+        });
+
+        return { orgAdmin: createAuthAdmin(orgAuth), orgDatabase };
+    };
+
+    it("refuses removeMember on the sole owner of an organization and keeps the row", async () => {
+        expect.assertions(2);
+
+        const { orgAdmin, orgDatabase } = createOrgFixture();
+        const owner = await orgAdmin.createUser({ email: "solo-remove@example.com", name: "SoloRemove" });
+        const org = await orgAdmin.createOrganization({ name: "Solo Remove Co", ownerId: owner.id });
+
+        await expect(orgAdmin.removeMember({ memberId: memberIdOf(orgDatabase, owner.id, org.id) })).rejects.toThrow(/LAST_ORGANIZATION_OWNER|last owner/iu);
+        expect(orgDatabase["member"]).toHaveLength(1);
+    });
+
+    it("refuses updateMemberRole demoting the sole owner and keeps the owner role", async () => {
+        expect.assertions(2);
+
+        const { orgAdmin, orgDatabase } = createOrgFixture();
+        const owner = await orgAdmin.createUser({ email: "solo-demote@example.com", name: "SoloDemote" });
+        const org = await orgAdmin.createOrganization({ name: "Solo Demote Co", ownerId: owner.id });
+        const memberId = memberIdOf(orgDatabase, owner.id, org.id);
+
+        await expect(orgAdmin.updateMemberRole({ memberId, role: "member" })).rejects.toThrow(/LAST_ORGANIZATION_OWNER|last owner/iu);
+
+        const row = (orgDatabase["member"] as { id: string; role: string }[]).find((candidate) => candidate.id === memberId);
+
+        expect(row?.role).toBe("owner");
+    });
+
+    it("allows updateMemberRole demoting an owner when another owner remains", async () => {
+        expect.assertions(2);
+
+        const { orgAdmin, orgDatabase } = createOrgFixture();
+        const first = await orgAdmin.createUser({ email: "first-owner@example.com", name: "FirstOwner" });
+        const second = await orgAdmin.createUser({ email: "second-owner@example.com", name: "SecondOwner" });
+        const org = await orgAdmin.createOrganization({ name: "Two Owner Co", ownerId: first.id });
+
+        await orgAdmin.addMember({ organizationId: org.id, role: "owner", userId: second.id });
+
+        const memberId = memberIdOf(orgDatabase, first.id, org.id);
+
+        await orgAdmin.updateMemberRole({ memberId, role: "member" });
+
+        const row = (orgDatabase["member"] as { id: string; role: string }[]).find((candidate) => candidate.id === memberId);
+
+        expect(row?.role).toBe("member");
+        expect(orgDatabase["member"]).toHaveLength(2);
+    });
+
+    it("allows removeMember of an owner when another owner remains", async () => {
+        expect.assertions(2);
+
+        const { orgAdmin, orgDatabase } = createOrgFixture();
+        const first = await orgAdmin.createUser({ email: "leaving-owner@example.com", name: "Leaving" });
+        const second = await orgAdmin.createUser({ email: "staying-owner@example.com", name: "Staying" });
+        const org = await orgAdmin.createOrganization({ name: "Leaving Owner Co", ownerId: first.id });
+
+        await orgAdmin.addMember({ organizationId: org.id, role: "owner", userId: second.id });
+
+        await expect(orgAdmin.removeMember({ memberId: memberIdOf(orgDatabase, first.id, org.id) })).resolves.toBeUndefined();
+
+        expect(orgDatabase["member"]).toHaveLength(1);
+    });
+
+    it("guards per organization: a sole-owner role elsewhere does not block removal from a co-owned org", async () => {
+        expect.assertions(3);
+
+        const { orgAdmin, orgDatabase } = createOrgFixture();
+        const user = await orgAdmin.createUser({ email: "two-orgs@example.com", name: "TwoOrgs" });
+        const coOwner = await orgAdmin.createUser({ email: "co-owner@example.com", name: "CoOwner" });
+        const orgA = await orgAdmin.createOrganization({ name: "Co Owned A", ownerId: user.id });
+        const orgB = await orgAdmin.createOrganization({ name: "Sole Owned B", ownerId: user.id });
+
+        await orgAdmin.addMember({ organizationId: orgA.id, role: "owner", userId: coOwner.id });
+
+        // The user is the sole owner of org B; removing them from org A must still succeed.
+        await expect(orgAdmin.removeMember({ memberId: memberIdOf(orgDatabase, user.id, orgA.id) })).resolves.toBeUndefined();
+
+        const remainingOrgIds = (orgDatabase["member"] as { organizationId: string; userId: string }[])
+            .filter((row) => row.userId === user.id)
+            .map((row) => row.organizationId);
+
+        expect(remainingOrgIds).toEqual([orgB.id]);
+        expect(orgDatabase["member"]).toHaveLength(2);
+    });
+
+    it("removeMember deletes the user's teamMember rows for the organization's teams only", async () => {
+        expect.assertions(4);
+
+        const orgDatabase: Record<string, unknown[]> = {
+            ...seedMemoryDatabase(),
+            invitation: [],
+            member: [],
+            organization: [],
+            team: [],
+            teamMember: [],
+        };
+        const teamAuth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(orgDatabase),
+            emailAndPassword: { enabled: true },
+            plugins: [admin(), organization({ teams: { defaultTeam: { enabled: false }, enabled: true } })],
+            secret: SECRET,
+        });
+        const teamAdmin = createAuthAdmin(teamAuth);
+
+        const owner = await teamAdmin.createUser({ email: "team-owner@example.com", name: "TeamOwner" });
+        const leaver = await teamAdmin.createUser({ email: "team-leaver@example.com", name: "TeamLeaver" });
+        const stayer = await teamAdmin.createUser({ email: "team-stayer@example.com", name: "TeamStayer" });
+        const orgA = await teamAdmin.createOrganization({ name: "Team Org A", ownerId: owner.id });
+        const orgB = await teamAdmin.createOrganization({ name: "Team Org B", ownerId: owner.id });
+        await teamAdmin.addMember({ organizationId: orgA.id, userId: leaver.id });
+        await teamAdmin.addMember({ organizationId: orgA.id, userId: stayer.id });
+
+        const teamA = await teamAdmin.createTeam({ name: "Team A", organizationId: orgA.id });
+        const teamB = await teamAdmin.createTeam({ name: "Team B", organizationId: orgB.id });
+
+        await teamAdmin.addTeamMember({ teamId: teamA.id, userId: leaver.id });
+        const stayerRow = await teamAdmin.addTeamMember({ teamId: teamA.id, userId: stayer.id });
+        const otherOrgRow = await teamAdmin.addTeamMember({ teamId: teamB.id, userId: leaver.id });
+
+        await teamAdmin.removeMember({ memberId: memberIdOf(orgDatabase, leaver.id, orgA.id) });
+
+        const remaining = orgDatabase["teamMember"] as { id: string; teamId: string; userId: string }[];
+
+        expect(remaining.some((row) => row.teamId === teamA.id && row.userId === leaver.id)).toBe(false);
+        expect(remaining.map((row) => row.id)).toContain(stayerRow.id);
+        expect(remaining.map((row) => row.id)).toContain(otherOrgRow.id);
+        expect(remaining).toHaveLength(2);
     });
 
     it("reports capabilities from the enabled plugins", async () => {
