@@ -13,7 +13,7 @@
 > condition, because the endpoint table in §4 was taken from 1.7.16.
 
 **Baseline:** `36c32cc1b` (2026-11-11)
-**Status:** TODO
+**Status:** DONE (APPROVED on review 2026-11-11 after one REVISE round (docblock placement); branch `security/improve-561-auth-audit-coverage`, commit `cb359bf05`, not merged; reviewer ran `build:packages` + `api:check` (pass))
 **Priority / Effort / Risk:** P2 / M / LOW. **Category:** security. **Depends on:** none.
 **Finding:** audit 2026-11-11, row 42.
 
@@ -468,8 +468,8 @@ The three new tests fail and every existing test passes.
 
 In `api-snapshots/auth.api.md`, replace the single `type AuthAuditEvent = …;` line (around
 line 331) with **one line** (no wrapping) of the same shape: `type AuthAuditEvent = ` followed
-by every member of the new union in `audit.ts`, each double-quoted, joined by `|`, and ending
-with ` | (string & {});`. That is the 13 existing names plus the 23 from §4.3, 36 in all, in
+by every member of the new union in `audit.ts`, each double-quoted, separated by a space, a pipe and a space
+(exactly as in the current line), and ending with ` | (string & {});`. That is the 13 existing names plus the 23 from §4.3, 36 in all, in
 alphabetical order. The file is excluded from the secret scan, so no marker is needed there.
 
 If the union in `audit.ts` ends up in a different order (for example because the linter sorted

@@ -11,7 +11,7 @@
 > a mismatch is a STOP condition.
 
 **Baseline:** `36c32cc1b` (2026-11-11)
-**Status:** TODO
+**Status:** DONE (APPROVED on review 2026-11-11; branch `security/improve-559-payment-subscription-facade`, commit `a57c2b565`, not merged; reviewer ran `build:packages` + `api:check` (pass) and regenerated the example (no drift))
 **Priority / Effort / Risk:** P1 / M / LOW. **Category:** security. **Depends on:** none.
 **Finding:** audit 2026-11-11, row 33. (Row 34, same-state subscription events, is a different
 finding and is **not** part of this plan.)

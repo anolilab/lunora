@@ -13,7 +13,7 @@
 > is `"version": "1.7.16"`; anything else is a STOP condition.
 
 **Baseline:** `36c32cc1b` (2026-11-11)
-**Status:** TODO
+**Status:** DONE (APPROVED on review 2026-11-11; branch `security/improve-562-invite-only-verified-email`, commit `800e5304b`, not merged; SCIM refusal (§4.2) awaits an owner decision)
 **Priority / Effort / Risk:** P1 / S / MED. **Category:** security. **Depends on:** none.
 **Finding:** audit 2026-11-11, row 43 (confirmed against the installed better-auth 1.7.16; see §1).
 

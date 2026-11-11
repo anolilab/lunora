@@ -11,7 +11,7 @@
 > any mismatch is a STOP condition.
 
 **Baseline:** `36c32cc1b` (2026-11-11)
-**Status:** TODO
+**Status:** DONE (APPROVED on review 2026-11-11; branch `security/improve-560-email-gate-address-change`, commit `f868ccf9b`, not merged)
 **Priority / Effort / Risk:** P2 / S / LOW. **Category:** security. **Depends on:** none.
 **Finding:** audit 2026-11-11, row 38.
 

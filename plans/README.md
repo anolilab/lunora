@@ -34,11 +34,11 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 | Plan                                                      | Title                                                                           | Notes                                                                                  |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| [558](./558-convex-import-contain-table-files.md)         | Keep a Convex directory import inside the snapshot for table files              | security batch 2026-11-11; TODO                                                        |
-| [559](./559-payment-facade-update-resume-subscription.md) | Owner-checked `updateSubscription` / `resumeSubscription` on the payment facade | security batch 2026-11-11; TODO                                                        |
-| [560](./560-email-gate-address-changes.md)                | Run the email-domain gate on address changes                                    | security batch 2026-11-11; TODO                                                        |
-| [561](./561-auth-audit-plugin-endpoints.md)               | Audit plugin sign-ins, admin actions and account changes                        | security batch 2026-11-11; TODO                                                        |
-| [562](./562-invite-only-require-verified-email.md)        | Invite-only admits non-password accounts only with a verified email             | security batch 2026-11-11; TODO                                                        |
+| [558](./558-convex-import-contain-table-files.md)         | Keep a Convex directory import inside the snapshot for table files              | APPROVED: `security/improve-558-convex-table-containment` @ `97a7129a9`, unmerged      |
+| [559](./559-payment-facade-update-resume-subscription.md) | Owner-checked `updateSubscription` / `resumeSubscription` on the payment facade | APPROVED: `security/improve-559-payment-subscription-facade` @ `a57c2b565`, unmerged   |
+| [560](./560-email-gate-address-changes.md)                | Run the email-domain gate on address changes                                    | APPROVED: `security/improve-560-email-gate-address-change` @ `f868ccf9b`, unmerged     |
+| [561](./561-auth-audit-plugin-endpoints.md)               | Audit plugin sign-ins, admin actions and account changes                        | APPROVED: `security/improve-561-auth-audit-coverage` @ `cb359bf05`, unmerged           |
+| [562](./562-invite-only-require-verified-email.md)        | Invite-only admits non-password accounts only with a verified email             | APPROVED: `security/improve-562-invite-only-verified-email` @ `800e5304b`, unmerged    |
 | [532](./532-privacy-status-and-c15t-consent.md)           | `@lunora/privacy`: close the open status items; read consent from c15t          | WS A, B, C, I done (privacy PR); c15t WS D–H TODO, needs §9 decisions                  |
 | [531](./531-typed-live-topics.md)                         | Typed live topics: declared names and payloads, generated refs                  | A to D shipped; E (auto-mount the routes) open                                         |
 | [530](./530-vite-startup-ts-morph-graph.md)               | Keep ts-morph out of the Vite and cloudflare config-load graph                  | BLOCKED: owner picks lazy codegen (~130 files) or async `lunora()` (public API change) |
@@ -99,8 +99,9 @@ audit does not re-report them:
 
 Plans 558–562, planned at `36c32cc1b` from rows 28, 33, 38, 42 and 43 of the 2026-11-11 audit.
 Each was executed in its own worktree on a `security/improve-<NNN>-*` branch and reviewed
-against the plan. Execution order: 560, 558, 559, 561, 562. They are independent, but 560, 561
-and 562 all touch `packages/auth`, so rebase them in that order when merging. Endpoint paths
+against the plan. Execution order: 560, 558, 559, 561, 562. All five were APPROVED on review and sit unmerged on
+their branches (base `36c32cc1b`). They are independent, but 560, 561 and 562 all touch
+`packages/auth` (no shared lines), so rebase them in that order when merging. Endpoint paths
 and user-creation behaviour were checked against the installed better-auth 1.7.16.
 
 ## Perf audit 2026-10-16 — measured and rejected
