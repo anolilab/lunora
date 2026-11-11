@@ -246,3 +246,9 @@ every generator); the reviewer runs the privacy workerd project and the snapshot
 new terminal status (alpha: stored rows may now hold `restored`).
 
 **Platform parity:** not applicable (no `ctx.*` surface).
+
+**Revision 1 (reviewer, during execution).** Adding `completed → restored` broke the lifecycle
+invariant test "moves nothing out of a terminal status". Decision (owner wording covers a `completed`
+row): keep the edge as the one documented exit from a terminal status; the invariant test asserts that
+exception explicitly, and the terminal docblocks in `shared/privacy-request-status.ts` and
+`lifecycle.ts` say so. `packages/privacy/__tests__/lifecycle.test.ts` joins the scope.
