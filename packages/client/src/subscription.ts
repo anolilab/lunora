@@ -153,6 +153,13 @@ export interface SubscriptionState {
     pendingDeltaRun?: { payload: unknown };
 
     /**
+     * The refusal the server answered this subscription with, handed to a subscriber
+     * that joins later: the state is already `"acked"`, so no frame goes out and no
+     * value will come. Kept until the subscription is re-armed or a value lands.
+     */
+    refusal?: SubscriptionError;
+
+    /**
      * The authoritative server value the optimistic layers fold onto — the value
      * with NO optimistic overlay. Tracks `lastValue` exactly whenever no layers
      * are active; diverges only while a per-call optimistic write is pending. A
@@ -300,6 +307,8 @@ export class SubscriptionRegistry {
 export const setSubscriptionAck = (state: SubscriptionState, next: SubscriptionState["ack"]): void => {
     // eslint-disable-next-line no-param-reassign -- the shared subscription state is advanced in place
     state.ack = next;
+    // eslint-disable-next-line no-param-reassign -- a re-armed subscription no longer holds the refusal it was answered with
+    state.refusal = undefined;
 };
 
 /**
@@ -356,4 +365,20 @@ export const failSubscription = (state: SubscriptionState, error: SubscriptionEr
     // eslint-disable-next-line no-param-reassign -- the flag is the shared subscription's own state
     state.awaitingSnapshot = false;
     fanSubscriptionError(state.errorCallbacks, error);
+};
+
+/**
+ * Hand a late subscriber the refusal the subscription was answered with: a refused query has no
+ * value to replay and sends no frame for a joiner, so this is the only answer it will get.
+ */
+export const replaySubscriptionRefusal = (state: SubscriptionState, errorCallback: SubscriptionErrorCallback | undefined, noReplayedValue: boolean): void => {
+    if (!noReplayedValue || errorCallback === undefined || state.refusal === undefined) {
+        return;
+    }
+
+    try {
+        errorCallback(state.refusal);
+    } catch {
+        /* user callback threw — ignore */
+    }
 };

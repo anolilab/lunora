@@ -83,7 +83,15 @@ import { registerSnapshotSource, snapshotSourceOf } from "./snapshot-preconditio
 import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
-import { failSubscription, fanSubscriptionError, releaseSubscribeFrame, setSubscriptionAck, SubscriptionRegistry, wrapSubscriber } from "./subscription";
+import {
+    failSubscription,
+    fanSubscriptionError,
+    releaseSubscribeFrame,
+    replaySubscriptionRefusal,
+    setSubscriptionAck,
+    SubscriptionRegistry,
+    wrapSubscriber,
+} from "./subscription";
 import { advanceWatermark, commitDataFrame, fanCheckpoints, isNonFinalRunFrame, isStaleDataFrame, replayableValue } from "./subscription-frames";
 import type { LeaderMirror, TabLeadershipHost } from "./tab-leadership";
 import {
@@ -3424,6 +3432,8 @@ class LunoraClient {
                 /* user callback threw — ignore */
             }
         }
+
+        replaySubscriptionRefusal(state, errorCallback, replay === undefined);
 
         this.ensureSocket(options.shardKey);
         this.sendSubscribeIfOpen(state);
@@ -7479,6 +7489,8 @@ class LunoraClient {
             // A refusal answers the request: the subscription stops counting as pending on this connection.
             // Marked before fanning, so a callback that resets the session (see above) is not undone by it.
             this.markQueryRejected(state);
+            // After `markQueryRejected`, whose `"acked"` write clears the refusal.
+            state.refusal = subscriptionError;
 
             failSubscription(state, subscriptionError);
 
@@ -7676,6 +7688,8 @@ class LunoraClient {
         const firstPolledValue = snapshotMark !== undefined && !state.valueReceived;
 
         commitDataFrame(state, payload, { claims: this.frameClaims, cursor: message.cursor, epoch: message.epoch });
+        // A value has landed, so the refusal a late subscriber would be handed is no longer the answer.
+        state.refusal = undefined;
 
         if (firstPolledValue) {
             state.valueReceived = true;
