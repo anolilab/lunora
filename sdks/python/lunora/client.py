@@ -332,6 +332,10 @@ class _Subscription:
         #: ``last_value`` exactly while no layer is active, and is what the
         #: layers fold onto when one is.
         self.server_base: Any = None
+        #: Set when a row change could not be merged into ``server_base``. Until a ``data`` frame
+        #: or a resubscribe clears it, delta frames are ignored whole, so a later frame's cursor
+        #: cannot move the resume position past the dropped change.
+        self.poisoned = False
         #: The DISPLAYED value: ``server_base`` folded through
         #: ``optimistic_layers``.
         self.last_value: Any = None
@@ -779,6 +783,7 @@ class LunoraClient:
 
         for sub in self._subs.values():
             sub.server_base = None
+            sub.poisoned = False
             sub.server_cursor = None
             sub.server_epoch = None
             sub.acked = False
@@ -1141,6 +1146,10 @@ class LunoraClient:
             sender = self._send
             if sender is None:
                 return
+            # The resubscribe resumes from the last applied cursor, so a dropped change is
+            # replayed; if it is still unmergeable the flag is set again.
+            for sub in self._subs.values():
+                sub.poisoned = False
             frames = [
                 build_subscribe_frame(sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch)
                 for sub in self._subs.values()
@@ -1283,6 +1292,12 @@ class LunoraClient:
                 deferred.extend(partial(cb, reported) for cb in sub.error_callbacks)
             return {"kind": "error", "id": frame.get("id"), "error": reported}
         displayed = value
+        if sub is not None:
+            if has_data:
+                # A snapshot is authoritative: it supersedes whatever change was dropped.
+                sub.poisoned = False
+            elif sub.poisoned:
+                return {"kind": "delta", "id": frame.get("id"), "value": sub.server_base, "displayed": sub.last_value, "unmerged": True}
         if not has_data and is_mutation_delta(value) and sub is not None and sub.server_base is not None:
             # A row change merges into the SERVER BASE, never the displayed value: the optimistic
             # layers are re-folded onto the result below, exactly as for a `data` frame.
@@ -1291,8 +1306,11 @@ class LunoraClient:
                 # DIVERGENCE from the reference, which re-snapshots here: this port has no
                 # resubscribe-for-snapshot path. Publishing the `{key, op, table, row}` envelope
                 # would replace a real result with it, so keep the previous value and leave the
-                # cursor and epoch where they were, which makes the next resubscribe resume
-                # from the last state that was actually applied.
+                # cursor and epoch where they were. Poison the subscription too: the run's last
+                # frame carries the cursor, and applying it would move the resume position past
+                # this change. Delta frames are ignored until a snapshot or a resubscribe, and
+                # that resubscribe resumes from the last applied cursor, so the server replays it.
+                sub.poisoned = True
                 return {
                     "kind": "delta",
                     "id": frame.get("id"),

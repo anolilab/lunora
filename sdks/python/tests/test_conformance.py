@@ -269,6 +269,35 @@ class TestWsFrameConsumer(unittest.TestCase):
                 if "epoch" in expect:
                     self.assertEqual(descriptor.get("epoch"), expect["epoch"])
 
+    def test_an_unmergeable_row_change_freezes_the_resume_cursor(self):
+        cases = load("ws-frames.json")["pageDeltaPoisonCases"]
+        self.assertTrue(cases, "pageDeltaPoisonCases must carry cases")
+
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                sent: list = []
+                client = LunoraClient("https://app.example")
+                client.attach_socket(sent.append)
+                seen: list = []
+                client.subscribe("messages:list", {"channel": "general"}, seen.append)
+                client.handle_frame(case["seedFrame"])
+
+                for step in case["steps"]:
+                    if "resume" in step:
+                        sent.clear()
+                        client.resend_subscriptions()
+                        subscribes = [frame for frame in sent if frame["type"] == "subscribe"]
+                        self.assertEqual(len(subscribes), 1)
+                        self.assertEqual(subscribes[0]["query"].get("sinceSeq"), step["resume"]["sinceSeq"])
+                        self.assertEqual(subscribes[0]["query"].get("sinceEpoch"), step["resume"]["sinceEpoch"])
+                        continue
+
+                    seen.clear()
+                    client.handle_frame(step["frame"])
+                    self.assertEqual(len(seen), step["publishes"])
+                    if "valueWire" in step:
+                        self.assertEqual(encode_wire(seen[-1]), step["valueWire"])
+
     def test_row_delta_without_a_mergeable_base_never_publishes_the_envelope(self):
         delta = {"key": "m1", "op": "update", "row": {"_id": "m1"}, "table": "messages"}
 
