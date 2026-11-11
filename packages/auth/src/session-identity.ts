@@ -207,7 +207,6 @@ const readSession = async (auth: LunoraAuth, headers: Headers): Promise<Awaited<
  * @param headers The request headers carrying the session.
  * @returns The identity, or `null` for an anonymous request.
  */
-
 const resolveSessionIdentity = async (auth: LunoraAuth, headers: Headers, claims: ReadonlyArray<string> = []): Promise<SessionIdentity | null> => {
     const identity = identityFromSession(await readSession(auth, headers), claims);
 
