@@ -1090,6 +1090,7 @@ const MESSAGE_IDS = [
     "No passkeys.",
     "API keys",
     "No API keys.",
+    "Could not load API keys.",
     "Never",
     "Operations",
     "Toggle operation console",

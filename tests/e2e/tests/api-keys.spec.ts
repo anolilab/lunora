@@ -28,6 +28,9 @@ const whoAmI = async (context: APIRequestContext, apiKey?: string): Promise<null
         headers: apiKey === undefined ? { Origin: BASE_URL } : { Origin: BASE_URL, "x-api-key": apiKey },
     });
 
+    // A refusal is a 4xx. A server error must fail the test rather than read as "no owner".
+    expect(response.status()).toBeLessThan(500);
+
     if (!response.ok()) {
         return null;
     }

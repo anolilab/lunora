@@ -139,10 +139,14 @@ import { createLunoraAuthClient } from "@lunora/auth/plugins/client";
 
 const authClient = createLunoraAuthClient(createAuthClient, { plugins: { apiKey: true } });
 
-const { key, id } = await authClient.apiKey.create({ name: "ci" });
-// `key` is the only time the plaintext is available. Store it in the CI secret store.
+const { data, error } = await authClient.apiKey.create({ name: "ci" });
 
-await authClient.apiKey.delete({ keyId: id });
+if (error) {
+    throw new Error(error.message);
+}
+
+// `data.key` is the only time the plaintext is available. Store it in the CI secret store.
+await authClient.apiKey.delete({ keyId: data.id });
 ```
 
 **Sending a key.** Put the key in `x-api-key` and call Lunora as usual. The
@@ -156,9 +160,10 @@ const response = await fetch(`${WORKER_ORIGIN}/_lunora/rpc`, {
 });
 ```
 
-Keep the default header name. The identity cache keys its entries on
-`x-api-key`, so a custom `apiKeyHeaders` value is not part of that key. A request
-that also carries a session cookie can then resolve to the cookie's identity.
+Keep the default header name. A request that carries `x-api-key` is never served
+from the identity cache, but a custom `apiKeyHeaders` value gets no such bypass. A
+request that sends that header together with a session cookie can then resolve to
+the cookie's identity.
 
 **Rate limits.** better-auth limits each key to **10 requests per day** by default,
 and a request over the limit is refused, not anonymised. Raise it for a
@@ -169,7 +174,9 @@ turn it off with `rateLimit: { enabled: false }` for a key you fully trust.
 **Revocation.** `apiKey.delete` removes the row, and the key stops resolving to its
 owner on its next call. Key requests are never served from the identity cache, so
 this does not wait for a cache window. Cookie sessions are still cached for the
-identity cache window (60 seconds by default, `LUNORA_IDENTITY_CACHE_MS`).
+identity cache window (60 seconds by default, `LUNORA_IDENTITY_CACHE_MS`). The studio's Revoke
+deletes the row directly, which needs the default `storage: "database"`; with
+secondary storage, revoke through better-auth's own endpoint.
 
 **The studio** lists a user's keys in the user drawer, with name, the leading
 characters of the key, creation time and expiry, and a Revoke action per row. The

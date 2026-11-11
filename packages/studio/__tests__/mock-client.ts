@@ -152,7 +152,7 @@ interface MockClientImpls {
     kvNamespaces?: KvNamespaceSummary[];
     /** Seed entries per namespace binding → key → stored entry. Mutated in place by put/delete. */
     kvSeed?: Record<string, Record<string, { expiration?: number; metadata?: unknown; value: string }>>;
-    listAuthApiKeys?: () => Promise<Record<string, unknown>[]> | Record<string, unknown>[];
+    listAuthApiKeys?: (input: { userId: string }) => Promise<Record<string, unknown>[]> | Record<string, unknown>[];
     listAuthSessions?: (options: { limit?: number; offset?: number; userId?: string }) => AuthPage<AuthSession>;
     listAuthUsers?: (options: ListAuthUsersOptions) => AuthPage<AuthUser>;
     listCronRuns?: () => CronRunsResult;
@@ -334,7 +334,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const listAuthAccounts = vi.fn<() => Promise<Record<string, unknown>[]>>(async () => [] as Record<string, unknown>[]);
     const unlinkAuthAccount = vi.fn<() => Promise<undefined>>(async () => undefined);
     const listAuthPasskeys = vi.fn<() => Promise<Record<string, unknown>[]>>(async () => [] as Record<string, unknown>[]);
-    const listAuthApiKeys = vi.fn<() => Promise<Record<string, unknown>[]>>(async () => impls.listAuthApiKeys?.() ?? []);
+    const listAuthApiKeys = vi.fn<(input: { userId: string }) => Promise<Record<string, unknown>[]>>(async (input) => impls.listAuthApiKeys?.(input) ?? []);
     const deleteAuthApiKey = vi.fn<() => Promise<undefined>>(async () => undefined);
     const deleteAuthPasskey = vi.fn<() => Promise<undefined>>(async () => undefined);
     const disableAuthTwoFactor = vi.fn<() => Promise<undefined>>(async () => undefined);

@@ -215,24 +215,45 @@ export const UserSecurityPanel = ({
     const t = useT();
 
     const [passkeys, setPasskeys] = useState<Record<string, unknown>[] | null>(null);
-    const [apiKeys, setApiKeys] = useState<Record<string, unknown>[] | null>(null);
+    // Rows and failures are tagged with the user they were loaded for, so a response
+    // from a previously selected user can never render under the current one.
+    const [apiKeys, setApiKeys] = useState<null | { rows: Record<string, unknown>[]; userId: string }>(null);
+    const [apiKeysFailedFor, setApiKeysFailedFor] = useState<null | string>(null);
+    const [apiKeysReload, setApiKeysReload] = useState(0);
 
     useEffect(() => {
-        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- capability-gated data load: fetch the user's API key rows when `capabilities.apiKey` is enabled, re-running on userId/version (refetch trigger); async fetch, not derivable during render and not a user event.
         if (!capabilities.apiKey) {
-            return;
+            return undefined;
         }
+
+        // A superseded request (another user, a newer version, a retry) must not write
+        // its result over the current one.
+        const request = { live: true };
 
         fireAndForget(
             (async (): Promise<void> => {
                 try {
-                    setApiKeys(await client.listAuthApiKeys({ userId }));
+                    const rows = await client.listAuthApiKeys({ userId });
+
+                    if (request.live) {
+                        setApiKeys({ rows, userId });
+                        setApiKeysFailedFor(null);
+                    }
                 } catch {
-                    setApiKeys(null);
+                    if (request.live) {
+                        setApiKeysFailedFor(userId);
+                    }
                 }
             })(),
         );
-    }, [capabilities.apiKey, client, userId, version]);
+
+        return () => {
+            request.live = false;
+        };
+    }, [apiKeysReload, capabilities.apiKey, client, userId, version]);
+
+    const keyRows = apiKeys?.userId === userId ? apiKeys.rows : null;
+    const apiKeysLoadFailed = apiKeysFailedFor === userId;
 
     useEffect(() => {
         // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- capability-gated data load: fetch the user's passkeys when the `capabilities.passkey` prop is enabled, re-running on userId/version (refetch trigger); async fetch, not derivable during render and not a user event. secret-scanner:allow — "passkey" is a WebAuthn feature name, not a credential
@@ -319,9 +340,27 @@ export const UserSecurityPanel = ({
                 </Card>
             )}
 
-            {capabilities.apiKey && apiKeys !== null && apiKeys.length === 0 && <p className="text-sm text-muted-foreground">{t("No API keys.")}</p>}
+            {capabilities.apiKey && apiKeysLoadFailed && (
+                <div className="flex items-center gap-2">
+                    <p className="text-sm text-muted-foreground">{t("Could not load API keys.")}</p>
+                    <Button
+                        data-testid="ud-api-keys-retry"
+                        disabled={busy}
+                        onClick={() => {
+                            setApiKeysReload((count) => count + 1);
+                        }}
+                        size="xs"
+                        type="button"
+                        variant="outline"
+                    >
+                        {t("Retry")}
+                    </Button>
+                </div>
+            )}
 
-            {capabilities.apiKey && apiKeys !== null && apiKeys.length > 0 && (
+            {capabilities.apiKey && keyRows !== null && keyRows.length === 0 && <p className="text-sm text-muted-foreground">{t("No API keys.")}</p>}
+
+            {capabilities.apiKey && keyRows !== null && keyRows.length > 0 && (
                 <Card className="overflow-hidden py-0">
                     <CardContent className="px-0">
                         <Table data-testid="ud-api-keys-table">
@@ -335,7 +374,7 @@ export const UserSecurityPanel = ({
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {apiKeys.map((apiKey) => {
+                                {keyRows.map((apiKey) => {
                                     const id = formatCell(apiKey["id"]);
 
                                     return (

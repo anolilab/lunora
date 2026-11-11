@@ -1097,6 +1097,9 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 return toUser(user as Record<string, unknown>);
             }),
 
+        // Deletes the row directly, like the other admin ops. That revokes the key only
+        // while the `apikey` table is the store, the default `storage: "database"`. Under
+        // secondary storage better-auth keeps keys elsewhere and this does not reach them.
         deleteApiKey: ({ apiKeyId }) =>
             withContext(async (context_) => {
                 await context_.adapter.delete({ model: "apikey", where: [{ field: "id", value: apiKeyId }] });
