@@ -12,7 +12,7 @@
 **Baseline:** `cb359bf05`, the tip of `security/improve-561-auth-audit-coverage` (PR #1546, not
 merged). This plan's branch `security/improve-564-auth-audit-plugin-coverage` stacks on it; its PR
 should target the 561 branch until #1546 merges.
-**Status:** TODO
+**Status:** DONE (APPROVED on review 2026-11-11; branch `security/improve-564-auth-audit-plugin-coverage`, commit `88c1da32a` on top of `cb359bf05`, not pushed; reviewer ran `build:packages` + `api:check` (pass). Errata found in execution: there are 13 method rows, not 11, and `/oauth2/end-session/confirm` needs its own suffix row)
 **Priority / Effort / Risk:** P2 / M / LOW. **Category:** security. **Depends on:** plan 561.
 **Decision:** owner, 2026-11-11: extend the audit mapping to the plugins plan 561 deferred.
 
