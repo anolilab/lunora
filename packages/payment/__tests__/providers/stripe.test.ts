@@ -400,6 +400,37 @@ describe("stripe adapter", () => {
         expect(action.sessionId).toBe("pi_1");
     });
 
+    it("does not record a setup-mode checkout session as a captured payment (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
+
+        // A setup session saves a card: no PaymentIntent, `no_payment_required`, and no money moves.
+        const event = {
+            data: { object: { customer: "cus_1", id: "cs_setup", mode: "setup", payment_status: "no_payment_required", setup_intent: "seti_1" } },
+            id: "evt_cs_setup",
+            type: "checkout.session.completed",
+        };
+        const action = await adapter.parseWebhook({ headers: webhookHeaders, payload: JSON.stringify(event) });
+
+        expect(action.type).toBe("unhandled");
+    });
+
+    it("does not record an async-settled setup-mode checkout session as a captured payment (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
+
+        const event = {
+            data: { object: { customer: "cus_1", id: "cs_setup", mode: "setup", payment_status: "no_payment_required", setup_intent: "seti_1" } },
+            id: "evt_cs_setup_async",
+            type: "checkout.session.async_payment_succeeded",
+        };
+        const action = await adapter.parseWebhook({ headers: webhookHeaders, payload: JSON.stringify(event) });
+
+        expect(action.type).toBe("unhandled");
+    });
+
     it("still captures a fully discounted session, which never gets a payment intent (regression)", async () => {
         expect.assertions(3);
 

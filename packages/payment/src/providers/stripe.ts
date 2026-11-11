@@ -239,6 +239,13 @@ const checkoutSessionAction = ({ base, currency, object }: StripeEvent): Webhook
         };
     }
 
+    // Only a payment-mode session moves money. A setup session (saving a card) has no PaymentIntent
+    // and settles as `no_payment_required`, so it would otherwise be recorded as a captured
+    // payment with no amount. Stripe sets `mode` on every Checkout Session.
+    if (readString(object, "mode") !== "payment") {
+        return { ...base, type: "unhandled" };
+    }
+
     const paymentIntentId = readString(object, "payment_intent");
 
     // Async payment methods can complete the session before a payment_intent id is attached.
