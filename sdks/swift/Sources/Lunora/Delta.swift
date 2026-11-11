@@ -53,23 +53,15 @@ enum LunoraRowDelta {
     }
 
     private static func apply(_ current: Any, _ delta: Change) -> Any? {
-        let list: [Any]
-        let isArray: Bool
-
         if let array = current as? [Any] {
-            list = array
-            isArray = true
-        } else if let object = current as? [String: Any], let page = object[pageField] as? [Any] {
-            list = page
-            isArray = false
-        } else {
-            return nil
+            return mergeRows(array, delta)
         }
 
-        guard let next = mergeRows(list, delta) else { return nil }
-        if isArray { return next }
+        guard let object = current as? [String: Any], let page = object[pageField] as? [Any],
+            let next = mergeRows(page, delta)
+        else { return nil }
 
-        var result = current as! [String: Any]  // swiftlint:disable:this force_cast
+        var result = object
         result[pageField] = next
 
         return result
