@@ -10,7 +10,7 @@
 > skip it, say so, continue with the others.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** TODO
+**Status:** DONE (review APPROVED; branch `fix/improve-551-five-small-fixes`, commits 86ba363c9, b7a2f73f3, 75373794a, 840ee31c5, ace703305; not merged)
 **Priority / effort / risk:** P3 / S each / LOW. **Category:** bug. **Depends on:** none.
 One commit per item (five commits), each with its own test that fails without its fix.
 
