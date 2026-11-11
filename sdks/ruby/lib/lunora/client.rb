@@ -3,6 +3,7 @@
 require "json"
 require "uri"
 
+require_relative "delta"
 require_relative "key"
 require_relative "offline"
 require_relative "optimistic"
@@ -240,8 +241,9 @@ module Lunora
 
   # +token+ is the session credential (protocol/README.md 5.1, 6). It is sent
   # here, in the first frame, and never in the socket URL.
-  def build_connect_frame(client_id = nil, context = nil, token: nil)
+  def build_connect_frame(client_id = nil, context = nil, token: nil, caps: nil)
     frame = { "id" => "connect", "type" => "connect" }
+    frame["caps"] = caps unless caps.nil?
     frame["clientId"] = client_id unless client_id.nil?
     frame["context"] = context unless context.nil?
     frame["token"] = token unless token.nil?
@@ -447,7 +449,8 @@ module Lunora
         @send = nil
         @attach_generation += 1
         @socket_generation = @credential_generation
-        [@attach_generation, Lunora.build_connect_frame(@client_id, context, token: @session_token)]
+        [@attach_generation,
+         Lunora.build_connect_frame(@client_id, context, token: @session_token, caps: [Delta::PAGE_DELTA_CAPABILITY])]
       end
 
       sender.call(connect)
@@ -984,8 +987,17 @@ module Lunora
       end
 
       if entry
-        advance(entry, frame)
         state = entry[:state]
+        is_data = frame.key?("data") && !frame["data"].nil?
+        value = Delta.resolve_data_payload(value, is_data, state.server_base)
+
+        # A row change that cannot be merged into the base is never published as
+        # the result. The reference re-snapshots here; this port has no
+        # resubscribe-for-snapshot path, so the previous value stays until the
+        # next data frame. The cursor is not advanced past the lost change.
+        return kind if value.equal?(UNMERGEABLE_DELTA)
+
+        advance(entry, frame)
         state.server_base = value
         state.server_cursor = entry[:cursor] if entry[:cursor].is_a?(Integer)
         # Drop the overlays this frame has caught up with, then RE-FOLD the rest

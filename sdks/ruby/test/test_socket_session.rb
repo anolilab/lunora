@@ -55,12 +55,13 @@ class TestSocketSession < Minitest::Test
 
     types = sent.map { |frame| frame["type"] }
     assert_equal %w[connect subscribe], types
-    assert_equal canonical(golden["connect-with-token"]), canonical(sent.first)
+    assert_equal ["pageDelta"], sent.first["caps"]
+    assert_equal canonical(golden["connect-with-token"]), canonical(sent.first.except("caps"))
     refute_includes JSON.generate(sent), "rpc-bearer-1", "the RPC bearer never rides a socket frame"
 
     anonymous = []
     Lunora::Client.new("https://app.example", client_id: "client-test").attach_socket(->(frame) { anonymous << frame })
-    assert_equal canonical(golden["connect"]), canonical(anonymous.first)
+    assert_equal canonical(golden["connect"]), canonical(anonymous.first.except("caps"))
     refute anonymous.first.key?("token"), "no session credential, so no token key"
 
     assert_equal canonical(golden["connect-with-token"]),
@@ -90,7 +91,8 @@ class TestSocketSession < Minitest::Test
     with_context = []
     Lunora::Client.new("https://app.example", client_id: "client-test")
                   .attach_socket(->(frame) { with_context << frame }, { "roomId" => "general" })
-    assert_equal canonical(golden["connect-with-context"]), canonical(with_context.first)
+    assert_equal ["pageDelta"], with_context.first["caps"]
+    assert_equal canonical(golden["connect-with-context"]), canonical(with_context.first.except("caps"))
 
     without_context = []
     Lunora::Client.new("https://app.example", client_id: "client-test").attach_socket(->(frame) { without_context << frame })
