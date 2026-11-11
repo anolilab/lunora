@@ -8,7 +8,7 @@
 > must print nothing. Any change is a STOP.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** DONE for 7 files (review APPROVED; branch `refactor/improve-550-split-mixed-exports`, 5 commits, head b68da26f8; api:check clean after full build; not merged). Nuxt module BLOCKED on owner (§4).
+**Status:** DONE for 7 files (PR #1539, merged as e793b60e7). Nuxt module part: IN PROGRESS on `refactor/improve-550-nuxt-module-helpers` (owner decided: move helpers out)
 **Priority / effort / risk:** P3 / S / LOW. **Category:** tech-debt. **Depends on:** none.
 
 ## 0. Headline finding
@@ -150,3 +150,48 @@ Not applicable.
 - [ ] Step 8 scan prints only `packages/nuxt/src/module.ts`.
 - [ ] cli, codegen, react, solid, studio: `test`, `lint:types`, `lint:eslint` exit 0.
 - [ ] Five commits as listed.
+
+## Addendum 2026-11-11 — the Nuxt module (owner decision: move the helpers out)
+
+**Status of this part:** TODO → dispatched. The first part (seven files) shipped as PR #1539
+(`e793b60e7` on `origin/alpha`). Because that PR is merged, this part goes on a NEW branch
+`refactor/improve-550-nuxt-module-helpers` cut from `e793b60e7`, not on the merged branch.
+
+**Decision.** `packages/nuxt/src/module.ts` keeps Nuxt's required default export and the type-only
+`ModuleOptions` (the `nuxt.config` typing users import; type-only companions are out of scope for
+the rule's interop rationale). `checkWorkerEntry`, `checkClientOnlyProvider` and the
+`ResolvedNuxtPlugin` interface move to a new sibling `packages/nuxt/src/module-checks.ts`, together
+with the private helpers only they use (`WORKER_TS_SNIPPET`, `EXPORT_KEYWORD_PATTERN`,
+`SHARD_DO_IDENTIFIER_PATTERN`, `LUNORA_STAR_EXPORT_PATTERN`, `starExportsLunoraBarrel`,
+`SCHEDULED_IDENTIFIER_PATTERN`, `looksLikeShardDoExport`, `CREATE_LUNORA_PATTERN`,
+`providesLunoraClient` — move exactly what the two functions reach and nothing `setup()` still uses).
+`module.ts` imports the two functions from `./module-checks`. They leave the package's public API
+(`package.json` exports only `.` → `module` and `./server`): **breaking on alpha**, noted in the
+commit body.
+
+**Current state at `e793b60e7`.** `module.ts:243` `export const checkWorkerEntry`, `:309`
+`export interface ResolvedNuxtPlugin`, `:346` `export const checkClientOnlyProvider`, `:366`
+`export interface ModuleOptions`, `:472` `export default lunoraNuxtModule`; uses at `:451` and `:465`.
+Importers: `packages/nuxt/__tests__/module-worker-guard.test.ts:7` and
+`packages/nuxt/__tests__/module-client-provider-guard.test.ts:7-8` (only). No docs import them
+(`grep` over `apps/docs`, `packages/nuxt/docs`); CHANGELOG mentions are history, leave them.
+`api-snapshots/nuxt.api.md:20-38` lists `ResolvedNuxtPlugin`, `checkClientOnlyProvider`,
+`checkWorkerEntry`.
+
+**Scope.** `packages/nuxt/src/module.ts`, `packages/nuxt/src/module-checks.ts` (create, named exports
+only), the two test files (import path only), and `api-snapshots/nuxt.api.md` (regenerated in a
+reviewer-run phase after a full build; the executor does not run `api:update` unless told).
+
+**Steps.** (1) `pnpm install`; `pnpm --filter "@lunora/nuxt..." run build`; baseline
+`pnpm --filter "@lunora/nuxt" run test`. (2) Create `module-checks.ts` by MOVING the code verbatim
+(docblocks included); fix the cross-references in docblocks (`{@link LunoraNuxtModule}` mentions may
+need plain text). (3) Point `module.ts` and the two tests at the new file. (4) Gates: oxfmt, nuxt
+`lint:eslint`, `lint:types`, `test`. (5) Commit
+`refactor(nuxt): move the module's build checks out of the module entry` with a body: the AGENTS.md
+rule, and "Breaks on alpha: checkWorkerEntry, checkClientOnlyProvider and ResolvedNuxtPlugin are no
+longer exported from @lunora/nuxt." No red-without-fix step (behaviour unchanged; existing tests are
+the gate).
+
+**Done when** the reviewer's AST scan over `packages/*/src` and `shared/` finds no file mixing a
+default with named VALUE exports, nuxt tests/types/lint pass, and `api:check` passes after the
+snapshot commit.
