@@ -1145,8 +1145,6 @@ class Client(
 
                 synchronized(lock) {
                     subscriptions[id]?.let { entry ->
-                        advance(entry, frame)
-
                         // The merge applies to the server base, never to the value the caller
                         // sees: the overlays are re-folded onto the result below.
                         val resolved = if (isDelta) {
@@ -1160,6 +1158,9 @@ class Client(
 
                         entry.state.serverBase = resolved.value
                         entry.state.hasBase = true
+                        // Advanced only once the frame is applied: an unmergeable row change returned above
+                        // must leave the resume cursor where it was, so a reconnect replays it.
+                        advance(entry, frame)
                         // `cursor` is OPTIONAL on data/delta frames, and a frame
                         // that omits it — or sends an explicit null — must LEAVE
                         // the tracked cursor where it is: nulling it strands every
