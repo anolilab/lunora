@@ -32,29 +32,34 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 ## Open (TODO)
 
-| Plan                                                   | Title                                                                  | Notes                                                                                  |
-| ------------------------------------------------------ | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| [532](./532-privacy-status-and-c15t-consent.md)        | `@lunora/privacy`: close the open status items; read consent from c15t | WS A, B, C, I done (privacy PR); c15t WS D–H TODO, needs §9 decisions                  |
-| [531](./531-typed-live-topics.md)                      | Typed live topics: declared names and payloads, generated refs         | A to D shipped; E (auto-mount the routes) open                                         |
-| [530](./530-vite-startup-ts-morph-graph.md)            | Keep ts-morph out of the Vite and cloudflare config-load graph         | BLOCKED: owner picks lazy codegen (~130 files) or async `lunora()` (public API change) |
-| [466](./466-local-replica-client-wiring.md)            | Wire `@lunora/replica` into every client                               | decisions D1–D6 open; Phase 0 first                                                    |
-| [467](./467-client-split-remaining-clusters.md)        | Finish splitting `lunora-client.ts`                                    | replay engine, frame handlers, admin surface; decisions D1–D3                          |
-| [480](./480-scheduler-remove-id-less-complete-shim.md) | Require the job id on `/complete` so a completion frees its own slot   | blocked: needs a read-only check of production pool rows for `inFlightIds`             |
-| [482](./482-ratelimit-db-store-atomic-consume.md)      | Make the ratelimit consume atomic on the D1-backed `.global()` table   | SQL and KV fixed in #1129; D1 needs a conditional write on `ctx.db` (in progress)      |
-| [135](./135-stable-1.0-roadmap.md)                     | Road to stable 1.0.0                                                   | umbrella; phase/exit-criteria tracker for `alpha → main`                               |
-| [306](./306-pluggable-queue-drivers.md)                | Pluggable queue-driver package                                         | P2                                                                                     |
-| [332](./332-payment-conformance-spike.md)              | Spike: what a payment-provider conformance suite asserts               | spike; deliverable is a decision                                                       |
-| [490](./490-lazy-function-registry.md)                 | Lazy function registry: Worker startup CPU scales with procedure count | PARTIAL: lazy registry shipped opt-in (#1236), smoke-load (eager too); §9 budget open  |
-| [168](./168-cross-shard-transactions-spike.md)         | Cross-shard transaction story                                          | spike; decision first                                                                  |
-| [078](./078-custom-scalar-types.md)                    | Custom scalar types (`v.custom`)                                       | not shipped                                                                            |
-| [089](./089-promise-pipelining-batch.md)               | Promise pipelining over the batch transport                            | draft, design-only                                                                     |
-| [160](./160-adapter-voice-agent-consolidation.md)      | Consolidate the voice/agent surface across the 5 adapters              | deferred                                                                               |
-| [033](./033-stream.md)                                 | Cloudflare Stream (video)                                              | P3, deferred                                                                           |
-| [037](./037-realtime-calls-webrtc.md)                  | Cloudflare Realtime / Calls (WebRTC)                                   | P3, deferred                                                                           |
-| [133](./133-live-cdc-and-do-consumes-do.md)            | Live CDC ingest + DO-consumes-DO shape                                 | P3, demand-gated                                                                       |
-| [169](./169-collab-crdt.md)                            | `@lunora/collab` (CRDT / collaborative editing)                        | demand-gated                                                                           |
-| [453](./453-embedded-runtime.md)                       | In-process runtime as an embedded (browser / device) target            | phase 1 shipped; rest demand-gated                                                     |
-| [454](./454-saas-kit.md)                               | Ship a Lunora SaaS Kit (`templates/saas`) composed from the registry   | P2; composition plan                                                                   |
+| Plan                                                      | Title                                                                           | Notes                                                                                  |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| [558](./558-convex-import-contain-table-files.md)         | Keep a Convex directory import inside the snapshot for table files              | security batch 2026-11-11; TODO                                                        |
+| [559](./559-payment-facade-update-resume-subscription.md) | Owner-checked `updateSubscription` / `resumeSubscription` on the payment facade | security batch 2026-11-11; TODO                                                        |
+| [560](./560-email-gate-address-changes.md)                | Run the email-domain gate on address changes                                    | security batch 2026-11-11; TODO                                                        |
+| [561](./561-auth-audit-plugin-endpoints.md)               | Audit plugin sign-ins, admin actions and account changes                        | security batch 2026-11-11; TODO                                                        |
+| [562](./562-invite-only-require-verified-email.md)        | Invite-only admits non-password accounts only with a verified email             | security batch 2026-11-11; TODO                                                        |
+| [532](./532-privacy-status-and-c15t-consent.md)           | `@lunora/privacy`: close the open status items; read consent from c15t          | WS A, B, C, I done (privacy PR); c15t WS D–H TODO, needs §9 decisions                  |
+| [531](./531-typed-live-topics.md)                         | Typed live topics: declared names and payloads, generated refs                  | A to D shipped; E (auto-mount the routes) open                                         |
+| [530](./530-vite-startup-ts-morph-graph.md)               | Keep ts-morph out of the Vite and cloudflare config-load graph                  | BLOCKED: owner picks lazy codegen (~130 files) or async `lunora()` (public API change) |
+| [466](./466-local-replica-client-wiring.md)               | Wire `@lunora/replica` into every client                                        | decisions D1–D6 open; Phase 0 first                                                    |
+| [467](./467-client-split-remaining-clusters.md)           | Finish splitting `lunora-client.ts`                                             | replay engine, frame handlers, admin surface; decisions D1–D3                          |
+| [480](./480-scheduler-remove-id-less-complete-shim.md)    | Require the job id on `/complete` so a completion frees its own slot            | blocked: needs a read-only check of production pool rows for `inFlightIds`             |
+| [482](./482-ratelimit-db-store-atomic-consume.md)         | Make the ratelimit consume atomic on the D1-backed `.global()` table            | SQL and KV fixed in #1129; D1 needs a conditional write on `ctx.db` (in progress)      |
+| [135](./135-stable-1.0-roadmap.md)                        | Road to stable 1.0.0                                                            | umbrella; phase/exit-criteria tracker for `alpha → main`                               |
+| [306](./306-pluggable-queue-drivers.md)                   | Pluggable queue-driver package                                                  | P2                                                                                     |
+| [332](./332-payment-conformance-spike.md)                 | Spike: what a payment-provider conformance suite asserts                        | spike; deliverable is a decision                                                       |
+| [490](./490-lazy-function-registry.md)                    | Lazy function registry: Worker startup CPU scales with procedure count          | PARTIAL: lazy registry shipped opt-in (#1236), smoke-load (eager too); §9 budget open  |
+| [168](./168-cross-shard-transactions-spike.md)            | Cross-shard transaction story                                                   | spike; decision first                                                                  |
+| [078](./078-custom-scalar-types.md)                       | Custom scalar types (`v.custom`)                                                | not shipped                                                                            |
+| [089](./089-promise-pipelining-batch.md)                  | Promise pipelining over the batch transport                                     | draft, design-only                                                                     |
+| [160](./160-adapter-voice-agent-consolidation.md)         | Consolidate the voice/agent surface across the 5 adapters                       | deferred                                                                               |
+| [033](./033-stream.md)                                    | Cloudflare Stream (video)                                                       | P3, deferred                                                                           |
+| [037](./037-realtime-calls-webrtc.md)                     | Cloudflare Realtime / Calls (WebRTC)                                            | P3, deferred                                                                           |
+| [133](./133-live-cdc-and-do-consumes-do.md)               | Live CDC ingest + DO-consumes-DO shape                                          | P3, demand-gated                                                                       |
+| [169](./169-collab-crdt.md)                               | `@lunora/collab` (CRDT / collaborative editing)                                 | demand-gated                                                                           |
+| [453](./453-embedded-runtime.md)                          | In-process runtime as an embedded (browser / device) target                     | phase 1 shipped; rest demand-gated                                                     |
+| [454](./454-saas-kit.md)                                  | Ship a Lunora SaaS Kit (`templates/saas`) composed from the registry            | P2; composition plan                                                                   |
 
 ## Shipped
 
@@ -89,6 +94,14 @@ audit does not re-report them:
 - **Request log writes every successful dispatch** (`do/src/shard-do.ts:11663`): `LUNORA_REQUEST_LOG_SAMPLE` defaults to 1.0; metrics now flush every 8 dispatches. Decide a production sample default.
 - **Payment reconcile has no conditional write** (`payment/src/reconcile.ts:139-158`): a webhook landing between the `after` read and the upsert is still overwritten; needs a version-conditional upsert on `PaymentStore`.
 - **Studio chart `<style>` from config strings** (`studio/src/components/evilcharts/ui/chart.tsx:169`): confirm no SQL alias can reach it.
+
+## Audit 2026-11-11 — security batch
+
+Plans 558–562, planned at `36c32cc1b` from rows 28, 33, 38, 42 and 43 of the 2026-11-11 audit.
+Each was executed in its own worktree on a `security/improve-<NNN>-*` branch and reviewed
+against the plan. Execution order: 560, 558, 559, 561, 562. They are independent, but 560, 561
+and 562 all touch `packages/auth`, so rebase them in that order when merging. Endpoint paths
+and user-creation behaviour were checked against the installed better-auth 1.7.16.
 
 ## Perf audit 2026-10-16 — measured and rejected
 
