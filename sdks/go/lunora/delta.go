@@ -216,7 +216,8 @@ func applyDelta(base any, delta mutationDelta) (any, bool) {
 // publish is false when a row change cannot be merged. The reference client
 // re-snapshots there; this port has no resubscribe-for-snapshot path, so it keeps the
 // previous value rather than publishing the row-change envelope as the query result.
-// That divergence is deliberate: the next data frame reconciles.
+// The caller poisons the subscription so no later delta moves the resume cursor past
+// the dropped change; the next data frame or resubscribe reconciles.
 func resolveDataPayload(kind string, base any, hasBase bool, value any) (next any, publish bool) {
 	if kind != "delta" {
 		return value, true

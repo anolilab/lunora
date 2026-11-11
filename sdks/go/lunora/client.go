@@ -252,6 +252,12 @@ type subscription struct {
 	onError  ErrorHandler
 	cursor   any
 	epoch    any
+	// poisoned is set when a row change could not be merged into the held base.
+	// The change is dropped, and a later frame of the same run carries the resume
+	// cursor, so honouring it would move the resume point past the dropped change
+	// and a reconnect would never replay it. While set, delta frames are ignored;
+	// a data frame (an authoritative snapshot) or a resubscribe clears it.
+	poisoned bool
 	// state carries the displayed value and its optimistic overlays. See
 	// optimistic.go.
 	state OptimisticState
@@ -1388,6 +1394,10 @@ func (c *Client) ResendSubscriptions() error {
 	entries := make([]resumePoint, 0, len(c.subscriptions))
 
 	for id, entry := range c.subscriptions {
+		// The resend replays from the frozen cursor, so a dropped change is
+		// re-applied: the poison is cleared and set again if it still cannot merge.
+		entry.poisoned = false
+
 		entries = append(entries, resumePoint{
 			args:   entry.args,
 			cursor: entry.cursor,
@@ -1497,8 +1507,17 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 
 			// A row-change delta merges into the server base, not into what the user
 			// sees: the overlay is re-folded onto the merged base below.
+			if kind == "data" {
+				entry.poisoned = false
+			} else if entry.poisoned {
+				c.mu.Unlock()
+
+				return kind, nil
+			}
+
 			merged, publish := resolveDataPayload(kind, entry.state.ServerBase, entry.state.ServerBase != nil, value)
 			if !publish {
+				entry.poisoned = true
 				c.mu.Unlock()
 
 				return kind, nil

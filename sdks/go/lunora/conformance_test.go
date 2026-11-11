@@ -1095,3 +1095,107 @@ func TestPageDeltaFramesMergeIntoTheCachedResult(t *testing.T) {
 		})
 	}
 }
+
+// TestPageDeltaPoisonFreezesTheResumeCursor drives ws-frames.json's
+// pageDeltaPoisonCases: an unmergeable row change poisons the subscription, so a
+// later delta frame neither publishes nor moves the resume cursor, and only a
+// resubscribe or a data frame clears it.
+func TestPageDeltaPoisonFreezesTheResumeCursor(t *testing.T) {
+	cases, _ := loadFixture(t, "ws-frames.json")["pageDeltaPoisonCases"].([]any)
+	if len(cases) != 1 {
+		t.Fatalf("fixture has %d pageDeltaPoisonCases, want 1", len(cases))
+	}
+
+	for _, entry := range cases {
+		testCase, _ := entry.(map[string]any)
+		name, _ := testCase["name"].(string)
+
+		t.Run(name, func(t *testing.T) {
+			var sent []map[string]any
+
+			client := NewClient("https://app.example", nil)
+			client.AttachSocket(recordSubscriptionFrames(&sent), nil)
+
+			var seen []any
+
+			client.Subscribe(
+				"messages:list",
+				map[string]any{"channel": "general"},
+				func(value any) { seen = append(seen, value) },
+				nil,
+				"",
+			)
+
+			client.mu.Lock()
+			var generated string
+			for key := range client.subscriptions {
+				generated = key
+			}
+			client.mu.Unlock()
+
+			handle := func(frame map[string]any) {
+				t.Helper()
+
+				frame["id"] = generated
+				raw, _ := json.Marshal(frame)
+
+				if _, err := client.HandleFrame(raw); err != nil {
+					t.Fatalf("handle: %v", err)
+				}
+			}
+
+			seed, _ := testCase["seedFrame"].(map[string]any)
+			handle(seed)
+
+			steps, _ := testCase["steps"].([]any)
+
+			for index, raw := range steps {
+				step, _ := raw.(map[string]any)
+
+				if resume, ok := step["resume"].(map[string]any); ok {
+					sent = nil
+
+					if err := client.ResendSubscriptions(); err != nil {
+						t.Fatalf("step %d: resend: %v", index+1, err)
+					}
+
+					if len(sent) != 1 {
+						t.Fatalf("step %d: resend sent %d frames, want 1", index+1, len(sent))
+					}
+
+					query, _ := sent[0]["query"].(map[string]any)
+
+					if got, want := canonical(t, query["sinceSeq"]), canonical(t, resume["sinceSeq"]); got != want {
+						t.Errorf("step %d: sinceSeq = %s, want %s", index+1, got, want)
+					}
+
+					if got, want := canonical(t, query["sinceEpoch"]), canonical(t, resume["sinceEpoch"]); got != want {
+						t.Errorf("step %d: sinceEpoch = %s, want %s", index+1, got, want)
+					}
+
+					continue
+				}
+
+				seen = nil
+				frame, _ := step["frame"].(map[string]any)
+				handle(frame)
+
+				want, _ := step["publishes"].(float64)
+				if len(seen) != int(want) {
+					t.Fatalf("step %d: published %d times, want %d", index+1, len(seen), int(want))
+				}
+
+				if wire, ok := step["valueWire"]; ok {
+					reEncoded, err := EncodeWire(seen[0])
+					if err != nil {
+						t.Fatalf("step %d: encode: %v", index+1, err)
+					}
+
+					if got, want := canonical(t, reEncoded), canonical(t, wire); got != want {
+						t.Errorf("step %d: value mismatch\n got: %s\nwant: %s", index+1, got, want)
+					}
+				}
+			}
+		})
+	}
+}
