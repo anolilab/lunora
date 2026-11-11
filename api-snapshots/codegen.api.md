@@ -2549,6 +2549,7 @@ const CAPABILITY_ROWS: readonly [
     },
     {
         readonly bindingFreeExports: readonly [
+            "authorizeSignedGet",
             "buildPresignedUrl",
             "buildSignedUrl",
             "scopeKey",
