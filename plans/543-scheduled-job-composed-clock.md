@@ -9,7 +9,7 @@
 > must print nothing. Then confirm the excerpts in §1 match. Any mismatch is a STOP.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** TODO
+**Status:** DONE (review APPROVED; branch `fix/improve-543-scheduled-job-clock`, commit `5e8333fc2`; merge before 542; not merged)
 **Priority / effort / risk:** P2 / S / LOW. **Category:** tests (harness fidelity). **Depends on:** none.
 **Merge order:** before plan 542 (both edit the dispatch block of `harness.ts`).
 
