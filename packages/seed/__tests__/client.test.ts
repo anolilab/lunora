@@ -174,6 +174,59 @@ describe("createSeedClient", () => {
         expect(inserted.find((entry) => entry.table === "posts")!.count).toBe(3);
     });
 
+    it("leaves the run state untouched when persist rejects", async () => {
+        expect.hasAssertions();
+
+        const seed = createSeedClient<InsertModel>(schema, {
+            persist: () => Promise.reject(new Error("insert failed")),
+            seed: 1,
+        });
+
+        await expect(seed.users(3)).rejects.toThrow("insert failed");
+
+        const fresh = client();
+
+        expect(seed.$ids.users).toEqual(fresh.$ids.users);
+        expect(seed.$store.users).toEqual(fresh.$store.users);
+    });
+
+    it("a retry after a failed persist yields the ids a clean first call would", async () => {
+        expect.hasAssertions();
+
+        let calls = 0;
+        const flaky = createSeedClient<InsertModel>(schema, {
+            persist: () => {
+                calls += 1;
+
+                return calls === 1 ? Promise.reject(new Error("insert failed")) : undefined;
+            },
+            seed: 1,
+        });
+
+        await expect(flaky.users(3)).rejects.toThrow("insert failed");
+
+        const retried = await flaky.users(3);
+        const clean = await client().users(3);
+
+        expect(retried.users).toEqual(clean.users);
+    });
+
+    it("keeps a parent that persisted when the child's persist fails", async () => {
+        expect.hasAssertions();
+
+        const seed = createSeedClient<InsertModel>(schema, {
+            persist: (table) => (table === "posts" ? Promise.reject(new Error("insert failed")) : undefined),
+            seed: 2,
+        });
+
+        await expect(seed.posts(2)).rejects.toThrow("insert failed");
+
+        const fresh = client();
+
+        expect(seed.$ids.users?.length).toBeGreaterThan(0);
+        expect(seed.$ids.posts).toEqual(fresh.$ids.posts);
+    });
+
     it("clears all state on $reset", async () => {
         expect.hasAssertions();
 

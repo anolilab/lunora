@@ -182,6 +182,13 @@ const createSeedClient = <InsertModel = Record<string, Record<string, unknown>>>
         for (const { rows, table: planned } of plan) {
             const ids = rows.map((row) => row._id as string);
 
+            // Record only after the insert succeeds: a failed persist must not leave ids
+            // that later calls wire foreign keys to, or advance the created count.
+            if (persist !== undefined) {
+                // eslint-disable-next-line no-await-in-loop -- parents must persist before children so FKs reference inserted rows
+                await persist(planned, rows);
+            }
+
             store[planned] ??= [];
             store[planned].push(...rows);
             idsByTable[planned] ??= [];
@@ -190,11 +197,6 @@ const createSeedClient = <InsertModel = Record<string, Record<string, unknown>>>
 
             if (planned === table) {
                 created = ids;
-            }
-
-            if (persist !== undefined) {
-                // eslint-disable-next-line no-await-in-loop -- parents must persist before children so FKs reference inserted rows
-                await persist(planned, rows);
             }
         }
 
