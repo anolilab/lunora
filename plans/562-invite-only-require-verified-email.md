@@ -360,7 +360,7 @@ in-scope files.
 
 ## 9. Open questions
 
-1. Owner: should SCIM provisioning be allowed to claim an invitation (§4.2)? Today it is refused.
+1. ~~Should SCIM provisioning be allowed to claim an invitation (§4.2)?~~ **Decided 2026-11-11 by the owner: keep refusing.** No code change; the branch already states it in `packages/auth/docs/plugins.mdx` ("SCIM provisioning cannot accept an invitation"), `packages/auth/README.md` and the `invite-only.ts` docblock.
 2. Maintenance: a new better-auth account-creation endpoint that creates users unverified, and is
    trusted, would need adding to `TRUSTED_CREATE_PATHS`. A new provider path is fail-closed by
    default.

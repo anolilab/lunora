@@ -546,9 +546,7 @@ in-scope files.
 
 ## 9. Open questions
 
-1. Should `readonly adapter` leave `LunoraPayment` now that every money and subscription
-   operation has a facade method? Removing it closes the raw path for good, but it is a wider
-   break (provider-specific extras use it). Not part of this plan; owner decision.
+1. **Decided 2026-11-11 by the owner: remove `ctx.payments.adapter`.** Planned as plan 563 (addendum on this branch); BLOCKED until the owner picks how the saas template and the bench app read provider capabilities (563 §9.1).
 2. Maintenance: a new subscription-mutating adapter method needs a facade twin, a
    `PAYMENT_METHODS` entry, a regenerated stub and a docs-table row. `codegen-stub.test.ts`
    and `docs.test.ts` catch the last three.
