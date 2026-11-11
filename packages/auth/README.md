@@ -96,7 +96,7 @@ For Cloudflare Turnstile on the **auth flow**, use the `captcha` plugin (`captch
 
 ### Disposable / free-email gating
 
-Reject throwaway/disposable signups (and branch on free-vs-business email) by reusing the visulima email lists — pure-data and **edge-safe on the default path** (no DNS). Wire it into better-auth's native signup with `withEmailGate` (or `emailGateDatabaseHooks`):
+Reject throwaway/disposable signups (and branch on free-vs-business email) by reusing the visulima email lists — pure-data and **edge-safe on the default path** (no DNS). Wire it into better-auth with `withEmailGate` (or `emailGateDatabaseHooks`). The gate runs on sign-up and on address changes (`/change-email`, the email-OTP change, admin updates); `onClassify` fires only at sign-up:
 
 ```ts
 import { createAuth, withEmailGate, lunoraD1Adapter } from "@lunora/auth";
