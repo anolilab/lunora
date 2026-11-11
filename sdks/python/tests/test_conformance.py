@@ -144,8 +144,12 @@ class TestWsFrameBuilders(unittest.TestCase):
         covers("client_frame_builders")
 
         frames = load("ws-frames.json")["clientFrames"]
-        self.assertEqual(build_connect_frame("client-test"), frames["connect"])
-        self.assertEqual(build_connect_frame("client-test", {"roomId": "general"}), frames["connect-with-context"])
+        # This port announces `pageDelta` (and only that), so its connect frame is the
+        # plain golden plus the token; `connect-with-page-delta-caps` is the same frame.
+        caps = {"caps": ["pageDelta"]}
+        self.assertEqual(build_connect_frame("client-test"), frames["connect-with-page-delta-caps"])
+        self.assertEqual(build_connect_frame("client-test"), {**frames["connect"], **caps})
+        self.assertEqual(build_connect_frame("client-test", {"roomId": "general"}), {**frames["connect-with-context"], **caps})
         self.assertEqual(build_subscribe_frame("sub_1", "messages:list", {"channel": "general"}), frames["subscribe-cold"])
         self.assertEqual(
             build_subscribe_frame("sub_1", "messages:list", {"channel": "general"}, since_seq=12, since_epoch="e1"),
@@ -240,6 +244,50 @@ class TestWsFrameConsumer(unittest.TestCase):
         # A conditional assertion that never runs is worse than none: without this,
         # renaming the fixture key would leave every suite green.
         self.assertEqual(cancellations, 1, "serverFrames must carry one cancelling case")
+
+    def test_page_delta_frames_merge_into_the_server_base(self):
+        cases = load("ws-frames.json")["pageDeltaFrames"]
+        self.assertTrue(cases, "pageDeltaFrames must carry cases")
+
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                client = LunoraClient("https://app.example")
+                client.attach_socket(lambda _frame: None)
+                seen: list = []
+                client.subscribe("messages:list", {"channel": "general"}, seen.append)
+                client.handle_frame({"data": case["baseWire"], "id": case["frame"]["id"], "type": "data"})
+                seen.clear()
+
+                descriptor = client.handle_frame(case["frame"])
+                expect = case["expect"]
+                self.assertEqual(descriptor["kind"], expect["kind"])
+                self.assertEqual(descriptor.get("id"), expect["id"])
+                self.assertEqual(encode_wire(descriptor["value"]), expect["valueWire"])
+                self.assertEqual([encode_wire(value) for value in seen], [expect["valueWire"]])
+                if "cursor" in expect:
+                    self.assertEqual(descriptor.get("cursor"), expect["cursor"])
+                if "epoch" in expect:
+                    self.assertEqual(descriptor.get("epoch"), expect["epoch"])
+
+    def test_row_delta_without_a_mergeable_base_never_publishes_the_envelope(self):
+        delta = {"key": "m1", "op": "update", "row": {"_id": "m1"}, "table": "messages"}
+
+        def run(base_wire):
+            client = LunoraClient("https://app.example")
+            client.attach_socket(lambda _frame: None)
+            seen: list = []
+            client.subscribe("messages:list", {}, seen.append)
+            if base_wire is not None:
+                client.handle_frame({"data": base_wire, "id": "sub_1", "type": "data"})
+            seen.clear()
+            client.handle_frame({"delta": delta, "id": "sub_1", "type": "delta"})
+            return seen
+
+        # No cached base: the legacy broadcast is published as-is.
+        self.assertEqual(run(None), [delta])
+        # A base that is not a row list (or whose rows lack `_id`): keep the previous value.
+        self.assertEqual(run("scalar"), [])
+        self.assertEqual(run([{"text": "no id"}]), [])
 
     def test_a_subscription_streams_its_frame_values_in_order(self):
         covers("subscription_stream_yields_frame_values_in_order")
