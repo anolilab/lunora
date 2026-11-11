@@ -1978,6 +1978,12 @@ class LunoraAdminClient extends LunoraClient {
         accountId: string;
         userId: string;
     }): Promise<void>;
+    listAuthApiKeys(input: {
+        userId: string;
+    }): Promise<Record<string, unknown>[]>;
+    deleteAuthApiKey(input: {
+        apiKeyId: string;
+    }): Promise<void>;
     listAuthPasskeys(input: {
         userId: string;
     }): Promise<Record<string, unknown>[]>;

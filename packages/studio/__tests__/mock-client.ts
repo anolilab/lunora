@@ -42,6 +42,7 @@ interface MockClientHooks {
     createAuthOrgTeam: ReturnType<typeof vi.fn>;
     createAuthSignUpInvitation: ReturnType<typeof vi.fn>;
     createAuthUser: ReturnType<typeof vi.fn>;
+    deleteAuthApiKey: ReturnType<typeof vi.fn>;
     deleteAuthOrganization: ReturnType<typeof vi.fn>;
     deleteAuthOrgRole: ReturnType<typeof vi.fn>;
     deleteAuthPasskey: ReturnType<typeof vi.fn>;
@@ -67,6 +68,7 @@ interface MockClientHooks {
     inviteAuthOrgMember: ReturnType<typeof vi.fn>;
     listAdminTokens: Mock<() => Promise<AdminTokenSummary[]>>;
     listAuthAccounts: ReturnType<typeof vi.fn>;
+    listAuthApiKeys: ReturnType<typeof vi.fn>;
     listAuthOrganizations: ReturnType<typeof vi.fn>;
     listAuthOrgInvitations: ReturnType<typeof vi.fn>;
     listAuthOrgMembers: ReturnType<typeof vi.fn>;
@@ -150,6 +152,7 @@ interface MockClientImpls {
     kvNamespaces?: KvNamespaceSummary[];
     /** Seed entries per namespace binding → key → stored entry. Mutated in place by put/delete. */
     kvSeed?: Record<string, Record<string, { expiration?: number; metadata?: unknown; value: string }>>;
+    listAuthApiKeys?: () => Promise<Record<string, unknown>[]> | Record<string, unknown>[];
     listAuthSessions?: (options: { limit?: number; offset?: number; userId?: string }) => AuthPage<AuthSession>;
     listAuthUsers?: (options: ListAuthUsersOptions) => AuthPage<AuthUser>;
     listCronRuns?: () => CronRunsResult;
@@ -320,17 +323,19 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     });
     const revokeAuthSession = vi.fn<() => Promise<undefined>>(async () => undefined);
     const revokeAuthUserSessions = vi.fn<() => Promise<undefined>>(async () => undefined);
-    const getAuthCapabilities = vi.fn<() => Promise<{ accounts: boolean; admin: boolean; organization: boolean; passkey: boolean; twoFactor: boolean }>>(
-        async () => {
-            return { accounts: true, admin: true, organization: false, passkey: false, twoFactor: false };
-        },
-    );
+    const getAuthCapabilities = vi.fn<
+        () => Promise<{ accounts: boolean; admin: boolean; apiKey: boolean; organization: boolean; passkey: boolean; twoFactor: boolean }>
+    >(async () => {
+        return { accounts: true, apiKey: false, admin: true, organization: false, passkey: false, twoFactor: false };
+    });
     const updateAuthUser = vi.fn<(input: { userId: string }) => Promise<{ id: string }>>(async (input) => {
         return { id: input.userId };
     });
     const listAuthAccounts = vi.fn<() => Promise<Record<string, unknown>[]>>(async () => [] as Record<string, unknown>[]);
     const unlinkAuthAccount = vi.fn<() => Promise<undefined>>(async () => undefined);
     const listAuthPasskeys = vi.fn<() => Promise<Record<string, unknown>[]>>(async () => [] as Record<string, unknown>[]);
+    const listAuthApiKeys = vi.fn<() => Promise<Record<string, unknown>[]>>(async () => impls.listAuthApiKeys?.() ?? []);
+    const deleteAuthApiKey = vi.fn<() => Promise<undefined>>(async () => undefined);
     const deleteAuthPasskey = vi.fn<() => Promise<undefined>>(async () => undefined);
     const disableAuthTwoFactor = vi.fn<() => Promise<undefined>>(async () => undefined);
     const listAuthOrganizations = vi.fn<() => Promise<{ rows: Record<string, unknown>[]; total: number }>>(async () => {
@@ -353,7 +358,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const cancelAuthOrgInvitation = vi.fn<() => Promise<undefined>>(async () => undefined);
     const getAuthConfig = vi.fn<() => Promise<Record<string, unknown>>>(async () => {
         return {
-            capabilities: { accounts: true, admin: true, inviteOnly: false, organization: false, passkey: false, twoFactor: false },
+            capabilities: { accounts: true, apiKey: false, admin: true, inviteOnly: false, organization: false, passkey: false, twoFactor: false },
             emailAndPassword: true,
             organization: { enabled: false, roles: false, teams: false },
             plugins: [] as string[],
@@ -480,6 +485,8 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         createAuthUser,
         deleteAuthOrganization,
         deleteAuthOrgRole,
+        deleteAuthApiKey,
+        listAuthApiKeys,
         deleteAuthPasskey,
         disableAuthTwoFactor,
         getAuthCapabilities,

@@ -215,6 +215,24 @@ export const UserSecurityPanel = ({
     const t = useT();
 
     const [passkeys, setPasskeys] = useState<Record<string, unknown>[] | null>(null);
+    const [apiKeys, setApiKeys] = useState<Record<string, unknown>[] | null>(null);
+
+    useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- capability-gated data load: fetch the user's API key rows when `capabilities.apiKey` is enabled, re-running on userId/version (refetch trigger); async fetch, not derivable during render and not a user event.
+        if (!capabilities.apiKey) {
+            return;
+        }
+
+        fireAndForget(
+            (async (): Promise<void> => {
+                try {
+                    setApiKeys(await client.listAuthApiKeys({ userId }));
+                } catch {
+                    setApiKeys(null);
+                }
+            })(),
+        );
+    }, [capabilities.apiKey, client, userId, version]);
 
     useEffect(() => {
         // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- capability-gated data load: fetch the user's passkeys when the `capabilities.passkey` prop is enabled, re-running on userId/version (refetch trigger); async fetch, not derivable during render and not a user event. secret-scanner:allow — "passkey" is a WebAuthn feature name, not a credential
@@ -239,6 +257,10 @@ export const UserSecurityPanel = ({
 
     const onDeletePasskey = (passkeyId: string): void => {
         runAction(() => client.deleteAuthPasskey({ passkeyId }));
+    };
+
+    const onRevokeApiKey = (apiKeyId: string): void => {
+        runAction(() => client.deleteAuthApiKey({ apiKeyId }));
     };
 
     return (
@@ -286,6 +308,58 @@ export const UserSecurityPanel = ({
                                                     variant="ghost"
                                                 >
                                                     {t("Delete")}
+                                                </Button>
+                                            </TableCell>
+                                        </TableRow>
+                                    );
+                                })}
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+            )}
+
+            {capabilities.apiKey && apiKeys !== null && apiKeys.length === 0 && <p className="text-sm text-muted-foreground">{t("No API keys.")}</p>}
+
+            {capabilities.apiKey && apiKeys !== null && apiKeys.length > 0 && (
+                <Card className="overflow-hidden py-0">
+                    <CardContent className="px-0">
+                        <Table data-testid="ud-api-keys-table">
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>{t("name")}</TableHead>
+                                    <TableHead>{t("Key")}</TableHead>
+                                    <TableHead>{t("created")}</TableHead>
+                                    <TableHead>{t("Expires")}</TableHead>
+                                    <TableHead aria-label={t("Actions")} />
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {apiKeys.map((apiKey) => {
+                                    const id = formatCell(apiKey["id"]);
+
+                                    return (
+                                        <TableRow data-testid={`ud-api-key-${id}`} key={id}>
+                                            <TableCell>{formatCell(apiKey["name"]) || id}</TableCell>
+                                            <TableCell className="font-mono text-muted-foreground">{formatCell(apiKey["start"]) || "—"}</TableCell>
+                                            <TableCell className="text-muted-foreground tabular-nums">
+                                                {formatTimestamp(apiKey["createdAt"] as number)}
+                                            </TableCell>
+                                            <TableCell className="text-muted-foreground tabular-nums">
+                                                {formatTimestamp(apiKey["expiresAt"] as number | null, t("Never"))}
+                                            </TableCell>
+                                            <TableCell>
+                                                <Button
+                                                    data-testid={`ud-revoke-api-key-${id}`}
+                                                    disabled={busy}
+                                                    onClick={() => {
+                                                        onRevokeApiKey(id);
+                                                    }}
+                                                    size="xs"
+                                                    type="button"
+                                                    variant="ghost"
+                                                >
+                                                    {t("Revoke")}
                                                 </Button>
                                             </TableCell>
                                         </TableRow>

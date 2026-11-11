@@ -123,6 +123,9 @@ interface AuthAdmin {
         password?: string;
         role?: string | string[];
     }) => Promise<AuthAdminUser>;
+    deleteApiKey: (input: {
+        apiKeyId: string;
+    }) => Promise<void>;
     deleteOrganization: (input: {
         organizationId: string;
     }) => Promise<void>;
@@ -147,6 +150,9 @@ interface AuthAdmin {
     listAccounts: (input: {
         userId: string;
     }) => Promise<AuthAccount[]>;
+    listApiKeys: (input: {
+        userId: string;
+    }) => Promise<AuthApiKey[]>;
     listInvitations: (options: {
         limit?: number;
         offset?: number;
@@ -285,6 +291,23 @@ interface AuthAdminUser {
 }
 ```
 
+### `AuthApiKey` (interface)
+
+```ts
+interface AuthApiKey {
+    [key: string]: unknown;
+    createdAt?: AuthTimestamp;
+    enabled?: boolean;
+    expiresAt?: AuthTimestamp | null;
+    id: string;
+    lastRequest?: AuthTimestamp | null;
+    name?: null | string;
+    prefix?: null | string;
+    referenceId: string;
+    start?: null | string;
+}
+```
+
 ### `AuthAuditEntry` (interface)
 
 ```ts
@@ -338,6 +361,7 @@ interface AuthAuditReader {
 interface AuthCapabilities {
     accounts: boolean;
     admin: boolean;
+    apiKey: boolean;
     inviteOnly: boolean;
     organization: boolean;
     passkey: boolean;
@@ -1606,6 +1630,7 @@ type LunoraAuthClientPlugin = ReturnType<typeof organizationClient>;
 interface LunoraAuthPluginToggles {
     admin?: boolean;
     anonymous?: boolean;
+    apiKey?: boolean;
     deviceAuthorization?: boolean;
     emailOtp?: boolean;
     lastLoginMethod?: boolean;

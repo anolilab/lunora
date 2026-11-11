@@ -151,6 +151,23 @@ interface AuthOrgRole {
     role?: null | string;
 }
 
+/**
+ * One API key. The hash (`key`) is stripped: the row is shown by its `start` /
+ * `prefix`, and the plaintext was only ever returned to the creator.
+ */
+interface AuthApiKey {
+    [key: string]: unknown;
+    createdAt?: AuthTimestamp;
+    enabled?: boolean;
+    expiresAt?: AuthTimestamp | null;
+    id: string;
+    lastRequest?: AuthTimestamp | null;
+    name?: null | string;
+    prefix?: null | string;
+    referenceId: string;
+    start?: null | string;
+}
+
 /** One registered passkey. Credential secrets (`publicKey`) are stripped. */
 interface AuthPasskey {
     [key: string]: unknown;
@@ -179,6 +196,8 @@ interface AuthCapabilities {
     accounts: boolean;
     /** The `admin()` plugin: ban/role/impersonate/create/delete/set-password. */
     admin: boolean;
+    /** The `apiKey()` plugin: per-user API keys, listed and revoked from the user drawer. */
+    apiKey: boolean;
     /** The `inviteOnly` plugin: sign-up invitations. */
     inviteOnly: boolean;
     /** The `organization` plugin: orgs, members, invitations. */
@@ -315,6 +334,8 @@ interface AuthAdmin {
     /** Create a team under an organization. */
     createTeam: (input: { name: string; organizationId: string }) => Promise<AuthTeam>;
     createUser: (input: { data?: Record<string, unknown>; email: string; name: string; password?: string; role?: string | string[] }) => Promise<AuthAdminUser>;
+    /** Revoke (delete) one API key by id. Needs the `apiKey()` plugin. */
+    deleteApiKey: (input: { apiKeyId: string }) => Promise<void>;
     /** Delete an organization and cascade-delete its members, invitations, teams, and custom roles. */
     deleteOrganization: (input: { organizationId: string }) => Promise<void>;
     /** Delete a custom org role. */
@@ -325,6 +346,8 @@ interface AuthAdmin {
     /** Create a pending email invitation to an org (no acceptance side effects). */
     inviteMember: (input: { email: string; inviterId?: string; organizationId: string; role?: string }) => Promise<AuthInvitation>;
     listAccounts: (input: { userId: string }) => Promise<AuthAccount[]>;
+    /** List a user's API keys (hash stripped). Needs the `apiKey()` plugin. */
+    listApiKeys: (input: { userId: string }) => Promise<AuthApiKey[]>;
     listInvitations: (options: { limit?: number; offset?: number; organizationId: string }) => Promise<AuthPage<AuthInvitation>>;
     listMembers: (options: { limit?: number; offset?: number; organizationId: string }) => Promise<AuthPage<AuthMember>>;
     listOrganizations: (options: { limit?: number; offset?: number }) => Promise<AuthPage<AuthOrganization>>;
@@ -449,6 +472,9 @@ const USER_CASCADE = [
     { field: "userId", model: "member" },
     { field: "userId", model: "teamMember" },
     { field: "userId", model: "passkey" },
+    // `referenceId` is the owning user for `apiKey()` rows (references: "user"), so a
+    // deleted user's keys go too rather than outliving the account.
+    { field: "referenceId", model: "apikey" },
     { field: "userId", model: "twoFactor" },
     { field: "userId", model: "oauthAccessToken" },
     { field: "userId", model: "oauthRefreshToken" },
@@ -628,6 +654,7 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
 
         return {
             accounts: features.accounts ?? true,
+            apiKey: features.apiKey ?? has("api-key"),
             admin: features.admin ?? has("admin"),
             inviteOnly: features.inviteOnly ?? has("lunora-invite-only"),
             organization: features.organization ?? has("organization"),
@@ -1070,6 +1097,11 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 return toUser(user as Record<string, unknown>);
             }),
 
+        deleteApiKey: ({ apiKeyId }) =>
+            withContext(async (context_) => {
+                await context_.adapter.delete({ model: "apikey", where: [{ field: "id", value: apiKeyId }] });
+            }),
+
         deletePasskey: ({ passkeyId }) =>
             withContext(async (context_) => {
                 await context_.adapter.delete({ model: "passkey", where: [{ field: "id", value: passkeyId }] });
@@ -1169,6 +1201,20 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
 
         listOrganizations: ({ limit, offset }) =>
             withContext((context_) => page<AuthOrganization>(context_, "organization", { limit, offset, sortBy: { direction: "desc", field: "createdAt" } })),
+
+        listApiKeys: ({ userId }) =>
+            withContext(async (context_) => {
+                const rows = await context_.adapter.findMany<Record<string, unknown>>({ model: "apikey", where: [{ field: "referenceId", value: userId }] });
+
+                // `key` is the stored hash; it never leaves the server.
+                return rows.map((row) => {
+                    const safe = normalizeRow(row);
+
+                    delete safe["key"];
+
+                    return safe as AuthApiKey;
+                });
+            }),
 
         listPasskeys: ({ userId }) =>
             withContext(async (context_) => {
@@ -1348,6 +1394,7 @@ export type {
     AuthAdmin,
     AuthAdminSession,
     AuthAdminUser,
+    AuthApiKey,
     AuthCapabilities,
     AuthConfigInfo,
     AuthInvitation,
