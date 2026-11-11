@@ -470,7 +470,7 @@ func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 	c.send = nil
 	c.socketGeneration = -1
 
-	if send(BuildConnectFrame(c.clientID, context, c.sessionToken)) != nil {
+	if send(BuildConnectFrame(c.clientID, context, c.sessionToken, PageDeltaCapability)) != nil {
 		return
 	}
 
@@ -1051,8 +1051,9 @@ func Call[T any](c *Client, verb Verb, functionPath string, args any, shardKey s
 
 // BuildConnectFrame is the one-shot frame sent first on every socket open.
 // token is the session credential; it rides here and never in the socket URL,
-// and is omitted when empty.
-func BuildConnectFrame(clientID string, context map[string]any, token string) map[string]any {
+// and is omitted when empty. caps announces optional server behaviours; the port
+// announces only what it handles (pageDelta, never refreshBatch).
+func BuildConnectFrame(clientID string, context map[string]any, token string, caps ...string) map[string]any {
 	frame := map[string]any{"id": "connect", "type": "connect"}
 	if clientID != "" {
 		frame["clientId"] = clientID
@@ -1064,6 +1065,10 @@ func BuildConnectFrame(clientID string, context map[string]any, token string) ma
 
 	if token != "" {
 		frame["token"] = token
+	}
+
+	if len(caps) > 0 {
+		frame["caps"] = caps
 	}
 
 	return frame
@@ -1489,8 +1494,18 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			var deferred []func()
 
 			c.mu.Lock()
+
+			// A row-change delta merges into the server base, not into what the user
+			// sees: the overlay is re-folded onto the merged base below.
+			merged, publish := resolveDataPayload(kind, entry.state.ServerBase, entry.state.ServerBase != nil, value)
+			if !publish {
+				c.mu.Unlock()
+
+				return kind, nil
+			}
+
 			c.advanceLocked(entry, frame)
-			entry.state.ServerBase = value
+			entry.state.ServerBase = merged
 
 			// `cursor` is OPTIONAL on a data/delta frame, and one that omits it
 			// must LEAVE the tracked cursor where it was. Nulling it strands every
