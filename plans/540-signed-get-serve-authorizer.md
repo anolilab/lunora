@@ -9,7 +9,7 @@
 > must print nothing. Then confirm the excerpts in §1 match. Any mismatch is a STOP.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** TODO
+**Status:** DONE (review APPROVED; branch `security/improve-540-signed-get-authorizer`, commits 16a6b7920 + be59c31eb (snapshots); api:check clean; storage workerd project green; not merged)
 **Priority / effort / risk:** P1 / S / LOW. **Category:** security. **Depends on:** none.
 
 ## 0. Headline finding
