@@ -87,9 +87,14 @@ const resolveConvexSnapshot = async (path: string): Promise<ConvexSnapshot | und
     return undefined;
 };
 
-/** Enumerate `<table>/documents.jsonl` under an exploded export directory. */
+/**
+ * Enumerate `<table>/documents.jsonl` under an exploded export directory. The
+ * export is operator-downloaded data, so a table file that links out of it is
+ * held to the same containment rule as a `_storage` blob.
+ */
 const listDirectoryTables = async (root: string): Promise<ConvexSnapshotTable[]> => {
     const found: ConvexSnapshotTable[] = [];
+    const canonicalRoot = await realpath(root);
 
     for (const entry of await readdir(root, { withFileTypes: true })) {
         if (!entry.isDirectory()) {
@@ -102,7 +107,14 @@ const listDirectoryTables = async (root: string): Promise<ConvexSnapshotTable[]>
         const documents = await stat(file).catch(() => undefined);
 
         if (documents?.isFile()) {
-            found.push({ file, table: entry.name });
+            // eslint-disable-next-line no-await-in-loop -- ditto; the reader must open the path that was checked
+            const canonicalFile = await realpath(file);
+
+            if (!isInsideDirectory(canonicalRoot, canonicalFile)) {
+                throw new Error(`table ${entry.name}: documents.jsonl resolves outside the snapshot directory`);
+            }
+
+            found.push({ file: canonicalFile, table: entry.name });
         }
     }
 

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -190,6 +190,32 @@ describe("convex snapshot reader", () => {
             const root = await buildDirectory({});
 
             await expect(listConvexSnapshotTables({ kind: "directory", root })).resolves.toBeUndefined();
+        });
+
+        it("refuses a documents.jsonl that is a symlink pointing outside the snapshot", async () => {
+            expect.assertions(1);
+
+            const root = await buildDirectory({ users: "{}\n" });
+
+            await writeFile(join(workDir, "outside.jsonl"), '{"leaked":true}\n', "utf8");
+            await mkdir(join(root, "evil"), { recursive: true });
+            await symlink(join(workDir, "outside.jsonl"), join(root, "evil", "documents.jsonl"));
+
+            await expect(listConvexSnapshotTables({ kind: "directory", root })).rejects.toThrow(/resolves outside the snapshot directory/);
+        });
+
+        it("lists a snapshot whose root is reached through a symlink, with canonical file paths", async () => {
+            expect.assertions(2);
+
+            const root = await buildDirectory({ users: "{}\n" });
+            const linked = join(workDir, "linked-export");
+
+            await symlink(root, linked);
+
+            const found = await listConvexSnapshotTables({ kind: "directory", root: linked });
+
+            expect(found?.map((entry) => entry.table)).toStrictEqual(["users"]);
+            expect(found?.[0]?.file).toBe(await realpath(join(root, "users", "documents.jsonl")));
         });
 
         it("lists an archive's tables sorted, naming them by their parent entry segment", async () => {
