@@ -67,7 +67,8 @@ celld TCK, the MySQL parity suites, the eight non-JS SDK conformance legs, and t
 
 **Step 2 — copy the jobs.** After the `e2e` job, add `test-celld`, `test-mysql` and `sdk-conformance`
 copied verbatim from `test.yml` (step order, comments, env, pinned SHAs), removing only the `"if"` and
-`"needs"` keys, and give each a one-line comment above it: `# test.yml's \`<job>\` without the paths-filter gate.`In`sdk-conformance`'s "Assert the matrix covers every SDK on disk" message, leave the text as is.
+`"needs"` keys, and give each a one-line comment above it, in the form "test.yml's <job> without the paths-filter gate".
+In `sdk-conformance`'s "Assert the matrix covers every SDK on disk" message, leave the text as is.
 
 **Step 3 — extend the nightly `e2e` job.** Set `"timeout-minutes": 45` with test.yml's comment; add the
 "Run SaaS kit E2E suite" step (verbatim, with its comment) after the examples step; add
