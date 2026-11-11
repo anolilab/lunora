@@ -118,6 +118,24 @@ const decodeBytes = (raw: NonNullable<FirestoreValue["bytesValue"]>, path: strin
  * Supabase reshape rule refuses.
  */
 
+/**
+ * `doubleValue` → number. The REST encoding spells non-finite doubles as the
+ * strings `"NaN"`, `"Infinity"` and `"-Infinity"`; JSON has no spelling for them,
+ * so `JSON.stringify` would write `null` and the value would be lost silently.
+ */
+const decodeDouble = (raw: number | string, path: string): number => {
+    const parsed = Number(raw);
+
+    if (!Number.isFinite(parsed)) {
+        throw new LunoraError(
+            "INTERNAL",
+            `${path}: doubleValue ${JSON.stringify(raw)} is not a finite number — JSON cannot carry it, and writing it would store null`,
+        );
+    }
+
+    return parsed;
+};
+
 const decodeValue = (value: FirestoreValue, path: string): unknown => {
     if ("nullValue" in value) {
         // eslint-disable-next-line unicorn/no-null -- a Firestore nullValue is JSON `null`; `undefined` would drop the field
@@ -140,7 +158,7 @@ const decodeValue = (value: FirestoreValue, path: string): unknown => {
     }
 
     if (value.doubleValue !== undefined) {
-        return Number(value.doubleValue);
+        return decodeDouble(value.doubleValue, path);
     }
 
     if (value.timestampValue !== undefined) {
@@ -218,6 +236,19 @@ const decodeFields = (fields: Record<string, FirestoreValue>, path: string): Rec
     Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, decodeValue(value, `${path}.${key}`)]));
 
 /**
+ * A document's own `_id` field would be silently replaced by the document id
+ * spread after it. Refuse, as the Supabase reader does for the same column.
+ */
+const assertNoReservedIdField = (decoded: Record<string, unknown>, path: string): void => {
+    if ("_id" in decoded) {
+        throw new LunoraError(
+            "INTERNAL",
+            `${path}._id: the document has its own \`_id\` field, which collides with the reserved id field — rename it in the source`,
+        );
+    }
+};
+
+/**
  * Decode one Firestore document to a Lunora document, preserving its id.
  *
  * Accepts both the wrapped form (`{ name, fields }`, as REST returns) and the
@@ -266,6 +297,8 @@ const toDocument = (
         // eslint-disable-next-line unicorn/no-null -- `null` is the reshape contract's "this cell was NULL"
         decoded[column] = applyReshape(column, kind, current === null ? null : String(current));
     }
+
+    assertNoReservedIdField(decoded, path);
 
     return { ...decoded, _id: id };
 };
