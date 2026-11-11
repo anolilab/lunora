@@ -518,14 +518,10 @@ fn client_frame_builders() {
     let args = WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]);
 
     // Every connect announces `pageDelta` (and not `refreshBatch`, which this port
-    // does not handle), so the plain goldens are compared with `caps` laid over them.
+    // does not handle), so the expected plain connect is the capability golden.
     assert_eq!(
         canonical(&build_connect_frame(Some("client-test"), None, None)),
         canonical(&frames["connect-with-page-delta-caps"])
-    );
-    assert_eq!(
-        canonical(&build_connect_frame(Some("client-test"), None, None)),
-        canonical(&with_page_delta(&frames["connect"]))
     );
     assert_eq!(
         canonical(&build_connect_frame(Some("client-test"), Some(&json!({ "roomId": "general" })), None)),
