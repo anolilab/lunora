@@ -47,7 +47,7 @@ import { detectPackageManager, toolchainExecArgs } from "../../util/detect-packa
 import { checkDurableObjectBudget } from "../../util/durable-object-budget";
 import type { ExitCode } from "../../util/exit-code";
 import { EXIT_CODE } from "../../util/exit-code";
-import runSmokeLoad from "../../util/lazy-smoke-load";
+import { runLazySmokeLoad } from "../../util/lazy-smoke-load";
 import type { Logger } from "../../util/logger";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runPostCodegenHook } from "../../util/post-codegen-hook";
@@ -1487,7 +1487,7 @@ const smokeLoadDeferredModules = async (
         return undefined;
     }
 
-    return runSmokeLoad({
+    return runLazySmokeLoad({
         composedEntry: resolveComposedWorkerEntry(cwd),
         configPath: wranglerPath,
         cwd,

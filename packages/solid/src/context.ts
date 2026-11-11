@@ -3,7 +3,7 @@ import { LunoraError } from "@lunora/errors";
 import type { Context } from "solid-js";
 import { useContext } from "solid-js";
 
-import sharedContext from "./shared-context";
+import { sharedContext } from "./shared-context";
 
 /**
  * Solid context carrying the framework-neutral {@link LunoraClient}. Every

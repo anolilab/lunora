@@ -36,7 +36,7 @@ import { join } from "node:path";
 import { LunoraError } from "@lunora/errors";
 import type { Project } from "ts-morph";
 
-import assertRequiredPackages from "./assert-required-packages";
+import { assertRequiredPackages } from "./assert-required-packages";
 import type { CapabilityKey } from "./capabilities";
 import { usedCapabilities } from "./capabilities";
 import { discoverAgents } from "./discover/agents";

@@ -8,7 +8,7 @@ import { ts } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import literal from "../../src/util/js-literal";
-import runLazySmokeLoad, { killWindowsTreeOnExit, taskkillEndedTree } from "../../src/util/lazy-smoke-load";
+import { killWindowsTreeOnExit, runLazySmokeLoad, taskkillEndedTree } from "../../src/util/lazy-smoke-load";
 
 const startDevProcess = vi.hoisted(() => vi.fn<(options: DevProcessOptions) => Promise<DevProcess>>());
 
