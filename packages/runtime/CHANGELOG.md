@@ -1,3 +1,7 @@
+## @lunora/runtime [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.284...@lunora/runtime@1.0.0-alpha.285) (2026-11-11)
+
+- feat(auth): add API keys via the apiKey() plugin (#1526)
+
 ## @lunora/runtime [1.0.0-alpha.284](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.283...@lunora/runtime@1.0.0-alpha.284) (2026-11-10)
 
 - feat(codegen): type user-column claims on ctx.auth from the auth config (#1525)
