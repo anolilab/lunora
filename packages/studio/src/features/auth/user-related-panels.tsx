@@ -1,5 +1,5 @@
 import type { AuthCapabilities, AuthSession } from "@lunora/client";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { useEffect, useState } from "react";
 
 import { Button } from "../../components/ui/button";
@@ -25,6 +25,37 @@ interface RelatedPanelProps {
 const SectionHeading = ({ children }: { readonly children: string }): ReactElement => (
     <h3 className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{children}</h3>
 );
+
+/** The bordered card and table shell the security rows share. Rows are passed as children. */
+const SecurityTable = ({
+    children,
+    columns,
+    testId,
+}: {
+    readonly children: ReactNode;
+    readonly columns: ReadonlyArray<string>;
+    readonly testId: string;
+}): ReactElement => {
+    const t = useT();
+
+    return (
+        <Card className="overflow-hidden py-0">
+            <CardContent className="px-0">
+                <Table data-testid={testId}>
+                    <TableHeader>
+                        <TableRow>
+                            {columns.map((column) => (
+                                <TableHead key={column}>{column}</TableHead>
+                            ))}
+                            <TableHead aria-label={t("Actions")} />
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>{children}</TableBody>
+                </Table>
+            </CardContent>
+        </Card>
+    );
+};
 
 /**
  * The user's live sessions, with a per-row revoke. Revoke goes through the
@@ -297,47 +328,32 @@ export const UserSecurityPanel = ({
             {capabilities.passkey && passkeys !== null && passkeys.length === 0 && <p className="text-sm text-muted-foreground">{t("No passkeys.")}</p>}
 
             {capabilities.passkey && passkeys !== null && passkeys.length > 0 && (
-                <Card className="overflow-hidden py-0">
-                    <CardContent className="px-0">
-                        <Table data-testid="ud-passkeys-table">
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>{t("name")}</TableHead>
-                                    <TableHead>{t("created")}</TableHead>
-                                    <TableHead aria-label={t("Actions")} />
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {passkeys.map((passkey) => {
-                                    const id = formatCell(passkey["id"]);
+                <SecurityTable columns={[t("name"), t("created")]} testId="ud-passkeys-table">
+                    {passkeys.map((passkey) => {
+                        const id = formatCell(passkey["id"]);
 
-                                    return (
-                                        <TableRow data-testid={`ud-passkey-${id}`} key={id}>
-                                            <TableCell>{formatCell(passkey["name"]) || id}</TableCell>
-                                            <TableCell className="text-muted-foreground tabular-nums">
-                                                {formatTimestamp(passkey["createdAt"] as number)}
-                                            </TableCell>
-                                            <TableCell>
-                                                <Button
-                                                    data-testid={`ud-delete-passkey-${id}`}
-                                                    disabled={busy}
-                                                    onClick={() => {
-                                                        onDeletePasskey(id);
-                                                    }}
-                                                    size="xs"
-                                                    type="button"
-                                                    variant="ghost"
-                                                >
-                                                    {t("Delete")}
-                                                </Button>
-                                            </TableCell>
-                                        </TableRow>
-                                    );
-                                })}
-                            </TableBody>
-                        </Table>
-                    </CardContent>
-                </Card>
+                        return (
+                            <TableRow data-testid={`ud-passkey-${id}`} key={id}>
+                                <TableCell>{formatCell(passkey["name"]) || id}</TableCell>
+                                <TableCell className="text-muted-foreground tabular-nums">{formatTimestamp(passkey["createdAt"] as number)}</TableCell>
+                                <TableCell>
+                                    <Button
+                                        data-testid={`ud-delete-passkey-${id}`}
+                                        disabled={busy}
+                                        onClick={() => {
+                                            onDeletePasskey(id);
+                                        }}
+                                        size="xs"
+                                        type="button"
+                                        variant="ghost"
+                                    >
+                                        {t("Delete")}
+                                    </Button>
+                                </TableCell>
+                            </TableRow>
+                        );
+                    })}
+                </SecurityTable>
             )}
 
             {capabilities.apiKey && apiKeysLoadFailed && (
@@ -361,53 +377,36 @@ export const UserSecurityPanel = ({
             {capabilities.apiKey && keyRows !== null && keyRows.length === 0 && <p className="text-sm text-muted-foreground">{t("No API keys.")}</p>}
 
             {capabilities.apiKey && keyRows !== null && keyRows.length > 0 && (
-                <Card className="overflow-hidden py-0">
-                    <CardContent className="px-0">
-                        <Table data-testid="ud-api-keys-table">
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>{t("name")}</TableHead>
-                                    <TableHead>{t("Key")}</TableHead>
-                                    <TableHead>{t("created")}</TableHead>
-                                    <TableHead>{t("Expires")}</TableHead>
-                                    <TableHead aria-label={t("Actions")} />
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {keyRows.map((apiKey) => {
-                                    const id = formatCell(apiKey["id"]);
+                <SecurityTable columns={[t("name"), t("Key"), t("created"), t("Expires")]} testId="ud-api-keys-table">
+                    {keyRows.map((apiKey) => {
+                        const id = formatCell(apiKey["id"]);
 
-                                    return (
-                                        <TableRow data-testid={`ud-api-key-${id}`} key={id}>
-                                            <TableCell>{formatCell(apiKey["name"]) || id}</TableCell>
-                                            <TableCell className="font-mono text-muted-foreground">{formatCell(apiKey["start"]) || "—"}</TableCell>
-                                            <TableCell className="text-muted-foreground tabular-nums">
-                                                {formatTimestamp(apiKey["createdAt"] as number)}
-                                            </TableCell>
-                                            <TableCell className="text-muted-foreground tabular-nums">
-                                                {formatTimestamp(apiKey["expiresAt"] as number | null, t("Never"))}
-                                            </TableCell>
-                                            <TableCell>
-                                                <Button
-                                                    data-testid={`ud-revoke-api-key-${id}`}
-                                                    disabled={busy}
-                                                    onClick={() => {
-                                                        onRevokeApiKey(id);
-                                                    }}
-                                                    size="xs"
-                                                    type="button"
-                                                    variant="ghost"
-                                                >
-                                                    {t("Revoke")}
-                                                </Button>
-                                            </TableCell>
-                                        </TableRow>
-                                    );
-                                })}
-                            </TableBody>
-                        </Table>
-                    </CardContent>
-                </Card>
+                        return (
+                            <TableRow data-testid={`ud-api-key-${id}`} key={id}>
+                                <TableCell>{formatCell(apiKey["name"]) || id}</TableCell>
+                                <TableCell className="font-mono text-muted-foreground">{formatCell(apiKey["start"]) || "—"}</TableCell>
+                                <TableCell className="text-muted-foreground tabular-nums">{formatTimestamp(apiKey["createdAt"] as number)}</TableCell>
+                                <TableCell className="text-muted-foreground tabular-nums">
+                                    {formatTimestamp(apiKey["expiresAt"] as number | null, t("Never"))}
+                                </TableCell>
+                                <TableCell>
+                                    <Button
+                                        data-testid={`ud-revoke-api-key-${id}`}
+                                        disabled={busy}
+                                        onClick={() => {
+                                            onRevokeApiKey(id);
+                                        }}
+                                        size="xs"
+                                        type="button"
+                                        variant="ghost"
+                                    >
+                                        {t("Revoke")}
+                                    </Button>
+                                </TableCell>
+                            </TableRow>
+                        );
+                    })}
+                </SecurityTable>
             )}
         </div>
     );
