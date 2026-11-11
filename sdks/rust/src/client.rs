@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use serde_json::{json, Map, Value};
 
+use crate::delta::{resolve_delta, Resolved};
 use crate::offline::{random_id, same_shard, token_stamp, Identity, OfflineQueue, SettledHandler, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED};
 use crate::optimistic::{drop_confirmed_layers, fold, OptimisticState};
 pub use crate::submit::MutationSettled;
@@ -295,6 +296,11 @@ pub fn build_connect_frame(client_id: Option<&str>, context: Option<&Value>, tok
     frame.insert("id".into(), json!("connect"));
     frame.insert("type".into(), json!("connect"));
 
+    // `pageDelta` lets the server send a row change instead of a full snapshot; this
+    // client merges it (see `crate::delta`). `refreshBatch` is NOT announced: batchStart/
+    // batchEnd frames are not handled here.
+    frame.insert("caps".into(), json!(["pageDelta"]));
+
     if let Some(id) = client_id {
         frame.insert("clientId".into(), json!(id));
     }
@@ -401,6 +407,9 @@ pub(crate) struct Subscription {
     on_error: ErrorHandler,
     cursor: Option<Value>,
     epoch: Option<Value>,
+    /// Whether a value has been adopted from the server yet. A row change merges
+    /// into a base only once there is one; before that it is the legacy broadcast.
+    has_base: bool,
     /// The displayed value and its optimistic overlays. See `crate::optimistic`.
     pub(crate) state: OptimisticState,
 }
@@ -1098,6 +1107,7 @@ impl Client {
                 cursor: None,
                 epoch: None,
                 function_path: function_path.to_string(),
+                has_base: false,
                 on_data,
                 on_error,
                 shard_key: shard_key.map(str::to_string),
@@ -1242,9 +1252,9 @@ impl Client {
 
         match kind.as_str() {
             "data" | "delta" => {
-                let payload = match frame.get("data") {
-                    Some(Value::Null) | None => frame.get("delta").unwrap_or(&Value::Null),
-                    Some(inner) => inner,
+                let (payload, is_row_change_candidate) = match frame.get("data") {
+                    Some(Value::Null) | None => (frame.get("delta").unwrap_or(&Value::Null), true),
+                    Some(inner) => (inner, false),
                 };
                 let value = match decode_wire(payload) {
                     Ok(decoded) => decoded,
@@ -1267,7 +1277,24 @@ impl Client {
                 };
 
                 if let Some(entry) = self.subscriptions.get_mut(&id) {
+                    // A `data` frame replaces the base. A `delta` frame is merged into
+                    // the SERVER base, not the displayed value, which may carry an
+                    // optimistic overlay that is re-folded below.
+                    let value = if is_row_change_candidate {
+                        let base = entry.has_base.then_some(&entry.state.server_base);
+
+                        match resolve_delta(value, base) {
+                            Resolved::Adopt(adopted) => adopted,
+                            // Left untouched, cursor included: advancing past a change we
+                            // did not apply would hide the gap from a resume.
+                            Resolved::Keep => return Ok(Some(kind)),
+                        }
+                    } else {
+                        value
+                    };
+
                     advance(entry, &frame);
+                    entry.has_base = true;
                     entry.state.server_base = value;
 
                     // `cursor` is OPTIONAL on a data/delta frame. Advance the

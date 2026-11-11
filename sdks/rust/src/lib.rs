@@ -6,6 +6,7 @@
 //! socket library rather than inheriting ours.
 
 pub mod client;
+pub(crate) mod delta;
 pub mod key;
 pub mod offline;
 pub mod optimistic;

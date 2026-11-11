@@ -503,15 +503,33 @@ fn non_2xx_without_error_envelope_fails() {
     assert!(!coded(400));
 }
 
+/// A connect golden with the `pageDelta` capability laid over it.
+pub(crate) fn with_page_delta(golden: &Value) -> Value {
+    let mut frame = golden.clone();
+
+    frame["caps"] = json!(["pageDelta"]);
+
+    frame
+}
+
 fn client_frame_builders() {
     let document = fixture("ws-frames.json");
     let frames = &document["clientFrames"];
     let args = WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]);
 
-    assert_eq!(canonical(&build_connect_frame(Some("client-test"), None, None)), canonical(&frames["connect"]));
+    // Every connect announces `pageDelta` (and not `refreshBatch`, which this port
+    // does not handle), so the plain goldens are compared with `caps` laid over them.
+    assert_eq!(
+        canonical(&build_connect_frame(Some("client-test"), None, None)),
+        canonical(&frames["connect-with-page-delta-caps"])
+    );
+    assert_eq!(
+        canonical(&build_connect_frame(Some("client-test"), None, None)),
+        canonical(&with_page_delta(&frames["connect"]))
+    );
     assert_eq!(
         canonical(&build_connect_frame(Some("client-test"), Some(&json!({ "roomId": "general" })), None)),
-        canonical(&frames["connect-with-context"])
+        canonical(&with_page_delta(&frames["connect-with-context"]))
     );
     assert_eq!(
         canonical(&build_subscribe_frame("sub_1", "messages:list", &args, None, None, None).expect("build")),
@@ -610,6 +628,55 @@ fn server_frame_consumer() {
     assert_eq!(cancellations, 1, "serverFrames must carry one cancelling case");
 
     a_refused_payload_stays_on_its_own_subscription();
+    page_delta_frames_merge_into_the_cached_result();
+}
+
+/// Each `pageDeltaFrames` case seeds the subscription with `baseWire`, applies the
+/// row-change frame, and expects the merged value.
+fn page_delta_frames_merge_into_the_cached_result() {
+    let document = fixture("ws-frames.json");
+    let cases = document["pageDeltaFrames"].as_array().expect("pageDeltaFrames");
+
+    assert_eq!(cases.len(), 8, "pageDeltaFrames must carry the eight merge cases");
+
+    for case in cases {
+        let name = case["name"].as_str().unwrap_or("?");
+        let id = case["frame"]["id"].as_str().expect("frame id");
+        let mut client = Client::new("https://app.example", None);
+        let seen: Arc<Mutex<Vec<WireValue>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_handle = Arc::clone(&seen);
+        let subscribed = client.subscribe(
+            "messages:list",
+            WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
+            Some(Box::new(move |value| seen_handle.lock().expect("seen").push(value.clone()))),
+            None,
+        );
+
+        assert_eq!(subscribed, id, "{name}: the fixture frame targets the first subscription");
+
+        let seed = json!({ "id": id, "type": "data", "data": case["baseWire"] });
+
+        client.handle_frame(&seed.to_string()).expect("seed");
+        seen.lock().expect("seen").clear();
+
+        let kind = client.handle_frame(&case["frame"].to_string()).expect("handle");
+
+        assert_eq!(kind.as_deref(), case["expect"]["kind"].as_str(), "{name}");
+
+        let seen = seen.lock().expect("seen");
+
+        assert_eq!(seen.len(), 1, "onData should fire once for {name}");
+        assert_eq!(
+            canonical(&encode_wire(&seen[0]).expect("encode")),
+            canonical(&case["expect"]["valueWire"]),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn page_delta_frames_merge() {
+    page_delta_frames_merge_into_the_cached_result();
 }
 
 /// A `data` payload the codec refuses reaches THAT subscription's error callback
