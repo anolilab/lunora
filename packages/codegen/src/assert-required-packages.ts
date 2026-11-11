@@ -195,6 +195,5 @@ const assertRequiredPackages = (schema: SchemaIR, dependencies: ReadonlySet<stri
     );
 };
 
-export default assertRequiredPackages;
-export { requiredPackagesFor };
+export { assertRequiredPackages, requiredPackagesFor };
 export type { RequiredPackage, RequiredPackageSignals };
