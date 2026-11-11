@@ -942,6 +942,58 @@ private fun rowDeltaFramesMergeIntoTheBase() {
     check(seen.none { canonical(Wire.encode(it)) == canonical(change) }, "an unmergeable row change must not reach the caller")
 }
 
+/**
+ * An unmergeable row change poisons the subscription: later deltas neither publish nor move the
+ * resume cursor, and only a `data` frame or a resubscribe clears it.
+ */
+private fun unmergeableRowChangeFreezesTheCursor() {
+    covers("unmergeable_row_change_freezes_the_cursor")
+
+    val cases = fixture("ws-frames.json")["pageDeltaPoisonCases"] as List<*>
+
+    check(cases.size == 1, "pageDeltaPoisonCases must carry 1 case, got ${cases.size}")
+
+    for (entry in cases) {
+        val testCase = entry as Map<*, *>
+        val name = testCase["name"]
+        val client = Client("https://app.example")
+        val seen = mutableListOf<WireValue>()
+
+        client.attachSocket { }
+        client.subscribe("messages:list", null, { seen.add(it) })
+        client.handleFrame(Json.write(testCase["seedFrame"]))
+        seen.clear()
+
+        for ((index, stepEntry) in (testCase["steps"] as List<*>).withIndex()) {
+            val step = stepEntry as Map<*, *>
+            val label = "$name step ${index + 1}"
+            val resume = step["resume"] as? Map<*, *>
+
+            if (resume != null) {
+                val resent = mutableListOf<Map<String, Any?>>()
+
+                client.attachSocket { resent.add(it) }
+                client.resendSubscriptions()
+
+                val query = resent.first { it["type"] == "subscribe" }["query"] as Map<*, *>
+
+                check(number(query["sinceSeq"]) == number(resume["sinceSeq"]), "$label: sinceSeq ${query["sinceSeq"]}")
+                check(query["sinceEpoch"] == resume["sinceEpoch"], "$label: sinceEpoch ${query["sinceEpoch"]}")
+
+                continue
+            }
+
+            seen.clear()
+            client.handleFrame(Json.write(step["frame"]))
+            check(seen.size == number(step["publishes"])?.toInt(), "$label: publishes ${seen.size}")
+
+            if (step.containsKey("valueWire")) {
+                check(canonical(Wire.encode(seen[0])) == canonical(step["valueWire"]), "$label: valueWire")
+            }
+        }
+    }
+}
+
 private fun serverFrameConsumer() {
     covers("server_frame_consumer")
     covers("complete_frame_cancels_without_dropping_the_subscription")
@@ -1649,6 +1701,7 @@ fun main() {
     clientFrameBuilders()
     serverFrameConsumer()
     rowDeltaFramesMergeIntoTheBase()
+    unmergeableRowChangeFreezesTheCursor()
     subscriptionStreamYieldsFrameValuesInOrder()
     shapeSubscribeFrame()
     shapeSubscriptionsResendAfterReconnect()

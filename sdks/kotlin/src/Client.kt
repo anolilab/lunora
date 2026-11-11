@@ -245,6 +245,13 @@ class Client(
         var epoch: Any? = null
 
         /**
+         * Set when a row change could not be merged into the held base. Later deltas are then
+         * ignored, cursor included, so the resume position stays before the dropped change.
+         * Cleared by a `data` frame (a snapshot) or by a resubscribe, whose replay re-applies it.
+         */
+        var poisoned: Boolean = false
+
+        /**
          * The stable wire key of [args], computed once at subscribe time so a
          * write's optimistic targeting can compare without re-serialising every
          * subscription's args on every write.
@@ -1087,6 +1094,7 @@ class Client(
                     // every shape view subscribed to a socket that no longer
                     // exists — silently, and for the rest of the process's life.
                     subscriptions.map { (id, entry) ->
+                        entry.poisoned = false
                         buildSubscribeFrame(id, entry.functionPath, entry.args, null, entry.cursor, entry.epoch)
                     } +
                         shapes.map { (id, shape) ->
@@ -1145,6 +1153,13 @@ class Client(
 
                 synchronized(lock) {
                     subscriptions[id]?.let { entry ->
+                        // A snapshot is authoritative; a delta after an unmergeable one is dropped whole.
+                        if (isDelta) {
+                            if (entry.poisoned) return@let
+                        } else {
+                            entry.poisoned = false
+                        }
+
                         // The merge applies to the server base, never to the value the caller
                         // sees: the overlays are re-folded onto the result below.
                         val resolved = if (isDelta) {
@@ -1154,12 +1169,18 @@ class Client(
                         }
 
                         // An unmergeable row change keeps the previous value; see RowDelta.resolve.
-                        if (resolved !is RowDelta.Resolution.Publish) return@let
+                        // It also poisons the subscription so a later frame's cursor cannot skip it.
+                        if (resolved !is RowDelta.Resolution.Publish) {
+                            entry.poisoned = true
+
+                            return@let
+                        }
 
                         entry.state.serverBase = resolved.value
                         entry.state.hasBase = true
                         // Advanced only once the frame is applied: an unmergeable row change returned above
-                        // must leave the resume cursor where it was, so a reconnect replays it.
+                        // must leave the resume cursor where it was, and `poisoned` keeps later frames
+                        // from moving it, so a reconnect replays the dropped change.
                         advance(entry, frame)
                         // `cursor` is OPTIONAL on data/delta frames, and a frame
                         // that omits it — or sends an explicit null — must LEAVE
