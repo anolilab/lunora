@@ -9,7 +9,7 @@
 > must print nothing. Then confirm the excerpts in §1 match. Any mismatch is a STOP.
 
 **Baseline:** `4a7c48bfd` (2026-11-11)
-**Status:** IN PROGRESS (first part APPROVED, e4c02bfc9, PR #1533; addendum: terminal `restored` status per owner decision)
+**Status:** DONE (first part APPROVED e4c02bfc9, PR #1533; `restored` addendum APPROVED after 2 revisions: 2dfd74eb7, f171f942e (example regen), d906f6733 (snapshots); privacy workerd green; api:check clean; not pushed)
 **Priority / effort / risk:** P2 / S-M / LOW. **Category:** bug (data-subject rights). **Depends on:** none.
 
 ## 0. Headline finding
