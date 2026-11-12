@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { columnKind } from "../helpers";
+import { columnKind, declarationSiteFields } from "../helpers";
 
 /** Column kinds that carry an epoch-millisecond instant a TTL sweep can compare against `now`. */
 const TIME_KINDS = new Set(["date", "number", "timestamp"]);
@@ -45,7 +45,7 @@ const ttlFieldNotTimestamp: Lint = {
                 emit(ttlFieldNotTimestamp, {
                     cacheKey: `ttl_field_not_timestamp:${table.name}:${ttl.field}`,
                     detail: `Table "${table.name}" declares \`.ttl("${ttl.field}")\`, but "${ttl.field}" is a ${kind} column, not an epoch-millisecond timestamp.`,
-                    metadata: { field: ttl.field, kind, table: table.name },
+                    metadata: { ...declarationSiteFields(table), field: ttl.field, kind, table: table.name },
                 }),
             );
         }

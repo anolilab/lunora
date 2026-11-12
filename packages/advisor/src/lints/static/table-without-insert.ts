@@ -1,6 +1,7 @@
 import { isReachableSite } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a declared table that no function inserts into.
@@ -48,7 +49,7 @@ const tableWithoutInsert: Lint = {
                 emit(tableWithoutInsert, {
                     cacheKey: `table_without_insert:${table.name}`,
                     detail: `No function calls \`ctx.db.insert("${table.name}", …)\` — table "${table.name}" has no discovered insert path.`,
-                    metadata: { table: table.name },
+                    metadata: { ...declarationSiteFields(table), table: table.name },
                 }),
             );
     },

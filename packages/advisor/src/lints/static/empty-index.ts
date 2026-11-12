@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a secondary index declared with no columns (`.index("x", [])`). The
@@ -24,7 +25,7 @@ const emptyIndex: Lint = {
                     emit(emptyIndex, {
                         cacheKey: `empty_index:${table.name}:${index.name}`,
                         detail: `Index "${index.name}" on table "${table.name}" declares no columns.`,
-                        metadata: { index: index.name, table: table.name },
+                        metadata: { ...declarationSiteFields(index), index: index.name, table: table.name },
                     }),
                 ),
         ),
