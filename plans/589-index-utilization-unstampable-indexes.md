@@ -10,7 +10,7 @@
 > Expect no output.
 
 **Baseline:** `79b0c5a6a` (2026-11-12)
-**Status:** TODO
+**Status:** DONE — APPROVED; PR https://github.com/anolilab/lunora/pull/1576 (branch `fix/improve-589-index-utilization-unstampable`). Reviewer ran the shard-engine workerd project (235 passed).
 **Source:** row 51 of the 2026-11-11 audit (advisor lints).
 
 ## Status
