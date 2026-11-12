@@ -1,11 +1,11 @@
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import AdmZip from "adm-zip";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ConvexSnapshot } from "../../src/commands/convex-snapshot";
+import type { ConvexSnapshot, ConvexSnapshotTable } from "../../src/commands/convex-snapshot";
 import {
     CONVEX_STORAGE_TABLE,
     isConvexSystemTable,
@@ -15,15 +15,45 @@ import {
     resolveConvexSnapshot,
 } from "../../src/commands/convex-snapshot";
 
-/** Drain a table's lines into an array. */
-const lines = async (snapshot: ConvexSnapshot, file: string, table: string): Promise<string[]> => {
+/** The table entries a directory snapshot lists, as the importer receives them. */
+const listedTables = async (root: string): Promise<ConvexSnapshotTable[]> => (await listConvexSnapshotTables({ kind: "directory", root })) ?? [];
+
+/** The single table a one-table directory snapshot lists. */
+const listedTable = async (root: string): Promise<ConvexSnapshotTable> => {
+    const [entry] = await listedTables(root);
+
+    if (entry === undefined) {
+        throw new Error(`expected ${root} to list one table`);
+    }
+
+    return entry;
+};
+
+/** Drain a table's lines into an array. A directory table is read through its listing, as the importer does. */
+const readLines = async (snapshot: ConvexSnapshot, entry: ConvexSnapshotTable): Promise<string[]> => {
     const out: string[] = [];
 
-    for await (const line of readSnapshotLines(snapshot, { file, table })) {
+    for await (const line of readSnapshotLines(snapshot, entry)) {
         out.push(line);
     }
 
     return out;
+};
+
+/** Drain a table's lines into an array, looking a directory table up by name in its listing. */
+const lines = async (snapshot: ConvexSnapshot, file: string, table: string): Promise<string[]> => {
+    if (snapshot.kind === "directory") {
+        const tables = await listConvexSnapshotTables(snapshot);
+        const listed = tables?.find((entry) => entry.table === table);
+
+        if (listed === undefined) {
+            throw new Error(`table ${table} is not listed in the snapshot`);
+        }
+
+        return readLines(snapshot, listed);
+    }
+
+    return readLines(snapshot, { file, table });
 };
 
 /** Narrow a resolve result, failing loudly rather than propagating `undefined`. */
@@ -271,14 +301,29 @@ describe("convex snapshot reader", () => {
             expect.assertions(1);
 
             const root = await buildDirectory({ users: '{"_id":"a"}\n' });
-            const file = await realpath(join(root, "users", "documents.jsonl"));
+            const entry = await listedTable(root);
             const outside = join(workDir, "outside-after-listing.jsonl");
 
             await writeFile(outside, '{"leaked":true}\n', "utf8");
-            await rm(file);
-            await symlink(outside, file);
+            await rm(entry.file);
+            await symlink(outside, entry.file);
 
-            await expect(lines({ kind: "directory", root }, file, "users")).rejects.toMatchObject({ code: "ELOOP" });
+            await expect(readLines({ kind: "directory", root }, entry)).rejects.toMatchObject({ code: "ELOOP" });
+        });
+
+        it("refuses a table directory swapped for a symlink after it was listed", async () => {
+            expect.assertions(1);
+
+            const root = await buildDirectory({ users: '{"_id":"a"}\n' });
+            const entry = await listedTable(root);
+            const outsideDir = join(workDir, "outside-table");
+
+            await mkdir(outsideDir);
+            await writeFile(join(outsideDir, "documents.jsonl"), '{"leaked":true}\n', "utf8");
+            await rename(join(root, "users"), join(workDir, "users-moved"));
+            await symlink(outsideDir, join(root, "users"));
+
+            await expect(readLines({ kind: "directory", root }, entry)).rejects.toThrow(/changed after it was listed/);
         });
 
         it("yields nothing for an empty table file", async () => {

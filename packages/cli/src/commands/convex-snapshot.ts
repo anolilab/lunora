@@ -34,6 +34,13 @@ const isConvexSystemTable = (table: string): boolean => table.startsWith("_");
 interface ConvexSnapshotTable {
     /** Absolute file path (directory) or archive-relative entry (zip). */
     file: string;
+
+    /**
+     * Device and inode of the file that was checked. Set for directory tables: the reader refuses
+     * any file it opens that is not this one, which catches a swapped parent directory and a link
+     * that `O_NOFOLLOW` cannot see (platforms without it).
+     */
+    identity?: { dev: number; ino: number };
     /** Table name (directory / archive entry name). */
     table: string;
 }
@@ -114,7 +121,10 @@ const listDirectoryTables = async (root: string): Promise<ConvexSnapshotTable[]>
                 throw new Error(`table ${entry.name}: documents.jsonl resolves outside the snapshot directory`);
             }
 
-            found.push({ file: canonicalFile, table: entry.name });
+            // eslint-disable-next-line no-await-in-loop -- ditto; the identity is taken from the file that was checked
+            const { dev, ino } = await stat(canonicalFile);
+
+            found.push({ file: canonicalFile, identity: { dev, ino }, table: entry.name });
         }
     }
 
@@ -155,11 +165,23 @@ const listConvexSnapshotTables = async (snapshot: ConvexSnapshot): Promise<Conve
 /** Stream one table's `documents.jsonl` lines as the snapshot provides them. */
 const readSnapshotLines = async function* (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable): AsyncGenerator<string> {
     if (snapshot.kind === "directory") {
-        // Read the file that was checked, not a second open of its name: O_NOFOLLOW fails the
-        // open if the path was swapped for a symlink after listDirectoryTables resolved it.
+        const { identity } = tableEntry;
+
+        if (identity === undefined) {
+            throw new Error(`table ${tableEntry.table}: read without being listed in this snapshot`);
+        }
+
+        // Open the listed path without following a final symlink, then check the opened file is the one
+        // that was listed. The check is what covers a swapped parent directory, which O_NOFOLLOW cannot see.
         const handle = await open(tableEntry.file, constants.O_NOFOLLOW);
 
         try {
+            const opened = await handle.stat();
+
+            if (opened.dev !== identity.dev || opened.ino !== identity.ino) {
+                throw new Error(`table ${tableEntry.table}: documents.jsonl changed after it was listed`);
+            }
+
             for await (const raw of createInterface({
                 crlfDelay: Number.POSITIVE_INFINITY,
                 input: handle.createReadStream({ autoClose: false, encoding: "utf8" }),
