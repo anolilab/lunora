@@ -54,7 +54,7 @@
     },
     {
       "callsMail": false,
-      "emitsEvent": false,
+      "emitsEvent": true,
       "fanOut": false,
       "handlesErrors": false,
       "reachesOutbound": false,
@@ -80,7 +80,7 @@
     },
     {
       "callsMail": false,
-      "emitsEvent": false,
+      "emitsEvent": true,
       "fanOut": false,
       "handlesErrors": false,
       "reachesOutbound": false,
@@ -101,7 +101,7 @@
       "file": "channels",
       "hasEmailArg": false,
       "kind": "mutation",
-      "line": 101,
+      "line": 103,
       "visibility": "public"
     },
     {
@@ -127,7 +127,7 @@
       "file": "channels",
       "hasEmailArg": false,
       "kind": "query",
-      "line": 122,
+      "line": 126,
       "visibility": "public"
     },
     {
@@ -153,7 +153,7 @@
       "file": "channels",
       "hasEmailArg": false,
       "kind": "query",
-      "line": 136,
+      "line": 140,
       "visibility": "public"
     },
     {
