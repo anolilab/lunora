@@ -4849,13 +4849,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         async rank(tableName, indexName, rankOptions) {
             const global = globalWriterFor(tableName, "rank");
 
+            onIndexUse(tableName, indexName, "rank");
+
             if (global) {
                 onRead(tableName, SCAN_DEP);
 
                 return global.rank(tableName, indexName, rankOptions);
             }
-
-            onIndexUse(tableName, indexName, "rank");
 
             const definition = schema.tables[tableName];
 
@@ -5009,13 +5009,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             const global = globalWriterFor(tableName, "rankPage");
 
+            onIndexUse(tableName, indexName, "rank");
+
             if (global) {
                 onRead(tableName, SCAN_DEP);
 
                 return global.rankPage(tableName, indexName, rankPageOptions);
             }
-
-            onIndexUse(tableName, indexName, "rank");
 
             // Shared SQL/order/hydration lives in `computeRankPage`; the
             // user-facing surface projects only the hydrated docs.

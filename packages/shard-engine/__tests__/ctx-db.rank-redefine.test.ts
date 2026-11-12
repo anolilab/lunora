@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
@@ -103,5 +103,53 @@ describe("rankIndex — redefining sortBy on a populated shard", () => {
         expect(btreeSql()).not.toContain("DESC");
 
         await flipped.insert("players", { _id: "p4", name: "d", score: 5 }, { allowExplicitId: true });
+    });
+});
+
+describe("rank index use on a .global() table", () => {
+    const globalSchema: SchemaLike = {
+        tables: {
+            entries: {
+                indexes: [],
+                rankIndexes: [{ name: "leaderboard", on: "entries", sortBy: [{ direction: "desc", field: "score" }] }],
+                shape: { score: { kind: "number" } },
+                shardMode: { kind: "global" },
+            },
+        },
+    };
+
+    beforeEach(() => {
+        harness = createSqliteExec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("stamps the rank index once per call before routing to the global writer", async () => {
+        expect.assertions(3);
+
+        const onIndexUse = vi.fn<(table: string, index: string, kind: string) => void>();
+        const globalDb = {
+            rank: vi.fn(async () => {return { position: 1, total: 1 }}),
+            rankPage: vi.fn(async () => {return { entries: [], hasMore: false }}),
+        };
+        const writer = createShardContextDatabase({
+            clock: () => 1_700_000_000_000,
+            globalDb: globalDb as unknown as DatabaseWriterLike,
+            onIndexUse,
+            schema: globalSchema,
+            sql: harness.sql,
+        });
+
+        await writer.rank("entries", "leaderboard", { row: "e1" });
+        await writer.rankPage("entries", "leaderboard");
+
+        expect(globalDb.rank).toHaveBeenCalledTimes(1);
+        expect(globalDb.rankPage).toHaveBeenCalledTimes(1);
+        expect(onIndexUse.mock.calls).toStrictEqual([
+            ["entries", "leaderboard", "rank"],
+            ["entries", "leaderboard", "rank"],
+        ]);
     });
 });
