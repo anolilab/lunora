@@ -210,7 +210,7 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
 
                 {isMember && (
                     <span className="muted">
-                        {access?.memberCount ?? 0} {access?.memberCount === 1 ? "member" : "members"}
+                        {access.memberCount} {access.memberCount === 1 ? "member" : "members"}
                     </span>
                 )}
 

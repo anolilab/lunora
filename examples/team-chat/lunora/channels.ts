@@ -102,7 +102,7 @@ export const leave = mutation
     .use(rateLimit(mutationLimiter, "send", byUser))
     .input({ channelId: v.string().max(128) })
     .mutation(async ({ args: { channelId }, ctx }): Promise<void> => {
-        const userId = ctx.auth.userId;
+        const { userId } = ctx.auth;
 
         if (!userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to leave a channel");
@@ -135,7 +135,7 @@ export const membership = query
 /** Member ids and join times for a channel. Member-only, so a non-member cannot enumerate who is in it. */
 export const members = query
     .input({ channelId: v.string().max(128) })
-    .query(async ({ args: { channelId }, ctx }): Promise<Array<{ joinedAt: number; userId: string }>> => {
+    .query(async ({ args: { channelId }, ctx }): Promise<{ joinedAt: number; userId: string }[]> => {
         if (!ctx.auth.userId) {
             return [];
         }
@@ -147,5 +147,7 @@ export const members = query
             .withIndex("by_channel_user", (q) => q.eq("channelId", channelId))
             .collect();
 
-        return rows.map((row) => ({ joinedAt: row.joinedAt, userId: row.userId }));
+        return rows.map((row) => {
+            return { joinedAt: row.joinedAt, userId: row.userId };
+        });
     });

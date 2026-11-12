@@ -83,9 +83,9 @@ const Chat = ({ email, name, userId }: ChatProperties): ReactElement => {
                         // The creator joins right after create, with the new channel's shard key:
                         // membership is not written by `create` itself.
                         createChannel({ name: value })
-                            .then(async ({ name }) => {
-                                await joinChannel({ channelId: name }, { shardKey: name });
-                                setActive(name);
+                            .then(async (channel) => {
+                                await joinChannel({ channelId: channel.name }, { shardKey: channel.name });
+                                setActive(channel.name);
                                 input.value = "";
 
                                 return undefined;

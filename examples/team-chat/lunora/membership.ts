@@ -10,7 +10,7 @@ import type { ActionCtx, MutationCtx, QueryCtx } from "./_generated/server.js";
  * guard every channel procedure calls first.
  */
 export const requireMember = async (ctx: QueryCtx | MutationCtx | ActionCtx, channelId: string): Promise<void> => {
-    const userId = ctx.auth.userId;
+    const { userId } = ctx.auth;
 
     if (!userId) {
         throw new LunoraError("UNAUTHENTICATED", "sign in to use channels");
