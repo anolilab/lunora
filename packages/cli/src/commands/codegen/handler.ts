@@ -42,7 +42,7 @@ interface CodegenCommandOptions {
 
 /** The `--format json` payload: what codegen wrote, and what it has to say about it. */
 interface CodegenCommandData {
-    advisories: ReadonlyArray<{ detail: string; level: Finding["level"]; name: string; remediation: string }>;
+    advisories: ReadonlyArray<{ detail: string; level: Finding["level"]; name: string; remediation: string; suppressed?: Finding["suppressed"] }>;
     cronTriggers: ReadonlyArray<string>;
     /** ERROR-level advisories that made the run fail, when strict mode is on. */
     failedAdvisories: number;
@@ -106,6 +106,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
                 level: advisory.level,
                 name: advisory.name,
                 remediation: advisory.remediation,
+                suppressed: advisory.suppressed,
             };
         }),
         cronTriggers: result.cronTriggers,
