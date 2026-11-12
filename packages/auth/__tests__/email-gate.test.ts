@@ -292,6 +292,20 @@ describe("email-gate", () => {
             expect(merged.databaseHooks?.user?.create?.before).toBeTypeOf("function");
         });
 
+        it("classifies an address once when the existing user.update.before leaves it unchanged", async () => {
+            expect.assertions(2);
+
+            assertEmailAllowed.mockResolvedValueOnce(businessClassification);
+
+            const existingUpdate = vi.fn<UserUpdateBefore>(async () => {});
+            const merged = withEmailGate({ databaseHooks: { user: { update: { before: existingUpdate } } } }, {});
+
+            await getUpdateBefore(merged.databaseHooks!)({ email: "cto@acme-corp.example" }, null);
+
+            expect(assertEmailAllowed).toHaveBeenCalledTimes(1);
+            expect(existingUpdate).toHaveBeenCalledTimes(1);
+        });
+
         it("gates the address an existing user.update.before rewrites to, by mutation or by returned data", async () => {
             expect.assertions(4);
 

@@ -182,9 +182,14 @@ const withEmailGate = (options: BetterAuthOptions, config: EmailGateHookConfig =
         ? async (patch, context) => {
               await gateUpdate(patch, context);
 
+              const checkedEmail = patch.email;
               const result = await existingUpdate(patch, context);
+              const effective = effectiveUpdatePatch(result, patch);
 
-              await gateUpdate(effectiveUpdatePatch(result, patch), context);
+              // An unchanged address was already classified; re-checking it would repeat the MX lookup.
+              if (effective.email !== checkedEmail) {
+                  await gateUpdate(effective, context);
+              }
 
               return result;
           }
