@@ -75,6 +75,21 @@ don't override `executeSubscription`. Generated shards don't use it, and a
 `@lunora/client` subscription registers its function path as the `table`, so
 nothing addressed by a real table name reaches one.
 
+## When a re-run fails
+
+If a subscription's query throws when a write re-runs it, the subscriber receives an `error`
+for that subscription and the subscription stays registered. The shard then backs it off: a
+query that keeps failing is not re-run on every write, only after a delay that starts at one
+second and doubles per failed retry up to 60 seconds. The error frame carries that delay as
+`retryAfterMs`, and `@lunora/client` (and every framework binding built on it) re-subscribes
+once when it elapses. A successful re-run delivers data as usual and ends the backoff; a retry
+that fails again is answered with the next, longer delay. A data frame, an unsubscribe or a
+reconnect cancels a pending retry.
+
+Errors a retry cannot fix (access denied, a result over the size limit) carry no delay and end
+the subscription. The non-JS SDKs differ per language; see the capability matrix in
+`sdks/README.md`.
+
 ## Reconnect
 
 The client (`@lunora/client`) uses exponential backoff with jitter and
