@@ -1103,7 +1103,7 @@
         }
     },
     "subscriptionRetry": {
-        "$comment": "What a client that honours `error.retryAfterMs` does (protocol/README.md 5.2), as the reference `@lunora/client` does it. Setup: `sub_1` subscribes `messages:list` {\"channel\":\"general\"} on an open socket and receives `seedFrame`. `hintFrame` schedules exactly ONE re-subscribe of `sub_1`, `retryAfterMs` later; nothing is sent before that, and exactly `retryFrame` is sent at it: a COLD subscribe (no sinceSeq/sinceEpoch), because the retry asks for a fresh snapshot. A newer hint for the id (`laterHintFrame`) replaces the pending one. Each of `cancelFrames`, received while the retry is pending, cancels it: the server has answered. An unsubscribe, a socket close or open, and closing the client cancel it too. None of `noRetryFrames` schedules anything: no hint, a hint that is not a finite number >= 0, or a TOKEN_EXPIRED frame, which belongs to the socket and is never routed to a subscription. A port that ignores the field is conforming (the `error-retry-after` case in `serverFrames` is what it must still deliver); sdks/README.md records which ports honour it.",
+        "$comment": "What a client that honours `error.retryAfterMs` does (protocol/README.md 5.2), as the reference `@lunora/client` does it. Setup: `sub_1` subscribes `messages:list` {\"channel\":\"general\"} on an open socket and receives `seedFrame`. `hintFrame` schedules exactly ONE re-subscribe of `sub_1`, `retryAfterMs` later; nothing is sent before that, and exactly `retryFrame` is sent at it: a COLD subscribe (no sinceSeq/sinceEpoch), because the retry asks for a fresh snapshot. A newer hint for the id (`laterHintFrame`) replaces the pending one. Each of `cancelFrames`, received while the retry is pending, cancels it: the server has answered, and an error without a hint is how it ends a subscription a retry cannot fix. An unsubscribe, a socket close or open, and closing the client cancel it too. None of `noRetryFrames` schedules anything: no hint, a hint that is not a finite number >= 0, or a TOKEN_EXPIRED frame, which belongs to the socket and is never routed to a subscription. A port that ignores the field is conforming (the `error-retry-after` case in `serverFrames` is what it must still deliver); sdks/README.md records which ports honour it.",
         "subscriptionId": "sub_1",
         "seedFrame": { "id": "sub_1", "type": "data", "data": { "n": 1 }, "cursor": 12, "epoch": "e1" },
         "hintFrame": {
@@ -1128,7 +1128,11 @@
             { "name": "data", "frame": { "id": "sub_1", "type": "data", "data": { "n": 2 }, "cursor": 13, "epoch": "e1" } },
             { "name": "delta", "frame": { "id": "sub_1", "type": "delta", "delta": { "n": 2 }, "cursor": 13, "epoch": "e1" } },
             { "name": "resume", "frame": { "id": "sub_1", "type": "resume", "cursor": 13, "epoch": "e1" } },
-            { "name": "settled", "frame": { "id": "sub_1", "type": "settled", "cursor": 13, "epoch": "e1" } }
+            { "name": "settled", "frame": { "id": "sub_1", "type": "settled", "cursor": 13, "epoch": "e1" } },
+            {
+                "name": "error-without-hint",
+                "frame": { "id": "sub_1", "type": "error", "error": { "code": "SUBSCRIPTION_REFRESH_FAILED", "message": "refresh failed" } }
+            }
         ],
         "noRetryFrames": [
             {
