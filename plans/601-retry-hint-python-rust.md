@@ -138,7 +138,7 @@ modules with `#[test]` wrappers.
 
 ## 5. Steps
 
-Worktree: given in your dispatch message (`/Users/daniel.bannert/Projects/lunora-wt-sdk-retry-py-rust`).
+Worktree: given in your dispatch message (`<worktrees>/lunora-wt-sdk-retry-py-rust`).
 Work only inside it; prefix every shell call with `cd <worktree> &&`.
 
 ### Python

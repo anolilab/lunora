@@ -121,7 +121,7 @@ tests need no sleep.
 
 ## 5. Steps
 
-Worktree: given in your dispatch message (`/Users/daniel.bannert/Projects/lunora-wt-sdk-retry-java-swift`).
+Worktree: given in your dispatch message (`<worktrees>/lunora-wt-sdk-retry-java-swift`).
 Work only inside it; prefix every shell call with `cd <worktree> &&`.
 
 ### Java

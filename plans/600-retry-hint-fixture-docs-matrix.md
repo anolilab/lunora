@@ -6,7 +6,7 @@
 > `plans/README.md`; your reviewer maintains the index.
 >
 > **Drift check (run first)**:
-> `git -C /Users/daniel.bannert/Projects/lunora-wt-sdk-retry-fixture diff --stat 1f55a1679..HEAD -- protocol/fixtures/ws-frames.json packages/client/__tests__/protocol-conformance.test.ts sdks/README.md apps/docs/src/content/docs/concepts/realtime.mdx shared/ai-knowledge-data.ts`
+> `git -C <worktrees>/lunora-wt-sdk-retry-fixture diff --stat 1f55a1679..HEAD -- protocol/fixtures/ws-frames.json packages/client/__tests__/protocol-conformance.test.ts sdks/README.md apps/docs/src/content/docs/concepts/realtime.mdx shared/ai-knowledge-data.ts`
 > → prints nothing. If it prints anything, STOP.
 
 **Baseline:** `1f55a1679` (head of `fix/improve-546-backoff-client-retry`, PR #1550), 2026-11-12
@@ -104,9 +104,9 @@ subscriber` (≈ line 46-76) explains re-execution, then `## Reconnect` (≈ lin
 
 ## 5. Steps
 
-Worktree: `/Users/daniel.bannert/Projects/lunora-wt-sdk-retry-fixture` (branch
+Worktree: `<worktrees>/lunora-wt-sdk-retry-fixture` (branch
 `feat/improve-546-retry-fixture`, already checked out, `pnpm install` already done). Work only
-inside it. Prefix every shell call with `cd /Users/daniel.bannert/Projects/lunora-wt-sdk-retry-fixture &&`.
+inside it. Prefix every shell call with `cd <worktrees>/lunora-wt-sdk-retry-fixture &&`.
 
 ### Step 1: Add the `serverFrames` case
 
