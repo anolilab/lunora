@@ -1831,6 +1831,9 @@ public final class Client {
 
                     if (entry != null && delay != null) {
                         pendingRetries.put(id, System.nanoTime() + delay);
+                    } else if (entry != null) {
+                        // A hint-less error ends the subscription: drop an earlier hint's retry.
+                        pendingRetries.remove(id);
                     }
 
                     if (entry != null && entry.onError != null) {
