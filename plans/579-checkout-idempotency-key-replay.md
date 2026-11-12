@@ -1,7 +1,7 @@
 # Plan 579 — A second identical checkout gets a fresh session when Stripe replays a finished one
 
 **Baseline:** `4121b67cc` (2026-11-12; `packages/payment` is unchanged since `79b0c5a6a`)
-**Status:** TODO (owner decision recorded 2026-11-12, see section 4)
+**Status:** DONE (APPROVED; PR #1571, branch fix/improve-579-checkout-replay)
 
 > **Executor instructions**: Follow this plan step by step. Run every verification command and
 > confirm the expected result before moving on. If anything in "STOP conditions" (section 8)

@@ -2,7 +2,7 @@
 
 **Baseline:** `8e435c6bc` (tip of `fix/improve-568-sdk-source-ref`, PR #1561; stacked on it because
 both change `vendor.ts`). `packages/cli/src/commands/sdk` is otherwise unchanged on alpha `4121b67cc`.
-**Status:** TODO (owner decision recorded 2026-11-12, see section 4)
+**Status:** DONE (APPROVED after 1 revision; PR #1575, branch fix/improve-569-sdk-stale-files, stacked on #1561)
 
 > **Executor instructions**: Follow this plan step by step. Run every verification command and
 > confirm the expected result before moving on. If anything in "STOP conditions" (section 8)
