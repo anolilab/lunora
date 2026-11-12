@@ -8,7 +8,7 @@
 > `fix/improve-588-idor-identity-scope` (`598dad74b`). `git log --oneline -1` → `598dad74b`.
 
 **Baseline:** `598dad74b` (2026-11-12)
-**Status:** BLOCKED — Step 6 STOP: with `requireMember(ctx, message.channelId)` before the sink, the matcher still reports `storage_key_from_user_args` at `attachmentUrl` (key read off the message row fetched by a caller-supplied id; the matcher does not model a dominating membership check). Local branch `feat/improve-599-team-chat-membership` (commits `a803ce2ca`, `05187b238`, `a9d4356a0`, `945ee1515`, `96051efbb`), not pushed; the original directive is still in place with a now-stale reason.
+**Status:** DONE — APPROVED; PR https://github.com/anolilab/lunora/pull/1593 (stacked on #1592). Workerd proves leave stops live delivery and non-members are refused; suppression removed after plan 608 (+ destructured-guard fix `aea84a007`).
 **Source:** follow-up to row 50 of the 2026-11-11 audit; owner decision (procedure-level checks, option 1).
 
 ## Status
