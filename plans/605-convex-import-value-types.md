@@ -12,7 +12,7 @@
 > live code. If they do not match, treat it as a STOP condition.
 
 **Baseline:** `4121b67cc` (2026-11-12)
-**Status:** TODO
+**Status:** DONE (PR https://github.com/anolilab/lunora/pull/1585, commit 36d056f17; revision 1 exempted `{ $storage: id }` storage references)
 
 ## Status
 
