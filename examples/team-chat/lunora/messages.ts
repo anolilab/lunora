@@ -4,6 +4,7 @@ import { rateLimit } from "lunorash/ratelimit";
 import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { ActionCtx, MutationCtx } from "./_generated/server.js";
 import { action, mutation, query, v } from "./_generated/server.js";
+import { requireMember } from "./membership.js";
 import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /**
@@ -49,6 +50,8 @@ export const list = query.input({ channelId: v.string().max(128) }).query(async 
         return [];
     }
 
+    await requireMember(ctx, channelId);
+
     return ctx.db
         .query("messages")
         .withIndex("by_channel", (q) => q.eq("channelId", channelId))
@@ -64,7 +67,13 @@ export const list = query.input({ channelId: v.string().max(128) }).query(async 
 export const search = query
     .input({ channelId: v.string().max(128), text: v.string().max(200) })
     .query(async ({ args: { channelId, text }, ctx }): Promise<Document_<"messages">[]> => {
-        if (!ctx.auth.userId || !text.trim()) {
+        if (!ctx.auth.userId) {
+            return [];
+        }
+
+        await requireMember(ctx, channelId);
+
+        if (!text.trim()) {
             return [];
         }
 
@@ -99,15 +108,18 @@ export const attachmentUrl = action
             throw new LunoraError("UNAUTHENTICATED", "sign in to download");
         }
 
-        // Note what this is and is not. The key now comes off a row, so no
-        // caller can name an object — that hole is closed. It is NOT a
-        // membership check: the caller also picks the `shardKey`, and every
-        // channel here is readable by every signed-in user anyway. Give this app
-        // private channels and the check that the caller may read THIS channel
-        // belongs right here, before the key is resolved.
+        // The key comes off a row, so no caller can name an object. The
+        // membership check runs on the message's own channel before the key is
+        // read, so a non-member cannot sign anything in a channel they have not joined.
         const message = await ctx.db.get("messages", messageId);
 
-        if (!message?.attachmentKey) {
+        if (!message) {
+            throw new LunoraError("NOT_FOUND", "no attachment on that message");
+        }
+
+        await requireMember(ctx, message.channelId);
+
+        if (!message.attachmentKey) {
             throw new LunoraError("NOT_FOUND", "no attachment on that message");
         }
 
@@ -133,6 +145,8 @@ export const send = mutation
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to post");
         }
+
+        await requireMember(ctx, channelId);
 
         if (!content.trim() && !attachmentKey) {
             throw new LunoraError("BAD_REQUEST", "a message needs text or an attachment");
@@ -167,6 +181,8 @@ export const requestAttachmentUpload = action
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to upload");
         }
+
+        await requireMember(ctx, channelId);
 
         if (!ALLOWED_ATTACHMENT_TYPES.has(contentType)) {
             throw new LunoraError("BAD_REQUEST", `unsupported attachment type: ${contentType}`);
