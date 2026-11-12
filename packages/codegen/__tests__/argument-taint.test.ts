@@ -213,10 +213,25 @@ describe("argument-taint", () => {
             expect(isScopedByIdentity(sinkArgument(`const me = await ctx.db.users.get(ctx.auth.userId);\nSINK(\`\${me._id}/\${args.k}\`);`))).toBe(true);
         });
 
-        it("accepts a key read off a database row, the owned-record shape the storage remediation names", () => {
+        it("accepts a key read off a database row fetched by the caller's identity", () => {
+            expect.assertions(2);
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row.key}/\${args.k}\`);`),
+                ),
+            ).toBe(true);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`const uid = ctx.auth.userId;\nconst row = await ctx.db.files.findFirst({ where: { ownerId: uid } });\nSINK(row.key);`),
+                ),
+            ).toBe(true);
+        });
+
+        it("rejects a key read off a database row the caller selected by id", () => {
             expect.assertions(1);
 
-            expect(isScopedByIdentity(sinkArgument(`const row = await ctx.db.get("files", args.id);\nSINK(row.key);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const row = await ctx.db.get("files", args.id);\nSINK(row.key);`))).toBe(false);
         });
 
         it("rejects a key scoped only by a server-trusted ctx value that names no caller", () => {

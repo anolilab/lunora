@@ -101,12 +101,23 @@ describe("discoverStorageKeyAccesses", () => {
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
-    it("ignores a key read off a database row the caller selected by id", () => {
+    it("reports a key read off a database row the caller selected by id", () => {
         expect.assertions(1);
 
         write(
             "owned-row.ts",
             `export const read = query(async ({ ctx, args }) => { const row = await ctx.db.get("files", args.id); return ctx.storage.avatars.get(row.key); });`,
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("ignores a key read off a database row fetched by the caller's identity", () => {
+        expect.assertions(1);
+
+        write(
+            "identity-row.ts",
+            `export const read = query(async ({ ctx, args }) => { const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId, id: args.id } }); return ctx.storage.avatars.get(row.key); });`,
         );
 
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);

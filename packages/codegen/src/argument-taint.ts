@@ -1,4 +1,4 @@
-import type { BindingElement, Identifier, Node as TsNode, VariableDeclaration } from "ts-morph";
+import type { BindingElement, CallExpression, Identifier, Node as TsNode, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { bindingKeyName, descendantsOfKind } from "./discover/ast";
@@ -213,40 +213,79 @@ const valueIdentifiersIn = (node: TsNode): Identifier[] =>
         );
     });
 
+/** The identifiers `node` reads a value through; `node` itself when it is a bare identifier. */
+const valueIdentifiersOf = (node: TsNode): Identifier[] => (Node.isIdentifier(node) ? [node] : valueIdentifiersIn(node));
+
+/** The outermost member/element-access (and non-null) chain that `node` heads, `node` itself when nothing extends it. */
+const outermostChainOf = (node: TsNode): TsNode => {
+    let outermost: TsNode = node;
+
+    for (;;) {
+        const parent = outermost.getParent();
+
+        if (
+            !(
+                (Node.isPropertyAccessExpression(parent) || Node.isElementAccessExpression(parent) || Node.isNonNullExpression(parent)) &&
+                parent.getExpression() === outermost
+            )
+        ) {
+            return outermost;
+        }
+
+        outermost = parent;
+    }
+};
+
+/** The `CallExpression` that invokes `chain` (`chain(…)`), or `undefined` when `chain` is only read. */
+const invokedBy = (chain: TsNode): CallExpression | undefined => {
+    const parent = chain.getParent();
+
+    return Node.isCallExpression(parent) && parent.getExpression() === chain ? parent : undefined;
+};
+
+/**
+ * Whether a database read is bound to the caller: one of its arguments names the
+ * caller's identity, directly or through a local whose initializer does
+ * (`ctx.db.files.findFirst({ where: { ownerId: uid } })` with `uid = ctx.auth.userId`).
+ * A read keyed by a caller-supplied id (`ctx.db.get("files", args.id)`) is not: the
+ * row it returns is whichever one the caller pointed at, so a key read off it is
+ * caller-chosen.
+ */
+const isIdentityBoundRead = (call: CallExpression): boolean =>
+    call.getArguments().some((argument) =>
+        valueIdentifiersOf(argument).some((identifier) => {
+            if (contextTrustPathOf(outermostChainOf(identifier))?.[0] === "auth") {
+                return true;
+            }
+
+            const initializer = trustedInitializerOf(identifier);
+
+            return initializer !== undefined && valueIdentifiersOf(initializer).some((inner) => contextTrustPathOf(outermostChainOf(inner))?.[0] === "auth");
+        }),
+    );
+
 /**
  * True when `node` is, or textually contains, a value reference to a key source the
  * caller cannot choose: the caller's identity (a ctx path whose first segment is
- * `auth`, `ctx.auth.userId`) or a value read from the database (`ctx.db.…`, such as
- * the row of an owned record). Narrower than {@link referencesContext}:
+ * `auth`, `ctx.auth.userId`), or a value read from the database through a read that
+ * is itself bound to that identity (see {@link isIdentityBoundRead}). A row fetched
+ * by a caller-supplied id is not such a source. Narrower than {@link referencesContext}:
  * `ctx.env.PREFIX` and `ctx.now` are server-trusted but name neither a caller nor a
  * stored record.
  */
-const referencesTrustedKeySource = (node: TsNode): boolean => {
-    const identifiers = Node.isIdentifier(node) ? [node] : valueIdentifiersIn(node);
-
-    return identifiers.some((identifier) => {
-        let outermost: TsNode = identifier;
-
-        for (;;) {
-            const parent = outermost.getParent();
-
-            if (
-                !(
-                    (Node.isPropertyAccessExpression(parent) || Node.isElementAccessExpression(parent) || Node.isNonNullExpression(parent)) &&
-                    parent.getExpression() === outermost
-                )
-            ) {
-                break;
-            }
-
-            outermost = parent;
-        }
-
+const referencesScopedKeySource = (node: TsNode): boolean =>
+    valueIdentifiersOf(node).some((identifier) => {
+        const outermost = outermostChainOf(identifier);
         const root = contextTrustPathOf(outermost)?.[0];
 
-        return root === "auth" || root === "db";
+        if (root === "auth") {
+            return true;
+        }
+
+        const call = root === "db" ? invokedBy(outermost) : undefined;
+
+        return call !== undefined && isIdentityBoundRead(call);
     });
-};
 
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
 export const referencesArgs = (node: TsNode): boolean => referencesBinding(node, "args");
@@ -398,22 +437,25 @@ export const isScopedByContext = (node: TsNode): boolean => {
 
 /**
  * Whether `node` is scoped to a key source the caller cannot choose: the caller's
- * identity, or a value read from the database (an owned record's field). It runs
- * the same direct, one-hop and composed-local stages as {@link isScopedByContext},
- * asking {@link referencesTrustedKeySource} instead of {@link referencesContext}.
- * Only the IDOR sinks (kv, storage, container keys) use it: a key built from an env
- * value (`${ctx.env.PREFIX}/${args.key}`) or `ctx.now` is still shared or
- * caller-chosen, so it is not scoped. Browser URLs keep the broader check, because a
- * server-pinned host (`${ctx.env.CDN}/…`) is exactly the safe shape there.
+ * identity, or a database read bound to that identity (an owned record's field read
+ * off `ctx.db…findFirst({ where: { ownerId: ctx.auth.userId } })`). A row fetched by
+ * a caller-supplied id (`ctx.db.get("files", args.id)`) does not scope a key: the
+ * caller picked the row. It runs the same direct, one-hop and composed-local stages
+ * as {@link isScopedByContext}, asking {@link referencesScopedKeySource} instead of
+ * {@link referencesContext}. Only the IDOR sinks (kv, storage, container keys) use
+ * it: a key built from an env value (`${ctx.env.PREFIX}/${args.key}`) or `ctx.now`
+ * is still shared or caller-chosen, so it is not scoped. Browser URLs keep the
+ * broader check, because a server-pinned host (`${ctx.env.CDN}/…`) is exactly the
+ * safe shape there.
  */
 export const isScopedByIdentity = (node: TsNode): boolean => {
-    if (referencesTrustedKeySource(node)) {
+    if (referencesScopedKeySource(node)) {
         return true;
     }
 
     const initializer = trustedInitializerOf(node);
 
-    if (initializer !== undefined && referencesTrustedKeySource(initializer)) {
+    if (initializer !== undefined && referencesScopedKeySource(initializer)) {
         return true;
     }
 
@@ -423,7 +465,7 @@ export const isScopedByIdentity = (node: TsNode): boolean => {
     return identifiers.some((identifier) => {
         const boundInitializer = trustedInitializerOf(identifier);
 
-        return boundInitializer !== undefined && referencesTrustedKeySource(boundInitializer);
+        return boundInitializer !== undefined && referencesScopedKeySource(boundInitializer);
     });
 };
 
