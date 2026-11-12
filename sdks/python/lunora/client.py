@@ -1441,6 +1441,9 @@ class LunoraClient:
         if sub is not None and (hint := _retry_after_ms(env)) is not None:
             self._pending_retries[sub_id] = time.monotonic() + hint / 1000
             return {"kind": "error", "id": sub_id, "code": code, "message": message, "retryAfterMs": hint}
+        if sub is not None:
+            # A hint-less error is how the server ends a subscription, so a retry an earlier hint scheduled is cancelled.
+            self._pending_retries.pop(sub_id, None)
         return {"kind": "error", "id": sub_id, "code": code, "message": message}
 
     def _advance(self, frame: dict, kind: str, deferred: list) -> dict:
