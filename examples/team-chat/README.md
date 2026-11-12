@@ -31,7 +31,21 @@ pnpm --filter @lunora-example/team-chat run deploy
   capability's `ctx.*` surface and its admin/studio surface together — see the
   note below on what going hand-rolled costs you.
 - **`authorizeShard`.** Shard keys come from the client, so the Worker decides
-  who may address which shard. Here: any signed-in member, no anonymous caller.
+  who may address which shard. Here: any signed-in user, no anonymous caller.
+  That boundary admits every signed-in user, so membership is enforced inside
+  each procedure that reads or writes channel data. A signed-in non-member can
+  open a socket to a channel's shard and subscribe, but every query there is
+  refused with `FORBIDDEN` and every mutation too, so they receive no channel data.
+- **Membership, checked in the shard.** `members` lives in each channel's own
+  shard, so the check and the data it protects sit in one serialized place, and a
+  `leave` is a write there that re-runs the subscriptions of anyone still listening.
+  Creator membership is established by the create-then-join flow: the client calls
+  `channels.join` right after `channels.create`, with that channel's shard key.
+  `create` itself does not write a membership row. `channels.join` is idempotent,
+  and `channels.leave` removes the caller's row; removing the last member is
+  allowed and the channel stays. `channels.membership` (any signed-in user) reports
+  whether the caller is in a channel and how many members it has, and
+  `channels.members` lists them, to members only.
 - **Presence without a sweeper.** Tabs heartbeat; the query returns every row and
   the client applies the TTL. Nothing runs on an alarm, and no `Date.now()`
   filter sits inside a live query waiting for someone else to write.
@@ -136,6 +150,11 @@ Drop `shardKey` and the runtime has to fan out across every channel's DO.
 
 ## Not included
 
-No private channels, no threads, no rate limits. For private channels, gate
-`authorizeShard` on membership instead of on "is signed in"; for write limits,
-add `.use(rateLimit(...))` from `@lunora/ratelimit` to `messages.send`.
+No private channels, no threads, no rate limits. Every channel is listed to every
+signed-in user, and any of them can join one. A private channel needs an
+invite flow and a list that hides channels from non-members; `join` alone is not
+enough. Joining also does not check that the channel exists in the root
+`channels` table, because a shard cannot read that table. A membership row for
+an unknown name grants access to nothing, and `messages.send` already accepts any
+channel id a signed-in caller names. For write limits, add `.use(rateLimit(...))`
+from `@lunora/ratelimit` to `messages.send`.
