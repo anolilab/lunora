@@ -1,6 +1,7 @@
 import type { Stripe } from "stripe";
 import { describe, expect, it, vi } from "vitest";
 
+import { LunoraPaymentError } from "../../src/errors";
 import { money } from "../../src/money";
 import type { StripeClientLike } from "../../src/providers/stripe";
 import { createStripeAdapter } from "../../src/providers/stripe";
@@ -157,6 +158,104 @@ describe("stripe adapter", () => {
 
         expect((checkout?.args[1] as { idempotencyKey?: string }).idempotencyKey).toBe("checkout:stripe:user_1");
         expect((checkout?.args[0] as { metadata?: Record<string, string> }).metadata?.referenceId).toBe("user_1");
+    });
+
+    describe("checkout replay of a finished session", () => {
+        const request = {
+            cancelUrl: "https://x/cancel",
+            idempotencyKey: "checkout:stripe:user_1",
+            mode: "subscription" as const,
+            priceId: "price_1",
+            referenceId: "user_1",
+            successUrl: "https://x/ok",
+        };
+
+        /** A client whose `checkout.sessions.create` answers with the queued responses, in order. */
+        const replayingClient = (calls: RecordedCall[], responses: { id: string; status?: string; url: string }[]): Stripe => {
+            const queue = [...responses];
+
+            return {
+                checkout: {
+                    sessions: {
+                        create: async (parameters: Record<string, unknown>, options?: { idempotencyKey?: string }) => {
+                            calls.push({ args: [parameters, options], name: "checkout" });
+
+                            return queue.shift();
+                        },
+                    },
+                },
+            } as unknown as Stripe;
+        };
+
+        it.each(["complete", "expired"])("retries once under a derived key when the replayed session is %s", async (status) => {
+            expect.assertions(4);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createStripeAdapter({
+                client: () =>
+                    replayingClient(calls, [
+                        { id: "cs_old", status, url: "https://checkout.test/old" },
+                        { id: "cs_new", status: "open", url: "https://checkout.test/new" },
+                    ]),
+                webhookSecret: "whsec",
+            });
+
+            const result = await adapter.createCheckout(request);
+
+            expect(result).toEqual({ id: "cs_new", provider: "stripe", url: "https://checkout.test/new" });
+
+            const checkouts = calls.filter((call) => call.name === "checkout");
+
+            expect(checkouts).toHaveLength(2);
+            expect((checkouts[1]?.args[1] as { idempotencyKey?: string }).idempotencyKey).toBe("checkout:stripe:user_1:cs_old");
+            expect(checkouts[1]?.args[0]).toEqual(checkouts[0]?.args[0]);
+        });
+
+        it("returns an open session from a single call", async () => {
+            expect.assertions(2);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createStripeAdapter({
+                client: () => replayingClient(calls, [{ id: "cs_1", status: "open", url: "https://checkout.test/1" }]),
+                webhookSecret: "whsec",
+            });
+
+            await expect(adapter.createCheckout(request)).resolves.toEqual({ id: "cs_1", provider: "stripe", url: "https://checkout.test/1" });
+            expect(calls.filter((call) => call.name === "checkout")).toHaveLength(1);
+        });
+
+        it("rejects with PROVIDER_ERROR when the retry also replays a finished session", async () => {
+            expect.assertions(3);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createStripeAdapter({
+                client: () =>
+                    replayingClient(calls, [
+                        { id: "cs_old", status: "complete", url: "https://checkout.test/old" },
+                        { id: "cs_older", status: "expired", url: "https://checkout.test/older" },
+                    ]),
+                webhookSecret: "whsec",
+            });
+
+            const failure = await adapter.createCheckout(request).catch((error: unknown) => error);
+
+            expect(failure).toBeInstanceOf(LunoraPaymentError);
+            expect(failure).toMatchObject({ code: "PROVIDER_ERROR" });
+            expect(calls.filter((call) => call.name === "checkout")).toHaveLength(2);
+        });
+
+        it("does not retry a finished session when the request carries no idempotency key", async () => {
+            expect.assertions(2);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createStripeAdapter({
+                client: () => replayingClient(calls, [{ id: "cs_old", status: "complete", url: "https://checkout.test/old" }]),
+                webhookSecret: "whsec",
+            });
+
+            await expect(adapter.createCheckout({ ...request, idempotencyKey: undefined })).resolves.toMatchObject({ id: "cs_old" });
+            expect(calls.filter((call) => call.name === "checkout")).toHaveLength(1);
+        });
     });
 
     it("forwards a checkout expiry in the seconds Stripe takes, and none when unset", async () => {
