@@ -5,8 +5,8 @@
  * streaming primary path; the ZIP reader (via `adm-zip`) is the convenience
  * surface and reads entries in full.
  */
-import { createReadStream } from "node:fs";
-import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -155,8 +155,19 @@ const listConvexSnapshotTables = async (snapshot: ConvexSnapshot): Promise<Conve
 /** Stream one table's `documents.jsonl` lines as the snapshot provides them. */
 const readSnapshotLines = async function* (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable): AsyncGenerator<string> {
     if (snapshot.kind === "directory") {
-        for await (const raw of createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: createReadStream(tableEntry.file, { encoding: "utf8" }) })) {
-            yield raw;
+        // Read the file that was checked, not a second open of its name: O_NOFOLLOW fails the
+        // open if the path was swapped for a symlink after listDirectoryTables resolved it.
+        const handle = await open(tableEntry.file, constants.O_NOFOLLOW);
+
+        try {
+            for await (const raw of createInterface({
+                crlfDelay: Number.POSITIVE_INFINITY,
+                input: handle.createReadStream({ autoClose: false, encoding: "utf8" }),
+            })) {
+                yield raw;
+            }
+        } finally {
+            await handle.close();
         }
 
         return;

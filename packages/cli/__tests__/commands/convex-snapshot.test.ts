@@ -267,6 +267,20 @@ describe("convex snapshot reader", () => {
             ]);
         });
 
+        it("refuses a table file swapped for a symlink after it was listed", async () => {
+            expect.assertions(1);
+
+            const root = await buildDirectory({ users: '{"_id":"a"}\n' });
+            const file = await realpath(join(root, "users", "documents.jsonl"));
+            const outside = join(workDir, "outside-after-listing.jsonl");
+
+            await writeFile(outside, '{"leaked":true}\n', "utf8");
+            await rm(file);
+            await symlink(outside, file);
+
+            await expect(lines({ kind: "directory", root }, file, "users")).rejects.toMatchObject({ code: "ELOOP" });
+        });
+
         it("yields nothing for an empty table file", async () => {
             expect.assertions(1);
 
