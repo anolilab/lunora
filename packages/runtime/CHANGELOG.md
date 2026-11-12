@@ -1,3 +1,7 @@
+## @lunora/runtime [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.285...@lunora/runtime@1.0.0-alpha.286) (2026-11-12)
+
+- feat(sdk): merge row-delta frames into list results in all eight ports (#1553)
+
 ## @lunora/runtime [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.284...@lunora/runtime@1.0.0-alpha.285) (2026-11-11)
 
 - feat(auth): add API keys via the apiKey() plugin (#1526)
