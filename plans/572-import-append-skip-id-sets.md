@@ -1,7 +1,7 @@
 # Plan 572 — `append` imports stop building id sets nobody reads
 
 **Baseline:** `79b0c5a6a` (2026-11-11), applied on top of plan 565's commit
-**Status:** TODO
+**Status:** DONE (APPROVED after 1 revision; PR #1559, branch fix/improve-565-import-unkeyed-rows)
 
 > **Executor instructions**: Follow this plan step by step. Run every verification command and
 > confirm the expected result before moving on. If anything in "STOP conditions" (section 8)

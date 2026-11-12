@@ -1,7 +1,7 @@
 # Plan 567 — Bare Firestore documents carrying `__name__` import instead of crashing
 
 **Baseline:** `79b0c5a6a` (2026-11-11), applied on top of plan 566's commit
-**Status:** TODO
+**Status:** DONE (APPROVED; PR #1560, branch fix/improve-566-firestore-reader)
 
 > **Executor instructions**: Follow this plan step by step. Run every verification command and
 > confirm the expected result before moving on. If anything in "STOP conditions" (section 8)

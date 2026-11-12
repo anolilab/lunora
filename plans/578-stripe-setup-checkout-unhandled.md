@@ -1,7 +1,7 @@
 # Plan 578 — A setup-mode Stripe Checkout is not recorded as a captured payment
 
 **Baseline:** `79b0c5a6a` (2026-11-11)
-**Status:** TODO
+**Status:** DONE (APPROVED; PR #1558, branch fix/improve-578-stripe-setup-checkout)
 
 > **Executor instructions**: Follow this plan step by step. Run every verification command and
 > confirm the expected result before moving on. If anything in "STOP conditions" (section 8)
