@@ -260,6 +260,14 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
     supersession chain) ordinary rows rather than special cases: there is
     nothing to remap, so there is no ordering problem to solve.
 
+    **`lunora import` refuses values it would change.** It stops at the first
+    one, naming the table, line and field: an Int64 outside ±(2^53−1), which a
+    JavaScript number would round; bytes and NaN/Infinity floats, which the
+    export encodes as `{"$bytes": …}` or `{"$float": …}`; and any table of a
+    pre-2026 export whose `generated_schema.jsonl` declares Int64, bytes or
+    non-finite floats. Store such values as strings in Convex before exporting,
+    or re-export with a current Convex.
+
     **File storage needs the opt-in.** `lunora import` skips the `_storage`
     table by default (those rows describe blobs, not application data). To
     migrate the files too (uploading every blob to R2 with a sha256 + size

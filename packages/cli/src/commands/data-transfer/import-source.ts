@@ -17,6 +17,160 @@ import { readImportSourceMapping } from "./sources/mapping";
 import { listSupabaseTables } from "./sources/supabase";
 import { readStorageMetadata } from "./storage-blobs";
 
+const DOCUMENTS_JSONL_RE = /documents\.jsonl$/;
+
+/**
+ * Pre-2026 Convex exports write Int64, bytes and non-finite floats as plain
+ * strings, and only the table's `generated_schema.jsonl` says which string is
+ * which. Whole-token matching keeps `normalfloat64` (an ordinary finite float)
+ * from tripping it.
+ */
+const LEGACY_LOSSY_SHAPE_RE = /(?:^|[^\w-])(?:int64|bytes|float64|NaN|-?inf|unknown)(?:$|\W)/;
+
+/** Source text of a number that is a Float64, not an Int64: it carries a dot or an exponent. */
+const FLOAT_TEXT_RE = /[.e]/i;
+
+/**
+ * An Int64 that a JavaScript number cannot hold exactly. The reviver leaves this
+ * where the rounded number would have been, so the refusal can name the field.
+ */
+class UnsafeInt64 {
+    public readonly source: string;
+
+    public constructor(source: string) {
+        this.source = source;
+    }
+}
+
+/**
+ * Convex's lossless format writes Int64 as a bare integer and Float64 with a dot
+ * or exponent, so past 2^53 the source text is the only place the two differ.
+ */
+const parseConvexLine = (line: string): unknown =>
+    JSON.parse(line, (_key: string, value: unknown, context?: { source?: string }) => {
+        if (typeof value === "number" && Number.isInteger(value) && !Number.isSafeInteger(value)) {
+            if (typeof context?.source === "string" && FLOAT_TEXT_RE.test(context.source)) {
+                return value;
+            }
+
+            // A missing source text fails closed: treat the value as an Int64.
+            return new UnsafeInt64(context?.source ?? String(value));
+        }
+
+        return value;
+    });
+
+interface LossyValue {
+    path: string;
+    reason: string;
+}
+
+/** The first value in a parsed row the import would change, with its field path. */
+const findLossyValue = (value: unknown, path: string): LossyValue | undefined => {
+    if (value instanceof UnsafeInt64) {
+        return { path, reason: `holds the Int64 ${value.source}, which a JavaScript number cannot represent exactly` };
+    }
+
+    let children: ReadonlyArray<readonly [string, unknown]>;
+
+    if (Array.isArray(value)) {
+        children = value.map((element, index): [string, unknown] => [`${path}[${String(index)}]`, element]);
+    } else {
+        if (typeof value !== "object" || value === null) {
+            return undefined;
+        }
+
+        const entries = Object.entries(value);
+        const [only] = entries;
+
+        // `{ $storage: id }` is the storage-reference shape `storage-remap.ts` rewrites, not an encoding to refuse.
+        if (entries.length === 1 && only?.[0] === "$storage" && typeof only[1] === "string") {
+            return undefined;
+        }
+
+        const encoded = entries.find(([key]) => key.startsWith("$"));
+
+        // Convex forbids field names starting with `$`, so one can only be an encoding.
+        if (encoded !== undefined) {
+            return { path, reason: `holds a Convex-encoded value (${encoded[0]}: bytes or a NaN/Infinity float), which lunora import cannot carry` };
+        }
+
+        children = entries.map(([key, child]): [string, unknown] => [path === "" ? key : `${path}.${key}`, child]);
+    }
+
+    for (const [childPath, child] of children) {
+        const hit = findLossyValue(child, childPath);
+
+        if (hit !== undefined) {
+            return hit;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * Refuse a table whose pre-2026 `generated_schema.jsonl` declares values the
+ * import would store as plain strings. Checked before its first row is read, so
+ * nothing from the table reaches the endpoint.
+ */
+const refuseLegacyLossyTable = async (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable): Promise<void> => {
+    const sidecar: ConvexSnapshotTable = {
+        file: tableEntry.file.replace(DOCUMENTS_JSONL_RE, "generated_schema.jsonl"),
+        table: tableEntry.table,
+    };
+
+    let present: boolean;
+
+    if (snapshot.kind === "zip") {
+        present = snapshot.zip.getEntry(sidecar.file) !== null;
+    } else {
+        const info = await stat(sidecar.file).catch(() => undefined);
+
+        present = info?.isFile() === true;
+    }
+
+    if (!present) {
+        return;
+    }
+
+    let first: string | undefined;
+
+    for await (const raw of readSnapshotLines(snapshot, sidecar)) {
+        const line = raw.trim();
+
+        if (line.length > 0) {
+            first = line;
+            break;
+        }
+    }
+
+    if (first === undefined) {
+        return;
+    }
+
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(first);
+    } catch (error: unknown) {
+        throw new LunoraError(
+            "INTERNAL",
+            `${tableEntry.table}/generated_schema.jsonl line 1: invalid JSON — ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error },
+        );
+    }
+
+    if (typeof parsed === "string" && parsed !== "uniform" && LEGACY_LOSSY_SHAPE_RE.test(parsed)) {
+        const shape = parsed.length > 300 ? `${parsed.slice(0, 300)}…` : parsed;
+
+        throw new LunoraError(
+            "INTERNAL",
+            `${tableEntry.table}/generated_schema.jsonl: this table was exported in Convex's pre-2026 format, which writes Int64, bytes and NaN/Infinity values as plain strings that only this shape can decode (${shape}). lunora import would store them as strings; re-export from Convex (current exports are lossless) and import that.`,
+        );
+    }
+};
+
 /**
  * Stream one `documents.jsonl` as `{ table, doc }` NDJSON lines, tallying what
  * it emitted into `sourceRows`.
@@ -30,6 +184,9 @@ import { readStorageMetadata } from "./storage-blobs";
  */
 // eslint-disable-next-line func-style -- a generator cannot be written as an arrow function; `function*` is the only form.
 async function* wrapJsonlLines(snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable, sourceRows: Map<string, number>): AsyncGenerator<string> {
+    // Before the first row, so a refused table contributes nothing to the import.
+    await refuseLegacyLossyTable(snapshot, tableEntry);
+
     let lineNumber = 0;
 
     for await (const raw of readSnapshotLines(snapshot, tableEntry)) {
@@ -44,12 +201,21 @@ async function* wrapJsonlLines(snapshot: ConvexSnapshot, tableEntry: ConvexSnaps
         let document: unknown;
 
         try {
-            document = JSON.parse(line);
+            document = parseConvexLine(line);
         } catch (error: unknown) {
             throw new LunoraError(
                 "INTERNAL",
                 `${tableEntry.table}/documents.jsonl line ${String(lineNumber)}: invalid JSON — ${error instanceof Error ? error.message : String(error)}`,
                 { cause: error },
+            );
+        }
+
+        const lossy = findLossyValue(document, "");
+
+        if (lossy !== undefined) {
+            throw new LunoraError(
+                "INTERNAL",
+                `${tableEntry.table}/documents.jsonl line ${String(lineNumber)}: field \`${lossy.path}\` ${lossy.reason}; refusing rather than changing it. Store the value as a string in Convex before exporting, or drop the field.`,
             );
         }
 
