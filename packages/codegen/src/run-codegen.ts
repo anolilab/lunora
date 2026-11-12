@@ -11,6 +11,7 @@ import type { Project } from "ts-morph";
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import { advisorEvidenceOf } from "./advisor-evidence";
 import { applyAdvisorPolicy } from "./advisor-floor";
+import { applySuppressions } from "./advisor-suppressions";
 import type { CallSites } from "./architecture";
 import { buildArchitecture, emitArchitectureModule } from "./architecture";
 import assertNoNamespaceCollisions from "./assert-namespace-collisions";
@@ -605,26 +606,31 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const advisories =
         advisorContext === undefined
             ? []
-            : applyAdvisorPolicy(options.projectRoot, [
-                  ...runAdvisor(advisorContext, { source: "static" }),
-                  ...discoverUnregisteredProcedures(project, lunoraDirectory, {
-                      // Workflows, queues, agents and containers record no file in
-                      // their IR — their `name` is the addressable identity — so
-                      // they key on the export name alone.
-                      byName: new Set([...workflows, ...queues, ...agents, ...containers].map((entry) => entry.exportName)),
-                      byPath: new Set([...functions, ...mutators, ...shapes, ...migrations].map((entry) => `${entry.filePath}:${entry.exportName}`)),
-                  }),
-                  ...discoverUnreadableArguments(project, lunoraDirectory),
-                  // The third, and the output-side twin of the second: a return
-                  // type codegen could render as neither a name nor a structure,
-                  // so `api.ts` says `unknown` where the runtime returns a shape.
-                  // Collected by the discovery pass above — the signal
-                  // ("expansion produced nothing") exists only at the moment of
-                  // the fallback, so it cannot be re-derived here.
-                  ...erasedReturnFindings(erased, lunoraDirectory),
-                  // A wrangler.jsonc queue rename the registry cannot route as written.
-                  ...queueAliasFindings(queues, options.wranglerQueueProducers),
-              ]);
+            : applySuppressions(
+                  project,
+                  options.projectRoot,
+                  lunoraDirectory,
+                  applyAdvisorPolicy(options.projectRoot, [
+                      ...runAdvisor(advisorContext, { source: "static" }),
+                      ...discoverUnregisteredProcedures(project, lunoraDirectory, {
+                          // Workflows, queues, agents and containers record no file in
+                          // their IR — their `name` is the addressable identity — so
+                          // they key on the export name alone.
+                          byName: new Set([...workflows, ...queues, ...agents, ...containers].map((entry) => entry.exportName)),
+                          byPath: new Set([...functions, ...mutators, ...shapes, ...migrations].map((entry) => `${entry.filePath}:${entry.exportName}`)),
+                      }),
+                      ...discoverUnreadableArguments(project, lunoraDirectory),
+                      // The third, and the output-side twin of the second: a return
+                      // type codegen could render as neither a name nor a structure,
+                      // so `api.ts` says `unknown` where the runtime returns a shape.
+                      // Collected by the discovery pass above — the signal
+                      // ("expansion produced nothing") exists only at the moment of
+                      // the fallback, so it cannot be re-derived here.
+                      ...erasedReturnFindings(erased, lunoraDirectory),
+                      // A wrangler.jsonc queue rename the registry cannot route as written.
+                      ...queueAliasFindings(queues, options.wranglerQueueProducers),
+                  ]),
+              );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
     // emitted into the generated ShardDO's `rlsMetadata()` override. Statically

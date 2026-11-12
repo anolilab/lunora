@@ -1,6 +1,7 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { suppressionRuleOf } from "../advisor-suppressions";
 import type { ProcedureMiddlewareIR } from "../ir";
 import { argumentNames, procedureArgumentObjects } from "../procedure-argument-objects";
 import { declarationLineOf, descendantsOfKind, findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
@@ -710,6 +711,11 @@ const exemptionOf = (declaration: VariableDeclaration): { exempt: boolean; exemp
         const rest = body.slice(EXEMPT_DIRECTIVE.length);
 
         if (WORD_CHARACTER.test(rest.charAt(0))) {
+            continue;
+        }
+
+        // A rule-scoped directive is an inline finding suppression (advisor-suppressions.ts), not a procedure exemption.
+        if (suppressionRuleOf(rest) !== undefined) {
             continue;
         }
 
