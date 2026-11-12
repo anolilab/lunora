@@ -10,7 +10,7 @@
 > Expect no output.
 
 **Baseline:** `79b0c5a6a` (2026-11-12)
-**Status:** TODO
+**Status:** DONE — APPROVED; PR https://github.com/anolilab/lunora/pull/1577 (branch `fix/improve-591-numeric-thresholds`).
 **Source:** row 53 of the 2026-11-11 audit (advisor lints).
 
 ## Status
