@@ -229,4 +229,66 @@ describe("lunora cloudflare ai-gateway", () => {
         expect(outcome.document?.data?.gatewayId).toBe("demo-app");
         expect(outcome.document?.data?.action).toBe("planned");
     });
+
+    it("--env writes the gateway vars into that environment's block and keeps its existing vars", async () => {
+        expect.assertions(3);
+
+        writeFileSync(join(workdir, "wrangler.jsonc"), `{ "name": "demo-app", "env": { "staging": { "vars": { "KEEP": "1" } } } }`, "utf8");
+
+        await runAiGatewayCommand({ cwd: workdir, env: "staging", environment: ENVIRONMENT, fetch: fakeFetch(404).fetch, logger: recordingLogger().logger });
+
+        const parsed = parseJsonc(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as {
+            env: Record<string, { vars: Record<string, unknown> }>;
+            vars?: Record<string, unknown>;
+        };
+
+        expect(parsed.env["staging"]?.vars).toStrictEqual({ KEEP: "1", LUNORA_AI_GATEWAY_ACCOUNT_ID: "acc123", LUNORA_AI_GATEWAY_ID: "demo-app" });
+        expect(parsed.vars).toBeUndefined();
+        expect(parsed.env).toHaveProperty("staging");
+    });
+
+    it("--env --dry-run reports the keys it would write and leaves the file unchanged", async () => {
+        expect.assertions(3);
+
+        const config = `{ "name": "demo-app", "env": { "staging": { "vars": { "KEEP": "1" } } } }`;
+
+        writeFileSync(join(workdir, "wrangler.jsonc"), config, "utf8");
+
+        const { calls, fetch } = fakeFetch(404);
+        const result = await runAiGatewayCommand({ cwd: workdir, dryRun: true, env: "staging", environment: {}, fetch, logger: recordingLogger().logger });
+
+        expect(result.data?.varsWritten).toStrictEqual(["LUNORA_AI_GATEWAY_ID"]);
+        expect(calls).toHaveLength(0);
+        expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(config);
+    });
+
+    it("--env naming an environment absent from wrangler.jsonc fails as usage and does not create it", async () => {
+        expect.assertions(4);
+
+        const config = `{ "name": "demo-app", "env": { "staging": { "vars": { "KEEP": "1" } } } }`;
+
+        writeFileSync(join(workdir, "wrangler.jsonc"), config, "utf8");
+
+        const { calls, fetch } = fakeFetch(404);
+        const { lines, logger } = recordingLogger();
+        const result = await runAiGatewayCommand({ cwd: workdir, env: "prod", environment: ENVIRONMENT, fetch, logger });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(result.error).toContain("env.prod");
+        expect(calls).toHaveLength(0);
+        expect(lines.join("\n")).toContain("env.prod");
+    });
+
+    it("without --env, warns once naming every environment when the top-level vars are written", async () => {
+        expect.assertions(3);
+
+        writeFileSync(join(workdir, "wrangler.jsonc"), `{ "name": "demo-app", "env": { "staging": { "vars": {} }, "production": { "vars": {} } } }`, "utf8");
+
+        const { lines, logger } = recordingLogger();
+        const result = await runAiGatewayCommand({ cwd: workdir, environment: ENVIRONMENT, fetch: fakeFetch(404).fetch, logger });
+
+        expect(result.code).toBe(0);
+        expect(readVariables(workdir)["LUNORA_AI_GATEWAY_ID"]).toBe("demo-app");
+        expect(lines.filter((line) => line.startsWith("warn: ") && line.includes("--env <name>") && line.includes("staging, production"))).toHaveLength(1);
+    });
 });
