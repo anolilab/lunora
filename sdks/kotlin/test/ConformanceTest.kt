@@ -1723,6 +1723,10 @@ fun main() {
     // stays the wire-protocol suite it has always been.
     runOptimisticOfflineCases()
 
+    // The subscription-retry cases (the live-query retry hint), in their own file for the same
+    // reason.
+    runSubscriptionRetryCases()
+
     assertManifestCovered()
 
     println("OK — $checks assertions")
