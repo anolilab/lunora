@@ -21,7 +21,7 @@ const seedMemoryDatabase = (): Record<string, unknown[]> => {
 };
 
 describe("withEmailGate — better-auth round trip", () => {
-    const buildAuth = (database: Record<string, unknown[]>): any =>
+    const buildAuth = (database: Record<string, unknown[]>) =>
         createAuth(
             withEmailGate(
                 {

@@ -181,12 +181,22 @@ describe("email-gate", () => {
         });
 
         it("ignores a patch that does not change the address", async () => {
-            expect.assertions(3);
+            expect.assertions(2);
 
             const update = getUpdateBefore(emailGateDatabaseHooks({}));
 
             await expect(update({ name: "Ada" }, null)).resolves.toBeUndefined();
-            await expect(update({ email: "" }, null)).resolves.toBeUndefined();
+            expect(assertEmailAllowed).not.toHaveBeenCalled();
+        });
+
+        it.each([[""], [42], [null]])("rejects a supplied address that is not a non-empty string (%j) without consulting the policy", async (email) => {
+            expect.assertions(3);
+
+            const update = getUpdateBefore(emailGateDatabaseHooks({}));
+            const rejection = update({ email } as unknown as Parameters<UserUpdateBefore>[0], null);
+
+            await expect(rejection).rejects.toBeInstanceOf(APIError);
+            await expect(rejection).rejects.toMatchObject({ body: { code: "VALIDATION_ERROR" } });
             expect(assertEmailAllowed).not.toHaveBeenCalled();
         });
 
@@ -280,6 +290,54 @@ describe("email-gate", () => {
             expect(order).toStrictEqual(["gate", "existing"]);
             expect(getBefore(merged.databaseHooks!)).toBeTypeOf("function");
             expect(merged.databaseHooks?.user?.create?.before).toBeTypeOf("function");
+        });
+
+        it("gates the address an existing user.update.before rewrites to, by mutation or by returned data", async () => {
+            expect.assertions(4);
+
+            assertEmailAllowed
+                .mockResolvedValueOnce(businessClassification)
+                .mockRejectedValueOnce(new LunoraError("EMAIL_DOMAIN_BLOCKED", "blocked"))
+                .mockResolvedValueOnce(businessClassification)
+                .mockRejectedValueOnce(new LunoraError("EMAIL_DOMAIN_BLOCKED", "blocked"));
+
+            const mutating = withEmailGate(
+                {
+                    databaseHooks: {
+                        user: {
+                            update: {
+                                before: async (patch) => {
+                                    Object.assign(patch, { email: "spammer@mailinator.com" });
+                                },
+                            },
+                        },
+                    },
+                },
+                {},
+            );
+            const returning = withEmailGate(
+                {
+                    databaseHooks: {
+                        user: {
+                            update: {
+                                before: async () => {
+                                    return { data: { email: "spammer@mailinator.com" } };
+                                },
+                            },
+                        },
+                    },
+                },
+                {},
+            );
+
+            await expect(getUpdateBefore(mutating.databaseHooks!)({ email: "cto@acme-corp.example" }, null)).rejects.toMatchObject({
+                body: { code: "EMAIL_DOMAIN_BLOCKED" },
+            });
+            await expect(getUpdateBefore(returning.databaseHooks!)({ email: "cto@acme-corp.example" }, null)).rejects.toMatchObject({
+                body: { code: "EMAIL_DOMAIN_BLOCKED" },
+            });
+            expect(assertEmailAllowed).toHaveBeenNthCalledWith(2, "spammer@mailinator.com", expect.anything());
+            expect(assertEmailAllowed).toHaveBeenNthCalledWith(4, "spammer@mailinator.com", expect.anything());
         });
 
         it("keeps an existing user.update.after untouched", () => {
