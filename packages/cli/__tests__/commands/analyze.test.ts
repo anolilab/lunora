@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -36,12 +36,16 @@ describe("lunora analyze", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-cli-analyze-"));
         buildOut = mkdtempSync(join(tmpdir(), "lunora-cli-analyze-out-"));
-        // Fake worker bundle: a big entry + a small chunk + a _generated/ file.
-        writeFileSync(join(buildOut, "worker.js"), "x".repeat(3000));
-        writeFileSync(join(buildOut, "chunk.js"), "x".repeat(200));
-        mkdirSync(join(buildOut, "lunora", "_generated"), { recursive: true });
-        writeFileSync(join(buildOut, "lunora", "_generated", "api.ts"), "x".repeat(500));
+        // Fake worker bundle: one output plus its source map, which must not count toward the total.
+        writeFileSync(join(buildOut, "index.js"), "x".repeat(3000));
+        writeFileSync(join(buildOut, "index.js.map"), "x".repeat(5000));
     });
+
+    const writeMetafile = (inputs: Record<string, number>): void => {
+        const inputEntries = Object.fromEntries(Object.entries(inputs).map(([path, bytes]) => [path, { bytesInOutput: bytes }]));
+
+        writeFileSync(join(buildOut, "bundle-meta.json"), JSON.stringify({ outputs: { "index.js": { inputs: inputEntries } } }), "utf8");
+    };
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
@@ -49,18 +53,49 @@ describe("lunora analyze", () => {
     });
 
     describe("lunora analyze", () => {
-        it("walks the supplied outdir and reports sizes + _generated files", async () => {
+        it("sizes source modules from the esbuild metafile and excludes source maps from the total", async () => {
             expect.hasAssertions();
 
+            writeMetafile({
+                "lunora/_generated/server.ts": 700,
+                "node_modules/x/index.js": 500,
+                "src/server.ts": 1800,
+            });
             const { logger } = recordingLogger();
 
             const result = await runAnalyzeCommand({ cwd: workdir, inspectOnly: buildOut, logger });
 
             expect(result.code).toBe(0);
-            expect(result.report?.totalFiles).toBe(3);
-            expect(result.report?.totalBytes).toBe(3700);
-            expect(result.report?.topModules[0]?.path).toBe("worker.js");
-            expect(result.report?.generatedFiles.map((f) => f.path)).toEqual([join("lunora", "_generated", "api.ts")]);
+            expect(result.report?.breakdown).toBe("metafile");
+            expect(result.report?.totalFiles).toBe(1);
+            expect(result.report?.totalBytes).toBe(3000);
+            expect(result.report?.topModules[0]).toStrictEqual({ path: "src/server.ts", sizeBytes: 1800 });
+            expect(result.report?.generatedFiles).toStrictEqual([{ path: "lunora/_generated/server.ts", sizeBytes: 700 }]);
+        });
+
+        it("falls back to the output files and warns when wrangler wrote no metafile", async () => {
+            expect.hasAssertions();
+
+            const { logger, recorded } = recordingLogger();
+
+            const result = await runAnalyzeCommand({ cwd: workdir, inspectOnly: buildOut, logger });
+
+            expect(result.report?.breakdown).toBe("output-files");
+            expect(result.report?.topModules).toStrictEqual([{ path: "index.js", sizeBytes: 3000 }]);
+            expect(result.report?.generatedFiles).toStrictEqual([]);
+            expect(recorded.warnings).toHaveLength(1);
+        });
+
+        it("does not count a path that merely contains _generated as generated", async () => {
+            expect.hasAssertions();
+
+            writeMetafile({ "src/not_generated_here.ts": 900 });
+            const { logger } = recordingLogger();
+
+            const result = await runAnalyzeCommand({ cwd: workdir, inspectOnly: buildOut, logger });
+
+            expect(result.report?.topModules[0]?.path).toBe("src/not_generated_here.ts");
+            expect(result.report?.generatedFiles).toStrictEqual([]);
         });
 
         // The document itself is `defineHandler`'s (see `__tests__/util/command.test.ts`);
@@ -92,15 +127,15 @@ describe("lunora analyze", () => {
                 expect(result.code).toBe(0);
                 // Not one byte: stdout belongs to the single JSON document.
                 expect(written.join("")).toBe("");
-                expect(result.report?.totalFiles).toBe(3);
-                expect(result.report?.topModules[0]?.path).toBe("worker.js");
+                expect(result.report?.totalFiles).toBe(1);
+                expect(result.report?.topModules[0]?.path).toBe("index.js");
             } finally {
                 spy.mockRestore();
             }
         });
 
         it("invokes wrangler dry-run with --outdir when no inspectOnly is given", async () => {
-            expect.assertions(6);
+            expect.assertions(7);
 
             const { logger } = recordingLogger();
 
@@ -117,6 +152,7 @@ describe("lunora analyze", () => {
             expect(argv).toContain("deploy");
             expect(argv).toContain("--dry-run");
             expect(argv).toContain("--outdir");
+            expect(argv).toContain("--metafile");
         });
 
         it("launches wrangler through npx when the project declares npm", async () => {
