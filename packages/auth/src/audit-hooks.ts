@@ -54,9 +54,9 @@ interface AuthAuditHookConfig extends AppendAuthAuditOptions {
 interface AuditHookContext {
     body?: Record<string, unknown>;
     context?: {
-        newSession?: { session?: { userId?: string }; user?: { email?: string; id?: string } } | null;
+        newSession?: { session?: { impersonatedBy?: string; userId?: string }; user?: { email?: string; id?: string } } | null;
         returned?: unknown;
-        session?: { session?: { userId?: string }; user?: { email?: string; id?: string } } | null;
+        session?: { session?: { impersonatedBy?: string; userId?: string }; user?: { email?: string; id?: string } } | null;
     };
     headers?: Headers;
     path?: string;
@@ -287,9 +287,24 @@ const resolveIp = (context: AuditHookContext, trustProxyHeaders: boolean | undef
     return header(context, "x-forwarded-for")?.split(",")[0]?.trim();
 };
 
-/** Resolve actor id/email from the freshly-created session (sign-in/up) or the existing session. */
+const stringOf = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
+
+const fieldOf = (value: unknown, key: string): unknown =>
+    typeof value === "object" && value !== null && key in value ? (value as Record<string, unknown>)[key] : undefined;
+
+/**
+ * Resolve actor id/email from the freshly-created session (sign-in/up) or the existing session.
+ * An impersonated session names the administrator in `impersonatedBy`, and that is the actor: its
+ * `user` is the impersonated account. The administrator's email is not on the session, so none is recorded.
+ */
 const resolveActor = (context: AuditHookContext): { actorEmail?: string; actorId?: string } => {
     const source = context.context?.newSession ?? context.context?.session;
+    const impersonator = stringOf(source?.session?.impersonatedBy);
+
+    if (impersonator !== undefined) {
+        return { actorId: impersonator };
+    }
+
     const actorId = source?.user?.id ?? source?.session?.userId;
     const actorEmail = source?.user?.email;
 
@@ -351,11 +366,6 @@ const resolveTargetEmail = (context: AuditHookContext, event: AuthAuditEvent): s
 
     return candidate.length > MAX_TARGET_EMAIL_LENGTH ? candidate.slice(0, MAX_TARGET_EMAIL_LENGTH) : candidate;
 };
-
-const stringOf = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
-
-const fieldOf = (value: unknown, key: string): unknown =>
-    typeof value === "object" && value !== null && key in value ? (value as Record<string, unknown>)[key] : undefined;
 
 /**
  * The subject of an `admin-*` action: the account the operator acted on, so the row says

@@ -559,6 +559,34 @@ describe("auth audit trail", () => {
             expect(entry?.detail).toStrictEqual({ path: "/api/auth/admin/stop-impersonating", targetUserId: "user_target" });
         });
 
+        it("names the administrator as actor when impersonation ends, and the impersonated user as target", () => {
+            expect.assertions(2);
+
+            const entry = buildAuditEntry({
+                context: {
+                    session: { session: { impersonatedBy: "admin_1", userId: "user_target" }, user: { email: "target@example.com", id: "user_target" } },
+                },
+                path: "/api/auth/admin/stop-impersonating",
+            });
+
+            expect(entry).toMatchObject({ actorId: "admin_1", detail: { targetUserId: "user_target" } });
+            expect(entry?.actorEmail).toBeUndefined();
+        });
+
+        it("names the administrator as actor when impersonation starts, not the new impersonated session's user", () => {
+            expect.assertions(1);
+
+            const entry = buildAuditEntry({
+                body: { userId: "user_target" },
+                context: {
+                    newSession: { session: { impersonatedBy: "admin_1", userId: "user_target" }, user: { id: "user_target" } },
+                },
+                path: "/api/auth/admin/impersonate-user",
+            });
+
+            expect(entry?.actorId).toBe("admin_1");
+        });
+
         it("does not add targetUserId to a non-admin event", () => {
             expect.assertions(1);
 
