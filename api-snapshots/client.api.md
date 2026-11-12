@@ -2117,6 +2117,12 @@ class LunoraAdminClient extends LunoraClient {
 const isLunoraAdminClient: (client: LunoraClient) => client is LunoraAdminClient;
 ```
 
+### `requireAdminAuthClient` (const)
+
+```ts
+const requireAdminAuthClient: (client: LunoraClient) => LunoraAdminClient;
+```
+
 ## `@lunora/client/auth`
 
 ### `ADMIN_AUTH_DEFAULT_PAGE_SIZE` (const)
@@ -2142,6 +2148,16 @@ const AUTH_STATUSES: readonly [
 interface AdminAuthList<T> {
     readonly fetchPage: (limit: number) => Promise<AuthPage<T>>;
     readonly key: ReadonlyArray<unknown>;
+}
+```
+
+### `AdminAuthListQueryOptions` (interface)
+
+```ts
+interface AdminAuthListQueryOptions<T> {
+    readonly queryFn: () => Promise<AuthPage<T>>;
+    readonly queryKey: ReadonlyArray<unknown>;
+    readonly staleTime: number;
 }
 ```
 
@@ -2174,16 +2190,36 @@ interface IdentityStore {
 }
 ```
 
+### `adminAuthImpersonateMutation` (const)
+
+```ts
+const adminAuthImpersonateMutation: (client: LunoraAdminClient) => {
+    readonly mutationFn: (userId: string) => Promise<AuthImpersonation>;
+};
+```
+
 ### `adminAuthListHasMore` (const)
 
 ```ts
 const adminAuthListHasMore: (page: AuthPage<unknown> | undefined) => boolean;
 ```
 
+### `adminAuthListPlaceholder` (const)
+
+```ts
+const adminAuthListPlaceholder: <T>(previous: AuthPage<T> | undefined, previousKey: ReadonlyArray<unknown> | undefined, queryKey: ReadonlyArray<unknown>) => AuthPage<T> | undefined;
+```
+
 ### `adminAuthListQueryKey` (const)
 
 ```ts
 const adminAuthListQueryKey: (identity: string | null, list: AdminAuthList<unknown>, limit: number) => ReadonlyArray<unknown>;
+```
+
+### `adminAuthListQueryOptions` (const)
+
+```ts
+const adminAuthListQueryOptions: <T>(list: AdminAuthList<T>, identity: string | null, limit: number) => AdminAuthListQueryOptions<T>;
 ```
 
 ### `authOrganizationsList` (const)
@@ -2228,6 +2264,12 @@ const isAuthenticatedStatus: (status: AuthStatus) => boolean;
 
 ```ts
 const isLoadingStatus: (status: AuthStatus) => boolean;
+```
+
+### `nextAdminAuthLimit` (const)
+
+```ts
+const nextAdminAuthLimit: (current: number, pageSize: number, hasMore: boolean) => number;
 ```
 
 ### `subscribeAdminAuthIdentity` (const)
