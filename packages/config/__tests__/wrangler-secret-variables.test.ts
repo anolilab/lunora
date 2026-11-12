@@ -174,6 +174,27 @@ describe("wranglerCodegenInputs — wranglerVariables", () => {
         expect(findings[0]).toMatchObject({ file: "wrangler.jsonc", key: "STRIPE_SECRET_KEY", kind: "stripe_live_key" });
     });
 
+    it("reports the line of each flagged vars key inside wrangler.jsonc", () => {
+        expect.assertions(1);
+
+        // eslint-disable-next-line no-secrets/no-secrets -- a fake committed secret fixture (the footgun this lint catches), not a real credential
+        const secretLine = `"STRIPE_SECRET_KEY": "sk_live_ABCDEFGHIJKLMNOPQRSTUV",`; // gitleaks:allow -- a fake committed secret fixture (the footgun this lint catches), not a real credential
+        const source = `{
+            // a comment naming "STRIPE_SECRET_KEY" must not be the match
+            "name": "app",
+            "vars": {
+                "PUBLIC_URL": "https://example.com",
+                ${secretLine}
+            },
+        }`;
+
+        writeFileSync(join(root, "wrangler.jsonc"), source, "utf8");
+
+        const [finding] = wranglerCodegenInputs(root).wranglerVariables;
+
+        expect(finding?.line).toBe(source.split("\n").findIndex((line) => line.includes('"STRIPE_SECRET_KEY": "sk_live')) + 1);
+    });
+
     it("returns [] when no wrangler config exists", () => {
         expect.assertions(1);
         expect(wranglerCodegenInputs(root).wranglerVariables).toHaveLength(0);

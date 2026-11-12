@@ -20,6 +20,7 @@
  */
 import type { WranglerVariableIR } from "@lunora/codegen";
 import { redact, secretKindOf } from "@lunora/codegen";
+import { findNodeAtLocation, parseTree } from "jsonc-parser";
 
 import { isPublicKeyName, isSecretKeyName } from "../../../../shared/secret-key";
 import { isPlaceholderValue } from "../scaffold-dev-variables";
@@ -40,7 +41,11 @@ const MIN_SECRET_NAMED_VALUE_LENGTH = 8;
  * value is long enough to plausibly be one. `kind` is the matched shape, or
  * `secret_named_var` for the key-name path.
  */
-const scanWranglerVariablesForSecrets = (variables: Record<string, unknown> | undefined, file: string): WranglerVariableIR[] => {
+const scanWranglerVariablesForSecrets = (
+    variables: Record<string, unknown> | undefined,
+    file: string,
+    lineOf: (key: string) => number | undefined = () => undefined,
+): WranglerVariableIR[] => {
     if (variables === undefined) {
         return [];
     }
@@ -72,11 +77,24 @@ const scanWranglerVariablesForSecrets = (variables: Record<string, unknown> | un
             continue;
         }
 
-        findings.push({ file, key, kind, preview: redact(rawValue) });
+        const line = lineOf(key);
+
+        findings.push({ file, key, kind, preview: redact(rawValue), ...(line === undefined ? {} : { line }) });
     }
 
     return findings;
 };
 
-// eslint-disable-next-line import/prefer-default-export -- named export by package convention; the index re-exports it
-export { scanWranglerVariablesForSecrets };
+/**
+ * The 1-based line of the top-level `vars` key `key` in the `wrangler.jsonc` text, or `undefined` when the key is not there.
+ * Read from the JSONC tree, so a comment or a string that happens to contain the key cannot match.
+ */
+const variableKeyLine = (text: string, key: string): number | undefined => {
+    const tree = parseTree(text, [], { allowTrailingComma: true });
+    const entries = tree === undefined ? undefined : findNodeAtLocation(tree, ["vars"])?.children;
+    const keyNode = entries?.find((entry) => entry.children?.[0]?.value === key)?.children?.[0];
+
+    return keyNode === undefined ? undefined : text.slice(0, keyNode.offset).split("\n").length;
+};
+
+export { scanWranglerVariablesForSecrets, variableKeyLine };
