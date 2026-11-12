@@ -317,16 +317,17 @@ runs as. Each port states its own session credential, which §5.2 allows, so eac
 backed off by the shard, and its `error` frame carries `error.retryAfterMs` (protocol/README.md
 §5.2). `@lunora/client` re-subscribes that id once at the hint, cold; a newer hint replaces the
 pending retry, and any `data`, `delta`, `ack`, `resume` or `settled` frame for the id, an `error`
-for it without a hint, an unsubscribe, a socket close or open, or `close()` cancels it. A port
-marked ❌ ignores the field and delivers the error as before, so the subscription stays on it until a
-write touches its tables after the backoff window or the socket reconnects. The goldens are
-`subscriptionRetry` in `protocol/fixtures/ws-frames.json`; it is not in `conformance-cases.json`,
-which may only require behaviour every port has. Python, Ruby, Go, Rust, Java, Kotlin, Swift and
-Dart honour it through a pulled deadline: the client records one per subscription,
-`retry_due_subscriptions(now)` (Python and Ruby; Java and Kotlin `retryDueSubscriptions`, Go
+for it without a hint, an unsubscribe, a socket close or open, or `close()` cancels it. A client
+that ignores the field delivers the error as before, so the subscription stays on it until a write
+touches its tables after the backoff window or the socket reconnects. The goldens are
+`subscriptionRetry` in `protocol/fixtures/ws-frames.json`; it is not yet required by
+`conformance-cases.json`: the Go, Ruby, Kotlin and Dart ports were written without their toolchains,
+so the name is added once CI has run all eight suites green. Python, Ruby, Go, Rust, Java, Kotlin,
+Swift and Dart honour it through a pulled deadline: the client records one per subscription,
+`retry_due_subscriptions(now)` (Python, Ruby and Rust; Java and Kotlin `retryDueSubscriptions`, Go
 `RetryDueSubscriptions(now)`, Swift `retryDueSubscriptions(now:)`, Dart
 `retryDueSubscriptions(nowMs:)`) sends the due re-subscribes, and `next_subscription_retry_at()`
-(Python and Ruby; Java and Kotlin `nextSubscriptionRetryAtNanos()`, Go
+(Python, Ruby and Rust; Java and Kotlin `nextSubscriptionRetryAtNanos()`, Go
 `NextSubscriptionRetryAt()`, Swift and Dart `nextSubscriptionRetryAt`) says when to call it next:
 the caller's timer, as for a flush's `retry_after_ms`. Python's `connect_and_run` arms that timer
 itself; Ruby, Go, Rust, Java, Kotlin, Swift and Dart callers arm their own.
