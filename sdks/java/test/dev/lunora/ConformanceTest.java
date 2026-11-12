@@ -80,6 +80,10 @@ public final class ConformanceTest {
         // their own file for the same reason.
         SocketSessionTest.run();
 
+        // The subscription-retry cases (the live-query retry hint), in their own file for the same
+        // reason.
+        SubscriptionRetryTest.run();
+
         assertManifestCovered();
 
         System.out.println("OK — " + checks + " assertions");
