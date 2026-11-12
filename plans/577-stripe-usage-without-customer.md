@@ -1,7 +1,7 @@
 # Plan 577 — Stripe usage without a customer stays unreported instead of being lost
 
 **Baseline:** `79b0c5a6a` (2026-11-11)
-**Status:** TODO
+**Status:** DONE (APPROVED after 1 revision; PR #1567, branch fix/improve-577-stripe-usage-customer)
 
 > **Executor instructions**: Follow this plan step by step. Run every verification command and
 > confirm the expected result before moving on. If anything in "STOP conditions" (section 8)

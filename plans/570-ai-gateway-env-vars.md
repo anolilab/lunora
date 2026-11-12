@@ -1,7 +1,7 @@
 # Plan 570 — `cloudflare ai-gateway --env <name>` writes the gateway vars where that environment reads them
 
 **Baseline:** `79b0c5a6a` (2026-11-11)
-**Status:** TODO
+**Status:** DONE (APPROVED; PR #1568, branch fix/improve-570-ai-gateway-env)
 
 > **Executor instructions**: Follow this plan step by step. Run every verification command and
 > confirm the expected result before moving on. If anything in "STOP conditions" (section 8)
