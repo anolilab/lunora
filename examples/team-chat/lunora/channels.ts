@@ -95,6 +95,8 @@ export const join = mutation
         }
 
         await addMember(ctx, channelId, ctx.auth.userId);
+
+        ctx.log.info("channel joined", { channelId });
     });
 
 /** Leave a channel. Removing the last member is allowed; the channel stays. */
@@ -116,6 +118,8 @@ export const leave = mutation
         if (existing) {
             await ctx.db.delete("members", existing._id);
         }
+
+        ctx.log.info("channel left", { channelId });
     });
 
 /** Whether the caller is a member, and how many members the channel has. Visible to any signed-in user, so they can decide to join. */
