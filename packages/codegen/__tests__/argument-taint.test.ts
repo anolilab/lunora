@@ -213,6 +213,12 @@ describe("argument-taint", () => {
             expect(isScopedByIdentity(sinkArgument(`const me = await ctx.db.users.get(ctx.auth.userId);\nSINK(\`\${me._id}/\${args.k}\`);`))).toBe(true);
         });
 
+        it("accepts a key read off a database row, the owned-record shape the storage remediation names", () => {
+            expect.assertions(1);
+
+            expect(isScopedByIdentity(sinkArgument(`const row = await ctx.db.get("files", args.id);\nSINK(row.key);`))).toBe(true);
+        });
+
         it("rejects a key scoped only by a server-trusted ctx value that names no caller", () => {
             expect.assertions(3);
 

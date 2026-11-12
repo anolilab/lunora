@@ -101,6 +101,17 @@ describe("discoverStorageKeyAccesses", () => {
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    it("ignores a key read off a database row the caller selected by id", () => {
+        expect.assertions(1);
+
+        write(
+            "owned-row.ts",
+            `export const read = query(async ({ ctx, args }) => { const row = await ctx.db.get("files", args.id); return ctx.storage.avatars.get(row.key); });`,
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("ignores a ctx-scoped key reached through one local const hop", () => {
         expect.assertions(1);
 

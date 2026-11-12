@@ -214,12 +214,14 @@ const valueIdentifiersIn = (node: TsNode): Identifier[] =>
     });
 
 /**
- * True when `node` is, or textually contains, a value reference to a ctx identity
- * — a ctx path whose first segment is `auth` (`ctx.auth.userId`, or a local bound
- * to one). Narrower than {@link referencesContext}: `ctx.env.PREFIX` and `ctx.now`
- * are server-trusted but name no caller.
+ * True when `node` is, or textually contains, a value reference to a key source the
+ * caller cannot choose: the caller's identity (a ctx path whose first segment is
+ * `auth`, `ctx.auth.userId`) or a value read from the database (`ctx.db.…`, such as
+ * the row of an owned record). Narrower than {@link referencesContext}:
+ * `ctx.env.PREFIX` and `ctx.now` are server-trusted but name neither a caller nor a
+ * stored record.
  */
-const referencesIdentity = (node: TsNode): boolean => {
+const referencesTrustedKeySource = (node: TsNode): boolean => {
     const identifiers = Node.isIdentifier(node) ? [node] : valueIdentifiersIn(node);
 
     return identifiers.some((identifier) => {
@@ -240,7 +242,9 @@ const referencesIdentity = (node: TsNode): boolean => {
             outermost = parent;
         }
 
-        return contextTrustPathOf(outermost)?.[0] === "auth";
+        const root = contextTrustPathOf(outermost)?.[0];
+
+        return root === "auth" || root === "db";
     });
 };
 
@@ -393,22 +397,23 @@ export const isScopedByContext = (node: TsNode): boolean => {
 };
 
 /**
- * Whether `node` is scoped to the caller's own identity. It runs the same direct,
- * one-hop and composed-local stages as {@link isScopedByContext}, asking
- * {@link referencesIdentity} instead of {@link referencesContext}. Only the IDOR sinks (kv, storage, container keys) use it,
- * because a key is caller-owned only when it contains the caller's own identity — a
- * `${ctx.env.PREFIX}/${args.key}` key is server-trusted but shared by every caller.
- * Browser URLs keep the broader check, because a server-pinned host (`${ctx.env.CDN}/…`)
- * is exactly the safe shape there.
+ * Whether `node` is scoped to a key source the caller cannot choose: the caller's
+ * identity, or a value read from the database (an owned record's field). It runs
+ * the same direct, one-hop and composed-local stages as {@link isScopedByContext},
+ * asking {@link referencesTrustedKeySource} instead of {@link referencesContext}.
+ * Only the IDOR sinks (kv, storage, container keys) use it: a key built from an env
+ * value (`${ctx.env.PREFIX}/${args.key}`) or `ctx.now` is still shared or
+ * caller-chosen, so it is not scoped. Browser URLs keep the broader check, because a
+ * server-pinned host (`${ctx.env.CDN}/…`) is exactly the safe shape there.
  */
 export const isScopedByIdentity = (node: TsNode): boolean => {
-    if (referencesIdentity(node)) {
+    if (referencesTrustedKeySource(node)) {
         return true;
     }
 
     const initializer = trustedInitializerOf(node);
 
-    if (initializer !== undefined && referencesIdentity(initializer)) {
+    if (initializer !== undefined && referencesTrustedKeySource(initializer)) {
         return true;
     }
 
@@ -418,7 +423,7 @@ export const isScopedByIdentity = (node: TsNode): boolean => {
     return identifiers.some((identifier) => {
         const boundInitializer = trustedInitializerOf(identifier);
 
-        return boundInitializer !== undefined && referencesIdentity(boundInitializer);
+        return boundInitializer !== undefined && referencesTrustedKeySource(boundInitializer);
     });
 };
 
