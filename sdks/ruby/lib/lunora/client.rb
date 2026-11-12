@@ -401,6 +401,9 @@ module Lunora
       @identity = identity
       @send = nil
       @subscriptions = {}
+      # The monotonic deadline of the one re-subscribe a retry hint asked for, per query id.
+      # See +retry_due_subscriptions+.
+      @pending_retries = {}
       @shapes = {}
       @pokes = {}
       @next_id = 0
@@ -448,6 +451,7 @@ module Lunora
       generation, connect = @mutex.synchronize do
         @send = nil
         @attach_generation += 1
+        @pending_retries.clear
         @socket_generation = @credential_generation
         [@attach_generation,
          Lunora.build_connect_frame(@client_id, context, token: @session_token, caps: [Delta::PAGE_DELTA_CAPABILITY])]
@@ -482,6 +486,7 @@ module Lunora
       expired = @mutex.synchronize do
         @send = nil
         @attach_generation += 1
+        @pending_retries.clear
         expiry_notified_by_close?(close_code, reason)
       end
 
@@ -578,6 +583,7 @@ module Lunora
         # An attach still in flight is superseded, so its sender is never installed after shutdown.
         @attach_generation += 1
         @send = nil
+        @pending_retries.clear
         [@offline_queue.clear, @streams.slice!(0..)]
       end
 
@@ -624,6 +630,7 @@ module Lunora
       lambda do
         locked_send do
           @subscriptions.delete(id)
+          @pending_retries.delete(id)
           Lunora.build_unsubscribe_frame(id)
         end
       end
@@ -925,7 +932,47 @@ module Lunora
       end
     end
 
+    # Re-subscribe every query whose retry hint has elapsed, and return how many
+    # frames were sent. +now+ is a +Lunora.monotonic_now+ reading. Each re-subscribe
+    # is cold (no resume cursor), since the hint asks for a fresh snapshot. While no
+    # socket is attached nothing is sent and nothing is dropped: the deadline waits
+    # for the next one.
+    def retry_due_subscriptions(now = Lunora.monotonic_now)
+      sender, frames = @mutex.synchronize do
+        sender = @send
+        next [nil, []] if sender.nil?
+
+        due = @pending_retries.select { |_id, deadline| deadline <= now }.keys
+        due.each { |id| @pending_retries.delete(id) }
+        frames = due.map do |id|
+          entry = @subscriptions[id]
+          next nil if entry.nil?
+
+          entry[:cursor] = nil
+          entry[:epoch] = nil
+          Lunora.build_subscribe_frame(id, entry[:function_path], entry[:args])
+        end
+        [sender, frames.compact]
+      end
+
+      frames.each { |frame| sender.call(frame) }
+      frames.size
+    end
+
+    # The monotonic deadline of the earliest pending retry, or nil when none is pending.
+    def next_subscription_retry_at = @mutex.synchronize { @pending_retries.values.min }
+
     private
+
+    # The server's retry hint on a query error, in seconds, or nil when it sent no
+    # hint this client can honour. Only a JSON number qualifies: +true+ and strings
+    # are not, and a hint past the clamp is cut to it.
+    def retry_after_seconds(envelope)
+      delay = envelope["retryAfterMs"]
+      return nil unless delay.is_a?(Numeric) && delay.finite? && delay >= 0
+
+      [delay, MAX_RETRY_AFTER_MS].min / 1000.0
+    end
 
     # Mutate the guarded state, then send the frame the block returns with the
     # lock released. A nil frame sends nothing.
@@ -945,6 +992,8 @@ module Lunora
     def dispatch(frame, deferred)
       kind = frame["type"]
       entry = @subscriptions[frame["id"]]
+      # The server answered the subscription, so a retry it was waiting on is moot.
+      @pending_retries.delete(frame["id"]) if %w[ack data delta resume settled].include?(kind)
 
       case kind
       when "ack" then kind
@@ -1072,6 +1121,17 @@ module Lunora
 
       [@subscriptions[id]&.fetch(:on_error, nil), @shapes[id]&.fetch(:on_error, nil)].compact.each do |handler|
         deferred << -> { handler.call(error) }
+      end
+
+      # A query error without a usable hint is how the server ends a subscription, so
+      # a retry an earlier hint scheduled for it is cancelled rather than sent.
+      if @subscriptions.key?(id)
+        delay = retry_after_seconds(envelope)
+        if delay.nil?
+          @pending_retries.delete(id)
+        else
+          @pending_retries[id] = Lunora.monotonic_now + delay
+        end
       end
 
       kind
