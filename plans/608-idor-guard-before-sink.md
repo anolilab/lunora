@@ -8,7 +8,7 @@
 > `origin/fix/improve-588-idor-identity-scope` (`72544ca39`). `git log --oneline -1` → `72544ca39`.
 
 **Baseline:** `72544ca39` (rebased 588 tip, 2026-11-12)
-**Status:** TODO
+**Status:** DONE — APPROVED after one review round (helper throw tied to the identity read, read tied to the row parameter, single-row reads only); PR https://github.com/anolilab/lunora/pull/1592 (commits `a6f503f57`, `425dec432`). Sweep: no finding disappears.
 **Source:** follow-up to row 50 of the 2026-11-11 audit; owner decision (teach the lint) after plan 599 Step 6.
 
 ## Status
