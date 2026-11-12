@@ -181,6 +181,8 @@ const readSnapshotLines = async function* (snapshot: ConvexSnapshot, tableEntry:
         // Open the listed path without following a final symlink, then check the opened file is the one
         // that was listed. The check is what covers a swapped parent directory, which O_NOFOLLOW cannot see.
         const handle = await open(tableEntry.file, constants.O_NOFOLLOW);
+        // Destroyed in `finally`, not left to the consumer: a consumer that stops early never ends the stream.
+        const stream = handle.createReadStream({ autoClose: false, encoding: "utf8" });
 
         try {
             const opened = await handle.stat();
@@ -189,17 +191,11 @@ const readSnapshotLines = async function* (snapshot: ConvexSnapshot, tableEntry:
                 throw new Error(`table ${tableEntry.table}: documents.jsonl changed after it was listed`);
             }
 
-            // Destroyed in `finally`, not left to the consumer: a consumer that stops early never ends the stream.
-            const stream = handle.createReadStream({ autoClose: false, encoding: "utf8" });
-
-            try {
-                for await (const raw of createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: stream })) {
-                    yield raw;
-                }
-            } finally {
-                stream.destroy();
+            for await (const raw of createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: stream })) {
+                yield raw;
             }
         } finally {
+            stream.destroy();
             await handle.close();
         }
 
