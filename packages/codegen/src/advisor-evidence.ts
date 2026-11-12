@@ -58,7 +58,7 @@ import discoverStorageUploads from "./discover/storage-uploads";
 import discoverUnboundedLoops from "./discover/unbounded-loops";
 import discoverUnrestrictedWhereBranches from "./discover/unrestricted-where-branches";
 import discoverVectorNamespaceAccesses from "./discover/vector-namespace-accesses";
-import type { FunctionIR, ModuleIR, MutatorIR, SchemaIR, ShapeIR, WranglerVariableIR } from "./ir";
+import type { FunctionIR, ModuleIR, MutatorIR, SchemaIR, ShapeIR, TopicIR, WranglerVariableIR } from "./ir";
 
 type Surface = ReturnType<typeof buildDeclarationSurface>;
 
@@ -74,13 +74,14 @@ export interface AdvisorEvidenceInputs {
     queues: Surface["queues"];
     schema: SchemaIR;
     shapes: ReadonlyArray<ShapeIR>;
+    topics?: ReadonlyArray<TopicIR>;
     workflows: Surface["workflows"];
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
 }
 
 /** Gather the advisor's evidence for one project, with every discovery pass the lints read. */
 export const advisorEvidenceOf = (project: Project, lunoraDirectory: string, inputs: AdvisorEvidenceInputs): LintContext => {
-    const { callSites, containers, crons, functions, modules, mutators, queues, schema, shapes, wranglerVariables, workflows } = inputs;
+    const { callSites, containers, crons, functions, modules, mutators, queues, schema, shapes, topics, wranglerVariables, workflows } = inputs;
 
     return toAdvisorContext({
         adminRoutes: discoverAdminRoutes(project, lunoraDirectory),
@@ -137,6 +138,7 @@ export const advisorEvidenceOf = (project: Project, lunoraDirectory: string, inp
         secretLiterals: discoverSecrets(project, lunoraDirectory),
         modules,
         shapes,
+        topics,
         softDeleteReads: discoverSoftDeleteReads(project, lunoraDirectory),
         sqlInterpolations: discoverSqlInterpolation(project, lunoraDirectory),
         storageKeyAccesses: discoverStorageKeyAccesses(project, lunoraDirectory, functions),

@@ -40,7 +40,7 @@ import type { AdvisorPaymentWebhook } from "./payment-webhooks";
 import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
 import type { AdvisorProcedureProtection } from "./procedure-protections";
 import type { AdvisorQueryRead } from "./queries";
-import type { AdvisorQueue } from "./queues";
+import type { AdvisorQueue, AdvisorTopic } from "./queues";
 import type { AdvisorR2sqlCall } from "./r2sql-calls";
 import type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
 import type { AdvisorRawRowReturn } from "./raw-row-returns";
@@ -736,6 +736,11 @@ export interface LintContext {
      * absent for runtime callers.
      */
     tableWrites?: ReadonlyArray<AdvisorTableWrite>;
+
+    /**
+     * Topics declared via `defineTopic` exports in `lunora/queues.ts`. The lint that reports a topic's subscription count reads its declaration site; absent for runtime callers.
+     */
+    topics?: ReadonlyArray<AdvisorTopic>;
 
     /**
      * Literal-infinite loops (`while (true)`, `for (;;)`, `do … while (true)`)

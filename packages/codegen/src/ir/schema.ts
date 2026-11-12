@@ -91,9 +91,21 @@ export interface ValidatorIR {
     valueType?: ValidatorIR;
 }
 
+/**
+ * Where a schema object is declared: the file relative to `lunora/` without its extension, and the 1-based start line of
+ * the node (leading comments excluded). Absent for an object with no source under `lunora/`, such as one contributed by an
+ * installed package's extension.
+ */
+export interface DeclarationSiteIR {
+    file: string;
+    line: number;
+}
+
 export interface IndexIR {
     fields: ReadonlyArray<string>;
     name: string;
+    /** Where the `.index(...)` call's method name is declared. */
+    site?: DeclarationSiteIR;
     unique?: boolean;
 }
 
@@ -105,6 +117,8 @@ export interface SearchIndexIR {
     /** Text-analysis profile (accent folding + that language's stopwords). */
     language?: string;
     name: string;
+    /** Where the `.searchIndex(...)` call's method name is declared. */
+    site?: DeclarationSiteIR;
     /** Skip the migration-time backfill of the search companion (large tables index out-of-band). */
     staged?: boolean;
     /** `"native"` opts into the engine's own full-text index where it has one (Postgres). */
@@ -118,6 +132,8 @@ export interface GeoIndexIR {
     name: string;
     /** Geohash precision (characters) maintained on the companion; omitted ⇒ the runtime default. */
     precision?: number;
+    /** Where the `.geoIndex(...)` call's method name is declared. */
+    site?: DeclarationSiteIR;
 }
 
 /** A `.ttl(field, { after? })` declaration — declarative table-level auto-expiry. */
@@ -136,6 +152,8 @@ export interface VectorIndexIR {
     metadata?: ReadonlyArray<string>;
     metric?: "cosine" | "dot-product" | "euclidean";
     name: string;
+    /** Where the inline `.vectorize(...)` call's method name is declared; absent for a standalone (Shape B) index. */
+    site?: DeclarationSiteIR;
     /** Owning table the vectors are sourced from. */
     table: string;
 }
@@ -159,6 +177,8 @@ export interface RankIndexIR {
     name: string;
     /** Columns scoping each ranking; omitted ⇒ one global rank over the table. */
     partitionBy?: ReadonlyArray<string>;
+    /** Where the `.rankIndex(...)` call's method name is declared. */
+    site?: DeclarationSiteIR;
     /** Ordered sort keys driving the rank. */
     sortBy: ReadonlyArray<RankSortKeyIR>;
 }
@@ -174,6 +194,8 @@ export interface KeyedRelationIR {
     onDelete?: "cascade" | "restrict" | "set null";
     /** Referenced column (defaults to `_id`). */
     references: string;
+    /** Where the relation's property in the `.relations(...)` object is declared. */
+    site?: DeclarationSiteIR;
     /** Target table name. */
     table: string;
     through?: never;
@@ -184,6 +206,8 @@ export interface ThroughRelationIR {
     kind: "many";
     /** Accessor name the relation is loaded under (the `with` key). */
     name: string;
+    /** Where the relation's property in the `.relations(...)` object is declared. */
+    site?: DeclarationSiteIR;
     /** Target table name. */
     table: string;
     /** The join table and its two keys: `from` points at the declaring table, `to` at `table`. */
@@ -277,6 +301,12 @@ export interface TableIR {
      */
     externalSource?: ExternalSourceIR;
 
+    /**
+     * Where each declared column's property sits in the `defineTable({...})` object, keyed by column name. Columns the
+     * table gains by injection (`.timestamps()`, `.softDelete()`) have no entry.
+     */
+    fieldSites?: Readonly<Record<string, DeclarationSiteIR>>;
+
     /** Geospatial indexes declared inline via `.geoIndex(name, …)`. Optional so hand-built IR may omit it (discovery always sets it). */
     geoIndexes?: ReadonlyArray<GeoIndexIR>;
 
@@ -308,6 +338,7 @@ export interface TableIR {
      * to `false`.
      */
     memory?: boolean;
+
     name: string;
     /** Rank indexes declared inline via `.rankIndex(name, …)`. */
     rankIndexes: ReadonlyArray<RankIndexIR>;
@@ -316,6 +347,12 @@ export interface TableIR {
     searchIndexes: ReadonlyArray<SearchIndexIR>;
     shape: Record<string, ValidatorIR>;
     shardMode: "global" | "root" | { field: string; kind: "shardBy" };
+
+    /**
+     * Where the table is declared: its `defineTable(...)` call, or the `defineSchema({...})` property when the table is
+     * not written as a `defineTable` chain. Absent for a table whose declaration is not under `lunora/`.
+     */
+    site?: DeclarationSiteIR;
     /** Set when the chain carried `.softDelete()` — the marker column's name (default `deletedAt`). The column is injected into `shape` so `Doc_*` carries it. */
     softDelete?: { field: string };
     /** Set when the chain carried `.ttl(field, { after? })` — the declarative auto-expiry policy read by the DO alarm sweep. */

@@ -6,6 +6,7 @@ import type { TableIR, ValidatorIR, VectorIndexIR } from "../../../ir";
 import { resolvePackageExtension } from "../../../resolve-package-extension";
 import { findObjectProperty, propertyKeyName } from "../../ast";
 import { asMetric, getNumberProperty, getStringProperty, objectPropertyInitializer } from "./properties";
+import type { SiteLocator } from "./sites";
 import { assertTableNameAllowed, parseTableBuilder, TABLE_NAME_IDENTIFIER_RE } from "./table-builder";
 
 /** Read the `source.table` literal off a `defineVectorIndex({ source: { table } })` options object. */
@@ -358,7 +359,7 @@ const extensionPartsOf = (call: CallExpression): { key: string; keyNode: TsNode;
 };
 
 /** Parse the `tables: {...}` property of a `defineSchemaExtension` options object into bare-named {@link TableIR}s. */
-const parseExtensionTables = (options: ObjectLiteralExpression): TableIR[] => {
+const parseExtensionTables = (options: ObjectLiteralExpression, locate: SiteLocator): TableIR[] => {
     const tablesProperty = findObjectProperty(options, "tables");
 
     if (!tablesProperty || !Node.isPropertyAssignment(tablesProperty)) {
@@ -391,7 +392,7 @@ const parseExtensionTables = (options: ObjectLiteralExpression): TableIR[] => {
         // so an error about the prefixed name would point at something the
         // user never typed.
         assertTableNameAllowed(name, property.getNameNode());
-        tables.push(parseTableBuilder(initializer, name));
+        tables.push(parseTableBuilder(initializer, name, locate, property));
     }
 
     return tables;
@@ -454,10 +455,10 @@ const namespaceExtension = (
 };
 
 /** Apply runtime namespacing to one AST-resolved `defineSchemaExtension(...)` options object. */
-const mergeExtension = (key: string, keyNode: TsNode, options: ObjectLiteralExpression): MergedExtension =>
+const mergeExtension = (key: string, keyNode: TsNode, options: ObjectLiteralExpression, locate: SiteLocator): MergedExtension =>
     namespaceExtension(
         key,
-        parseExtensionTables(options),
+        parseExtensionTables(options, locate),
         parseExtensionVectorIndexes(options),
         keyNode,
         keyNode.getSourceFile().getFilePath().includes("/node_modules/"),
@@ -469,7 +470,7 @@ const mergeExtension = (key: string, keyNode: TsNode, options: ObjectLiteralExpr
  * local sources or is malformed. Mirrors how codegen elsewhere warns rather
  * than crashing on inputs it can't statically resolve.
  */
-const mergeExtendCall = (extendCall: CallExpression, projectRoot: string | undefined): MergedExtension | undefined => {
+const mergeExtendCall = (extendCall: CallExpression, projectRoot: string | undefined, locate: SiteLocator): MergedExtension | undefined => {
     const rawArgument = extendCall.getArguments()[0];
 
     if (!rawArgument) {
@@ -529,7 +530,7 @@ const mergeExtendCall = (extendCall: CallExpression, projectRoot: string | undef
         return undefined;
     }
 
-    return mergeExtension(parts.key, parts.keyNode, parts.options);
+    return mergeExtension(parts.key, parts.keyNode, parts.options, locate);
 };
 
 /**
@@ -577,12 +578,12 @@ const extendCallsOf = (defineSchemaCall: CallExpression): CallExpression[] => {
  * Cross-package extensions (only reachable as a `.d.ts`) are skipped with a
  * warning — a deferred phase. Throws on a real post-prefix table collision.
  */
-const applyExtensions = (defineSchemaCall: CallExpression, tables: TableIR[], projectRoot: string | undefined): VectorIndexIR[] => {
+const applyExtensions = (defineSchemaCall: CallExpression, tables: TableIR[], projectRoot: string | undefined, locate: SiteLocator): VectorIndexIR[] => {
     const existingTableNames = new Set(tables.map((table) => table.name));
     const vectorIndexes: VectorIndexIR[] = [];
 
     for (const extendCall of extendCallsOf(defineSchemaCall)) {
-        const merged = mergeExtendCall(extendCall, projectRoot);
+        const merged = mergeExtendCall(extendCall, projectRoot, locate);
 
         if (!merged) {
             continue;

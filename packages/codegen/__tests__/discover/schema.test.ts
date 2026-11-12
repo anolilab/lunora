@@ -215,6 +215,7 @@ describe("discoverSchema", () => {
             field: "text",
             filterFields: ["channelId"],
             name: "by_text",
+            site: { file: "schema", line: 9 },
         });
     });
 
@@ -355,7 +356,7 @@ describe("discoverSchema", () => {
         const places = schema.tables.find((table) => table.name === "places");
 
         expect(places?.geoIndexes).toHaveLength(1);
-        expect(places?.geoIndexes?.[0]).toEqual({ field: "location", name: "by_location", precision: 7 });
+        expect(places?.geoIndexes?.[0]).toEqual({ field: "location", name: "by_location", precision: 7, site: { file: "schema", line: 9 } });
         // The geo-point column emits a `{ lat, lng }` type in the data model.
         expect(emitDataModel(schema)).toContain("location: { lat: number; lng: number };");
     });
@@ -432,7 +433,7 @@ describe("discoverSchema", () => {
         const messages = schema.tables[0];
 
         expect(messages?.shardMode).toEqual({ field: "channelId", kind: "shardBy" });
-        expect(messages?.indexes).toEqual([{ fields: ["channelId"], name: "by_channel", unique: false }]);
+        expect(messages?.indexes).toEqual([{ fields: ["channelId"], name: "by_channel", site: { file: "schema", line: 10 }, unique: false }]);
         expect(messages?.searchIndexes[0]).toMatchObject({ field: "text", name: "by_text" });
     });
 
@@ -493,6 +494,7 @@ describe("discoverSchema", () => {
             name: "by_points",
             partitionBy: ["boardId"],
             sortBy: [{ direction: "desc", field: "points" }],
+            site: { file: "schema", line: 9 },
         });
 
         // `direction` defaults to "asc" when omitted on a sortBy key.
@@ -506,6 +508,7 @@ describe("discoverSchema", () => {
 
         expect(discoverSchema(project2, schemaPath2).tables[0]?.rankIndexes[0]).toEqual({
             name: "g",
+            site: { file: "schema", line: 5 },
             partitionBy: undefined,
             sortBy: [{ direction: "asc", field: "points" }],
         });
@@ -598,7 +601,7 @@ describe("discoverSchema", () => {
         const schema = discoverSchema(project, schemaPath);
         const users = schema.tables.find((table) => table.name === "users");
 
-        expect(users?.indexes).toEqual([{ fields: ["email"], name: "by_email", unique: true }]);
+        expect(users?.indexes).toEqual([{ fields: ["email"], name: "by_email", site: { file: "schema", line: 8 }, unique: true }]);
     });
 
     it("throws when `unique` is a non-literal expression instead of silently dropping it", () => {
@@ -739,6 +742,7 @@ describe("discoverSchema", () => {
             metric: "cosine",
             name: "docs-body",
             table: "docs",
+            site: { file: "schema", line: 12 },
         });
         expect(schema.vectorIndexes).toEqual(docs?.vectorIndexes);
     });
@@ -857,8 +861,12 @@ describe("discoverSchema", () => {
         const users = schema.tables.find((table) => table.name === "users");
         const posts = schema.tables.find((table) => table.name === "posts");
 
-        expect(users?.relations).toEqual([{ field: "authorId", kind: "many", name: "posts", onDelete: undefined, references: "_id", table: "posts" }]);
-        expect(posts?.relations).toEqual([{ field: "authorId", kind: "one", name: "author", onDelete: "cascade", references: "_id", table: "users" }]);
+        expect(users?.relations).toEqual([
+            { field: "authorId", kind: "many", name: "posts", onDelete: undefined, references: "_id", site: { file: "schema", line: 6 }, table: "posts" },
+        ]);
+        expect(posts?.relations).toEqual([
+            { field: "authorId", kind: "one", name: "author", onDelete: "cascade", references: "_id", site: { file: "schema", line: 12 }, table: "users" },
+        ]);
     });
 
     it("honors an explicit references and ignores onDelete on a many relation", () => {
@@ -877,7 +885,15 @@ describe("discoverSchema", () => {
         const schema = discoverSchema(project, schemaPath);
         const orgs = schema.tables.find((table) => table.name === "orgs");
 
-        expect(orgs?.relations[0]).toEqual({ field: "orgSlug", kind: "many", name: "members", onDelete: undefined, references: "slug", table: "members" });
+        expect(orgs?.relations[0]).toEqual({
+            field: "orgSlug",
+            kind: "many",
+            name: "members",
+            onDelete: undefined,
+            references: "slug",
+            site: { file: "schema", line: 6 },
+            table: "members",
+        });
     });
 
     it("tables without .relations() expose an empty relations array", () => {
@@ -918,8 +934,10 @@ describe("discoverSchema", () => {
 
         expect(messages).toBeDefined();
         // Triggers are code (closures), not IR — discovery steps over the call and the rest of the chain still parses.
-        expect(messages?.indexes).toEqual([{ fields: ["authorId"], name: "by_author", unique: false }]);
-        expect(messages?.relations).toEqual([{ field: "authorId", kind: "one", name: "author", onDelete: undefined, references: "_id", table: "users" }]);
+        expect(messages?.indexes).toEqual([{ fields: ["authorId"], name: "by_author", site: { file: "schema", line: 6 }, unique: false }]);
+        expect(messages?.relations).toEqual([
+            { field: "authorId", kind: "one", name: "author", onDelete: undefined, references: "_id", site: { file: "schema", line: 7 }, table: "users" },
+        ]);
     });
 
     it("emits the relation type machinery and per-table Relations map", () => {
@@ -1029,7 +1047,7 @@ describe("discoverSchema", () => {
 
         expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["ext_buckets", "todos"]);
         expect(buckets).toBeDefined();
-        expect(buckets?.indexes).toEqual([{ fields: ["key"], name: "by_key", unique: true }]);
+        expect(buckets?.indexes).toEqual([{ fields: ["key"], name: "by_key", site: { file: "schema", line: 12 }, unique: true }]);
     });
 
     it("throws a located diagnostic for an extension key that is not a valid JS identifier", () => {
@@ -1969,7 +1987,9 @@ describe("discoverSchema", () => {
         const posts = schema.tables.find((table) => table.name === "posts");
 
         expect(posts?.shape.authorId).toMatchObject({ kind: "id", tableName: "users" });
-        expect(posts?.relations).toEqual([{ field: "authorId", kind: "one", name: "author", onDelete: undefined, references: "_id", table: "users" }]);
+        expect(posts?.relations).toEqual([
+            { field: "authorId", kind: "one", name: "author", onDelete: undefined, references: "_id", site: { file: "schema", line: 7 }, table: "users" },
+        ]);
 
         // Emission still succeeds and never surfaces the `_unknown_` sentinel
         // this plan removed — a rejected-in-error schema would either throw
