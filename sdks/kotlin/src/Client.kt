@@ -1133,7 +1133,8 @@ class Client(
         // the lock exists to protect.
         when (kind) {
             "data", "delta" -> {
-                val isDelta = frame["data"] == null && frame["delta"] != null
+                // The frame type decides, as in every port: a delta whose payload is null is still a delta.
+                val isDelta = kind == "delta"
                 val payload = frame["data"] ?: frame["delta"]
                 val value = try {
                     Wire.decode(payload)

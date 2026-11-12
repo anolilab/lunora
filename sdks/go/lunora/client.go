@@ -433,6 +433,8 @@ func (c *Client) evictSessionLocked(deferred *[]func()) {
 	for _, entry := range c.subscriptions {
 		entry.cursor = nil
 		entry.epoch = nil
+		// A freeze belongs to the previous identity, as its cached base does.
+		entry.poisoned = false
 		entry.state.ServerBase = nil
 		entry.state.ServerCursor = nil
 		NotifySubscription(&entry.state, FoldOptimistic(nil, entry.state.Layers), deferred)

@@ -572,6 +572,16 @@
                     "publishes": 0
                 },
                 {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": null,
+                        "cursor": 11,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0
+                },
+                {
                     "resume": {
                         "sinceSeq": 5,
                         "sinceEpoch": "e1"
