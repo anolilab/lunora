@@ -10,7 +10,7 @@
 > Expect no output.
 
 **Baseline:** `79b0c5a6a` (2026-11-12)
-**Status:** TODO
+**Status:** DONE — APPROVED; PR https://github.com/anolilab/lunora/pull/1574 (branch `fix/improve-587-privileged-dispatch-shapes`, commit `6add549e8`). No in-repo finding change.
 **Source:** row 49 of the 2026-11-11 audit (advisor lints).
 
 ## Status
