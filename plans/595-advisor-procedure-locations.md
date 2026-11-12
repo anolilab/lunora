@@ -8,7 +8,7 @@
 > `git diff --stat 4121b67cc..HEAD -- packages/advisor/src packages/codegen/src` → no output.
 
 **Baseline:** `4121b67cc` (2026-11-12)
-**Status:** TODO
+**Status:** DONE — APPROVED; PR https://github.com/anolilab/lunora/pull/1584 (commits `ce2b9e2de`, `4aedc5e34`, `1b2a46f47`, `a75902bbb`). 18 of 19 lints covered; `topic-too-many-subscriptions` moved to plan 596.
 **Source:** follow-up to row 50 of the 2026-11-11 audit (advisor lints): first of a four-PR stack
 (595 locations for declaration findings → 596 locations for schema/config findings → 597
 per-finding suppression → 588 row 50).
