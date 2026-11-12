@@ -352,20 +352,39 @@ const resolveTargetEmail = (context: AuditHookContext, event: AuthAuditEvent): s
     return candidate.length > MAX_TARGET_EMAIL_LENGTH ? candidate.slice(0, MAX_TARGET_EMAIL_LENGTH) : candidate;
 };
 
+const stringOf = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
+
+const fieldOf = (value: unknown, key: string): unknown =>
+    typeof value === "object" && value !== null && key in value ? (value as Record<string, unknown>)[key] : undefined;
+
 /**
- * The subject of an `admin-*` action — `ctx.body.userId`, the account the operator
- * acted on, so an impersonation row says who was impersonated. Only `userId` is
- * copied: other body fields (`set-user-password` carries the new password) must
- * never reach the trail.
+ * The subject of an `admin-*` action: the account the operator acted on, so the row says
+ * who was impersonated, created or changed. Taken from `ctx.body.userId` when the endpoint
+ * takes one. `create-user` has no such body field, so its subject is the account the response
+ * returns; `stop-impersonating` has none either, so its subject is the impersonated session's
+ * user. Only the id is copied: other body fields (`set-user-password` carries the new password)
+ * and the rest of the response must never reach the trail.
  */
 const resolveTargetUserId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined => {
     if (!event.startsWith("admin-")) {
         return undefined;
     }
 
-    const candidate = context.body?.["userId"];
+    const fromBody = stringOf(context.body?.["userId"]);
 
-    return typeof candidate === "string" && candidate.length > 0 ? candidate : undefined;
+    if (fromBody !== undefined) {
+        return fromBody;
+    }
+
+    if (event === "admin-user-create") {
+        return stringOf(fieldOf(fieldOf(context.context?.returned, "user"), "id"));
+    }
+
+    if (event === "admin-impersonate-stop") {
+        return stringOf(fieldOf(fieldOf(context.context?.session, "user"), "id")) ?? stringOf(fieldOf(fieldOf(context.context?.session, "session"), "userId"));
+    }
+
+    return undefined;
 };
 
 /**

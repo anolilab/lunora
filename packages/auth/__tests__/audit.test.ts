@@ -536,6 +536,29 @@ describe("auth audit trail", () => {
             });
         });
 
+        it("records the created account's id on create-user, from the response, not the body", () => {
+            expect.assertions(1);
+
+            const entry = buildAuditEntry({
+                body: { email: "new@example.com", password: NEW_PASSWORD },
+                context: { returned: { user: { email: "new@example.com", id: "user_new" } } },
+                path: "/api/auth/admin/create-user",
+            });
+
+            expect(entry?.detail).toStrictEqual({ path: "/api/auth/admin/create-user", targetUserId: "user_new" });
+        });
+
+        it("records the impersonated user's id on stop-impersonating, from the session being ended", () => {
+            expect.assertions(1);
+
+            const entry = buildAuditEntry({
+                context: { session: { session: { userId: "user_target" }, user: { id: "user_target" } } },
+                path: "/api/auth/admin/stop-impersonating",
+            });
+
+            expect(entry?.detail).toStrictEqual({ path: "/api/auth/admin/stop-impersonating", targetUserId: "user_target" });
+        });
+
         it("does not add targetUserId to a non-admin event", () => {
             expect.assertions(1);
 
