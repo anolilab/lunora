@@ -93,6 +93,22 @@ const polarSubscriptionUpdate = (patch: SubscriptionPatch): { productId: string 
     return { productId: patch.priceId ?? "" };
 };
 
+/**
+ * The seat count a checkout asks Polar for. A single unit is Polar's default, so it is left unsent and
+ * the request stays byte-identical for non-seat products.
+ */
+const checkoutSeats = (quantity: number | undefined): number | undefined => (quantity === undefined || quantity === 1 ? undefined : quantity);
+
+/**
+ * Polar applies `seats` only to seat-based prices and answers `seats: null` otherwise. A silent mismatch
+ * would bill a seat count the buyer did not pick, so the checkout fails instead.
+ */
+const assertSeatsApplied = (checkoutId: string, requested: number | undefined, applied: number | null | undefined): void => {
+    if (requested !== undefined && applied !== requested) {
+        throw new LunoraPaymentError("PROVIDER_ERROR", `polar did not apply the seat count ${String(requested)} to checkout ${checkoutId}`);
+    }
+};
+
 type PolarRefundReason = Parameters<Polar["refunds"]["create"]>[0]["reason"];
 
 /** `RefundCreate.reason` is a CLOSED enum — a free-form reason fails the SDK's validation outright. */
@@ -290,6 +306,7 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
 
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
             const client = await loadClient();
+            const seats = checkoutSeats(input.quantity);
 
             const checkout = await client.checkouts.create({
                 // Bind the checkout to the customer the facade already reused/minted for this reference,
@@ -304,8 +321,11 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
                 products: [input.priceId],
                 // Polar shows a back button to this URL; map the caller's cancel URL onto it.
                 returnUrl: input.cancelUrl,
+                ...(seats === undefined ? {} : { seats }),
                 successUrl: input.successUrl,
             });
+
+            assertSeatsApplied(checkout.id, seats, checkout.seats);
 
             return { id: checkout.id, provider: "polar", url: checkout.url };
         },
