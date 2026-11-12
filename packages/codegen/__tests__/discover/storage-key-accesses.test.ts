@@ -286,6 +286,63 @@ export const getAttachment = query(async ({ ctx, args }) => {
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    it("accepts a helper that destructures the caller's id from ctx.auth", () => {
+        expect.assertions(1);
+
+        const helper = `const requireMember = async (ctx, channelId) => {
+    const { userId } = ctx.auth;
+    if (!userId) {
+        throw new Error("UNAUTHENTICATED");
+    }
+    const row = await ctx.db.query("members").withIndex("by_channel_user", (q) => q.eq("channelId", channelId).eq("userId", userId)).first();
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+};`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("reports a helper that destructures from a value other than ctx.auth", () => {
+        expect.assertions(1);
+
+        const helper = `const requireMember = async (ctx, channelId, opts) => {
+    const { userId } = opts;
+    if (!userId) {
+        throw new Error("UNAUTHENTICATED");
+    }
+    const row = await ctx.db.query("members").withIndex("by_channel_user", (q) => q.eq("channelId", channelId).eq("userId", userId)).first();
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+};`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports a helper whose destructured id comes from a nested pattern", () => {
+        expect.assertions(1);
+
+        const helper = `const requireMember = async (ctx, channelId) => {
+    const { auth: { userId } } = ctx;
+    if (!userId) {
+        throw new Error("UNAUTHENTICATED");
+    }
+    const row = await ctx.db.query("members").withIndex("by_channel_user", (q) => q.eq("channelId", channelId).eq("userId", userId)).first();
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+};`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("accepts an inline identity guard that checks the row before the sink", () => {
         expect.assertions(1);
 

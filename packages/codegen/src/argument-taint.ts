@@ -480,8 +480,32 @@ const chainArgumentNodes = (chain: DatabaseChain): TsNode[] =>
     chain.calls.flatMap((call) => call.getArguments().flatMap((argument) => [argument, ...argument.getDescendants()]));
 
 /**
- * Whether `node` reads the caller's identity through the ctx parameter `parameter`: a `P.auth…` chain, or
- * an identifier whose one-hop `const` initializer is one (`const userId = ctx.auth.userId`).
+ * Whether `node` names a binding made by a direct element of `const { … } = P.auth…`: no nesting, rest or
+ * default, so `{ userId }` and `{ userId: uid }` count while `{ auth: { userId } } = ctx` does not.
+ */
+const isDirectDestructuredIdentityOf = (node: TsNode, parameter: ParameterDeclaration): boolean => {
+    const element = Node.isIdentifier(node) ? declarationOf(node) : undefined;
+
+    if (!Node.isBindingElement(element) || element.getDotDotDotToken() !== undefined || element.getInitializer() !== undefined) {
+        return false;
+    }
+
+    const pattern = element.getParent();
+    const declaration = Node.isObjectBindingPattern(pattern) ? pattern.getParent() : undefined;
+
+    if (!isConstDeclaration(declaration)) {
+        return false;
+    }
+
+    const source = accessPathOf(declaration.getInitializer());
+
+    return source?.path[0] === "auth" && bindsTo(source.root, parameter);
+};
+
+/**
+ * Whether `node` reads the caller's identity through the ctx parameter `parameter`: a `P.auth…` chain, an
+ * identifier whose one-hop `const` initializer is one (`const userId = ctx.auth.userId`), or a name a
+ * direct `const { userId } = ctx.auth` destructuring binds (the form `prefer-destructuring` enforces).
  */
 const isIdentityReadOf = (node: TsNode, parameter: ParameterDeclaration): boolean => {
     const access = accessPathOf(node);
@@ -492,7 +516,11 @@ const isIdentityReadOf = (node: TsNode, parameter: ParameterDeclaration): boolea
 
     const initializerAccess = accessPathOf(trustedInitializerOf(node));
 
-    return initializerAccess?.path[0] === "auth" && bindsTo(initializerAccess.root, parameter);
+    if (initializerAccess?.path[0] === "auth" && bindsTo(initializerAccess.root, parameter)) {
+        return true;
+    }
+
+    return isDirectDestructuredIdentityOf(node, parameter);
 };
 
 /** The declaration a variable statement makes, when it is a single `const` binding one identifier. */
