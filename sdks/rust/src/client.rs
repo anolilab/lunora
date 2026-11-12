@@ -1475,9 +1475,15 @@ impl Client {
                     handler(&error);
                 }
 
-                if let Some(delay) = retry_after(envelope) {
-                    if self.subscriptions.contains_key(&id) {
-                        self.pending_retries.insert(id.clone(), Instant::now() + delay);
+                if self.subscriptions.contains_key(&id) {
+                    match retry_after(envelope) {
+                        Some(delay) => {
+                            self.pending_retries.insert(id.clone(), Instant::now() + delay);
+                        }
+                        // A hint-less error is how the server ends a subscription, so a retry an earlier hint scheduled is cancelled.
+                        None => {
+                            self.pending_retries.remove(&id);
+                        }
                     }
                 }
             }
