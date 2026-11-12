@@ -131,3 +131,15 @@ and `notify_missing_push_config` if its evidence is not one call.
 ## 6. Platform parity
 
 Not applicable.
+
+## 5. Clarifications after the executor's Step 0 (reviewer, 2026-11-12)
+
+- A table whose `defineSchema` property initializer is not a `defineTable(...)` chain (`users: usersTable`, `users: makeUsers()`)
+  is located at that property assignment's start line; schema discovery is not changed. (Such a table is already discovered with
+  no columns — a pre-existing bug reported separately.)
+- Schema objects use `node.getStartLineNumber()` on the specific node, not `declarationLineOf` (which would climb to the
+  `defineSchema` statement): table → `defineTable` call; index → the `.index`-family property-access name node or standalone
+  `define*Index(...)` call; field → property assignment; relation → relation property.
+- `topic_too_many_subscriptions` is in scope: topics gain a declaration site and reach `LintContext` under a new optional `topics` key.
+- `notify_missing_push_config` stays without a location (its evidence spans the channel config and send sites, not one call).
+- `cross_module_table_write` keeps its grouping and copies the location of the write row it is built from.
