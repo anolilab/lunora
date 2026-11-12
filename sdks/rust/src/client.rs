@@ -908,6 +908,9 @@ impl Client {
         for entry in self.subscriptions.values_mut() {
             entry.cursor = None;
             entry.epoch = None;
+            entry.poisoned = false;
+            // A cached base belongs to the previous identity; a row change must not merge into it.
+            entry.has_base = false;
         }
 
         // A poke half-received under the previous session must not land on the

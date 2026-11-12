@@ -1387,6 +1387,7 @@ func (c *Client) ResendSubscriptions() error {
 		args   any
 		cursor any
 		epoch  any
+		sub    *subscription
 	}
 
 	c.mu.Lock()
@@ -1394,11 +1395,8 @@ func (c *Client) ResendSubscriptions() error {
 	entries := make([]resumePoint, 0, len(c.subscriptions))
 
 	for id, entry := range c.subscriptions {
-		// The resend replays from the frozen cursor, so a dropped change is
-		// re-applied: the poison is cleared and set again if it still cannot merge.
-		entry.poisoned = false
-
 		entries = append(entries, resumePoint{
+			sub:    entry,
 			args:   entry.args,
 			cursor: entry.cursor,
 			epoch:  entry.epoch,
@@ -1429,13 +1427,27 @@ func (c *Client) ResendSubscriptions() error {
 		return nil
 	}
 
+	// The replay re-applies a dropped change from the frozen cursor, so the poison clears
+	// for each send. A poisoned subscription would ignore that replay. A failed build or
+	// send leaves the subscription frozen again.
 	for _, entry := range entries {
 		frame, err := BuildSubscribeFrame(entry.id, entry.name, entry.args, "", entry.cursor, entry.epoch)
 		if err != nil {
 			return err
 		}
 
+		c.mu.Lock()
+		wasPoisoned := entry.sub.poisoned
+		entry.sub.poisoned = false
+		c.mu.Unlock()
+
 		if err := send(frame); err != nil {
+			if wasPoisoned {
+				c.mu.Lock()
+				entry.sub.poisoned = true
+				c.mu.Unlock()
+			}
+
 			return err
 		}
 	}

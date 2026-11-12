@@ -478,6 +478,9 @@ public final class Client {
         for (Subscription subscription : subscriptions.values()) {
             subscription.cursor = null;
             subscription.epoch = null;
+            subscription.poisoned = false;
+            // A cached base belongs to the previous identity; a row change must not merge into it.
+            subscription.state.serverBase = null;
         }
 
         for (Shape shape : shapes.values()) {

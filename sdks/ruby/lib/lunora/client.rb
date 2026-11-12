@@ -1288,6 +1288,8 @@ module Lunora
         entry[:cursor] = nil
         entry[:epoch] = nil
         entry[:poisoned] = false
+        # A cached base belongs to the previous identity; a row change must not merge into it.
+        entry[:state].server_base = nil
       end
 
       @shapes.each_value do |shape|

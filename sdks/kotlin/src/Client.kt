@@ -1344,6 +1344,9 @@ class Client(
         for (entry in subscriptions.values) {
             entry.cursor = null
             entry.epoch = null
+            entry.poisoned = false
+            // A cached base belongs to the previous identity; a row change must not merge into it.
+            entry.state.hasBase = false
         }
 
         return shapes.values.mapNotNull { shape ->

@@ -181,9 +181,13 @@ class LunoraClient {
     }
 
     for (final entry in _subscriptions.values) {
+      // A cached base belongs to the previous identity; a row change must not merge into it.
       entry
         ..cursor = null
-        ..epoch = null;
+        ..epoch = null
+        ..poisoned = false
+        ..hasServerBase = false
+        ..serverBase = null;
     }
 
     _shapeRegistry.evictSession();

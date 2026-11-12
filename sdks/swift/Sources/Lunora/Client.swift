@@ -396,6 +396,9 @@ public final class LunoraClient {
         for entry in subscriptions.values {
             entry.cursor = nil
             entry.epoch = nil
+            entry.poisoned = false
+            // A cached base belongs to the previous identity; a row change must not merge into it.
+            entry.state.hasServerBase = false
         }
 
         for shape in shapes.values {
@@ -1074,18 +1077,24 @@ public final class LunoraClient {
         let (sender, frames) = withLock { () -> (LunoraFrameSender?, [[String: Any]]) in
             guard send != nil else { return (nil, []) }
 
-            var frames = subscriptions.compactMap { id, entry in
-                // The resume cursor sits before the dropped change, so the replay
-                // re-applies it; if it is still unmergeable the flag is set again.
-                entry.poisoned = false
+            var frames: [[String: Any]] = []
 
-                return try? LunoraClient.buildSubscribeFrame(
+            for (id, entry) in subscriptions {
+                let built = try? LunoraClient.buildSubscribeFrame(
                     id: id,
                     functionPath: entry.functionPath,
                     args: entry.args,
                     sinceSeq: entry.cursor,
                     sinceEpoch: entry.epoch
                 )
+
+                guard let frame = built else { continue }
+
+                // The resume cursor sits before the dropped change, so the replay re-applies
+                // it. Clear the poison only for a frame that is sent: a frame that failed to
+                // build leaves its subscription frozen.
+                entry.poisoned = false
+                frames.append(frame)
             }
 
             frames += shapes.compactMap { id, entry in
