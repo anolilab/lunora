@@ -140,3 +140,8 @@ nor make a leave stop a subscription. Revised decisions (replace the matching bu
   channel immediately. If the harness cannot run scheduled jobs, test `addCreator` directly and say so.
 - `requireMember(ctx, channelId)` reads `ctx.db.members` with `where: { channelId, userId: ctx.auth.userId }`.
 - Everything else in §2–§3 stands (gates, README wording, tests, live-query test, Step 6 directive removal with its STOP).
+- **Revision 2 (reviewer):** the scheduled `addCreator` is dropped — `ctx.scheduler` makes codegen require `@lunora/scheduler`
+  (and its Durable Object) in the example only for this. The creator becomes a member through the create-then-join client flow;
+  `join` is idempotent and cannot check that the channel exists (a shard cannot read the root `channels` table) — no wider than
+  `messages.send`, which already reaches any channel id a signed-in caller names. Owner-visible deviation from "the creator
+  becomes a member on channel creation": it is the UI flow, not one server mutation.
