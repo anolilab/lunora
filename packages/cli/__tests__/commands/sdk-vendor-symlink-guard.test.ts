@@ -100,6 +100,32 @@ describe("sdk vendor — refuses to copy a transport symlink", () => {
         expect(existsSync(join(outputDirectory, "lunora", "test_client.py"))).toBe(false);
     });
 
+    it("refuses a symlink in a later vendor entry before the first entry is copied", async () => {
+        // Rust and Ruby vendor two entries. A refusal in the second must not
+        // leave the first already on disk.
+        expect.assertions(2);
+
+        mkdirSync(join(transportRoot, "python", "extra"), { recursive: true });
+        writeFileSync(join(transportRoot, "python", "extra", "other.py"), "OTHER = 1\n", "utf8");
+
+        const linkTarget = join(scratchDir, "target.txt");
+
+        writeFileSync(linkTarget, "scratch-marker\n", "utf8");
+        symlinkSync(linkTarget, join(transportRoot, "python", "extra", "link.py"));
+
+        const twoEntries = {
+            ...target,
+            vendor: [
+                { from: "lunora", to: "lunora" },
+                { from: "extra", to: "extra" },
+            ],
+        };
+
+        await expect(vendorTransport({ ...vendorOptions(), target: twoEntries })).rejects.toThrow("refusing to vendor");
+
+        expect(existsSync(join(outputDirectory, "lunora"))).toBe(false);
+    });
+
     it("a symlink-free transport still vendors correctly (regression guard)", async () => {
         expect.assertions(2);
 

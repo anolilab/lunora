@@ -48,9 +48,15 @@ const TEST_SUFFIX = /_test\.|Tests?\./u;
 
 const isTestFile = (name: string): boolean => name.startsWith("test_") || TEST_SUFFIX.test(name);
 
-/** Every file under `directory`, as paths relative to it, sorted. */
+/**
+ * Every vendored file under `directory`, as paths relative to it, sorted.
+ *
+ * Skips the same names the copy's filter does, so the list describes what lands
+ * on disk: a test file or test directory is never copied and never listed.
+ */
 const walk = (directory: string, prefix = ""): string[] =>
     readdirSync(directory)
+        .filter((entry) => !isTestFile(entry))
         .toSorted((a, b) => a.localeCompare(b))
         .flatMap((entry) => {
             const absolute = join(directory, entry);
@@ -108,31 +114,60 @@ const assertNoSymlinks = (sourceRoot: string, current: string): void => {
 };
 
 /**
- * Copy one `vendor` entry. Returns the destination paths written.
+ * Refuse the whole transport before any entry is copied.
+ *
+ * Every entry is checked, not just the one about to be copied: a Rust or Ruby
+ * transport has two, and a refusal in the second must not leave the first
+ * already written into the project.
+ */
+const assertEntriesVendorable = (sourceRoot: string, vendor: SdkTarget["vendor"]): void => {
+    for (const entry of vendor) {
+        const source = join(sourceRoot, entry.from);
+
+        if (!existsSync(source)) {
+            throw new LunoraError("NOT_FOUND", `transport is missing ${entry.from}`);
+        }
+
+        assertNoSymlinks(sourceRoot, source);
+    }
+};
+
+/**
+ * The destination paths one `vendor` entry will produce, from its SOURCE.
+ *
+ * Listed from the source rather than read back from the destination: the stamp
+ * records what the transport contributed, and a destination that already holds
+ * files from a previous run would otherwise be recorded as transport.
+ */
+const listEntry = (sourceRoot: string, entry: SdkTarget["vendor"][number]): string[] => {
+    const source = join(sourceRoot, entry.from);
+
+    // `to` is a file when the source was; only a directory has children to walk.
+    return statSync(source).isDirectory() ? walk(source).map((child) => `${entry.to}/${child}`) : [entry.to];
+};
+
+/**
+ * Copy every `vendor` entry of a transport into `outputDirectory`, and return
+ * the destination paths they produced.
  *
  * `cpSync` rather than a hand-rolled copy: it already creates parents, copies
  * recursively and preserves file modes, and a filter returning `false` for a
  * directory prunes the whole subtree.
  */
-const copyEntry = (sourceRoot: string, outputDirectory: string, from: string, to: string): string[] => {
-    const source = join(sourceRoot, from);
+const copyEntries = (sourceRoot: string, outputDirectory: string, vendor: SdkTarget["vendor"]): string[] => {
+    assertEntriesVendorable(sourceRoot, vendor);
 
-    if (!existsSync(source)) {
-        throw new LunoraError("NOT_FOUND", `transport is missing ${from}`);
+    const files = vendor.flatMap((entry) => listEntry(sourceRoot, entry));
+
+    for (const entry of vendor) {
+        cpSync(join(sourceRoot, entry.from), join(outputDirectory, entry.to), {
+            filter: (candidate) => !isTestFile(candidate.slice(candidate.lastIndexOf(sep) + 1)),
+            force: true,
+            recursive: true,
+        });
     }
 
-    assertNoSymlinks(sourceRoot, source);
-
-    const destination = join(outputDirectory, to);
-
-    cpSync(source, destination, {
-        filter: (candidate) => !isTestFile(candidate.slice(candidate.lastIndexOf(sep) + 1)),
-        force: true,
-        recursive: true,
-    });
-
-    // `to` is a file when the source was; only a directory has children to walk.
-    return statSync(destination).isDirectory() ? walk(destination).map((child) => `${to}/${child}`) : [to];
+    return files.toSorted((a, b) => a.localeCompare(b));
 };
 
 /**
@@ -168,7 +203,7 @@ const vendorAtRef = async (
         }
 
         return {
-            files: target.vendor.flatMap((entry) => copyEntry(directory, outputDirectory, entry.from, entry.to)).toSorted((a, b) => a.localeCompare(b)),
+            files: copyEntries(directory, outputDirectory, target.vendor),
             ref,
             source: `${base}/${language}`,
             versionMatched: ref === resolveCliVersionRef(),
@@ -194,7 +229,7 @@ const vendorFromLocal = (from: string, options: { language: string; outputDirect
     }
 
     return {
-        files: target.vendor.flatMap((entry) => copyEntry(directory, outputDirectory, entry.from, entry.to)).toSorted((a, b) => a.localeCompare(b)),
+        files: copyEntries(directory, outputDirectory, target.vendor),
         // Deliberately not a git ref. The stamp's job is to say what the output
         // holds, and a working copy is whatever it is on disk — recording the
         // checkout's HEAD would claim a provenance the files may not have.

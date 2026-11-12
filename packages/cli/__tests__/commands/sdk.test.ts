@@ -134,6 +134,28 @@ describe("lunora sdk generate", () => {
         }).toStrictEqual({ surface: true, warned: true });
     });
 
+    it("does not record generated Dart files as transport on a second run", async () => {
+        expect.assertions(2);
+
+        // The second run is the one that matters: the first leaves generated
+        // files on disk, and the next run's scan must not mistake them for the
+        // vendored transport.
+        mkdirSync(join(transportRoot, "dart", "lib", "src"), { recursive: true });
+        writeFileSync(join(transportRoot, "dart", "lib", "lunora.dart"), "library lunora;\n", "utf8");
+        writeFileSync(join(transportRoot, "dart", "lib", "src", "client.dart"), "class Client {}\n", "utf8");
+
+        const spec = writeSpec(SPEC);
+        const outputDirectory = join(workdir, "sdk", "dart");
+
+        await runSdk({ from: transportRoot, lang: "dart", spec });
+        await runSdk({ from: transportRoot, lang: "dart", spec });
+
+        const stamp = JSON.parse(readFileSync(join(outputDirectory, "lunora-transport.json"), "utf8")) as { files: string[] };
+
+        expect(existsSync(join(outputDirectory, "lib", "lunora_api.dart"))).toBe(true);
+        expect(stamp.files).toStrictEqual(["lib/lunora.dart", "lib/src/client.dart"]);
+    });
+
     it("warns on an empty `methods` array but still writes the SDK, transport included", async () => {
         expect.assertions(3);
 
