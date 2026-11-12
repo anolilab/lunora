@@ -76,6 +76,21 @@ const POSTS = `${PREAMBLE}
         .mutation(() => null);
 `;
 
+// Policies declared through `definePolicies` / `definePolicy`: one list held in a
+// `const` and handed to `rls` by name, and one policy held in a `const` and
+// listed inline.
+const DEFINED = `${PREAMBLE}
+    const policies = definePolicies([
+        definePolicy({ on: "read", table: "notes", when: () => true }),
+        definePolicy({ on: "insert", table: "posts", when: () => true }),
+    ]);
+    const r = rls(policies);
+    export const q = c.query.use(r).query(async () => []);
+
+    const one = definePolicy({ on: "read", table: "notes", when: () => true });
+    export const single = c.query.use(rls(definePolicies([one]))).query(async () => []);
+`;
+
 let workdir: string;
 let project: Project;
 
@@ -85,11 +100,24 @@ describe("discoverRlsMetadata", () => {
         mkdirSync(join(workdir, "lunora"), { recursive: true });
         writeFileSync(join(workdir, "lunora", "documents.ts"), DOCUMENTS, "utf8");
         writeFileSync(join(workdir, "lunora", "posts.ts"), POSTS, "utf8");
+        writeFileSync(join(workdir, "lunora", "defined.ts"), DEFINED, "utf8");
         project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
     });
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
+    });
+
+    it("reads policies declared through definePolicies and definePolicy", () => {
+        expect.assertions(3);
+
+        const { policies } = discoverRlsMetadata(project, join(workdir, "lunora"));
+
+        // The list held in a `const` and handed to `rls` by name.
+        expect(policies).toContainEqual({ file: "defined", on: "read", procedure: "q", table: "notes" });
+        expect(policies).toContainEqual({ file: "defined", on: "insert", procedure: "q", table: "posts" });
+        // A single policy held in a `const` and listed inline.
+        expect(policies).toContainEqual({ file: "defined", on: "read", procedure: "single", table: "notes" });
     });
 
     it("extracts each policy's table + operation and the declaring procedure", () => {
