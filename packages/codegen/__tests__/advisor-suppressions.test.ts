@@ -201,7 +201,7 @@ export const legacy = mutation({ args: {}, handler: async () => { throw new Erro
         );
 
         const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
-        const row = result.advisorContext?.procedureProtections.find((entry) => entry.exportName === "legacy");
+        const row = result.advisorContext?.procedureProtections?.find((entry) => entry.exportName === "legacy");
 
         expect(row?.exempt).toBe(true);
         expect(row?.exemptReason).toBe("legacy endpoint, removed in Q3");
@@ -221,7 +221,7 @@ export const scoped = mutation({ args: {}, handler: async () => { throw new Erro
         );
 
         const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
-        const row = result.advisorContext?.procedureProtections.find((entry) => entry.exportName === "scoped");
+        const row = result.advisorContext?.procedureProtections?.find((entry) => entry.exportName === "scoped");
 
         expect(row?.exempt).toBe(false);
         expect(result.advisories.filter((advisory) => advisory.name === "advisor_suppression_invalid")).toHaveLength(0);
