@@ -23,6 +23,7 @@ const Chat = ({ email, name, userId }: ChatProperties): ReactElement => {
     const profiles = useQuery(api.profiles.list, {});
 
     const { mutate: createChannel } = useMutation(api.channels.create);
+    const { mutate: joinChannel } = useMutation(api.channels.join);
     const { mutate: saveProfile } = useMutation(api.profiles.save);
 
     const [active, setActive] = useState<string | null>(null);
@@ -79,9 +80,12 @@ const Chat = ({ email, name, userId }: ChatProperties): ReactElement => {
                         }
 
                         setError(null);
+                        // The creator joins right after create, with the new channel's shard key:
+                        // membership is not written by `create` itself.
                         createChannel({ name: value })
-                            .then(() => {
-                                setActive(value.toLowerCase());
+                            .then(async ({ name }) => {
+                                await joinChannel({ channelId: name }, { shardKey: name });
+                                setActive(name);
                                 input.value = "";
 
                                 return undefined;

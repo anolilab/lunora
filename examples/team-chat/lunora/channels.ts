@@ -31,7 +31,7 @@ export const list = query.query(async ({ ctx }): Promise<Document_<"channels">[]
 export const create = mutation
     .use(rateLimit(mutationLimiter, "send", byUser))
     .input({ name: v.string().max(64) })
-    .mutation(async ({ args: { name }, ctx }): Promise<Id<"channels">> => {
+    .mutation(async ({ args: { name }, ctx }): Promise<{ id: Id<"channels">; name: string }> => {
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to create a channel");
         }
@@ -62,7 +62,7 @@ export const create = mutation
 
         ctx.log.info("channel created", { name: slug });
 
-        return ctx.db.insert("channels", { createdBy: ctx.auth.userId, name: slug });
+        return { id: await ctx.db.insert("channels", { createdBy: ctx.auth.userId, name: slug }), name: slug };
     });
 
 /** Write the membership row if it is absent. */
