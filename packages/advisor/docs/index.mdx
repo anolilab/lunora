@@ -263,6 +263,59 @@ data" for the `index_utilization` lint. It stays internal, as groundwork for a
 future writer, until that gap closes. See the docblock atop `ae-metrics.ts` for
 the full read contract.
 
+## Suppressing one finding
+
+When a finding is accepted for your app, accept that one finding at one site with
+an inline directive above the code it concerns:
+
+```ts title="lunora/messages.ts"
+// lunora-advisor-exempt unindexed_foreign_key -- messages are append-only and never filtered by author
+export const archive = mutation({ ... });
+```
+
+The directive is `// lunora-advisor-exempt <rule> -- <reason>` on its own line.
+`<rule>` is the lint's snake_case name. The reason after `--` is required.
+
+- **Attachment.** The directive attaches to the code on the next line that holds
+  code; blank lines and other comments in between are skipped. In a `.ts` file
+  that is the outermost node starting at that line's first token, so a directive
+  above a statement covers the whole statement, including a multi-line chained
+  call. When the line below is a property or a chained call rather than a
+  statement, the directive covers only that property or call.
+- **Matching.** A finding is suppressed when it is of the named rule, it is
+  reported in the same file, and its reported line falls inside that node's line
+  span. A directive never matches by rule alone, by file alone, or by procedure,
+  and it does not reach the statement below the one it sits above.
+- **`wrangler.jsonc`.** The same `//` comment above a key accepts findings of the
+  named rule for that key only. `plaintext_secret_in_wrangler_vars` is the rule
+  that reports a plaintext secret in `vars`; the directive is then
+  `// lunora-advisor-exempt plaintext_secret_in_wrangler_vars -- <reason>`.
+- **Reason.** A directive with an empty reason suppresses nothing.
+- **Two WARN findings check the directives.** `advisor_suppression_invalid` fires
+  for a directive that cannot apply: no reason, an unknown rule id, a runtime
+  lint, or a rule that reports no source location. `advisor_suppression_unused`
+  fires for a valid directive that matches no finding, so a stale one gets
+  removed. Both name the directive's file and line. They are not lints, so they
+  have no row in the tables above.
+- **Gate.** The ERROR gate on `lunora codegen` and `lunora deploy` ignores a
+  suppressed finding. An unsuppressed ERROR still blocks, even when a suppressed
+  one sits beside it.
+- **Health map.** A suppressed finding neither fails nor warns its procedure. The
+  summary counts it as `suppressed`.
+- **Visibility.** A suppressed finding stays in the advisory list with its reason.
+  It appears in the codegen terminal output under an `N suppressed` line, in the
+  `lunora advisor` summary, in the Studio Advisors views with a Suppressed badge,
+  and in the `suppressed` field of the `lunora_get_advisories` MCP tool.
+- **Not suppressible.** Runtime lints have no source site, so a directive cannot
+  accept one. Some findings have no line to match: `notify_missing_push_config`
+  reports no location at all, and findings about tables or indexes that an
+  installed package contributes through its schema extension carry no line in
+  your code. A directive for either is reported, as invalid or as unused.
+
+A directive with no rule id, `// lunora-advisor-exempt -- <reason>`, is the older
+whole-procedure opt-out. It exempts the procedure from the health map score and
+suppresses no finding.
+
 ## Health map — score, verdicts, baseline
 
 The lints above answer _"what is wrong?"_. `scoreAdvisor()` answers _"how is the app
