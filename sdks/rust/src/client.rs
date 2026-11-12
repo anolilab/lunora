@@ -1313,6 +1313,14 @@ impl Client {
                             Resolved::Keep => {
                                 entry.poisoned = true;
 
+                                // Reported once, when the freeze starts: an app that stays silent shows a stale list.
+                                if let Some(handler) = &entry.on_error {
+                                    handler(&SubscriptionError {
+                                        code: Some("delta_unmergeable".to_string()),
+                                        message: "row change could not be merged; subscription frozen until a snapshot or resubscribe".to_string(),
+                                    });
+                                }
+
                                 return Ok(Some(kind));
                             }
                         }

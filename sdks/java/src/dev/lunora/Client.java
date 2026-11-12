@@ -1574,6 +1574,7 @@ public final class Client {
 
                 List<Runnable> deferred = new ArrayList<>();
 
+                frozen:
                 synchronized (lock) {
                     Subscription entry = subscriptions.get(id);
 
@@ -1605,7 +1606,21 @@ public final class Client {
                             // frame or a resubscribe, so a later frame's cursor cannot move the
                             // resume position past the dropped change.
                             entry.poisoned = true;
-                            return kind;
+                            // Reported once, when the freeze starts; the label exits the lock so
+                            // the callback runs after it.
+                            Consumer<SubscriptionError> handler = entry.onError;
+                            if (handler != null) {
+                                deferred.add(
+                                        () ->
+                                                handler.accept(
+                                                        new SubscriptionError(
+                                                                "delta_unmergeable",
+                                                                "a row change could not be merged;"
+                                                                    + " the subscription is frozen"
+                                                                    + " until a snapshot or a"
+                                                                    + " resubscribe")));
+                            }
+                            break frozen;
                         }
                     }
 

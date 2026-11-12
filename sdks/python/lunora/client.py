@@ -1311,6 +1311,9 @@ class LunoraClient:
                 # this change. Delta frames are ignored until a snapshot or a resubscribe, and
                 # that resubscribe resumes from the last applied cursor, so the server replays it.
                 sub.poisoned = True
+                # Reported once, when the freeze starts: an app that stays silent shows a stale list.
+                notice = SubscriptionError("row change could not be merged; subscription frozen until a snapshot or resubscribe", "delta_unmergeable")
+                deferred.extend(partial(cb, notice) for cb in sub.error_callbacks)
                 return {
                     "kind": "delta",
                     "id": frame.get("id"),

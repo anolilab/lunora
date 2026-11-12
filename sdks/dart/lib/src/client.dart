@@ -934,6 +934,9 @@ class LunoraClient {
           // `data` frame or a resend, so a reconnect replays from before it.
           if (merged == null) {
             entry.poisoned = true;
+            // Reported once, when the freeze starts: an app that stays silent shows a stale list.
+            entry.onError
+                ?.call(LunoraSubscriptionError('delta_unmergeable', 'row change could not be merged; subscription frozen until a snapshot or resubscribe'));
 
             return kind;
           }

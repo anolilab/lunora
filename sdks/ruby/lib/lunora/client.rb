@@ -1009,6 +1009,12 @@ module Lunora
         # the subscription is poisoned so the cursor stays before the lost change.
         if value.equal?(UNMERGEABLE_DELTA)
           entry[:poisoned] = true
+          # Reported once, when the freeze starts: an app that stays silent shows a stale list.
+          handler = entry[:on_error]
+          if handler
+            notice = SubscriptionError.new("delta_unmergeable", "row change could not be merged; subscription frozen until a snapshot or resubscribe")
+            deferred << -> { handler.call(notice) }
+          end
           return kind
         end
 

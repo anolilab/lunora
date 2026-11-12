@@ -1252,7 +1252,15 @@ public final class LunoraClient {
                 guard case .value(let merged) = resolution else {
                     entry.poisoned = true
 
-                    return []
+                    // Reported once, when the freeze starts: an app that stays silent shows a stale list.
+                    guard let onError = entry.onError else { return [] }
+
+                    let notice = LunoraSubscriptionError(
+                        code: "delta_unmergeable",
+                        message: "row change could not be merged; subscription frozen until a snapshot or resubscribe"
+                    )
+
+                    return [{ onError(notice) }]
                 }
 
                 advance(entry, frame)

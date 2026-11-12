@@ -1530,7 +1530,13 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			merged, publish := resolveDataPayload(kind, entry.state.ServerBase, value)
 			if !publish {
 				entry.poisoned = true
+				notice := entry.onError
 				c.mu.Unlock()
+
+				// Reported once, when the freeze starts: an app that stays silent shows a stale list.
+				if notice != nil {
+					notice(SubscriptionError{Code: "delta_unmergeable", Message: "row change could not be merged; subscription frozen until a snapshot or resubscribe"})
+				}
 
 				return kind, nil
 			}

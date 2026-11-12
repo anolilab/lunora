@@ -1172,6 +1172,17 @@ class Client(
                         // It also poisons the subscription so a later frame's cursor cannot skip it.
                         if (resolved !is RowDelta.Resolution.Publish) {
                             entry.poisoned = true
+                            // Reported once, when the freeze starts: an app that stays silent shows a stale list.
+                            val onError = entry.onError
+
+                            if (onError != null) {
+                                val notice =
+                                    SubscriptionError(
+                                        "delta_unmergeable",
+                                        "row change could not be merged; subscription frozen until a snapshot or resubscribe",
+                                    )
+                                deferred.add { onError(notice) }
+                            }
 
                             return@let
                         }
