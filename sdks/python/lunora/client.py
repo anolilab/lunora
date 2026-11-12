@@ -32,6 +32,7 @@ from collections.abc import AsyncIterator, Awaitable
 from functools import partial
 from typing import Any, Callable, Optional, Union
 
+from .delta import apply_delta, is_mutation_delta
 from .errors import WIRE_DECODE_FAILED, LunoraError, SubscriptionError, decode_failed, reply_error
 from .offline import Identity, OfflineQueue, random_id, token_stamp
 from .optimistic import drop_confirmed_layers, fold_optimistic
@@ -153,7 +154,9 @@ def parse_rpc_response(body: Any, status: int) -> Any:
 
 
 def build_connect_frame(client_id: Optional[str], context: Optional[dict] = None, token: Optional[str] = None) -> dict:
-    frame: dict[str, Any] = {"id": "connect", "type": "connect"}
+    # `pageDelta` only: this port merges row deltas but does not handle `batchStart`/`batchEnd`,
+    # so it must not announce `refreshBatch`.
+    frame: dict[str, Any] = {"caps": ["pageDelta"], "id": "connect", "type": "connect"}
     if client_id is not None:
         frame["clientId"] = client_id
     if context is not None:
@@ -329,6 +332,10 @@ class _Subscription:
         #: ``last_value`` exactly while no layer is active, and is what the
         #: layers fold onto when one is.
         self.server_base: Any = None
+        #: Set when a row change could not be merged into ``server_base``. Until a ``data`` frame
+        #: or a resubscribe clears it, delta frames are ignored whole, so a later frame's cursor
+        #: cannot move the resume position past the dropped change.
+        self.poisoned = False
         #: The DISPLAYED value: ``server_base`` folded through
         #: ``optimistic_layers``.
         self.last_value: Any = None
@@ -776,6 +783,7 @@ class LunoraClient:
 
         for sub in self._subs.values():
             sub.server_base = None
+            sub.poisoned = False
             sub.server_cursor = None
             sub.server_epoch = None
             sub.acked = False
@@ -1138,6 +1146,10 @@ class LunoraClient:
             sender = self._send
             if sender is None:
                 return
+            # The resubscribe resumes from the last applied cursor, so a dropped change is
+            # replayed; if it is still unmergeable the flag is set again.
+            for sub in self._subs.values():
+                sub.poisoned = False
             frames = [
                 build_subscribe_frame(sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch)
                 for sub in self._subs.values()
@@ -1266,12 +1278,9 @@ class LunoraClient:
 
     def _handle_data(self, frame: dict, deferred: list) -> dict:
         sub = self._subs.get(_frame_key(frame.get("id")))
-        # Minimal delta handling: replace wholesale (the full protocol merges a
-        # mutation-delta into the server base; a wholesale replace is a correct
-        # fallback and keeps the SDK dependency-free).
-        has_data = "data" in frame and frame["data"] is not None
+        has_data = frame.get("type") == "data"
         try:
-            value = decode_wire(frame["data"]) if has_data else decode_wire(frame.get("delta"))
+            value = decode_wire(frame.get("data")) if has_data else decode_wire(frame.get("delta"))
         except WireFormatError as error:
             # A malformed payload belongs on the subscription's error callback,
             # not on the socket read loop's stack. Letting it escape here ended
@@ -1283,6 +1292,36 @@ class LunoraClient:
                 deferred.extend(partial(cb, reported) for cb in sub.error_callbacks)
             return {"kind": "error", "id": frame.get("id"), "error": reported}
         displayed = value
+        if sub is not None:
+            if has_data:
+                # A snapshot is authoritative: it supersedes whatever change was dropped.
+                sub.poisoned = False
+            elif sub.poisoned:
+                return {"kind": "delta", "id": frame.get("id"), "value": sub.server_base, "displayed": sub.last_value, "unmerged": True}
+        if not has_data and is_mutation_delta(value) and sub is not None:
+            # A row change merges into the SERVER BASE, never the displayed value: the optimistic
+            # layers are re-folded onto the result below, exactly as for a `data` frame.
+            merged = apply_delta(sub.server_base, value)
+            if merged is None:
+                # DIVERGENCE from the reference, which re-snapshots here: this port has no
+                # resubscribe-for-snapshot path. Publishing the `{key, op, table, row}` envelope
+                # would replace a real result with it, so keep the previous value and leave the
+                # cursor and epoch where they were. Poison the subscription too: the run's last
+                # frame carries the cursor, and applying it would move the resume position past
+                # this change. Delta frames are ignored until a snapshot or a resubscribe, and
+                # that resubscribe resumes from the last applied cursor, so the server replays it.
+                sub.poisoned = True
+                # Reported once, when the freeze starts: an app that stays silent shows a stale list.
+                notice = SubscriptionError("row change could not be merged; subscription frozen until a snapshot or resubscribe", "delta_unmergeable")
+                deferred.extend(partial(cb, notice) for cb in sub.error_callbacks)
+                return {
+                    "kind": "delta",
+                    "id": frame.get("id"),
+                    "value": sub.server_base,
+                    "displayed": sub.last_value,
+                    "unmerged": True,
+                }
+            value = displayed = merged
         if sub is not None:
             sub.server_base = value
             # Only an integer cursor advances the tracked one. A frame that omits
@@ -1303,7 +1342,7 @@ class LunoraClient:
             deferred.extend(partial(cb, displayed) for cb in sub.callbacks)
         # ``value`` is the authoritative server value and ``displayed`` is what a
         # subscriber saw; they differ only while an optimistic layer is pending.
-        desc = {"kind": "data", "id": frame.get("id"), "value": value, "displayed": displayed}
+        desc = {"kind": "data" if has_data else "delta", "id": frame.get("id"), "value": value, "displayed": displayed}
         if "cursor" in frame:
             desc["cursor"] = frame["cursor"]
         if "epoch" in frame:
@@ -1347,6 +1386,9 @@ class LunoraClient:
         sub = self._subs.get(_frame_key(frame.get("id")))
         if sub is not None:
             sub.acked = True
+        # A poisoned subscription ignores these frames too: their cursor would move
+        # the resume position past the dropped row change.
+        if sub is not None and not sub.poisoned:
             if isinstance(frame.get("cursor"), int) and not isinstance(frame["cursor"], bool):
                 sub.server_cursor = frame["cursor"]
             if "epoch" in frame:

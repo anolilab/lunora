@@ -252,6 +252,12 @@ type subscription struct {
 	onError  ErrorHandler
 	cursor   any
 	epoch    any
+	// poisoned is set when a row change could not be merged into the held base.
+	// The change is dropped, and a later frame of the same run carries the resume
+	// cursor, so honouring it would move the resume point past the dropped change
+	// and a reconnect would never replay it. While set, delta frames are ignored;
+	// a data frame (an authoritative snapshot) or a resubscribe clears it.
+	poisoned bool
 	// state carries the displayed value and its optimistic overlays. See
 	// optimistic.go.
 	state OptimisticState
@@ -427,6 +433,8 @@ func (c *Client) evictSessionLocked(deferred *[]func()) {
 	for _, entry := range c.subscriptions {
 		entry.cursor = nil
 		entry.epoch = nil
+		// A freeze belongs to the previous identity, as its cached base does.
+		entry.poisoned = false
 		entry.state.ServerBase = nil
 		entry.state.ServerCursor = nil
 		NotifySubscription(&entry.state, FoldOptimistic(nil, entry.state.Layers), deferred)
@@ -470,7 +478,7 @@ func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 	c.send = nil
 	c.socketGeneration = -1
 
-	if send(BuildConnectFrame(c.clientID, context, c.sessionToken)) != nil {
+	if send(BuildConnectFrame(c.clientID, context, c.sessionToken, PageDeltaCapability)) != nil {
 		return
 	}
 
@@ -1051,8 +1059,9 @@ func Call[T any](c *Client, verb Verb, functionPath string, args any, shardKey s
 
 // BuildConnectFrame is the one-shot frame sent first on every socket open.
 // token is the session credential; it rides here and never in the socket URL,
-// and is omitted when empty.
-func BuildConnectFrame(clientID string, context map[string]any, token string) map[string]any {
+// and is omitted when empty. caps announces optional server behaviours; the port
+// announces only what it handles (pageDelta, never refreshBatch).
+func BuildConnectFrame(clientID string, context map[string]any, token string, caps ...string) map[string]any {
 	frame := map[string]any{"id": "connect", "type": "connect"}
 	if clientID != "" {
 		frame["clientId"] = clientID
@@ -1064,6 +1073,10 @@ func BuildConnectFrame(clientID string, context map[string]any, token string) ma
 
 	if token != "" {
 		frame["token"] = token
+	}
+
+	if len(caps) > 0 {
+		frame["caps"] = caps
 	}
 
 	return frame
@@ -1376,6 +1389,7 @@ func (c *Client) ResendSubscriptions() error {
 		args   any
 		cursor any
 		epoch  any
+		sub    *subscription
 	}
 
 	c.mu.Lock()
@@ -1384,6 +1398,7 @@ func (c *Client) ResendSubscriptions() error {
 
 	for id, entry := range c.subscriptions {
 		entries = append(entries, resumePoint{
+			sub:    entry,
 			args:   entry.args,
 			cursor: entry.cursor,
 			epoch:  entry.epoch,
@@ -1414,13 +1429,27 @@ func (c *Client) ResendSubscriptions() error {
 		return nil
 	}
 
+	// The replay re-applies a dropped change from the frozen cursor, so the poison clears
+	// for each send. A poisoned subscription would ignore that replay. A failed build or
+	// send leaves the subscription frozen again.
 	for _, entry := range entries {
 		frame, err := BuildSubscribeFrame(entry.id, entry.name, entry.args, "", entry.cursor, entry.epoch)
 		if err != nil {
 			return err
 		}
 
+		c.mu.Lock()
+		wasPoisoned := entry.sub.poisoned
+		entry.sub.poisoned = false
+		c.mu.Unlock()
+
 		if err := send(frame); err != nil {
+			if wasPoisoned {
+				c.mu.Lock()
+				entry.sub.poisoned = true
+				c.mu.Unlock()
+			}
+
 			return err
 		}
 	}
@@ -1489,8 +1518,33 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			var deferred []func()
 
 			c.mu.Lock()
+
+			// A row-change delta merges into the server base, not into what the user
+			// sees: the overlay is re-folded onto the merged base below.
+			if kind == "data" {
+				entry.poisoned = false
+			} else if entry.poisoned {
+				c.mu.Unlock()
+
+				return kind, nil
+			}
+
+			merged, publish := resolveDataPayload(kind, entry.state.ServerBase, value)
+			if !publish {
+				entry.poisoned = true
+				notice := entry.onError
+				c.mu.Unlock()
+
+				// Reported once, when the freeze starts: an app that stays silent shows a stale list.
+				if notice != nil {
+					notice(SubscriptionError{Code: "delta_unmergeable", Message: "row change could not be merged; subscription frozen until a snapshot or resubscribe"})
+				}
+
+				return kind, nil
+			}
+
 			c.advanceLocked(entry, frame)
-			entry.state.ServerBase = value
+			entry.state.ServerBase = merged
 
 			// `cursor` is OPTIONAL on a data/delta frame, and one that omits it
 			// must LEAVE the tracked cursor where it was. Nulling it strands every
@@ -1520,6 +1574,15 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			var deferred []func()
 
 			c.mu.Lock()
+
+			// A poisoned subscription ignores these frames too: their cursor would move
+			// the resume position past the dropped row change.
+			if entry.poisoned {
+				c.mu.Unlock()
+
+				return kind, nil
+			}
+
 			c.advanceLocked(entry, frame)
 
 			// A resume/settled frame advances the cursor without a value change —

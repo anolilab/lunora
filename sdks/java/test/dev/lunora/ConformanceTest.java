@@ -54,6 +54,9 @@ public final class ConformanceTest {
         non2xxWithoutEnvelopeThrows();
         clientFrameBuilders();
         serverFrameConsumer();
+        pageDeltaFramesMergeIntoTheCachedResult();
+        rowDeltaWithoutMergeableBaseIsNotPublishedAsAnEnvelope();
+        unmergeableRunFreezesTheCursor();
         subscriptionStreamYieldsFrameValuesInOrder();
         shapeSubscribeFrame();
         shapeSubscriptionsResendAfterReconnect();
@@ -829,11 +832,15 @@ public final class ConformanceTest {
         context.put("roomId", "general");
 
         check(
-                canonical(Client.buildConnectFrame("client-test", null, null))
+                canonical(Client.buildConnectFrame("client-test", null, null, null))
                         .equals(canonical(frames.get("connect"))),
                 "connect");
         check(
-                canonical(Client.buildConnectFrame("client-test", context, null))
+                canonical(Client.buildConnectFrame("client-test", null, null, List.of("pageDelta")))
+                        .equals(canonical(frames.get("connect-with-page-delta-caps"))),
+                "connect-with-page-delta-caps");
+        check(
+                canonical(Client.buildConnectFrame("client-test", context, null, null))
                         .equals(canonical(frames.get("connect-with-context"))),
                 "connect-with-context");
         check(
@@ -927,6 +934,140 @@ public final class ConformanceTest {
         // A conditional assertion that never runs is worse than none: without this,
         // renaming the fixture key would leave every suite green.
         check(cancellations == 1, "serverFrames must carry one cancelling case");
+    }
+
+    /**
+     * Each {@code pageDeltaFrames} case seeds the subscription's server base with a {@code data}
+     * frame, applies the row-change {@code delta}, and expects the merged value rather than the
+     * {key, op, table, row} envelope.
+     */
+    @SuppressWarnings("unchecked")
+    private static void pageDeltaFramesMergeIntoTheCachedResult() throws IOException {
+        List<Object> cases = (List<Object>) fixture("ws-frames.json").get("pageDeltaFrames");
+
+        check(
+                cases.size() == 8,
+                "ws-frames.json must carry 8 pageDeltaFrames, got " + cases.size());
+
+        for (Object entry : cases) {
+            Map<String, Object> testCase = (Map<String, Object>) entry;
+            Map<String, Object> frame = (Map<String, Object>) testCase.get("frame");
+            Map<String, Object> expect = (Map<String, Object>) testCase.get("expect");
+            Client client = new Client("https://app.example", null);
+
+            client.attachSocket(frame0 -> {}, null);
+
+            List<Object> seen = new ArrayList<>();
+
+            client.subscribe("messages:list", new LinkedHashMap<>(), seen::add, null, null);
+
+            Map<String, Object> seed = new LinkedHashMap<>();
+
+            seed.put("type", "data");
+            seed.put("id", frame.get("id"));
+            seed.put("data", testCase.get("baseWire"));
+            client.handleFrame(Json.write(seed));
+
+            String kind = client.handleFrame(Json.write(frame));
+
+            check(expect.get("kind").equals(kind), "kind for " + testCase.get("name"));
+            check(
+                    seen.size() == 2,
+                    "onData should fire for the seed and the delta: " + testCase.get("name"));
+            check(
+                    canonical(Wire.encode(seen.get(1))).equals(canonical(expect.get("valueWire"))),
+                    "merged value for " + testCase.get("name"));
+        }
+    }
+
+    /**
+     * An unmergeable row change poisons the subscription: later deltas neither publish nor move the
+     * resume cursor, until a resubscribe or a data frame clears it.
+     */
+    @SuppressWarnings("unchecked")
+    private static void unmergeableRunFreezesTheCursor() throws IOException {
+        List<Object> cases = (List<Object>) fixture("ws-frames.json").get("pageDeltaPoisonCases");
+
+        check(cases.size() == 3, "ws-frames.json must carry 3 pageDeltaPoisonCases");
+
+        for (Object entry : cases) {
+            Map<String, Object> testCase = (Map<String, Object>) entry;
+            String name = (String) testCase.get("name");
+            Client client = new Client("https://app.example", null);
+            List<Map<String, Object>> sent = new ArrayList<>();
+            List<Object> seen = new ArrayList<>();
+
+            client.attachSocket(sent::add, null);
+            client.subscribe("messages:list", new LinkedHashMap<>(), seen::add, null, null);
+            client.handleFrame(Json.write(testCase.get("seedFrame")));
+            seen.clear();
+
+            for (Object stepEntry : (List<Object>) testCase.get("steps")) {
+                Map<String, Object> step = (Map<String, Object>) stepEntry;
+
+                if (step.containsKey("resume")) {
+                    Map<String, Object> resume = (Map<String, Object>) step.get("resume");
+
+                    sent.clear();
+                    client.resendSubscriptions();
+
+                    Map<String, Object> query =
+                            (Map<String, Object>) resent(sent, "sub_1").get("query");
+
+                    check(
+                            sameNumber(query.get("sinceSeq"), resume.get("sinceSeq"))
+                                    && resume.get("sinceEpoch").equals(query.get("sinceEpoch")),
+                            name + ": the resume must carry the pre-run position, sent " + query);
+
+                    continue;
+                }
+
+                seen.clear();
+                client.handleFrame(Json.write(step.get("frame")));
+                check(
+                        seen.size() == ((Number) step.get("publishes")).intValue(),
+                        name + ": publishes, got " + seen.size());
+
+                if (step.containsKey("valueWire")) {
+                    check(
+                            canonical(Wire.encode(seen.get(0)))
+                                    .equals(canonical(step.get("valueWire"))),
+                            name + ": value");
+                }
+            }
+        }
+    }
+
+    /**
+     * A row change with no base, or one that cannot be merged into it, keeps the previous value and
+     * is never published as the envelope.
+     */
+    private static void rowDeltaWithoutMergeableBaseIsNotPublishedAsAnEnvelope() {
+        String delta =
+                "{\"type\":\"delta\",\"id\":\"sub_1\",\"delta\":"
+                        + "{\"key\":\"m1\",\"op\":\"update\",\"table\":\"t\","
+                        + "\"row\":{\"_id\":\"m1\"}}}";
+        Client bare = new Client("https://app.example", null);
+
+        bare.attachSocket(frame0 -> {}, null);
+
+        List<Object> bareSeen = new ArrayList<>();
+
+        bare.subscribe("messages:list", new LinkedHashMap<>(), bareSeen::add, null, null);
+        bare.handleFrame(delta);
+        check(bareSeen.isEmpty(), "a row change with no base is held, not published");
+
+        Client scalar = new Client("https://app.example", null);
+
+        scalar.attachSocket(frame0 -> {}, null);
+
+        List<Object> scalarSeen = new ArrayList<>();
+
+        scalar.subscribe("messages:count", new LinkedHashMap<>(), scalarSeen::add, null, null);
+        scalar.handleFrame("{\"type\":\"data\",\"id\":\"sub_1\",\"data\":3}");
+        scalar.handleFrame(delta);
+        check(scalarSeen.size() == 1, "an unmergeable row change publishes nothing");
+        check(Double.valueOf(3).equals(scalarSeen.get(0)), "the previous value is kept");
     }
 
     /**

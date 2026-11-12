@@ -503,15 +503,29 @@ fn non_2xx_without_error_envelope_fails() {
     assert!(!coded(400));
 }
 
+/// A connect golden with the `pageDelta` capability laid over it.
+pub(crate) fn with_page_delta(golden: &Value) -> Value {
+    let mut frame = golden.clone();
+
+    frame["caps"] = json!(["pageDelta"]);
+
+    frame
+}
+
 fn client_frame_builders() {
     let document = fixture("ws-frames.json");
     let frames = &document["clientFrames"];
     let args = WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]);
 
-    assert_eq!(canonical(&build_connect_frame(Some("client-test"), None, None)), canonical(&frames["connect"]));
+    // Every connect announces `pageDelta` (and not `refreshBatch`, which this port
+    // does not handle), so the expected plain connect is the capability golden.
+    assert_eq!(
+        canonical(&build_connect_frame(Some("client-test"), None, None)),
+        canonical(&frames["connect-with-page-delta-caps"])
+    );
     assert_eq!(
         canonical(&build_connect_frame(Some("client-test"), Some(&json!({ "roomId": "general" })), None)),
-        canonical(&frames["connect-with-context"])
+        canonical(&with_page_delta(&frames["connect-with-context"]))
     );
     assert_eq!(
         canonical(&build_subscribe_frame("sub_1", "messages:list", &args, None, None, None).expect("build")),
@@ -610,6 +624,113 @@ fn server_frame_consumer() {
     assert_eq!(cancellations, 1, "serverFrames must carry one cancelling case");
 
     a_refused_payload_stays_on_its_own_subscription();
+    page_delta_frames_merge_into_the_cached_result();
+}
+
+/// Each `pageDeltaFrames` case seeds the subscription with `baseWire`, applies the
+/// row-change frame, and expects the merged value.
+fn page_delta_frames_merge_into_the_cached_result() {
+    let document = fixture("ws-frames.json");
+    let cases = document["pageDeltaFrames"].as_array().expect("pageDeltaFrames");
+
+    assert_eq!(cases.len(), 8, "pageDeltaFrames must carry the eight merge cases");
+
+    for case in cases {
+        let name = case["name"].as_str().unwrap_or("?");
+        let id = case["frame"]["id"].as_str().expect("frame id");
+        let mut client = Client::new("https://app.example", None);
+        let seen: Arc<Mutex<Vec<WireValue>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_handle = Arc::clone(&seen);
+        let subscribed = client.subscribe(
+            "messages:list",
+            WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
+            Some(Box::new(move |value| seen_handle.lock().expect("seen").push(value.clone()))),
+            None,
+        );
+
+        assert_eq!(subscribed, id, "{name}: the fixture frame targets the first subscription");
+
+        let seed = json!({ "id": id, "type": "data", "data": case["baseWire"] });
+
+        client.handle_frame(&seed.to_string()).expect("seed");
+        seen.lock().expect("seen").clear();
+
+        let kind = client.handle_frame(&case["frame"].to_string()).expect("handle");
+
+        assert_eq!(kind.as_deref(), case["expect"]["kind"].as_str(), "{name}");
+
+        let seen = seen.lock().expect("seen");
+
+        assert_eq!(seen.len(), 1, "onData should fire once for {name}");
+        assert_eq!(
+            canonical(&encode_wire(&seen[0]).expect("encode")),
+            canonical(&case["expect"]["valueWire"]),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn page_delta_frames_merge() {
+    page_delta_frames_merge_into_the_cached_result();
+}
+
+/// An unmergeable row change poisons the subscription: later delta frames neither
+/// publish nor move the resume cursor. A resubscribe or a `data` frame clears it.
+#[test]
+fn an_unmergeable_run_freezes_the_cursor() {
+    let document = fixture("ws-frames.json");
+    let cases = document["pageDeltaPoisonCases"].as_array().expect("pageDeltaPoisonCases");
+
+    assert_eq!(cases.len(), 3, "pageDeltaPoisonCases must carry its three cases");
+
+    for case in cases {
+        let name = case["name"].as_str().unwrap_or("?");
+        let mut client = Client::new("https://app.example", None);
+        let sent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let outbound = Arc::clone(&sent);
+
+        client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())), None);
+
+        let seen: Arc<Mutex<Vec<WireValue>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_handle = Arc::clone(&seen);
+
+        client.subscribe(
+            "messages:list",
+            WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
+            Some(Box::new(move |value| seen_handle.lock().expect("seen").push(value.clone()))),
+            None,
+        );
+
+        client.handle_frame(&case["seedFrame"].to_string()).expect("seed");
+        seen.lock().expect("seen").clear();
+
+        for (index, step) in case["steps"].as_array().expect("steps").iter().enumerate() {
+            if let Some(resume) = step.get("resume") {
+                sent.lock().expect("sent").clear();
+                client.resend_subscriptions().expect("resend");
+
+                let frames = sent.lock().expect("sent");
+                let subscribe = frames.iter().find(|frame| frame["type"] == json!("subscribe")).expect("a resent subscribe");
+
+                assert_eq!(subscribe["query"]["sinceSeq"], resume["sinceSeq"], "{name} step {index}");
+                assert_eq!(subscribe["query"]["sinceEpoch"], resume["sinceEpoch"], "{name} step {index}");
+
+                continue;
+            }
+
+            seen.lock().expect("seen").clear();
+            client.handle_frame(&step["frame"].to_string()).expect("handle");
+
+            let seen = seen.lock().expect("seen");
+
+            assert_eq!(seen.len() as u64, step["publishes"].as_u64().expect("publishes"), "{name} step {index}");
+
+            if let Some(value_wire) = step.get("valueWire") {
+                assert_eq!(canonical(&encode_wire(&seen[0]).expect("encode")), canonical(value_wire), "{name} step {index}");
+            }
+        }
+    }
 }
 
 /// A `data` payload the codec refuses reaches THAT subscription's error callback
@@ -965,7 +1086,7 @@ fn deliver(client: &mut Client, frames: &Value) {
 }
 
 /// The frames `resend_subscriptions` sends now, keyed by type.
-fn resent(client: &Client, sent: &Arc<Mutex<Vec<Value>>>, kind: &str) -> Value {
+fn resent(client: &mut Client, sent: &Arc<Mutex<Vec<Value>>>, kind: &str) -> Value {
     sent.lock().expect("sent").clear();
     client.resend_subscriptions().expect("resend");
 
@@ -1011,7 +1132,7 @@ fn shape_poke_with_undecodable_row_is_refused_whole() {
         "the shape's error callback hears it once"
     );
 
-    let frame = resent(&client, &sent, "shape_subscribe");
+    let frame = resent(&mut client, &sent, "shape_subscribe");
 
     assert_eq!(
         frame["sinceCheckpoint"], shape["undecodableRowResendCheckpoint"],
@@ -1055,7 +1176,7 @@ fn shape_poke_with_undecodable_row_is_refused_whole() {
         "cold"
     );
 
-    let frame = resent(&client, &sent, "shape_subscribe");
+    let frame = resent(&mut client, &sent, "shape_subscribe");
 
     assert!(
         frame.get("sinceCheckpoint").is_none() && frame.get("sinceEpoch").is_none(),
@@ -1109,7 +1230,7 @@ fn malformed_frames_are_ignored_without_raising() {
 
     assert_eq!(*touched.lock().expect("touched"), 0, "no malformed frame reaches sub_1's callbacks");
 
-    let frame = resent(&client, &sent, "subscribe");
+    let frame = resent(&mut client, &sent, "subscribe");
 
     assert_eq!(
         frame["query"]["sinceSeq"], case["resendSinceSeq"],
@@ -1201,8 +1322,8 @@ fn identity_change_evicts_previous_session() {
 
         client.set_identity(identity(&transition["to"]));
 
-        let query = resent(&client, &sent, "subscribe");
-        let shape = resent(&client, &sent, "shape_subscribe");
+        let query = resent(&mut client, &sent, "subscribe");
+        let shape = resent(&mut client, &sent, "shape_subscribe");
 
         if transition["evicts"] == json!(true) {
             let evicted = &case["evicted"];
@@ -1268,8 +1389,8 @@ fn token_change_without_identity_evicts_previous_session(document: &Value) {
 
         set_token(&mut client, after);
 
-        let query = resent(&client, &sent, "subscribe");
-        let shape = resent(&client, &sent, "shape_subscribe");
+        let query = resent(&mut client, &sent, "subscribe");
+        let shape = resent(&mut client, &sent, "shape_subscribe");
 
         assert_eq!(query["query"].get("sinceSeq").is_none(), evicts, "{label}: query");
         assert_eq!(shape.get("sinceCheckpoint").is_none(), evicts, "{label}: shape");

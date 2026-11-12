@@ -1,5 +1,5 @@
 {
-    "$comment": "Golden fixtures for the WebSocket subscription protocol (GET /_lunora/ws). `clientFrames` are frames a client MUST emit; a conforming client's builders produce these (compared as parsed JSON, key order irrelevant). `serverFrames` are frames a client MUST consume; each `expect` describes the observable effect (`valueWire` is the wire form of the value delivered to the callback, so encode(received) == valueWire). `shape` covers the poke-based partial-replication path. `pageDeltaFrames` is a SEPARATE set only an SDK that announced the `pageDelta` capability should run: each case applies its `frame` ON TOP of `baseWire` (merging, not replacing) and asserts the merged `valueWire`. It is deliberately not in `serverFrames`, which SDKs iterate wholesale and apply by replacement. `refreshBatchFrames` is likewise separate, for an SDK that announced `refreshBatch`: frames between `batchStart` and `batchEnd` are held and applied together at the end, with one notification per subscription (README 5.5). `connect-with-caps` is the OPTIONAL capability-announcing form of the connect frame (protocol README 5.1.1) \u2014 an SDK that implements no capability tokens emits plain `connect` and is fully conforming, so only an SDK that has actually implemented a token should assert against it. Today no non-JS port announces a capability token, so `connect-with-caps`, `pageDeltaFrames` and `refreshBatchFrames` are asserted by `@lunora/client` alone — they are the reference's forward contract, not dead data.",
+    "$comment": "Golden fixtures for the WebSocket subscription protocol (GET /_lunora/ws). `clientFrames` are frames a client MUST emit; a conforming client's builders produce these (compared as parsed JSON, key order irrelevant). `serverFrames` are frames a client MUST consume; each `expect` describes the observable effect (`valueWire` is the wire form of the value delivered to the callback, so encode(received) == valueWire). `shape` covers the poke-based partial-replication path. `pageDeltaFrames` is a SEPARATE set only an SDK that announced the `pageDelta` capability should run: each case applies its `frame` ON TOP of `baseWire` (merging, not replacing) and asserts the merged `valueWire`. It is deliberately not in `serverFrames`, which SDKs iterate wholesale and apply by replacement. `refreshBatchFrames` is likewise separate, for an SDK that announced `refreshBatch`: frames between `batchStart` and `batchEnd` are held and applied together at the end, with one notification per subscription (README 5.5). `connect-with-caps` is the OPTIONAL capability-announcing form of the connect frame (protocol README 5.1.1) \u2014 an SDK that implements no capability tokens emits plain `connect` and is fully conforming, so only an SDK that has actually implemented a token should assert against it. All eight non-JS ports announce `pageDelta` and assert `pageDeltaFrames` and `connect-with-page-delta-caps`. `connect-with-caps` and `refreshBatchFrames` are asserted by `@lunora/client` alone, since no port announces `refreshBatch`; they are the reference's forward contract, not dead data.",
     "clientFrames": {
         "connect": {
             "clientId": "client-test",
@@ -12,6 +12,7 @@
             "id": "connect",
             "type": "connect"
         },
+        "connect-with-page-delta-caps": { "caps": ["pageDelta"], "clientId": "client-test", "id": "connect", "type": "connect" },
         "connect-with-context": {
             "clientId": "client-test",
             "id": "connect",
@@ -395,6 +396,366 @@
                     ]
                 }
             }
+        },
+        {
+            "name": "delta-page-insert-ascending-middle",
+            "$comment": "Ascending list (oldest-first). The new row's _creationTime falls between two neighbours, so it splices before the first larger one (README 5.1.1).",
+            "baseWire": {
+                "continueCursor": "c_2",
+                "isDone": false,
+                "page": [
+                    { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                    { "_creationTime": 1003, "_id": "m3", "text": "three" }
+                ]
+            },
+            "frame": {
+                "id": "sub_1",
+                "type": "delta",
+                "delta": { "key": "m2", "op": "insert", "row": { "_creationTime": 1002, "_id": "m2", "text": "two" }, "table": "messages" }
+            },
+            "expect": {
+                "kind": "delta",
+                "id": "sub_1",
+                "valueWire": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" },
+                        { "_creationTime": 1003, "_id": "m3", "text": "three" }
+                    ]
+                }
+            }
+        },
+        {
+            "name": "delta-page-delete",
+            "$comment": "A delete removes the row with that _id and leaves every other field of the page wrapper untouched.",
+            "baseWire": {
+                "continueCursor": "c_2",
+                "isDone": false,
+                "page": [
+                    { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                    { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                ]
+            },
+            "frame": { "id": "sub_1", "type": "delta", "delta": { "key": "m1", "op": "delete", "table": "messages" } },
+            "expect": {
+                "kind": "delta",
+                "id": "sub_1",
+                "valueWire": { "continueCursor": "c_2", "isDone": false, "page": [{ "_creationTime": 1002, "_id": "m2", "text": "two" }] }
+            }
+        },
+        {
+            "name": "delta-page-delete-absent-row",
+            "$comment": "A delete for a row this list never held is a no-op, not a failure.",
+            "baseWire": {
+                "continueCursor": "c_2",
+                "isDone": false,
+                "page": [
+                    { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                    { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                ]
+            },
+            "frame": { "id": "sub_1", "type": "delta", "delta": { "key": "m9", "op": "delete", "table": "messages" } },
+            "expect": {
+                "kind": "delta",
+                "id": "sub_1",
+                "valueWire": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                }
+            }
+        },
+        {
+            "name": "delta-bare-array-update",
+            "$comment": "A bare-array result merges the same way as a paginated one; the value stays a bare array.",
+            "baseWire": [
+                { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                { "_creationTime": 1002, "_id": "m2", "text": "two" }
+            ],
+            "frame": {
+                "id": "sub_1",
+                "type": "delta",
+                "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "messages" }
+            },
+            "expect": {
+                "kind": "delta",
+                "id": "sub_1",
+                "valueWire": [
+                    { "_creationTime": 1001, "_id": "m1", "text": "ONE" },
+                    { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                ]
+            }
+        },
+        {
+            "name": "delta-page-insert-without-creation-time",
+            "$comment": "A row with no numeric _creationTime has no position to honour, so it appends (the list keeps its own order).",
+            "baseWire": {
+                "continueCursor": "c_2",
+                "isDone": false,
+                "page": [
+                    { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                    { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                ]
+            },
+            "frame": { "id": "sub_1", "type": "delta", "delta": { "key": "m5", "op": "insert", "row": { "_id": "m5", "text": "five" }, "table": "messages" } },
+            "expect": {
+                "kind": "delta",
+                "id": "sub_1",
+                "valueWire": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" },
+                        { "_id": "m5", "text": "five" }
+                    ]
+                }
+            }
+        },
+        {
+            "name": "delta-unrecognised-payload-replaces",
+            "$comment": "An opaque payload that is not a row delta (no key/op/table) is not merged: it replaces the cached value, as a plain data frame would.",
+            "baseWire": { "continueCursor": "c_2", "isDone": false, "page": [{ "_creationTime": 1001, "_id": "m1", "text": "one" }] },
+            "frame": { "id": "sub_1", "type": "delta", "delta": { "count": 1 } },
+            "expect": { "kind": "delta", "id": "sub_1", "valueWire": { "count": 1 } }
+        }
+    ],
+    "pageDeltaPoisonCases": [
+        {
+            "name": "unmergeable-run-freezes-the-cursor",
+            "$comment": "A row change that cannot be merged (an update with no row) poisons the subscription: later delta frames are not merged, published or allowed to advance the resume cursor, even when they carry one. Only a data frame or a resubscribe clears the poison. Without this a later frame's cursor would move the resume position past the dropped change, so a reconnect would not replay it (protocol README 5.4).",
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": {
+                            "key": "m1",
+                            "op": "update",
+                            "table": "messages"
+                        },
+                        "more": true
+                    },
+                    "publishes": 0
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": {
+                            "key": "m2",
+                            "op": "update",
+                            "row": {
+                                "_creationTime": 1002,
+                                "_id": "m2",
+                                "text": "TWO"
+                            },
+                            "table": "messages"
+                        },
+                        "cursor": 9,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "settled",
+                        "cursor": 10,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": null,
+                        "cursor": 11,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0
+                },
+                {
+                    "resume": {
+                        "sinceSeq": 5,
+                        "sinceEpoch": "e1"
+                    }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "data",
+                        "data": {
+                            "continueCursor": "c_3",
+                            "isDone": false,
+                            "page": [
+                                {
+                                    "_creationTime": 1001,
+                                    "_id": "m1",
+                                    "text": "one"
+                                },
+                                {
+                                    "_creationTime": 1002,
+                                    "_id": "m2",
+                                    "text": "TWO"
+                                }
+                            ]
+                        },
+                        "cursor": 12,
+                        "epoch": "e2"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_3",
+                        "isDone": false,
+                        "page": [
+                            {
+                                "_creationTime": 1001,
+                                "_id": "m1",
+                                "text": "one"
+                            },
+                            {
+                                "_creationTime": 1002,
+                                "_id": "m2",
+                                "text": "TWO"
+                            }
+                        ]
+                    }
+                }
+            ],
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        {
+                            "_creationTime": 1001,
+                            "_id": "m1",
+                            "text": "one"
+                        },
+                        {
+                            "_creationTime": 1002,
+                            "_id": "m2",
+                            "text": "two"
+                        }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            }
+        },
+        {
+            "name": "committed-null-base-holds-a-row-change",
+            "$comment": "A committed null is a base like any other. A row change against it cannot merge, so it is held: nothing publishes and the cursor stays put until a data frame arrives. Without the hold, a client that reads a null base as no base publishes the raw {key, op, table, row} envelope as the result.",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": null,
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": {
+                            "key": "m1",
+                            "op": "update",
+                            "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" },
+                            "table": "messages"
+                        },
+                        "cursor": 6,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0
+                },
+                {
+                    "resume": {
+                        "sinceSeq": 5,
+                        "sinceEpoch": "e1"
+                    }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "data",
+                        "data": {
+                            "continueCursor": "c_3",
+                            "isDone": false,
+                            "page": [{ "_creationTime": 1001, "_id": "m1", "text": "ONE" }]
+                        },
+                        "cursor": 7,
+                        "epoch": "e2"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_3",
+                        "isDone": false,
+                        "page": [{ "_creationTime": 1001, "_id": "m1", "text": "ONE" }]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "row-change-with-no-base-is-held",
+            "$comment": "A subscription that has never received a data frame has no base. A row change cannot merge into nothing, so it is held as the committed-null case is. The raw envelope is never published as the result, and the data frame that follows is authoritative.",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "resume",
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": {
+                            "key": "m1",
+                            "op": "update",
+                            "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" },
+                            "table": "messages"
+                        },
+                        "cursor": 6,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0
+                },
+                {
+                    "resume": {
+                        "sinceSeq": 5,
+                        "sinceEpoch": "e1"
+                    }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "data",
+                        "data": {
+                            "continueCursor": "c_3",
+                            "isDone": false,
+                            "page": [{ "_creationTime": 1001, "_id": "m1", "text": "ONE" }]
+                        },
+                        "cursor": 7,
+                        "epoch": "e2"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_3",
+                        "isDone": false,
+                        "page": [{ "_creationTime": 1001, "_id": "m1", "text": "ONE" }]
+                    }
+                }
+            ]
         }
     ],
     "refreshBatchFrames": {

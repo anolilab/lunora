@@ -245,6 +245,13 @@ class Client(
         var epoch: Any? = null
 
         /**
+         * Set when a row change could not be merged into the held base. Later deltas are then
+         * ignored, cursor included, so the resume position stays before the dropped change.
+         * Cleared by a `data` frame (a snapshot) or by a resubscribe, whose replay re-applies it.
+         */
+        var poisoned: Boolean = false
+
+        /**
          * The stable wire key of [args], computed once at subscribe time so a
          * write's optimistic targeting can compare without re-serialising every
          * subscription's args on every write.
@@ -398,7 +405,19 @@ class Client(
             throw ApiException(WIRE_DECODE_FAILED, "the call succeeded but its result could not be decoded: ${error.message}")
         }
 
-        fun buildConnectFrame(clientId: String? = null, context: Map<String, Any?>? = null, token: String? = null): Map<String, Any?> {
+        /**
+         * The capability tokens this client announces. Only `pageDelta`: the server sends row-change
+         * deltas to a client that announces it, and [RowDelta] merges them. `refreshBatch` is not
+         * announced because batchStart/batchEnd frames are not handled.
+         */
+        val CAPABILITIES: List<String> = listOf("pageDelta")
+
+        fun buildConnectFrame(
+            clientId: String? = null,
+            context: Map<String, Any?>? = null,
+            token: String? = null,
+            caps: List<String>? = null,
+        ): Map<String, Any?> {
             val frame = LinkedHashMap<String, Any?>()
 
             frame["id"] = "connect"
@@ -406,6 +425,7 @@ class Client(
             clientId?.let { frame["clientId"] = it }
             context?.let { frame["context"] = it }
             token?.let { frame["token"] = it }
+            caps?.let { frame["caps"] = it }
 
             return frame
         }
@@ -567,7 +587,7 @@ class Client(
             send = null
             Triple(++attachGeneration, credentialGeneration, wsToken)
         }
-        sender(buildConnectFrame(clientId = clientId, context = context, token = provider?.invoke()))
+        sender(buildConnectFrame(clientId = clientId, context = context, token = provider?.invoke(), caps = CAPABILITIES))
         // A detach or a newer attach during the send supersedes this one: installing this sender would undo it,
         // so it is not installed and its whisper joins are not sent. The joins are written under the lock, so a
         // last-listener leave cannot unsubscribe between this snapshot and its join. A join that throws leaves
@@ -1074,6 +1094,7 @@ class Client(
                     // every shape view subscribed to a socket that no longer
                     // exists — silently, and for the rest of the process's life.
                     subscriptions.map { (id, entry) ->
+                        entry.poisoned = false
                         buildSubscribeFrame(id, entry.functionPath, entry.args, null, entry.cursor, entry.epoch)
                     } +
                         shapes.map { (id, shape) ->
@@ -1112,6 +1133,8 @@ class Client(
         // the lock exists to protect.
         when (kind) {
             "data", "delta" -> {
+                // The frame type decides, as in every port: a delta whose payload is null is still a delta.
+                val isDelta = kind == "delta"
                 val payload = frame["data"] ?: frame["delta"]
                 val value = try {
                     Wire.decode(payload)
@@ -1131,8 +1154,46 @@ class Client(
 
                 synchronized(lock) {
                     subscriptions[id]?.let { entry ->
+                        // A snapshot is authoritative; a delta after an unmergeable one is dropped whole.
+                        if (isDelta) {
+                            if (entry.poisoned) return@let
+                        } else {
+                            entry.poisoned = false
+                        }
+
+                        // The merge applies to the server base, never to the value the caller
+                        // sees: the overlays are re-folded onto the result below.
+                        val resolved = if (isDelta) {
+                            RowDelta.resolve(value, if (entry.state.hasBase) entry.state.serverBase else null)
+                        } else {
+                            RowDelta.Resolution.Publish(value)
+                        }
+
+                        // An unmergeable row change keeps the previous value; see RowDelta.resolve.
+                        // It also poisons the subscription so a later frame's cursor cannot skip it.
+                        if (resolved !is RowDelta.Resolution.Publish) {
+                            entry.poisoned = true
+                            // Reported once, when the freeze starts: an app that stays silent shows a stale list.
+                            val onError = entry.onError
+
+                            if (onError != null) {
+                                val notice =
+                                    SubscriptionError(
+                                        "delta_unmergeable",
+                                        "row change could not be merged; subscription frozen until a snapshot or resubscribe",
+                                    )
+                                deferred.add { onError(notice) }
+                            }
+
+                            return@let
+                        }
+
+                        entry.state.serverBase = resolved.value
+                        entry.state.hasBase = true
+                        // Advanced only once the frame is applied: an unmergeable row change returned above
+                        // must leave the resume cursor where it was, and `poisoned` keeps later frames
+                        // from moving it, so a reconnect replays the dropped change.
                         advance(entry, frame)
-                        entry.state.serverBase = value
                         // `cursor` is OPTIONAL on data/delta frames, and a frame
                         // that omits it — or sends an explicit null — must LEAVE
                         // the tracked cursor where it is: nulling it strands every
@@ -1160,6 +1221,10 @@ class Client(
 
                 synchronized(lock) {
                     subscriptions[id]?.let { entry ->
+                        // A poisoned subscription ignores these frames too: their cursor would
+                        // move the resume position past the dropped row change.
+                        if (entry.poisoned) return@let
+
                         advance(entry, frame)
                         // A resume/settled frame advances the cursor without a
                         // value change — but a write whose result was
@@ -1291,6 +1356,9 @@ class Client(
         for (entry in subscriptions.values) {
             entry.cursor = null
             entry.epoch = null
+            entry.poisoned = false
+            // A cached base belongs to the previous identity; a row change must not merge into it.
+            entry.state.hasBase = false
         }
 
         return shapes.values.mapNotNull { shape ->

@@ -328,6 +328,12 @@ private fun socketCredentialsStayOutOfTheUrl() {
     check(bare.wsUrl(null) == "wss://app.example/_lunora/ws", "with no ticket the socket URL carries no token parameter")
 }
 
+/** The golden connect frame plus the `caps` this client announces now that it merges row deltas. */
+private fun withPageDeltaCaps(golden: Any?): Map<String, Any?> =
+    LinkedHashMap<String, Any?>((golden as Map<*, *>).entries.associate { it.key.toString() to it.value }).also {
+        it["caps"] = listOf("pageDelta")
+    }
+
 private fun connectFrameFirstAndCarriesSessionToken() {
     covers("connect_frame_first_and_carries_session_token")
 
@@ -345,7 +351,10 @@ private fun connectFrameFirstAndCarriesSessionToken() {
     client.resendSubscriptions()
 
     check(sent[0]["type"] == "connect", "frame 0 of an open must be connect, got ${sent[0]["type"]}")
-    check(canonical(sent[0]) == canonical(golden["connect-with-token"]), "the connect frame must match connect-with-token")
+    check(
+        canonical(sent[0]) == canonical(withPageDeltaCaps(golden["connect-with-token"])),
+        "the connect frame must match connect-with-token, announcing pageDelta",
+    )
     check(sent[1]["type"] == "whisper_subscribe", "a topic registered before attach must rejoin right after connect")
     check(sent[2]["type"] == "subscribe" && sent[2]["id"] == "sub_1", "a subscription registered before attach must follow connect")
     check(
@@ -364,7 +373,10 @@ private fun connectFrameFirstAndCarriesSessionToken() {
     bearerOnly.clientId = "client-test"
     bearerOnly.attachSocket { bearerFrames.add(it) }
 
-    check(canonical(bearerFrames[0]) == canonical(golden["connect"]), "with no session credential connect must omit token")
+    check(
+        canonical(bearerFrames[0]) == canonical(golden["connect-with-page-delta-caps"]),
+        "with no session credential connect must omit token and announce only pageDelta",
+    )
     check(!bearerFrames[0].containsKey("token"), "the RPC bearer must never travel as connect.token")
 }
 
@@ -398,13 +410,19 @@ private fun attachSocketCarriesConnectionContext() {
 
     client.attachSocket(mapOf("roomId" to "general")) { withContext.add(it) }
 
-    check(canonical(withContext[0]) == canonical(golden["connect-with-context"]), "connect must carry the context in the connect-with-context shape")
+    check(
+        canonical(withContext[0]) == canonical(withPageDeltaCaps(golden["connect-with-context"])),
+        "connect must carry the context in the connect-with-context shape, announcing pageDelta",
+    )
 
     val without = mutableListOf<Map<String, Any?>>()
 
     client.attachSocket { without.add(it) }
 
-    check(canonical(without[0]) == canonical(golden["connect"]), "connect without a context must match the bare connect shape")
+    check(
+        canonical(without[0]) == canonical(golden["connect-with-page-delta-caps"]),
+        "connect without a context must match the bare pageDelta connect shape",
+    )
     check(!without[0].containsKey("context"), "connect must omit context when none is given")
 }
 
@@ -873,6 +891,107 @@ private fun clientFrameBuilders() {
         "subscribe-resume",
     )
     check(canonical(Client.buildUnsubscribeFrame("sub_1")) == canonical(frames["unsubscribe"]), "unsubscribe")
+}
+
+/**
+ * A row-change `delta` merges into the subscription's server base instead of reaching the
+ * caller as the value; the golden cases seed a base with a `data` frame first.
+ */
+private fun rowDeltaFramesMergeIntoTheBase() {
+    covers("row_delta_frames_merge_into_the_base")
+
+    val cases = fixture("ws-frames.json")["pageDeltaFrames"] as List<*>
+
+    check(cases.size == 8, "pageDeltaFrames must carry 8 cases, got ${cases.size}")
+
+    for (entry in cases) {
+        val testCase = entry as Map<*, *>
+        val name = testCase["name"]
+        val frame = testCase["frame"] as Map<*, *>
+        val client = Client("https://app.example")
+        val seen = mutableListOf<WireValue>()
+
+        client.attachSocket { }
+        client.subscribe("messages:list", null, { seen.add(it) })
+        client.handleFrame(Json.write(mapOf("id" to frame["id"], "type" to "data", "data" to testCase["baseWire"])))
+        seen.clear()
+
+        val kind = client.handleFrame(Json.write(frame))
+        val expect = testCase["expect"] as Map<*, *>
+
+        check(kind == expect["kind"], "kind for $name")
+        check(seen.size == 1, "onData should fire once for $name")
+        check(canonical(Wire.encode(seen[0])) == canonical(expect["valueWire"]), "value for $name")
+    }
+
+    // A delta that cannot merge (a row without _id) keeps the previous value; with no base
+    // the row change cannot merge into nothing, so it is held too.
+    val client = Client("https://app.example")
+    val seen = mutableListOf<WireValue>()
+    val change = mapOf("key" to "m1", "op" to "update", "row" to mapOf("text" to "x"), "table" to "messages")
+
+    client.attachSocket { }
+    client.subscribe("messages:list", null, { seen.add(it) })
+    client.handleFrame(Json.write(mapOf("id" to "sub_1", "type" to "delta", "delta" to change)))
+    check(seen.isEmpty(), "a delta with no base is held, not published")
+
+    seen.clear()
+    client.handleFrame(Json.write(mapOf("id" to "sub_1", "type" to "data", "data" to listOf(mapOf("text" to "no id")))))
+    seen.clear()
+    client.handleFrame(Json.write(mapOf("id" to "sub_1", "type" to "delta", "delta" to change)))
+    check(seen.none { canonical(Wire.encode(it)) == canonical(change) }, "an unmergeable row change must not reach the caller")
+}
+
+/**
+ * An unmergeable row change poisons the subscription: later deltas neither publish nor move the
+ * resume cursor, and only a `data` frame or a resubscribe clears it.
+ */
+private fun unmergeableRowChangeFreezesTheCursor() {
+    covers("unmergeable_row_change_freezes_the_cursor")
+
+    val cases = fixture("ws-frames.json")["pageDeltaPoisonCases"] as List<*>
+
+    check(cases.size == 3, "pageDeltaPoisonCases must carry 3 cases, got ${cases.size}")
+
+    for (entry in cases) {
+        val testCase = entry as Map<*, *>
+        val name = testCase["name"]
+        val client = Client("https://app.example")
+        val seen = mutableListOf<WireValue>()
+
+        client.attachSocket { }
+        client.subscribe("messages:list", null, { seen.add(it) })
+        client.handleFrame(Json.write(testCase["seedFrame"]))
+        seen.clear()
+
+        for ((index, stepEntry) in (testCase["steps"] as List<*>).withIndex()) {
+            val step = stepEntry as Map<*, *>
+            val label = "$name step ${index + 1}"
+            val resume = step["resume"] as? Map<*, *>
+
+            if (resume != null) {
+                val resent = mutableListOf<Map<String, Any?>>()
+
+                client.attachSocket { resent.add(it) }
+                client.resendSubscriptions()
+
+                val query = resent.first { it["type"] == "subscribe" }["query"] as Map<*, *>
+
+                check(number(query["sinceSeq"]) == number(resume["sinceSeq"]), "$label: sinceSeq ${query["sinceSeq"]}")
+                check(query["sinceEpoch"] == resume["sinceEpoch"], "$label: sinceEpoch ${query["sinceEpoch"]}")
+
+                continue
+            }
+
+            seen.clear()
+            client.handleFrame(Json.write(step["frame"]))
+            check(seen.size == number(step["publishes"])?.toInt(), "$label: publishes ${seen.size}")
+
+            if (step.containsKey("valueWire")) {
+                check(canonical(Wire.encode(seen[0])) == canonical(step["valueWire"]), "$label: valueWire")
+            }
+        }
+    }
 }
 
 private fun serverFrameConsumer() {
@@ -1581,6 +1700,8 @@ fun main() {
     non2xxWithoutEnvelopeThrows()
     clientFrameBuilders()
     serverFrameConsumer()
+    rowDeltaFramesMergeIntoTheBase()
+    unmergeableRowChangeFreezesTheCursor()
     subscriptionStreamYieldsFrameValuesInOrder()
     shapeSubscribeFrame()
     shapeSubscriptionsResendAfterReconnect()

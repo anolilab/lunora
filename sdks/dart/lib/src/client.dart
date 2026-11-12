@@ -33,6 +33,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 
+import 'delta_merge.dart';
 import 'errors.dart';
 import 'key.dart';
 import 'offline_queue.dart';
@@ -72,6 +73,15 @@ class _Subscription implements OptimisticTarget {
 
   @override
   Object? serverBase;
+
+  /// Whether [serverBase] has been set by a frame. A null base is a real value
+  /// (a query may return null), so this cannot be read off the value itself.
+  bool hasServerBase = false;
+
+  /// Set when a row change could not be merged and so was dropped. While set,
+  /// `delta` frames are ignored so a later frame's cursor cannot move the resume
+  /// position past the dropped change. A `data` frame or a resend clears it.
+  bool poisoned = false;
 
   @override
   Object? lastValue;
@@ -171,9 +181,13 @@ class LunoraClient {
     }
 
     for (final entry in _subscriptions.values) {
+      // A cached base belongs to the previous identity; a row change must not merge into it.
       entry
         ..cursor = null
-        ..epoch = null;
+        ..epoch = null
+        ..poisoned = false
+        ..hasServerBase = false
+        ..serverBase = null;
     }
 
     _shapeRegistry.evictSession();
@@ -633,8 +647,15 @@ class LunoraClient {
 
   // ─── Frame builders ───────────────────────────────────────────────────────
 
+  /// Always announces `pageDelta`: the server only sends row deltas to a client
+  /// that does, and [_dispatch] merges them. `refreshBatch` is deliberately not
+  /// announced, since batchStart/batchEnd are not handled.
   static Map<String, Object?> buildConnectFrame({String? clientId, Map<String, Object?>? context, String? token}) {
-    final frame = <String, Object?>{'id': 'connect', 'type': 'connect'};
+    final frame = <String, Object?>{
+      'id': 'connect',
+      'type': 'connect',
+      'caps': <String>['pageDelta']
+    };
 
     if (clientId != null) {
       frame['clientId'] = clientId;
@@ -770,6 +791,12 @@ class LunoraClient {
     // throws into a handler that does — would otherwise mutate `_subscriptions`
     // while it is being iterated. Swift's port serialises this under its lock
     // for the same reason.
+    for (final entry in _subscriptions.values) {
+      // The resent position predates the dropped change, so the replay
+      // re-applies it; if it is still unmergeable the flag is set again.
+      entry.poisoned = false;
+    }
+
     final frames = <Map<String, Object?>>[
       for (final entry in _subscriptions.entries)
         buildSubscribeFrame(entry.key, entry.value.functionPath, entry.value.args, sinceSeq: entry.value.cursor, sinceEpoch: entry.value.epoch),
@@ -870,7 +897,15 @@ class LunoraClient {
       case 'data':
       case 'delta':
         final entry = id == null ? null : _subscriptions[id];
-        final Object? value;
+
+        // A poisoned subscription ignores later deltas. Only a `data` frame clears the
+        // poison, and it does so after its payload decodes (below), so a malformed
+        // snapshot leaves the stale base and the cursor where they were.
+        if (entry != null && entry.poisoned && kind != 'data') {
+          return kind;
+        }
+
+        Object? value;
 
         try {
           value = decodeWire(frame['data'] ?? frame['delta']);
@@ -884,6 +919,31 @@ class LunoraClient {
           return 'error';
         }
 
+        // A `delta` that is a row change merges into the server base, not the
+        // displayed value, which may carry an optimistic overlay re-folded below.
+        // `data` wins when both are present, as it does for the decode above.
+        if (frame['data'] == null && entry != null && isMutationDelta(value)) {
+          // With no base, or a committed null, the row change cannot merge and is held like any other.
+          final merged = entry.hasServerBase ? applyDelta(entry.serverBase, value! as Map<String, Object?>) : null;
+
+          // Unmergeable against a base we hold. The reference re-snapshots here;
+          // this port has no resubscribe-for-snapshot path, so the previous value
+          // is kept. The cursor is NOT advanced, and the subscription is poisoned:
+          // a later frame of the same run carries the cursor, and honouring it
+          // would resume past this change. Poisoned deltas are ignored until a
+          // `data` frame or a resend, so a reconnect replays from before it.
+          if (merged == null) {
+            entry.poisoned = true;
+            // Reported once, when the freeze starts: an app that stays silent shows a stale list.
+            entry.onError
+                ?.call(LunoraSubscriptionError('delta_unmergeable', 'row change could not be merged; subscription frozen until a snapshot or resubscribe'));
+
+            return kind;
+          }
+
+          value = merged;
+        }
+
         if (entry != null) {
           // Order matters, and matches the reference client: record the
           // authoritative value, advance the cursor, drop the layers the server
@@ -891,7 +951,13 @@ class LunoraClient {
           // whatever is still pending. Notifying before the drop would show the
           // confirmed write twice — once in the new base and once in its own
           // overlay.
+          if (kind == 'data') {
+            // A snapshot is authoritative, so it supersedes the dropped change.
+            entry.poisoned = false;
+          }
+
           entry.serverBase = value;
+          entry.hasServerBase = true;
           _advance(entry, frame);
           dropConfirmedLayers(entry, entry.serverCursor);
           notifyTarget(entry, foldOptimistic(value, entry.layers));
@@ -901,6 +967,10 @@ class LunoraClient {
       case 'resume':
       case 'settled':
         final entry = id == null ? null : _subscriptions[id];
+
+        if (entry != null && entry.poisoned) {
+          return kind;
+        }
 
         if (entry != null) {
           _advance(entry, frame);

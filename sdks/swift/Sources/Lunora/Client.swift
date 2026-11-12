@@ -250,6 +250,11 @@ public final class LunoraClient {
         let onError: ((LunoraSubscriptionError) -> Void)?
         var cursor: Any?
         var epoch: Any?
+        /// Set by a row change that could not be merged into the held base. While
+        /// set, delta frames are ignored whole so a later frame's cursor cannot move
+        /// the resume position past the dropped change. A `data` frame or a
+        /// resubscribe clears it.
+        var poisoned = false
         /// The displayed value and its optimistic overlays. See ``LunoraOptimistic``.
         let state = LunoraOptimisticState()
 
@@ -391,6 +396,9 @@ public final class LunoraClient {
         for entry in subscriptions.values {
             entry.cursor = nil
             entry.epoch = nil
+            entry.poisoned = false
+            // A cached base belongs to the previous identity; a row change must not merge into it.
+            entry.state.hasServerBase = false
         }
 
         for shape in shapes.values {
@@ -431,7 +439,11 @@ public final class LunoraClient {
     public func attachSocket(_ sender: @escaping LunoraFrameSender, context: [String: Any]? = nil) {
         withLock {
             socketGeneration = credentialGeneration
-            sender(LunoraClient.buildConnectFrame(clientID: storedClientID, context: context, token: storedSessionToken))
+            sender(
+                LunoraClient.buildConnectFrame(
+                    clientID: storedClientID, context: context, token: storedSessionToken, caps: [LunoraRowDelta.pageDeltaCapability]
+                )
+            )
 
             for topic in whispers.keys.sorted() {
                 sender(LunoraClient.buildWhisperSubscribeFrame(topic: topic))
@@ -863,8 +875,9 @@ public final class LunoraClient {
     /// The `connect` frame ``attachSocket(_:context:)`` sends first on every open.
     /// `token` is the session credential: it rides here, never in the socket URL,
     /// and is omitted when nil or empty.
-    public static func buildConnectFrame(clientID: String? = nil, context: [String: Any]? = nil, token: String? = nil) -> [String: Any] {
+    public static func buildConnectFrame(clientID: String? = nil, context: [String: Any]? = nil, token: String? = nil, caps: [String] = []) -> [String: Any] {
         var frame: [String: Any] = ["id": "connect", "type": "connect"]
+        if !caps.isEmpty { frame["caps"] = caps }
         if let clientID { frame["clientId"] = clientID }
         if let context { frame["context"] = context }
         // Empty is absent, matching `wsURL` and `buildRPCBody`.
@@ -1064,14 +1077,24 @@ public final class LunoraClient {
         let (sender, frames) = withLock { () -> (LunoraFrameSender?, [[String: Any]]) in
             guard send != nil else { return (nil, []) }
 
-            var frames = subscriptions.compactMap { id, entry in
-                try? LunoraClient.buildSubscribeFrame(
+            var frames: [[String: Any]] = []
+
+            for (id, entry) in subscriptions {
+                let built = try? LunoraClient.buildSubscribeFrame(
                     id: id,
                     functionPath: entry.functionPath,
                     args: entry.args,
                     sinceSeq: entry.cursor,
                     sinceEpoch: entry.epoch
                 )
+
+                guard let frame = built else { continue }
+
+                // The resume cursor sits before the dropped change, so the replay re-applies
+                // it. Clear the poison only for a frame that is sent: a frame that failed to
+                // build leaves its subscription frozen.
+                entry.poisoned = false
+                frames.append(frame)
             }
 
             frames += shapes.compactMap { id, entry in
@@ -1217,11 +1240,35 @@ public final class LunoraClient {
             let deferred = withLock { () -> LunoraOptimistic.Deferred in
                 guard let id, let entry = subscriptions[id] else { return [] }
 
+                // A snapshot is authoritative; a delta behind an unmergeable change
+                // is dropped whole, cursor included.
+                if kind == "data" { entry.poisoned = false } else if entry.poisoned { return [] }
+
+                // A row-change delta merges into the SERVER base, not into what the
+                // user sees; the pending layers are re-folded onto the result below.
+                let resolution = LunoraRowDelta.resolve(
+                    kind: kind, payload: value, base: entry.state.serverBase, hasBase: entry.state.hasServerBase
+                )
+                guard case .value(let merged) = resolution else {
+                    entry.poisoned = true
+
+                    // Reported once, when the freeze starts: an app that stays silent shows a stale list.
+                    guard let onError = entry.onError else { return [] }
+
+                    let notice = LunoraSubscriptionError(
+                        code: "delta_unmergeable",
+                        message: "row change could not be merged; subscription frozen until a snapshot or resubscribe"
+                    )
+
+                    return [{ onError(notice) }]
+                }
+
                 advance(entry, frame)
 
                 var queued: LunoraOptimistic.Deferred = []
 
-                entry.state.serverBase = value
+                entry.state.serverBase = merged
+                entry.state.hasServerBase = true
                 // Only when the frame CARRIES one: `cursor` is optional on
                 // data/delta frames, and nulling the tracked cursor strands every
                 // pending layer — a later `confirm(commitCursor)` has nothing to
@@ -1248,6 +1295,10 @@ public final class LunoraClient {
         case "resume", "settled":
             let deferred = withLock { () -> LunoraOptimistic.Deferred in
                 guard let id, let entry = subscriptions[id] else { return [] }
+
+                // A poisoned subscription ignores these frames too: their cursor would move
+                // the resume position past the dropped row change.
+                guard !entry.poisoned else { return [] }
 
                 advance(entry, frame)
 

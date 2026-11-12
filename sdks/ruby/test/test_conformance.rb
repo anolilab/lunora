@@ -258,6 +258,78 @@ class TestWsFrames < Minitest::Test
     assert_equal "e1", resent[1]["sinceEpoch"]
   end
 
+  def test_connect_frame_announces_page_delta_caps
+    golden = fixture("ws-frames.json")["clientFrames"]["connect-with-page-delta-caps"]
+
+    assert_equal canonical(golden), canonical(Lunora.build_connect_frame("client-test", caps: ["pageDelta"]))
+
+    client = Lunora::Client.new("https://app.example")
+    sent = []
+    client.attach_socket(->(frame) { sent << frame })
+    assert_equal ["pageDelta"], sent.first["caps"], "attach announces pageDelta, and never refreshBatch"
+  end
+
+  def test_page_delta_frames_merge_into_the_cached_list
+    fixture("ws-frames.json")["pageDeltaFrames"].each do |entry|
+      client = Lunora::Client.new("https://app.example")
+      client.attach_socket(->(_frame) {})
+      seen = []
+      client.subscribe("messages:list", { "channel" => "general" }, ->(value) { seen << value })
+      id = entry["frame"]["id"]
+      client.handle_frame(JSON.generate({ "id" => id, "type" => "data", "data" => entry["baseWire"] }))
+      seen.clear
+
+      assert_equal entry["expect"]["kind"], client.handle_frame(JSON.generate(entry["frame"])), entry["name"]
+      assert_equal 1, seen.length, "onData should fire once for #{entry["name"]}"
+      assert_equal canonical(entry["expect"]["valueWire"]), canonical(Lunora.encode_wire(seen.first)), entry["name"]
+    end
+  end
+
+  def test_unmergeable_row_delta_keeps_the_previous_value
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(_frame) {})
+    seen = []
+    client.subscribe("messages:list", {}, ->(value) { seen << value })
+    base = { "page" => [{ "text" => "no id" }], "isDone" => true }
+    client.handle_frame(JSON.generate({ "id" => "sub_1", "type" => "data", "data" => base }))
+    seen.clear
+
+    delta = { "key" => "m1", "op" => "update", "table" => "messages", "row" => { "_id" => "m1" } }
+    client.handle_frame(JSON.generate({ "id" => "sub_1", "type" => "delta", "delta" => delta }))
+
+    assert_empty seen, "the row-change envelope must never be published as the result"
+  end
+
+  def test_unmergeable_run_freezes_the_cursor
+    fixture("ws-frames.json")["pageDeltaPoisonCases"].each do |entry|
+      client = Lunora::Client.new("https://app.example")
+      sent = []
+      client.attach_socket(->(frame) { sent << frame })
+      seen = []
+      client.subscribe("messages:list", {}, ->(value) { seen << value })
+      client.handle_frame(JSON.generate(entry["seedFrame"]))
+      seen.clear
+
+      entry["steps"].each_with_index do |step, index|
+        label = "#{entry["name"]} step #{index + 1}"
+
+        if step["resume"]
+          sent.clear
+          client.resend_subscriptions
+          subscribe = sent.find { |frame| frame["type"] == "subscribe" }
+          assert_equal step["resume"]["sinceSeq"], subscribe["query"]["sinceSeq"], label
+          assert_equal step["resume"]["sinceEpoch"], subscribe["query"]["sinceEpoch"], label
+          next
+        end
+
+        seen.clear
+        client.handle_frame(JSON.generate(step["frame"]))
+        assert_equal step["publishes"], seen.length, label
+        assert_equal canonical(step["valueWire"]), canonical(Lunora.encode_wire(seen.first)), label if step["valueWire"]
+      end
+    end
+  end
+
   def test_server_frames
     ConformanceManifest.covers("server_frame_consumer")
     ConformanceManifest.covers("complete_frame_cancels_without_dropping_the_subscription")

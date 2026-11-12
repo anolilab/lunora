@@ -17,7 +17,8 @@ void caseClientFrameBuilders() {
 
   final frames = fixture('ws-frames.json')['clientFrames'] as Map<String, Object?>;
 
-  equals(canonical(LunoraClient.buildConnectFrame(clientId: 'client-test')), canonical(frames['connect']), 'connect frame');
+  equals(canonical(LunoraClient.buildConnectFrame(clientId: 'client-test')), canonical(frames['connect-with-page-delta-caps']),
+      'connect frame announces pageDelta');
   // protocol/README.md 5.1: the session credential is sent in connect, and only when held.
   equals(
     LunoraClient.buildConnectFrame(clientId: 'client-test', token: 'sess-SECRET-1')['token'],
@@ -27,7 +28,10 @@ void caseClientFrameBuilders() {
   check(!LunoraClient.buildConnectFrame(clientId: 'client-test').containsKey('token'), 'connect omits token when no session credential is held');
   equals(
     canonical(LunoraClient.buildConnectFrame(clientId: 'client-test', context: <String, Object?>{'roomId': 'general'})),
-    canonical(frames['connect-with-context']),
+    canonical(<String, Object?>{
+      ...frames['connect-with-context']! as Map<String, Object?>,
+      'caps': <Object?>['pageDelta']
+    }),
     'connect frame with context',
   );
   equals(
@@ -101,6 +105,126 @@ void caseServerFrameConsumer() {
   // A conditional assertion that never runs is worse than none: without this,
   // renaming the fixture key would leave every suite green.
   equals(cancellations, 1, 'serverFrames must carry one cancelling case');
+}
+
+/// `pageDeltaFrames`: each case seeds the subscription with `baseWire` as a
+/// `data` frame, applies `frame`, and expects the published value to be the row
+/// change merged into the base, never the `{ key, op, table, row }` envelope.
+void casePageDeltaFramesMergeIntoTheBase() {
+  final cases = objectList(fixture('ws-frames.json')['pageDeltaFrames']);
+
+  equals(cases.length, 8, 'pageDeltaFrames must carry its eight cases');
+
+  for (final testCase in cases) {
+    final name = testCase['name'];
+    final frame = testCase['frame'] as Map<String, Object?>;
+    final expect = testCase['expect'] as Map<String, Object?>;
+    final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+    final seen = <Object?>[];
+
+    client.subscribe('messages:list', args: <String, Object?>{'channel': 'general'}, onData: seen.add);
+    pushData(client, frame['id']! as String, testCase['baseWire']);
+    seen.clear();
+
+    equals(client.handleFrame(jsonEncode(frame)), expect['kind'], 'frame kind for $name');
+    equals(seen.length, 1, 'onData should fire once for $name');
+    equals(canonical(encodeWire(seen.isEmpty ? null : seen.first)), canonical(expect['valueWire']), 'merged value for $name');
+  }
+}
+
+/// A row change that cannot be merged is not published, and it poisons the
+/// subscription: later row changes wait for a snapshot.
+void caseUnmergeableRowDeltaKeepsThePreviousValue() {
+  final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+  final seen = <Object?>[];
+  final change = <String, Object?>{'key': 'm1', 'op': 'update', 'table': 'messages'};
+
+  client.subscribe('messages:list', onData: seen.add);
+
+  // No base yet: the row change cannot merge into nothing, so it is held and not published.
+  client.handleFrame(jsonEncode(<String, Object?>{'type': 'delta', 'id': 'sub_1', 'delta': change}));
+  equals(seen.length, 0, 'a row change with no base is held, not published');
+
+  pushData(client, 'sub_1', <Object?>[
+    <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'one'},
+  ]);
+  seen.clear();
+
+  // An update with no `row` cannot be spliced in.
+  client.handleFrame(jsonEncode(<String, Object?>{'type': 'delta', 'id': 'sub_1', 'delta': change}));
+  equals(seen.length, 0, 'an unmergeable row change is not published over the base');
+
+  // The refused change poisons the subscription, so a later mergeable change is
+  // ignored rather than merged over the base.
+  client.handleFrame(
+    jsonEncode(<String, Object?>{
+      'type': 'delta',
+      'id': 'sub_1',
+      'delta': <String, Object?>{
+        ...change,
+        'row': <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'ONE'},
+      },
+    }),
+  );
+  equals(seen.length, 0, 'a poisoned subscription ignores a later row change');
+
+  // A snapshot clears the poison and is published as it arrived.
+  pushData(client, 'sub_1', <Object?>[
+    <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'ONE'},
+  ]);
+  equals(
+    canonical(seen),
+    canonical(<Object?>[
+      <Object?>[
+        <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'ONE'},
+      ],
+    ]),
+    'a snapshot clears the poison',
+  );
+}
+
+/// `pageDeltaPoisonCases`: an unmergeable row change poisons the subscription, so
+/// a later delta in the run neither publishes nor moves the resume position, a
+/// resend asks for the pre-change position, and a `data` frame clears the poison.
+void casePoisonedSubscriptionFreezesTheResumeCursor() {
+  final cases = objectList(fixture('ws-frames.json')['pageDeltaPoisonCases']);
+
+  equals(cases.length, 3, 'pageDeltaPoisonCases must carry its three cases');
+
+  for (final testCase in cases) {
+    final name = testCase['name'];
+    final sent = <Map<String, Object?>>[];
+    final client = LunoraClient(url: 'https://app.example');
+    final seen = <Object?>[];
+
+    attachRecording(client, sent);
+    client.subscribe('messages:list', args: <String, Object?>{'channel': 'general'}, onData: seen.add);
+    client.handleFrame(jsonEncode(testCase['seedFrame']));
+    seen.clear();
+
+    for (final step in objectList(testCase['steps'])) {
+      final resume = step['resume'];
+
+      if (resume is Map<String, Object?>) {
+        sent.clear();
+        client.resendSubscriptions();
+
+        final subscribe = sent.singleWhere((frame) => frame['type'] == 'subscribe')['query']! as Map<String, Object?>;
+
+        equals(subscribe['sinceSeq'], resume['sinceSeq'], 'resent sinceSeq for $name');
+        equals(subscribe['sinceEpoch'], resume['sinceEpoch'], 'resent sinceEpoch for $name');
+        continue;
+      }
+
+      seen.clear();
+      client.handleFrame(jsonEncode(step['frame']));
+      equals(seen.length, step['publishes'], 'publish count for $name');
+
+      if (step.containsKey('valueWire')) {
+        equals(canonical(encodeWire(seen.single)), canonical(step['valueWire']), 'published value for $name');
+      }
+    }
+  }
 }
 
 /// The `Stream` form of a live query: same subscription, same decode, same order

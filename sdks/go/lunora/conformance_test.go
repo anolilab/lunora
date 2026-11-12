@@ -386,6 +386,7 @@ func TestClientFrameBuilders(t *testing.T) {
 	}
 
 	assertFrame(t, BuildConnectFrame("client-test", nil, ""), "connect")
+	assertFrame(t, BuildConnectFrame("client-test", nil, "", "pageDelta"), "connect-with-page-delta-caps")
 	assertFrame(t, BuildConnectFrame("client-test", map[string]any{"roomId": "general"}, ""), "connect-with-context")
 
 	cold, err := BuildSubscribeFrame("sub_1", "messages:list", map[string]any{"channel": "general"}, "", nil, nil)
@@ -1022,5 +1023,179 @@ func TestPendingPokeBuffersAreBounded(t *testing.T) {
 		if candidate == newest {
 			t.Error("the eviction order kept a stale id for an applied poke")
 		}
+	}
+}
+
+// TestPageDeltaFramesMergeIntoTheCachedResult drives ws-frames.json's
+// pageDeltaFrames: a data frame seeds the subscription's server base, then the
+// delta frame must merge into it rather than publish the row-change envelope.
+func TestPageDeltaFramesMergeIntoTheCachedResult(t *testing.T) {
+	cases, _ := loadFixture(t, "ws-frames.json")["pageDeltaFrames"].([]any)
+	if len(cases) != 8 {
+		t.Fatalf("fixture has %d pageDeltaFrames, want 8", len(cases))
+	}
+
+	for _, entry := range cases {
+		testCase, _ := entry.(map[string]any)
+		name, _ := testCase["name"].(string)
+
+		t.Run(name, func(t *testing.T) {
+			client := NewClient("https://app.example", nil)
+			client.AttachSocket(recordSubscriptionFrames(&[]map[string]any{}), nil)
+
+			var seen []any
+
+			client.Subscribe(
+				"messages:list",
+				map[string]any{"channel": "general"},
+				func(value any) { seen = append(seen, value) },
+				nil,
+				"",
+			)
+
+			frame, _ := testCase["frame"].(map[string]any)
+			id, _ := frame["id"].(string)
+
+			// The subscription id is generated; address the fixture's frames to it.
+			client.mu.Lock()
+			var generated string
+			for key := range client.subscriptions {
+				generated = key
+			}
+			client.mu.Unlock()
+
+			seed, _ := json.Marshal(map[string]any{"id": generated, "type": "data", "data": testCase["baseWire"]})
+			if _, err := client.HandleFrame(seed); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+
+			seen = nil
+			frame["id"] = generated
+
+			raw, _ := json.Marshal(frame)
+
+			if kind, err := client.HandleFrame(raw); err != nil || kind != "delta" {
+				t.Fatalf("handle = %q, %v; want delta (fixture id %s)", kind, err, id)
+			}
+
+			if len(seen) != 1 {
+				t.Fatalf("onData fired %d times, want 1", len(seen))
+			}
+
+			reEncoded, err := EncodeWire(seen[0])
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+
+			expect, _ := testCase["expect"].(map[string]any)
+
+			if got, want := canonical(t, reEncoded), canonical(t, expect["valueWire"]); got != want {
+				t.Errorf("value mismatch\n got: %s\nwant: %s", got, want)
+			}
+		})
+	}
+}
+
+// TestPageDeltaPoisonFreezesTheResumeCursor drives ws-frames.json's
+// pageDeltaPoisonCases: an unmergeable row change poisons the subscription, so a
+// later delta frame neither publishes nor moves the resume cursor, and only a
+// resubscribe or a data frame clears it.
+func TestPageDeltaPoisonFreezesTheResumeCursor(t *testing.T) {
+	cases, _ := loadFixture(t, "ws-frames.json")["pageDeltaPoisonCases"].([]any)
+	if len(cases) != 3 {
+		t.Fatalf("fixture has %d pageDeltaPoisonCases, want 3", len(cases))
+	}
+
+	for _, entry := range cases {
+		testCase, _ := entry.(map[string]any)
+		name, _ := testCase["name"].(string)
+
+		t.Run(name, func(t *testing.T) {
+			var sent []map[string]any
+
+			client := NewClient("https://app.example", nil)
+			client.AttachSocket(recordSubscriptionFrames(&sent), nil)
+
+			var seen []any
+
+			client.Subscribe(
+				"messages:list",
+				map[string]any{"channel": "general"},
+				func(value any) { seen = append(seen, value) },
+				nil,
+				"",
+			)
+
+			client.mu.Lock()
+			var generated string
+			for key := range client.subscriptions {
+				generated = key
+			}
+			client.mu.Unlock()
+
+			handle := func(frame map[string]any) {
+				t.Helper()
+
+				frame["id"] = generated
+				raw, _ := json.Marshal(frame)
+
+				if _, err := client.HandleFrame(raw); err != nil {
+					t.Fatalf("handle: %v", err)
+				}
+			}
+
+			seed, _ := testCase["seedFrame"].(map[string]any)
+			handle(seed)
+
+			steps, _ := testCase["steps"].([]any)
+
+			for index, raw := range steps {
+				step, _ := raw.(map[string]any)
+
+				if resume, ok := step["resume"].(map[string]any); ok {
+					sent = nil
+
+					if err := client.ResendSubscriptions(); err != nil {
+						t.Fatalf("step %d: resend: %v", index+1, err)
+					}
+
+					if len(sent) != 1 {
+						t.Fatalf("step %d: resend sent %d frames, want 1", index+1, len(sent))
+					}
+
+					query, _ := sent[0]["query"].(map[string]any)
+
+					if got, want := canonical(t, query["sinceSeq"]), canonical(t, resume["sinceSeq"]); got != want {
+						t.Errorf("step %d: sinceSeq = %s, want %s", index+1, got, want)
+					}
+
+					if got, want := canonical(t, query["sinceEpoch"]), canonical(t, resume["sinceEpoch"]); got != want {
+						t.Errorf("step %d: sinceEpoch = %s, want %s", index+1, got, want)
+					}
+
+					continue
+				}
+
+				seen = nil
+				frame, _ := step["frame"].(map[string]any)
+				handle(frame)
+
+				want, _ := step["publishes"].(float64)
+				if len(seen) != int(want) {
+					t.Fatalf("step %d: published %d times, want %d", index+1, len(seen), int(want))
+				}
+
+				if wire, ok := step["valueWire"]; ok {
+					reEncoded, err := EncodeWire(seen[0])
+					if err != nil {
+						t.Fatalf("step %d: encode: %v", index+1, err)
+					}
+
+					if got, want := canonical(t, reEncoded), canonical(t, wire); got != want {
+						t.Errorf("step %d: value mismatch\n got: %s\nwant: %s", index+1, got, want)
+					}
+				}
+			}
+		})
 	}
 }

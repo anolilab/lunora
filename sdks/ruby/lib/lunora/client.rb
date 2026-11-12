@@ -3,6 +3,7 @@
 require "json"
 require "uri"
 
+require_relative "delta"
 require_relative "key"
 require_relative "offline"
 require_relative "optimistic"
@@ -240,8 +241,9 @@ module Lunora
 
   # +token+ is the session credential (protocol/README.md 5.1, 6). It is sent
   # here, in the first frame, and never in the socket URL.
-  def build_connect_frame(client_id = nil, context = nil, token: nil)
+  def build_connect_frame(client_id = nil, context = nil, token: nil, caps: nil)
     frame = { "id" => "connect", "type" => "connect" }
+    frame["caps"] = caps unless caps.nil?
     frame["clientId"] = client_id unless client_id.nil?
     frame["context"] = context unless context.nil?
     frame["token"] = token unless token.nil?
@@ -447,7 +449,8 @@ module Lunora
         @send = nil
         @attach_generation += 1
         @socket_generation = @credential_generation
-        [@attach_generation, Lunora.build_connect_frame(@client_id, context, token: @session_token)]
+        [@attach_generation,
+         Lunora.build_connect_frame(@client_id, context, token: @session_token, caps: [Delta::PAGE_DELTA_CAPABILITY])]
       end
 
       sender.call(connect)
@@ -612,7 +615,7 @@ module Lunora
         id = "sub_#{@next_id}"
         @subscriptions[id] = {
           args: args, args_key: Lunora.stable_wire_key(args.nil? ? {} : args), cursor: nil, epoch: nil,
-          function_path: function_path, on_data: on_data, on_error: on_error, shard_key: shard_key,
+          function_path: function_path, on_data: on_data, on_error: on_error, poisoned: false, shard_key: shard_key,
           state: Optimistic::State.build(nil, on_data.nil? ? [] : [on_data])
         }
         Lunora.build_subscribe_frame(id, function_path, args)
@@ -702,6 +705,9 @@ module Lunora
         next [] if sender.nil?
 
         queries = @subscriptions.map do |id, entry|
+          # The resume position is still before any dropped change, so the replay
+          # re-applies it; if it is still unmergeable the flag is set again.
+          entry[:poisoned] = false
           Lunora.build_subscribe_frame(
             id, entry[:function_path], entry[:args],
             since_seq: entry[:cursor], since_epoch: entry[:epoch]
@@ -968,7 +974,7 @@ module Lunora
     end
 
     def deliver(entry, frame, kind, deferred)
-      payload = frame.key?("data") && !frame["data"].nil? ? frame["data"] : frame["delta"]
+      payload = kind == "data" ? frame["data"] : frame["delta"]
 
       begin
         value = Lunora.decode_wire(payload)
@@ -984,8 +990,35 @@ module Lunora
       end
 
       if entry
-        advance(entry, frame)
         state = entry[:state]
+        is_data = kind == "data"
+
+        # A snapshot is authoritative, so it ends a poisoned run.
+        entry[:poisoned] = false if is_data
+
+        # Once a row change has been dropped, every later delta is ignored, even
+        # one carrying a cursor: advancing would move the resume position past
+        # the dropped change and a reconnect would never replay it.
+        return kind if entry[:poisoned]
+
+        value = Delta.resolve_data_payload(value, is_data, state.server_base)
+
+        # A row change that cannot be merged into the base is never published as
+        # the result. This port has no resubscribe-for-snapshot path, so the
+        # previous value stays until the next data frame or a resubscribe, and
+        # the subscription is poisoned so the cursor stays before the lost change.
+        if value.equal?(UNMERGEABLE_DELTA)
+          entry[:poisoned] = true
+          # Reported once, when the freeze starts: an app that stays silent shows a stale list.
+          handler = entry[:on_error]
+          if handler
+            notice = SubscriptionError.new("delta_unmergeable", "row change could not be merged; subscription frozen until a snapshot or resubscribe")
+            deferred << -> { handler.call(notice) }
+          end
+          return kind
+        end
+
+        advance(entry, frame)
         state.server_base = value
         state.server_cursor = entry[:cursor] if entry[:cursor].is_a?(Integer)
         # Drop the overlays this frame has caught up with, then RE-FOLD the rest
@@ -1006,6 +1039,10 @@ module Lunora
     # until some unrelated write happens to produce a data frame — indefinitely
     # on a quiet query. Only re-fold when something was actually dropped.
     def sweep(entry, frame, kind, deferred)
+      # A poisoned subscription ignores this frame too: its cursor would move the
+      # resume position past the dropped row change.
+      return kind if entry && entry[:poisoned]
+
       if entry
         advance(entry, frame)
         state = entry[:state]
@@ -1256,6 +1293,9 @@ module Lunora
       @subscriptions.each_value do |entry|
         entry[:cursor] = nil
         entry[:epoch] = nil
+        entry[:poisoned] = false
+        # A cached base belongs to the previous identity; a row change must not merge into it.
+        entry[:state].server_base = nil
       end
 
       @shapes.each_value do |shape|

@@ -547,8 +547,22 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
+    /// A connect golden plus the capability the port announces on every open. The
+    /// fixture carries no pageDelta form of the token/context goldens, and the port
+    /// always adds it, so the expectation is derived rather than duplicated.
+    func withPageDeltaCaps(_ golden: Any?) -> [String: Any] {
+        var out = golden as? [String: Any] ?? [:]
+        out["caps"] = ["pageDelta"]
+        return out
+    }
+
     func caseClientFrameBuilders() throws {
         let frames = try XCTUnwrap(fixture("ws-frames.json")["clientFrames"] as? [String: Any])
+
+        XCTAssertEqual(
+            canonical(LunoraClient.buildConnectFrame(clientID: "client-test", caps: ["pageDelta"])),
+            canonical(frames["connect-with-page-delta-caps"])
+        )
 
         XCTAssertEqual(canonical(LunoraClient.buildConnectFrame(clientID: "client-test")), canonical(frames["connect"]))
         XCTAssertEqual(
@@ -620,6 +634,113 @@ final class ConformanceTests: XCTestCase {
         // A conditional assertion that never runs is worse than none: without
         // this, renaming the fixture key would leave every suite green.
         XCTAssertEqual(cancellations, 1, "serverFrames must carry one cancelling case")
+
+        try casePageDeltaFrames()
+    }
+
+    /// Row-change deltas merge into the server base; see `pageDeltaFrames`.
+    func casePageDeltaFrames() throws {
+        let cases = try XCTUnwrap(fixture("ws-frames.json")["pageDeltaFrames"] as? [[String: Any]])
+
+        XCTAssertEqual(cases.count, 8, "pageDeltaFrames must carry its eight cases")
+
+        func feed(_ client: LunoraClient, _ frame: Any?) throws {
+            let raw = try JSONSerialization.data(withJSONObject: try XCTUnwrap(frame))
+            client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+        }
+
+        for testCase in cases {
+            let name = testCase["name"] as? String ?? "?"
+            let client = LunoraClient(url: "https://app.example")
+            client.attachSocket { _ in }
+
+            var seen: [Any] = []
+            client.subscribe("messages:list", args: ["channel": "general"], onData: { seen.append($0) }, onError: { _ in })
+
+            let frame = try XCTUnwrap(testCase["frame"] as? [String: Any])
+            try feed(client, ["id": frame["id"] as Any, "type": "data", "data": testCase["baseWire"] as Any])
+            try feed(client, frame)
+
+            let expect = try XCTUnwrap(testCase["expect"] as? [String: Any])
+
+            XCTAssertEqual(seen.count, 2, "\(name): base then merged value")
+            XCTAssertEqual(canonical(try Wire.encode(seen.last)), canonical(expect["valueWire"]), name)
+        }
+
+        // No base: the row change cannot merge into nothing, so it is held. Nothing is
+        // published, and an unmergeable list keeps the previous value.
+        let envelope: [String: Any] = ["key": "m1", "op": "delete", "table": "messages"]
+        let bare = LunoraClient(url: "https://app.example")
+        bare.attachSocket { _ in }
+        var bareSeen: [Any] = []
+        bare.subscribe("messages:list", args: ["channel": "general"], onData: { bareSeen.append($0) }, onError: { _ in })
+        try feed(bare, ["id": "sub_1", "type": "delta", "delta": envelope])
+        XCTAssertTrue(bareSeen.isEmpty, "no base holds the delta: nothing is published")
+
+        let gap = LunoraClient(url: "https://app.example")
+        gap.attachSocket { _ in }
+        var gapSeen: [Any] = []
+        gap.subscribe("messages:list", args: ["channel": "general"], onData: { gapSeen.append($0) }, onError: { _ in })
+        let rows: [[String: Any]] = [["text": "no id"]]
+        try feed(gap, ["id": "sub_1", "type": "data", "data": rows])
+        try feed(gap, ["id": "sub_1", "type": "delta", "delta": envelope])
+        XCTAssertEqual(gapSeen.count, 1, "an unmergeable delta publishes nothing")
+
+        try casePageDeltaPoison()
+    }
+
+    /// An unmergeable row change freezes the resume cursor until a data frame or a
+    /// resubscribe; see `pageDeltaPoisonCases`.
+    func casePageDeltaPoison() throws {
+        let cases = try XCTUnwrap(fixture("ws-frames.json")["pageDeltaPoisonCases"] as? [[String: Any]])
+
+        XCTAssertEqual(cases.count, 3, "pageDeltaPoisonCases must carry its three cases")
+
+        for testCase in cases {
+            let name = testCase["name"] as? String ?? "?"
+            let client = LunoraClient(url: "https://app.example")
+            var sent: [[String: Any]] = []
+            client.attachSocket { sent.append($0) }
+
+            var seen: [Any] = []
+            client.subscribe("messages:list", args: ["channel": "general"], onData: { seen.append($0) }, onError: { _ in })
+
+            func feed(_ frame: Any?) throws {
+                let raw = try JSONSerialization.data(withJSONObject: try XCTUnwrap(frame))
+                client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+            }
+
+            try feed(testCase["seedFrame"])
+            // Only a data frame publishes a value; a resume seed leaves the subscription with no base.
+            let seedPublishes = ((testCase["seedFrame"] as? [String: Any])?["type"] as? String) == "data" ? 1 : 0
+            XCTAssertEqual(seen.count, seedPublishes, "\(name): the seed publishes \(seedPublishes)")
+
+            for (index, step) in try XCTUnwrap(testCase["steps"] as? [[String: Any]]).enumerated() {
+                let label = "\(name) step \(index + 1)"
+
+                if let resume = step["resume"] as? [String: Any] {
+                    sent.removeAll()
+                    client.resendSubscriptions()
+
+                    let subscribe = try XCTUnwrap(sent.first { $0["type"] as? String == "subscribe" }, label)
+
+                    let query = try XCTUnwrap(subscribe["query"] as? [String: Any], label)
+
+                    XCTAssertEqual(query["sinceSeq"] as? Int, resume["sinceSeq"] as? Int, label)
+                    XCTAssertEqual(query["sinceEpoch"] as? String, resume["sinceEpoch"] as? String, label)
+                    continue
+                }
+
+                let before = seen.count
+
+                try feed(step["frame"])
+                XCTAssertEqual(seen.count - before, step["publishes"] as? Int, label)
+
+                if let wire = step["valueWire"] {
+                    XCTAssertEqual(canonical(try Wire.encode(seen.last)), canonical(wire), label)
+                }
+            }
+        }
     }
 
     /// The `AsyncStream` form of a live query: same subscription, same decode,

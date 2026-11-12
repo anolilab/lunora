@@ -246,6 +246,12 @@ public final class Client {
         Object cursor;
         Object epoch;
 
+        /**
+         * Set by a row change that could not be merged into the held base. While set, delta frames
+         * are ignored entirely (no cursor advance); a data frame or a resubscribe clears it.
+         */
+        boolean poisoned;
+
         /** The displayed value and its optimistic overlays. See {@link Optimistic}. */
         final Optimistic.State state = new Optimistic.State(null);
 
@@ -472,6 +478,9 @@ public final class Client {
         for (Subscription subscription : subscriptions.values()) {
             subscription.cursor = null;
             subscription.epoch = null;
+            subscription.poisoned = false;
+            // A cached base belongs to the previous identity; a row change must not merge into it.
+            subscription.state.serverBase = null;
         }
 
         for (Shape shape : shapes.values()) {
@@ -543,7 +552,12 @@ public final class Client {
             credential = credentialGeneration;
         }
 
-        sender.send(buildConnectFrame(clientId, context, resolve(provider)));
+        sender.send(
+                buildConnectFrame(
+                        clientId,
+                        context,
+                        resolve(provider),
+                        List.of(DeltaMerge.PAGE_DELTA_CAPABILITY)));
 
         // A detach or a newer attach during the send supersedes this one: installing this sender
         // would undo it, so it is not installed and its whisper joins are not sent. The joins are
@@ -1112,9 +1126,12 @@ public final class Client {
         return cursor instanceof Number number ? number.longValue() : null;
     }
 
-    /** The {@code connect} frame. {@code token} is the session credential; null omits it. */
+    /**
+     * The {@code connect} frame. {@code token} is the session credential; null omits it. {@code
+     * caps} announces optional server behaviours and is omitted when null or empty.
+     */
     public static Map<String, Object> buildConnectFrame(
-            String clientId, Map<String, Object> context, String token) {
+            String clientId, Map<String, Object> context, String token, List<String> caps) {
         Map<String, Object> frame = new LinkedHashMap<>();
 
         frame.put("id", "connect");
@@ -1130,6 +1147,10 @@ public final class Client {
 
         if (token != null) {
             frame.put("token", token);
+        }
+
+        if (caps != null && !caps.isEmpty()) {
+            frame.put("caps", caps);
         }
 
         return frame;
@@ -1454,6 +1475,9 @@ public final class Client {
             for (Map.Entry<String, Subscription> entry : subscriptions.entrySet()) {
                 Subscription subscription = entry.getValue();
 
+                // The replay from the old cursor re-applies the dropped change, and poisons again
+                // if it is still unmergeable.
+                subscription.poisoned = false;
                 frames.add(
                         buildSubscribeFrame(
                                 entry.getKey(),
@@ -1550,6 +1574,7 @@ public final class Client {
 
                 List<Runnable> deferred = new ArrayList<>();
 
+                frozen:
                 synchronized (lock) {
                     Subscription entry = subscriptions.get(id);
 
@@ -1557,8 +1582,51 @@ public final class Client {
                         return kind;
                     }
 
+                    // The merge applies to the SERVER base, not the displayed value: the layers
+                    // are re-folded onto the merged result below, as for a data frame. A row
+                    // change that cannot be merged leaves the base as it was; the reference
+                    // re-snapshots here, this port has no such path, so the next data frame
+                    // reconciles it.
+                    if ("data".equals(kind)) {
+                        // A snapshot is authoritative, so it ends any poisoning.
+                        entry.poisoned = false;
+                        entry.state.serverBase = value;
+                    } else {
+                        if (entry.poisoned) {
+                            // A dropped row change is only replayed if the resume cursor stays
+                            // before it, and only the last frame of a run carries a cursor.
+                            return kind;
+                        }
+
+                        if (DeltaMerge.resolve(entry.state.serverBase, value)
+                                instanceof DeltaMerge.Outcome.Publish publish) {
+                            entry.state.serverBase = publish.value();
+                        } else {
+                            // Nothing changed, so nothing is published. Poisoned until a data
+                            // frame or a resubscribe, so a later frame's cursor cannot move the
+                            // resume position past the dropped change.
+                            entry.poisoned = true;
+                            // Reported once, when the freeze starts; the label exits the lock so
+                            // the callback runs after it.
+                            Consumer<SubscriptionError> handler = entry.onError;
+                            if (handler != null) {
+                                deferred.add(
+                                        () ->
+                                                handler.accept(
+                                                        new SubscriptionError(
+                                                                "delta_unmergeable",
+                                                                "a row change could not be merged;"
+                                                                    + " the subscription is frozen"
+                                                                    + " until a snapshot or a"
+                                                                    + " resubscribe")));
+                            }
+                            break frozen;
+                        }
+                    }
+
+                    // Advanced only once the frame is applied: a poisoned subscription returned
+                    // above and leaves the resume cursor where it was.
                     advance(entry, frame);
-                    entry.state.serverBase = value;
 
                     // `cursor` is OPTIONAL on data/delta frames, so a frame without one LEAVES the
                     // tracked cursor where it was. Nulling it strands every pending layer: the
@@ -1588,6 +1656,12 @@ public final class Client {
                     Subscription entry = subscriptions.get(id);
 
                     if (entry == null) {
+                        return kind;
+                    }
+
+                    // A poisoned subscription ignores these frames too: their cursor would move
+                    // the resume position past the dropped row change.
+                    if (entry.poisoned) {
                         return kind;
                     }
 
