@@ -965,6 +965,47 @@ describe("createPayment", () => {
         await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(10_000n);
     });
 
+    it("reports a replayed refund to the observer and returns the session unchanged", async () => {
+        expect.assertions(3);
+
+        // Same setup as the test above: the provider replays the first refund under the shared key and
+        // moves no money. The second call must still return the row as it stands, and the observer is
+        // told the refund never happened.
+        const store = new MemoryPaymentStore();
+        const captured = { ...paymentSession("user_1"), amount: money(10_000, "USD"), capturedAmount: money(10_000, "USD") };
+
+        await store.upsertPaymentSession(captured);
+
+        const byKey = new Map<string, { amount: bigint; refundId: string }>();
+        const issued: bigint[] = [];
+        const adapter = fakeAdapter({
+            refundPayment: async (input) => {
+                const key = input.idempotencyKey ?? "";
+                const replayed = byKey.get(key);
+
+                if (replayed) {
+                    return { ...captured, refundedAmount: money(replayed.amount, "USD"), refundId: replayed.refundId };
+                }
+
+                const amount = input.amount?.minorUnits ?? captured.capturedAmount.minorUnits;
+
+                issued.push(amount);
+                byKey.set(key, { amount, refundId: `re_${String(issued.length)}` });
+
+                return { ...captured, refundedAmount: money(amount, "USD"), refundId: `re_${String(issued.length)}` };
+            },
+        });
+        const observer = vi.fn<PaymentObserver>();
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", observability: observer, store });
+
+        await payment.refundPayment({ amount: money(2000, "USD"), sessionId: "pi_1" });
+        const replayed = await payment.refundPayment({ amount: money(2000, "USD"), sessionId: "pi_1" });
+
+        expect(replayed.refundedAmount.minorUnits).toBe(2000n);
+        expect(observer).toHaveBeenCalledTimes(1);
+        expect(observer).toHaveBeenCalledWith({ provider: "stripe", referenceId: "user_1", refundId: "re_1", sessionId: "pi_1", type: "refund.replayed" });
+    });
+
     it("books the amount the provider reports refunding, not the amount asked for", async () => {
         expect.assertions(2);
 

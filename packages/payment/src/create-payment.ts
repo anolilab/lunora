@@ -701,8 +701,17 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             // The marker for this refund id is already claimed: the provider replayed an earlier refund
             // under a colliding key, so no money moved. (An amount-keyed marker proves nothing, so only
-            // a provider `refundId` short-circuits.)
+            // a provider `refundId` short-circuits.) The caller asked for a refund that never happened,
+            // so the observer is told; the return value stays the row as it stands.
             if (!freshRefund && issuedRefund.refundId !== undefined) {
+                notifyObserver(options.observability, {
+                    provider: adapter.identifier,
+                    referenceId: existing.referenceId,
+                    refundId: issuedRefund.refundId,
+                    sessionId: input.sessionId,
+                    type: "refund.replayed",
+                });
+
                 return existing;
             }
 
