@@ -10,7 +10,7 @@
 
 **Baseline:** head of `feat/improve-546-retry-fixture` (plan 600), which sits on `1f55a1679`
 (PR #1550), 2026-11-12
-**Status:** DONE — APPROVED after 1 revision (footnote 13 lead); PR #1579, branch `feat/improve-546-retry-python-rust`
+**Status:** DONE — APPROVED after 2 revisions (footnote 13 lead; Python timer passes its deadline so an early-firing handle keeps the retry, `ee3eee44b`); PR #1579, branch `feat/improve-546-retry-python-rust`
 **Priority / effort / risk:** P2 / M / LOW. **Category:** feature parity. **Depends on:** plan 600
 (the `subscriptionRetry` fixture group). **Branch:** `feat/improve-546-retry-python-rust`.
 
