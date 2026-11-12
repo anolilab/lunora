@@ -5,6 +5,7 @@ import type { ProcedureMiddlewareIR } from "../ir";
 import { argumentNames, procedureArgumentObjects } from "../procedure-argument-objects";
 import { descendantsOfKind, findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
+import { resolveUseArgumentCall } from "./builder-chain";
 import { calleeName } from "./callee";
 import { contextSurfaceNodesIn, contextSurfacePathOf, isContextIdentifier } from "./context-root";
 import { isDatabaseAccessor } from "./database-calls";
@@ -137,31 +138,6 @@ const protectPublicFlags = (call: CallExpression): { usesCaptcha: boolean; usesR
     }
 
     return { usesCaptcha: Boolean(findObjectProperty(argument, "captcha")), usesRateLimit: Boolean(findObjectProperty(argument, "rateLimit")) };
-};
-
-/**
- * Resolve a `.use(...)` argument to the middleware-factory call it ultimately
- * installs. A direct `.use(rateLimit(...))` is already that call; a `.use(mw)`
- * alias — `const mw = rateLimit(limiter, "bucket", …)` then `.use(mw)`, the shape
- * the storage/presence templates use — resolves through the local `const`'s
- * initializer. Resolution is by NAME within the same file (no cross-file/type
- * info), matching the feeder's name-based philosophy; an alias defined elsewhere
- * (import) or initialised by something other than a call returns `undefined`, so
- * the lint stays fail-closed.
- */
-const resolveUseArgumentCall = (argument: TsNode): CallExpression | undefined => {
-    if (Node.isCallExpression(argument)) {
-        return argument;
-    }
-
-    if (!Node.isIdentifier(argument)) {
-        return undefined;
-    }
-
-    const declaration = argument.getSourceFile().getVariableDeclaration(argument.getText());
-    const initializer = declaration?.getInitializer();
-
-    return initializer && Node.isCallExpression(initializer) ? initializer : undefined;
 };
 
 /** The protections a single `.use(...)` step installs (all `false` when it matches none). */

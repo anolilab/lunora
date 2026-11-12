@@ -53,16 +53,43 @@ const walkBuilderChain = (receiver: Node): { root: Node | undefined; steps: Buil
 const builderChainSteps = (receiver: Node): BuilderChainStep[] => walkBuilderChain(receiver).steps;
 
 /**
+ * Resolve a `.use(...)` argument to the middleware-factory call it ultimately
+ * installs. A direct `.use(rateLimit(...))` is already that call; a `.use(mw)`
+ * alias — `const mw = rateLimit(limiter, "bucket", …)` then `.use(mw)`, the shape
+ * the storage/presence templates use — resolves through the local `const`'s
+ * initializer. Resolution is by NAME within the same file (no cross-file/type
+ * info), matching the feeder's name-based philosophy; an alias defined elsewhere
+ * (import) or initialised by something other than a call returns `undefined`, so
+ * the lint stays fail-closed.
+ */
+const resolveUseArgumentCall = (argument: Node): CallExpression | undefined => {
+    if (TsNode.isCallExpression(argument)) {
+        return argument;
+    }
+
+    if (!TsNode.isIdentifier(argument)) {
+        return undefined;
+    }
+
+    const declaration = argument.getSourceFile().getVariableDeclaration(argument.getText());
+    const initializer = declaration?.getInitializer();
+
+    return initializer && TsNode.isCallExpression(initializer) ? initializer : undefined;
+};
+
+/**
  * The first argument of every `<method>(<callee>(...))` step whose callee
- * `matches`. The walk and the argument rule are shared; only the question asked
- * of the callee varies, so each caller states its own trust policy: middleware
+ * `matches`, with a `const`-aliased argument (`const r = rls(p); .use(r)`) resolved
+ * to its factory call. The walk and the argument rule are shared; only the question
+ * asked of the callee varies, so each caller states its own trust policy: middleware
  * detectors use `resolvesToImportedName`, the security markers use `isServerImport`.
  */
 const wrappedCallsWhere = (receiver: Node, method: string, matches: (callee: Node) => boolean): CallExpression[] =>
     builderChainSteps(receiver)
         .filter((step) => step.name === method)
         .map((step) => step.call.getArguments()[0])
-        .filter((argument): argument is CallExpression => argument !== undefined && TsNode.isCallExpression(argument) && matches(argument.getExpression()));
+        .map((argument) => (argument === undefined ? undefined : resolveUseArgumentCall(argument)))
+        .filter((call): call is CallExpression => call !== undefined && matches(call.getExpression()));
 
 /**
  * The first argument of every `<method>(<callee>(...))` step in the chain — the
@@ -88,4 +115,4 @@ const chainHasStep = (receiver: TsNode, method: string): boolean => builderChain
 const chainUsesWrappedCall = (receiver: TsNode, method: string, wrappedCallee: string): boolean =>
     wrappedCallsInChain(receiver, method, wrappedCallee).length > 0;
 
-export { builderChainSteps, chainHasStep, chainUsesWrappedCall, walkBuilderChain, wrappedCallsInChain, wrappedCallsWhere };
+export { builderChainSteps, chainHasStep, chainUsesWrappedCall, resolveUseArgumentCall, walkBuilderChain, wrappedCallsInChain, wrappedCallsWhere };
