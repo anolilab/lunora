@@ -247,9 +247,13 @@ describe("discoverStorageKeyAccesses", () => {
 describe("discoverStorageKeyAccesses identity-bound guard", () => {
     const SINK = "return ctx.storage.attachments.getSignedUrl(message.attachmentKey, { expiresIn: 60 });";
     const HELPER = `const requireMember = async (ctx, channelId) => {
-    const member = await ctx.db.members.findFirst({ where: { userId: ctx.auth.userId, channelId } });
-    if (!member) {
-        throw new Error("forbidden");
+    const userId = ctx.auth.userId;
+    if (!userId) {
+        throw new Error("UNAUTHENTICATED");
+    }
+    const row = await ctx.db.query("members").withIndex("by_channel_user", (q) => q.eq("channelId", channelId).eq("userId", userId)).first();
+    if (!row) {
+        throw new Error("FORBIDDEN");
     }
 };`;
 
@@ -446,6 +450,115 @@ const requireMember = async (ctx, channelId) => {
 };`;
 
         write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+    it("accepts a helper that enforces its single-row read with an OrThrow variant", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                "await requireMember(ctx, message.channelId);",
+                SINK,
+                `const requireMember = async (ctx, channelId) => {
+    const userId = ctx.auth.userId;
+    const row = await ctx.db.members.findFirstOrThrow({ where: { userId, channelId } });
+};`,
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("reports a helper whose throw does not follow from the identity read", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                "await requireMember(ctx, message.channelId);",
+                SINK,
+                `const requireMember = async (ctx, channelId) => {
+    const userId = ctx.auth.userId;
+    const row = await ctx.db.query("members").withIndex("by_channel_user", (q) => q.eq("channelId", channelId).eq("userId", userId)).first();
+    if (!channelId) {
+        throw new Error("FORBIDDEN");
+    }
+};`,
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports a helper whose identity read ignores the row parameter", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                "await requireMember(ctx, message.channelId);",
+                SINK,
+                `const requireMember = async (ctx, channelId) => {
+    const userId = ctx.auth.userId;
+    const row = await ctx.db.query("members").withIndex("by_user", (q) => q.eq("userId", userId)).first();
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+};`,
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports an inline guard that reads with findMany", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(`const membership = await ctx.db.members.findMany({ where: { userId: ctx.auth.userId, channelId: message.channelId } });
+    if (!membership) {
+        throw new Error("forbidden");
+    }`),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports an inline guard checked with === undefined", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(`const membership = await ctx.db.members.findFirst({ where: { userId: ctx.auth.userId, channelId: message.channelId } });
+    if (membership === undefined) {
+        throw new Error("forbidden");
+    }`),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports a guard and sink that both sit inside a loop", () => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(`for (const attempt of [1]) {\n        await requireMember(ctx, message.channelId);\n        ${SINK}\n    }`, ""));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports a guard and sink that both sit in the finally block of a try with a catch", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                `try {\n        await Promise.resolve();\n    } catch (error) {\n        return null;\n    } finally {\n        await requireMember(ctx, message.channelId);\n        ${SINK}\n    }`,
+                "",
+            ),
+        );
 
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });

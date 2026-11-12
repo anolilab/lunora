@@ -311,10 +311,6 @@ const enclosingFunctionOf = (node: TsNode): FunctionNode | undefined => {
     return isFunctionNode(ancestor) ? ancestor : undefined;
 };
 
-/** The descendants of `enclosing` of `kind` that do not sit inside a function nested in `enclosing`. */
-const ownDescendantsOf = (enclosing: FunctionNode, kind: SyntaxKind): TsNode[] =>
-    descendantsOfKind(enclosing, kind).filter((node) => enclosingFunctionOf(node)?.compilerNode === enclosing.compilerNode);
-
 /** The `await` operand of `node` (both unwrapped), or `node` itself when it is not awaited. */
 const awaitedOperand = (node: TsNode | undefined): TsNode | undefined => {
     const unwrapped = unwrapExpression(node);
@@ -421,27 +417,171 @@ const rowDeclarationOf = (key: TsNode): VariableDeclaration | undefined => {
     return Node.isCallExpression(read) && contextTrustPathOf(read.getExpression())?.[0] === "db" ? declaration : undefined;
 };
 
-/** Whether `call` reads `parameter.db…` with a `parameter.auth…` chain among its arguments: a read bound to the caller's identity. */
-const isIdentityReadThrough = (call: CallExpression, parameter: ParameterDeclaration): boolean => {
-    const callee = accessPathOf(call.getExpression());
+/** A chain of calls and property reads, as a `db` read is written: every call in it, the names read along it, and its root. */
+interface DatabaseChain {
+    calls: CallExpression[];
+    names: ReadonlyArray<string>;
+    root: Identifier;
+}
 
-    if (callee === undefined || callee.path.length < 2 || callee.path[0] !== "db" || !bindsTo(callee.root, parameter)) {
+/** The chain a read is written as (`ctx.db.query("m").withIndex(…).first()`), or `undefined` for any other shape. */
+const databaseChainOf = (node: TsNode | undefined): DatabaseChain | undefined => {
+    const calls: CallExpression[] = [];
+    const names: string[] = [];
+    let current: TsNode | undefined = unwrapExpression(node);
+
+    while (current !== undefined) {
+        if (Node.isCallExpression(current)) {
+            calls.push(current);
+            current = unwrapExpression(current.getExpression());
+        } else if (Node.isPropertyAccessExpression(current)) {
+            names.unshift(current.getName());
+            current = unwrapExpression(current.getExpression());
+        } else if (Node.isElementAccessExpression(current)) {
+            const argument = current.getArgumentExpression();
+
+            if (!Node.isStringLiteral(argument)) {
+                return undefined;
+            }
+
+            names.unshift(argument.getLiteralValue());
+            current = unwrapExpression(current.getExpression());
+        } else if (Node.isIdentifier(current)) {
+            return calls.length > 0 && names.length > 0 ? { calls, names, root: current } : undefined;
+        } else {
+            return undefined;
+        }
+    }
+
+    return undefined;
+};
+
+/** The read methods that return one row, or none. */
+const SINGLE_ROW_READS: ReadonlySet<string> = new Set(["findFirst", "findUnique", "first", "get", "unique"]);
+
+/**
+ * The single-row read a chain ends in. `selfEnforcing` is true for a `…OrThrow` variant, which throws on a
+ * miss by itself. `undefined` for any other terminal (`findMany`, `collect`, …).
+ */
+const singleRowReadOf = (chain: DatabaseChain): { selfEnforcing: boolean } | undefined => {
+    const method = chain.names[chain.names.length - 1] ?? "";
+
+    if (SINGLE_ROW_READS.has(method)) {
+        return { selfEnforcing: false };
+    }
+
+    const base = method.endsWith("OrThrow") ? method.slice(0, -"OrThrow".length) : undefined;
+
+    return base !== undefined && SINGLE_ROW_READS.has(base) ? { selfEnforcing: true } : undefined;
+};
+
+/** Every argument of the chain, and every node inside each argument (a callback's body included). */
+const chainArgumentNodes = (chain: DatabaseChain): TsNode[] =>
+    chain.calls.flatMap((call) => call.getArguments().flatMap((argument) => [argument, ...argument.getDescendants()]));
+
+/**
+ * Whether `node` reads the caller's identity through the ctx parameter `parameter`: a `P.auth…` chain, or
+ * an identifier whose one-hop `const` initializer is one (`const userId = ctx.auth.userId`).
+ */
+const isIdentityReadOf = (node: TsNode, parameter: ParameterDeclaration): boolean => {
+    const access = accessPathOf(node);
+
+    if (access !== undefined && access.path.length > 0) {
+        return access.path[0] === "auth" && bindsTo(access.root, parameter);
+    }
+
+    const initializerAccess = accessPathOf(trustedInitializerOf(node));
+
+    return initializerAccess?.path[0] === "auth" && bindsTo(initializerAccess.root, parameter);
+};
+
+/** The declaration a variable statement makes, when it is a single `const` binding one identifier. */
+const constDeclarationOf = (statement: TsNode): VariableDeclaration | undefined => {
+    if (!Node.isVariableStatement(statement)) {
+        return undefined;
+    }
+
+    const declarations = statement.getDeclarations();
+    const declaration = declarations.length === 1 ? declarations[0] : undefined;
+
+    return declaration !== undefined && isConstDeclaration(declaration) && Node.isIdentifier(declaration.getNameNode()) ? declaration : undefined;
+};
+
+/** Whether `condition` is `!g` or `g == null`, in either operand order, for the binding `g`. */
+const isMissingCheck = (condition: TsNode | undefined, declaration: VariableDeclaration): boolean => {
+    const expression = unwrapExpression(condition);
+    const isBinding = (node: TsNode | undefined): boolean => Node.isIdentifier(node) && bindsTo(node, declaration);
+
+    if (Node.isPrefixUnaryExpression(expression)) {
+        return expression.getOperatorToken() === SyntaxKind.ExclamationToken && isBinding(unwrapExpression(expression.getOperand()));
+    }
+
+    if (!Node.isBinaryExpression(expression) || expression.getOperatorToken().getKind() !== SyntaxKind.EqualsEqualsToken) {
         return false;
     }
 
-    return call.getArguments().some((argument) =>
-        [argument, ...argument.getDescendants()].some((node) => {
-            const access = accessPathOf(node);
+    const left = unwrapExpression(expression.getLeft());
+    const right = unwrapExpression(expression.getRight());
 
-            return access?.path[0] === "auth" && bindsTo(access.root, parameter);
-        }),
-    );
+    return (isBinding(left) && Node.isNullLiteral(right)) || (isBinding(right) && Node.isNullLiteral(left));
+};
+
+/** Whether a branch's last statement (the branch itself, or its block's last statement) leaves the handler: a `throw`, or a `return` unless `throwOnly`. */
+const exitsBranch = (branch: TsNode | undefined, throwOnly: boolean): boolean => {
+    const statements = Node.isBlock(branch) ? branch.getStatements() : undefined;
+    const last = statements === undefined ? branch : statements[statements.length - 1];
+
+    return Node.isThrowStatement(last) || (!throwOnly && Node.isReturnStatement(last));
+};
+
+/** Whether `statement` is an `if` with no `else` that exits when the binding `g` is missing. */
+const isNullCheckExit = (statement: TsNode | undefined, declaration: VariableDeclaration, throwOnly: boolean): boolean =>
+    Node.isIfStatement(statement) &&
+    statement.getElseStatement() === undefined &&
+    isMissingCheck(statement.getExpression(), declaration) &&
+    exitsBranch(statement.getThenStatement(), throwOnly);
+
+/**
+ * Whether `helper`'s own body enforces the identity check of {@link isHelperGuardCall}: a top-level
+ * `const r = await P.db…` single-row read whose chain reads the caller's identity through `parameter` and
+ * references a parameter that received the row. It is enforced by a later `if (!r)` / `if (r == null)` in
+ * the same block whose branch throws, or by the read itself when it is a `…OrThrow` variant.
+ */
+const helperEnforcesRead = (helper: FunctionNode, parameter: ParameterDeclaration, tiedParameters: ReadonlyArray<ParameterDeclaration>): boolean => {
+    const body = helper.getBody();
+
+    if (!Node.isBlock(body)) {
+        return false;
+    }
+
+    const statements = body.getStatements();
+
+    return statements.some((statement, index) => {
+        const declaration = constDeclarationOf(statement);
+        const initializer = unwrapExpression(declaration?.getInitializer());
+        const chain = Node.isAwaitExpression(initializer) ? databaseChainOf(initializer.getExpression()) : undefined;
+        const single = chain === undefined ? undefined : singleRowReadOf(chain);
+
+        if (declaration === undefined || chain === undefined || single === undefined || chain.names[0] !== "db" || !bindsTo(chain.root, parameter)) {
+            return false;
+        }
+
+        const nodes = chainArgumentNodes(chain);
+        const readsIdentity = nodes.some((node) => isIdentityReadOf(node, parameter));
+        const readsRow = tiedParameters.some((tied) => nodes.some((node) => Node.isIdentifier(node) && bindsTo(node, tied)));
+
+        if (!readsIdentity || !readsRow) {
+            return false;
+        }
+
+        return single.selfEnforcing || statements.slice(index + 1).some((later) => isNullCheckExit(later, declaration, true));
+    });
 };
 
 /**
- * Whether a helper call is an identity guard for the row: the handler's ctx is its only ctx-valued
- * argument, another argument references the row, and the helper's own body both reads through its
- * ctx parameter's `db` with `auth` and throws. A helper that may return a Promise must be awaited.
+ * Whether a helper call is an identity guard for the row: the handler's ctx is its only ctx-valued argument,
+ * another argument references the row, and the helper's body enforces the identity read of
+ * {@link helperEnforcesRead}. A helper that may return a Promise must be awaited.
  */
 const isHelperGuardCall = (call: CallExpression, row: VariableDeclaration, awaited: boolean): boolean => {
     const helper = appFunctionOf(call.getExpression());
@@ -459,88 +599,47 @@ const isHelperGuardCall = (call: CallExpression, row: VariableDeclaration, await
         return false;
     }
 
-    const tiedToRow = args.some((argument, index) => index !== contextIndex && valueIdentifiersOf(argument).some((identifier) => bindsTo(identifier, row)));
+    const tiedParameters: ParameterDeclaration[] = [];
+
+    args.forEach((argument, index) => {
+        const tied =
+            index === contextIndex || !valueIdentifiersOf(argument).some((identifier) => bindsTo(identifier, row)) ? undefined : helper.getParameters()[index];
+
+        if (tied !== undefined && Node.isIdentifier(tied.getNameNode())) {
+            tiedParameters.push(tied);
+        }
+    });
+
     const returnType = helper.getReturnType();
     const mayBePromise = helper.isAsync() || returnType.isAny() || returnType.isUnknown() || returnType.getText().includes("Promise");
 
-    if (!tiedToRow || (!awaited && mayBePromise)) {
+    if (tiedParameters.length === 0 || (!awaited && mayBePromise)) {
         return false;
     }
 
-    const readsWithIdentity = ownDescendantsOf(helper, SyntaxKind.CallExpression).some(
-        (node) => Node.isCallExpression(node) && isIdentityReadThrough(node, parameter),
-    );
-
-    return readsWithIdentity && ownDescendantsOf(helper, SyntaxKind.ThrowStatement).length > 0;
-};
-
-/** Whether `node` is `undefined` or `null`, the two values a missing row reads as. */
-const isMissingLiteral = (node: TsNode | undefined): boolean => Node.isNullLiteral(node) || (Node.isIdentifier(node) && node.getText() === "undefined");
-
-/** Whether `condition` is one of `!g`, `g === undefined`, `g === null`, `g == null`, in either operand order, for the binding `g`. */
-const isMissingCheck = (condition: TsNode | undefined, declaration: VariableDeclaration): boolean => {
-    const expression = unwrapExpression(condition);
-    const isBinding = (node: TsNode | undefined): boolean => Node.isIdentifier(node) && bindsTo(node, declaration);
-
-    if (Node.isPrefixUnaryExpression(expression)) {
-        return expression.getOperatorToken() === SyntaxKind.ExclamationToken && isBinding(unwrapExpression(expression.getOperand()));
-    }
-
-    if (!Node.isBinaryExpression(expression)) {
-        return false;
-    }
-
-    const operator = expression.getOperatorToken().getKind();
-
-    if (operator !== SyntaxKind.EqualsEqualsToken && operator !== SyntaxKind.EqualsEqualsEqualsToken) {
-        return false;
-    }
-
-    const left = unwrapExpression(expression.getLeft());
-    const right = unwrapExpression(expression.getRight());
-
-    return (isBinding(left) && isMissingLiteral(right)) || (isBinding(right) && isMissingLiteral(left));
-};
-
-/** Whether a branch's last statement (the branch itself, or its block's last statement) leaves the handler. */
-const exitsBranch = (branch: TsNode | undefined): boolean => {
-    const statements = Node.isBlock(branch) ? branch.getStatements() : undefined;
-    const last = statements === undefined ? branch : statements[statements.length - 1];
-
-    return Node.isThrowStatement(last) || Node.isReturnStatement(last);
+    return helperEnforcesRead(helper, parameter, tiedParameters);
 };
 
 /**
- * The `const g = await ctx.db…(…)` that an inline guard reads: identity-bound (see
- * {@link isIdentityBoundRead}), with an argument referencing the row. `undefined` otherwise.
+ * The `const g = await ctx.db…(…)` an inline guard reads: a single-row read rooted at the handler's ctx,
+ * identity-bound in one of its calls (see {@link isIdentityBoundRead}), with an argument referencing the row.
+ * `selfEnforcing` is true for a `…OrThrow` read, which needs no following `if`.
  */
-const inlineGuardDeclarationOf = (statement: TsNode, row: VariableDeclaration): VariableDeclaration | undefined => {
-    if (!Node.isVariableStatement(statement)) {
+const inlineGuardOf = (statement: TsNode, row: VariableDeclaration): { declaration: VariableDeclaration; selfEnforcing: boolean } | undefined => {
+    const declaration = constDeclarationOf(statement);
+    const initializer = unwrapExpression(declaration?.getInitializer());
+    const chain = Node.isAwaitExpression(initializer) ? databaseChainOf(initializer.getExpression()) : undefined;
+    const single = chain === undefined ? undefined : singleRowReadOf(chain);
+
+    if (declaration === undefined || chain === undefined || single === undefined || chain.names[0] !== "db" || contextTrustPathOf(chain.root)?.length !== 0) {
         return undefined;
     }
 
-    const declarations = statement.getDeclarations();
-    const declaration = declarations.length === 1 ? declarations[0] : undefined;
+    const identityBound = chain.calls.some((call) => isIdentityBoundRead(call));
+    const tied = chainArgumentNodes(chain).some((node) => Node.isIdentifier(node) && bindsTo(node, row));
 
-    if (declaration === undefined || !isConstDeclaration(declaration) || !Node.isIdentifier(declaration.getNameNode())) {
-        return undefined;
-    }
-
-    const read = awaitedOperand(declaration.getInitializer());
-
-    if (!Node.isCallExpression(read) || contextTrustPathOf(read.getExpression())?.[0] !== "db" || !isIdentityBoundRead(read)) {
-        return undefined;
-    }
-
-    return read.getArguments().some((argument) => valueIdentifiersOf(argument).some((identifier) => bindsTo(identifier, row))) ? declaration : undefined;
+    return identityBound && tied ? { declaration, selfEnforcing: single.selfEnforcing } : undefined;
 };
-
-/** Whether `statement` is an `if` with no `else` that exits when the inline guard's binding is missing. */
-const isInlineEnforcement = (statement: TsNode | undefined, declaration: VariableDeclaration): boolean =>
-    Node.isIfStatement(statement) &&
-    statement.getElseStatement() === undefined &&
-    isMissingCheck(statement.getExpression(), declaration) &&
-    exitsBranch(statement.getThenStatement());
 
 /**
  * Whether `statement` runs before the sink on every path through the handler: no function, `if`,
@@ -576,7 +675,8 @@ const runsBeforeSinkUnconditionally = (statement: TsNode, enclosing: FunctionNod
 
 /**
  * Whether one of the statements before the sink's own statement (`statements[index]`) is an identity
- * guard for `row`: a helper-guard call, or an inline read followed directly by its enforcing `if`.
+ * guard for `row`: a helper-guard call, or an inline single-row read followed directly by its enforcing
+ * `if` (or a `…OrThrow` read, which enforces on its own).
  */
 const hasPrecedingGuard = (statements: ReadonlyArray<TsNode>, index: number, row: VariableDeclaration, enclosing: FunctionNode, sinkCall: TsNode): boolean =>
     statements.slice(0, index).some((statement, position) => {
@@ -594,9 +694,9 @@ const hasPrecedingGuard = (statements: ReadonlyArray<TsNode>, index: number, row
             }
         }
 
-        const inlineDeclaration = inlineGuardDeclarationOf(statement, row);
+        const inline = inlineGuardOf(statement, row);
 
-        return inlineDeclaration !== undefined && position + 1 < index && isInlineEnforcement(statements[position + 1], inlineDeclaration);
+        return inline !== undefined && (inline.selfEnforcing || (position + 1 < index && isNullCheckExit(statements[position + 1], inline.declaration, false)));
     });
 
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
