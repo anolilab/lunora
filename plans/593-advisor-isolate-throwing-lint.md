@@ -11,7 +11,7 @@
 > code; on a mismatch, STOP.
 
 **Baseline:** `79b0c5a6a` (2026-11-12)
-**Status:** TODO
+**Status:** DONE — APPROVED; PR https://github.com/anolilab/lunora/pull/1564 (branch `fix/improve-593-advisor-lint-isolation`, commit `89f781368`)
 **Source:** row 55 of the 2026-11-11 audit (advisor lints).
 
 ## Status
