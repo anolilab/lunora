@@ -120,7 +120,7 @@ const SUFFIX_EVENTS: ReadonlyArray<readonly [suffix: string, event: AuthAuditEve
     ["/oauth2/update-consent", "oauth-consent-update"],
     ["/oauth2/delete-consent", "oauth-consent-revoke"],
     ["/oauth2/revoke", "oauth-token-revoke"],
-    // Replaces the old `ends("/token")` → `token-refresh` reading: the code-grant token endpoint issues a session.
+    // The code-grant token endpoint issues a session; eventForPath tells a refresh apart by grant_type.
     ["/oauth2/token", "oauth-token-issue"],
     // The end-session endpoint answers GET and POST, and can ask for a confirmation step; the
     // suffix is anchored, so the confirm path needs its own row.
