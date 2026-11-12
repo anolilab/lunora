@@ -1415,8 +1415,13 @@ public final class LunoraClient {
             let handlers = withLock { () -> [(LunoraSubscriptionError) -> Void] in
                 guard let id else { return [] }
 
-                if subscriptions[id] != nil, let delay = LunoraClient.retryAfterSeconds(envelope) {
-                    pendingRetries[id] = ProcessInfo.processInfo.systemUptime + delay
+                if subscriptions[id] != nil {
+                    if let delay = LunoraClient.retryAfterSeconds(envelope) {
+                        pendingRetries[id] = ProcessInfo.processInfo.systemUptime + delay
+                    } else {
+                        // A hint-less error ends the subscription: drop an earlier hint's retry.
+                        pendingRetries[id] = nil
+                    }
                 }
 
                 return [subscriptions[id]?.onError, shapes[id]?.onError].compactMap { $0 }
