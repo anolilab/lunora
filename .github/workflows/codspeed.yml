@@ -141,7 +141,7 @@
                   "BASE_REF": "${{ github.base_ref }}"
               "run": |
                   if [ "$EVENT_NAME" = "pull_request" ]; then
-                      printf 'run=pnpm exec vis affected test:bench --no-cache --fail-fast --base "origin/%s"\n' "$BASE_REF" >> "$GITHUB_OUTPUT"
+                      printf 'run=pnpm exec vis affected test:bench --if-present --no-cache --fail-fast --base "origin/%s"\n' "$BASE_REF" >> "$GITHUB_OUTPUT"
                   else
                       echo "run=pnpm exec vis run test:bench --no-cache" >> "$GITHUB_OUTPUT"
                   fi
