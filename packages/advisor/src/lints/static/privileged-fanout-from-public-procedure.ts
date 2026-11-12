@@ -1,6 +1,7 @@
 import emit from "../../finding";
 import { mightExhibit } from "../../procedure-protections";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a public procedure whose handler fans work out to a privileged,
@@ -41,7 +42,7 @@ const privilegedFanoutFromPublicProcedure: Lint = {
                 emit(privilegedFanoutFromPublicProcedure, {
                     cacheKey: `privileged_fanout_from_public_procedure:${procedure.file}:${procedure.exportName}`,
                     detail: `\`${procedure.exportName}\` (${procedure.file}) is public and fans work out to a privileged dispatch surface (scheduler/queue/topic/workflow) with no rate limit — an anonymous caller can drive that billable, system-identity dispatch in a loop. Add a rate-limit guard, or make it internal and trigger it from an authenticated path.`,
-                    metadata: { exportName: procedure.exportName, file: procedure.file, kind: procedure.kind },
+                    metadata: { exportName: procedure.exportName, ...declarationSiteFields(procedure), kind: procedure.kind },
                 }),
             );
     },
