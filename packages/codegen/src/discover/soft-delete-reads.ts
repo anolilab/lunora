@@ -3,10 +3,27 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { isArgumentDerived } from "../argument-taint";
 import type { SoftDeleteReadIR } from "../ir";
-import { descendantsOfKind, listLunoraSourceFiles, lunoraRelativePath, propertyInitializer } from "./ast";
+import { descendantsOfKind, findObjectProperty, listLunoraSourceFiles, lunoraRelativePath, propertyInitializer } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { readTargetOf } from "./database-calls";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
+
+/**
+ * The value `includeDeleted` is read from: its initializer, or for the shorthand
+ * `{ includeDeleted }` the same-named binding. {@link propertyInitializer} returns
+ * nothing for a shorthand by design, so the shorthand is resolved here.
+ */
+const includeDeletedValueOf = (options: TsNode | undefined): TsNode | undefined => {
+    const initializer = propertyInitializer(options, "includeDeleted");
+
+    if (initializer !== undefined || !Node.isObjectLiteralExpression(options)) {
+        return initializer;
+    }
+
+    const property = findObjectProperty(options, "includeDeleted");
+
+    return Node.isShorthandPropertyAssignment(property) ? property.getNameNode() : undefined;
+};
 
 /**
  * Reduce one exported procedure declaration to the `includeDeleted` list reads
@@ -39,7 +56,7 @@ const softDeleteReadsInDeclaration = (declaration: TsNode, relativePath: string)
             continue;
         }
 
-        const value = propertyInitializer(target.options, "includeDeleted");
+        const value = includeDeletedValueOf(target.options);
 
         if (value === undefined) {
             continue;
