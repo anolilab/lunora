@@ -3,6 +3,10 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-12T22:03:33.792Z",
+      "key": "@lunora/hyperdrive@1.0.0-alpha.230"
+    },
+    {
       "at": "2026-11-12T13:15:10.881Z",
       "key": "@lunora/runtime@1.0.0-alpha.286"
     },
@@ -397,12 +401,8 @@
     {
       "at": "2026-11-04T20:06:50.177Z",
       "key": "@lunora/cli@1.0.0-alpha.483"
-    },
-    {
-      "at": "2026-11-04T20:06:50.177Z",
-      "key": "@lunora/notify@1.0.0-alpha.111"
     }
   ],
-  "updatedAt": "2026-11-12T13:15:10.882Z",
+  "updatedAt": "2026-11-12T22:03:33.792Z",
   "version": 1
 }
