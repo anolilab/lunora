@@ -634,8 +634,8 @@ describe("named admin tokens", () => {
         expect.assertions(4);
 
         const { namespace } = fakeShards();
-        const listApiKeys = vi.fn(async () => [{ id: "k1", referenceId: "u1" }]);
-        const deleteApiKey = vi.fn(async () => undefined);
+        const listApiKeys = vi.fn<() => Promise<{ id: string; referenceId: string }[]>>(async () => [{ id: "k1", referenceId: "u1" }]);
+        const deleteApiKey = vi.fn<() => Promise<undefined>>(async () => undefined);
         const worker = createBareWorker({
             adminRevocations: fakeRevocations(),
             adminToken: ROOT,
