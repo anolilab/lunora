@@ -8,7 +8,7 @@
 > is `daf7fc8da`. `git diff --stat daf7fc8da..HEAD` → empty.
 
 **Baseline:** plan 596 tip `daf7fc8da` (2026-11-12)
-**Status:** TODO
+**Status:** DONE — APPROVED; PR https://github.com/anolilab/lunora/pull/1587 (stacked on #1586). Implemented in two executor parts plus a mirror/snapshot pass.
 **Source:** follow-up to row 50 of the 2026-11-11 audit; third PR of the stack (595 → 596 → 597 → 588).
 
 ## Status
