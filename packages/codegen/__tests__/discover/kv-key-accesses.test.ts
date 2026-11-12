@@ -91,6 +91,22 @@ describe("discoverKvKeyAccesses", () => {
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    it("flags a key prefixed only by a server-trusted non-identity ctx value", () => {
+        expect.assertions(1);
+
+        write("env-prefix.ts", `export const read = query(async ({ ctx, args }) => { return ctx.kv.get(\`\${ctx.env.PREFIX}/\${args.key}\`); });`);
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("ignores a key scoped by the caller's own identity", () => {
+        expect.assertions(1);
+
+        write("own-prefix.ts", `export const read = query(async ({ ctx, args }) => { return ctx.kv.get(\`\${ctx.auth.userId}/\${args.key}\`); });`);
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("ignores a key scoped by a server-trusted ctx value", () => {
         expect.assertions(1);
 

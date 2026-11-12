@@ -32,6 +32,7 @@ const KV_KEY_METHODS = new Set(["delete", "get", "getRaw", "getWithMetadata", "p
 const discoverKvKeyAccesses = (project: Project, lunoraDirectory: string, functions: ReadonlyArray<FunctionIR> = []): KvKeyAccessIR[] => {
     const accesses = discoverArgumentDerivedAccesses(project, lunoraDirectory, {
         argIndex: 0,
+        scope: "identity",
         matchReceiver: (receiver) => receiver === "ctx.kv" || receiver.startsWith("ctx.kv."),
         methods: KV_KEY_METHODS,
     });

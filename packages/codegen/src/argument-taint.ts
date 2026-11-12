@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { bindingKeyName, descendantsOfKind } from "./discover/ast";
 import { declarationOf, isReassignedBinding } from "./discover/attribution";
-import { isHandlerArgsParameter, referencesContext } from "./discover/context-root";
+import { contextTrustPathOf, isHandlerArgsParameter, referencesContext } from "./discover/context-root";
 
 /**
  * The parameter binding element that declares `name`, searched from the
@@ -213,6 +213,37 @@ const valueIdentifiersIn = (node: TsNode): Identifier[] =>
         );
     });
 
+/**
+ * True when `node` is, or textually contains, a value reference to a ctx identity
+ * — a ctx path whose first segment is `auth` (`ctx.auth.userId`, or a local bound
+ * to one). Narrower than {@link referencesContext}: `ctx.env.PREFIX` and `ctx.now`
+ * are server-trusted but name no caller.
+ */
+const referencesIdentity = (node: TsNode): boolean => {
+    const identifiers = Node.isIdentifier(node) ? [node] : valueIdentifiersIn(node);
+
+    return identifiers.some((identifier) => {
+        let outermost: TsNode = identifier;
+
+        for (;;) {
+            const parent = outermost.getParent();
+
+            if (
+                !(
+                    (Node.isPropertyAccessExpression(parent) || Node.isElementAccessExpression(parent) || Node.isNonNullExpression(parent)) &&
+                    parent.getExpression() === outermost
+                )
+            ) {
+                break;
+            }
+
+            outermost = parent;
+        }
+
+        return contextTrustPathOf(outermost)?.[0] === "auth";
+    });
+};
+
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
 export const referencesArgs = (node: TsNode): boolean => referencesBinding(node, "args");
 
@@ -358,6 +389,36 @@ export const isScopedByContext = (node: TsNode): boolean => {
         const boundInitializer = trustedInitializerOf(identifier);
 
         return boundInitializer !== undefined && referencesContext(boundInitializer);
+    });
+};
+
+/**
+ * Whether `node` is scoped to the caller's own identity. It runs the same direct,
+ * one-hop and composed-local stages as {@link isScopedByContext}, asking
+ * {@link referencesIdentity} instead of {@link referencesContext}. Only the IDOR sinks (kv, storage, container keys) use it,
+ * because a key is caller-owned only when it contains the caller's own identity — a
+ * `${ctx.env.PREFIX}/${args.key}` key is server-trusted but shared by every caller.
+ * Browser URLs keep the broader check, because a server-pinned host (`${ctx.env.CDN}/…`)
+ * is exactly the safe shape there.
+ */
+export const isScopedByIdentity = (node: TsNode): boolean => {
+    if (referencesIdentity(node)) {
+        return true;
+    }
+
+    const initializer = trustedInitializerOf(node);
+
+    if (initializer !== undefined && referencesIdentity(initializer)) {
+        return true;
+    }
+
+    const composed = initializer ?? node;
+    const identifiers = Node.isIdentifier(composed) ? [composed] : composed.getDescendantsOfKind(SyntaxKind.Identifier);
+
+    return identifiers.some((identifier) => {
+        const boundInitializer = trustedInitializerOf(identifier);
+
+        return boundInitializer !== undefined && referencesIdentity(boundInitializer);
     });
 };
 

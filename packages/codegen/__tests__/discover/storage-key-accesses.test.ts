@@ -82,6 +82,25 @@ describe("discoverStorageKeyAccesses", () => {
         expect(found[0]).toMatchObject({ scope: { kind: "export", name: "grab" }, method: "download" });
     });
 
+    it("flags a key prefixed only by a server-trusted non-identity ctx value", () => {
+        expect.assertions(1);
+
+        write("env-prefix.ts", `export const read = query(async ({ ctx, args }) => { return ctx.storage.avatars.get(\`\${ctx.env.PREFIX}/\${args.key}\`); });`);
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("ignores a key scoped by the caller's own identity", () => {
+        expect.assertions(1);
+
+        write(
+            "own-prefix.ts",
+            `export const read = query(async ({ ctx, args }) => { return ctx.storage.avatars.get(\`\${ctx.auth.userId}/\${args.key}\`); });`,
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("ignores a ctx-scoped key reached through one local const hop", () => {
         expect.assertions(1);
 

@@ -6,6 +6,7 @@ import {
     isArgumentDerived,
     isRequestInputDerived,
     isScopedByContext,
+    isScopedByIdentity,
     isUnmodifiedArgumentPassthrough,
     referencesArgs,
     referencesRequestInput,
@@ -199,6 +200,25 @@ describe("argument-taint", () => {
 
             expect(isScopedByContext(scoped)).toBe(true);
             expect(isArgumentDerived(scoped)).toBe(true);
+        });
+    });
+
+    describe("isScopedByIdentity", () => {
+        it("accepts a key composed with the caller's own ctx.auth identity, direct or through a local", () => {
+            expect.assertions(4);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId}/\${args.k}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId;\nSINK(\`\${uid}/\${args.k}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const { userId } = ctx.auth;\nSINK(\`\${userId}:\${args.k}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const me = await ctx.db.users.get(ctx.auth.userId);\nSINK(\`\${me._id}/\${args.k}\`);`))).toBe(true);
+        });
+
+        it("rejects a key scoped only by a server-trusted ctx value that names no caller", () => {
+            expect.assertions(3);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.env.PREFIX}/\${args.k}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.now}-\${args.k}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(args.k);`))).toBe(false);
         });
     });
 
