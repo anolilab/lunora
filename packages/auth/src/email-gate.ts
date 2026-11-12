@@ -121,11 +121,11 @@ const buildUpdateBeforeHook =
         await gateAddress(patch.email, config, { disposable: config.blockDisposable !== false, free: false });
     };
 
-/** The patch better-auth will persist: a hook's `{ data }` replacement, or the (possibly mutated) patch itself. */
+/** The patch better-auth will persist: the (possibly mutated) patch, merged with a hook's `{ data }` as better-auth merges it. */
 type UserUpdatePatch = Parameters<UserUpdateBefore>[0];
 
 const effectiveUpdatePatch = (result: Awaited<ReturnType<UserUpdateBefore>>, patch: UserUpdatePatch): UserUpdatePatch =>
-    typeof result === "object" && "data" in result ? result.data : patch;
+    typeof result === "object" && "data" in result ? { ...patch, ...result.data } : patch;
 
 /**
  * Produce a `databaseHooks` fragment that gates better-auth's user lifecycle on the

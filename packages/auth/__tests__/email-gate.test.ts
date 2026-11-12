@@ -306,6 +306,35 @@ describe("email-gate", () => {
             expect(existingUpdate).toHaveBeenCalledTimes(1);
         });
 
+        it("gates the address an existing hook leaves on the patch when it returns data without an email", async () => {
+            expect.assertions(2);
+
+            assertEmailAllowed.mockResolvedValueOnce(businessClassification).mockRejectedValueOnce(new LunoraError("EMAIL_DOMAIN_BLOCKED", "blocked"));
+
+            const existingUpdate = vi.fn<UserUpdateBefore>(async (patch) => {
+                Object.assign(patch, { email: "spammer@mailinator.com" });
+
+                return { data: { name: "Updated" } };
+            });
+            const merged = withEmailGate({ databaseHooks: { user: { update: { before: existingUpdate } } } }, {});
+
+            await expect(getUpdateBefore(merged.databaseHooks!)({ email: "cto@acme-corp.example" }, null)).rejects.toMatchObject({
+                body: { code: "EMAIL_DOMAIN_BLOCKED" },
+            });
+            expect(assertEmailAllowed).toHaveBeenLastCalledWith("spammer@mailinator.com", expect.anything());
+        });
+
+        it("passes an update through an existing hook that returns { data: undefined }", async () => {
+            expect.assertions(1);
+
+            assertEmailAllowed.mockResolvedValueOnce(businessClassification);
+
+            const existingUpdate = vi.fn<UserUpdateBefore>(async () => ({ data: undefined }) as unknown as Awaited<ReturnType<UserUpdateBefore>>);
+            const merged = withEmailGate({ databaseHooks: { user: { update: { before: existingUpdate } } } }, {});
+
+            await expect(getUpdateBefore(merged.databaseHooks!)({ email: "cto@acme-corp.example" }, null)).resolves.toStrictEqual({ data: undefined });
+        });
+
         it("gates the address an existing user.update.before rewrites to, by mutation or by returned data", async () => {
             expect.assertions(4);
 
