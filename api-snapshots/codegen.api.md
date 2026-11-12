@@ -1615,7 +1615,7 @@ const emitWranglerCronTriggers: (crons: ReadonlyArray<CronJobIR>) => string[];
 ### `errorAdvisoryNames` (const)
 
 ```ts
-const errorAdvisoryNames: (advisories: ReadonlyArray<Pick<Finding, "level" | "name">>) => ReadonlyArray<string>;
+const errorAdvisoryNames: (advisories: ReadonlyArray<Pick<Finding, "level" | "name" | "suppressed">>) => ReadonlyArray<string>;
 ```
 
 ### `errorPlatformDiagnosticNames` (const)
