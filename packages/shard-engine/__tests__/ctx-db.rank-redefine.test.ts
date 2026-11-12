@@ -131,8 +131,12 @@ describe("rank index use on a .global() table", () => {
 
         const onIndexUse = vi.fn<(table: string, index: string, kind: string) => void>();
         const globalDb = {
-            rank: vi.fn(async () => {return { position: 1, total: 1 }}),
-            rankPage: vi.fn(async () => {return { entries: [], hasMore: false }}),
+            rank: vi.fn<() => Promise<{ position: number; total: number }>>(async () => {
+                return { position: 1, total: 1 };
+            }),
+            rankPage: vi.fn<() => Promise<{ entries: never[]; hasMore: boolean }>>(async () => {
+                return { entries: [], hasMore: false };
+            }),
         };
         const writer = createShardContextDatabase({
             clock: () => 1_700_000_000_000,
