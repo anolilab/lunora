@@ -1703,9 +1703,12 @@ class LunoraClient:
                         continue
                     hint = descriptor.get("retryAfterMs")
                     if hint is not None:
-                        # The hint is a deadline only `retry_due_subscriptions` acts on, so a
-                        # timer a later frame made moot sends nothing.
-                        (self._call_later or loop.call_later)(hint / 1000, self.retry_due_subscriptions)
+                        # Pass the deadline this timer stands for: a loop may run a handle up to its
+                        # clock resolution early, and re-reading the clock then would find nothing
+                        # due and lose the retry. A later frame that replaced or cancelled the
+                        # deadline still makes this a no-op.
+                        armed = time.monotonic() + hint / 1000
+                        (self._call_later or loop.call_later)(hint / 1000, partial(self.retry_due_subscriptions, armed))
                     # Only a frame the client recognised proves a live server;
                     # `null` or an unknown `type` must not reset the backoff. An
                     # `error` frame does not either: a TOKEN_EXPIRED arrives just before
