@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { ProcedureMiddlewareIR } from "../ir";
 import { argumentNames, procedureArgumentObjects } from "../procedure-argument-objects";
-import { descendantsOfKind, findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { declarationLineOf, descendantsOfKind, findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { calleeName } from "./callee";
 import { contextSurfaceNodesIn, contextSurfacePathOf, isContextIdentifier } from "./context-root";
@@ -902,6 +902,7 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
         file: relativePath,
         hasEmailArg: declaresEmailArgument(initializer, classified.receiver),
         kind: classified.kind,
+        line: declarationLineOf(declaration),
         visibility: classified.visibility,
     };
 };

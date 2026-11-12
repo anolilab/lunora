@@ -17,8 +17,13 @@ export interface CronJobIR {
     args: Record<string, unknown>;
     /** Compiled standard cron expression, e.g. `"0 9 * * *"`. */
     cron: string;
+    /** Lunora-relative module of the `cronJobs()` registration, without extension. */
+    file?: string;
     /** Target function ref `namespace:fn`. Present for a function target; absent when {@link CronJobIR.workflow} is set. */
     functionPath?: string;
+
+    /** 1-based start line of the statement registering the job, without leading comments. */
+    line?: number;
     /** Unique, human-readable job name. */
     name: string;
 
@@ -59,13 +64,20 @@ export interface ContainerIRBase {
     /** The `lunora/containers.ts` export name, e.g. `transcoder`. */
     exportName: string;
 
+    /** Lunora-relative module of the declaration, without extension: always `containers`. */
+    file?: string;
+
     /**
      * The static `hardTimeout` value, when it was a literal. It caps total lifetime,
      * so it also bounds how long an idle instance can run. Lifted for the advisor.
      */
     hardTimeout?: number | string;
+
     /** Static `instanceType`, when declared (the default size, under `durable_object`). */
     instanceType?: string | { diskMb?: number; memoryMib?: number; vcpu?: number };
+
+    /** 1-based start line of the `export const` declaring the container, without leading comments. */
+    line?: number;
 
     /** Static wrangler `containers[].name` override, when declared. */
     name?: string;
@@ -140,6 +152,9 @@ export interface WorkflowIR {
     /** The `lunora/workflows.ts` export name, e.g. `orderPipeline`. */
     exportName: string;
 
+    /** Lunora-relative module of the `defineWorkflow()` export, without extension. */
+    file?: string;
+
     /**
      * The file declaring the `handler:` when it is a function passed by reference
      * and declared in another file — the file {@link WorkflowIR.steps}' lines are
@@ -148,8 +163,12 @@ export interface WorkflowIR {
     handlerFile?: string;
     /** See {@link HandlerSiteIR}. */
     handlerSite?: HandlerSiteIR;
+
     /** Static `limits` literal → `exports.<Class>.limits`. */
     limits?: { steps?: number };
+
+    /** 1-based start line of the `export const` declaring the workflow, without leading comments. */
+    line?: number;
 
     /**
      * The stable wrangler `exports.<Class>.name`. Defaults to the kebab-cased export
@@ -269,6 +288,9 @@ export interface QueueIR {
 
     /** See {@link HandlerSiteIR}. */
     handlerSite?: HandlerSiteIR;
+    /** 1-based start line of the `export const` declaring the queue or subscription, without leading comments. */
+    line?: number;
+
     /** How the queue is consumed: `"push"` (a worker `queue()` handler) or `"pull"` (external HTTP). */
     mode: "pull" | "push";
 
@@ -527,6 +549,8 @@ export interface AdminRouteIR {
     exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
+    /** 1-based start line of the declaring statement (the `export const`), without leading comments. */
+    line?: number;
     /** HTTP verb the route binds to (uppercased), e.g. `"POST"`. */
     method: string;
     /** The route path, e.g. `/admin/users`. */

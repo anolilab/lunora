@@ -7,8 +7,12 @@
 export interface AdvisorCron {
     /** The compiled standard five-field cron expression, e.g. `"0 9 * * *"`. */
     cron: string;
+    /** Lunora-relative module of the declaration, without extension, when the feeder recorded it. */
+    file?: string;
     /** The `namespace:fn` the job dispatches; absent when the job starts a workflow. */
     functionPath?: string;
+    /** 1-based start line of the declaring statement, when the feeder recorded it. */
+    line?: number;
     /** Unique job name. */
     name: string;
     /** Set when each fire starts a workflow instance instead of dispatching a function. */
