@@ -277,6 +277,16 @@
                 "message": "subscription was cancelled by the server",
                 "resendsAfterReconnect": true
             }
+        },
+        {
+            "name": "error-retry-after",
+            "$comment": "A live query whose refresh failed: the shard backs it off and `error.retryAfterMs` asks the client to re-subscribe once after that many milliseconds (protocol/README.md 5.2). Otherwise an ordinary subscription error, so a port that ignores the field delivers exactly this; what a port that honours it does is pinned by `subscriptionRetry`.",
+            "frame": {
+                "id": "sub_1",
+                "type": "error",
+                "error": { "code": "SUBSCRIPTION_REFRESH_FAILED", "message": "refresh failed", "retryAfterMs": 5000 }
+            },
+            "expect": { "kind": "error", "id": "sub_1", "code": "SUBSCRIPTION_REFRESH_FAILED", "message": "refresh failed" }
         }
     ],
     "pageDeltaFrames": [
@@ -1091,5 +1101,56 @@
             "shapeRows": [],
             "shapeCallbackRows": []
         }
+    },
+    "subscriptionRetry": {
+        "$comment": "What a client that honours `error.retryAfterMs` does (protocol/README.md 5.2), as the reference `@lunora/client` does it. Setup: `sub_1` subscribes `messages:list` {\"channel\":\"general\"} on an open socket and receives `seedFrame`. `hintFrame` schedules exactly ONE re-subscribe of `sub_1`, `retryAfterMs` later; nothing is sent before that, and exactly `retryFrame` is sent at it: a COLD subscribe (no sinceSeq/sinceEpoch), because the retry asks for a fresh snapshot. A newer hint for the id (`laterHintFrame`) replaces the pending one. Each of `cancelFrames`, received while the retry is pending, cancels it: the server has answered. An unsubscribe, a socket close or open, and closing the client cancel it too. None of `noRetryFrames` schedules anything: no hint, a hint that is not a finite number >= 0, or a TOKEN_EXPIRED frame, which belongs to the socket and is never routed to a subscription. A port that ignores the field is conforming (the `error-retry-after` case in `serverFrames` is what it must still deliver); sdks/README.md records which ports honour it.",
+        "subscriptionId": "sub_1",
+        "seedFrame": { "id": "sub_1", "type": "data", "data": { "n": 1 }, "cursor": 12, "epoch": "e1" },
+        "hintFrame": {
+            "id": "sub_1",
+            "type": "error",
+            "error": { "code": "SUBSCRIPTION_REFRESH_FAILED", "message": "refresh failed", "retryAfterMs": 5000 }
+        },
+        "retryAfterMs": 5000,
+        "laterHintFrame": {
+            "id": "sub_1",
+            "type": "error",
+            "error": { "code": "SUBSCRIPTION_REFRESH_FAILED", "message": "refresh failed", "retryAfterMs": 8000 }
+        },
+        "laterRetryAfterMs": 8000,
+        "retryFrame": {
+            "id": "sub_1",
+            "query": { "args": { "channel": "general" }, "functionPath": "messages:list", "table": "messages:list" },
+            "type": "subscribe"
+        },
+        "cancelFrames": [
+            { "name": "ack", "frame": { "id": "sub_1", "type": "ack" } },
+            { "name": "data", "frame": { "id": "sub_1", "type": "data", "data": { "n": 2 }, "cursor": 13, "epoch": "e1" } },
+            { "name": "delta", "frame": { "id": "sub_1", "type": "delta", "delta": { "n": 2 }, "cursor": 13, "epoch": "e1" } },
+            { "name": "resume", "frame": { "id": "sub_1", "type": "resume", "cursor": 13, "epoch": "e1" } },
+            { "name": "settled", "frame": { "id": "sub_1", "type": "settled", "cursor": 13, "epoch": "e1" } }
+        ],
+        "noRetryFrames": [
+            {
+                "name": "no-hint",
+                "frame": { "id": "sub_1", "type": "error", "error": { "code": "SUBSCRIPTION_REFRESH_FAILED", "message": "refresh failed" } }
+            },
+            {
+                "name": "negative-hint",
+                "frame": { "id": "sub_1", "type": "error", "error": { "code": "SUBSCRIPTION_REFRESH_FAILED", "message": "refresh failed", "retryAfterMs": -1 } }
+            },
+            {
+                "name": "string-hint",
+                "frame": {
+                    "id": "sub_1",
+                    "type": "error",
+                    "error": { "code": "SUBSCRIPTION_REFRESH_FAILED", "message": "refresh failed", "retryAfterMs": "5000" }
+                }
+            },
+            {
+                "name": "token-expired",
+                "frame": { "id": "sub_1", "type": "error", "error": { "code": "TOKEN_EXPIRED", "message": "token expired", "retryAfterMs": 5000 } }
+            }
+        ]
     }
 }
