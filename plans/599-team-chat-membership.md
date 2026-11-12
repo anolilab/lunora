@@ -116,3 +116,27 @@ Out: every package, other examples, the advisor matcher.
 ## 6. Platform parity
 
 Not applicable (example code; no `ctx.*` surface added).
+
+## 7. Revision after the executor's STOP (reviewer, 2026-11-12)
+
+The executor stopped before any edit, correctly: (1) the example's test harness builds only shard tables
+(`packages/shard-engine/src/ctx-db-migrations.ts:663,670` skip `.global()` tables; `chat.test.ts:11,194` already
+note `profiles` is unreadable there), and (2) a channel shard's live query is NOT invalidated by a write to a `.global()`
+row (`packages/shard-engine/src/dependency-tracker.ts:38-45`). A global membership table therefore can neither be tested
+nor make a leave stop a subscription. Revised decisions (replace the matching bullets of §2):
+
+- **`members` is shard-local**: `defineTable({ channelId, userId, joinedAt }).shardBy("channelId")` with unique index
+  `by_channel_user` on `["channelId", "userId"]`. Every gate reads it inside the channel's own shard, so a `leave` (a write
+  in that shard) re-runs that shard's subscriptions, which then refuse.
+- **Discovery**: `channels.list` stays visible to every signed-in user and is unchanged (no `isMember`; reading per-channel
+  membership from the root shard would be a fan-out). Opening a channel calls a new member-aware query
+  `channels.membership({ channelId })` (in-shard, returns `{ isMember, memberCount }` for any signed-in user) to show
+  Join or the channel.
+- **join / leave / members** are channel-shard procedures (`shardKey: channelId`): `join` is idempotent; `leave` removes
+  the caller's row; `members` is member-only.
+- **Creator membership**: `channels.create` (root) schedules
+  `ctx.scheduler.runAfter(0, internal.channels.addCreator, { channelId, userId }, { shardKey: <the new channel id> })`
+  (an internal, idempotent insert), and the client also calls `channels.join` right after `create` so the creator can open the
+  channel immediately. If the harness cannot run scheduled jobs, test `addCreator` directly and say so.
+- `requireMember(ctx, channelId)` reads `ctx.db.members` with `where: { channelId, userId: ctx.auth.userId }`.
+- Everything else in §2–§3 stands (gates, README wording, tests, live-query test, Step 6 directive removal with its STOP).
