@@ -15,8 +15,8 @@ import { lunoraTest } from "@lunora/testing";
 import { afterEach, beforeEach, expect, it } from "vitest";
 
 import type { Id } from "../lunora/_generated/dataModel";
-import { create, list as listChannels } from "../lunora/channels";
-import { attachmentUrl, list as listMessages, search, send } from "../lunora/messages";
+import { create, join, leave as leaveChannel, list as listChannels, members, membership } from "../lunora/channels";
+import { attachmentUrl, list as listMessages, requestAttachmentUpload, search, send } from "../lunora/messages";
 import { heartbeat, leave, list as listPresence } from "../lunora/presence";
 import { avatarUrl, save } from "../lunora/profiles";
 import schema from "../lunora/schema";
@@ -27,6 +27,13 @@ const NO_ATTACHMENT_RE = /no attachment/i;
 const NOT_YOUR_KEY_RE = /not your avatar key/i;
 const SIGNING_FAILED_RE = /object storage did not answer/i;
 const ANOTHER_MEMBER_RE = /belongs to another member/i;
+const FORBIDDEN_RE = /join #\S+ first/i;
+const BAD_KEY_RE = /does not belong to this caller and channel/i;
+
+/** Join `view`'s identity to `channelId`, as the client does right after create or on Join. */
+const joined = async (view: ReturnType<typeof lunoraTest>, channelId: string): Promise<void> => {
+    await view.mutation(join, { channelId });
+};
 
 let t: ReturnType<typeof lunoraTest>;
 let ada: ReturnType<typeof lunoraTest>;
@@ -49,19 +56,123 @@ it("shows a signed-out visitor nothing and lets them write nothing", async () =>
 });
 
 it("creates a channel once, slugged, and rejects the duplicate", async () => {
-    expect.assertions(2);
-    await ada.mutation(create, { name: "General Chat" });
+    expect.assertions(3);
+    const created = await ada.mutation(create, { name: "General Chat" });
 
+    expect(created.name).toBe("general-chat");
     const awaited1 = await ada.query(listChannels, {});
     expect(awaited1.map((channel) => channel.name)).toStrictEqual(["general-chat"]);
     await expect(ada.mutation(create, { name: "general-chat" })).rejects.toThrow(ALREADY_EXISTS_RE);
 });
 
+it("makes the creator a member once the client joins right after create", async () => {
+    expect.assertions(2);
+    // `create` does not write membership; the client's join does. Before the join
+    // the creator is not in the channel.
+    const { name } = await ada.mutation(create, { name: "general" });
+
+    expect(await ada.query(membership, { channelId: name })).toStrictEqual({ isMember: false, memberCount: 0 });
+
+    await joined(ada, name);
+
+    expect(await ada.query(membership, { channelId: name })).toStrictEqual({ isMember: true, memberCount: 1 });
+});
+
+it("treats a second join as a no-op", async () => {
+    expect.assertions(2);
+    await joined(ada, "general");
+    await joined(ada, "general");
+
+    const roster = await ada.query(members, { channelId: "general" });
+    expect(roster.map((row) => row.userId)).toStrictEqual(["u-ada"]);
+    expect(await ada.query(membership, { channelId: "general" })).toStrictEqual({ isMember: true, memberCount: 1 });
+});
+
+it("refuses a signed-out join and leave", async () => {
+    expect.assertions(2);
+    await expect(t.mutation(join, { channelId: "general" })).rejects.toThrow(SIGN_IN_RE);
+    await expect(t.mutation(leaveChannel, { channelId: "general" })).rejects.toThrow(SIGN_IN_RE);
+});
+
+it("refuses a non-member every channel read and write, and gives them no data", async () => {
+    expect.assertions(8);
+    await joined(ada, "general");
+    await ada.mutation(send, { channelId: "general", content: "members only" });
+    await ada.mutation(heartbeat, { channelId: "general", name: "Ada", sessionId: "s1" });
+
+    const grace = t.withIdentity({ userId: "u-grace" });
+
+    await expect(grace.query(listMessages, { channelId: "general" })).rejects.toThrow(FORBIDDEN_RE);
+    await expect(grace.query(search, { channelId: "general", text: "members" })).rejects.toThrow(FORBIDDEN_RE);
+    await expect(grace.query(listPresence, { channelId: "general" })).rejects.toThrow(FORBIDDEN_RE);
+    await expect(grace.mutation(send, { channelId: "general", content: "let me in" })).rejects.toThrow(FORBIDDEN_RE);
+    await expect(grace.mutation(heartbeat, { channelId: "general", name: "Grace", sessionId: "g1" })).rejects.toThrow(FORBIDDEN_RE);
+    await expect(grace.action(requestAttachmentUpload, { channelId: "general", contentType: "image/png" })).rejects.toThrow(FORBIDDEN_RE);
+    await expect(grace.query(members, { channelId: "general" })).rejects.toThrow(FORBIDDEN_RE);
+
+    // Joining is what unlocks it; nothing above was written.
+    expect(await grace.query(membership, { channelId: "general" })).toStrictEqual({ isMember: false, memberCount: 1 });
+});
+
+it("lets a non-member see whether they are in a channel and how many are in it", async () => {
+    expect.assertions(3);
+    await joined(ada, "general");
+
+    const grace = t.withIdentity({ userId: "u-grace" });
+
+    expect(await grace.query(membership, { channelId: "general" })).toStrictEqual({ isMember: false, memberCount: 1 });
+    await joined(grace, "general");
+    expect(await grace.query(membership, { channelId: "general" })).toStrictEqual({ isMember: true, memberCount: 2 });
+    expect(await ada.query(membership, { channelId: "general" })).toStrictEqual({ isMember: true, memberCount: 2 });
+});
+
+it("lists the members to a member, with join times", async () => {
+    expect.assertions(2);
+    await joined(ada, "general");
+    await joined(t.withIdentity({ userId: "u-grace" }), "general");
+
+    const rows = await ada.query(members, { channelId: "general" });
+    expect(rows.map((row) => row.userId).toSorted()).toStrictEqual(["u-ada", "u-grace"]);
+    expect(rows.every((row) => Number.isFinite(row.joinedAt))).toBe(true);
+});
+
+it("stops a leaving member's reads and writes, and removes them from the roster", async () => {
+    expect.assertions(4);
+    await joined(ada, "general");
+    await ada.mutation(send, { channelId: "general", content: "before leaving" });
+
+    await ada.mutation(leaveChannel, { channelId: "general" });
+
+    await expect(ada.query(listMessages, { channelId: "general" })).rejects.toThrow(FORBIDDEN_RE);
+    await expect(ada.mutation(send, { channelId: "general", content: "after leaving" })).rejects.toThrow(FORBIDDEN_RE);
+    expect(await ada.query(membership, { channelId: "general" })).toStrictEqual({ isMember: false, memberCount: 0 });
+    // Removing the last member is allowed; the channel itself stays.
+    await expect(ada.query(members, { channelId: "general" })).rejects.toThrow(FORBIDDEN_RE);
+});
+
+it("stops a live subscription for a member who leaves", async () => {
+    expect.assertions(2);
+    await joined(ada, "general");
+    await ada.mutation(send, { channelId: "general", content: "visible" });
+
+    const subscription = ada.subscribe(listMessages, { channelId: "general" });
+    const first = await subscription.next();
+    expect((first.value as Array<{ content: string }>).map((message) => message.content)).toStrictEqual(["visible"]);
+
+    // The harness re-evaluates every subscription on every mutation, so the next
+    // emission is the re-run after the leave. It must be a refusal, not data.
+    await ada.mutation(leaveChannel, { channelId: "general" });
+    await expect(subscription.next()).rejects.toThrow(FORBIDDEN_RE);
+});
+
 it("posts messages into a channel and reads them back", async () => {
     expect.assertions(1);
     await ada.mutation(create, { name: "general" });
+    await joined(ada, "general");
     await ada.mutation(send, { channelId: "general", content: "hello" });
-    await t.withIdentity({ userId: "u-grace" }).mutation(send, { channelId: "general", content: "hi back" });
+    const grace = t.withIdentity({ userId: "u-grace" });
+    await joined(grace, "general");
+    await grace.mutation(send, { channelId: "general", content: "hi back" });
 
     const messages = await ada.query(listMessages, { channelId: "general" });
 
@@ -89,6 +200,8 @@ it("posts messages into a channel and reads them back", async () => {
 
 it("keeps channels apart", async () => {
     expect.assertions(1);
+    await joined(ada, "general");
+    await joined(ada, "random");
     await ada.mutation(send, { channelId: "general", content: "in general" });
     await ada.mutation(send, { channelId: "random", content: "in random" });
 
@@ -98,11 +211,13 @@ it("keeps channels apart", async () => {
 
 it("refuses an attachment key that belongs to someone else", async () => {
     expect.assertions(1);
-    await expect(ada.mutation(send, { attachmentKey: "general/u-grace/secret.png", channelId: "general", content: "" })).rejects.toThrow();
+    await joined(ada, "general");
+    await expect(ada.mutation(send, { attachmentKey: "general/u-grace/secret.png", channelId: "general", content: "" })).rejects.toThrow(BAD_KEY_RE);
 });
 
 it("searches within a channel and returns nothing for an empty term", async () => {
     expect.assertions(2);
+    await joined(ada, "general");
     await ada.mutation(send, { channelId: "general", content: "deploy is green" });
     await ada.mutation(send, { channelId: "general", content: "lunch?" });
 
@@ -113,6 +228,7 @@ it("searches within a channel and returns nothing for an empty term", async () =
 
 it("tracks presence per session and clears it on leave", async () => {
     expect.assertions(3);
+    await joined(ada, "general");
     await ada.mutation(heartbeat, { channelId: "general", name: "Ada", sessionId: "s1" });
 
     const awaited4 = await ada.query(listPresence, { channelId: "general" });
@@ -129,6 +245,8 @@ it("tracks presence per session and clears it on leave", async () => {
 it("keeps one member from renaming or removing another member's presence", async () => {
     expect.assertions(4);
     const mallory = t.withIdentity({ userId: "u-mallory" });
+    await joined(ada, "general");
+    await joined(mallory, "general");
 
     await ada.mutation(heartbeat, { channelId: "general", name: "Ada", sessionId: "ada-tab" });
 
@@ -146,6 +264,7 @@ it("keeps one member from renaming or removing another member's presence", async
 
 it("will not sign a download for a message that carries no attachment", async () => {
     expect.assertions(1);
+    await joined(ada, "general");
     const messageId = await ada.mutation(send, { channelId: "general", content: "no file here" });
 
     // Refused at the row, before `ctx.storage` is touched at all. The old shape
@@ -157,12 +276,14 @@ it("will not sign a download for a message that carries no attachment", async ()
 
 it("will not sign a download for a message id that does not exist", async () => {
     expect.assertions(1);
+    await joined(ada, "general");
 
     await expect(ada.action(attachmentUrl, { messageId: "m-does-not-exist" as Id<"messages"> })).rejects.toThrow(NO_ATTACHMENT_RE);
 });
 
 it("signs only the key stored on the message, reached through the row", async () => {
     expect.assertions(1);
+    await joined(ada, "general");
     const messageId = await ada.mutation(send, {
         attachmentKey: "files/channels/general/u-ada/f.png",
         channelId: "general",
@@ -174,6 +295,14 @@ it("signs only the key stored on the message, reached through the row", async ()
     // is what it took to get here: a message id, resolved server-side. There is
     // no argument on this action that names an object.
     await expect(ada.action(attachmentUrl, { messageId })).rejects.toThrow(SIGNING_FAILED_RE);
+});
+
+it("will not sign a download for a non-member, even with a valid message id", async () => {
+    expect.assertions(1);
+    await joined(ada, "general");
+    const messageId = await ada.mutation(send, { attachmentKey: "files/channels/general/u-ada/f.png", channelId: "general", content: "" });
+
+    await expect(t.withIdentity({ userId: "u-grace" }).action(attachmentUrl, { messageId })).rejects.toThrow(FORBIDDEN_RE);
 });
 
 it("refuses a profile save that claims an avatar key that is not the caller's own", async () => {
