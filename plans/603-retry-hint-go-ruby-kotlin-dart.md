@@ -1,7 +1,8 @@
 # Plan 603 — Go, Ruby, Kotlin and Dart SDKs honour the live-query retry hint
 
-> **Executor instructions**: Follow this plan step by step, ONE PORT PER RUN, on a machine whose
-> toolchain for that port is installed (see "Toolchains"). Run every verification command and
+> **Executor instructions**: Follow this plan step by step, ONE PORT PER RUN. The
+> toolchains are not installed: mirror the reference port named in the brief and report every
+> statement you could not compile or run. Run every verification command and
 > confirm the expected result before moving on. If anything in "STOP conditions" occurs, stop and
 > report. Do NOT update `plans/README.md`.
 >
@@ -9,9 +10,9 @@
 
 **Baseline:** head of `feat/improve-546-retry-java-swift` (plan 602), on `1f55a1679` (PR #1550),
 2026-11-12
-**Status:** BLOCKED (toolchain missing on the planning machine: `go`; `ruby` ≥ 3.0 — only system
-Ruby 2.6.10 is installed and it cannot parse the port's endless methods (`def close = …`,
-`client.rb:95-97`); `kotlinc`; `dart`). Not executed blind.
+**Status:** DONE — APPROVED UNVERIFIED (written without toolchains; nothing compiled or run). PR #1582, branch
+`feat/improve-546-retry-go-ruby-kotlin-dart`: adfd97442 go, d4bc2178e ruby, b5597f6dd kotlin,
+5ab5d9285 dart, de87ad9e5 footnote. CI after retarget is the first verification.
 **Priority / effort / risk:** P3 / M / LOW. **Category:** feature parity. **Depends on:** plans
 600-602. **Branch (suggested):** `feat/improve-546-retry-go-ruby-kotlin-dart`, one commit per port.
 
@@ -33,7 +34,7 @@ kotlin and dart still ignore it (`sdks/README.md` row "Subscription retry hint",
 3. **Cancel** on any `ack`/`data`/`delta`/`resume`/`settled` frame for the id (one check right
    after the frame's `type`/`id` are read, before the switch — not inside the data branch, which
    PR #1553 rewrites), on unsubscribe; clear the map on attach, detach and close. An error
-   without a valid hint leaves an entry alone.
+   routed to a query subscription without a valid hint REMOVES its entry (plan 604).
 4. **Pulled firing**: `RetryDueSubscriptions(now)` / `retry_due_subscriptions(now)` /
    `retryDueSubscriptions(now)` sends, for each due entry still registered, ONE cold subscribe
    frame (same id/path/args, no since fields), clearing the stored cursor/epoch; returns the
