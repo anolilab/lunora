@@ -24,6 +24,16 @@ export const messages = sqliteTable("messages", {
     by_channel: index("by_channel").on(t.channelId),
 }));
 
+export const members = sqliteTable("members", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    channelId: text("channelId").notNull(),
+    userId: text("userId").notNull(),
+    joinedAt: real("joinedAt").notNull(),
+}, (t) => ({
+    by_channel_user: uniqueIndex("by_channel_user").on(t.channelId, t.userId),
+}));
+
 export const presence = sqliteTable("presence", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),

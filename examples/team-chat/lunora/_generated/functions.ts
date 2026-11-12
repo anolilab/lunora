@@ -63,7 +63,11 @@ export interface RegisteredLunoraFunction {
  */
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "channels:create": lunora_channels_0.create as unknown as RegisteredLunoraFunction,
+    "channels:join": lunora_channels_0.join as unknown as RegisteredLunoraFunction,
+    "channels:leave": lunora_channels_0.leave as unknown as RegisteredLunoraFunction,
     "channels:list": lunora_channels_0.list as unknown as RegisteredLunoraFunction,
+    "channels:members": lunora_channels_0.members as unknown as RegisteredLunoraFunction,
+    "channels:membership": lunora_channels_0.membership as unknown as RegisteredLunoraFunction,
     "messages:attachmentUrl": lunora_messages_1.attachmentUrl as unknown as RegisteredLunoraFunction,
     "messages:list": lunora_messages_1.list as unknown as RegisteredLunoraFunction,
     "messages:requestAttachmentUpload": lunora_messages_1.requestAttachmentUpload as unknown as RegisteredLunoraFunction,
@@ -89,6 +93,34 @@ if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(
 if (typeof source["name"] !== "string") return DEFER;
 if (source["name"].length > 64) return DEFER;
 return { "name": source["name"] };
+});
+installCompiledValidatorMap(lunora_channels_0.join.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["channelId"] !== "string") return DEFER;
+if (source["channelId"].length > 128) return DEFER;
+return { "channelId": source["channelId"] };
+});
+installCompiledValidatorMap(lunora_channels_0.leave.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["channelId"] !== "string") return DEFER;
+if (source["channelId"].length > 128) return DEFER;
+return { "channelId": source["channelId"] };
+});
+installCompiledValidatorMap(lunora_channels_0.members.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["channelId"] !== "string") return DEFER;
+if (source["channelId"].length > 128) return DEFER;
+return { "channelId": source["channelId"] };
+});
+installCompiledValidatorMap(lunora_channels_0.membership.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["channelId"] !== "string") return DEFER;
+if (source["channelId"].length > 128) return DEFER;
+return { "channelId": source["channelId"] };
 });
 installCompiledValidatorMap(lunora_messages_1.attachmentUrl.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -208,7 +240,7 @@ return { "name": source["name"], ...(__has1 ? { "avatarKey": __val1 } : {}) };
  * address-keyed from its first run, so it never resumes one warm: its rows can depend on the address the cursor
  * was read at, which a claims fingerprint leaves out.
  */
-export const LUNORA_IP_READER_PATHS: ReadonlySet<string> = new Set(["presence:list"]);
+export const LUNORA_IP_READER_PATHS: ReadonlySet<string> = new Set(["channels:members", "messages:list", "messages:search", "presence:list"]);
 
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
@@ -264,8 +296,12 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     channels: {
-        create: (args: { name: string }) => Promise<Id<"channels">>;
+        create: (args: { name: string }) => Promise<{ id: Id<"channels">; name: string; }>;
+        join: (args: { channelId: string }) => Promise<void>;
+        leave: (args: { channelId: string }) => Promise<void>;
         list: (args?: {}) => Promise<import("./dataModel.js").Doc_channels[]>;
+        members: (args: { channelId: string }) => Promise<{ joinedAt: number; userId: string; }[]>;
+        membership: (args: { channelId: string }) => Promise<{ isMember: boolean; memberCount: number; }>;
     };
     messages: {
         attachmentUrl: (args: { messageId: Id<"messages"> }) => Promise<string>;
@@ -326,7 +362,11 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
 export const createCaller = (context: CallerCtx): Caller => ({
     channels: {
         create: (args) => callRegistered(context, "channels:create", args),
+        join: (args) => callRegistered(context, "channels:join", args),
+        leave: (args) => callRegistered(context, "channels:leave", args),
         list: (args) => callRegistered(context, "channels:list", args),
+        members: (args) => callRegistered(context, "channels:members", args),
+        membership: (args) => callRegistered(context, "channels:membership", args),
     },
     messages: {
         attachmentUrl: (args) => callRegistered(context, "messages:attachmentUrl", args),

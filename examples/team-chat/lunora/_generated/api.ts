@@ -7,8 +7,12 @@ import type { Id } from "./dataModel.js";
 
 export interface ApiTypes {
     channels: {
-        create: FunctionReference<"mutation", { name: string }, Id<"channels">>;
+        create: FunctionReference<"mutation", { name: string }, { id: Id<"channels">; name: string; }>;
+        join: FunctionReference<"mutation", { channelId: string }, void>;
+        leave: FunctionReference<"mutation", { channelId: string }, void>;
         list: FunctionReference<"query", {}, import("./dataModel.js").Doc_channels[]>;
+        members: FunctionReference<"query", { channelId: string }, { joinedAt: number; userId: string; }[]>;
+        membership: FunctionReference<"query", { channelId: string }, { isMember: boolean; memberCount: number; }>;
     };
     messages: {
         attachmentUrl: FunctionReference<"action", { messageId: Id<"messages"> }, string>;
@@ -33,7 +37,11 @@ export interface ApiTypes {
 export const api: ApiTypes = {
     channels: {
         create: { __lunoraRef: "channels:create" },
+        join: { __lunoraRef: "channels:join" },
+        leave: { __lunoraRef: "channels:leave" },
         list: { __lunoraRef: "channels:list" },
+        members: { __lunoraRef: "channels:members" },
+        membership: { __lunoraRef: "channels:membership" },
     },
     messages: {
         attachmentUrl: { __lunoraRef: "messages:attachmentUrl" },
