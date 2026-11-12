@@ -122,11 +122,24 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
     // Static schema advisories (unindexed FKs, …). Surface each with its
     // remediation so the warning is actionable; one grouped `warn` keeps it in
     // line with the cron-trigger warning below.
-    if (result.advisories.length > 0) {
-        const count = result.advisories.length;
-        const lines = result.advisories.map((advisory) => `  [${advisory.level}] ${advisory.name} — ${advisory.detail}\n      ↳ ${advisory.remediation}`);
+    // A suppressed finding was accepted by an inline directive: it stays listed
+    // with its reason, but it is not a warning to act on.
+    const active = result.advisories.filter((advisory) => advisory.suppressed === undefined);
+    const suppressed = result.advisories.filter((advisory) => advisory.suppressed !== undefined);
+
+    if (active.length > 0) {
+        const count = active.length;
+        const lines = active.map((advisory) => `  [${advisory.level}] ${advisory.name} — ${advisory.detail}\n      ↳ ${advisory.remediation}`);
 
         logger.warn(`${count.toString()} schema ${count === 1 ? "advisory" : "advisories"}:\n${lines.join("\n")}`);
+    }
+
+    if (suppressed.length > 0) {
+        const lines = suppressed.map(
+            (advisory) => `  [${advisory.level}] ${advisory.name} (suppressed: ${advisory.suppressed?.reason ?? ""}) — ${advisory.detail}`,
+        );
+
+        logger.info(`${suppressed.length.toString()} suppressed:\n${lines.join("\n")}`);
     }
 
     const platform = reportPlatformDiagnostics(result.platformDiagnostics, logger);
