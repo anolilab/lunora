@@ -587,6 +587,13 @@ describe("auth audit trail", () => {
             expect(entry?.actorId).toBe("admin_1");
         });
 
+        it("classifies an OAuth token refresh as token-refresh, and an initial grant as issuance", () => {
+            expect.assertions(2);
+
+            expect(buildAuditEntry({ body: { grant_type: "refresh_token" }, path: "/api/auth/oauth2/token" })?.event).toBe("token-refresh");
+            expect(buildAuditEntry({ body: { grant_type: "authorization_code" }, path: "/api/auth/oauth2/token" })?.event).toBe("oauth-token-issue");
+        });
+
         it("does not add targetUserId to a non-admin event", () => {
             expect.assertions(1);
 

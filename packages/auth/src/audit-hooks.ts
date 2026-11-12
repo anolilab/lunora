@@ -326,17 +326,24 @@ const branchEventForPath = (normalized: string): AuthAuditEvent | undefined => {
  * better-auth by `__tests__/audit-endpoint-coverage.test.ts`, which fails on any
  * endpoint it does not classify, so an upgrade cannot add one silently.
  *
- * The exact table {@link SUFFIX_EVENTS} is consulted first, then the substring branches.
+ * The method-keyed rows are checked first, then the exact suffix table {@link SUFFIX_EVENTS},
+ * then the substring branches.
  *
  * `method` only matters for {@link METHOD_EVENTS}, the paths that serve a read and a
  * write under one template (SCIM users, OAuth resources). Pass it whenever the verb
  * is known; a direct server call has none, and those paths are left unclassified.
+ *
+ * `grantType` is the request's `grant_type`. The OAuth token endpoint serves both the
+ * initial grant and a refresh, and only the refresh is a token refresh.
  */
-const eventForPath = (path: string, method?: string): AuthAuditEvent | undefined => {
+const eventForPath = (path: string, method?: string, grantType?: string): AuthAuditEvent | undefined => {
     const normalized = path.toLowerCase();
     const upperMethod = method?.toUpperCase();
 
+    const isTokenRefresh = normalized.endsWith("/oauth2/token") && grantType === "refresh_token";
+
     return (
+        (isTokenRefresh ? "token-refresh" : undefined) ??
         METHOD_PATTERNS.find((row) => row.method === upperMethod && row.pattern.test(normalized))?.event ??
         SUFFIX_PATTERNS.find((row) => row.pattern.test(normalized))?.event ??
         branchEventForPath(normalized)
@@ -555,7 +562,9 @@ const buildAuditEntry = (
     context: AuditHookContext,
     { now = Date.now(), trustProxyHeaders }: { now?: number; trustProxyHeaders?: boolean } = {},
 ): AppendAuthAuditEntry | undefined => {
-    const event = context.path === undefined ? undefined : eventForPath(context.path, context.method);
+    const rawGrantType = context.body?.["grant_type"];
+    const grantType = typeof rawGrantType === "string" ? rawGrantType : undefined;
+    const event = context.path === undefined ? undefined : eventForPath(context.path, context.method, grantType);
 
     if (event === undefined) {
         return undefined;
