@@ -10,7 +10,7 @@ import discoverRlsProcedures from "../../src/discover/rls-procedures";
 // The same self-contained branded builder the rls-metadata fixtures use: discovery
 // resolves the `__lunoraProcedure` brand off the receiver's type, so the builder is
 // declared inline.
- 
+
 const PREAMBLE = `
     interface Policy { table: string; on: string; when: (context: unknown) => unknown }
     declare const rls: (policies: unknown) => (options: { ctx: unknown }) => unknown;
