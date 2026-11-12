@@ -9,7 +9,7 @@
 > lists only 595's files. Nothing else changed under `packages/codegen/src/discover/schema` or
 > `packages/advisor/src/lints/static` since `4121b67cc`.
 
-**Baseline:** plan 595's branch tip (on `4121b67cc`, 2026-11-12)
+**Baseline:** plan 595's branch tip `a75902bbb` (2026-11-12)
 **Status:** TODO
 **Source:** follow-up to row 50 of the 2026-11-11 audit; second PR of the stack (595 → 596 → 597 → 588).
 
@@ -19,7 +19,7 @@
 
 ## 0. Headline
 
-Twenty static lints describe a schema object (table, index, field, relation) or a config entry and
+Twenty-one static lints describe a schema object (table, index, field, relation) or a config entry and
 report no source location, so plan 597's directive (rule id + file + line span) cannot match them.
 This plan records where each object is declared and copies it into `metadata.file` / `metadata.line`,
 the keys the other 95 lints already use after plan 595. Objects with no source site in the app keep no
@@ -37,6 +37,7 @@ Lints and their evidence (`packages/advisor/src/lints/static/<name>.ts`):
   `tableWrites`), ttl-field-not-timestamp, unindexed-relation-target, through-relation-missing-unique-index.
 - **Config**: notify-missing-push-config (`context.notifyConfig`), plaintext-secret-in-wrangler-variables
   (`context.wranglerVariables`, rows already carry `file`, not `line`).
+- **Declaration left over from plan 595**: topic-too-many-subscriptions (keyed to a `defineTopic` export; its evidence has no row with a location — add the topic's declaration `file`/`line` the way plan 595 did for queues, using `declarationLineOf` from `packages/codegen/src/discover/ast.ts` and `declarationSiteFields` from `packages/advisor/src/lints/helpers.ts`).
 - **Write-derived**: cross-module-table-write (`inserts`, `tableWrites`, `modules`; those rows carry `file`/`line`).
 - Schema discovery is AST-based: `packages/codegen/src/discover/schema/index.ts` (`parseBaseTables` over the
   `defineSchema(...)` argument, `applyExtensions` for chained `.extend(...)`), helpers in
@@ -73,7 +74,7 @@ Lints and their evidence (`packages/advisor/src/lints/static/<name>.ts`):
 
 ### Step 0 — verify per rule (write the table into your report)
 
-For each of the 20 lints, name the IR object it reports and the source node per §2, or "no site" with the reason. If a rule's
+For each of the 21 lints, name the IR object it reports and the source node per §2, or "no site" with the reason. If a rule's
 object is built in a way §2 does not cover (e.g. a table whose definition the schema discoverer reads from something other
 than a `defineTable` call node), STOP and report the cases.
 
@@ -89,7 +90,7 @@ Record `file`/`line` in the schema discoverer for tables, indexes, fields, relat
 
 ### Step 3 — lints copy the location
 
-Each of the 20 lints adds `file`/`line` to `metadata` when defined. No other change.
+Each of the 21 lints adds `file`/`line` to `metadata` when defined. No other change.
 
 ### Step 4 — tests (red without the fix)
 
@@ -97,7 +98,7 @@ Each of the 20 lints adds `file`/`line` to `metadata` when defined. No other cha
   a field and a relation, asserting each recorded `file`/`line`; a wrangler.jsonc fixture asserting a key's line (model after the
   existing discoverer tests).
 - advisor: one test per lint family (table, index, field, relation, wrangler, notify, cross-module) asserting `metadata.file`/`line`.
-- Red: restore the baseline sources (`git show <595 tip>:<path> > <path>`), new tests FAIL; restore; pass.
+- Red: restore the baseline sources (`git show a75902bbb:<path> > <path>`), new tests FAIL; restore; pass.
 
 ### Step 5 — goldens and generated output
 
