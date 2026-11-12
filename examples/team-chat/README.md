@@ -39,9 +39,11 @@ pnpm --filter @lunora-example/team-chat run deploy
 - **Membership, checked in the shard.** `members` lives in each channel's own
   shard, so the check and the data it protects sit in one serialized place, and a
   `leave` is a write there that re-runs the subscriptions of anyone still listening.
-  Creator membership is established by the create-then-join flow: the client calls
-  `channels.join` right after `channels.create`, with that channel's shard key.
-  `create` itself does not write a membership row. `channels.join` is idempotent,
+  The creator becomes a member through the client's create-then-join flow, not
+  inside `channels.create`: the client calls `channels.join` right after
+  `channels.create`, with that channel's shard key. `create` itself does not write
+  a membership row, so a creator who closes the tab between create and join is not
+  a member until they join. `channels.join` is idempotent,
   and `channels.leave` removes the caller's row; removing the last member is
   allowed and the channel stays. `channels.membership` (any signed-in user) reports
   whether the caller is in a channel and how many members it has, and
