@@ -231,6 +231,15 @@ class LunoraClient {
   /// it has any, and left when the last one goes.
   final Map<String, List<LunoraDataCallback>> _whisperListeners = <String, List<LunoraDataCallback>>{};
   final Map<String, _Subscription> _subscriptions = <String, _Subscription>{};
+
+  /// The live-query retry hint's deadline per query subscription id, in milliseconds on [_retryClock].
+  /// One per id: a newer hint replaces it. Nothing here arms a timer; the caller pulls
+  /// [retryDueSubscriptions], as it does for a flush's retry.
+  final Map<String, int> _pendingRetries = <String, int>{};
+
+  /// Started with the client, so a deadline is measured on a clock a wall-clock change cannot move.
+  final Stopwatch _retryClock = Stopwatch()..start();
+
   final ShapeRegistry _shapeRegistry = ShapeRegistry();
   int _nextId = 0;
 
@@ -252,6 +261,7 @@ class LunoraClient {
     // Offline until every write below has returned: a write that throws leaves the client offline, and a
     // detach the sender makes during the writes supersedes this attach.
     _send = null;
+    _pendingRetries.clear();
     final attachGeneration = ++_attachGeneration;
 
     if (_closed) {
@@ -323,6 +333,7 @@ class LunoraClient {
     // Offline before any listener runs, so a listener that reattaches is not
     // undone by this method clearing the sender afterwards.
     _send = null;
+    _pendingRetries.clear();
     _attachGeneration++;
 
     if (code == 4001) {
@@ -491,6 +502,7 @@ class LunoraClient {
     _replayer.cancelRetries(all: true);
     _send = null;
     _subscriptions.clear();
+    _pendingRetries.clear();
     _whisperListeners.clear();
     _shapeRegistry.clear();
 
@@ -725,6 +737,8 @@ class LunoraClient {
     _send?.call(buildSubscribeFrame(id, functionPath, args));
 
     return () {
+      _pendingRetries.remove(id);
+
       if (_subscriptions.remove(id) != null) {
         _send?.call(buildUnsubscribeFrame(id));
       }
@@ -811,6 +825,76 @@ class LunoraClient {
     }
   }
 
+  /// Re-subscribes every query whose retry hint has come due by [nowMs], and returns how many it
+  /// sent. [nowMs] defaults to this client's clock, the one [nextSubscriptionRetryAt] is read on.
+  ///
+  /// Each re-subscribe is cold: the hint asks for a fresh snapshot, so the stored resume cursor and
+  /// epoch are cleared first. Nothing is sent, and nothing is due, while no socket is attached,
+  /// because detaching cancels every pending retry.
+  int retryDueSubscriptions({int? nowMs}) {
+    final sender = _send;
+
+    if (sender == null) {
+      return 0;
+    }
+
+    final now = nowMs ?? _retryClock.elapsedMilliseconds;
+
+    // Built before any is sent, for the reason [resendSubscriptions] gives.
+    final frames = <Map<String, Object?>>[];
+
+    for (final id in List<String>.of(_pendingRetries.keys)) {
+      if (_pendingRetries[id]! > now) {
+        continue;
+      }
+
+      _pendingRetries.remove(id);
+
+      final entry = _subscriptions[id];
+
+      if (entry == null) {
+        continue;
+      }
+
+      entry.cursor = null;
+      entry.epoch = null;
+      frames.add(buildSubscribeFrame(id, entry.functionPath, entry.args));
+    }
+
+    for (final frame in frames) {
+      sender(frame);
+    }
+
+    return frames.length;
+  }
+
+  /// The earliest pending retry deadline on the clock [retryDueSubscriptions] reads, or null when no
+  /// retry is pending. A caller arms its timer for this, and re-arms after each fire.
+  int? get nextSubscriptionRetryAt {
+    int? next;
+
+    for (final deadline in _pendingRetries.values) {
+      if (next == null || deadline < next) {
+        next = deadline;
+      }
+    }
+
+    return next;
+  }
+
+  /// The server's retry hint on a subscription error, in milliseconds and clamped to
+  /// [maxRetryAfterMs], or null when it names no delay this client can honour. A bool is not a
+  /// `num`, so `true` is refused as well.
+  static int? _retryHintMs(Map<String, Object?> envelope) {
+    final delay = envelope['retryAfterMs'];
+
+    if (delay is! num || !delay.isFinite || delay < 0) {
+      return null;
+    }
+
+    return (delay < maxRetryAfterMs ? delay : maxRetryAfterMs).round();
+  }
+
   // ─── Whisper and rooms ────────────────────────────────────────────────────
 
   /// Joins [topic] and calls [listener] with every whisper sent to it, from any
@@ -892,6 +976,12 @@ class LunoraClient {
   String? _dispatch(Map<String, Object?> frame) {
     final kind = frame['type'] is String ? frame['type'] as String : null;
     final id = frame['id'] is String ? frame['id'] as String : null;
+
+    // The server answered this subscription, so a retry it was waiting on is moot. `error` is not in
+    // this set: it cancels only by carrying no hint, which the error case decides.
+    if (id != null && const <String>{'ack', 'data', 'delta', 'resume', 'settled'}.contains(kind)) {
+      _pendingRetries.remove(id);
+    }
 
     switch (kind) {
       case 'data':
@@ -1008,6 +1098,19 @@ class LunoraClient {
         );
 
         if (id != null) {
+          // A shape view is never a query re-run, so only a registered query is scheduled. A hint
+          // replaces any pending retry; no hint cancels it, since a retry cannot fix what the server
+          // has given up on.
+          if (_subscriptions.containsKey(id)) {
+            final delay = _retryHintMs(coded);
+
+            if (delay == null) {
+              _pendingRetries.remove(id);
+            } else {
+              _pendingRetries[id] = _retryClock.elapsedMilliseconds + delay;
+            }
+          }
+
           _subscriptions[id]?.onError?.call(error);
           _shapeRegistry.reportError(id, error);
         }

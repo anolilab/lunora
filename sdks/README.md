@@ -152,7 +152,7 @@ change that adds or removes a capability.
 | Token expiry from close codes | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Identity frame adopted        | ➖¹²   | ➖¹² | ➖¹² | ➖¹² | ➖¹²  | ➖¹² | ➖¹²   | ➖¹² |
 | 503 at upgrade retried        | ✅¹¹   | ➖¹¹ | ➖¹¹ | ➖¹¹ | ➖¹¹  | ➖¹¹ | ➖¹¹   | ➖¹¹ |
-| Subscription retry hint       | ✅¹³   | ✅¹³ | ✅¹³ | ✅¹³ | ✅¹³  | ✅¹³ | ✅¹³   | ❌¹³ |
+| Subscription retry hint       | ✅¹³   | ✅¹³ | ✅¹³ | ✅¹³ | ✅¹³  | ✅¹³ | ✅¹³   | ✅¹³ |
 | Multi-tab leader election     | ❌     | ❌   | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Built-in HTTP / socket        | ✅⁴    | ❌   | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Several sockets per client    | ❌³    | ❌³  | ❌³  | ❌³  | ❌³   | ❌³  | ❌³    | ❌³  |
@@ -321,14 +321,15 @@ for it without a hint, an unsubscribe, a socket close or open, or `close()` canc
 marked ❌ ignores the field and delivers the error as before, so the subscription stays on it until a
 write touches its tables after the backoff window or the socket reconnects. The goldens are
 `subscriptionRetry` in `protocol/fixtures/ws-frames.json`; it is not in `conformance-cases.json`,
-which may only require behaviour every port has. Python, Ruby, Go, Rust, Java, Kotlin and Swift
-honour it through a pulled deadline: the client records one per subscription,
+which may only require behaviour every port has. Python, Ruby, Go, Rust, Java, Kotlin, Swift and
+Dart honour it through a pulled deadline: the client records one per subscription,
 `retry_due_subscriptions(now)` (Python and Ruby; Java and Kotlin `retryDueSubscriptions`, Go
-`RetryDueSubscriptions(now)`, Swift `retryDueSubscriptions(now:)`) sends the due re-subscribes, and
-`next_subscription_retry_at()` (Python and Ruby; Java and Kotlin `nextSubscriptionRetryAtNanos()`,
-Go `NextSubscriptionRetryAt()`, Swift `nextSubscriptionRetryAt`) says when to call it next: the
-caller's timer, as for a flush's `retry_after_ms`. Python's `connect_and_run` arms that timer itself;
-Ruby, Go, Rust, Java, Kotlin and Swift callers arm their own.
+`RetryDueSubscriptions(now)`, Swift `retryDueSubscriptions(now:)`, Dart
+`retryDueSubscriptions(nowMs:)`) sends the due re-subscribes, and `next_subscription_retry_at()`
+(Python and Ruby; Java and Kotlin `nextSubscriptionRetryAtNanos()`, Go
+`NextSubscriptionRetryAt()`, Swift and Dart `nextSubscriptionRetryAt`) says when to call it next:
+the caller's timer, as for a flush's `retry_after_ms`. Python's `connect_and_run` arms that timer
+itself; Ruby, Go, Rust, Java, Kotlin, Swift and Dart callers arm their own.
 
 **The two argument rows are one problem with two halves, and no port can pass
 both by a rule applied at the transport.** An unset `v.optional()` must reach the
