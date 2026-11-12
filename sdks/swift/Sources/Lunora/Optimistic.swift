@@ -196,8 +196,8 @@ public final class LunoraOptimisticState {
     public var serverBase: Any
 
     /// Whether a `data`/`delta` frame has set ``serverBase``. A row-change delta
-    /// before the first one is the legacy broadcast, not something to merge into
-    /// the initial null.
+    /// before the first one cannot merge, so it is held rather than merged into the
+    /// initial null.
     public var hasServerBase = false
 
     /// The CDC high-watermark ``lastValue`` reflects, from the last cursor-stamped

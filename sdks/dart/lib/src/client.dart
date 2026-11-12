@@ -918,8 +918,9 @@ class LunoraClient {
         // A `delta` that is a row change merges into the server base, not the
         // displayed value, which may carry an optimistic overlay re-folded below.
         // `data` wins when both are present, as it does for the decode above.
-        if (frame['data'] == null && entry != null && isMutationDelta(value) && entry.hasServerBase) {
-          final merged = applyDelta(entry.serverBase, value! as Map<String, Object?>);
+        if (frame['data'] == null && entry != null && isMutationDelta(value)) {
+          // With no base, or a committed null, the row change cannot merge and is held like any other.
+          final merged = entry.hasServerBase ? applyDelta(entry.serverBase, value! as Map<String, Object?>) : null;
 
           // Unmergeable against a base we hold. The reference re-snapshots here;
           // this port has no resubscribe-for-snapshot path, so the previous value

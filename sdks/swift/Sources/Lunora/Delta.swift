@@ -39,14 +39,14 @@ enum LunoraRowDelta {
 
     /// What a data/delta frame's decoded `payload` does to `base`.
     ///
-    /// A `data` frame replaces the base. A row change with no cached base is the
-    /// legacy broadcast and is published as-is. With a base it is merged; when it
-    /// cannot be merged the envelope is NOT published and the previous value stays;
+    /// A `data` frame replaces the base. A row change is merged into the base; with no
+    /// base, or when it cannot be merged, the envelope is NOT published and the previous
+    /// value stays;
     /// the caller then poisons the subscription so the resume cursor stays put and a
     /// reconnect replays the dropped change.
     static func resolve(kind: String?, payload: Any, base: Any, hasBase: Bool) -> Resolution {
         guard kind == "delta", let delta = change(payload) else { return .value(payload) }
-        guard hasBase else { return .value(payload) }
+        guard hasBase else { return .unmergeable }
         guard let merged = apply(base, delta) else { return .unmergeable }
 
         return .value(merged)

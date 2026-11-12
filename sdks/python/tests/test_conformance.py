@@ -312,8 +312,8 @@ class TestWsFrameConsumer(unittest.TestCase):
             client.handle_frame({"delta": delta, "id": "sub_1", "type": "delta"})
             return seen
 
-        # No cached base: the legacy broadcast is published as-is.
-        self.assertEqual(run(None), [delta])
+        # No base: the row change is held, never published as the envelope.
+        self.assertEqual(run(None), [])
         # A base that is not a row list (or whose rows lack `_id`): keep the previous value.
         self.assertEqual(run("scalar"), [])
         self.assertEqual(run([{"text": "no id"}]), [])

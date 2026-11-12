@@ -1102,8 +1102,8 @@ func TestPageDeltaFramesMergeIntoTheCachedResult(t *testing.T) {
 // resubscribe or a data frame clears it.
 func TestPageDeltaPoisonFreezesTheResumeCursor(t *testing.T) {
 	cases, _ := loadFixture(t, "ws-frames.json")["pageDeltaPoisonCases"].([]any)
-	if len(cases) != 1 {
-		t.Fatalf("fixture has %d pageDeltaPoisonCases, want 1", len(cases))
+	if len(cases) != 3 {
+		t.Fatalf("fixture has %d pageDeltaPoisonCases, want 3", len(cases))
 	}
 
 	for _, entry := range cases {

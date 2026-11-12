@@ -199,16 +199,15 @@ pub(crate) enum Resolved {
 }
 
 /// Resolves a decoded `delta` payload against the subscription's server base.
-/// `base` is `None` before the subscription has received any value: that is the
-/// legacy broadcast, where there is nothing to corrupt, so the delta is adopted
-/// as-is.
+/// `base` is `None` before the subscription has received any value; a row change
+/// cannot merge into nothing, so it is held like any other unmergeable change.
 pub(crate) fn resolve_delta(payload: WireValue, base: Option<&WireValue>) -> Resolved {
     let Some(delta) = as_row_delta(&payload) else {
         return Resolved::Adopt(payload);
     };
 
     let Some(base) = base else {
-        return Resolved::Adopt(payload);
+        return Resolved::Keep;
     };
 
     match apply_delta(base, &delta) {

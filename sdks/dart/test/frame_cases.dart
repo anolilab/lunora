@@ -141,9 +141,9 @@ void caseUnmergeableRowDeltaKeepsThePreviousValue() {
 
   client.subscribe('messages:list', onData: seen.add);
 
-  // No cached base yet: the legacy broadcast is published as it arrived.
+  // No base yet: the row change cannot merge into nothing, so it is held and not published.
   client.handleFrame(jsonEncode(<String, Object?>{'type': 'delta', 'id': 'sub_1', 'delta': change}));
-  equals(canonical(seen), canonical(<Object?>[change]), 'a row change with no base is published as is');
+  equals(seen.length, 0, 'a row change with no base is held, not published');
 
   pushData(client, 'sub_1', <Object?>[
     <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'one'},
@@ -189,7 +189,7 @@ void caseUnmergeableRowDeltaKeepsThePreviousValue() {
 void casePoisonedSubscriptionFreezesTheResumeCursor() {
   final cases = objectList(fixture('ws-frames.json')['pageDeltaPoisonCases']);
 
-  equals(cases.length, 1, 'pageDeltaPoisonCases must carry its one case');
+  equals(cases.length, 3, 'pageDeltaPoisonCases must carry its three cases');
 
   for (final testCase in cases) {
     final name = testCase['name'];

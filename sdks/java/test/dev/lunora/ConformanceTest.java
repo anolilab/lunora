@@ -988,7 +988,7 @@ public final class ConformanceTest {
     private static void unmergeableRunFreezesTheCursor() throws IOException {
         List<Object> cases = (List<Object>) fixture("ws-frames.json").get("pageDeltaPoisonCases");
 
-        check(cases.size() == 1, "ws-frames.json must carry 1 pageDeltaPoisonCase");
+        check(cases.size() == 3, "ws-frames.json must carry 3 pageDeltaPoisonCases");
 
         for (Object entry : cases) {
             Map<String, Object> testCase = (Map<String, Object>) entry;
@@ -1039,8 +1039,8 @@ public final class ConformanceTest {
     }
 
     /**
-     * A row change with no cached base is published as decoded (the legacy broadcast); one that
-     * cannot be merged into the base keeps the previous value instead of publishing the envelope.
+     * A row change with no base, or one that cannot be merged into it, keeps the previous value and
+     * is never published as the envelope.
      */
     private static void rowDeltaWithoutMergeableBaseIsNotPublishedAsAnEnvelope() {
         String delta =
@@ -1055,10 +1055,7 @@ public final class ConformanceTest {
 
         bare.subscribe("messages:list", new LinkedHashMap<>(), bareSeen::add, null, null);
         bare.handleFrame(delta);
-        check(bareSeen.size() == 1, "a row change with no base publishes as-is");
-        check(
-                bareSeen.get(0) instanceof Map<?, ?> map && "m1".equals(map.get("key")),
-                "the legacy broadcast is published as decoded");
+        check(bareSeen.isEmpty(), "a row change with no base is held, not published");
 
         Client scalar = new Client("https://app.example", null);
 

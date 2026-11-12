@@ -1298,7 +1298,7 @@ class LunoraClient:
                 sub.poisoned = False
             elif sub.poisoned:
                 return {"kind": "delta", "id": frame.get("id"), "value": sub.server_base, "displayed": sub.last_value, "unmerged": True}
-        if not has_data and is_mutation_delta(value) and sub is not None and sub.server_base is not None:
+        if not has_data and is_mutation_delta(value) and sub is not None:
             # A row change merges into the SERVER BASE, never the displayed value: the optimistic
             # layers are re-folded onto the result below, exactly as for a `data` frame.
             merged = apply_delta(sub.server_base, value)

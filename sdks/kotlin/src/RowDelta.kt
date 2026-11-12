@@ -38,15 +38,15 @@ internal object RowDelta {
     /**
      * Resolves a decoded `delta` payload against the subscription's server base.
      *
-     * With no base the row change is published as-is (the legacy broadcast). When the base cannot
-     * take the merge the previous value is kept and the envelope is NOT published: the reference
+     * With no base, or against a committed null, the row change cannot merge and is held. When the
+     * base cannot take the merge the previous value is kept and the envelope is NOT published: the reference
      * re-snapshots here, but this port has no resubscribe-for-snapshot path, so the gap is
      * left until the next `data` frame rather than hidden behind a wrong value.
      */
     fun resolve(delta: WireValue, base: WireValue?): Resolution {
         if (!isRowChange(delta)) return Resolution.Publish(delta)
 
-        if (base == null) return Resolution.Publish(delta)
+        if (base == null) return Resolution.Unmergeable
 
         return apply(base, delta as WireValue.Obj)?.let { Resolution.Publish(it) } ?: Resolution.Unmergeable
     }

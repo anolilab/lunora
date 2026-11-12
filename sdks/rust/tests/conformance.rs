@@ -682,7 +682,7 @@ fn an_unmergeable_run_freezes_the_cursor() {
     let document = fixture("ws-frames.json");
     let cases = document["pageDeltaPoisonCases"].as_array().expect("pageDeltaPoisonCases");
 
-    assert_eq!(cases.len(), 1, "pageDeltaPoisonCases must carry its one case");
+    assert_eq!(cases.len(), 3, "pageDeltaPoisonCases must carry its three cases");
 
     for case in cases {
         let name = case["name"].as_str().unwrap_or("?");

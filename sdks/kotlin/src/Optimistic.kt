@@ -80,7 +80,7 @@ object Optimistic {
          */
         var serverBase: WireValue = base
 
-        /** False until the first value arrives: a row delta with no base is published as-is, not merged into [serverBase]'s placeholder. */
+        /** False until the first value arrives: a row delta with no base is held, not merged into [serverBase]'s placeholder. */
         var hasBase: Boolean = false
 
         /** The CDC high-watermark [lastValue] reflects, from the last cursor-stamped frame. */

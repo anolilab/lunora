@@ -211,14 +211,14 @@ func applyDelta(base any, delta mutationDelta) (any, bool) {
 
 // resolveDataPayload decides the new server base for a data or delta frame. A data
 // frame replaces it. A delta that is a row change merges into the cached base; with
-// no cached base (legacy broadcast) the decoded delta is published as-is.
+// no cached base it cannot merge, so it is held like any other unmergeable change.
 //
 // publish is false when a row change cannot be merged. The reference client
 // re-snapshots there; this port has no resubscribe-for-snapshot path, so it keeps the
 // previous value rather than publishing the row-change envelope as the query result.
 // The caller poisons the subscription so no later delta moves the resume cursor past
 // the dropped change; the next data frame or resubscribe reconciles.
-func resolveDataPayload(kind string, base any, hasBase bool, value any) (next any, publish bool) {
+func resolveDataPayload(kind string, base any, value any) (next any, publish bool) {
 	if kind != "delta" {
 		return value, true
 	}
@@ -228,10 +228,7 @@ func resolveDataPayload(kind string, base any, hasBase bool, value any) (next an
 		return value, true
 	}
 
-	if !hasBase {
-		return value, true
-	}
-
+	// No base, or a committed null, cannot take a row change: applyDelta reports it as unmergeable.
 	merged, ok := applyDelta(base, delta)
 	if !ok {
 		return nil, false

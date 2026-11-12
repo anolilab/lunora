@@ -1515,7 +1515,7 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 				return kind, nil
 			}
 
-			merged, publish := resolveDataPayload(kind, entry.state.ServerBase, entry.state.ServerBase != nil, value)
+			merged, publish := resolveDataPayload(kind, entry.state.ServerBase, value)
 			if !publish {
 				entry.poisoned = true
 				c.mu.Unlock()

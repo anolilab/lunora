@@ -104,11 +104,10 @@ module Lunora
     end
 
     # What a frame's decoded payload becomes. +is_data+ frames replace the base.
-    # A row change with no cached base is the legacy broadcast and passes
-    # through; with a base it merges, or is UNMERGEABLE_DELTA when it cannot.
+    # A row change merges into the base, or is UNMERGEABLE_DELTA when it cannot,
+    # including when there is no base yet or the base is a committed null.
     def resolve_data_payload(value, is_data, server_base)
       return value if is_data || !mutation_delta?(value)
-      return value if server_base.nil?
 
       apply_delta(server_base, value) || UNMERGEABLE_DELTA
     end

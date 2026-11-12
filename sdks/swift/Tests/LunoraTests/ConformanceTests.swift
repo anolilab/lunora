@@ -667,15 +667,15 @@ final class ConformanceTests: XCTestCase {
             XCTAssertEqual(canonical(try Wire.encode(seen.last)), canonical(expect["valueWire"]), name)
         }
 
-        // No cached base: the legacy broadcast is published as-is. An unmergeable
-        // list keeps the previous value instead of leaking the envelope.
+        // No base: the row change cannot merge into nothing, so it is held. Nothing is
+        // published, and an unmergeable list keeps the previous value.
         let envelope: [String: Any] = ["key": "m1", "op": "delete", "table": "messages"]
         let bare = LunoraClient(url: "https://app.example")
         bare.attachSocket { _ in }
         var bareSeen: [Any] = []
         bare.subscribe("messages:list", args: ["channel": "general"], onData: { bareSeen.append($0) }, onError: { _ in })
         try feed(bare, ["id": "sub_1", "type": "delta", "delta": envelope])
-        XCTAssertEqual(canonical(try Wire.encode(bareSeen.last)), canonical(envelope), "no base publishes the delta")
+        XCTAssertTrue(bareSeen.isEmpty, "no base holds the delta: nothing is published")
 
         let gap = LunoraClient(url: "https://app.example")
         gap.attachSocket { _ in }
@@ -694,7 +694,7 @@ final class ConformanceTests: XCTestCase {
     func casePageDeltaPoison() throws {
         let cases = try XCTUnwrap(fixture("ws-frames.json")["pageDeltaPoisonCases"] as? [[String: Any]])
 
-        XCTAssertEqual(cases.count, 1, "pageDeltaPoisonCases must carry its one case")
+        XCTAssertEqual(cases.count, 3, "pageDeltaPoisonCases must carry its three cases")
 
         for testCase in cases {
             let name = testCase["name"] as? String ?? "?"
@@ -711,7 +711,9 @@ final class ConformanceTests: XCTestCase {
             }
 
             try feed(testCase["seedFrame"])
-            XCTAssertEqual(seen.count, 1, "\(name): the seed publishes once")
+            // Only a data frame publishes a value; a resume seed leaves the subscription with no base.
+            let seedPublishes = ((testCase["seedFrame"] as? [String: Any])?["type"] as? String) == "data" ? 1 : 0
+            XCTAssertEqual(seen.count, seedPublishes, "\(name): the seed publishes \(seedPublishes)")
 
             for (index, step) in try XCTUnwrap(testCase["steps"] as? [[String: Any]]).enumerated() {
                 let label = "\(name) step \(index + 1)"

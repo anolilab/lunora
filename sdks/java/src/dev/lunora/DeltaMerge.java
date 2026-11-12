@@ -35,17 +35,13 @@ final class DeltaMerge {
     /**
      * Resolves a decoded {@code delta} payload against the subscription's server base.
      *
-     * <p>A payload that is not a row change replaces the value. A row change with no cached base is
-     * published as decoded (the legacy broadcast). One that cannot be merged is NOT published: the
+     * <p>A payload that is not a row change replaces the value. A row change that cannot be merged,
+     * including one with no cached base or against a committed null, is NOT published: the
      * reference re-snapshots here, but this port has no resubscribe-for-snapshot path, so it keeps
      * the previous value and the next {@code data} frame reconciles it.
      */
     static Outcome resolve(Object base, Object delta) {
         if (!isMutationDelta(delta)) {
-            return new Outcome.Publish(delta);
-        }
-
-        if (base == null) {
             return new Outcome.Publish(delta);
         }
 

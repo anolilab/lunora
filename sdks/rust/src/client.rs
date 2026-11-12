@@ -408,7 +408,8 @@ pub(crate) struct Subscription {
     cursor: Option<Value>,
     epoch: Option<Value>,
     /// Whether a value has been adopted from the server yet. A row change merges
-    /// into a base only once there is one; before that it is the legacy broadcast.
+    /// into a base only once there is one; before that it is held like any other
+    /// unmergeable change.
     has_base: bool,
     /// Set when a row change could not be merged and was dropped. While set, delta
     /// frames are ignored whole, so a later frame's cursor cannot move the resume

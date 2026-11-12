@@ -641,6 +641,111 @@
                 "cursor": 5,
                 "epoch": "e1"
             }
+        },
+        {
+            "name": "committed-null-base-holds-a-row-change",
+            "$comment": "A committed null is a base like any other. A row change against it cannot merge, so it is held: nothing publishes and the cursor stays put until a data frame arrives. Without the hold, a client that reads a null base as no base publishes the raw {key, op, table, row} envelope as the result.",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": null,
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": {
+                            "key": "m1",
+                            "op": "update",
+                            "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" },
+                            "table": "messages"
+                        },
+                        "cursor": 6,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0
+                },
+                {
+                    "resume": {
+                        "sinceSeq": 5,
+                        "sinceEpoch": "e1"
+                    }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "data",
+                        "data": {
+                            "continueCursor": "c_3",
+                            "isDone": false,
+                            "page": [{ "_creationTime": 1001, "_id": "m1", "text": "ONE" }]
+                        },
+                        "cursor": 7,
+                        "epoch": "e2"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_3",
+                        "isDone": false,
+                        "page": [{ "_creationTime": 1001, "_id": "m1", "text": "ONE" }]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "row-change-with-no-base-is-held",
+            "$comment": "A subscription that has never received a data frame has no base. A row change cannot merge into nothing, so it is held as the committed-null case is. The raw envelope is never published as the result, and the data frame that follows is authoritative.",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "resume",
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": {
+                            "key": "m1",
+                            "op": "update",
+                            "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" },
+                            "table": "messages"
+                        },
+                        "cursor": 6,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0
+                },
+                {
+                    "resume": {
+                        "sinceSeq": 5,
+                        "sinceEpoch": "e1"
+                    }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "data",
+                        "data": {
+                            "continueCursor": "c_3",
+                            "isDone": false,
+                            "page": [{ "_creationTime": 1001, "_id": "m1", "text": "ONE" }]
+                        },
+                        "cursor": 7,
+                        "epoch": "e2"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_3",
+                        "isDone": false,
+                        "page": [{ "_creationTime": 1001, "_id": "m1", "text": "ONE" }]
+                    }
+                }
+            ]
         }
     ],
     "refreshBatchFrames": {

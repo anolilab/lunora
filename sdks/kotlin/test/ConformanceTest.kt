@@ -925,7 +925,7 @@ private fun rowDeltaFramesMergeIntoTheBase() {
     }
 
     // A delta that cannot merge (a row without _id) keeps the previous value; with no base
-    // the row change is published as-is.
+    // the row change cannot merge into nothing, so it is held too.
     val client = Client("https://app.example")
     val seen = mutableListOf<WireValue>()
     val change = mapOf("key" to "m1", "op" to "update", "row" to mapOf("text" to "x"), "table" to "messages")
@@ -933,7 +933,7 @@ private fun rowDeltaFramesMergeIntoTheBase() {
     client.attachSocket { }
     client.subscribe("messages:list", null, { seen.add(it) })
     client.handleFrame(Json.write(mapOf("id" to "sub_1", "type" to "delta", "delta" to change)))
-    check(seen.size == 1 && canonical(Wire.encode(seen[0])) == canonical(change), "a delta with no base is published as-is")
+    check(seen.isEmpty(), "a delta with no base is held, not published")
 
     seen.clear()
     client.handleFrame(Json.write(mapOf("id" to "sub_1", "type" to "data", "data" to listOf(mapOf("text" to "no id")))))
@@ -951,7 +951,7 @@ private fun unmergeableRowChangeFreezesTheCursor() {
 
     val cases = fixture("ws-frames.json")["pageDeltaPoisonCases"] as List<*>
 
-    check(cases.size == 1, "pageDeltaPoisonCases must carry 1 case, got ${cases.size}")
+    check(cases.size == 3, "pageDeltaPoisonCases must carry 3 cases, got ${cases.size}")
 
     for (entry in cases) {
         val testCase = entry as Map<*, *>
