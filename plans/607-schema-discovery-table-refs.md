@@ -7,7 +7,7 @@
 > **Drift check (run first)**: `git log --oneline -1` → `90c9b63f4`. `git diff --stat 90c9b63f4..HEAD -- packages/codegen/src/discover/schema` → empty.
 
 **Baseline:** `90c9b63f4` (origin/alpha, 2026-11-12)
-**Status:** TODO
+**Status:** DONE — APPROVED; PR https://github.com/anolilab/lunora/pull/1589 (commit `a7537ee43`). No in-repo app uses an affected shape.
 **Source:** found during the 2026-11-11 audit (advisor lints), while adding source locations to schema findings (plan 596).
 
 ## Status
