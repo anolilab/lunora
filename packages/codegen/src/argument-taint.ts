@@ -1,4 +1,4 @@
-import type { BindingElement, Identifier, Node as TsNode } from "ts-morph";
+import type { BindingElement, Identifier, Node as TsNode, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { bindingKeyName, descendantsOfKind } from "./discover/ast";
@@ -183,14 +183,45 @@ const trustedInitializerOf = (node: TsNode): TsNode | undefined => {
         : undefined;
 };
 
+/** Whether `variable` binds `name` directly, or as an identifier anywhere inside a destructuring pattern. */
+const declaresName = (variable: VariableDeclaration, name: string): boolean => {
+    const nameNode = variable.getNameNode();
+
+    if (Node.isIdentifier(nameNode)) {
+        return nameNode.getText() === name;
+    }
+
+    return nameNode.getDescendantsOfKind(SyntaxKind.BindingElement).some((element) => {
+        const elementName = element.getNameNode();
+
+        return Node.isIdentifier(elementName) && elementName.getText() === name;
+    });
+};
+
+/**
+ * The identifiers in `node` that read a value: the trailing `.name` of a member
+ * access and the key of an explicit `{ name: … }` property name a different
+ * binding, so they are skipped.
+ */
+const valueIdentifiersIn = (node: TsNode): Identifier[] =>
+    node.getDescendantsOfKind(SyntaxKind.Identifier).filter((identifier) => {
+        const parent = identifier.getParent();
+
+        return (
+            !(Node.isPropertyAccessExpression(parent) && parent.getNameNode() === identifier) &&
+            !(Node.isPropertyAssignment(parent) && parent.getNameNode() === identifier)
+        );
+    });
+
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
 export const referencesArgs = (node: TsNode): boolean => referencesBinding(node, "args");
 
 /**
- * When `node` is a bare identifier bound by a `const key = args.key` in the enclosing
- * handler, return that initializer so a *single* extra hop of taint can be checked
- * (`const key = args.key; … key`); otherwise `undefined`. Only same-function
- * declarations are followed — the taint stays deliberately single-hop.
+ * When `node` is a bare identifier bound by a `const key = args.key` (or by a
+ * destructure such as `const { key } = args`) in the enclosing handler, return that
+ * initializer so a *single* extra hop of taint can be checked (`const key = args.key;
+ * … key`); otherwise `undefined`. Only same-function declarations are followed — the
+ * taint stays deliberately single-hop.
  */
 export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
     if (!Node.isIdentifier(node)) {
@@ -218,7 +249,7 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
     let nearestPosition = -1;
 
     for (const variable of descendantsOfKind(enclosingFunction, SyntaxKind.VariableDeclaration)) {
-        if (variable.getName() !== name) {
+        if (!declaresName(variable, name)) {
             continue;
         }
 
@@ -236,9 +267,12 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
 
 /**
  * True when `expression` is derived from the handler's `args` — directly (`args.x`,
- * a template / `new URL(...)` / helper call embedding `args.*`) or through one local
- * hop (`const key = args.key; … key`). This is the shared taint predicate every
- * Wave 3 sink feeder (SSRF fetch, owner-field write, storage/kv IDOR) reads.
+ * a template / `new URL(...)` / helper call embedding `args.*`), through one local
+ * hop on the expression itself (`const key = args.key; … key`), or through one hop
+ * on each value identifier composed into a larger expression (`const host =
+ * args.host; fetch(\`https://${host}/x\`)`). Each identifier is followed one hop
+ * only; an initializer is never followed again. This is the shared taint predicate
+ * every Wave 3 sink feeder (SSRF fetch, owner-field write, storage/kv IDOR) reads.
  */
 export const isArgumentDerived = (expression: TsNode): boolean => {
     if (referencesArgs(expression)) {
@@ -247,7 +281,15 @@ export const isArgumentDerived = (expression: TsNode): boolean => {
 
     const initializer = singleHopInitializer(expression);
 
-    return initializer !== undefined && referencesArgs(initializer);
+    if (initializer !== undefined && referencesArgs(initializer)) {
+        return true;
+    }
+
+    return valueIdentifiersIn(expression).some((identifier) => {
+        const boundInitializer = singleHopInitializer(identifier);
+
+        return boundInitializer !== undefined && referencesArgs(boundInitializer);
+    });
 };
 
 /**

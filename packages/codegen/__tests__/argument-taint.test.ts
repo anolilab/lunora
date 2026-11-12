@@ -126,6 +126,30 @@ describe("argument-taint", () => {
             expect(isArgumentDerived(sinkArgument(`SINK(hash(args.key));`))).toBe(true);
             expect(isArgumentDerived(sinkArgument(`SINK(new URL(args.url));`))).toBe(true);
         });
+
+        it("follows a binding destructured from args at the body level, renames and nesting included", () => {
+            expect.assertions(3);
+
+            expect(isArgumentDerived(sinkArgument(`const { url } = args;\nSINK(url);`))).toBe(true);
+            expect(isArgumentDerived(sinkArgument(`const { target: url } = args;\nSINK(url);`))).toBe(true);
+            expect(isArgumentDerived(sinkArgument(`const { page: { id } } = args;\nSINK(id);`))).toBe(true);
+        });
+
+        it("follows a local composed into a larger expression, one hop per identifier", () => {
+            expect.assertions(2);
+
+            expect(isArgumentDerived(sinkArgument(`const host = args.host;\nSINK(\`https://\${host}/x\`);`))).toBe(true);
+            expect(isArgumentDerived(sinkArgument(`const body = args.payload;\nSINK(body.url);`))).toBe(true);
+        });
+
+        it("does not follow a destructure from a non-args source, or a second hop through a composed local", () => {
+            expect.assertions(4);
+
+            expect(isArgumentDerived(sinkArgument(`const { userId } = ctx.auth;\nSINK(\`users/\${userId}\`);`))).toBe(false);
+            expect(isArgumentDerived(sinkArgument(`const host = "example.com";\nSINK(\`https://\${host}/x\`);`))).toBe(false);
+            expect(isArgumentDerived(sinkArgument(`const first = args.key;\nconst second = first;\nSINK(\`k/\${second}\`);`))).toBe(false);
+            expect(isArgumentDerived(sinkArgument(`const { url } = config;\nSINK(url);`))).toBe(false);
+        });
     });
 
     describe("unmodified-argument passthrough", () => {
