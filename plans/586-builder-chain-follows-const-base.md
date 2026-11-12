@@ -10,7 +10,7 @@
 > Expected: only the changes plan 584 made on this branch (builder-chain.ts, procedure-middleware.ts).
 
 **Baseline:** `79b0c5a6a` (2026-11-12)
-**Status:** TODO
+**Status:** DONE — APPROVED; PR https://github.com/anolilab/lunora/pull/1572 (same branch as 584, commit `5008c619c`).
 **Source:** row 48 of the 2026-11-11 audit (advisor lints). Same branch as plan 584, lands after it.
 
 ## Status

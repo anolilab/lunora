@@ -10,7 +10,7 @@
 > Expect no output (this plan runs first on its branch).
 
 **Baseline:** `79b0c5a6a` (2026-11-12)
-**Status:** TODO
+**Status:** DONE — APPROVED after a plan correction (Step 2 tests retargeted to `discoverRlsProcedures`/`discoverRlsMetadata`; shared `internal/policies.ts` added); PR https://github.com/anolilab/lunora/pull/1572 (branch `fix/improve-584-builder-chain-aliases`).
 **Source:** row 46 of the 2026-11-11 audit (advisor lints). Same branch as plan 586 (row 48), which lands after it.
 
 ## Status
