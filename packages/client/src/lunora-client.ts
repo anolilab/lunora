@@ -7617,14 +7617,15 @@ class LunoraClient {
 
     /**
      * Re-subscribe once after the server's retry hint. The server keeps the failure streak across this re-subscribe, so
-     * a re-run that fails again is answered with a longer hint rather than retried on every write.
+     * a re-run that fails again is answered with a longer hint rather than retried on every write. An error without a
+     * usable hint cancels a pending retry: the server sends one when it has ended the subscription.
      */
     private scheduleSubscriptionRetry(state: SubscriptionState, retryAfterMs: unknown): void {
+        this.cancelSubscriptionRetry(state.id);
+
         if (typeof retryAfterMs !== "number" || !Number.isFinite(retryAfterMs) || retryAfterMs < 0) {
             return;
         }
-
-        this.cancelSubscriptionRetry(state.id);
 
         const timer = setTimeout(() => {
             this.pendingSubscriptionRetries.delete(state.id);

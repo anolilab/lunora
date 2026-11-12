@@ -260,6 +260,22 @@ describe("lunoraClient — retry hint on a failing subscription", () => {
         expect(subscribeFramesFor(socket, id)).toHaveLength(1);
     });
 
+    it("cancels the pending re-subscribe when a later error carries no hint", () => {
+        expect.assertions(1);
+
+        const { id, socket } = openSubscription();
+
+        socket.receive(refreshFailure(id, 5000));
+
+        vi.advanceTimersByTime(1000);
+
+        socket.receive(refreshFailure(id));
+
+        vi.advanceTimersByTime(5000);
+
+        expect(subscribeFramesFor(socket, id)).toHaveLength(1);
+    });
+
     it("never re-subscribes an error that carries no hint", () => {
         expect.assertions(1);
 
