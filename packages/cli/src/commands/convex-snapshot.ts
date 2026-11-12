@@ -124,6 +124,13 @@ const listDirectoryTables = async (root: string): Promise<ConvexSnapshotTable[]>
             // eslint-disable-next-line no-await-in-loop -- ditto; the identity is taken from the file that was checked
             const { dev, ino } = await stat(canonicalFile);
 
+            // A swap between the containment check and the stat records the outside file's identity. Re-resolving
+            // catches a swap that is still in place; the reader's identity check covers the rest.
+            // eslint-disable-next-line no-await-in-loop -- ditto; the re-check must follow the stat
+            if ((await realpath(file)) !== canonicalFile) {
+                throw new Error(`table ${entry.name}: documents.jsonl changed while it was being listed`);
+            }
+
             found.push({ file: canonicalFile, identity: { dev, ino }, table: entry.name });
         }
     }
@@ -182,11 +189,15 @@ const readSnapshotLines = async function* (snapshot: ConvexSnapshot, tableEntry:
                 throw new Error(`table ${tableEntry.table}: documents.jsonl changed after it was listed`);
             }
 
-            for await (const raw of createInterface({
-                crlfDelay: Number.POSITIVE_INFINITY,
-                input: handle.createReadStream({ autoClose: false, encoding: "utf8" }),
-            })) {
-                yield raw;
+            // Destroyed in `finally`, not left to the consumer: a consumer that stops early never ends the stream.
+            const stream = handle.createReadStream({ autoClose: false, encoding: "utf8" });
+
+            try {
+                for await (const raw of createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: stream })) {
+                    yield raw;
+                }
+            } finally {
+                stream.destroy();
             }
         } finally {
             await handle.close();
