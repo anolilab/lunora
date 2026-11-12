@@ -23,6 +23,7 @@
       "file": "messages",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 33,
       "visibility": "public"
     },
     {
@@ -48,6 +49,7 @@
       "file": "messages",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 43,
       "visibility": "public"
     }
   ]

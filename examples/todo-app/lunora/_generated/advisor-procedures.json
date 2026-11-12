@@ -23,6 +23,7 @@
       "file": "todos",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 32,
       "visibility": "public"
     },
     {
@@ -48,6 +49,7 @@
       "file": "todos",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 38,
       "visibility": "public"
     },
     {
@@ -73,6 +75,7 @@
       "file": "todos",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 43,
       "visibility": "public"
     },
     {
@@ -98,6 +101,7 @@
       "file": "todos",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 50,
       "visibility": "public"
     }
   ]
