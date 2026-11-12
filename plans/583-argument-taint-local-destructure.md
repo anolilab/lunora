@@ -10,7 +10,7 @@
 > Expect no output; otherwise compare the excerpts with the live code and STOP on a mismatch.
 
 **Baseline:** `79b0c5a6a` (2026-11-12)
-**Status:** TODO
+**Status:** DONE — APPROVED; PR https://github.com/anolilab/lunora/pull/1569 (branch `fix/improve-583-argument-taint`, commit `f34e12180`). New in-repo finding: apps/bench insights/index.ts:31 kv_unscoped_user_key_idor INFO (internal mutation, true positive at the intended level, no change).
 **Source:** row 45 of the 2026-11-11 audit (advisor lints). Shipped on one branch with plans 588 (row 50) and 590 (row 52), which build on it.
 
 ## Status

@@ -9,7 +9,7 @@
 > **Drift check (run first)**: `git diff --stat 79b0c5a6a..HEAD -- packages/codegen/src/discover/soft-delete-reads.ts packages/codegen/__tests__/discover/soft-delete-reads.test.ts` → no output.
 
 **Baseline:** `79b0c5a6a` (2026-11-12)
-**Status:** TODO
+**Status:** DONE — APPROVED; PR https://github.com/anolilab/lunora/pull/1569 (same branch as 583, commit `38296ef80`).
 **Source:** row 52 of the 2026-11-11 audit (advisor lints). Same branch as plans 583 and 588 (lands last; its body-destructure test needs 583).
 
 ## Status
