@@ -96,7 +96,7 @@ describe("sdk vendor — refuses to copy a transport symlink", () => {
 
         const result = await vendorTransport(vendorOptions());
 
-        expect(result.files).toStrictEqual(["lunora/client.py"]);
+        expect(result.transportFiles).toStrictEqual(["lunora/client.py"]);
         expect(existsSync(join(outputDirectory, "lunora", "test_client.py"))).toBe(false);
     });
 
@@ -131,7 +131,7 @@ describe("sdk vendor — refuses to copy a transport symlink", () => {
 
         const result = await vendorTransport(vendorOptions());
 
-        expect(result.files).toStrictEqual(["lunora/client.py"]);
+        expect(result.transportFiles).toStrictEqual(["lunora/client.py"]);
         expect(readFileSync(join(outputDirectory, "lunora", "client.py"), "utf8")).toBe("CLIENT = 1\n");
     });
 });

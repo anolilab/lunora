@@ -6,7 +6,7 @@
  * what was actually copied, test files are filtered out of the vendored copy,
  * and spec validation fails with a directive error naming the path.
  */
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -113,15 +113,16 @@ describe("lunora sdk generate", () => {
         expect(existsSync(join(outputDirectory, "lunora", "test_client.py"))).toBe(false);
 
         const stamp = JSON.parse(readFileSync(join(outputDirectory, "lunora-transport.json"), "utf8")) as {
-            files: string[];
+            generatedFiles: string[];
             language: string;
             ref: string;
             source: string;
+            transportFiles: string[];
             versionMatched: boolean;
         };
 
         expect(stamp.language).toBe("python");
-        expect(stamp.files).toStrictEqual(["lunora/client.py", "lunora/values.py"]);
+        expect(stamp.transportFiles).toStrictEqual(["lunora/client.py", "lunora/values.py"]);
         // A `--from` working copy has no provenance to claim: `ref` is the
         // literal "local" and the copy is never version-matched.
         expect({ ref: stamp.ref, versionMatched: stamp.versionMatched }).toStrictEqual({ ref: "local", versionMatched: false });
@@ -150,10 +151,142 @@ describe("lunora sdk generate", () => {
         await runSdk({ from: transportRoot, lang: "dart", spec });
         await runSdk({ from: transportRoot, lang: "dart", spec });
 
-        const stamp = JSON.parse(readFileSync(join(outputDirectory, "lunora-transport.json"), "utf8")) as { files: string[] };
+        const stamp = JSON.parse(readFileSync(join(outputDirectory, "lunora-transport.json"), "utf8")) as { transportFiles: string[] };
 
         expect(existsSync(join(outputDirectory, "lib", "lunora_api.dart"))).toBe(true);
-        expect(stamp.files).toStrictEqual(["lib/lunora.dart", "lib/src/client.dart"]);
+        expect(stamp.transportFiles).toStrictEqual(["lib/lunora.dart", "lib/src/client.dart"]);
+    });
+
+    it("deletes a transport file removed upstream between two runs", async () => {
+        expect.assertions(2);
+
+        const spec = writeSpec(SPEC);
+        const outputDirectory = join(workdir, "sdk", "python");
+
+        await runSdk({ from: transportRoot, lang: "python", spec });
+        rmSync(join(transportRoot, "python", "lunora", "values.py"));
+        await runSdk({ from: transportRoot, lang: "python", spec });
+
+        expect(existsSync(join(outputDirectory, "lunora", "values.py"))).toBe(false);
+        expect(existsSync(join(outputDirectory, "lunora", "client.py"))).toBe(true);
+    });
+
+    it("deletes a generated file a previous stamp recorded and this run no longer produces", async () => {
+        expect.assertions(2);
+
+        const spec = writeSpec(SPEC);
+        const outputDirectory = join(workdir, "sdk", "python");
+
+        mkdirSync(join(outputDirectory, "lunora_api"), { recursive: true });
+        writeFileSync(join(outputDirectory, "lunora_api", "retired.py"), "RETIRED = 1\n", "utf8");
+        writeFileSync(
+            join(outputDirectory, "lunora-transport.json"),
+            JSON.stringify({ format: 2, generatedFiles: ["lunora_api/retired.py"], transportFiles: [] }),
+            "utf8",
+        );
+
+        await runSdk({ from: transportRoot, lang: "python", spec });
+
+        expect(existsSync(join(outputDirectory, "lunora_api", "retired.py"))).toBe(false);
+        expect(existsSync(join(outputDirectory, "lunora_api"))).toBe(true);
+    });
+
+    it("never deletes a user file that no stamp listed", async () => {
+        expect.assertions(2);
+
+        const spec = writeSpec(SPEC);
+        const outputDirectory = join(workdir, "sdk", "python");
+
+        await runSdk({ from: transportRoot, lang: "python", spec });
+        writeFileSync(join(outputDirectory, "notes.txt"), "mine\n", "utf8");
+        await runSdk({ from: transportRoot, lang: "python", spec });
+
+        expect(readFileSync(join(outputDirectory, "notes.txt"), "utf8")).toBe("mine\n");
+        expect(existsSync(join(outputDirectory, "lunora", "client.py"))).toBe(true);
+    });
+
+    it("refuses stale paths that escape, are absolute, or pass through a symlink, and reports each", async () => {
+        expect.assertions(6);
+
+        const spec = writeSpec(SPEC);
+        const outputDirectory = join(workdir, "sdk", "python");
+        const outsideDirectory = mkdtempSync(join(tmpdir(), "lunora-sdk-outside-"));
+        const outsideFile = join(outsideDirectory, "outside.txt");
+        const linkedFile = join(outsideDirectory, "victim.txt");
+
+        try {
+            mkdirSync(outputDirectory, { recursive: true });
+            writeFileSync(join(workdir, "sdk", "outside.txt"), "keep\n", "utf8");
+            writeFileSync(outsideFile, "keep\n", "utf8");
+            writeFileSync(linkedFile, "keep\n", "utf8");
+            symlinkSync(outsideFile, join(outputDirectory, "link.txt"));
+            symlinkSync(outsideDirectory, join(outputDirectory, "linked"));
+            writeFileSync(
+                join(outputDirectory, "lunora-transport.json"),
+                JSON.stringify({
+                    format: 2,
+                    generatedFiles: ["../outside.txt", outsideFile, "link.txt", "linked/victim.txt"],
+                    transportFiles: [],
+                }),
+                "utf8",
+            );
+
+            const { output } = await runSdk({ from: transportRoot, lang: "python", spec });
+
+            expect(readFileSync(join(workdir, "sdk", "outside.txt"), "utf8")).toBe("keep\n");
+            expect(readFileSync(outsideFile, "utf8")).toBe("keep\n");
+            expect(readFileSync(linkedFile, "utf8")).toBe("keep\n");
+            expect(lstatSync(join(outputDirectory, "link.txt")).isSymbolicLink()).toBe(true);
+            expect(output).toContain("refusing to delete ../outside.txt");
+            expect(output).toContain(`refusing to delete ${outsideFile}`);
+        } finally {
+            rmSync(outsideDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("deletes nothing when the previous stamp is missing or in the older format", async () => {
+        expect.assertions(3);
+
+        const spec = writeSpec(SPEC);
+        const outputDirectory = join(workdir, "sdk", "python");
+
+        mkdirSync(join(outputDirectory, "lunora_api"), { recursive: true });
+        writeFileSync(join(outputDirectory, "lunora_api", "old.py"), "OLD = 1\n", "utf8");
+
+        await runSdk({ from: transportRoot, lang: "python", spec });
+
+        expect(existsSync(join(outputDirectory, "lunora_api", "old.py"))).toBe(true);
+
+        writeFileSync(join(outputDirectory, "lunora-transport.json"), JSON.stringify({ files: ["lunora_api/old.py"] }), "utf8");
+        await runSdk({ from: transportRoot, lang: "python", spec });
+
+        expect(existsSync(join(outputDirectory, "lunora_api", "old.py"))).toBe(true);
+
+        const stamp = JSON.parse(readFileSync(join(outputDirectory, "lunora-transport.json"), "utf8")) as { format?: number };
+
+        expect(stamp.format).toBe(2);
+    });
+
+    it("records transport and generated files under separate keys, both sorted", async () => {
+        expect.assertions(2);
+
+        mkdirSync(join(transportRoot, "dart", "lib", "src"), { recursive: true });
+        writeFileSync(join(transportRoot, "dart", "lib", "lunora.dart"), "library lunora;\n", "utf8");
+        writeFileSync(join(transportRoot, "dart", "lib", "src", "client.dart"), "class Client {}\n", "utf8");
+
+        const spec = writeSpec(SPEC);
+        const outputDirectory = join(workdir, "sdk", "dart");
+
+        await runSdk({ from: transportRoot, lang: "dart", spec });
+
+        const stamp = JSON.parse(readFileSync(join(outputDirectory, "lunora-transport.json"), "utf8")) as Record<string, unknown>;
+
+        expect(stamp).toMatchObject({
+            format: 2,
+            generatedFiles: ["lib/lunora_api.dart", "lib/models.dart", "pubspec.yaml"],
+            transportFiles: ["lib/lunora.dart", "lib/src/client.dart"],
+        });
+        expect(stamp).not.toHaveProperty("files");
     });
 
     it("warns on an empty `methods` array but still writes the SDK, transport included", async () => {

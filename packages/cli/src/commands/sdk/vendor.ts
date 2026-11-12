@@ -17,7 +17,7 @@
  * I hold" answerable from the stamp this module writes.
  */
 
-import { cpSync, existsSync, lstatSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 import type { SdkTarget } from "@lunora/codegen";
@@ -28,12 +28,11 @@ import type { Logger } from "../../util/logger";
 import { resolveCliVersionRef, resolvePinnedSourceRef, resolveSourceRef } from "../../util/source-ref";
 import { resolveItemDirectory } from "../registry/resolve";
 import type { AddCommandOptions } from "../registry/types";
+import type { VendorResult } from "./stamp";
+import { STAMP_FILE } from "./stamp";
 
 /** The giget base the transports are fetched from, mirroring the registry's. */
 const SDK_SOURCE_BASE = "gh:anolilab/lunora/sdks";
-
-/** The sidecar recording which transport vintage the output holds. */
-const STAMP_FILE = "lunora-transport.json";
 
 /**
  * Test-suite filenames, excluded from the copy in every language.
@@ -64,18 +63,6 @@ const walk = (directory: string, prefix = ""): string[] =>
 
             return statSync(absolute).isDirectory() ? walk(absolute, relativePath) : [relativePath];
         });
-
-/** What a completed vendoring recorded, for the stamp and the CLI's report. */
-interface VendorResult {
-    /** Paths written, relative to the output directory, sorted. */
-    files: ReadonlyArray<string>;
-    /** The ref the transport actually came from. */
-    ref: string;
-    /** Where it came from: the giget base, or the local `--from` directory. */
-    source: string;
-    /** True when the ref above is the running CLI's own release tag. */
-    versionMatched: boolean;
-}
 
 /**
  * Refuse a transport that contains a symlink, BEFORE anything is copied.
@@ -203,7 +190,7 @@ const vendorAtRef = async (
         }
 
         return {
-            files: copyEntries(directory, outputDirectory, target.vendor),
+            transportFiles: copyEntries(directory, outputDirectory, target.vendor),
             ref,
             source: `${base}/${language}`,
             versionMatched: ref === resolveCliVersionRef(),
@@ -229,7 +216,7 @@ const vendorFromLocal = (from: string, options: { language: string; outputDirect
     }
 
     return {
-        files: copyEntries(directory, outputDirectory, target.vendor),
+        transportFiles: copyEntries(directory, outputDirectory, target.vendor),
         // Deliberately not a git ref. The stamp's job is to say what the output
         // holds, and a working copy is whatever it is on disk — recording the
         // checkout's HEAD would claim a provenance the files may not have.
@@ -332,29 +319,5 @@ const vendorTransport = async (options: {
     return fallback;
 };
 
-/**
- * Write the vintage stamp beside the copy.
- *
- * Copy-in trades upgrades for independence: there is no version to bump, so the
- * only way to know which protocol a vendored transport speaks is to record it at
- * copy time. `versionMatched` is the field that matters — it answers whether the
- * transport and the surface above it came from one release, which is exactly what
- * the fallback path can silently break.
- */
-const writeStamp = (outputDirectory: string, language: string, result: VendorResult): void => {
-    const stamp = {
-        cliVersion: resolveCliVersion(),
-        files: result.files,
-        language,
-        note: result.versionMatched
-            ? "Vendored by `lunora sdk generate` at the ref matching the CLI that generated the surface beside it. Regenerate with a newer CLI to upgrade."
-            : "Vendored by `lunora sdk generate` from a ref that is NOT this CLI's release tag, so the transport and the generated surface may be different protocol vintages.",
-        ref: result.ref,
-        source: result.source,
-        versionMatched: result.versionMatched,
-    };
-
-    writeFileSync(join(outputDirectory, STAMP_FILE), `${JSON.stringify(stamp, undefined, 4)}\n`, "utf8");
-};
-
-export { STAMP_FILE, vendorTransport, writeStamp };
+// eslint-disable-next-line import/prefer-default-export -- imported by name by the handler and the vendor tests; a default would split the import style
+export { vendorTransport };
