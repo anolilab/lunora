@@ -188,6 +188,9 @@ const AdvisorHealthPanel = ({ advisorCompanion = false, localProcedures = false,
                         <span className={COVERAGE_STYLE.exempt}>
                             {map.summary.exempt} {t("exempt")}
                         </span>
+                        <span className="text-muted-foreground" data-testid={`${testId}-suppressed`}>
+                            {map.summary.suppressed} {t("suppressed")}
+                        </span>
                     </div>
                 </CardContent>
             </Card>
