@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { isArgumentDerived, isScopedByContext, isScopedByIdentity, isUnmodifiedArgumentPassthrough } from "../argument-taint";
+import { isArgumentDerived, isGuardedByIdentityCheck, isScopedByContext, isScopedByIdentity, isUnmodifiedArgumentPassthrough } from "../argument-taint";
 import type { CallSiteScope } from "../ir";
 import { collectCallRows } from "./ast";
 import { callSiteScopeOf } from "./attribution";
@@ -41,8 +41,10 @@ const accessInCall = (call: CallExpression, relativePath: string, config: Argume
 
     // Arg-derived (directly or through one local `const` hop) *and* not scoped by
     // a server-trusted `ctx.*` value — a value like `` `${ctx.auth.userId}:${args.id}` ``
-    // references `ctx` and is treated as scoped, so it is not flagged.
-    const isScoped = config.scope === "identity" ? isScopedByIdentity : isScopedByContext;
+    // references `ctx` and is treated as scoped, so it is not flagged. An identity
+    // scope also accepts a row the handler checked against the caller before the sink.
+    const isScoped = (node: TsNode): boolean =>
+        config.scope === "identity" ? isScopedByIdentity(node) || isGuardedByIdentityCheck(call, node) : isScopedByContext(node);
 
     if (!key || !isArgumentDerived(key) || isScoped(key)) {
         return undefined;
