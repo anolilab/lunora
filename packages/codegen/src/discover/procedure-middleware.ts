@@ -5,7 +5,7 @@ import type { ProcedureMiddlewareIR } from "../ir";
 import { argumentNames, procedureArgumentObjects } from "../procedure-argument-objects";
 import { descendantsOfKind, findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
-import { resolveUseArgumentCall } from "./builder-chain";
+import { builderChainSteps, resolveUseArgumentCall } from "./builder-chain";
 import { calleeName } from "./callee";
 import { contextSurfaceNodesIn, contextSurfacePathOf, isContextIdentifier } from "./context-root";
 import { isDatabaseAccessor } from "./database-calls";
@@ -174,28 +174,21 @@ const useStepProtections = (useArgument: TsNode): Protections => {
  */
 const protectionsInChain = (receiver: TsNode): Protections => {
     const protections: Protections = { ...NO_PROTECTIONS };
-    let node: TsNode = receiver;
 
-    while (Node.isCallExpression(node)) {
-        const chainCallee = node.getExpression();
+    for (const step of builderChainSteps(receiver)) {
+        const useArgument = step.name === "use" ? step.call.getArguments()[0] : undefined;
 
-        if (!Node.isPropertyAccessExpression(chainCallee)) {
-            break;
+        if (!useArgument) {
+            continue;
         }
 
-        const useArgument = chainCallee.getName() === "use" ? node.getArguments()[0] : undefined;
+        const installed = useStepProtections(useArgument);
 
-        if (useArgument) {
-            const step = useStepProtections(useArgument);
-
-            protections.usesCaptcha ||= step.usesCaptcha;
-            protections.usesEmailGate ||= step.usesEmailGate;
-            protections.usesMask ||= step.usesMask;
-            protections.usesRateLimit ||= step.usesRateLimit;
-            protections.usesRls ||= step.usesRls;
-        }
-
-        node = chainCallee.getExpression();
+        protections.usesCaptcha ||= installed.usesCaptcha;
+        protections.usesEmailGate ||= installed.usesEmailGate;
+        protections.usesMask ||= installed.usesMask;
+        protections.usesRateLimit ||= installed.usesRateLimit;
+        protections.usesRls ||= installed.usesRls;
     }
 
     return protections;

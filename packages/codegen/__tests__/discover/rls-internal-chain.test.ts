@@ -196,6 +196,15 @@ describe("rls internal chain", () => {
             expect(calls[0]?.getText()).toBe("rls(policies)");
         });
 
+        it("follows a `const` base builder that carries `.use(rls(...))`", () => {
+            expect.assertions(2);
+
+            const calls = rlsCallsInChain(receiverOf(`base.query(handler)`, `const base = c.query.use(rls(policies));`));
+
+            expect(calls).toHaveLength(1);
+            expect(calls[0]?.getText()).toBe("rls(policies)");
+        });
+
         it("ignores a `.use(alias)` whose const is initialised by a non-rls call", () => {
             expect.assertions(1);
 

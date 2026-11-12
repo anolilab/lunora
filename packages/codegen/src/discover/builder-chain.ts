@@ -1,7 +1,7 @@
 import type { CallExpression, Node } from "ts-morph";
 import { Node as TsNode } from "ts-morph";
 
-import { unwrapExpression } from "./ast";
+import { isConstDeclaration, unwrapExpression } from "./ast";
 import { resolvesToImportedName } from "./callee";
 
 /** One `.method(...)` step of a builder chain, in terminal-to-root order. */
@@ -12,9 +12,35 @@ interface BuilderChainStep {
     name: string;
 }
 
+/** How many same-file `const` builders the walk follows before it stops at an identifier. */
+const MAX_CONST_BUILDER_HOPS = 3;
+
+/**
+ * The call a root identifier is bound to by a same-file `const`, when that call
+ * is itself a builder expression — `const base = mutation.use(x)` read from
+ * `base.mutation(h)`. A `let`, an import or a non-call initializer is not followed.
+ */
+const constBuilderInitializer = (root: Node | undefined): CallExpression | undefined => {
+    if (!root || !TsNode.isIdentifier(root)) {
+        return undefined;
+    }
+
+    const declaration = root.getSymbol()?.getValueDeclaration();
+
+    if (!isConstDeclaration(declaration)) {
+        return undefined;
+    }
+
+    const initializer = unwrapExpression(declaration.getInitializer());
+
+    return initializer && TsNode.isCallExpression(initializer) ? initializer : undefined;
+};
+
 /**
  * Walk a builder chain leftward from `receiver`, collecting each `.method(...)`
- * step and the expression the chain bottoms out at.
+ * step and the expression the chain bottoms out at. A root bound to a `const`
+ * builder is followed, up to three hops, so `const base = mutation.use(x); base.mutation(h)`
+ * carries `x`.
  *
  * This walk was written out longhand in eight places, in three dialects that
  * disagreed about whether to unwrap `(x)` / `x as T` and about what a
@@ -34,19 +60,29 @@ interface BuilderChainStep {
 const walkBuilderChain = (receiver: Node): { root: Node | undefined; steps: BuilderChainStep[] } => {
     const steps: BuilderChainStep[] = [];
     let current: Node | undefined = unwrapExpression(receiver);
+    let hops = 0;
 
-    while (current && TsNode.isCallExpression(current)) {
-        const callee = unwrapExpression(current.getExpression());
+    for (;;) {
+        while (current && TsNode.isCallExpression(current)) {
+            const callee = unwrapExpression(current.getExpression());
 
-        if (!callee || !TsNode.isPropertyAccessExpression(callee)) {
-            return { root: undefined, steps };
+            if (!callee || !TsNode.isPropertyAccessExpression(callee)) {
+                return { root: undefined, steps };
+            }
+
+            steps.push({ call: current, name: callee.getName() });
+            current = unwrapExpression(callee.getExpression());
         }
 
-        steps.push({ call: current, name: callee.getName() });
-        current = unwrapExpression(callee.getExpression());
-    }
+        const bound = hops < MAX_CONST_BUILDER_HOPS ? constBuilderInitializer(current) : undefined;
 
-    return { root: current, steps };
+        if (!bound) {
+            return { root: current, steps };
+        }
+
+        hops += 1;
+        current = bound;
+    }
 };
 
 /** The `.method(...)` steps of a builder chain, terminal-first. */
