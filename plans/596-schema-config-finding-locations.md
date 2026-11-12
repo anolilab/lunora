@@ -10,7 +10,7 @@
 > `packages/advisor/src/lints/static` since `4121b67cc`.
 
 **Baseline:** plan 595's branch tip `a75902bbb` (2026-11-12)
-**Status:** TODO
+**Status:** DONE — APPROVED after a Step-0 STOP and reviewer clarifications (§5); PR https://github.com/anolilab/lunora/pull/1586 (commits `100010eb2`, `b4d998d68`, `74cbb5d55`, `c034e48d4`, `daf7fc8da`). Without a location: `notify_missing_push_config`; tables/indexes from installed-package extensions.
 **Source:** follow-up to row 50 of the 2026-11-11 audit; second PR of the stack (595 → 596 → 597 → 588).
 
 ## Status

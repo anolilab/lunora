@@ -5,9 +5,9 @@
 > not improvise. A reviewer dispatched you and maintains `plans/README.md`; do not edit it.
 >
 > **Drift check (run first)**: the branch is stacked on plan 596's branch. `git log --oneline -1`
-> equals the 596 tip the reviewer names in the brief. `git diff --stat <596 tip>..HEAD` → empty.
+> is `daf7fc8da`. `git diff --stat daf7fc8da..HEAD` → empty.
 
-**Baseline:** plan 596's branch tip (stacked on 595 `a75902bbb`, 2026-11-12)
+**Baseline:** plan 596 tip `daf7fc8da` (2026-11-12)
 **Status:** TODO
 **Source:** follow-up to row 50 of the 2026-11-11 audit; third PR of the stack (595 → 596 → 597 → 588).
 
@@ -44,7 +44,7 @@ rule-scoped, site-scoped inline suppression that every surface honours and shows
 - `Finding` type: `packages/advisor/src/types.ts:105-126`. After plans 595/596 every static finding with a
   source site carries `metadata.file` (relative to `lunora/`, no extension — except `shapes` rows, which carry
   `lunora/shapes.ts`, and wrangler findings, which carry `wrangler.jsonc` relative to the project root) and
-  `metadata.line` (1-based). Plan 596's report lists the rules that stay without a location.
+  `metadata.line` (1-based). Rules without a location (plan 596): `notify_missing_push_config`, and findings about tables/indexes contributed by an installed package's extension (no `metadata.line`). Topics reach the advisor as `context.topics`.
 - Docs: `packages/advisor/docs/index.mdx` (the reference; `__tests__/docs-lint-reference.test.ts` requires every
   lint-table row to name a registered lint), `apps/docs/src/content/docs/concepts/advisors.mdx:129-130`
   (the unimplemented Studio dismissal sentence).
@@ -100,7 +100,7 @@ rule-scoped, site-scoped inline suppression that every surface honours and shows
 5. **Studio** — `advisoryRow` carries `suppressed`; the views show a "Suppressed" badge with the reason (tooltip or inline) and a count in the panel header; use existing badge/i18n patterns in `packages/studio/src/features/advisors/*` and add strings to `packages/studio/src/locales/en.ts` (and any locale files the repo requires keys in). Test next to existing advisor-view tests.
 6. **MCP** — `lunora_get_advisories` includes `suppressed` (reason, file, line) per advisory and documents it in the tool's output schema description. Test next to existing MCP tool tests.
 7. **Docs** — `packages/advisor/docs/index.mdx`: a "Suppressing one finding" section (syntax, attachment rule, matching, required reason, the two WARN findings, gate behaviour, visibility, runtime lints out of scope, the list of rules without a location from plan 596). `apps/docs/src/content/docs/concepts/advisors.mdx`: replace the Studio-dismissal sentence (`:129-130`) with what exists now (the inline directive; the cacheKey is a stable id for dedup), and link to the reference. Run prettier on both.
-8. **Red without the fix** — with all commits in place, restore `run-codegen.ts`, `advisory-gate.ts`, `blocking.ts` from the 596 tip (`git show <596 tip>:<p> > <p>`) and confirm the suppression and gate tests FAIL; restore; pass.
+8. **Red without the fix** — with all commits in place, restore `run-codegen.ts`, `advisory-gate.ts`, `blocking.ts` from the 596 tip (`git show daf7fc8da:<p> > <p>`) and confirm the suppression and gate tests FAIL; restore; pass.
 
 ## Commands
 
