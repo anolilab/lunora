@@ -356,7 +356,9 @@ interface AdvisorImageDeliveryUrlAccess {
 ```ts
 interface AdvisorIndex {
     fields: ReadonlyArray<string>;
+    file?: string;
     kind: "geo" | "index" | "rank" | "search" | "vector";
+    line?: number;
     name: string;
     unique?: boolean;
 }
@@ -388,7 +390,9 @@ interface AdvisorInsertWrite {
 ```ts
 interface AdvisorKeyedRelation {
     field: string;
+    file?: string;
     kind: "many" | "one";
+    line?: number;
     name: string;
     onDelete?: "cascade" | "restrict" | "set null";
     references: string;
@@ -879,8 +883,14 @@ interface AdvisorTable {
     externallyManaged?: boolean;
     externalSource?: AdvisorExternalSource;
     fields: ReadonlyArray<string>;
+    fieldSites?: Readonly<Record<string, {
+        file?: string;
+        line?: number;
+    }>>;
+    file?: string;
     indexes: ReadonlyArray<AdvisorIndex>;
     isPublic?: boolean;
+    line?: number;
     name: string;
     relations: ReadonlyArray<AdvisorRelation>;
     shardKind?: "global" | "root" | "shardBy";
@@ -916,7 +926,9 @@ interface AdvisorTableWrite extends AdvisorInsertWrite {
 
 ```ts
 interface AdvisorThroughRelation {
+    file?: string;
     kind: "many";
+    line?: number;
     name: string;
     table: string;
     through: {
@@ -924,6 +936,16 @@ interface AdvisorThroughRelation {
         table: string;
         to: string;
     };
+}
+```
+
+### `AdvisorTopic` (interface)
+
+```ts
+interface AdvisorTopic {
+    exportName: string;
+    file?: string;
+    line?: number;
 }
 ```
 
@@ -979,6 +1001,7 @@ interface AdvisorWranglerVariable {
     file: string;
     key: string;
     kind: string;
+    line?: number;
     preview: string;
 }
 ```
@@ -1187,6 +1210,7 @@ interface LintContext {
     storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
     tableScans?: ReadonlyArray<AdvisorTableScan>;
     tableWrites?: ReadonlyArray<AdvisorTableWrite>;
+    topics?: ReadonlyArray<AdvisorTopic>;
     unboundedLoops?: ReadonlyArray<AdvisorUnboundedLoop>;
     unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
     vectorNamespaceAccesses?: ReadonlyArray<AdvisorVectorNamespaceAccess>;

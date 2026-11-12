@@ -469,6 +469,7 @@ interface HttpRouteIR {
 interface IndexIR {
     fields: ReadonlyArray<string>;
     name: string;
+    site?: DeclarationSiteIR;
     unique?: boolean;
 }
 ```
@@ -578,6 +579,7 @@ interface LintSchemaOptions {
     storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>;
     storageUploads?: ReadonlyArray<StorageUploadIR>;
     tableWrites?: ReadonlyArray<TableWriteIR>;
+    topics?: ReadonlyArray<TopicIR>;
     unboundedLoops?: ReadonlyArray<UnboundedLoopIR>;
     unrestrictedWhereBranches?: ReadonlyArray<UnrestrictedWhereBranchIR>;
     vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>;
@@ -1107,6 +1109,7 @@ interface TableIR {
     extensionKey?: string;
     externallyManaged?: boolean;
     externalSource?: ExternalSourceIR;
+    fieldSites?: Readonly<Record<string, DeclarationSiteIR>>;
     geoIndexes?: ReadonlyArray<GeoIndexIR>;
     globalBackend?: "d1" | "hyperdrive";
     indexes: ReadonlyArray<IndexIR>;
@@ -1121,6 +1124,7 @@ interface TableIR {
         field: string;
         kind: "shardBy";
     };
+    site?: DeclarationSiteIR;
     softDelete?: {
         field: string;
     };
@@ -1158,6 +1162,7 @@ interface TargetScope {
 interface TopicIR {
     exportName: string;
     filePath: string;
+    line?: number;
 }
 ```
 
@@ -1200,6 +1205,7 @@ interface VectorIndexIR {
     metadata?: ReadonlyArray<string>;
     metric?: "cosine" | "dot-product" | "euclidean";
     name: string;
+    site?: DeclarationSiteIR;
     table: string;
 }
 ```
@@ -1250,6 +1256,7 @@ interface WranglerVariableIR {
     file: string;
     key: string;
     kind: string;
+    line?: number;
     preview: string;
 }
 ```
@@ -2693,6 +2700,15 @@ interface CountReadIR {
 type CrossOriginOpenerPolicy = "same-origin" | "same-origin-allow-popups" | "unsafe-none";
 ```
 
+### `DeclarationSiteIR` (interface)
+
+```ts
+interface DeclarationSiteIR {
+    file: string;
+    line: number;
+}
+```
+
 ### `DriftCoverage` (interface)
 
 ```ts
@@ -2880,6 +2896,7 @@ interface GeoIndexIR {
     field: string;
     name: string;
     precision?: number;
+    site?: DeclarationSiteIR;
 }
 ```
 
@@ -2963,6 +2980,7 @@ interface KeyedRelationIR {
     name: string;
     onDelete?: "cascade" | "restrict" | "set null";
     references: string;
+    site?: DeclarationSiteIR;
     table: string;
     through?: never;
 }
@@ -3178,6 +3196,7 @@ interface ProcedureMiddlewareIR {
 interface RankIndexIR {
     name: string;
     partitionBy?: ReadonlyArray<string>;
+    site?: DeclarationSiteIR;
     sortBy: ReadonlyArray<RankSortKeyIR>;
 }
 ```
@@ -3271,6 +3290,7 @@ interface SearchIndexIR {
     filterFields?: ReadonlyArray<string>;
     language?: string;
     name: string;
+    site?: DeclarationSiteIR;
     staged?: boolean;
     strategy?: string;
 }
@@ -3385,6 +3405,7 @@ interface TableWriteIR {
 interface ThroughRelationIR {
     kind: "many";
     name: string;
+    site?: DeclarationSiteIR;
     table: string;
     through: {
         from: string;
