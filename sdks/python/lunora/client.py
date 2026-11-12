@@ -25,8 +25,10 @@ import contextlib
 import inspect
 import json
 import logging
+import math
 import random
 import threading
+import time
 import urllib.request
 from collections.abc import AsyncIterator, Awaitable
 from functools import partial
@@ -37,6 +39,7 @@ from .errors import WIRE_DECODE_FAILED, LunoraError, SubscriptionError, decode_f
 from .offline import Identity, OfflineQueue, random_id, token_stamp
 from .optimistic import drop_confirmed_layers, fold_optimistic
 from .submit import (
+    MAX_RETRY_AFTER_MS,
     FlushReport,
     MutationOutcome,
     MutationSettled,
@@ -255,6 +258,14 @@ def _send_resubscribe(send: Callable[[dict], None], frame: dict) -> None:
         _log.exception("lunora: shape resubscribe send failed")
 
 
+def _retry_after_ms(envelope: Any) -> Optional[float]:
+    """The server's retry hint on a subscription error, or ``None`` when it sent none we can honour."""
+    delay = envelope.get("retryAfterMs") if isinstance(envelope, dict) else None
+    if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not math.isfinite(delay) or delay < 0:
+        return None
+    return min(delay, MAX_RETRY_AFTER_MS)
+
+
 def _frame_key(value: Any) -> Optional[str]:
     """A frame's ``id``/``pokeId``/``shapeId`` when it is a string, else ``None``.
 
@@ -449,6 +460,9 @@ class LunoraClient:
         self._socket_running = False
         self._frames_received = 0
         self._subs: dict[str, _Subscription] = {}
+        #: The ``time.monotonic()`` deadline of the one re-subscribe a retry hint asked for,
+        #: per query subscription id. See :meth:`retry_due_subscriptions`.
+        self._pending_retries: dict[str, float] = {}
         self._shapes: dict[str, _ShapeSubscription] = {}
         self._poke_buffers: dict[str, dict] = {}
         self._next_sub_id = 0
@@ -499,6 +513,7 @@ class LunoraClient:
     def _attach(self, send: Callable[[dict], None], context: Optional[dict], session: Optional[str], generation: int) -> None:
         with self._lock:
             self._socket_generation = generation
+            self._pending_retries.clear()
             # `connect` goes out before the sender is visible, so no frame another thread
             # produces can reach the server ahead of it.
             self._send = None
@@ -542,6 +557,7 @@ class LunoraClient:
         with self._lock:
             self._send = None
             self._attach_generation += 1
+            self._pending_retries.clear()
             notify = close_code == TOKEN_EXPIRED_CLOSE
             if close_code == REFUSED_CLOSE and reason != CONNECT_DEADLINE_REASON:
                 opened = self._socket_generation
@@ -806,6 +822,7 @@ class LunoraClient:
 
         close_queue(self)
         with self._lock:
+            self._pending_retries.clear()
             hooks = list(self._close_hooks)
         _run_callbacks(hooks, "close hook")
 
@@ -1033,6 +1050,7 @@ class LunoraClient:
         def unsubscribe() -> None:
             with self._lock:
                 self._subs.pop(sub_id, None)
+                self._pending_retries.pop(sub_id, None)
                 sender = self._send
             if sender is not None:
                 sender(build_unsubscribe_frame(sub_id))
@@ -1162,6 +1180,43 @@ class LunoraClient:
         for frame in frames:
             sender(frame)
 
+    def retry_due_subscriptions(self, now: Optional[float] = None) -> int:
+        """Re-subscribe every subscription whose retry hint has elapsed; returns the number of frames sent.
+
+        ``now`` is a ``time.monotonic()`` reading and defaults to the current one. Each
+        re-subscribe is cold (no resume cursor), since the hint asks for a fresh snapshot.
+        Nothing is sent and nothing is dropped while no socket is attached: the deadline
+        waits for the next one.
+        """
+
+        with self._lock:
+            sender = self._send
+            if sender is None:
+                return 0
+            current = time.monotonic() if now is None else now
+            due = [sub_id for sub_id, deadline in self._pending_retries.items() if deadline <= current]
+            for sub_id in due:
+                del self._pending_retries[sub_id]
+            frames = []
+            for sub_id in due:
+                sub = self._subs.get(sub_id)
+                if sub is None:
+                    continue
+                sub.acked = False
+                sub.server_cursor = None
+                sub.server_epoch = None
+                frames.append(build_subscribe_frame(sub.id, sub.function_path, sub.args))
+
+        for frame in frames:
+            sender(frame)
+        return len(frames)
+
+    def next_subscription_retry_at(self) -> Optional[float]:
+        """The ``time.monotonic()`` deadline of the earliest pending retry, or ``None`` when none is pending."""
+
+        with self._lock:
+            return min(self._pending_retries.values(), default=None)
+
     # --- Inbound frame dispatch (fixture-tested) ---------------------------
 
     def handle_frame(self, frame: dict) -> dict:
@@ -1195,6 +1250,9 @@ class LunoraClient:
             return {"kind": "ignored", "type": None}
 
         kind = frame.get("type")
+        if kind in ("ack", "data", "delta", "resume", "settled"):
+            # The server answered, so a retry this subscription was waiting on is moot.
+            self._pending_retries.pop(_frame_key(frame.get("id")), None)
         if kind == "ack":
             sub = self._subs.get(_frame_key(frame.get("id")))
             if sub is not None:
@@ -1380,6 +1438,9 @@ class LunoraClient:
         shape = self._shapes.get(sub_id) if sub_id is not None else None
         if shape is not None:
             deferred.extend(partial(cb, error) for cb in shape.error_callbacks)
+        if sub is not None and (hint := _retry_after_ms(env)) is not None:
+            self._pending_retries[sub_id] = time.monotonic() + hint / 1000
+            return {"kind": "error", "id": sub_id, "code": code, "message": message, "retryAfterMs": hint}
         return {"kind": "error", "id": sub_id, "code": code, "message": message}
 
     def _advance(self, frame: dict, kind: str, deferred: list) -> dict:
@@ -1640,6 +1701,11 @@ class LunoraClient:
                     except Exception:
                         _log.exception("lunora: frame handler raised")
                         continue
+                    hint = descriptor.get("retryAfterMs")
+                    if hint is not None:
+                        # The hint is a deadline only `retry_due_subscriptions` acts on, so a
+                        # timer a later frame made moot sends nothing.
+                        (self._call_later or loop.call_later)(hint / 1000, self.retry_due_subscriptions)
                     # Only a frame the client recognised proves a live server;
                     # `null` or an unknown `type` must not reset the backoff. An
                     # `error` frame does not either: a TOKEN_EXPIRED arrives just before

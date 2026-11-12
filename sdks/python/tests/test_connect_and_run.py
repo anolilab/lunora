@@ -30,10 +30,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lunora.client import MAX_WS_FRAME_BYTES, LunoraClient
 from lunora.offline import OfflineQueue
 from lunora.submit import SubmitOptions
+from tests._fixtures import load
 
 # Generous: every wait below is satisfied in microseconds when the loop is
 # correct, and this only bounds how long a REGRESSION hangs the suite.
 TIMEOUT = 5.0
+
+RETRY = load("ws-frames.json")["subscriptionRetry"]
 
 
 class _FakeConnectionClosedError(Exception):
@@ -959,6 +962,40 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(settled[0].status, "committed")
         self.assertEqual(len(posts), 2)
         self.assertEqual(clock.timers, [], "a committed write schedules nothing more")
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+    async def test_a_subscription_retry_hint_re_subscribes_on_the_open_socket(self):
+        """A live query whose refresh failed is re-subscribed when its hint elapses, on the same socket.
+
+        Nothing else touches the subscription, so the cold subscribe that follows is the
+        timer ``connect_and_run`` armed from the error frame.
+        """
+
+        socket = _FakeSocket()
+        self._install(socket)
+        clock = _FakeClock()
+        patcher = unittest.mock.patch("lunora.client.time", types.SimpleNamespace(monotonic=clock.monotonic))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        client = LunoraClient("https://app.example", client_id="client-test")
+        client._call_later = clock.call_later
+        client.subscribe("messages:list", {"channel": "general"}, lambda _value: None)
+        run = asyncio.ensure_future(client.connect_and_run())
+        await asyncio.wait_for(socket.sent_at_least(2).wait(), TIMEOUT)
+        subscribed = len(socket.sent)
+
+        socket.inbound.put_nowait(json.dumps(RETRY["hintFrame"]))
+        await _wait_for(lambda: 5.0 in clock.delays)
+
+        clock.advance(4.999)
+        await asyncio.sleep(0)
+        self.assertEqual(len(socket.sent), subscribed, "not before the hint")
+
+        clock.advance(0.001)
+        await _wait_for(lambda: len(socket.sent) == subscribed + 1)
+        self.assertEqual(socket.sent[-1], RETRY["retryFrame"])
 
         socket.close()
         await asyncio.wait_for(run, TIMEOUT)
