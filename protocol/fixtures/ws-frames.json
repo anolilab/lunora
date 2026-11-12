@@ -563,6 +563,15 @@
                     "publishes": 0
                 },
                 {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "settled",
+                        "cursor": 10,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0
+                },
+                {
                     "resume": {
                         "sinceSeq": 5,
                         "sinceEpoch": "e1"

@@ -1278,9 +1278,9 @@ class LunoraClient:
 
     def _handle_data(self, frame: dict, deferred: list) -> dict:
         sub = self._subs.get(_frame_key(frame.get("id")))
-        has_data = "data" in frame and frame["data"] is not None
+        has_data = frame.get("type") == "data"
         try:
-            value = decode_wire(frame["data"]) if has_data else decode_wire(frame.get("delta"))
+            value = decode_wire(frame.get("data")) if has_data else decode_wire(frame.get("delta"))
         except WireFormatError as error:
             # A malformed payload belongs on the subscription's error callback,
             # not on the socket read loop's stack. Letting it escape here ended
@@ -1383,6 +1383,9 @@ class LunoraClient:
         sub = self._subs.get(_frame_key(frame.get("id")))
         if sub is not None:
             sub.acked = True
+        # A poisoned subscription ignores these frames too: their cursor would move
+        # the resume position past the dropped row change.
+        if sub is not None and not sub.poisoned:
             if isinstance(frame.get("cursor"), int) and not isinstance(frame["cursor"], bool):
                 sub.server_cursor = frame["cursor"]
             if "epoch" in frame:

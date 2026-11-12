@@ -1209,6 +1209,10 @@ class Client(
 
                 synchronized(lock) {
                     subscriptions[id]?.let { entry ->
+                        // A poisoned subscription ignores these frames too: their cursor would
+                        // move the resume position past the dropped row change.
+                        if (entry.poisoned) return@let
+
                         advance(entry, frame)
                         // A resume/settled frame advances the cursor without a
                         // value change — but a write whose result was

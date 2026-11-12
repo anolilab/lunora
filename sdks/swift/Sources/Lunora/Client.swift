@@ -1279,6 +1279,10 @@ public final class LunoraClient {
             let deferred = withLock { () -> LunoraOptimistic.Deferred in
                 guard let id, let entry = subscriptions[id] else { return [] }
 
+                // A poisoned subscription ignores these frames too: their cursor would move
+                // the resume position past the dropped row change.
+                guard !entry.poisoned else { return [] }
+
                 advance(entry, frame)
 
                 // A resume/settled frame advances the cursor without a value

@@ -974,7 +974,7 @@ module Lunora
     end
 
     def deliver(entry, frame, kind, deferred)
-      payload = frame.key?("data") && !frame["data"].nil? ? frame["data"] : frame["delta"]
+      payload = kind == "data" ? frame["data"] : frame["delta"]
 
       begin
         value = Lunora.decode_wire(payload)
@@ -991,7 +991,7 @@ module Lunora
 
       if entry
         state = entry[:state]
-        is_data = frame.key?("data") && !frame["data"].nil?
+        is_data = kind == "data"
 
         # A snapshot is authoritative, so it ends a poisoned run.
         entry[:poisoned] = false if is_data
@@ -1033,6 +1033,10 @@ module Lunora
     # until some unrelated write happens to produce a data frame — indefinitely
     # on a quiet query. Only re-fold when something was actually dropped.
     def sweep(entry, frame, kind, deferred)
+      # A poisoned subscription ignores this frame too: its cursor would move the
+      # resume position past the dropped row change.
+      return kind if entry && entry[:poisoned]
+
       if entry
         advance(entry, frame)
         state = entry[:state]

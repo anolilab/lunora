@@ -894,13 +894,11 @@ class LunoraClient {
       case 'delta':
         final entry = id == null ? null : _subscriptions[id];
 
-        if (entry != null) {
-          if (kind == 'data') {
-            // A snapshot is authoritative, so it supersedes the dropped change.
-            entry.poisoned = false;
-          } else if (entry.poisoned) {
-            return kind;
-          }
+        // A poisoned subscription ignores later deltas. Only a `data` frame clears the
+        // poison, and it does so after its payload decodes (below), so a malformed
+        // snapshot leaves the stale base and the cursor where they were.
+        if (entry != null && entry.poisoned && kind != 'data') {
+          return kind;
         }
 
         Object? value;
@@ -945,6 +943,11 @@ class LunoraClient {
           // whatever is still pending. Notifying before the drop would show the
           // confirmed write twice — once in the new base and once in its own
           // overlay.
+          if (kind == 'data') {
+            // A snapshot is authoritative, so it supersedes the dropped change.
+            entry.poisoned = false;
+          }
+
           entry.serverBase = value;
           entry.hasServerBase = true;
           _advance(entry, frame);
@@ -956,6 +959,10 @@ class LunoraClient {
       case 'resume':
       case 'settled':
         final entry = id == null ? null : _subscriptions[id];
+
+        if (entry != null && entry.poisoned) {
+          return kind;
+        }
 
         if (entry != null) {
           _advance(entry, frame);

@@ -1345,6 +1345,12 @@ impl Client {
             }
             "resume" | "settled" => {
                 if let Some(entry) = self.subscriptions.get_mut(&id) {
+                    // A poisoned subscription ignores these frames too: their cursor would
+                    // move the resume position past the dropped row change.
+                    if entry.poisoned {
+                        return Ok(Some(kind));
+                    }
+
                     advance(entry, &frame);
 
                     // A resume/settled frame advances the cursor without a value

@@ -1583,7 +1583,7 @@ public final class Client {
                     // change that cannot be merged leaves the base as it was; the reference
                     // re-snapshots here, this port has no such path, so the next data frame
                     // reconciles it.
-                    if (frame.get("data") != null) {
+                    if ("data".equals(kind)) {
                         // A snapshot is authoritative, so it ends any poisoning.
                         entry.poisoned = false;
                         entry.state.serverBase = value;
@@ -1638,6 +1638,12 @@ public final class Client {
                     Subscription entry = subscriptions.get(id);
 
                     if (entry == null) {
+                        return kind;
+                    }
+
+                    // A poisoned subscription ignores these frames too: their cursor would move
+                    // the resume position past the dropped row change.
+                    if (entry.poisoned) {
                         return kind;
                     }
 

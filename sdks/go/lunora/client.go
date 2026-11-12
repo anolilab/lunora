@@ -1554,6 +1554,15 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			var deferred []func()
 
 			c.mu.Lock()
+
+			// A poisoned subscription ignores these frames too: their cursor would move
+			// the resume position past the dropped row change.
+			if entry.poisoned {
+				c.mu.Unlock()
+
+				return kind, nil
+			}
+
 			c.advanceLocked(entry, frame)
 
 			// A resume/settled frame advances the cursor without a value change —
