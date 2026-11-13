@@ -2504,6 +2504,46 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
     });
 
+    it("raises the error that failed the write, not the failure to restore the old plan after it", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // The new row's write fails, and the restore of the old row fails too.
+        let oldRowWrites = 0;
+        const failing = Object.assign(Object.create(store) as object, {
+            upsertSubscription: (record: Subscription, guard?: RevisionGuard) => {
+                if (record.id === "sub_2") {
+                    return Promise.reject(new Error("database unavailable"));
+                }
+
+                if (record.id === "sub_1") {
+                    oldRowWrites += 1;
+
+                    if (oldRowWrites > 1) {
+                        return Promise.reject(new Error("restore unavailable"));
+                    }
+                }
+
+                return store.upsertSubscription(record, guard);
+            },
+        }) as PaymentStore;
+
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: async () => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: "price_2" };
+            },
+            updateSubscription: async (_id, patch) => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: patch.priceId ?? "price_2" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: failing });
+
+        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).rejects.toThrow("database unavailable");
+    });
+
     it("refuses the plan change, and writes no new row, when the old plan changed before it could be retired", async () => {
         expect.assertions(3);
 

@@ -455,6 +455,11 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             }
         };
 
+        // A failed restore is secondary: the caller needs the error that caused the rollback, so that one is raised.
+        const restoreOrIgnore = async (): Promise<void> => {
+            await restoreRetired().catch(() => undefined);
+        };
+
         let outcome: SubscriptionWrite;
 
         try {
@@ -462,7 +467,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         } catch (error) {
             // A failed write after the retire leaves nothing granting access, so the old row is restored before the error goes up.
             if (retires) {
-                await restoreRetired();
+                await restoreOrIgnore();
             }
 
             throw error;
@@ -470,7 +475,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
         if (outcome === "rejected") {
             if (retires) {
-                await restoreRetired();
+                await restoreOrIgnore();
             }
 
             throw conflict();
