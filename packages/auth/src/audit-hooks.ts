@@ -564,6 +564,10 @@ const clientIdOf = (oauthQuery: unknown): string | undefined => {
 
 const BASIC_SCHEME = /^basic /iu;
 
+/** The organization a switch moved to: the answer to `set-active` is that organization, and `null` when the switch cleared it. */
+const switchedOrganizationId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined =>
+    event === "org-switch" ? detailId(fieldOf(context.context?.returned, "id")) : undefined;
+
 /**
  * The client id a `client_secret_basic` credential names. The header is `Basic base64(client_id:client_secret)` with the
  * client id form-encoded, and only that part is read: the secret is never copied.
@@ -577,7 +581,8 @@ const clientIdFromBasic = (authorization: string | undefined): string | undefine
         const decoded = atob(authorization.slice("basic ".length).trim());
         const separator = decoded.indexOf(":");
 
-        return detailId(decodeURIComponent(separator === -1 ? decoded : decoded.slice(0, separator)));
+        // Without a colon the whole value is the secret, so it is never read as an id.
+        return separator === -1 ? undefined : detailId(decodeURIComponent(decoded.slice(0, separator)));
     } catch {
         return undefined;
     }
@@ -606,21 +611,24 @@ const organizationIds = (context: AuditHookContext, event: AuthAuditEvent): Read
             : undefined;
     // `remove-member` takes a member id or an email. The `@` check runs on the whole value, since cutting it first could leave
     // an email's prefix in the trail, and an email is never copied.
-    const rawMemberReference = body["memberIdOrEmail"];
-    const memberReference = typeof rawMemberReference === "string" && rawMemberReference.includes("@") ? undefined : detailId(rawMemberReference);
+    const memberReferenceOf = (value: unknown): string | undefined => (typeof value === "string" && value.includes("@") ? undefined : detailId(value));
+    const memberReference = memberReferenceOf(body["memberIdOrEmail"]);
 
     return [
         [
             "organizationId",
             event === "org-create"
                 ? createdId
-                : (detailId(body["organizationId"]) ?? detailId(fieldOf(context.context?.returned, "organizationId")) ?? activeOrganizationId),
+                : (detailId(body["organizationId"]) ??
+                  detailId(fieldOf(context.context?.returned, "organizationId")) ??
+                  switchedOrganizationId(context, event) ??
+                  activeOrganizationId),
         ],
         ["teamId", detailId(body["teamId"]) ?? (event === "org-team-create" ? createdId : undefined)],
         ["roleId", detailId(body["roleId"]) ?? (event === "org-role-change" ? createdId : undefined)],
         ["roleName", detailId(body["roleName"])],
         ["invitationId", detailId(body["invitationId"]) ?? (event === "org-invitation-create" ? createdId : undefined)],
-        ["memberId", detailId(body["memberId"]) ?? memberReference],
+        ["memberId", memberReferenceOf(body["memberId"]) ?? memberReference],
         ["targetUserId", detailId(body["userId"])],
     ];
 };

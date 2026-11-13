@@ -72,3 +72,44 @@ describe("audit rows name the organization, role and client their request acts o
         expect(entry?.detail).toMatchObject({ clientId: "app_10" });
     });
 });
+
+describe("audit rows never read a secret as an id", () => {
+    it("names no client from a Basic credential that carries no client id, and copies nothing of it", () => {
+        expect.assertions(2);
+
+        const credential = Buffer.from("only-a-secret-value").toString("base64");
+        const entry = buildAuditEntry({
+            headers: new Headers({ authorization: `Basic ${credential}` }),
+            method: "POST",
+            path: "/api/auth/oauth2/token",
+        });
+
+        expect(entry?.detail).not.toHaveProperty("clientId");
+        expect(JSON.stringify(entry?.detail)).not.toContain("only-a-secret-value");
+    });
+
+    it("never copies an email into the member id, even when it arrives in that field", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({
+            body: { memberId: "ada@example.com" },
+            method: "POST",
+            path: "/api/auth/organization/remove-member",
+        });
+
+        expect(entry?.detail).not.toHaveProperty("memberId");
+    });
+
+    it("names the organization a switch by slug moved to, from the organization it answers with", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({
+            body: { organizationSlug: "acme" },
+            context: { returned: { id: "org_acme", slug: "acme" } },
+            method: "POST",
+            path: "/api/auth/organization/set-active",
+        });
+
+        expect(entry?.detail).toMatchObject({ organizationId: "org_acme" });
+    });
+});
