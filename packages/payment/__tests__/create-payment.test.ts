@@ -2504,8 +2504,8 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
     });
 
-    it("raises the error that failed the write, not the failure to restore the old plan after it", async () => {
-        expect.assertions(1);
+    it("reports a failed restore with both failures, so the subscription can be reconciled", async () => {
+        expect.assertions(3);
 
         const store = new MemoryPaymentStore();
 
@@ -2541,7 +2541,11 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: failing });
 
-        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).rejects.toThrow("database unavailable");
+        const failure = await payment.updateSubscription("sub_1", { priceId: "price_2" }).catch((error: unknown) => error);
+
+        expect(failure).toMatchObject({ code: "INVALID_TRANSITION" });
+        expect((failure as Error).message).toContain("database unavailable");
+        expect((failure as Error).message).toContain("restore unavailable");
     });
 
     it("refuses the plan change, and writes no new row, when the old plan changed before it could be retired", async () => {

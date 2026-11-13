@@ -61,6 +61,8 @@ import { readWebhookBody } from "./webhook-body";
 let lastUsageStamp = 0;
 
 /** How many guarded writes record a cancel answer over a row that keeps moving under it, before the conflict is raised. */
+/** The message of an error, for a message that names one. */
+const describeError = (error: unknown): string => (error instanceof Error ? error.message : "unknown error");
 const CANCEL_RECORD_ATTEMPTS = 3;
 
 /**
@@ -455,10 +457,13 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             }
         };
 
-        // A failed restore is secondary: the caller needs the error that caused the rollback, so that one is raised.
-        const restoreOrIgnore = async (): Promise<void> => {
-            await restoreRetired().catch(() => undefined);
-        };
+        // A failed restore leaves the subscription with no plan granting access, and the caller must know that: the error says
+        // so, and names the failure that started the rollback.
+        const rollbackFailed = (cause: unknown, restoreError: unknown): LunoraPaymentError =>
+            new LunoraPaymentError(
+                "INVALID_TRANSITION",
+                `the provider's change could not be stored (${describeError(cause)}), and the old plan could not be restored (${describeError(restoreError)}); the subscription has no plan granting access, so reconcile it`,
+            );
 
         let outcome: SubscriptionWrite;
 
@@ -467,7 +472,9 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         } catch (error) {
             // A failed write after the retire leaves nothing granting access, so the old row is restored before the error goes up.
             if (retires) {
-                await restoreOrIgnore();
+                await restoreRetired().catch((restoreError: unknown) => {
+                    throw rollbackFailed(error, restoreError);
+                });
             }
 
             throw error;
@@ -475,7 +482,9 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
         if (outcome === "rejected") {
             if (retires) {
-                await restoreOrIgnore();
+                await restoreRetired().catch((restoreError: unknown) => {
+                    throw rollbackFailed(conflict(), restoreError);
+                });
             }
 
             throw conflict();
