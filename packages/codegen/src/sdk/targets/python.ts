@@ -145,7 +145,7 @@ const renderSubscribe = (method: SdkMethod): string => {
 };
 
 /**
- * A query's stream form: the live query as an async iterator, for `async for`. Leaving the loop unsubscribes.
+ * A query's stream form: the live query as an async iterator, for `async for`. `aclose()` unsubscribes, and is the only release for a watch the loop never started.
  */
 const renderWatch = (method: SdkMethod): string => {
     const payload = argsPayload(method);
@@ -161,7 +161,7 @@ const renderWatch = (method: SdkMethod): string => {
         `    def watch_${memberName(method.functionName)}(`,
         ...parameters.map((parameter) => `        ${parameter},`),
         `    ) -> AsyncIterator:`,
-        `        """live ${commentText(method.summary)} as an async iterator — \`async for\` over it; leaving the loop unsubscribes."""`,
+        `        """live ${commentText(method.summary)} as an async iterator — \`async for\` over it; \`aclose()\` unsubscribes, and a watch the loop never started is released only by it."""`,
         `        return self._client.watch("${stringLiteral(method.functionPath)}", ${payload}, shard_key)`,
     ].join("\n");
 };
@@ -197,7 +197,11 @@ const renderNamespaceClass = (namespace: SdkNamespace): string => {
 const narrowBareExcept = (models: string): string => models.replaceAll(/^([ \t]*)except:$/gmu, "$1except Exception:");
 
 const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
-    assertDistinctMembers(namespaces, "Python", (method) => [memberName(method.functionName), `subscribe_${memberName(method.functionName)}`]);
+    assertDistinctMembers(namespaces, "Python", (method) => [
+        memberName(method.functionName),
+        `subscribe_${memberName(method.functionName)}`,
+        `watch_${memberName(method.functionName)}`,
+    ]);
     const referenced = referencedModels(namespaces);
     const modelImport = referenced.length > 0 ? `from .models import ${referenced.join(", ")}\n` : "";
 

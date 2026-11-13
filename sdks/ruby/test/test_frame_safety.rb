@@ -246,6 +246,39 @@ class TestFrameSafety < Minitest::Test
     end
   end
 
+  # A loop that exits early must unsubscribe without the caller holding `stop`: the
+  # enumerator owns the subscription it opened.
+  def test_breaking_out_of_a_watch_loop_unsubscribes
+    frames = []
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(frame) { frames << frame })
+    values, _stop = client.watch("messages:list", {})
+    client.handle_frame(JSON.generate({ "type" => "data", "id" => "sub_1", "data" => { "n" => 1 } }))
+
+    values.first
+
+    unsubscribed = frames.select { |frame| frame["type"] == "unsubscribe" }
+
+    ids = unsubscribed.map { |frame| frame["id"] }
+
+    assert_equal ["sub_1"], ids
+  end
+
+  def test_raising_out_of_a_watch_loop_unsubscribes
+    frames = []
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(frame) { frames << frame })
+    values, _stop = client.watch("messages:list", {})
+    client.handle_frame(JSON.generate({ "type" => "data", "id" => "sub_1", "data" => { "n" => 1 } }))
+
+    assert_raises(RuntimeError) { values.each { |value| raise "consumer failed after #{value}" if value } }
+
+    unsubscribed = frames.select { |frame| frame["type"] == "unsubscribe" }
+    ids = unsubscribed.map { |frame| frame["id"] }
+
+    assert_equal ["sub_1"], ids
+  end
+
   def test_the_auth_token_is_redacted_when_printed
     ConformanceManifest.covers("auth_token_redacted_when_printed")
     secret = "lunora-secret-7f3a9c" # secret-scanner:allow -- test fixture

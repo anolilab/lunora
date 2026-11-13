@@ -649,7 +649,17 @@ module Lunora
       @mutex.synchronize { @streams << values }
       unsubscribe = subscribe(function_path, args, ->(value) { values << [:value, value] },
                               ->(error) { values << [:error, error] }, shard_key)
+      # Idempotent: the enumerator calls it when its loop exits, and a caller may
+      # call it as well, so the second call must not unsubscribe twice.
+      stopped = false
       stop = lambda do
+        first = @mutex.synchronize do
+          next false if stopped
+
+          stopped = true
+        end
+        next unless first
+
         @mutex.synchronize { @streams.delete(values) }
         unsubscribe.call
         # Wakes a consumer blocked in `pop` so `each` returns instead of hanging
@@ -665,6 +675,10 @@ module Lunora
 
           yielder << payload
         end
+      ensure
+        # A `break` or a raise out of the consumer's loop ends the enumerator here,
+        # so the subscription is released without the caller holding `stop`.
+        stop.call
       end
 
       [enumerator, stop]

@@ -87,6 +87,23 @@ describe("assertGeneratable", () => {
 
         await expect(generateSdk(colliding, targets[0]!)).rejects.toThrow(/"messages:list".*"messages:watchList".*"WatchList".*Dart/su);
     });
+
+    it.each(["python", "ruby", "rust"])("rejects a function whose name collides with a query's %s watch member", async (lang) => {
+        expect.assertions(1);
+
+        // The query `fooBAR` emits a `watch_foo_bar` member in these targets, the same
+        // name a sibling function `watch_foo_bar` generates. The distinct-member check
+        // must see the watch name, not only the call and subscribe names.
+        const target = targets.find((candidate) => candidate.id === lang)!;
+        const colliding: OpenRpcDocument = {
+            methods: [
+                { name: "foo:fooBAR", "x-lunora-function-kind": "query" },
+                { name: "foo:watch_foo_bar", "x-lunora-function-kind": "mutation" },
+            ],
+        };
+
+        await expect(generateSdk(colliding, target)).rejects.toThrow(/"foo:fooBAR".*"foo:watch_foo_bar".*watch_foo_bar/su);
+    });
 });
 
 describe("wire types no model can carry", () => {

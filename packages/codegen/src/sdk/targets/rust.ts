@@ -284,7 +284,11 @@ const renderNamespaceStruct = (namespace: SdkNamespace): string => {
 };
 
 const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
-    assertDistinctMembers(namespaces, "Rust", (method) => [memberName(method.functionName), `subscribe_${toSnakeCase(method.functionName)}`]);
+    assertDistinctMembers(namespaces, "Rust", (method) => [
+        memberName(method.functionName),
+        `subscribe_${toSnakeCase(method.functionName)}`,
+        `watch_${toSnakeCase(method.functionName)}`,
+    ]);
     const accessors = namespaces
         .map((namespace) =>
             [

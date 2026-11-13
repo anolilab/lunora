@@ -62,9 +62,10 @@ let watchClient = LunoraClient(url: "https://app.example")
 
 watchClient.attachSocket { watchFrames.append($0) }
 
-var watchIterator = try API(client: watchClient).messages.watchList(
+let watchStream = try API(client: watchClient).messages.watchList(
     MessagesListArgs(channelID: "chan_1", limit: nil)
-).makeAsyncIterator()
+)
+var watchIterator = watchStream.makeAsyncIterator()
 
 guard let subscribe = watchFrames.first(where: { ($0["type"] as? String) == "subscribe" }),
     let query = subscribe["query"] as? [String: Any],
@@ -93,6 +94,15 @@ let watchDecoded = Wire.stableStringify(try Wire.encode(watchValue))
 
 guard watchDecoded == #"{"ok":true}"# else {
     fatalError("watch yielded \(watchDecoded), want {\"ok\":true}")
+}
+
+// cancel() is what unsubscribes: leaving the loop does not, so the watch is cancelled here.
+watchStream.cancel()
+
+let watchUnsubscribes = watchFrames.filter { ($0["type"] as? String) == "unsubscribe" }
+
+guard watchUnsubscribes.count == 1, (watchUnsubscribes[0]["id"] as? String) == subscriptionID else {
+    fatalError("cancelling the watch sent \(watchUnsubscribes), want one unsubscribe for \(subscriptionID)")
 }
 
 // Two keys differing only by a lone surrogate are one Swift `String`, so the

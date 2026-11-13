@@ -248,19 +248,22 @@ const renderSubscribe = (method: SdkMethod): string => {
 };
 
 /**
- * A query's stream form: the live query as an `AsyncStream`, so `for await` binds it and leaving
- * the loop unsubscribes. Wraps `client.stream` the way `subscribe` wraps `client.subscribe`.
+ * A query's stream form: the live query as a `LunoraWatch`, so `for await` binds it and `cancel()`
+ * unsubscribes. Leaving the loop does not, so the doc says so. Wraps `client.watch` the way
+ * `subscribe` wraps `client.subscribe`.
+ *
+ * Untyped arguments are encoded here, with a throw: the transport's own encode would be swallowed
+ * and leave the watch waiting for a subscribe frame that is never sent.
  */
 const renderWatch = (method: SdkMethod): string => {
     const argument = argsChoice(method, { none: "", typed: (type) => `_ args: ${type}, `, untyped: "_ args: Any, " });
-    const payload = swiftPayload(method);
+    const payload = argsChoice(method, { none: "nil", typed: () => swiftPayload(method), untyped: "try Wire.encode(args)" });
 
     return [
-        `    /// live ${commentText(method.summary)}, as an \`AsyncStream\` — \`for await\` over it; leaving the loop unsubscribes.`,
+        `    /// live ${commentText(method.summary)}, as a \`LunoraWatch\` — \`for await\` over it; \`cancel()\` unsubscribes, since leaving the loop does not.`,
         `    public func watch${toPascalCase(method.functionName)}(`,
         `        ${argument}shardKey: String? = nil`,
-        // eslint-disable-next-line no-secrets/no-secrets -- a Swift type name, not a credential
-        `    ) throws -> AsyncStream<LunoraClient.LunoraWatchEvent> {`,
+        `    ) throws -> LunoraClient.LunoraWatch {`,
         `        client.watch("${stringLiteral(method.functionPath)}", args: ${payload}, shardKey: shardKey)`,
         `    }`,
     ].join("\n");

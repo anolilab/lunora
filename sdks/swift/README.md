@@ -162,7 +162,7 @@ while !Task.isCancelled {
 Every RPC failure is a `LunoraAPIError`: a body that is not JSON or not an object
 is `INTERNAL`, and a success whose `result` does not decode is
 `WIRE_DECODE_FAILED` (the call committed). `close()` also ends every live
-`stream(...)`. `dump(client)` shows the bearer token only as `<redacted>`.
+`watch(...)`. `dump(client)` shows the bearer token only as `<redacted>`.
 
 ## Optimistic updates and offline writes
 

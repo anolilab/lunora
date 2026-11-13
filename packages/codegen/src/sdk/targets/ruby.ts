@@ -163,7 +163,7 @@ const renderSubscribe = (method: SdkMethod): string => {
 };
 
 /**
- * A query's stream form: the live query as an Enumerator with a stop callable. Calling stop unsubscribes.
+ * A query's stream form: the live query as an Enumerator with a stop callable. Calling stop unsubscribes, and so does leaving the loop.
  */
 const renderWatch = (method: SdkMethod): string => {
     const parameters = method.argsType === undefined && !method.takesArgs ? "shard_key: nil" : "args, shard_key: nil";
@@ -256,7 +256,11 @@ const structsOnly = (namespaces: ReadonlyArray<SdkNamespace>, models: string): R
 };
 
 const render = ({ models, namespaces: declared }: SdkRenderInput): Record<string, string> => {
-    assertDistinctMembers(declared, "Ruby", (method) => [memberName(method.functionName), `subscribe_${memberName(method.functionName)}`]);
+    assertDistinctMembers(declared, "Ruby", (method) => [
+        memberName(method.functionName),
+        `subscribe_${memberName(method.functionName)}`,
+        `watch_${memberName(method.functionName)}`,
+    ]);
     const namespaces = structsOnly(declared, models);
     const readers = namespaces.map((namespace) => `:${memberName(namespace.name)}`).join(", ");
     const assignments = namespaces.map((namespace) => `      @${memberName(namespace.name)} = ${toPascalCase(namespace.name)}Api.new(client)`).join("\n");
