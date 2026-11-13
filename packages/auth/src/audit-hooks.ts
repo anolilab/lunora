@@ -641,7 +641,13 @@ const resourceIdentifierOf = (value: unknown): string | undefined => {
         // A special scheme gives an empty path a trailing slash. Only that one is dropped, never a slash in a real path.
         const cleaned = url.pathname === "/" ? url.href.slice(0, -1) : url.href;
 
-        return url.host === "" ? detailId(cleaned) : boundedDetailValue(cleaned);
+        // A URI with no host keeps only a URN: any other (a `data:` URI, say) carries its payload in the path, so it is not
+        // recorded, since an identifier is exempt from redaction.
+        if (url.host === "") {
+            return url.protocol === "urn:" ? detailId(cleaned) : undefined;
+        }
+
+        return boundedDetailValue(cleaned);
     } catch {
         // Not a parseable URI, so the value before any query or fragment is all that is safe to keep.
         return detailId(BEFORE_QUERY.exec(identifier)?.[0]);

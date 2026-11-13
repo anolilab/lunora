@@ -97,4 +97,16 @@ describe("resource and consent rows name what they act on, without the secrets a
         expect(JSON.stringify(entry?.detail ?? {})).not.toContain("s3cretpass");
         expect(JSON.stringify(entry?.detail ?? {})).not.toContain("alice");
     });
+
+    it("does not record a data URI, whose payload is in its path, as a resource", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({
+            body: { identifier: "data:text/plain,payload-secret-value" },
+            method: "POST",
+            path: "/api/auth/admin/oauth2/resources",
+        });
+
+        expect(JSON.stringify(entry?.detail ?? {})).not.toContain("payload-secret-value");
+    });
 });
