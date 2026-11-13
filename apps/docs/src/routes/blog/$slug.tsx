@@ -119,7 +119,7 @@ const buildPost = async (slug: string) => {
 
 const loadPost = createServerFn({ method: "GET" })
     .middleware([staticFunctionMiddleware])
-    .inputValidator((slug: string) => slug)
+    .validator((slug: string) => slug)
     .handler(({ data: slug }) => buildPost(slug));
 
 const BaseImg = defaultMdxComponents.img;

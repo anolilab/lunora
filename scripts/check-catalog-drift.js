@@ -136,14 +136,6 @@ const CATALOG_ALLOWLIST = new Map([
         "jiti",
         "tooling (^2.7.0) and cli (2.7.0) both ship in published dependencies (@lunora/codegen, @lunora/config vs @lunora/cli); aligning either changes a published range, so it is the owner's call",
     ],
-    [
-        "@tanstack/react-router",
-        "web pins match @tanstack/start-static-server-functions@1.167.39, which depends on start-client-core 1.170.34 / router-core 1.171.34; moving them to frontend's versions gives apps/docs two router-core copies. Align together with a start-static-server-functions bump",
-    ],
-    [
-        "@tanstack/react-start",
-        "web pins match @tanstack/start-static-server-functions@1.167.39, which depends on start-client-core 1.170.34 / router-core 1.171.34; moving them to frontend's versions gives apps/docs two router-core copies. Align together with a start-static-server-functions bump",
-    ],
 ]);
 
 /** name -> [catalog, specifier][] across every named catalog. */
