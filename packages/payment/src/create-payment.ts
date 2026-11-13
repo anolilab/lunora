@@ -19,7 +19,7 @@ import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription } from "./store";
 import type { SubscriptionWrite } from "./subscription-policy";
-import { storeSubscription } from "./subscription-policy";
+import { ENTITLING_STATES, storeSubscription } from "./subscription-policy";
 import applyWebhookAction from "./sync";
 import type {
     AttachInput,
@@ -400,25 +400,51 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         return existing;
     };
 
-    // Stores the provider's answer to an update or a resume. Both calls set absolute state, so a row a
-    // webhook moved during the call is not merged onto: the provider has accepted the change and its own
-    // event for it follows. The conflict is raised rather than the answer dropped silently, and a retry is
-    // safe for the same reason.
-    const recordSubscriptionAnswer = async (existing: Subscription, answer: Subscription, verb: "updated" | "resumed"): Promise<Subscription> => {
-        const synced = overlayProviderSubscription(existing, answer);
-        const policy = options.singleSubscriptionPerReference ?? false;
-        // A provider can move the subscription to a new id (Autumn: a plan change is a new `customer::product` row). There is
-        // no row under the new id to guard with the old revision, so the new row is written as new and the old one is retired
-        // under its own revision. Otherwise the old plan stays active beside the new one.
-        const moved = synced.id !== existing.id;
-        const outcome = await storeSubscription(store, policy, existing, synced, { ifRevision: moved ? undefined : existing.revision });
-        const retired = !moved || (await store.upsertSubscription({ ...existing, state: "canceled" }, { ifRevision: existing.revision }));
+    // An update or resume names an owner that has to be a real one: a row a webhook wrote with no reference is no one's to change.
+    const changeableSubscription = async (subscriptionId: string): Promise<Subscription> => {
+        const existing = await ownedSubscription(subscriptionId);
 
-        if (outcome === "rejected" || !retired) {
-            throw new LunoraPaymentError(
+        if (existing.referenceId.trim() === "") {
+            throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
+        }
+
+        return existing;
+    };
+
+    // Stores the provider's answer to an update or a resume. The row is settled against the provider's current state,
+    // because a caller-keyed retry can come back as a cached replay of the first answer (Stripe keeps those for 24h).
+    // Both calls set absolute state, so a row a webhook moved during the call is not merged onto: the provider has
+    // accepted the change and its own event for it follows. The conflict is raised rather than the answer dropped
+    // silently, and a retry is safe for the same reason.
+    const recordSubscriptionAnswer = async (existing: Subscription, answer: Subscription, verb: "updated" | "resumed"): Promise<Subscription> => {
+        const settled = await adapter.getSubscriptionStatus(answer.id);
+        const synced = overlayProviderSubscription(existing, settled);
+        const policy = options.singleSubscriptionPerReference ?? false;
+        const conflict = (): LunoraPaymentError =>
+            new LunoraPaymentError(
                 "INVALID_TRANSITION",
                 `the subscription changed while it was being ${verb}; the provider has accepted the change, so retry or reconcile this subscription`,
             );
+
+        // A provider can move the subscription to a new id (Autumn: a plan change is a new `customer::product` row). The
+        // target is guarded by whatever row sits under its id now: absent, or a row from an earlier plan that is replaced.
+        const moved = synced.id !== existing.id;
+        const target = moved ? await store.getSubscription(adapter.identifier, synced.id) : existing;
+
+        // The old row retires first, and only once the new one grants access: a retire that loses a race stops the write
+        // there, so both rows never grant at once. A downgrade that leaves the old plan running keeps it active.
+        if (
+            moved &&
+            ENTITLING_STATES.has(synced.state) &&
+            !(await store.upsertSubscription({ ...existing, state: "canceled" }, { ifRevision: existing.revision }))
+        ) {
+            throw conflict();
+        }
+
+        const outcome = await storeSubscription(store, policy, target, synced, { ifRevision: target?.revision });
+
+        if (outcome === "rejected") {
+            throw conflict();
         }
 
         if (outcome === "refused") {
@@ -711,7 +737,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         provider,
 
         resumeSubscription: async (subscriptionId, resumeOptions) => {
-            const existing = await ownedSubscription(subscriptionId);
+            const existing = await changeableSubscription(subscriptionId);
             // `undefined` is forwarded as-is, not derived: see the interface comment on why a derived key is wrong here.
             const key =
                 resumeOptions?.idempotencyKey === undefined
@@ -894,12 +920,21 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         },
 
         updateSubscription: async (subscriptionId, patch) => {
-            const existing = await ownedSubscription(subscriptionId);
+            const existing = await changeableSubscription(subscriptionId);
 
             // Validated here so every provider refuses a bad seat count before its own call. A missing quantity is
             // not defaulted: requireQuantity's default of 1 would turn "leave the seats alone" into a seat cut.
+            // Zero seats would keep the plan running with nobody on it, so ending a subscription is cancelSubscription's job.
             if (patch.quantity !== undefined) {
                 requireQuantity("updateSubscription", patch.quantity);
+
+                if (patch.quantity < 1) {
+                    throw new LunoraPaymentError("VALIDATION_ERROR", "updateSubscription(): `quantity` must be at least 1; cancel the subscription to end it");
+                }
+            }
+
+            if (patch.priceId?.trim() === "") {
+                throw new LunoraPaymentError("VALIDATION_ERROR", "updateSubscription(): `priceId` must name a plan");
             }
 
             const key =

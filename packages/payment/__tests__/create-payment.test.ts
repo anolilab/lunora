@@ -2213,7 +2213,11 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
 
         await store.upsertSubscription(subscription("user_1", "active"));
 
+        // The provider's current state is what the row is settled to, so the status read reports the new plan.
         const adapter = fakeAdapter({
+            getSubscriptionStatus: async (id) => {
+                return { ...subscription("user_1", "active"), id, priceId: "price_2" };
+            },
             updateSubscription: async (id, patch) => {
                 return { ...subscription("user_1", "active"), id, priceId: patch.priceId ?? "price_1" };
             },
@@ -2343,6 +2347,9 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
 
         // Autumn names a plan change by its new `customer::product` id, so no row exists under the old revision's id.
         const adapter = fakeAdapter({
+            getSubscriptionStatus: async () => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: "price_2" };
+            },
             updateSubscription: async (_id, patch) => {
                 return { ...subscription("user_1", "active"), id: "sub_2", priceId: patch.priceId ?? "price_1" };
             },
@@ -2352,6 +2359,96 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).resolves.toMatchObject({ id: "sub_2", priceId: "price_2" });
         await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ priceId: "price_2", state: "active" });
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
+    });
+
+    it("returns to a plan whose row an earlier change canceled, replacing that row", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+        await store.upsertSubscription({ ...subscription("user_1", "canceled"), id: "sub_2", priceId: "price_2" });
+
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: async () => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: "price_2" };
+            },
+            updateSubscription: async (_id, patch) => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: patch.priceId ?? "price_2" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).resolves.toMatchObject({ id: "sub_2", state: "active" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
+    });
+
+    it("keeps the old plan active when a downgrade lands the new one paused", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: async () => {
+                return { ...subscription("user_1", "paused"), id: "sub_2", priceId: "price_2" };
+            },
+            updateSubscription: async (_id, patch) => {
+                return { ...subscription("user_1", "paused"), id: "sub_2", priceId: patch.priceId ?? "price_2" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.updateSubscription("sub_1", { priceId: "price_2" });
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
+        await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ state: "paused" });
+    });
+
+    it("settles the row to the provider's current state, not a replayed answer", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // The retry comes back as the first call's cached answer (price_2) while the provider already sits on price_3.
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: async (id) => {
+                return { ...subscription("user_1", "active"), id, priceId: "price_3" };
+            },
+            updateSubscription: async (id) => {
+                return { ...subscription("user_1", "active"), id, priceId: "price_2" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.updateSubscription("sub_1", { priceId: "price_2" });
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ priceId: "price_3" });
+    });
+
+    it("refuses an empty plan id, a seat cut to zero, and a row with no owner", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+        await store.upsertSubscription({ ...subscription("", "active"), id: "sub_orphan" });
+
+        const updateSubscription = vi.fn<PaymentAdapter["updateSubscription"]>(fakeAdapter().updateSubscription);
+        // An application authorizer that accepts a blank reference: the ownerless row must still be refused on its own.
+        const payment = createPayment({
+            adapter: fakeAdapter({ updateSubscription }),
+            authorize: () => true,
+            store,
+        });
+
+        await expect(payment.updateSubscription("sub_1", { priceId: "  " })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(payment.updateSubscription("sub_1", { quantity: 0 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(payment.updateSubscription("sub_orphan", { priceId: "price_2" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+        expect(updateSubscription).not.toHaveBeenCalled();
     });
 
     it("raises a conflict when a webhook moves the row during the provider call, and keeps the stored plan", async () => {
