@@ -555,15 +555,23 @@ const createdClientId = (context: AuditHookContext, event: AuthAuditEvent): stri
 const organizationIds = (context: AuditHookContext, event: AuthAuditEvent): ReadonlyArray<readonly [key: string, value: string | undefined]> => {
     const body = context.body ?? {};
     const createdId = detailId(fieldOf(context.context?.returned, "id"));
-    const activeOrganizationId = detailId(fieldOf(fieldOf(context.context?.session, "session"), "activeOrganizationId"));
-    const memberIdOrEmail = detailId(body["memberIdOrEmail"]);
+    // Only a call that acts within the active organization is attributed to it. A switch, an invitation (which may belong to
+    // another organization) or a create names its organization from the request or the response.
+    const activeOrganizationId =
+        event.startsWith("org-member-") || event.startsWith("org-team-") || event === "org-role-change"
+            ? detailId(fieldOf(fieldOf(context.context?.session, "session"), "activeOrganizationId"))
+            : undefined;
+    // `remove-member` takes a member id or an email. The `@` check runs on the whole value, since cutting it first could leave
+    // an email's prefix in the trail, and an email is never copied.
+    const rawMemberReference = body["memberIdOrEmail"];
+    const memberReference = typeof rawMemberReference === "string" && rawMemberReference.includes("@") ? undefined : detailId(rawMemberReference);
 
     return [
         ["organizationId", event === "org-create" ? createdId : (detailId(body["organizationId"]) ?? activeOrganizationId)],
         ["teamId", detailId(body["teamId"]) ?? (event === "org-team-create" ? createdId : undefined)],
+        ["roleId", detailId(body["roleId"]) ?? (event === "org-role-change" ? createdId : undefined)],
         ["invitationId", detailId(body["invitationId"]) ?? (event === "org-invitation-create" ? createdId : undefined)],
-        // `remove-member` takes a member id or an email; an email is never copied into the trail.
-        ["memberId", detailId(body["memberId"]) ?? (memberIdOrEmail?.includes("@") === true ? undefined : memberIdOrEmail)],
+        ["memberId", detailId(body["memberId"]) ?? memberReference],
         ["targetUserId", detailId(body["userId"])],
     ];
 };
@@ -580,6 +588,8 @@ const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Rec
     const body = context.body ?? {};
     const params = context.params ?? {};
 
+    const createdId = detailId(fieldOf(context.context?.returned, "id"));
+
     const candidates = ((): ReadonlyArray<readonly [key: string, value: string | undefined]> => {
         if (event.startsWith("admin-")) {
             return [["targetUserId", detailId(body["userId"]) ?? adminSubject(context, event)]];
@@ -595,7 +605,8 @@ const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Rec
                     "clientId",
                     detailId(body["client_id"]) ?? detailId(params["client_id"]) ?? clientIdOf(body["oauth_query"]) ?? createdClientId(context, event),
                 ],
-                ["resourceIdentifier", detailId(params["identifier"])],
+                // A resource is named by its path, or by the `identifier` a create request carries.
+                ["resourceIdentifier", detailId(params["identifier"]) ?? detailId(body["identifier"])],
             ];
         }
 
@@ -605,10 +616,10 @@ const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Rec
         }
 
         if (event.startsWith("scim-")) {
-            // A SCIM resource id, not necessarily the better-auth user id.
+            // A SCIM resource id, not necessarily the better-auth user id. A create is collection-level, so its id comes from the response.
             return [
-                ["scimUserId", detailId(params["userId"])],
-                ["scimGroupId", detailId(params["groupId"])],
+                ["scimUserId", detailId(params["userId"]) ?? (event === "scim-user-create" ? createdId : undefined)],
+                ["scimGroupId", detailId(params["groupId"]) ?? (event === "scim-group-create" ? createdId : undefined)],
             ];
         }
 
