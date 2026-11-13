@@ -6,6 +6,7 @@ package lunora
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1306,4 +1307,61 @@ func TestIdentityChangeEvictsTheCachedBaseAndThePoison(t *testing.T) {
 // delta marked more is held, and the run publishes once, on its last frame.
 func TestPageDeltaRunsAreHeldUntilTheirLastFrame(t *testing.T) {
 	runDeltaStepCases(t, "pageDeltaRunCases", 5)
+}
+
+// TestUndecodableDeltaRunFrameFreezesTheSubscription drives ws-frames.json's
+// undecodableDeltaRunCases: a run frame the decoder refuses reports once, discards the run
+// and freezes the subscription like an unmergeable row change.
+func TestUndecodableDeltaRunFrameFreezesTheSubscription(t *testing.T) {
+	runDeltaStepCases(t, "undecodableDeltaRunCases", 1)
+}
+
+// TestAttachingASocketDiscardsEveryHeldRun pins that a run held on one socket never finishes
+// on the next, whether the new socket replaces a live one or its connect fails.
+func TestAttachingASocketDiscardsEveryHeldRun(t *testing.T) {
+	attachments := map[string]FrameSender{
+		"over a live socket":     func(map[string]any) error { return nil },
+		"after a failed connect": func(map[string]any) error { return errors.New("connect failed") },
+	}
+
+	for name, send := range attachments {
+		t.Run(name, func(t *testing.T) {
+			harness := newDeltaHarness(t)
+
+			cases, _ := loadFixture(t, "ws-frames.json")["pageDeltaRunCases"].([]any)
+			testCase, _ := cases[0].(map[string]any)
+			seed, _ := testCase["seedFrame"].(map[string]any)
+			harness.handle(seed)
+
+			held := map[string]any{
+				"type": "delta",
+				"more": true,
+				"delta": map[string]any{
+					"key": "m1", "op": "update", "table": "messages",
+					"row": map[string]any{"_creationTime": 1001, "_id": "m1", "text": "ONE"},
+				},
+			}
+			harness.handle(held)
+
+			harness.client.AttachSocket(send, nil)
+
+			harness.seen = nil
+			harness.handle(map[string]any{
+				"type": "delta",
+				"delta": map[string]any{
+					"key": "m2", "op": "update", "table": "messages",
+					"row": map[string]any{"_creationTime": 1002, "_id": "m2", "text": "TWO"},
+				},
+			})
+
+			if len(harness.seen) != 1 {
+				t.Fatalf("published %d times, want 1", len(harness.seen))
+			}
+
+			wire, _ := EncodeWire(harness.seen[0])
+			if strings.Contains(canonical(t, wire), "ONE") {
+				t.Fatalf("a run held before the attach was committed: %s", canonical(t, wire))
+			}
+		})
+	}
 }

@@ -1518,9 +1518,24 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			// not on the socket read loop's stack. Returning it ended the caller's
 			// loop — and with it every other subscription on this client — over one
 			// bad frame.
+			if entry != nil && kind == "delta" {
+				// A run that lost a frame cannot complete, and a later frame would commit against
+				// a base missing it: drop the run and freeze, as an unmergeable row change does.
+				c.mu.Lock()
+				frozen := entry.poisoned
+				entry.poisoned = true
+				entry.discardRun()
+				c.mu.Unlock()
+
+				// A frozen subscription ignores delta frames, so the refusal is already reported.
+				if !frozen && entry.onError != nil {
+					entry.onError(SubscriptionError{Code: CodeWireDecodeFailed, Message: err.Error()})
+				}
+
+				return "error", nil
+			}
+
 			if entry != nil {
-				// A run that lost a frame cannot complete: drop it so a later frame merges onto
-				// the committed base, not the abandoned partial one.
 				c.mu.Lock()
 				entry.discardRun()
 				c.mu.Unlock()
@@ -1624,6 +1639,7 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			// position past frames that were never applied, so drop the run and hold the cursor.
 			if kind == "settled" && entry.hasPending {
 				entry.discardRun()
+				entry.poisoned = true
 				c.mu.Unlock()
 
 				return kind, nil
