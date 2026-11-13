@@ -372,6 +372,20 @@ const resolveTargetEmail = (context: AuditHookContext, event: AuthAuditEvent): s
 };
 
 /**
+ * The account an impersonated session acts as, which the administrator named in `impersonatedBy` is acting for.
+ * `undefined` for an ordinary session.
+ */
+const impersonatedUserId = (context: AuditHookContext): string | undefined => {
+    const source = context.context?.newSession ?? context.context?.session;
+
+    if (stringOf(source?.session?.impersonatedBy) === undefined) {
+        return undefined;
+    }
+
+    return stringOf(source?.user?.id);
+};
+
+/**
  * The subject of an `admin-*` action: the account the operator acted on, so the row says
  * who was impersonated, created or changed. Taken from `ctx.body.userId` when the endpoint
  * takes one. `create-user` has no such body field, so its subject is the account the response
@@ -381,7 +395,8 @@ const resolveTargetEmail = (context: AuditHookContext, event: AuthAuditEvent): s
  */
 const resolveTargetUserId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined => {
     if (!event.startsWith("admin-")) {
-        return undefined;
+        // An impersonated session acts as the impersonated account, so that account is what the row is about.
+        return impersonatedUserId(context);
     }
 
     const fromBody = stringOf(context.body?.["userId"]);
