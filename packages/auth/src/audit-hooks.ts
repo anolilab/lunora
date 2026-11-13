@@ -254,6 +254,12 @@ const branchEventForPath = (normalized: string): AuthAuditEvent | undefined => {
  */
 const eventForPath = (path: string): AuthAuditEvent | undefined => {
     const normalized = path.toLowerCase();
+    // A callback's last segment is the provider's id, so it can equal an endpoint name (`/callback/delete-user`). A
+    // callback is therefore a sign-in whatever ends it, and the suffix table is not consulted for it.
+    if (normalized.includes("/callback/") || normalized.includes("/saml2/sp/acs/")) {
+        return branchEventForPath(normalized);
+    }
+
     const exactEvent = SUFFIX_EVENTS.find(([suffix]) => normalized === suffix || normalized.endsWith(suffix))?.[1];
 
     return exactEvent ?? branchEventForPath(normalized);
