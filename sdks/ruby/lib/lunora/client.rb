@@ -703,34 +703,50 @@ module Lunora
     def resend_subscriptions
       sender = nil
 
-      frames = @mutex.synchronize do
+      queries, shapes = @mutex.synchronize do
         sender = @send
-        next [] if sender.nil?
+        next [[], []] if sender.nil?
 
-        queries = @subscriptions.map do |id, entry|
-          # The resume position is still before any dropped change, so the replay
-          # re-applies it; if it is still unmergeable the flag is set again.
+        [
+          @subscriptions.map do |id, entry|
+            [entry, Lunora.build_subscribe_frame(
+              id, entry[:function_path], entry[:args],
+              since_seq: entry[:cursor], since_epoch: entry[:epoch]
+            )]
+          end,
+          # BOTH registries. A resend that walks only the queries leaves every
+          # shape view subscribed to a socket that no longer exists — silently, and
+          # for the rest of the process's life.
+          @shapes.map do |id, entry|
+            Lunora.build_shape_subscribe_frame(
+              id, entry[:name], entry[:args],
+              since_checkpoint: entry[:checkpoint], since_epoch: entry[:epoch]
+            )
+          end
+        ]
+      end
+
+      queries.each do |entry, frame|
+        # Cleared per send, not up front: the resume position is still before any dropped
+        # change, so the replay re-applies it. A send that fails means the server never saw
+        # that replay, so the flag comes back and a later delta cannot advance the cursor.
+        was_poisoned = @mutex.synchronize do
+          poisoned = entry[:poisoned]
           entry[:poisoned] = false
           # The cursor still sits before the run, so the server replays all of it.
           entry[:run] = nil
-          Lunora.build_subscribe_frame(
-            id, entry[:function_path], entry[:args],
-            since_seq: entry[:cursor], since_epoch: entry[:epoch]
-          )
+          poisoned
         end
 
-        # BOTH registries. A resend that walks only the queries leaves every
-        # shape view subscribed to a socket that no longer exists — silently, and
-        # for the rest of the process's life.
-        queries + @shapes.map do |id, entry|
-          Lunora.build_shape_subscribe_frame(
-            id, entry[:name], entry[:args],
-            since_checkpoint: entry[:checkpoint], since_epoch: entry[:epoch]
-          )
+        begin
+          sender.call(frame)
+        rescue StandardError
+          @mutex.synchronize { entry[:poisoned] = true } if was_poisoned
+          raise
         end
       end
 
-      frames.each { |frame| sender.call(frame) }
+      shapes.each { |frame| sender.call(frame) }
     end
 
     # Apply one server frame and return its type. Unknown types are ignored,

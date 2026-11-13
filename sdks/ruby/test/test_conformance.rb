@@ -347,6 +347,40 @@ class TestWsFrames < Minitest::Test
     end
   end
 
+  def test_a_failed_resend_keeps_a_poisoned_subscription_frozen
+    entry = fixture("ws-frames.json")["pageDeltaPoisonCases"].first
+    freeze = entry["steps"][0]["frame"]
+    later = entry["steps"][1]["frame"]
+    broken = false
+    sent = []
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(lambda { |frame|
+      raise IOError, "socket gone" if broken
+
+      sent << frame
+    })
+    seen = []
+    client.subscribe("messages:list", {}, ->(value) { seen << value }, ->(_error) {})
+    client.handle_frame(JSON.generate(entry["seedFrame"]))
+    client.handle_frame(JSON.generate(freeze))
+
+    broken = true
+    assert_raises(IOError) { client.resend_subscriptions }
+
+    # The replay never reached the server, so the dropped change is still unapplied.
+    seen.clear
+    client.handle_frame(JSON.generate(later))
+
+    assert_empty seen
+
+    broken = false
+    sent.clear
+    client.resend_subscriptions
+    subscribe = sent.find { |frame| frame["type"] == "subscribe" }
+
+    assert_equal entry["steps"][4]["resume"]["sinceSeq"], subscribe["query"]["sinceSeq"]
+  end
+
   def test_delta_runs_are_held_until_their_last_frame
     cases = fixture("ws-frames.json")["pageDeltaRunCases"]
     assert_equal 5, cases.length, "pageDeltaRunCases must carry all five cases"
