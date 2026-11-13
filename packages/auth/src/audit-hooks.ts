@@ -353,17 +353,17 @@ const eventForPath = (path: string, method?: string, grantType?: string): AuthAu
     const normalized = path.toLowerCase();
     const upperMethod = method?.toUpperCase();
     // A callback's last segment is the provider's id, so it can equal an endpoint name (`/callback/delete-user`). A callback
-    // is therefore a sign-in whatever ends it, so the suffix patterns are not consulted for it.
+    // is a sign-in whatever ends it, so no other rule is consulted for it.
     const isCallback = normalized.includes("/callback/") || normalized.includes("/saml2/sp/acs/");
-
+    const callbackEvent: AuthAuditEvent | undefined = isCallback ? "sign-in" : undefined;
     const isTokenRefresh = normalized.endsWith("/oauth2/token") && grantType === "refresh_token";
-
-    return (
+    const event: AuthAuditEvent | undefined =
         (isTokenRefresh ? "token-refresh" : undefined) ??
         METHOD_PATTERNS.find((row) => row.method === upperMethod && row.pattern.test(normalized))?.event ??
         (isCallback ? undefined : SUFFIX_PATTERNS.find((row) => row.pattern.test(normalized))?.event) ??
-        branchEventForPath(normalized)
-    );
+        branchEventForPath(normalized);
+
+    return callbackEvent ?? event;
 };
 
 /** Pull the first present header off whichever of `headers` / `request.headers` exists. */
