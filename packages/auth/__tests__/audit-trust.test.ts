@@ -45,4 +45,19 @@ describe("audit rows trust the response and the session over a stray body field"
 
         expect(entry?.detail).toMatchObject({ targetUserId: "user_b" });
     });
+
+    it("names the member a team change acts on, even in an impersonated session", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({
+            body: { teamId: "team_1", userId: "member_c" },
+            context: {
+                session: { session: { impersonatedBy: "admin_a", userId: "user_b" }, user: { id: "user_b" } },
+            },
+            method: "POST",
+            path: "/api/auth/organization/add-team-member",
+        });
+
+        expect(entry?.detail).toMatchObject({ targetUserId: "member_c" });
+    });
 });

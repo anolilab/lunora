@@ -799,7 +799,10 @@ const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Rec
     })();
 
     // An impersonated session's rows are about the impersonated account, unless the request names another subject.
-    const impersonated = event.startsWith("admin-") ? undefined : impersonatedUserId(context, event);
+    // A team membership change names the user it acts on in the body, which is the subject. Every other event takes the
+    // impersonated account, so a stray body field cannot hide who was impersonated.
+    const namesUser = event.startsWith("org-team-member-");
+    const impersonated = event.startsWith("admin-") || namesUser ? undefined : impersonatedUserId(context, event);
     const entries = [...candidates, ...(impersonated === undefined ? [] : [["targetUserId", impersonated] as const])];
 
     return Object.fromEntries(entries.flatMap(([key, value]) => (value === undefined ? [] : [[key, value] as const])));
