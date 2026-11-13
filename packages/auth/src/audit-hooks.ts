@@ -412,7 +412,13 @@ const MAX_DETAIL_ID_LENGTH = 256;
 const detailId = (value: unknown): string | undefined => {
     const id = stringOf(value);
 
-    if (id === undefined || id.length <= MAX_DETAIL_ID_LENGTH) {
+    // An `@` marks an email, or a URL that carries userinfo. Neither is an id, and an identifier is exempt from redaction,
+    // so it is never copied.
+    if (id === undefined || id.includes("@")) {
+        return undefined;
+    }
+
+    if (id.length <= MAX_DETAIL_ID_LENGTH) {
         return id;
     }
 

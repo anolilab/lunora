@@ -224,6 +224,7 @@ const AUDIT_REDACT_RULES = [...standardRules, ...piiRules];
  */
 const IDENTIFIER_DETAIL_KEYS: ReadonlySet<string> = new Set([
     "clientId",
+    "consentId",
     "invitationId",
     "keyId",
     "memberId",
