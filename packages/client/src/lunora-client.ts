@@ -7676,10 +7676,11 @@ class LunoraClient {
             // value dies identically — the subscription frozen with the
             // indicator still reading `connected`. Surface it to the subscriber
             // instead and leave the cached value + cursor untouched.
-            // A run that was partly held can no longer complete on this base: drop it, so a later
-            // frame merges onto the committed value and not onto the abandoned partial one.
+            // A run that was partly held, or whose first frame was refused, can no longer complete on
+            // this base: drop it, so a later frame merges onto the committed value and not onto the
+            // abandoned partial one.
             state.pendingDeltaRun = undefined;
-            this.failUndecodableFrame(state, error, pendingRun !== undefined);
+            this.failUndecodableFrame(state, error, pendingRun !== undefined || isNonFinalRunFrame(message));
 
             return;
         }
@@ -8045,14 +8046,21 @@ class LunoraClient {
             return;
         }
 
-        // The settled cursor is past rows of the held run this client never applied, so taking it would
-        // resume after them and ACK a checkpoint it does not have. The run is void: re-snapshot, since a
-        // later delta would merge onto a base that is missing its rows.
-        if (state.pendingDeltaRun === undefined) {
-            this.ackAndAdvanceCursor(state, message.cursor, message.epoch);
-        } else {
+        // A held run's rows, or a snapshot still on its way, mean this base is missing rows the server
+        // has already confirmed. The settled cursor and watermark would resume after those rows and
+        // confirm a write whose rows are absent, so they wait for the snapshot, which carries both.
+        const runHeld = state.pendingDeltaRun !== undefined;
+
+        if (runHeld) {
+            state.pendingDeltaRun = undefined;
             this.resnapshotDiscardedRun(state);
         }
+
+        if (runHeld || state.awaitingSnapshot === true) {
+            return;
+        }
+
+        this.ackAndAdvanceCursor(state, message.cursor, message.epoch);
 
         if (message.lastMutationId !== undefined) {
             // `Math.max`, like the `data`-frame and cross-tab `settled` siblings.
