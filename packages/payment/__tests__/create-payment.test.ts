@@ -2669,6 +2669,35 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
     });
 
+    it("reports a reconcile error, not the storage error, when a storage fault leaves no plan granting after a move", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // The move retires the old row and writes the new one, then the counter bump fails, so the policy steps the new row
+        // back. That step back is this call's own write, so the rollback cannot restore the old row over it.
+        store.bumpReferenceRevision = () => Promise.reject(new Error("storage unavailable"));
+
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: async () => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: "price_2" };
+            },
+            updateSubscription: async () => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: "price_2" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", singleSubscriptionPerReference: true, store });
+
+        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).rejects.toMatchObject({
+            code: "INVALID_TRANSITION",
+            message: expect.stringContaining("reconcile it"),
+        });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
+        await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ state: "paused" });
+    });
+
     it("reports a failed restore with both failures, so the subscription can be reconciled", async () => {
         expect.assertions(3);
 

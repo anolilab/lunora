@@ -101,10 +101,16 @@ const settleGrant = async (store: PaymentStore, granted: Subscription, revision:
     } catch (error) {
         // The grant's row is already written, and an unsettled grant may be the second one granting. It steps back before
         // the error goes up, so a storage failure here fails closed; the caller's retry grants it again once storage works.
+        // If the step back fails too, nothing more can be written: a later write of the row finds it already granting and
+        // runs no check, so the error names the duplicate for the operator to cancel.
         await demote().catch((demoteError: unknown) => {
-            throw new LunoraPaymentError("INVALID_TRANSITION", `subscription "${granted.id}" could not be settled or stepped back; reconcile it`, {
-                cause: { demoteError, settleError: error },
-            });
+            throw new LunoraPaymentError(
+                "INVALID_TRANSITION",
+                `subscription "${granted.id}" could not be settled or stepped back, so it may grant access alongside another subscription for its reference; a reconcile does not undo that, so cancel the duplicate`,
+                {
+                    cause: { demoteError, settleError: error },
+                },
+            );
         });
 
         throw error;

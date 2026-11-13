@@ -152,6 +152,24 @@ describe("storeSubscription — concurrent grants under singleSubscriptionPerRef
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active", updatedAt: 3 });
     });
 
+    it("names the possible duplicate when both the counter bump and the step back fail", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+        const upsert = store.upsertSubscription.bind(store);
+        let writes = 0;
+
+        store.bumpReferenceRevision = () => Promise.reject(new Error("storage unavailable"));
+        // The grant's own write lands; the step back after it fails as well.
+        store.upsertSubscription = async (record, guard) => {
+            writes += 1;
+
+            return writes === 1 ? upsert(record, guard) : Promise.reject(new Error("storage unavailable"));
+        };
+
+        await expect(storeSubscription(store, true, undefined, subscription("sub_1", "user_1", "active"))).rejects.toThrow(/cancel the duplicate/);
+    });
+
     it("does not serialize grants for different references", async () => {
         expect.assertions(2);
 

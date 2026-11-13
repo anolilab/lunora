@@ -545,14 +545,20 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         // restored: a revision another write has since moved past is left as that write made it. Nor once anything has
         // written the new row since it was read: that is the provider's own event for the new plan (active, past due, or
         // canceled), and it says what the customer has now, so the old plan stays retired.
-        const restoreRetired = async (): Promise<void> => {
+        // Says whether a plan still grants access afterwards, as far as this call can tell: the old one restored, or the new one
+        // granting because a write made it so.
+        const restoreRetired = async (): Promise<boolean> => {
             const current = await store.getSubscription(adapter.identifier, existing.id);
             const destination = await store.getSubscription(adapter.identifier, synced.id);
             const destinationUntouched = destination?.revision === target?.revision && !ENTITLING_STATES.has(destination?.state ?? "canceled");
 
             if (current?.state === "canceled" && current.revision === (existing.revision ?? 0) + 1 && destinationUntouched) {
                 await restoreSubscription(store, policy, current, existing);
+
+                return true;
             }
+
+            return ENTITLING_STATES.has(destination?.state ?? "canceled");
         };
 
         // A failed restore leaves the subscription with no plan granting access, and the caller must know that. The message
@@ -571,10 +577,16 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             outcome = await storeSubscription(store, policy, target, synced, { ifRevision: target?.revision });
         } catch (error) {
             // A failed write after the retire leaves nothing granting access, so the old row is restored before the error goes up.
+            // A restore that is skipped leaves no plan granting too, for instance when the policy stepped the new row back
+            // after a storage fault, and the caller hears the same: reconcile, not a bare storage error.
             if (retires) {
-                await restoreRetired().catch((restoreError: unknown) => {
+                const granting = await restoreRetired().catch((restoreError: unknown) => {
                     throw rollbackFailed(error, restoreError);
                 });
+
+                if (!granting) {
+                    throw rollbackFailed(error, undefined);
+                }
             }
 
             throw error;
