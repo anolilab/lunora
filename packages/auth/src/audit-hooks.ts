@@ -57,6 +57,7 @@ interface AuditHookContext {
     context?: {
         newSession?: { session?: { impersonatedBy?: string; userId?: string }; user?: { email?: string; id?: string } } | null;
         returned?: unknown;
+        secret?: string;
         session?: { session?: { impersonatedBy?: string; userId?: string }; user?: { email?: string; id?: string } } | null;
     };
     headers?: Headers;
@@ -633,6 +634,7 @@ const authAuditHook = (config: AuthAuditHookConfig): ReturnType<typeof createAut
 
             if (entry !== undefined) {
                 const persisted = await appendAuthAuditEntry(config.executor, entry, {
+                    hashKey: context.context.secret,
                     redactDetail: config.redactDetail,
                     retention: config.retention,
                 });

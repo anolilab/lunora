@@ -54,6 +54,7 @@ interface AppendAuthAuditEntry {
 ```ts
 interface AppendAuthAuditOptions {
     redactDetail?: boolean;
+    hashKey?: string;
     retention?: number;
 }
 ```
@@ -1974,6 +1975,7 @@ interface AuditHookContext {
             };
         } | null;
         returned?: unknown;
+        secret?: string;
         session?: {
             session?: {
                 impersonatedBy?: string;
