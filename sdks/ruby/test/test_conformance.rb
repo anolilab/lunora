@@ -347,6 +347,16 @@ class TestWsFrames < Minitest::Test
     end
   end
 
+  def test_delta_runs_are_held_until_their_last_frame
+    cases = fixture("ws-frames.json")["pageDeltaRunCases"]
+    assert_equal 4, cases.length, "pageDeltaRunCases must carry all four cases"
+
+    cases.each do |entry|
+      client, sent, seen, errors = delta_case_client(entry)
+      run_delta_steps(entry, client, sent, seen, errors)
+    end
+  end
+
   def test_identity_change_evicts_the_cached_base_and_the_poison
     cases = fixture("ws-frames.json")["identityChangeEvictionCases"]
     assert_equal 2, cases.length, "identityChangeEvictionCases must carry both cases"

@@ -447,6 +447,7 @@ module Lunora
     def attach_socket(sender, context = nil)
       generation, connect = @mutex.synchronize do
         @send = nil
+        discard_held_runs
         @attach_generation += 1
         @socket_generation = @credential_generation
         [@attach_generation,
@@ -481,6 +482,7 @@ module Lunora
     def detach_socket(close_code = nil, reason = nil)
       expired = @mutex.synchronize do
         @send = nil
+        discard_held_runs
         @attach_generation += 1
         expiry_notified_by_close?(close_code, reason)
       end
@@ -578,6 +580,7 @@ module Lunora
         # An attach still in flight is superseded, so its sender is never installed after shutdown.
         @attach_generation += 1
         @send = nil
+        discard_held_runs
         [@offline_queue.clear, @streams.slice!(0..)]
       end
 
@@ -615,7 +618,7 @@ module Lunora
         id = "sub_#{@next_id}"
         @subscriptions[id] = {
           args: args, args_key: Lunora.stable_wire_key(args.nil? ? {} : args), cursor: nil, epoch: nil,
-          function_path: function_path, on_data: on_data, on_error: on_error, poisoned: false, shard_key: shard_key,
+          function_path: function_path, on_data: on_data, on_error: on_error, poisoned: false, run: nil, shard_key: shard_key,
           state: Optimistic::State.build(nil, on_data.nil? ? [] : [on_data])
         }
         Lunora.build_subscribe_frame(id, function_path, args)
@@ -708,6 +711,8 @@ module Lunora
           # The resume position is still before any dropped change, so the replay
           # re-applies it; if it is still unmergeable the flag is set again.
           entry[:poisoned] = false
+          # The cursor still sits before the run, so the server replays all of it.
+          entry[:run] = nil
           Lunora.build_subscribe_frame(
             id, entry[:function_path], entry[:args],
             since_seq: entry[:cursor], since_epoch: entry[:epoch]
@@ -979,6 +984,8 @@ module Lunora
       begin
         value = Lunora.decode_wire(payload)
       rescue WireFormatError => e
+        # A run with a frame missing can no longer be completed.
+        entry[:run] = nil if entry
         # Delivered to the ONE subscription the frame is addressed to, never
         # raised out of +handle_frame+: the caller is a socket read loop, so a
         # raise here ends it and with it every other subscription on this client
@@ -994,14 +1001,21 @@ module Lunora
         is_data = kind == "data"
 
         # A snapshot is authoritative, so it ends a poisoned run.
-        entry[:poisoned] = false if is_data
+        if is_data
+          entry[:poisoned] = false
+          entry[:run] = nil
+        end
 
         # Once a row change has been dropped, every later delta is ignored, even
         # one carrying a cursor: advancing would move the resume position past
         # the dropped change and a reconnect would never replay it.
         return kind if entry[:poisoned]
 
-        value = Delta.resolve_data_payload(value, is_data, state.server_base)
+        # A frame that is not a row change replaces the base, so a run held
+        # against the old base can no longer commit onto it.
+        entry[:run] = nil unless is_data || Delta.mutation_delta?(value)
+        held = entry[:run]
+        value = Delta.resolve_data_payload(value, is_data, held.nil? ? state.server_base : held)
 
         # A row change that cannot be merged into the base is never published as
         # the result. This port has no resubscribe-for-snapshot path, so the
@@ -1009,6 +1023,7 @@ module Lunora
         # the subscription is poisoned so the cursor stays before the lost change.
         if value.equal?(UNMERGEABLE_DELTA)
           entry[:poisoned] = true
+          entry[:run] = nil
           # Reported once, when the freeze starts: an app that stays silent shows a stale list.
           handler = entry[:on_error]
           if handler
@@ -1018,6 +1033,15 @@ module Lunora
           return kind
         end
 
+        # A frame marked +more+ opens or extends a run: it merges onto the held
+        # payload and nothing is published or advanced until the run's last frame,
+        # so a drop mid-run resumes from the cursor before the run.
+        if !is_data && frame["more"] == true
+          entry[:run] = value
+          return kind
+        end
+
+        entry[:run] = nil
         advance(entry, frame)
         state.server_base = value
         state.server_cursor = entry[:cursor] if entry[:cursor].is_a?(Integer)
@@ -1042,6 +1066,10 @@ module Lunora
       # A poisoned subscription ignores this frame too: its cursor would move the
       # resume position past the dropped row change.
       return kind if entry && entry[:poisoned]
+
+      # A resume frame replays from the committed cursor; a settled frame only
+      # reports progress and leaves the held run alone.
+      entry[:run] = nil if entry && kind == "resume"
 
       if entry
         advance(entry, frame)
@@ -1287,6 +1315,12 @@ module Lunora
       shape[:rows][key] = operation["value"]
     end
 
+    # Held frames are never committed, so any teardown of the socket they arrived
+    # on just forgets them. Runs with the lock held.
+    def discard_held_runs
+      @subscriptions.each_value { |entry| entry[:run] = nil }
+    end
+
     # Retire the previous identity's session; see +identity=+. Runs with the
     # lock held, so the shape callbacks are queued onto +deferred+.
     def evict_identity_session(deferred)
@@ -1294,6 +1328,7 @@ module Lunora
         entry[:cursor] = nil
         entry[:epoch] = nil
         entry[:poisoned] = false
+        entry[:run] = nil
         # A cached base belongs to the previous identity; a row change must not merge into it.
         entry[:state].server_base = nil
       end
