@@ -1137,8 +1137,9 @@ describe("work queued for a socket that has since lapsed", () => {
 
         const deltas = (ws: FakeWebSocket) => ws.sent.filter((frame) => frame.includes('"type":"delta"')).length;
 
-        // The authenticated socket gets none for the table-only sub; the anonymous one and a named sub still do.
-        expect([deltas(claimed), deltas(anonymous), deltas(named)]).toStrictEqual([0, 1, 1]);
+        // The authenticated socket's table-only sub gets none, the anonymous table-only sub still gets one, and
+        // the named sub gets none because the shard serves it by re-execution, which applies its own RLS and query filter.
+        expect([deltas(claimed), deltas(anonymous), deltas(named)]).toStrictEqual([0, 1, 0]);
         expect(claimed.closes).toStrictEqual([]);
         expect(Object.keys(claimed.attachment?.subs ?? {})).toStrictEqual(["table-only"]);
     });

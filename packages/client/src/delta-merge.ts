@@ -43,8 +43,10 @@ interface MutationDelta {
     row?: Record<string, unknown>;
 
     /**
-     * The query's only read table, or `"__lunora__"` when it read several, none, or
-     * depends on every table. The merge never uses it (protocol README §5.1.1).
+     * On a re-execution delta, the query's only read table, or `"__lunora__"` when it
+     * read several, none, or depends on every table. On a `broadcastDelta` frame, the
+     * string the server stamped (the subscription's registered `table`). The merge
+     * never uses it (protocol README §5.1.1).
      */
     table: string;
 }

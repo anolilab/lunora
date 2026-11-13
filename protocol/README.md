@@ -535,7 +535,10 @@ defaults to 1 MiB and closes with `1009`, on every reconnect) must raise it.
 
 `subscribe.query.args` is `encodeWire(args)`. `functionPath` selects the query
 the server re-executes; `table` addresses the legacy raw-delta fan-out
-(`ShardDO.broadcastDelta`), which compares it to `delta.table` verbatim. A client
+(`ShardDO.broadcastDelta`), which compares it to `delta.table` verbatim. A subscription
+the server serves by re-execution (every `__lunora_admin__:` and flag subscription,
+and every subscription with a `functionPath` on a shard that re-runs queries) never receives a
+`broadcastDelta` frame, so one subscription id is fed by exactly one of the two paths. A client
 that has no table name to give sends the function path there — `@lunora/client`
 always does, because a function reference carries only its `namespace:fn` id — so
 those subscriptions are fed by re-execution alone. The non-JS SDKs carry `table`
@@ -636,14 +639,18 @@ page deltas when every field outside `page` is byte-identical to the last
 delivered value, so a moved `continueCursor` or a flipped `isDone` always arrives
 as a full `data` snapshot instead.
 
-**`delta.table`.** A row delta's `table` is a real table name only when the query's read set is
-exactly one table and nothing else. A query that read several tables, read none, or depends on
-every table (the admin wildcard behind Studio's live views, whose result may depend on any table)
-gets the placeholder `"__lunora__"` instead (a leading `__` is reserved for framework tables, so
-no user table has that name). The server diffs the
-query's result, whose rows carry no record of their source table, so it cannot name the table
-of each row. A client MUST NOT route, key or filter by this field: the merge is by `key` / `_id`
-alone, and `table` only marks the payload as a row delta (it must be a string).
+**`delta.table`.** A **re-execution** row delta's `table` is a real table name only when the
+query's read set is exactly one table and nothing else. A query that read several tables, read
+none, or depends on every table (the admin wildcard behind Studio's live views, whose result may
+depend on any table) gets the placeholder `"__lunora__"` instead (a leading `__` is reserved for
+framework tables, so no user table has that name). The server diffs the query's result, whose rows
+carry no record of their source table, so it cannot name the table of each row. A
+`broadcastDelta` frame (§5.1, legacy raw-delta fan-out) carries the string the server stamped on
+the write, which under the default matcher equals the subscription's own registered `table` (the
+written table, on the `createShardCtxDb` route); its `row` is the written row as stored, not
+filtered by the subscriber's query, row-level security or column masks. A client MUST NOT route,
+key or filter by this field: the merge is by `key` / `_id` alone, and `table` only marks the
+payload as a row delta (it must be a string).
 
 **Insert placement.** An `insert` op carries no index, so a merging client
 decides the position itself: if the new row and its neighbours all carry a
