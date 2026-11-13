@@ -1310,10 +1310,10 @@ func TestPageDeltaRunsAreHeldUntilTheirLastFrame(t *testing.T) {
 }
 
 // TestUndecodableDeltaRunFrameFreezesTheSubscription drives ws-frames.json's
-// undecodableDeltaRunCases: a run frame the decoder refuses reports once, discards the run
+// undecodableDeltaRunCases: a delta frame the decoder refuses reports once, discards the run
 // and freezes the subscription like an unmergeable row change.
 func TestUndecodableDeltaRunFrameFreezesTheSubscription(t *testing.T) {
-	runDeltaStepCases(t, "undecodableDeltaRunCases", 1)
+	runDeltaStepCases(t, "undecodableDeltaRunCases", 2)
 }
 
 // TestAttachingASocketDiscardsEveryHeldRun pins that a run held on one socket never finishes

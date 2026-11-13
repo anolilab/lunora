@@ -1928,6 +1928,87 @@ describe("lunoraClient", () => {
             vi.useRealTimers();
         });
 
+        it("sends no subscribe when an error callback removes the subscription that a refused run frame cut short", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const registration: { unsubscribe?: () => void } = {};
+
+            registration.unsubscribe = client.subscribe(fnRef("messages:list"), {}, () => undefined, {
+                // The last listener leaves inside its own error callback.
+                onError: () => registration.unsubscribe?.(),
+            });
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const subId = firstSub(socket).id as string;
+
+            socket.receive({ id: subId, type: "ack" });
+            socket.receive({ cursor: 5, data: [{ _id: "a" }, { _id: "b" }], epoch: "e1", id: subId, type: "data" });
+            socket.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: subId, more: true, type: "delta" });
+
+            let deep: unknown = 1;
+
+            for (let level = 0; level < 80; level += 1) {
+                deep = { a: deep };
+            }
+
+            socket.receive({ delta: { key: "c", op: "insert", row: deep, table: "messages" }, id: subId, more: true, type: "delta" });
+
+            const subscribes = socket.sent.map((frame) => JSON.parse(frame) as { type?: string }).filter((frame) => frame.type === "subscribe");
+
+            // The subscription is gone, so recovery must not send a subscribe for it.
+            expect(subscribes).toHaveLength(1);
+
+            client.close();
+        });
+
+        it("keeps a delta from committing onto a base that a settled frame was taken against after a refused single delta", () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+            const received: unknown[] = [];
+            const errors: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d), { onError: (error) => errors.push(error) });
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const subId = firstSub(socket).id as string;
+
+            socket.receive({ id: subId, type: "ack" });
+            socket.receive({ cursor: 5, data: [{ _id: "a" }, { _id: "b" }], epoch: "e1", id: subId, type: "data" });
+
+            let deep: unknown = 1;
+
+            for (let level = 0; level < 80; level += 1) {
+                deep = { a: deep };
+            }
+
+            // A lone refused delta: its row never reaches the base, and it is not a run.
+            socket.receive({ cursor: 6, delta: { key: "c", op: "insert", row: deep, table: "messages" }, id: subId, type: "delta" });
+            // A later valid delta must not commit onto the base that is missing that row.
+            socket.receive({ cursor: 7, delta: { key: "a", op: "delete", table: "messages" }, id: subId, type: "delta" });
+
+            expect(errors).toHaveLength(1);
+            expect(received.at(-1)).toStrictEqual([{ _id: "a" }, { _id: "b" }]);
+
+            client.close();
+        });
+
         it("does not forward the watermark of a settled frame that cuts a held run short", () => {
             expect.assertions(1);
 

@@ -1139,6 +1139,83 @@
                     }
                 }
             ]
+        },
+        {
+            "name": "undecodable-single-delta-freezes-the-subscription",
+            "$comment": "A lone delta the decoder refuses is a row change that never reaches the base, so it freezes the subscription like a refused run frame. It reports WIRE_DECODE_FAILED once. A later valid delta must not commit onto the base missing that row: the cursor stays put and the resume after the freeze replays from before it (protocol README 5.4).",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": {
+                            "key": "m1",
+                            "op": "update",
+                            "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE", "n": ["$lunora.wire$", "bigint", "not-a-number"] },
+                            "table": "messages"
+                        },
+                        "cursor": 6,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0,
+                    "errors": ["WIRE_DECODE_FAILED"]
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m2", "op": "update", "row": { "_creationTime": 1002, "_id": "m2", "text": "TWO" }, "table": "messages" },
+                        "cursor": 7,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0
+                },
+                {
+                    "resume": {
+                        "sinceSeq": 5,
+                        "sinceEpoch": "e1"
+                    }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "data",
+                        "data": {
+                            "continueCursor": "c_3",
+                            "isDone": false,
+                            "page": [
+                                { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                                { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                            ]
+                        },
+                        "cursor": 8,
+                        "epoch": "e2"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_3",
+                        "isDone": false,
+                        "page": [
+                            { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                            { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                        ]
+                    }
+                }
+            ]
         }
     ],
     "identityChangeEvictionCases": [

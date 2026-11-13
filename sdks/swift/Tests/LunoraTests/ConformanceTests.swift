@@ -695,7 +695,7 @@ final class ConformanceTests: XCTestCase {
         try runDeltaFrameCases("pageDeltaPoisonCases", count: 3)
         try runDeltaFrameCases("identityChangeEvictionCases", count: 2)
         try runDeltaFrameCases("pageDeltaRunCases", count: 5)
-        try runDeltaFrameCases("undecodableDeltaRunCases", count: 1)
+        try runDeltaFrameCases("undecodableDeltaRunCases", count: 2)
     }
 
     /// Drives one fixture list of `seedFrame` + `steps` cases against a fresh client.

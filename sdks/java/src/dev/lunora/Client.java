@@ -1606,12 +1606,9 @@ public final class Client {
                         Subscription entry = subscriptions.get(id);
 
                         if (entry != null) {
-                            // A run frame the decoder refuses leaves the run incomplete: drop it
-                            // and freeze, so a later frame cannot commit past the refused row.
-                            boolean runFrame =
-                                    "delta".equals(kind)
-                                            && (Boolean.TRUE.equals(frame.get("more"))
-                                                    || entry.holding);
+                            // A refused row change never reaches the base, so drop any held run and
+                            // freeze: a later frame cannot commit past the refused row.
+                            boolean runFrame = "delta".equals(kind);
 
                             discardRun(entry);
 

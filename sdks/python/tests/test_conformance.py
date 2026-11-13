@@ -355,7 +355,7 @@ class TestWsFrameConsumer(unittest.TestCase):
         self._replay_delta_cases("pageDeltaRunCases")
         self.assertEqual(len(load("ws-frames.json")["pageDeltaRunCases"]), 5)
         self._replay_delta_cases("undecodableDeltaRunCases")
-        self.assertEqual(len(load("ws-frames.json")["undecodableDeltaRunCases"]), 1)
+        self.assertEqual(len(load("ws-frames.json")["undecodableDeltaRunCases"]), 2)
 
     def _client_holding_a_run(self, sender):
         case = load("ws-frames.json")["pageDeltaRunCases"][0]

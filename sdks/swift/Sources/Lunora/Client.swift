@@ -1250,9 +1250,9 @@ public final class LunoraClient {
                 let notices = withLock { () -> [(handler: (LunoraSubscriptionError) -> Void, code: String)] in
                     guard let id, let entry = subscriptions[id] else { return [] }
 
-                    // A run frame the decoder refuses leaves the run incomplete, so the run is
-                    // dropped and the subscription frozen; a later frame must not commit past it.
-                    let isRunFrame = kind == "delta" && (frame["more"] as? Bool == true || entry.hasPendingRun)
+                    // A refused row change never reaches the base, so the run is dropped and the
+                    // subscription frozen; a later frame must not commit past it.
+                    let isRunFrame = kind == "delta"
 
                     entry.discardRun()
 

@@ -784,11 +784,11 @@ fn a_delta_run_commits_once_on_its_last_frame() {
     run_page_delta_cases("pageDeltaRunCases", 5);
 }
 
-/// A run frame the decoder refuses reports once, discards the run and freezes the
+/// A delta frame the decoder refuses reports once, discards the run and freezes the
 /// subscription like an unmergeable row change.
 #[test]
 fn an_undecodable_run_frame_freezes_the_subscription() {
-    run_page_delta_cases("undecodableDeltaRunCases", 1);
+    run_page_delta_cases("undecodableDeltaRunCases", 2);
 }
 
 /// Attaching a socket, over a live one or after a failed open, discards every held run: it

@@ -1059,7 +1059,7 @@ private fun failedResendKeepsTheSubscriptionFrozen() {
 /** A run of `more: true` deltas is held and publishes once, on its last frame. */
 private fun deltaRunsCommitOnTheirLastFrame() {
     runDeltaCases("pageDeltaRunCases", 5)
-    runDeltaCases("undecodableDeltaRunCases", 1)
+    runDeltaCases("undecodableDeltaRunCases", 2)
 }
 
 /** Attaching a socket over a live one voids every held run: the old socket's rest of it is not coming. */

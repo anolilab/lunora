@@ -7631,8 +7631,9 @@ class LunoraClient {
             message: `could not decode a server frame for this subscription — ${error instanceof Error ? error.message : String(error)}`,
         });
 
-        // The refused frame's rows never applied, so the rest of the run cannot either.
-        if (heldRun) {
+        // The refused frame's rows never applied, so the rest of the run cannot either. The error
+        // callback may have removed the last listener; a removed subscription has nothing to recover.
+        if (heldRun && this.subscriptions.getById(state.id) === state) {
             this.resnapshotDiscardedRun(state);
         }
 
@@ -7676,11 +7677,11 @@ class LunoraClient {
             // value dies identically — the subscription frozen with the
             // indicator still reading `connected`. Surface it to the subscriber
             // instead and leave the cached value + cursor untouched.
-            // A run that was partly held, or whose first frame was refused, can no longer complete on
-            // this base: drop it, so a later frame merges onto the committed value and not onto the
-            // abandoned partial one.
+            // A refused row change never reaches the base, so a later frame must not merge onto a base
+            // missing it: drop any held run and recover. A refused `data` frame is not a row change
+            // and stays a plain error.
             state.pendingDeltaRun = undefined;
-            this.failUndecodableFrame(state, error, pendingRun !== undefined || isNonFinalRunFrame(message));
+            this.failUndecodableFrame(state, error, message.type === "delta");
 
             return;
         }

@@ -393,7 +393,7 @@ class TestWsFrames < Minitest::Test
 
   def test_an_undecodable_run_frame_freezes_the_subscription
     cases = fixture("ws-frames.json")["undecodableDeltaRunCases"]
-    assert_equal 1, cases.length, "undecodableDeltaRunCases must carry its one case"
+    assert_equal 2, cases.length, "undecodableDeltaRunCases must carry its two cases"
 
     cases.each do |entry|
       client, sent, seen, errors = delta_case_client(entry)
