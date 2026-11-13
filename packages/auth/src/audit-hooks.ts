@@ -459,8 +459,10 @@ const refineEvent = (context: AuditHookContext, event: AuthAuditEvent): AuthAudi
     let refined: AuthAuditEvent | undefined = event;
 
     if (event === "sign-in" && path.endsWith("/phone-number/verify")) {
-        // Without `updatePhoneNumber` the code signs the caller in; with it, the number is attached to an existing account.
-        refined = context.body?.["updatePhoneNumber"] === true ? "phone-verification" : "sign-in";
+        // Without `updatePhoneNumber` the code signs the caller in, unless sessions are disabled: a verified number then comes
+        // back with no token, and nobody is signed in. With `updatePhoneNumber` the number is attached to an existing account.
+        const signsIn = context.body?.["updatePhoneNumber"] !== true && fieldOf(returned, "token") !== null;
+        refined = signsIn ? "sign-in" : "phone-verification";
     } else if (event === "user-delete" && path.endsWith("/delete-user") && stringOf(fieldOf(returned, "message")) === "Verification email sent") {
         refined = "user-delete-request";
     } else if (event === "sign-in" && path.endsWith("/device/token") && pendingDevicePoll) {
