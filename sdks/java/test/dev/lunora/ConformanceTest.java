@@ -946,8 +946,8 @@ public final class ConformanceTest {
         List<Object> cases = (List<Object>) fixture("ws-frames.json").get("pageDeltaFrames");
 
         check(
-                cases.size() == 8,
-                "ws-frames.json must carry 8 pageDeltaFrames, got " + cases.size());
+                cases.size() == 9,
+                "ws-frames.json must carry 9 pageDeltaFrames, got " + cases.size());
 
         for (Object entry : cases) {
             Map<String, Object> testCase = (Map<String, Object>) entry;

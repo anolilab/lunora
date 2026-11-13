@@ -2,6 +2,7 @@ import { serialize } from "node:v8";
 
 import { LunoraError } from "@lunora/errors";
 import type { IndexKeyEntry, KeyRange, MutationDelta, SocketAttachment, SubscriptionEnvelope, TransactionHeadroomTracker } from "@lunora/shard-engine";
+import { DELTA_PLACEHOLDER_TABLE, UNVOUCHABLE_DEP } from "@lunora/shard-engine";
 import { encodeWire } from "@lunora/wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -1839,6 +1840,54 @@ describe("shardDO subscription delta push", () => {
 
         expect(last).toMatchObject({ id: "sub-1", type: "delta" });
         expect(last.delta).toEqual({ key: "b", op: "insert", row: idRow("b", { text: "hi" }), table: "messages" });
+    });
+
+    it("a query that read two tables stamps the placeholder, not the first table, on a row delta", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a")], tables: new Set(["members", "messages"]) });
+
+        await subscribeMessages(shard, ws);
+
+        shard.outcomes.set("messages:list", {
+            result: [...filler(16), idRow("a"), idRow("b", { text: "hi" })],
+            tables: new Set(["members", "messages"]),
+        });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const last = JSON.parse(ws.sent.at(-1)!);
+
+        expect(last).toMatchObject({ id: "sub-1", type: "delta" });
+        expect(last.delta).toStrictEqual({ key: "b", op: "insert", row: idRow("b", { text: "hi" }), table: DELTA_PLACEHOLDER_TABLE });
+    });
+
+    it("a single-table query still names its table, even after an unvouchable read", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a")], tables: new Set(["messages", UNVOUCHABLE_DEP]) });
+
+        await subscribeMessages(shard, ws);
+
+        shard.outcomes.set("messages:list", {
+            result: [...filler(16), idRow("a"), idRow("b", { text: "hi" })],
+            tables: new Set(["messages", UNVOUCHABLE_DEP]),
+        });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const last = JSON.parse(ws.sent.at(-1)!);
+
+        expect(last).toMatchObject({ id: "sub-1", type: "delta" });
+        expect(last.delta).toStrictEqual({ key: "b", op: "insert", row: idRow("b", { text: "hi" }), table: "messages" });
     });
 
     it("a non-list result still pushes a data snapshot on a subsequent change", async () => {

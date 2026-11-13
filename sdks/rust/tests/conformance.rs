@@ -633,7 +633,7 @@ fn page_delta_frames_merge_into_the_cached_result() {
     let document = fixture("ws-frames.json");
     let cases = document["pageDeltaFrames"].as_array().expect("pageDeltaFrames");
 
-    assert_eq!(cases.len(), 8, "pageDeltaFrames must carry the eight merge cases");
+    assert_eq!(cases.len(), 9, "pageDeltaFrames must carry the nine merge cases");
 
     for case in cases {
         let name = case["name"].as_str().unwrap_or("?");

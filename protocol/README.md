@@ -636,6 +636,13 @@ page deltas when every field outside `page` is byte-identical to the last
 delivered value, so a moved `continueCursor` or a flipped `isDone` always arrives
 as a full `data` snapshot instead.
 
+**`delta.table`.** A row delta's `table` names the table the query read when it read exactly one;
+a query that read several tables, or none, gets the placeholder `"__lunora__"` instead (a leading
+`__` is reserved for framework tables, so no user table has that name). The server diffs the
+query's result, whose rows carry no record of their source table, so it cannot name the table
+of each row. A client MUST NOT route, key or filter by this field: the merge is by `key` / `_id`
+alone, and `table` only marks the payload as a row delta (it must be a string).
+
 **Insert placement.** An `insert` op carries no index, so a merging client
 decides the position itself: if the new row and its neighbours all carry a
 numeric `_creationTime`, insert before the first neighbour that breaks the

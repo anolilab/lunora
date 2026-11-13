@@ -16,15 +16,42 @@
 import { encodeWire, isPlainObject, needsWireEncoding, stableStringify } from "@lunora/wire";
 
 import { ID_FIELD, insertionIndexFor, PAGE_DELTA_CAPABILITY, PAGE_FIELD } from "../../../shared/page-result";
+import { UNVOUCHABLE_DEP } from "./read-footprint";
 import type { MutationDelta } from "./types";
 
 /**
- * Fallback table name stamped on a delta when the subscription's read-table
- * set is empty. The client only uses `table` for its structural guard
- * ({@link MutationDelta} recognition) — `key`/`row`/`op` drive the actual
- * merge — so any non-empty string is safe.
+ * The `table` stamped on a row delta when the subscription's read set does not
+ * name exactly one table (several, or none). A result row carries no record of
+ * the table it came from, so the server cannot name the source of each changed
+ * row. The leading `__` is reserved by `isInternalTableName`, so no user table
+ * can collide with it. Clients merge by `key` and must not route by `table`
+ * (protocol README §5.1.1).
  */
-const DELTA_FALLBACK_TABLE = "__lunora__";
+const DELTA_PLACEHOLDER_TABLE = "__lunora__";
+
+/**
+ * The `table` a subscription's row deltas carry: the one table it read, or
+ * {@link DELTA_PLACEHOLDER_TABLE} when it read several or none. Naming the
+ * first of several would claim every changed row came from that table.
+ * @returns the single read table, or the placeholder
+ */
+const deltaTableFor = (tables: Iterable<string>): string => {
+    let only: string | undefined;
+
+    for (const table of tables) {
+        if (table === UNVOUCHABLE_DEP) {
+            continue;
+        }
+
+        if (only !== undefined) {
+            return DELTA_PLACEHOLDER_TABLE;
+        }
+
+        only = table;
+    }
+
+    return only ?? DELTA_PLACEHOLDER_TABLE;
+};
 
 /**
  * Read a row's `_id` as a string; `undefined` when the row isn't a plain object with a string `_id`.
@@ -301,7 +328,7 @@ const collectFramedDeltas = (previousJson: string, nextResult: unknown, table: s
         return undefined;
     }
 
-    const deltaTable = table === "" ? DELTA_FALLBACK_TABLE : table;
+    const deltaTable = table === "" ? DELTA_PLACEHOLDER_TABLE : table;
     const tableJson = JSON.stringify(deltaTable);
     // Deletes precede upserts so the client never sees a transient over-length page.
     const framed = [...collectDeleteDeltas(previous, next, deltaTable, tableJson), ...collectUpsertDeltas(previous, next, deltaTable, tableJson)];
@@ -444,7 +471,7 @@ interface SubscriptionFrameInput {
     snapshotJson: string;
     /** The subscription id the frames are addressed to. */
     subId: string;
-    /** The table stamped on each delta; `""` falls back to {@link DELTA_FALLBACK_TABLE}. */
+    /** The table stamped on each delta; `""` falls back to {@link DELTA_PLACEHOLDER_TABLE}. */
     table: string;
 }
 
@@ -580,4 +607,4 @@ const awaitWsDrain = async (ws: DrainableSink): Promise<void> => {
 };
 
 export type { DrainableSink, FrameSink, SubscriptionFrameInput };
-export { awaitWsDrain, subscriptionFrames, subscriptionListDeltas, trySendFrame };
+export { awaitWsDrain, DELTA_PLACEHOLDER_TABLE, deltaTableFor, subscriptionFrames, subscriptionListDeltas, trySendFrame };

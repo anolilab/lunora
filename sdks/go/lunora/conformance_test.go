@@ -1031,8 +1031,8 @@ func TestPendingPokeBuffersAreBounded(t *testing.T) {
 // delta frame must merge into it rather than publish the row-change envelope.
 func TestPageDeltaFramesMergeIntoTheCachedResult(t *testing.T) {
 	cases, _ := loadFixture(t, "ws-frames.json")["pageDeltaFrames"].([]any)
-	if len(cases) != 8 {
-		t.Fatalf("fixture has %d pageDeltaFrames, want 8", len(cases))
+	if len(cases) != 9 {
+		t.Fatalf("fixture has %d pageDeltaFrames, want 9", len(cases))
 	}
 
 	for _, entry := range cases {

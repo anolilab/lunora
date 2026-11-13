@@ -902,7 +902,7 @@ private fun rowDeltaFramesMergeIntoTheBase() {
 
     val cases = fixture("ws-frames.json")["pageDeltaFrames"] as List<*>
 
-    check(cases.size == 8, "pageDeltaFrames must carry 8 cases, got ${cases.size}")
+    check(cases.size == 9, "pageDeltaFrames must carry 9 cases, got ${cases.size}")
 
     for (entry in cases) {
         val testCase = entry as Map<*, *>

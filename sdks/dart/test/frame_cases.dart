@@ -113,7 +113,7 @@ void caseServerFrameConsumer() {
 void casePageDeltaFramesMergeIntoTheBase() {
   final cases = objectList(fixture('ws-frames.json')['pageDeltaFrames']);
 
-  equals(cases.length, 8, 'pageDeltaFrames must carry its eight cases');
+  equals(cases.length, 9, 'pageDeltaFrames must carry its nine cases');
 
   for (final testCase in cases) {
     final name = testCase['name'];
