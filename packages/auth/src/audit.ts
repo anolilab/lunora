@@ -250,7 +250,8 @@ const redactDetail = (detail: Record<string, unknown>): Record<string, unknown> 
     const identifiers = Object.fromEntries(
         Object.entries(detail).filter(([key, value]) => IDENTIFIER_DETAIL_KEYS.has(key) && typeof value === "string" && OPAQUE_IDENTIFIER.test(value)),
     );
-    const rest = Object.fromEntries(Object.entries(detail).filter(([key]) => !(key in identifiers)));
+    const kept = new Set(Object.keys(identifiers));
+    const rest = Object.fromEntries(Object.entries(detail).filter(([key]) => !kept.has(key)));
 
     return { ...redact(maskCredentials(rest) as Record<string, unknown>, AUDIT_REDACT_RULES), ...identifiers };
 };
