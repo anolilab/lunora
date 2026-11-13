@@ -15,9 +15,11 @@
 - **Depends on**: none
 - **Planned at**: commit `90c9b63f4` (origin/alpha), 2026-11-12. Supersedes the 2026-11-11 draft
   written at `4a7c48bfd`; the recount below was redone at `90c9b63f4`.
-- **State**: DONE: PR anolilab/lunora#1590 (17 aligned, 6 allowlisted; the tanstack router/start
-  pair moved to the allowlist after the first run, see below). Step 2's table lists all 19
-  candidates; the shipped change reverts the two tanstack rows.
+- **State**: DONE — PR anolilab/lunora#1590. Final: 19 names aligned, `jiti` loosened, allowlist = the
+  3 Solid 2 entries. Commits: 69f0b343d (17 web alignments), bde7949b9 (gate), c96af8392 (TanStack
+  pair + `start-static-server-functions` 1.167.39 → 1.167.44, docs `.inputValidator` → `.validator`),
+  16fd45fb5 (`fix(cli)`: jiti `2.7.0` → `^2.7.0`, a published range change), 503b92246 (filter
+  covers `scripts/workspace-config.js`, from a review-bot finding).
 
 ## Why this matters
 
@@ -287,3 +289,21 @@ Paste the outputs of 1–3 in the report. Commit 2 (stage `scripts/check-catalog
   codegen/config) or keep the CLI exact on purpose and say so in a comment.
 - The `web` catalog now uses carets for these 19 names; `saveExact: true` still makes new entries
   exact by default, so the gate (not convention) is what keeps them equal.
+
+## Follow-up (2026-11-13, owner decisions)
+
+- **TanStack pair aligned.** `start-static-server-functions@1.167.44` is the companion release:
+  it is built on `start-client-core@1.170.39` and `router-core@1.171.39` and peers react-start
+  `^1.169.4`. Devtools 1.167.2 only peers on router-core, so it stays. The lockfile went from two
+  router-core versions (1.171.34 and 1.171.39) to one (1.171.39), and only the `apps/docs` importer
+  changed. react-start 1.169 renamed `.inputValidator()` to `.validator()` in both types and
+  runtime, so two docs loaders changed one line each.
+- **jiti loosened.** The `cli` catalog moves to `^2.7.0`. The resolved version stays 2.7.0, and
+  the only lockfile change is the catalog specifier line. It is typed `fix(cli)` to get a release
+  note, but the repo squash-merges PRs, so the PR title's type decides the release.
+- **Review-bot finding:** the `dependency_manifests` filter now lists `scripts/workspace-config.js`.
+- **Execution notes:**
+    - `fetch-stats.js` in the docs build was rate-limited by its external API, so the docs build ran
+      every step except that one.
+    - The docs `lint:eslint` script fails on an unmodified tree too, so it is not used as a gate.
+    - The cli test `codegen-watch` timed out in the full run and passed when run alone.
