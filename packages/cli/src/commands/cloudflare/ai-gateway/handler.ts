@@ -38,7 +38,7 @@ const DOCS = {
 /** The subset of the wrangler config this command reads. */
 interface WranglerAiShape {
     account_id?: unknown;
-    env?: Record<string, { vars?: Record<string, unknown> } | null | undefined>;
+    env?: Record<string, { account_id?: unknown; vars?: Record<string, unknown> } | null | undefined>;
     name?: unknown;
     vars?: Record<string, unknown>;
 }
@@ -157,6 +157,8 @@ const writeVariables = (
 
 /** The vars block this run writes: the top level, or one environment's. */
 interface VariablesTarget {
+    /** The `account_id` wrangler deploys this target to: an environment's own, else the top-level one. */
+    accountId: unknown;
     current: Record<string, unknown> | undefined;
     /** How the block is named in messages: `vars` or `env.<name>.vars`. */
     label: string;
@@ -169,10 +171,11 @@ interface VariablesTarget {
  */
 const resolveVariablesTarget = (options: AiCommandOptions, parsed: WranglerAiShape): AiCommandResult | VariablesTarget => {
     if (options.env === undefined) {
-        return { current: parsed.vars, label: "vars", path: ["vars"] };
+        return { accountId: parsed.account_id, current: parsed.vars, label: "vars", path: ["vars"] };
     }
 
-    const block = parsed.env?.[options.env];
+    // An own property only: `--env __proto__` would otherwise resolve to `Object.prototype` and pass the object check.
+    const block = parsed.env !== undefined && Object.hasOwn(parsed.env, options.env) ? parsed.env[options.env] : undefined;
 
     if (typeof block !== "object" || block === null) {
         return fail(
@@ -182,7 +185,7 @@ const resolveVariablesTarget = (options: AiCommandOptions, parsed: WranglerAiSha
         );
     }
 
-    return { current: block.vars, label: `env.${options.env}.vars`, path: ["env", options.env, "vars"] };
+    return { accountId: block.account_id ?? parsed.account_id, current: block.vars, label: `env.${options.env}.vars`, path: ["env", options.env, "vars"] };
 };
 
 /**
@@ -190,7 +193,7 @@ const resolveVariablesTarget = (options: AiCommandOptions, parsed: WranglerAiSha
  * them into environments, so an environment-deployed Worker keeps the default
  * gateway. Name the environments so the user can re-run for each one.
  */
-const warnIfEnvironmentsSkipped = (options: AiCommandOptions, parsed: WranglerAiShape): void => {
+const warnIfEnvironmentsSkipped = (options: AiCommandOptions, parsed: WranglerAiShape, verb: "would write" | "wrote"): void => {
     const names = Object.keys(parsed.env ?? {});
 
     if (options.env !== undefined || names.length === 0) {
@@ -198,7 +201,7 @@ const warnIfEnvironmentsSkipped = (options: AiCommandOptions, parsed: WranglerAi
     }
 
     options.logger.warn(
-        `ai-gateway: wrote the top-level vars only; wrangler does not inherit vars into environments — re-run with --env <name> for each of: ${names.join(", ")}`,
+        `ai-gateway: ${verb} the top-level vars only; wrangler does not inherit vars into environments — re-run with --env <name> for each of: ${names.join(", ")}`,
     );
 };
 
@@ -327,28 +330,31 @@ const runAiGatewayCommand = async (options: AiCommandOptions): Promise<AiCommand
 
     const { gatewayId, parsed, text, wranglerPath } = project;
     const collectLogs = options.logs !== false;
-    const { accountId, token } = resolveCloudflareCredentials(options.environment ?? process.env, parsed.account_id);
-    // The account id is only read by bring-your-own providers (`resolveAiGateway`'s
-    // `baseURL`); the binding path needs the gateway id alone.
-    const variables: Record<string, string> = {
-        [AI_GATEWAY_ID_VAR]: gatewayId,
-        ...(accountId === undefined ? {} : { [AI_GATEWAY_ACCOUNT_ID_VAR]: accountId }),
-    };
     const target = resolveVariablesTarget(options, parsed);
 
     if ("code" in target) {
         return target;
     }
 
-    warnIfEnvironmentsSkipped(options, parsed);
+    const { accountId, token } = resolveCloudflareCredentials(options.environment ?? process.env, target.accountId);
+    // The account id is only read by bring-your-own providers (`resolveAiGateway`'s
+    // `baseURL`); the binding path needs the gateway id alone.
+    const variables: Record<string, string> = {
+        [AI_GATEWAY_ID_VAR]: gatewayId,
+        ...(accountId === undefined ? {} : { [AI_GATEWAY_ACCOUNT_ID_VAR]: accountId }),
+    };
     const written = writeVariables(text, target.path, target.current, variables);
 
     if (options.dryRun === true) {
-        return reportDryRun(
+        const planned = reportDryRun(
             logger,
             { accountId, action: "planned", collectLogs, dryRun: true, gatewayId, varsWritten: written.changed, wranglerPath },
             target.label,
         );
+
+        warnIfEnvironmentsSkipped(options, parsed, "would write");
+
+        return planned;
     }
 
     if (token === undefined || accountId === undefined) {
@@ -381,6 +387,7 @@ const runAiGatewayCommand = async (options: AiCommandOptions): Promise<AiCommand
         logger.info(`ai-gateway: ${wranglerPath} ${target.label} are already up to date.`);
     }
 
+    warnIfEnvironmentsSkipped(options, parsed, "wrote");
     printNextSteps(logger, gatewayId);
 
     return {

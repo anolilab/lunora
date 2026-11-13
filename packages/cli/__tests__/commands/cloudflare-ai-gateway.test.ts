@@ -291,4 +291,56 @@ describe("lunora cloudflare ai-gateway", () => {
         expect(readVariables(workdir)["LUNORA_AI_GATEWAY_ID"]).toBe("demo-app");
         expect(lines.filter((line) => line.startsWith("warn: ") && line.includes("--env <name>") && line.includes("staging, production"))).toHaveLength(1);
     });
+
+    it("--env provisions in the environment's own account_id, not the top-level one", async () => {
+        expect.assertions(3);
+
+        writeFileSync(
+            join(workdir, "wrangler.jsonc"),
+            `{ "account_id": "top-level", "name": "demo-app", "env": { "staging": { "account_id": "staging-acc", "vars": {} } } }`,
+            "utf8",
+        );
+
+        const { calls, fetch } = fakeFetch(404);
+        const result = await runAiGatewayCommand({
+            cwd: workdir,
+            env: "staging",
+            environment: { CLOUDFLARE_API_TOKEN: "tok" },
+            fetch,
+            logger: recordingLogger().logger,
+        });
+
+        const parsed = parseJsonc(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as { env: Record<string, { vars: Record<string, unknown> }> };
+
+        expect(result.code).toBe(0);
+        expect(calls[0]?.url).toContain("/accounts/staging-acc/");
+        expect(parsed.env["staging"]?.vars["LUNORA_AI_GATEWAY_ACCOUNT_ID"]).toBe("staging-acc");
+    });
+
+    it("--env __proto__ is refused as an unknown environment", async () => {
+        expect.assertions(3);
+
+        const config = `{ "name": "demo-app", "env": { "staging": { "vars": {} } } }`;
+
+        writeFileSync(join(workdir, "wrangler.jsonc"), config, "utf8");
+
+        const { calls, fetch } = fakeFetch(404);
+        const result = await runAiGatewayCommand({ cwd: workdir, env: "__proto__", environment: ENVIRONMENT, fetch, logger: recordingLogger().logger });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(calls).toHaveLength(0);
+        expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(config);
+    });
+
+    it("without --env, a failed run does not claim it wrote the top-level vars", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "wrangler.jsonc"), `{ "name": "demo-app", "env": { "staging": { "vars": {} } } }`, "utf8");
+
+        const { lines, logger } = recordingLogger();
+        const result = await runAiGatewayCommand({ cwd: workdir, environment: {}, fetch: fakeFetch(404).fetch, logger });
+
+        expect(result.code).toBe(EXIT_CODE.AUTH);
+        expect(lines.some((line) => line.includes("wrote the top-level vars"))).toBe(false);
+    });
 });
