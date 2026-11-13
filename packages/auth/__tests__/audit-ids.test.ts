@@ -92,4 +92,16 @@ describe("audit rows name the organization, role, member and resource they act o
 
         expect(entry?.detail).toMatchObject({ roleName: "admin" });
     });
+
+    it("records the role a member is changed to", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({
+            body: { memberId: "m_1", role: "admin" },
+            method: "POST",
+            path: "/api/auth/organization/update-member-role",
+        });
+
+        expect(entry?.detail).toMatchObject({ memberId: "m_1", role: "admin" });
+    });
 });

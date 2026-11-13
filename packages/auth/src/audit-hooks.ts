@@ -686,6 +686,8 @@ const organizationIds = (context: AuditHookContext, event: AuthAuditEvent): Read
         ["teamId", detailId(body["teamId"]) ?? (event === "org-team-create" ? createdId : undefined)],
         ["roleId", detailId(body["roleId"]) ?? (event === "org-role-change" ? createdId : undefined)],
         ["roleName", detailId(body["roleName"]) ?? (event === "org-role-change" ? detailId(body["role"]) : undefined)],
+        // The permission level a member is set to. A plain name, so it is kept as the request sent it.
+        ["role", event === "org-member-role-change" ? detailId(body["role"]) : undefined],
         ["invitationId", detailId(body["invitationId"]) ?? (event === "org-invitation-create" ? createdId : undefined)],
         ["memberId", memberReferenceOf(body["memberId"]) ?? memberReference],
         ["targetUserId", detailId(body["userId"])],
