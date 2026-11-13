@@ -10,13 +10,14 @@
 > must print nothing.
 
 **Baseline:** `26351bfca` (`origin/alpha`, 2026-11-13)
-**Status:** DONE — APPROVED after one review round (test renamed; API snapshot recorded by a
-fresh executor because the first declined a mid-task message). PR
-https://github.com/anolilab/lunora/pull/1595 (commits `0cd8b7741`, `d2810720b`, `ba5ac565d`).
-Owner decision 2026-11-13: options C + A. Reviewer re-ran: `@lunora/do` unit + workerd,
-`@lunora/shard-engine` unit + workerd, client conformance, python/rust/java SDK suites and
-generated-check, `api:check`, eslint/types, red-without-fix. Swift (no XCTest here), Go, Ruby,
-Kotlin and Dart not run.
+**Status:** DONE — PR https://github.com/anolilab/lunora/pull/1595. Part A: commits `0cd8b7741`,
+`d2810720b`, `ba5ac565d` (APPROVED after one review round). Follow-up B (admin wildcard): commits
+`5b81a3209`, `dccad4aee` (APPROVED first round; deviation accepted: `admin-readers.ts` re-exports the
+constant with `export { ADMIN_WILDCARD } from "@lunora/shard-engine"` because of
+`unicorn/prefer-export-from`). Reviewer re-ran after B: `@lunora/do` and `@lunora/shard-engine` unit
+and workerd projects, client conformance, `api:check` on a fresh full build, eslint/types, and
+red-without-fix (`"*"` received). Not run: Swift (no XCTest here), Go, Ruby, Kotlin, Dart, the
+Studio tests (no Studio change).
 **Source:** lead from the review of PR #1593 (team-chat membership): a member's socket received a
 new message for `messages:list` as a `delta` frame with `"table": "members"`.
 
@@ -398,3 +399,115 @@ SDK test files in Step 7, `api-snapshots/shard-engine.api.md`.
 
 1. (Reviewer) Should the Studio admin wildcard `"*"` also map to the placeholder? Deferred: not a
    user-facing query, and outside the owner's rule.
+
+## 10. Follow-up B — the admin wildcard is not a table (owner decision 2026-11-13)
+
+### Facts (audit at `ba5ac565d`)
+
+- **Where `"*"` comes from.** `ADMIN_WILDCARD = "*"` is defined in `packages/do/src/admin-readers.ts:41`
+  and exported at `:352`. Only the read-only admin ops (`__lunora_admin__:*`, reached through
+  `ShardDO.readAdminOp`, `shard-do.ts:13329`) put it in a read set: `admin-readers.ts:55, 68, 97, 126,
+138, 230, 258, 276, 305` and `shard-do.ts:13343, 13428, 13449, 13686, 13725`. Admin subscriptions are
+  seeded by `executeAdminSubscription` (`shard-do.ts:13695`). A user query's read set comes from the
+  read tracker, which records declared table names, and a table name must match
+  `[A-Za-z_$][A-Za-z0-9_$]*`. So a non-admin query can never carry `"*"`.
+- **Other consumers, which must not change.** Refresh matching treats `"*"` as "depends on any table":
+  `memoProvesUnchanged` (`shard-do.ts:1873`) and `SocketTableIndex` (`socket-table-index.ts:168, 188`).
+  Both import the constant from `./admin-readers`.
+- **Who reads the label.** Studio talks to the shard through `LunoraClient` (`packages/studio/src/app/app.tsx:167`).
+  The client merges by `key` and only checks that `table` is a string (`packages/client/src/delta-merge.ts`).
+  `packages/client/src/admin/*` never reads a delta. The only `"delta"` in `packages/studio/src` is the
+  AI assistant's text stream (`features/assistant/use-assistant-chat.ts:172`), which is unrelated. So
+  nothing keys or routes by it, and Studio needs no change.
+- **Fixtures.** `protocol/fixtures/ws-frames.json` has no admin-subscription case, so no fixture change
+  is needed.
+- **Not changed.** `batchedTableLookup` reports the requested table names as the read set
+  (`describeTables` / `listTablesIndexes`). Those results are per-table objects, not `_id` row lists,
+  so they never produce a row delta.
+
+### Decision
+
+`deltaTableFor` skips `ADMIN_WILDCARD` just as it skips `UNVOUCHABLE_DEP`, but its presence forces the
+placeholder. The wildcard means the result may depend on any table, so even "wildcard + one real
+table" is not a faithful single-table label. The new rule: a real table name only when the read set
+is exactly one real table and nothing else, ignoring only `UNVOUCHABLE_DEP`, which marks a KV read
+rather than a table; every other case sends `"__lunora__"`.
+
+**The constant moves to `@lunora/shard-engine`.** `deltaTableFor` lives there, and shard-engine cannot
+import from `@lunora/do`, because do depends on shard-engine. `read-footprint.ts` already documents
+`"*"` as the sibling marker of `UNVOUCHABLE_DEP`. `admin-readers.ts` imports it from
+`@lunora/shard-engine` and keeps re-exporting it, so `shard-do.ts` and `socket-table-index.ts` stay
+untouched. _Rejected:_ a second literal in shard-engine, which would let two definitions drift; and a
+`deltaTableFor(tables, extraMarkers)` parameter, which is a knob with one caller.
+
+### Steps (executor)
+
+B1. `packages/shard-engine/src/read-footprint.ts`: add, before `UNVOUCHABLE_DEP`, the constant
+`const ADMIN_WILDCARD = "*";`. Its doc comment is the one now at `packages/do/src/admin-readers.ts:34-40`,
+moved verbatim. Add a sentence that it lives here, beside `UNVOUCHABLE_DEP`, so `deltaTableFor` can
+recognise it. In the `UNVOUCHABLE_DEP` doc, change "(the admin wildcard in `shard-do.ts`)" to
+"({@link ADMIN_WILDCARD})". Add `ADMIN_WILDCARD` to the file's export list (`:170`) and to
+`packages/shard-engine/src/index.ts:327` (alphabetical, first). Verify:
+`pnpm --filter "@lunora/shard-engine..." run build` → exit 0.
+
+B2. `packages/do/src/admin-readers.ts`: delete the local `const ADMIN_WILDCARD = "*";` and its doc
+(`:34-41`). Add `ADMIN_WILDCARD` to the existing value import from `@lunora/shard-engine` (the
+`import { … } from "@lunora/shard-engine";` block ending near line 31, alphabetical). Keep
+`ADMIN_WILDCARD` in the file's `export { … }` list at the bottom, so its importers do not change.
+Verify: `grep -rn 'ADMIN_WILDCARD = ' packages/*/src` → exactly one hit, in `read-footprint.ts`.
+
+B3. `packages/shard-engine/src/subscription-delivery.ts`: import `ADMIN_WILDCARD` alongside
+`UNVOUCHABLE_DEP` from `./read-footprint`. Change `deltaTableFor` so that, inside the loop, a
+`table === ADMIN_WILDCARD` returns `DELTA_PLACEHOLDER_TABLE` immediately, before the `UNVOUCHABLE_DEP`
+skip. Update its doc to say: one real table and nothing else → that table; several tables, or the
+wildcard (the result may depend on any table), or none → the placeholder. Verify: the shard-engine
+build is clean.
+
+B4. Tests in `packages/shard-engine/__tests__/subscription-frames.test.ts`, `describe("deltaTableFor")`,
+in the existing style:
+
+- `[ADMIN_WILDCARD]` → `DELTA_PLACEHOLDER_TABLE`
+- `[ADMIN_WILDCARD, "messages"]` and `["messages", ADMIN_WILDCARD]` → `DELTA_PLACEHOLDER_TABLE`
+
+The existing `["messages"]` → `"messages"` case stays.
+
+In `packages/do/__tests__/shard-do.test.ts` (`describe("shardDO subscription delta push")`), after the
+"single-table query still names its table alongside an unvouchable read" test, add
+`"an admin read that depends on every table stamps the placeholder, not the wildcard"`. It is the same
+shape as the two-table test, with `tables: new Set([ADMIN_WILDCARD])` on both `outcomes.set` calls
+(import `ADMIN_WILDCARD` from `@lunora/shard-engine`, in the existing value import), and asserts
+`table: DELTA_PLACEHOLDER_TABLE`.
+
+Red-without-fix: temporarily remove only the wildcard branch from `deltaTableFor`, rebuild
+`@lunora/shard-engine` (`pnpm --filter "@lunora/shard-engine" run build`), and run
+`pnpm --filter "@lunora/do" exec vitest run __tests__/shard-do.test.ts -t "admin read"`. It must FAIL
+with `"*"` received. Restore, rebuild, and it passes. Report both outputs.
+
+Verify: `pnpm --filter "@lunora/shard-engine" run test` and `pnpm --filter "@lunora/do" run test` → all pass.
+
+B5. `protocol/README.md` §5.1.1, the `**`delta.table`.**` paragraph: replace its first sentence so it
+reads that a row delta's `table` is a real table name only when the query's read set is exactly one
+table and nothing else; a query that read several tables, none, or depends on every table (the
+admin wildcard behind Studio's live views) gets the placeholder `"__lunora__"`. Keep the rest of the
+paragraph. Mirror the same wording briefly in the `MutationDelta.table` doc in
+`packages/client/src/delta-merge.ts` and in `sdks/README.md` footnote 7 (the sentence starting
+`` `table` is the query's one read table``).
+
+B6. Gates: eslint (`lint:eslint`) for shard-engine, do and client → 0; `lint:types` for shard-engine
+and do → 0; `pnpm exec oxfmt --check` on touched .ts files and `pnpm exec prettier --check
+protocol/README.md sdks/README.md` → clean. Do NOT run `api:check` / `api:update`.
+
+B7. ONE new commit (no amend, no rebase, no push), explicit paths:
+`fix(do): send the delta placeholder for the admin wildcard read set`. Body: Studio admin reads
+depend on every table, so `"*"` was stamped as a table name; `ADMIN_WILDCARD` moves to
+`@lunora/shard-engine` so `deltaTableFor` can recognise it; refresh matching is unchanged.
+
+**In scope for B:** `packages/shard-engine/src/read-footprint.ts`, `packages/shard-engine/src/index.ts`,
+`packages/shard-engine/src/subscription-delivery.ts`, `packages/shard-engine/__tests__/subscription-frames.test.ts`,
+`packages/do/src/admin-readers.ts`, `packages/do/__tests__/shard-do.test.ts`, `protocol/README.md`,
+`packages/client/src/delta-merge.ts`, `sdks/README.md`. **Out of scope:** `shard-do.ts`,
+`socket-table-index.ts`, Studio, fixtures, SDK sources and tests, and `api-snapshots/*` (the reviewer
+handles the snapshot).
+
+**STOP** if any existing test that exercises refresh or `SocketTableIndex` wildcard behaviour fails, if
+a circular import appears, or if anything outside the in-scope list seems to need a change.
