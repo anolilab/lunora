@@ -955,6 +955,16 @@ class LunoraClient {
           // loop — and with it every OTHER subscription on this client — over one
           // bad frame.
           entry?.pendingRun = null;
+
+          // A refused run frame is a lost row change, like an unmergeable one: freeze so the cursor
+          // stays before it, reported once, when the freeze starts.
+          if (entry != null && kind == 'delta') {
+            entry.poisoned = true;
+            entry.onError?.call(LunoraSubscriptionError('WIRE_DECODE_FAILED', error.message));
+
+            return kind;
+          }
+
           entry?.onError?.call(LunoraSubscriptionError('INVALID_FRAME', error.message));
 
           return 'error';
@@ -1035,12 +1045,15 @@ class LunoraClient {
         if (entry != null) {
           // A resume restarts the stream the run was part of. A `settled` frame mid-run
           // discards it too, and must not advance the cursor: the run's frames were never
-          // taken, so a resume from past them would skip the whole run.
+          // taken, so a resume from past them would skip the whole run. It freezes the
+          // subscription as well, until a `data` frame or a resend.
           final heldRun = entry.pendingRun != null;
 
           entry.pendingRun = null;
 
           if (kind == 'settled' && heldRun) {
+            entry.poisoned = true;
+
             return kind;
           }
 

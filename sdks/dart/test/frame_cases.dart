@@ -264,6 +264,10 @@ void casePoisonedSubscriptionFreezesTheResumeCursor() => _playFrameCases('pageDe
 /// commits once on its last frame; a data frame or a resend discards what is held.
 void casePageDeltaRunIsHeldUntilItsLastFrame() => _playFrameCases('pageDeltaRunCases', 5);
 
+/// `undecodableDeltaRunCases`: a run frame the decoder refuses discards the held run and
+/// freezes the subscription, reports `WIRE_DECODE_FAILED` once, and leaves the cursor and epoch put.
+void caseUndecodableRunFrameFreezesTheSubscription() => _playFrameCases('undecodableDeltaRunCases', 1);
+
 /// `identityChangeEvictionCases`: changing identity drops the cached base and the
 /// freeze with the cursor, so a row change cannot merge onto rows the new identity
 /// was never shown, and a frozen subscription resumes tracking its position.
