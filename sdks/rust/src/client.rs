@@ -1401,6 +1401,12 @@ impl Client {
                         entry.pending_run = None;
                     }
 
+                    // A settled mid-run means the run was cut off: its tail never arrives, so the
+                    // cursor stays before the run and a resubscribe replays it whole.
+                    if kind == "settled" && entry.pending_run.take().is_some() {
+                        return Ok(Some(kind));
+                    }
+
                     advance(entry, &frame);
 
                     // A resume/settled frame advances the cursor without a value

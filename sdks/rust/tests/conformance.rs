@@ -781,7 +781,7 @@ fn an_unmergeable_run_freezes_the_cursor() {
 /// A run of delta frames marked `more` is held and commits once, on its last frame.
 #[test]
 fn a_delta_run_commits_once_on_its_last_frame() {
-    run_page_delta_cases("pageDeltaRunCases", 4);
+    run_page_delta_cases("pageDeltaRunCases", 5);
 }
 
 /// A change of identity drops the cached base and the freeze with it: both belong
