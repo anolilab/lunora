@@ -559,6 +559,8 @@ const buildAuditEntry = (
  * | `/magic-link/verify`                               | _(not recorded)_    | `sign-in`             |
  * | `/two-factor/verify-totp` / `-otp` / `-backup-code`| _(not recorded)_    | `sign-in`             |
  * | `/device/token`                                    | `token-refresh`     | `sign-in`             |
+ * | `/request-password-reset`, `/forget-password`, `…/forget-password/email-otp`, `…/request-password-reset` | `password-reset` | `password-reset-request` |
+ * | Any event in a session that is impersonating another user | actor is the impersonated user, with `actorEmail` | actor is the administrator (`impersonatedBy`), with no `actorEmail`; the impersonated user is `detail.targetUserId` |
  *
  * A caller matching on `event === "sign-in"` now sees FEWER events for
  * `/sign-in/social` and `/sign-in/magic-link` (they never actually authenticated
