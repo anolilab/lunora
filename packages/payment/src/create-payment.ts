@@ -60,9 +60,15 @@ import { readWebhookBody } from "./webhook-body";
  */
 let lastUsageStamp = 0;
 
+/**
+ * The price set after an operation that changes only the primary price, from the stored set it started from. The old
+ * primary leaves the set and the new one joins it; every other price the stored set held stays.
+ */
+const swapPrimaryPrice = (stored: Subscription, answer: Subscription): ReadonlyArray<string> => [
+    ...new Set([answer.priceId, ...(stored.priceIds ?? []).filter((id) => id !== stored.priceId)]),
+];
+
 /** How many guarded writes record a cancel answer over a row that keeps moving under it, before the conflict is raised. */
-/** The message of an error, for a message that names one. */
-const describeError = (error: unknown): string => (error instanceof Error ? error.message : "unknown error");
 const CANCEL_RECORD_ATTEMPTS = 3;
 
 /**
@@ -438,7 +444,10 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
         // A moved row keeps the history of the row it lands on (its creation date and last event), not the one it left,
         // and keeps the owner the subscription already had.
-        const overlaid = overlayProviderSubscription(target, settled);
+        // A status read that failed can leave the price set unknown, and a full-row write would then erase the one stored. The
+        // operations here change only the primary price, so the stored set stands with that price swapped.
+        const carried = !moved && settled.priceIds === undefined && existing.priceIds !== undefined ? swapPrimaryPrice(existing, settled) : settled.priceIds;
+        const overlaid = overlayProviderSubscription(target, { ...settled, priceIds: carried });
         const synced: Subscription = moved ? { ...overlaid, referenceId: ownerOf(existing.referenceId, settled.referenceId) } : overlaid;
 
         // The old row retires first, and only once the new one grants access: a retire that loses a race stops the write
@@ -461,12 +470,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             }
         };
 
-        // A failed restore leaves the subscription with no plan granting access, and the caller must know that: the error says
-        // so, and names the failure that started the rollback.
+        // A failed restore leaves the subscription with no plan granting access, and the caller must know that. The message
+        // is fixed: storage errors can carry database detail, which `toErrorBody` would echo to the caller. Both failures
+        // travel on `cause` for the operator.
         const rollbackFailed = (cause: unknown, restoreError: unknown): LunoraPaymentError =>
             new LunoraPaymentError(
                 "INVALID_TRANSITION",
-                `the provider's change could not be stored (${describeError(cause)}), and the old plan could not be restored (${describeError(restoreError)}); the subscription has no plan granting access, so reconcile it`,
+                "the provider's change could not be stored, and the old plan could not be restored; the subscription has no plan granting access, so reconcile it",
+                { cause: { restoreError, storeError: cause } },
             );
 
         let outcome: SubscriptionWrite;

@@ -246,7 +246,9 @@ interface LunoraPayment {
 ```ts
 class LunoraPaymentError extends LunoraError {
     readonly code: PaymentErrorCode;
-    constructor(code: PaymentErrorCode, message: string);
+    constructor(code: PaymentErrorCode, message: string, options?: {
+        cause?: unknown;
+    });
 }
 ```
 

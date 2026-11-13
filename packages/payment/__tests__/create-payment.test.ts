@@ -2588,8 +2588,36 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         const failure = await payment.updateSubscription("sub_1", { priceId: "price_2" }).catch((error: unknown) => error);
 
         expect(failure).toMatchObject({ code: "INVALID_TRANSITION" });
-        expect((failure as Error).message).toContain("database unavailable");
-        expect((failure as Error).message).toContain("restore unavailable");
+        // The message goes to the caller, so it names neither storage failure; both are kept on the cause for the operator.
+        expect((failure as Error).message).not.toMatch(/database unavailable|restore unavailable/u);
+        expect((failure as Error & { cause: { restoreError: Error; storeError: Error } }).cause).toMatchObject({
+            restoreError: { message: "restore unavailable" },
+            storeError: { message: "database unavailable" },
+        });
+    });
+
+    it("keeps the stored add-on prices when a plan change's status read fails and the answer omits the price set", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), priceIds: ["price_1", "addon_1"] });
+
+        // The change answers with the first page of items only (no full price set), and the follow-up status read fails.
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: () => Promise.reject(new Error("provider read unavailable")),
+            updateSubscription: async (id, patch) => {
+                return { ...subscription("user_1", "active"), id, priceId: patch.priceId ?? "price_1" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.updateSubscription("sub_1", { priceId: "price_2" });
+
+        const stored = await store.getSubscription("stripe", "sub_1");
+
+        expect(stored).toMatchObject({ priceId: "price_2" });
+        expect(stored?.priceIds).toStrictEqual(["price_2", "addon_1"]);
     });
 
     it("refuses the plan change, and writes no new row, when the old plan changed before it could be retired", async () => {
