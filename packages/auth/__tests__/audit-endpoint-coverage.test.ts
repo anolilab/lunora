@@ -203,7 +203,7 @@ const methodKeysOf = (endpoints: Record<string, { options?: { method?: string | 
     });
 
 const enumeratedByMethod: string[] = [
-    ...methodKeysOf(organization({ teams: { enabled: true } }).endpoints),
+    ...methodKeysOf(organization({ dynamicAccessControl: { enabled: true }, teams: { enabled: true } }).endpoints),
     ...methodKeysOf(oauthProvider({ consentPage: "/consent", loginPage: "/login" }).endpoints),
     ...methodKeysOf(oauthDeviceAuthorization({}).endpoints),
     ...methodKeysOf(scim({ authentication: { verifyBearerToken: async () => null }, connections: [] }).endpoints),
@@ -293,6 +293,11 @@ const EXPECTED_BY_METHOD: Record<string, AuthAuditEvent | undefined> = {
     "POST /organization/remove-team-member": "org-team-member-remove",
     "POST /organization/set-active": "org-switch",
     "POST /organization/set-active-team": "org-team-switch",
+    "POST /organization/create-role": "org-role-change",
+    "POST /organization/delete-role": "org-role-change",
+    "POST /organization/update-role": "org-role-change",
+    "GET /organization/get-role": undefined,
+    "GET /organization/list-roles": undefined,
     "POST /organization/update": "org-update",
     "POST /organization/update-member-role": "org-member-role-change",
     "POST /organization/update-team": "org-team-update",
