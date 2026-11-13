@@ -1023,7 +1023,7 @@ private fun unmergeableRowChangeFreezesTheCursor() {
 
 /** A run of `more: true` deltas is held and publishes once, on its last frame. */
 private fun deltaRunsCommitOnTheirLastFrame() {
-    runDeltaCases("pageDeltaRunCases", 4)
+    runDeltaCases("pageDeltaRunCases", 5)
 }
 
 /**

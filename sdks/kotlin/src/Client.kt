@@ -1249,8 +1249,15 @@ class Client(
                         // move the resume position past the dropped row change.
                         if (entry.poisoned) return@let
 
-                        // Only a resume discards the run: the reference leaves it alone on `settled`.
-                        if (kind == "resume") entry.heldRun = null
+                        // A run still held when `settled` arrives was cut short: its rest is
+                        // not coming, so the held frames are void and the cursor stays at the
+                        // last published state, or a reconnect would resume past the lost rows.
+                        if (kind == "settled" && entry.heldRun != null) {
+                            entry.heldRun = null
+                            return@let
+                        }
+
+                        entry.heldRun = null
 
                         advance(entry, frame)
                         // A resume/settled frame advances the cursor without a
