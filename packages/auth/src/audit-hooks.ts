@@ -96,6 +96,7 @@ const SUFFIX_EVENTS: ReadonlyArray<readonly [suffix: string, event: AuthAuditEve
     ["/device/token", "sign-in"],
     // Before `/change-email`, which it ends with: the OTP flow changes the address itself, the plain request only sends a link.
     ["/email-otp/change-email", "email-change"],
+    ["/email-otp/request-email-change", "email-change-request"],
     ["/change-email", "email-change-request"],
     ["/delete-user", "user-delete"],
     ["/delete-user/callback", "user-delete"],
