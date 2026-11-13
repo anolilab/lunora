@@ -575,6 +575,26 @@ const switchedOrganizationId = (context: AuditHookContext, event: AuthAuditEvent
     event === "org-switch" ? detailId(fieldOf(context.context?.returned, "id")) : undefined;
 
 /**
+ * A resource identifier is a URI, and a URI can carry credentials or a token in its query. Only the origin and path are
+ * kept, so the trail names the resource without the secret that rode along with it.
+ */
+const resourceIdentifierOf = (value: unknown): string | undefined => {
+    const identifier = stringOf(value);
+
+    if (identifier === undefined) {
+        return undefined;
+    }
+
+    try {
+        const url = new URL(identifier);
+
+        return detailId(`${url.origin}${url.pathname === "/" ? "" : url.pathname}`);
+    } catch {
+        return detailId(identifier);
+    }
+};
+
+/**
  * The client id a `client_secret_basic` credential names. The header is `Basic base64(client_id:client_secret)` with the
  * client id form-encoded, and only that part is read: the secret is never copied.
  */
@@ -673,7 +693,9 @@ const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Rec
                         createdClientId(context, event),
                 ],
                 // A resource is named by its path, or by the `identifier` a create request carries.
-                ["resourceIdentifier", detailId(params["identifier"]) ?? detailId(body["identifier"])],
+                ["resourceIdentifier", resourceIdentifierOf(params["identifier"] ?? body["identifier"])],
+                // An update or revoke of a consent names it by its own id, not by a client.
+                ["consentId", event === "oauth-consent-update" || event === "oauth-consent-revoke" ? detailId(body["id"]) : undefined],
             ];
         }
 
