@@ -26,6 +26,7 @@
 import { piiRules, redact, standardRules } from "@visulima/redact";
 
 import { maskCredentials } from "../../../shared/credential-redaction";
+import { importHmacKey } from "../../../shared/hmac-key";
 import type { SqlExecutor } from "./sql-store";
 
 /** Reserved append-only table backing the Studio "Security / audit" page. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -184,6 +185,12 @@ interface AppendAuthAuditEntry {
 /** Options for {@link appendAuthAuditEntry}. */
 interface AppendAuthAuditOptions {
     /**
+     * The key a failed attempt's identifiers are HMAC'd under. A failed attempt can carry text the caller typed into an
+     * identifier field, such as a pasted password, and an unkeyed digest of that would be brute-forceable.
+     */
+    hashKey?: string;
+
+    /**
      * Redact secrets/PII in the `detail` payload before persisting. Defaults to
      * `true`. Set `false` only for a trusted, pre-scrubbed payload.
      */
@@ -245,6 +252,34 @@ const IDENTIFIER_DETAIL_KEYS: ReadonlySet<string> = new Set([
  * key-value credential. A value that fails this is not an id, so it takes the ordinary redaction below.
  */
 const OPAQUE_IDENTIFIER = /^[^\s?#=@]{1,256}$/u;
+
+/** Marks a stored failed-attempt identifier as a digest, so it is never read back as the id the caller sent. */
+const HASHED_IDENTIFIER_PREFIX = "hmac-sha256:";
+
+const hexOf = (buffer: ArrayBuffer): string => [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
+/**
+ * Replace the identifier values of a failed attempt with a keyed digest. Without a key the detail is left as written: the
+ * hook always supplies the auth secret, and a direct writer is trusted with what it passes. Successful rows keep their ids.
+ */
+const protectFailedIdentifiers = async (detail: Record<string, unknown>, hashKey: string | undefined): Promise<Record<string, unknown>> => {
+    if (hashKey === undefined) {
+        return detail;
+    }
+
+    const key = await importHmacKey(hashKey);
+    const digests = await Promise.all(
+        Object.entries(detail)
+            .filter(([name, value]) => IDENTIFIER_DETAIL_KEYS.has(name) && typeof value === "string")
+            .map(async ([name, value]) => {
+                const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(String(value)));
+
+                return [name, HASHED_IDENTIFIER_PREFIX + hexOf(mac)] as const;
+            }),
+    );
+
+    return { ...detail, ...Object.fromEntries(digests) };
+};
 
 /** Redact the free-form detail, leaving the allow-listed identifier keys as the hooks wrote them. */
 const redactDetail = (detail: Record<string, unknown>): Record<string, unknown> => {
@@ -366,7 +401,9 @@ const appendAuthAuditEntry = async (
     let detail: Record<string, unknown> | undefined;
 
     if (entry.detail !== undefined) {
-        detail = options.redactDetail === false ? entry.detail : redactDetail(entry.detail);
+        const scoped = entry.outcome === "failure" ? await protectFailedIdentifiers(entry.detail, options.hashKey) : entry.detail;
+
+        detail = options.redactDetail === false ? scoped : redactDetail(scoped);
     }
 
     await executor.run(

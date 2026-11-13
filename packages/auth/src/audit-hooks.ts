@@ -59,6 +59,7 @@ interface AuditHookContext {
         /** Cookies and headers the endpoint set on its way to the response, which the response is built from. */
         responseHeaders?: Headers;
         returned?: unknown;
+        secret?: string;
         session?: { session?: { activeOrganizationId?: string; impersonatedBy?: string; userId?: string }; user?: { email?: string; id?: string } } | null;
     };
     headers?: Headers;
@@ -982,6 +983,7 @@ const authAuditHook = (config: AuthAuditHookConfig): ReturnType<typeof createAut
 
             if (entry !== undefined) {
                 const persisted = await appendAuthAuditEntry(config.executor, entry, {
+                    hashKey: context.context.secret,
                     redactDetail: config.redactDetail,
                     retention: config.retention,
                 });
