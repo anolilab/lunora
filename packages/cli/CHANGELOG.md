@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.491](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.490...@lunora/cli@1.0.0-alpha.491) (2026-11-13)
+
+- fix(cli): loosen the jiti range and align versions across pnpm catalogs (#1590)
+
 ## @lunora/cli [1.0.0-alpha.490](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.489...@lunora/cli@1.0.0-alpha.490) (2026-11-09)
 
 - feat(cli): apply generated SQL migrations per stage (#1516)
