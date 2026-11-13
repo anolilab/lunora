@@ -6,7 +6,7 @@
  * the same checks whatever the stamp says. Outside files live in a scratch
  * directory this suite creates and removes.
  */
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -130,6 +130,49 @@ describe("sdk stamp", () => {
 
             expect(result.deleted).toStrictEqual([]);
             expect(existsSync(join(outputDirectory, "lib/kept.txt"))).toBe(true);
+        });
+
+        it("keeps the file the new run wrote when the previous stamp spells it with a trailing slash", () => {
+            expect.assertions(2);
+
+            writeOutput("lib/kept.txt");
+
+            const result = pruneStale(outputDirectory, previous([], ["lib/kept.txt/"]), { generatedFiles: ["lib/kept.txt"], transportFiles: [] });
+
+            expect(result.deleted).toStrictEqual([]);
+            expect(existsSync(join(outputDirectory, "lib/kept.txt"))).toBe(true);
+        });
+
+        it("keeps the file the new run wrote when a previous entry is another name for it", () => {
+            expect.assertions(2);
+
+            // A case-insensitive filesystem makes `Models.dart` and `models.dart` one file;
+            // a hard link reproduces that on any filesystem.
+            writeOutput("lib/models.dart");
+            linkSync(join(outputDirectory, "lib/models.dart"), join(outputDirectory, "lib/Models.dart"));
+
+            const result = pruneStale(outputDirectory, previous([], ["lib/Models.dart"]), { generatedFiles: ["lib/models.dart"], transportFiles: [] });
+
+            expect(result.deleted).toStrictEqual([]);
+            expect(existsSync(join(outputDirectory, "lib/models.dart"))).toBe(true);
+        });
+
+        it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("reports a stale file it cannot delete instead of aborting the run", () => {
+            expect.assertions(3);
+
+            writeOutput("locked/gone.py");
+            writeOutput("lunora/other.py");
+            chmodSync(join(outputDirectory, "locked"), 0o500);
+
+            try {
+                const result = pruneStale(outputDirectory, previous(["locked/gone.py", "lunora/other.py"], []), { generatedFiles: [], transportFiles: [] });
+
+                expect(result.deleted).toStrictEqual(["lunora/other.py"]);
+                expect(result.refused.map((entry) => entry.path)).toStrictEqual(["locked/gone.py"]);
+                expect(existsSync(join(outputDirectory, "locked/gone.py"))).toBe(true);
+            } finally {
+                chmodSync(join(outputDirectory, "locked"), 0o700);
+            }
         });
 
         it("skips a listed path that no longer exists, without reporting it", () => {

@@ -7,7 +7,7 @@
  */
 
 import type { Stats } from "node:fs";
-import { existsSync, lstatSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 
 import { resolveCliVersion } from "../../util/cli-manifest";
@@ -117,7 +117,10 @@ const pathKey = (path: unknown): string | undefined => (typeof path === "string"
 /** True when `child` is `root` or sits beneath it. A bare prefix test would let `/a/bc` pass for `/a/b`. */
 const isInside = (root: string, child: string): boolean => child === root || child.startsWith(`${root}${sep}`);
 
-type Verdict = { absolute: string; kind: "delete" } | { kind: "refuse"; reason: string } | { kind: "skip" };
+type Verdict = { absolute: string; identity: string; kind: "delete" } | { kind: "refuse"; reason: string } | { kind: "skip" };
+
+/** Device and inode: two spellings name one file exactly when these match. */
+const fileIdentity = (stats: Stats): string => `${String(stats.dev)}:${String(stats.ino)}`;
 
 /**
  * Decide whether one previously-written path may be deleted. Every check must
@@ -173,7 +176,32 @@ const judge = (outputDirectory: string, candidate: unknown): Verdict => {
         return { kind: "refuse", reason: "is not a regular file" };
     }
 
-    return { kind: "delete", absolute };
+    return { absolute, identity: fileIdentity(stats), kind: "delete" };
+};
+
+/** The identities of the files the current run wrote, so another spelling of one is never deleted. */
+const keptFileIdentities = (outputDirectory: string, current: StampFiles): Set<string> => {
+    const identities = new Set<string>();
+
+    for (const path of [...current.transportFiles, ...current.generatedFiles]) {
+        try {
+            identities.add(fileIdentity(statSync(resolve(outputDirectory, path))));
+        } catch {
+            // Not on disk, so no candidate can be another name for it.
+        }
+    }
+
+    return identities;
+};
+
+const deleteCandidate = (result: PruneResult, candidate: string, absolute: string): void => {
+    try {
+        unlinkSync(absolute);
+        result.deleted.push(candidate);
+    } catch (error) {
+        // A read-only or locked file must not abort the run before the new stamp is written.
+        result.refused.push({ path: candidate, reason: `could not be deleted (${(error as NodeJS.ErrnoException).code ?? "unknown error"})` });
+    }
 };
 
 /**
@@ -194,6 +222,9 @@ const pruneStale = (outputDirectory: string, previous: StampFiles | undefined, c
     // would let a file the current run produced be deleted.
     const kept = new Set([...current.transportFiles, ...current.generatedFiles].map((path) => pathKey(path)).filter((key) => key !== undefined));
     const candidates = new Set([...previous.transportFiles, ...previous.generatedFiles]);
+    // The string compare above misses spellings that still reach a file this run wrote: a
+    // trailing slash, or another case on a case-insensitive filesystem.
+    const keptFiles = keptFileIdentities(outputDirectory, current);
 
     for (const candidate of [...candidates].toSorted(byPath)) {
         // The stamp is rewritten at the end of the run, so pruning it would be
@@ -207,8 +238,9 @@ const pruneStale = (outputDirectory: string, previous: StampFiles | undefined, c
         const verdict = judge(outputDirectory, candidate);
 
         if (verdict.kind === "delete") {
-            unlinkSync(verdict.absolute);
-            result.deleted.push(candidate);
+            if (!keptFiles.has(verdict.identity)) {
+                deleteCandidate(result, candidate, verdict.absolute);
+            }
         } else if (verdict.kind === "refuse") {
             result.refused.push({ path: candidate, reason: verdict.reason });
         }
