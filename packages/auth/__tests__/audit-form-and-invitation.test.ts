@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildAuditEntry } from "../src/audit-hooks";
 
 describe("a form-encoded client id is read as the client named", () => {
-    it("reads a plus sign in a Basic client id as a space, as form encoding does", () => {
+    it("records a Basic client id as the client sent it, form encoding included", () => {
         expect.assertions(1);
 
         const credential = Buffer.from("My+App:secret").toString("base64");
@@ -13,7 +13,7 @@ describe("a form-encoded client id is read as the client named", () => {
             path: "/api/auth/oauth2/token",
         });
 
-        expect(entry?.detail).toMatchObject({ clientId: "My App" });
+        expect(entry?.detail).toMatchObject({ clientId: "My+App" });
     });
 });
 
@@ -28,5 +28,22 @@ describe("an invitation answer names the organization it returns", () => {
         });
 
         expect(entry?.detail).toMatchObject({ organizationId: "org_c", invitationId: "inv_9" });
+    });
+});
+
+describe("a proxy's Basic credential is not read as the client", () => {
+    it("names the client a registration creates, not the proxy user on the header", () => {
+        expect.assertions(1);
+
+        const credential = Buffer.from("staging-gate:proxy-pass").toString("base64");
+        const entry = buildAuditEntry({
+            body: { client_name: "Portal" },
+            context: { returned: { client_id: "app_new", client_name: "Portal" } },
+            headers: new Headers({ authorization: `Basic ${credential}` }),
+            method: "POST",
+            path: "/api/auth/oauth2/register",
+        });
+
+        expect(entry?.detail).toMatchObject({ clientId: "app_new" });
     });
 });

@@ -409,6 +409,10 @@ const MAX_DETAIL_ID_LENGTH = 256;
  * An id read from a request body or response and copied into `detail`. Capped, because a caller can send any length
  * and a failed request is still written.
  */
+/** An id cut to the detail limit, keeping a hash of the whole value so two long ids that share a prefix stay apart. */
+const boundedDetailValue = (id: string): string =>
+    id.length <= MAX_DETAIL_ID_LENGTH ? id : `${id.slice(0, MAX_DETAIL_ID_LENGTH - 15)}~${cyrb53(id).toString(16).padStart(14, "0")}`;
+
 const detailId = (value: unknown): string | undefined => {
     const id = stringOf(value);
 
@@ -418,12 +422,7 @@ const detailId = (value: unknown): string | undefined => {
         return undefined;
     }
 
-    if (id.length <= MAX_DETAIL_ID_LENGTH) {
-        return id;
-    }
-
-    // Two long ids that share a prefix would otherwise read the same, so the cut keeps a hash of the whole value.
-    return `${id.slice(0, MAX_DETAIL_ID_LENGTH - 15)}~${cyrb53(id).toString(16).padStart(14, "0")}`;
+    return boundedDetailValue(id);
 };
 
 const fieldOf = (value: unknown, key: string): unknown =>
@@ -588,9 +587,6 @@ const invitationOrganizationId = (context: AuditHookContext, event: AuthAuditEve
 const switchedOrganizationId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined =>
     event === "org-switch" ? detailId(fieldOf(context.context?.returned, "id")) : undefined;
 
-/** A `+` in a form-encoded value stands for a space. */
-const PLUS = /\+/gu;
-
 /** The part of a value before any query or fragment. */
 const BEFORE_QUERY = /^[^?#]*/u;
 
@@ -617,7 +613,7 @@ const resourceIdentifierOf = (value: unknown): string | undefined => {
         // A special scheme gives an empty path a trailing slash. Only that one is dropped, never a slash in a real path.
         const cleaned = url.pathname === "/" ? url.href.slice(0, -1) : url.href;
 
-        return detailId(cleaned);
+        return url.host === "" ? detailId(cleaned) : boundedDetailValue(cleaned);
     } catch {
         // Not a parseable URI, so the value before any query or fragment is all that is safe to keep.
         return detailId(BEFORE_QUERY.exec(identifier)?.[0]);
@@ -638,7 +634,7 @@ const clientIdFromBasic = (authorization: string | undefined): string | undefine
         const separator = decoded.indexOf(":");
 
         // Without a colon the whole value is the secret, so it is never read as an id.
-        return separator === -1 ? undefined : detailId(decodeURIComponent(decoded.slice(0, separator).replaceAll(PLUS, " ")));
+        return separator === -1 ? undefined : detailId(decoded.slice(0, separator));
     } catch {
         return undefined;
     }
@@ -683,10 +679,30 @@ const organizationIds = (context: AuditHookContext, event: AuthAuditEvent): Read
         ],
         ["teamId", detailId(body["teamId"]) ?? (event === "org-team-create" ? createdId : undefined)],
         ["roleId", detailId(body["roleId"]) ?? (event === "org-role-change" ? createdId : undefined)],
-        ["roleName", detailId(body["roleName"])],
+        ["roleName", detailId(body["roleName"]) ?? (event === "org-role-change" ? detailId(body["role"]) : undefined)],
         ["invitationId", detailId(body["invitationId"]) ?? (event === "org-invitation-create" ? createdId : undefined)],
         ["memberId", memberReferenceOf(body["memberId"]) ?? memberReference],
         ["targetUserId", detailId(body["userId"])],
+    ];
+};
+
+/** The client, resource and consent ids an OAuth row names. */
+const oauthIds = (context: AuditHookContext, event: AuthAuditEvent): ReadonlyArray<readonly [key: string, value: string | undefined]> => {
+    const body = context.body ?? {};
+    const params = context.params ?? {};
+
+    // A proxy's HTTP Basic credential is not the client, so only a token exchange or a revoke reads one.
+    const basicClientId = event === "oauth-token-issue" || event === "oauth-token-revoke" ? clientIdFromBasic(header(context, "authorization")) : undefined;
+
+    return [
+        [
+            "clientId",
+            detailId(body["client_id"]) ?? detailId(params["client_id"]) ?? clientIdOf(body["oauth_query"]) ?? basicClientId ?? createdClientId(context, event),
+        ],
+        // A resource is named by its path, or by the `identifier` a create request carries.
+        ["resourceIdentifier", resourceIdentifierOf(params["identifier"] ?? body["identifier"])],
+        // An update or revoke of a consent names it by its own id, not by a client.
+        ["consentId", event === "oauth-consent-update" || event === "oauth-consent-revoke" ? detailId(body["id"]) : undefined],
     ];
 };
 
@@ -714,20 +730,7 @@ const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Rec
         }
 
         if (event.startsWith("oauth-")) {
-            return [
-                [
-                    "clientId",
-                    detailId(body["client_id"]) ??
-                        detailId(params["client_id"]) ??
-                        clientIdOf(body["oauth_query"]) ??
-                        clientIdFromBasic(header(context, "authorization")) ??
-                        createdClientId(context, event),
-                ],
-                // A resource is named by its path, or by the `identifier` a create request carries.
-                ["resourceIdentifier", resourceIdentifierOf(params["identifier"] ?? body["identifier"])],
-                // An update or revoke of a consent names it by its own id, not by a client.
-                ["consentId", event === "oauth-consent-update" || event === "oauth-consent-revoke" ? detailId(body["id"]) : undefined],
-            ];
+            return oauthIds(context, event);
         }
 
         if (event === "token-refresh") {

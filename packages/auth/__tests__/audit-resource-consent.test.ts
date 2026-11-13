@@ -72,4 +72,16 @@ describe("resource and consent rows name what they act on, without the secrets a
 
         expect(entry?.detail).toMatchObject({ resourceIdentifier: "https://api.example.com/v1/" });
     });
+
+    it("keeps the path of a resource whose URI carries an @ in it", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({
+            body: { identifier: "https://api.example.com/users/@me" },
+            method: "POST",
+            path: "/api/auth/admin/oauth2/resources",
+        });
+
+        expect(entry?.detail).toMatchObject({ resourceIdentifier: "https://api.example.com/users/@me" });
+    });
 });

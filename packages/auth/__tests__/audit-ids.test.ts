@@ -84,4 +84,12 @@ describe("audit rows name the organization, role, member and resource they act o
 
         expect(entry?.detail).toMatchObject({ resourceIdentifier: "https://api.example.com" });
     });
+
+    it("names the role a create was sent under, from the name it carries as role", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({ body: { role: "admin" }, method: "POST", path: "/api/auth/organization/create-role" });
+
+        expect(entry?.detail).toMatchObject({ roleName: "admin" });
+    });
 });
