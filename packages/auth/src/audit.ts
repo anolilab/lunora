@@ -217,6 +217,8 @@ const OPAQUE_IDENTIFIER = /^[^\s?#=@]{1,256}$/u;
 /** Marks a stored failed-attempt identifier as a digest, so it is never read back as the id the caller sent. */
 const HASHED_IDENTIFIER_PREFIX = "hmac-sha256:";
 
+const IDENTIFIER_DIGEST_CONTEXT = "lunora/auth-audit/failed-identifier";
+
 const hexOf = (buffer: ArrayBuffer): string => [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /**
@@ -228,7 +230,10 @@ const protectFailedIdentifiers = async (detail: Record<string, unknown>, hashKey
         return detail;
     }
 
-    const key = await importHmacKey(hashKey);
+    // Digest under a key derived for this purpose only. The hash key is the auth secret, which also signs cookies and URLs, so
+    // a row holding its MAC of caller-chosen text would hand that caller a signature.
+    const rootKey = await importHmacKey(hashKey);
+    const key = await importHmacKey(hexOf(await crypto.subtle.sign("HMAC", rootKey, new TextEncoder().encode(IDENTIFIER_DIGEST_CONTEXT))));
     const digests = await Promise.all(
         Object.entries(detail)
             .filter(([name, value]) => IDENTIFIER_DETAIL_KEYS.has(name) && typeof value === "string")
