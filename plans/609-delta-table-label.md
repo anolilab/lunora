@@ -10,8 +10,13 @@
 > must print nothing.
 
 **Baseline:** `26351bfca` (`origin/alpha`, 2026-11-13)
-**Status:** TODO — owner decision 2026-11-13: options C + A (name the table only for a
-single-table read set, otherwise a fixed placeholder; document the field).
+**Status:** DONE — APPROVED after one review round (test renamed; API snapshot recorded by a
+fresh executor because the first declined a mid-task message). PR
+https://github.com/anolilab/lunora/pull/1595 (commits `0cd8b7741`, `d2810720b`, `ba5ac565d`).
+Owner decision 2026-11-13: options C + A. Reviewer re-ran: `@lunora/do` unit + workerd,
+`@lunora/shard-engine` unit + workerd, client conformance, python/rust/java SDK suites and
+generated-check, `api:check`, eslint/types, red-without-fix. Swift (no XCTest here), Go, Ruby,
+Kotlin and Dart not run.
 **Source:** lead from the review of PR #1593 (team-chat membership): a member's socket received a
 new message for `messages:list` as a `delta` frame with `"table": "members"`.
 
