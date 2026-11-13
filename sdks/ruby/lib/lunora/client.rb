@@ -1067,9 +1067,14 @@ module Lunora
       # resume position past the dropped row change.
       return kind if entry && entry[:poisoned]
 
-      # A resume frame replays from the committed cursor; a settled frame only
-      # reports progress and leaves the held run alone.
-      entry[:run] = nil if entry && kind == "resume"
+      # A resume frame replays from the committed cursor, so it drops a held run.
+      # A settled frame's cursor sits past the held frames, which are never
+      # published: advancing would resume beyond them, so it drops the run and
+      # holds the cursor and epoch instead.
+      if entry && entry[:run]
+        entry[:run] = nil
+        return kind if kind == "settled"
+      end
 
       if entry
         advance(entry, frame)

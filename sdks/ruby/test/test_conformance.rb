@@ -349,7 +349,7 @@ class TestWsFrames < Minitest::Test
 
   def test_delta_runs_are_held_until_their_last_frame
     cases = fixture("ws-frames.json")["pageDeltaRunCases"]
-    assert_equal 4, cases.length, "pageDeltaRunCases must carry all four cases"
+    assert_equal 5, cases.length, "pageDeltaRunCases must carry all five cases"
 
     cases.each do |entry|
       client, sent, seen, errors = delta_case_client(entry)
