@@ -61,4 +61,20 @@ describe("audit identifiers survive redaction", () => {
         expect(JSON.stringify(row?.detail)).not.toContain("tok_secret_value");
         expect(row?.detail?.["targetUserId"]).toBe("12345");
     });
+
+    it("redacts a value under an identifier key that is not a bare token, rather than keeping it", async () => {
+        expect.assertions(2);
+
+        await appendAuthAuditEntry(executor, {
+            detail: { keyId: "Bearer abc.def secret", targetUserId: "12345", organizationId: { token: "nested-secret-value" } },
+            event: "api-key-delete",
+            outcome: "failure",
+            ts: 1,
+        });
+
+        const [row] = await readAuthAuditLog(executor, {});
+
+        expect(JSON.stringify(row?.detail)).not.toMatch(/abc\.def|nested-secret-value/u);
+        expect(row?.detail?.["targetUserId"]).toBe("12345");
+    });
 });

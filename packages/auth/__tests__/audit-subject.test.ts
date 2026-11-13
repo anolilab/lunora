@@ -37,3 +37,13 @@ describe("impersonated sessions name the impersonated account on every row", () 
         expect(entry?.detail).not.toHaveProperty("targetUserId");
     });
 });
+
+describe("an admin row with no subject names none", () => {
+    it("leaves the target unset when an admin request names no user", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({ body: { role: "admin" }, path: "/api/auth/admin/set-role" });
+
+        expect(entry?.detail).not.toHaveProperty("targetUserId");
+    });
+});
