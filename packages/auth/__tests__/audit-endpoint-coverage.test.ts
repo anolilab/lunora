@@ -111,7 +111,7 @@ const EXPECTED: Record<string, AuthAuditEvent | undefined> = {
     "/email-otp/request-email-change": "email-change-request",
     "/email-otp/request-password-reset": "password-reset-request", // secret-scanner:allow -- endpoint path or event name, not a credential
     "/email-otp/reset-password": "password-reset",
-    "/email-otp/send-verification-otp": undefined,
+    "/email-otp/send-verification-otp": "password-reset-request", // secret-scanner:allow -- endpoint path or event name, not a credential
     "/email-otp/verify-email": "email-verification",
     "/error": undefined,
     "/forget-password/email-otp": "password-reset-request", // secret-scanner:allow -- endpoint path or event name, not a credential
@@ -174,6 +174,7 @@ const EXPECTED: Record<string, AuthAuditEvent | undefined> = {
     "/verify-email": "email-verification",
     "/verify-password": undefined,
     "/sso/delete-provider": "sso-provider-delete",
+    // Reads of IdP configuration change nothing, so they are not audited.
     "/sso/get-provider": undefined,
     "/sso/providers": undefined,
     "/sso/register": "sso-provider-register",
