@@ -30,3 +30,12 @@ describe("audit detail ids are bounded", () => {
         expect(entry?.detail).toMatchObject({ targetUserId: expect.stringMatching(/^u{241}~[0-9a-f]{14}$/) });
     });
 });
+
+describe("a callback is a sign-in, whatever its provider id is", () => {
+    it("does not read a callback whose id is an endpoint name as that endpoint", () => {
+        expect.assertions(2);
+
+        expect(buildAuditEntry({ path: "/api/auth/callback/delete-user" })?.event).toBe("sign-in");
+        expect(buildAuditEntry({ path: "/api/auth/callback/change-email" })?.event).toBe("sign-in");
+    });
+});

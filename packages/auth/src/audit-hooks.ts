@@ -352,13 +352,16 @@ const branchEventForPath = (normalized: string): AuthAuditEvent | undefined => {
 const eventForPath = (path: string, method?: string, grantType?: string): AuthAuditEvent | undefined => {
     const normalized = path.toLowerCase();
     const upperMethod = method?.toUpperCase();
+    // A callback's last segment is the provider's id, so it can equal an endpoint name (`/callback/delete-user`). A callback
+    // is therefore a sign-in whatever ends it, so the suffix patterns are not consulted for it.
+    const isCallback = normalized.includes("/callback/") || normalized.includes("/saml2/sp/acs/");
 
     const isTokenRefresh = normalized.endsWith("/oauth2/token") && grantType === "refresh_token";
 
     return (
         (isTokenRefresh ? "token-refresh" : undefined) ??
         METHOD_PATTERNS.find((row) => row.method === upperMethod && row.pattern.test(normalized))?.event ??
-        SUFFIX_PATTERNS.find((row) => row.pattern.test(normalized))?.event ??
+        (isCallback ? undefined : SUFFIX_PATTERNS.find((row) => row.pattern.test(normalized))?.event) ??
         branchEventForPath(normalized)
     );
 };
