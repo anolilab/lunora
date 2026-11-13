@@ -662,6 +662,15 @@ const clientIdFromBasic = (authorization: string | undefined): string | undefine
 const createdClientId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined =>
     event === "oauth-client-create" ? detailId(fieldOf(context.context?.returned, "client_id")) : undefined;
 
+/** The role or roles a member is set to: one name, or several names joined, so a multi-role change keeps every role it assigned. */
+const memberRoleOf = (value: unknown): string | undefined => {
+    if (Array.isArray(value)) {
+        return detailId(value.every((role) => typeof role === "string") ? value.join(",") : undefined);
+    }
+
+    return detailId(value);
+};
+
 /**
  * The organization, team, invitation and member ids an `org-*` row names. A create endpoint is named by its
  * response, since its request need not carry the new id; any other call falls back to the session's active organization.
@@ -699,7 +708,7 @@ const organizationIds = (context: AuditHookContext, event: AuthAuditEvent): Read
         ["roleId", detailId(body["roleId"]) ?? (event === "org-role-change" ? createdId : undefined)],
         ["roleName", detailId(body["roleName"]) ?? (event === "org-role-change" ? detailId(body["role"]) : undefined)],
         // The permission level a member is set to. A plain name, so it is kept as the request sent it.
-        ["role", event === "org-member-role-change" ? detailId(body["role"]) : undefined],
+        ["role", event === "org-member-role-change" ? memberRoleOf(body["role"]) : undefined],
         ["invitationId", detailId(body["invitationId"]) ?? (event === "org-invitation-create" ? createdId : undefined)],
         ["memberId", memberReferenceOf(body["memberId"]) ?? memberReference],
         ["targetUserId", detailId(body["userId"])],
