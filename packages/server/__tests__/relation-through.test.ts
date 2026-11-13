@@ -187,7 +187,9 @@ describe("r.many through: schema rules", () => {
         expect.assertions(2);
 
         // A soft-deleted link keeps its unique pair, so a later connect could never store it again.
-        expect(build(defineTable(joinShape).index("byPair", ["postId", "tagId"], { unique: true }).softDelete())).toThrow(/softDelete/u);
+        expect(build(defineTable(joinShape).index("byPair", ["postId", "tagId"], { unique: true }).softDelete())).toThrow(
+            /Hard-delete the soft-deleted rows of "join" first.*remove \.softDelete\(\)/u,
+        );
         expect(build(defineTable(joinShape).index("byPair", ["postId", "tagId"], { unique: true }))).not.toThrow();
     });
 });

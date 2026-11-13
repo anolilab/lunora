@@ -57,7 +57,7 @@ const validateThroughRelation = (tables: Record<string, TableDefinition>, tableN
     if (join.softDeleteMode !== undefined) {
         throw new LunoraError(
             "INTERNAL",
-            `${label}: the join table is .softDelete(), so a disconnected pair could never be linked again (the unique index still holds the soft-deleted row). Remove .softDelete() from "${joinName}".`,
+            `${label}: the join table is .softDelete(), so a disconnected pair could never be linked again (the unique index still holds the soft-deleted row). Hard-delete the soft-deleted rows of "${joinName}" first, or those links come back, then remove .softDelete() from it.`,
         );
     }
 };
