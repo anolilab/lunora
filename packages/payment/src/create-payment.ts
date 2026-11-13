@@ -711,7 +711,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             const key =
                 resumeOptions?.idempotencyKey === undefined
                     ? undefined
-                    : await outboundKey("resume_subscription", [subscriptionId], resumeOptions.idempotencyKey, () => []);
+                    : await derivedIdempotencyKey("resume_subscription", adapter.identifier, subscriptionId, resumeOptions.idempotencyKey);
 
             return recordSubscriptionAnswer(existing, await adapter.resumeSubscription(subscriptionId, { idempotencyKey: key }), "resumed");
         },
@@ -898,7 +898,9 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             }
 
             const key =
-                patch.idempotencyKey === undefined ? undefined : await outboundKey("update_subscription", [subscriptionId], patch.idempotencyKey, () => []);
+                patch.idempotencyKey === undefined
+                    ? undefined
+                    : await derivedIdempotencyKey("update_subscription", adapter.identifier, subscriptionId, patch.idempotencyKey);
 
             return recordSubscriptionAnswer(existing, await adapter.updateSubscription(subscriptionId, { ...patch, idempotencyKey: key }), "updated");
         },
