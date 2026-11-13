@@ -132,10 +132,6 @@ const CATALOG_ALLOWLIST = new Map([
         "@solidjs/testing-library",
         "solid2 catalog tracks the Solid 2 RC on purpose: it moves independently of frontend's Solid 1 (see the solid2 comment in pnpm-workspace.yaml)",
     ],
-    [
-        "jiti",
-        "tooling (^2.7.0) and cli (2.7.0) both ship in published dependencies (@lunora/codegen, @lunora/config vs @lunora/cli); aligning either changes a published range, so it is the owner's call",
-    ],
 ]);
 
 /** name -> [catalog, specifier][] across every named catalog. */
