@@ -570,9 +570,26 @@ const clientIdOf = (oauthQuery: unknown): string | undefined => {
 
 const BASIC_SCHEME = /^basic /iu;
 
+/**
+ * The organization an invitation answer names: an accept returns the invitation and the member it created, each
+ * carrying the organization. Accepting or rejecting carries no organization id in the request.
+ */
+const invitationOrganizationId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined => {
+    if (!event.startsWith("org-invitation-")) {
+        return undefined;
+    }
+
+    const returned = context.context?.returned;
+
+    return detailId(fieldOf(fieldOf(returned, "invitation"), "organizationId")) ?? detailId(fieldOf(fieldOf(returned, "member"), "organizationId"));
+};
+
 /** The organization a switch moved to: the answer to `set-active` is that organization, and `null` when the switch cleared it. */
 const switchedOrganizationId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined =>
     event === "org-switch" ? detailId(fieldOf(context.context?.returned, "id")) : undefined;
+
+/** A `+` in a form-encoded value stands for a space. */
+const PLUS = /\+/gu;
 
 /** The part of a value before any query or fragment. */
 const BEFORE_QUERY = /^[^?#]*/u;
@@ -621,7 +638,7 @@ const clientIdFromBasic = (authorization: string | undefined): string | undefine
         const separator = decoded.indexOf(":");
 
         // Without a colon the whole value is the secret, so it is never read as an id.
-        return separator === -1 ? undefined : detailId(decodeURIComponent(decoded.slice(0, separator)));
+        return separator === -1 ? undefined : detailId(decodeURIComponent(decoded.slice(0, separator).replaceAll(PLUS, " ")));
     } catch {
         return undefined;
     }
@@ -660,6 +677,7 @@ const organizationIds = (context: AuditHookContext, event: AuthAuditEvent): Read
                 ? createdId
                 : (detailId(body["organizationId"]) ??
                   detailId(fieldOf(context.context?.returned, "organizationId")) ??
+                  invitationOrganizationId(context, event) ??
                   switchedOrganizationId(context, event) ??
                   activeOrganizationId),
         ],
