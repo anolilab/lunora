@@ -224,6 +224,27 @@ describe("auth jurisdiction move (node:sqlite)", () => {
         expect(unequal).toEqual([]);
     });
 
+    it("re-finishes a finished table that gains exactly one full page, so the purge accepts it", async () => {
+        expect.assertions(2);
+
+        const context = harness();
+
+        await warm(context);
+        seed(context.source);
+        addExtraTables(context.source);
+        await copyAll(context.move);
+
+        // Exactly one page: the first read is a full, non-final page and the second comes back empty.
+        for (let row = 0; row < 100; row += 1) {
+            context.source.prepare(`INSERT INTO "extra_07" VALUES (?, ?)`).run(`page${String(row)}`, "appended");
+        }
+
+        await copyAll(context.move);
+
+        expect(count(context.target, "extra_07")).toBe(count(context.source, "extra_07"));
+        await expect(context.move.purge()).resolves.toMatchObject({ dropped: expect.arrayContaining(["extra_07"]) });
+    });
+
     it("carries a row appended to a finished table in a single call, without a full re-copy", async () => {
         expect.assertions(2);
 

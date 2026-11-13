@@ -896,7 +896,9 @@ const createAuthJurisdictionMove = (post: (side: MoveSide, body: Row) => Promise
             const rows = decodeWire(page.rows) as Row[];
             const final = rows.length < PAGE_ROWS;
 
-            if (rows.length === 0 && begun.done[table.name] === true) {
+            // Only the first read may skip the write: after a full page this call wrote with `final: false`, which
+            // cleared the marker's `done`, so the empty tail still has to send the final write that restores it.
+            if (rows.length === 0 && pages === 1 && begun.done[table.name] === true) {
                 return { complete: true, delta, pages };
             }
 
