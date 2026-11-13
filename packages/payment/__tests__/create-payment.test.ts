@@ -2427,6 +2427,26 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ state: "paused" });
     });
 
+    it("records the provider's answer when reading its current state fails, so a completed change is not lost", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: () => Promise.reject(new Error("provider read unavailable")),
+            updateSubscription: async (id, patch) => {
+                return { ...subscription("user_1", "active"), id, priceId: patch.priceId ?? "price_2" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.updateSubscription("sub_1", { priceId: "price_2" });
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ priceId: "price_2" });
+    });
+
     it("settles the row to the provider's current state, not a replayed answer", async () => {
         expect.assertions(1);
 

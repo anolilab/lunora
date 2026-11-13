@@ -419,7 +419,9 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     // accepted the change and its own event for it follows. The conflict is raised rather than the answer dropped
     // silently, and a retry is safe for the same reason.
     const recordSubscriptionAnswer = async (existing: Subscription, answer: Subscription, verb: "updated" | "resumed"): Promise<Subscription> => {
-        const settled = await adapter.getSubscriptionStatus(answer.id);
+        // The status read settles a caller-keyed replay to the provider's current state. If that read fails, the answer the
+        // provider accepted is recorded instead: losing a completed change is worse than a replay that a later event corrects.
+        const settled = await adapter.getSubscriptionStatus(answer.id).catch(() => answer);
         const policy = options.singleSubscriptionPerReference ?? false;
         const conflict = (): LunoraPaymentError =>
             new LunoraPaymentError(
