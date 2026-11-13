@@ -129,4 +129,51 @@ describe("audit rows name the organization, role, member and resource they act o
 
         expect(entry?.detail).toMatchObject({ organizationId: "org_a", teamId: "team_1" });
     });
+
+    it("names the organization a team is created in or removed from when the request names one, not the active organization", () => {
+        expect.assertions(2);
+
+        const session = { session: { activeOrganizationId: "org_a" } };
+        const created = buildAuditEntry({
+            body: { name: "Crew", organizationId: "org_b" },
+            context: { session },
+            method: "POST",
+            path: "/api/auth/organization/create-team",
+        });
+        const removed = buildAuditEntry({
+            body: { organizationId: "org_b", teamId: "team_1" },
+            context: { session },
+            method: "POST",
+            path: "/api/auth/organization/remove-team",
+        });
+
+        expect(created?.detail).toMatchObject({ organizationId: "org_b" });
+        expect(removed?.detail).toMatchObject({ organizationId: "org_b", teamId: "team_1" });
+    });
+
+    it("names the active organization for a team removal that names none", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({
+            body: { teamId: "team_1" },
+            context: { session: { session: { activeOrganizationId: "org_a" } } },
+            method: "POST",
+            path: "/api/auth/organization/remove-team",
+        });
+
+        expect(entry?.detail).toMatchObject({ organizationId: "org_a" });
+    });
+
+    it("names no organization for a team change with no active organization, whatever the body asserts", () => {
+        expect.assertions(2);
+
+        const entry = buildAuditEntry({
+            body: { teamId: "team_1", organizationId: "org_forged" },
+            method: "POST",
+            path: "/api/auth/organization/update-team",
+        });
+
+        expect(entry?.detail).toMatchObject({ teamId: "team_1" });
+        expect(entry?.detail).not.toHaveProperty("organizationId");
+    });
 });

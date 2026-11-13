@@ -16,6 +16,20 @@ describe("resource and consent rows name what they act on, without the secrets a
         expect(JSON.stringify(entry?.detail)).not.toMatch(/pa55|s3cret/u);
     });
 
+    it("keeps a DID resource identifier, which has no host, and never a data URI's payload", () => {
+        expect.assertions(2);
+
+        const did = buildAuditEntry({ body: { identifier: "did:example:123" }, method: "POST", path: "/api/auth/admin/oauth2/resources" });
+        const data = buildAuditEntry({
+            body: { identifier: "data:text/plain,s3cret-payload" },
+            method: "POST",
+            path: "/api/auth/admin/oauth2/resources",
+        });
+
+        expect(did?.detail).toMatchObject({ resourceIdentifier: "did:example:123" });
+        expect(data?.detail).not.toHaveProperty("resourceIdentifier");
+    });
+
     it("names the consent an update or a revoke acts on", () => {
         expect.assertions(2);
 

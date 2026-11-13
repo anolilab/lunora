@@ -56,6 +56,8 @@ interface AuditHookContext {
     body?: Record<string, unknown>;
     context?: {
         newSession?: { session?: { activeOrganizationId?: string; impersonatedBy?: string; userId?: string }; user?: { email?: string; id?: string } } | null;
+        /** Cookies and headers the endpoint set on its way to the response, which the response is built from. */
+        responseHeaders?: Headers;
         returned?: unknown;
         session?: { session?: { activeOrganizationId?: string; impersonatedBy?: string; userId?: string }; user?: { email?: string; id?: string } } | null;
     };
@@ -568,8 +570,32 @@ const isImmediateEmailChange = (context: AuditHookContext): boolean => {
     return newEmail !== undefined && context.context?.newSession?.user?.email === newEmail;
 };
 
+/** A non-empty value in the cookie the end-session endpoint sets before asking to confirm; its clearing cookie has none. */
+const LOGOUT_CONFIRMATION_COOKIE = /\.oauth_logout_confirmation=[^;]/u;
+
+/** Whether a logout only asked the user to confirm: that page sets the confirmation cookie and ends no session. */
+const isLogoutConfirmation = (context: AuditHookContext): boolean =>
+    (context.context?.responseHeaders?.getSetCookie() ?? []).some((cookie) => LOGOUT_CONFIRMATION_COOKIE.test(cookie));
+
 /** Device-flow errors that mean the user has not approved yet: the client polls again, and nothing failed. */
 const DEVICE_POLL_PENDING: ReadonlySet<string> = new Set(["authorization_pending", "slow_down"]);
+
+/** Settle the events the path decides only with the request: an email change, a logout's confirmation step, and a reset code. */
+const refinePathEvent = (context: AuditHookContext, event: AuthAuditEvent, path: string): AuthAuditEvent | undefined => {
+    let refined: AuthAuditEvent | undefined = event;
+
+    if (event === "email-change-request" && path.endsWith("/change-email") && isImmediateEmailChange(context)) {
+        refined = "email-change";
+    } else if (event === "sign-out" && path.endsWith("/oauth2/end-session") && isLogoutConfirmation(context)) {
+        // Asking the user to confirm ends no session. `/oauth2/end-session/confirm` records the logout once it happens.
+        refined = undefined;
+    } else if (event === "password-reset-request" && path.endsWith("/email-otp/send-verification-otp")) {
+        // The same endpoint sends sign-in and verification codes too; only a reset code is a password-reset request.
+        refined = context.body?.["type"] === "forget-password" ? event : undefined;
+    }
+
+    return refined;
+};
 
 /**
  * Settle the endpoint's event from the request body and the response, where the path alone cannot tell.
@@ -579,7 +605,8 @@ const refineEvent = (context: AuditHookContext, event: AuthAuditEvent): AuthAudi
     const path = context.path?.toLowerCase() ?? "";
     const returned = context.context?.returned;
     const pendingDevicePoll = DEVICE_POLL_PENDING.has(stringOf(fieldOf(fieldOf(returned, "body"), "error")) ?? "");
-    let refined: AuthAuditEvent | undefined = event;
+
+    let refined: AuthAuditEvent | undefined;
 
     if (event === "sign-in" && path.endsWith("/phone-number/verify")) {
         // Without `updatePhoneNumber` the code signs the caller in, unless sessions are disabled: a verified number then comes
@@ -592,11 +619,8 @@ const refineEvent = (context: AuditHookContext, event: AuthAuditEvent): AuthAudi
         refined = "user-delete-request";
     } else if (event === "sign-in" && path.endsWith("/device/token") && pendingDevicePoll) {
         refined = undefined;
-    } else if (event === "email-change-request" && path.endsWith("/change-email") && isImmediateEmailChange(context)) {
-        refined = "email-change";
-    } else if (event === "password-reset-request" && path.endsWith("/email-otp/send-verification-otp")) {
-        // The same endpoint sends sign-in and verification codes too; only a reset code is a password-reset request.
-        refined = context.body?.["type"] === "forget-password" ? event : undefined;
+    } else {
+        refined = refinePathEvent(context, event, path);
     }
 
     return refined;
@@ -634,6 +658,9 @@ const switchedOrganizationId = (context: AuditHookContext, event: AuthAuditEvent
 /** The part of a value before any query or fragment. */
 const BEFORE_QUERY = /^[^?#]*/u;
 
+/** Schemes whose URIs name a resource by identifier and carry no payload, so a URI without a host is still a valid identifier. */
+const HOSTLESS_IDENTIFIER_SCHEMES: ReadonlySet<string> = new Set(["did:", "urn:"]);
+
 /**
  * A resource identifier is a URI, and a URI can carry credentials or a token in its query. Only the origin and path are
  * kept, so the trail names the resource without the secret that rode along with it.
@@ -657,10 +684,10 @@ const resourceIdentifierOf = (value: unknown): string | undefined => {
         // A special scheme gives an empty path a trailing slash. Only that one is dropped, never a slash in a real path.
         const cleaned = url.pathname === "/" ? url.href.slice(0, -1) : url.href;
 
-        // A URI with no host keeps only a URN: any other (a `data:` URI, say) carries its payload in the path, so it is not
-        // recorded, since an identifier is exempt from redaction.
+        // A URI with no host keeps only a scheme that names a resource by identifier. Any other (a `data:` URI, say) carries its
+        // payload in the path, so it is not recorded, since an identifier is exempt from redaction.
         if (url.host === "") {
-            return url.protocol === "urn:" ? detailId(cleaned) : undefined;
+            return HOSTLESS_IDENTIFIER_SCHEMES.has(url.protocol) ? detailId(cleaned) : undefined;
         }
 
         return boundedDetailValue(cleaned);
@@ -704,9 +731,10 @@ const memberRoleOf = (value: unknown): string | undefined => {
 };
 
 /**
- * The organization a row names. A new organization or team is named by its request or response. An existing team is found
- * within the active organization, so a body cannot move it. An accept, reject or cancel is about its invitation's organization,
- * and the request is not trusted for it. Otherwise the request's organization, then the response's, then the session's.
+ * The organization a row names. A new organization or team is named by its request or response. A team removal is scoped
+ * by the request's organization, as the server scopes it, and defaults to the active one. Any other existing team is
+ * found within the active organization, so a body cannot move it. An accept, reject or cancel is about its invitation's
+ * organization, and the request is not trusted for it. Otherwise the request's organization, then the response's, then the session's.
  */
 const organizationOf = (
     context: AuditHookContext,
@@ -717,6 +745,10 @@ const organizationOf = (
 ): string | undefined => {
     if (event === "org-create") {
         return createdId;
+    }
+
+    if (event === "org-team-remove") {
+        return detailId(body["organizationId"]) ?? activeOrganizationId;
     }
 
     if (event.startsWith("org-team-") && event !== "org-team-create") {
@@ -794,10 +826,11 @@ const oauthIds = (context: AuditHookContext, event: AuthAuditEvent): ReadonlyArr
 /**
  * The ids an audit row names, per event family, copied from an allow-list only.
  * Bodies and params carry secrets (`rotate-secret` returns one, `set-user-password`
- * sends one) and emails (invitations), so no other field is ever copied. The
- * `admin-*` subject stays `targetUserId`: an administrator acting on a user names that user. An impersonated
- * session's rows name the impersonated account whatever the event, OAuth ones included, since that account is the one
- * the session acts for. Otherwise an OAuth row carries no `targetUserId`.
+ * sends one) and emails (invitations), so no other field is ever copied.
+ *
+ * An `admin-*` row's `targetUserId` is the user the administrator acted on. An impersonated session's row names the
+ * impersonated account as `targetUserId`, except an `admin-*` row, which keeps the user it acted on, and a team-membership
+ * row, which names the user its body does.
  */
 const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Record<string, string> => {
     const body = context.body ?? {};
