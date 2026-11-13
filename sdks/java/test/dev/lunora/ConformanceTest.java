@@ -58,6 +58,7 @@ public final class ConformanceTest {
         rowDeltaWithoutMergeableBaseIsNotPublishedAsAnEnvelope();
         unmergeableRunFreezesTheCursor();
         identityChangeEvictsTheDeltaState();
+        deltaRunIsHeldUntilItsLastFrame();
         subscriptionStreamYieldsFrameValuesInOrder();
         shapeSubscribeFrame();
         shapeSubscriptionsResendAfterReconnect();
@@ -995,6 +996,14 @@ public final class ConformanceTest {
      */
     private static void identityChangeEvictsTheDeltaState() throws IOException {
         runDeltaCases("identityChangeEvictionCases", 2);
+    }
+
+    /**
+     * A delta marked {@code more} is held, not published: the run commits once on its last frame,
+     * and the resume position moves only then.
+     */
+    private static void deltaRunIsHeldUntilItsLastFrame() throws IOException {
+        runDeltaCases("pageDeltaRunCases", 4);
     }
 
     /**
