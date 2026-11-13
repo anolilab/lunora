@@ -335,6 +335,17 @@ describe("email-gate", () => {
             await expect(getUpdateBefore(merged.databaseHooks!)({ email: "cto@acme-corp.example" }, null)).resolves.toStrictEqual({ data: undefined });
         });
 
+        it("passes an update through an existing hook that returns null", async () => {
+            expect.assertions(1);
+
+            assertEmailAllowed.mockResolvedValueOnce(businessClassification);
+
+            const existingUpdate = vi.fn<UserUpdateBefore>(async () => null as unknown as Awaited<ReturnType<UserUpdateBefore>>);
+            const merged = withEmailGate({ databaseHooks: { user: { update: { before: existingUpdate } } } }, {});
+
+            await expect(getUpdateBefore(merged.databaseHooks!)({ email: "cto@acme-corp.example" }, null)).resolves.toBeNull();
+        });
+
         it("gates the address an existing user.update.before rewrites to, by mutation or by returned data", async () => {
             expect.assertions(4);
 

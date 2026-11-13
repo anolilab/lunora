@@ -124,8 +124,9 @@ const buildUpdateBeforeHook =
 /** The patch better-auth will persist: the (possibly mutated) patch, merged with a hook's `{ data }` as better-auth merges it. */
 type UserUpdatePatch = Parameters<UserUpdateBefore>[0];
 
-const effectiveUpdatePatch = (result: Awaited<ReturnType<UserUpdateBefore>>, patch: UserUpdatePatch): UserUpdatePatch =>
-    typeof result === "object" && "data" in result ? { ...patch, ...result.data } : patch;
+// `| null`: a plain-JS hook can return null despite the type, and `typeof null` is "object".
+const effectiveUpdatePatch = (result: Awaited<ReturnType<UserUpdateBefore>> | null, patch: UserUpdatePatch): UserUpdatePatch =>
+    typeof result === "object" && result !== null && "data" in result ? { ...patch, ...result.data } : patch;
 
 /**
  * Produce a `databaseHooks` fragment that gates better-auth's user lifecycle on the
