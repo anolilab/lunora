@@ -433,17 +433,25 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
         // The old row retires first, and only once the new one grants access: a retire that loses a race stops the write
         // there, so both rows never grant at once. A downgrade that leaves the old plan running keeps it active.
-        if (
-            moved &&
-            ENTITLING_STATES.has(synced.state) &&
-            !(await store.upsertSubscription({ ...existing, state: "canceled" }, { ifRevision: existing.revision }))
-        ) {
+        const retires = moved && ENTITLING_STATES.has(synced.state);
+
+        if (retires && !(await store.upsertSubscription({ ...existing, state: "canceled" }, { ifRevision: existing.revision }))) {
             throw conflict();
         }
 
         const outcome = await storeSubscription(store, policy, target, synced, { ifRevision: target?.revision });
 
         if (outcome === "rejected") {
+            if (retires) {
+                // The new row did not land, so the old one goes back to granting access. Only the row this call retired
+                // is restored: a revision another write has since moved past is left as that write made it.
+                const current = await store.getSubscription(adapter.identifier, existing.id);
+
+                if (current?.state === "canceled" && current.revision === (existing.revision ?? 0) + 1) {
+                    await store.upsertSubscription(existing, { ifRevision: current.revision });
+                }
+            }
+
             throw conflict();
         }
 

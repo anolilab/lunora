@@ -2451,6 +2451,40 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         expect(updateSubscription).not.toHaveBeenCalled();
     });
 
+    it("gives the old plan back when the new row cannot be stored, instead of leaving the subscription with no access", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // A paused row for the destination appears between the target lookup and the write, so the provider's active
+        // answer for it is refused by the revision guard.
+        const racing = Object.assign(Object.create(store) as object, {
+            upsertSubscription: (record: Subscription, guard?: RevisionGuard) => {
+                if (record.id === "sub_2") {
+                    return Promise.resolve(false);
+                }
+
+                return store.upsertSubscription(record, guard);
+            },
+        }) as PaymentStore;
+
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: async () => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: "price_2" };
+            },
+            updateSubscription: async (_id, patch) => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: patch.priceId ?? "price_2" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: racing });
+
+        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
+        await expect(store.getSubscription("stripe", "sub_2")).resolves.toBeUndefined();
+    });
+
     it("raises a conflict when a webhook moves the row during the provider call, and keeps the stored plan", async () => {
         expect.assertions(2);
 
