@@ -47,3 +47,20 @@ describe("an admin row with no subject names none", () => {
         expect(entry?.detail).not.toHaveProperty("targetUserId");
     });
 });
+
+describe("the actor of a revoke is the account that made it", () => {
+    it("names the request's account, not one a revoke left in the new session", () => {
+        expect.assertions(2);
+
+        const entry = buildAuditEntry({
+            context: {
+                newSession: { session: { userId: "user_b" }, user: { id: "user_b" } },
+                session: { session: { userId: "user_a" }, user: { id: "user_a" } },
+            },
+            path: "/api/auth/multi-session/revoke",
+        });
+
+        expect(entry?.event).toBe("session-revoke");
+        expect(entry?.actorId).toBe("user_a");
+    });
+});

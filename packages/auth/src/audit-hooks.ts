@@ -330,8 +330,10 @@ const fieldOf = (value: unknown, key: string): unknown =>
  * An impersonated session names the administrator in `impersonatedBy`, and that is the actor: its
  * `user` is the impersonated account. The administrator's email is not on the session, so none is recorded.
  */
-const resolveActor = (context: AuditHookContext): { actorEmail?: string; actorId?: string } => {
-    const source = context.context?.newSession ?? context.context?.session;
+const resolveActor = (context: AuditHookContext, event: AuthAuditEvent | undefined): { actorEmail?: string; actorId?: string } => {
+    // A revoke can leave another account's session in `newSession`, so the request session is the actor for it.
+    const source =
+        event === "session-revoke" ? (context.context?.session ?? context.context?.newSession) : (context.context?.newSession ?? context.context?.session);
     const impersonator = stringOf(source?.session?.impersonatedBy);
 
     if (impersonator !== undefined) {
@@ -525,7 +527,7 @@ const buildAuditEntry = (
     const keyId = resolveKeyId(context, event);
 
     return {
-        ...resolveActor(context),
+        ...resolveActor(context, event),
         event,
         outcome: resolveOutcome(context),
         ts: now,
