@@ -2389,11 +2389,13 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
 
         await store.upsertSubscription(subscription("user_1", "active"));
 
-        const updateSubscription = vi.fn<PaymentAdapter["updateSubscription"]>(async (id, patch) => {return {
-            ...subscription("user_1", "active"),
-            id,
-            priceId: patch.priceId ?? "price_1",
-        }});
+        const updateSubscription = vi.fn<PaymentAdapter["updateSubscription"]>(async (id, patch) => {
+            return {
+                ...subscription("user_1", "active"),
+                id,
+                priceId: patch.priceId ?? "price_1",
+            };
+        });
         const payment = createPayment({
             adapter: fakeAdapter({ updateSubscription }),
             authorize: (referenceId) => referenceId === "user_1",
@@ -2436,7 +2438,9 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
 
         await store.upsertSubscription(subscription("user_1", "active"));
 
-        const updateSubscription = vi.fn<PaymentAdapter["updateSubscription"]>(async (id) => {return { ...subscription("user_1", "active"), id }});
+        const updateSubscription = vi.fn<PaymentAdapter["updateSubscription"]>(async (id) => {
+            return { ...subscription("user_1", "active"), id };
+        });
         const payment = createPayment({
             adapter: fakeAdapter({ updateSubscription }),
             authorize: (referenceId) => referenceId === "user_1",
@@ -2865,6 +2869,20 @@ describe("createPayment — provider info", () => {
         expect(Object.values(payment)).not.toContain(adapter);
         expect(payment.provider.capabilities).not.toBe(adapter.capabilities);
         expect(Object.values(payment.provider).some((value) => typeof value === "function")).toBe(false);
+    });
+
+    it("copies only the declared capability fields, so an operation on the adapter's capabilities is not reachable", () => {
+        expect.assertions(2);
+
+        const capabilities = { checkoutExpiry: true, merchantOfRecord: false, portal: true, refundAll: () => "refunded", usageMetering: true };
+        const payment = createPayment({
+            adapter: fakeAdapter({ capabilities }),
+            authorize: () => true,
+            store: new MemoryPaymentStore(),
+        });
+
+        expect("refundAll" in payment.provider.capabilities).toBe(false);
+        expect(new Set(Object.keys(payment.provider.capabilities))).toStrictEqual(new Set(["checkoutExpiry", "merchantOfRecord", "portal", "usageMetering"]));
     });
 
     it("is frozen, and changing it does not change what the facade does", async () => {

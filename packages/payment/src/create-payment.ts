@@ -434,11 +434,11 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         }
     };
 
-    // Stores the provider's answer to an update or a resume. The row is settled against the provider's current state,
-    // because a caller-keyed retry can come back as a cached replay of the first answer (Stripe keeps those for 24h).
-    // Both calls set absolute state, so a row a webhook moved during the call is not merged onto: the provider has
-    // accepted the change and its own event for it follows. The conflict is raised rather than the answer dropped
-    // silently, and a retry is safe for the same reason.
+    // Stores the provider's answer to an update or a resume, settled against the provider's current state: the answer is
+    // what the provider accepted, and its status read also carries what a webhook changed since. Both calls set absolute
+    // state, so a row a webhook moved during the call is not merged onto: the provider has accepted the change and its
+    // own event for it follows. The conflict is raised rather than the answer dropped silently. Repeating the call is not
+    // safe, since Creem and Dodo charge a proration again, so the caller is sent to reconcile instead.
     const recordSubscriptionAnswer = async (existing: Subscription, answer: Subscription, verb: "updated" | "resumed"): Promise<Subscription> => {
         // A provider can move the subscription to a new id (Autumn: a plan change is a new `customer::product` row). The
         // target is guarded by whatever row sits under its id now: absent, or a row from an earlier plan that is replaced.
@@ -447,14 +447,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         const moved = answer.id !== existing.id;
         const target = moved ? await store.getSubscription(adapter.identifier, answer.id) : existing;
 
-        // The status read settles a caller-keyed replay to the provider's current state. If that read fails, the answer the
-        // provider accepted is recorded instead: losing a completed change is worse than a replay that a later event corrects.
+        // If the status read fails, the answer the provider accepted is recorded instead: losing a completed change is worse
+        // than a stale field that the provider's later event corrects.
         const settled = await adapter.getSubscriptionStatus(answer.id).catch(() => answer);
         const policy = options.singleSubscriptionPerReference ?? false;
         const conflict = (): LunoraPaymentError =>
             new LunoraPaymentError(
                 "INVALID_TRANSITION",
-                `the subscription changed while it was being ${verb}; the provider has accepted the change, so retry or reconcile this subscription`,
+                `the subscription changed while it was being ${verb}; the provider has accepted the change, so reconcile this subscription rather than repeating the change`,
             );
 
         // A moved row keeps the history of the row it lands on (its creation date and last event), not the one it left,
@@ -579,7 +579,12 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     // Copies, not the adapter's own objects: nothing reachable from `provider` can call an operation or change
     // what the facade reads from the adapter.
     const provider = Object.freeze({
-        capabilities: Object.freeze({ ...adapter.capabilities }),
+        capabilities: Object.freeze({
+            ...(adapter.capabilities.checkoutExpiry === undefined ? {} : { checkoutExpiry: adapter.capabilities.checkoutExpiry }),
+            merchantOfRecord: adapter.capabilities.merchantOfRecord,
+            portal: adapter.capabilities.portal,
+            usageMetering: adapter.capabilities.usageMetering,
+        }),
         identifier: adapter.identifier,
     });
 
