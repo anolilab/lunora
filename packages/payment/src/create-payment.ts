@@ -70,6 +70,14 @@ const swapPrimaryPrice = (stored: Subscription, answer: Subscription): ReadonlyA
 ];
 
 /**
+ * How far before a plan change or resume the floor for later webhooks sits. Provider event times come from the provider's
+ * clock (Stripe's in whole seconds), so a floor at the call itself would drop a genuine event created just after it, such
+ * as the move to past due when the proration charge fails. A redelivered event from before the change is minutes old, so
+ * it is still dropped.
+ */
+const EVENT_FLOOR_MARGIN_MS = 60_000;
+
+/**
  * The row an update or resume answer is recorded as, over `target` (the row under the answer's id).
  *
  * A moved row keeps the history of the row it lands on (its creation date and last event), not the one it left, and the
@@ -77,8 +85,8 @@ const swapPrimaryPrice = (stored: Subscription, answer: Subscription): ReadonlyA
  * would then erase the one stored; these operations change only the primary price, so the stored set stands with that
  * price swapped. The seat count is kept the same way, since a mutation answer can omit it (Creem maps missing units to
  * one). An accepted resume clears the period-end cancel even when the status read still reports it (Autumn derives the
- * flag from `canceled_at`, which can trail the uncancel). And any provider event created before the call describes the
- * row as it was, so the time the call started is the floor for the last applied event.
+ * flag from `canceled_at`, which can trail the uncancel). And a provider event created well before the call describes the
+ * row as it was, so a point {@link EVENT_FLOOR_MARGIN_MS} before the call is the floor for the last applied event.
  */
 const answerRow = (
     existing: Subscription,
@@ -90,7 +98,7 @@ const answerRow = (
     const quantity = readFailed && !answer.setsQuantity ? existing.quantity : settled.quantity;
     const cancelAtPeriodEnd = answer.verb === "resumed" ? false : settled.cancelAtPeriodEnd;
     const overlaid = overlayProviderSubscription(target, { ...settled, cancelAtPeriodEnd, priceIds, quantity });
-    const row: Subscription = { ...overlaid, lastEventAt: Math.max(overlaid.lastEventAt ?? 0, calledAt) };
+    const row: Subscription = { ...overlaid, lastEventAt: Math.max(overlaid.lastEventAt ?? 0, calledAt - EVENT_FLOOR_MARGIN_MS) };
 
     return moved ? { ...row, referenceId: ownerOf(existing.referenceId, settled.referenceId) } : row;
 };

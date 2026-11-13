@@ -2820,10 +2820,10 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
 
         await payment.updateSubscription("sub_1", { priceId: "price_2" });
 
-        // Created at the provider before the change was requested, newer than the last event the row had applied.
+        // Redelivered after the change, but created two minutes before it was requested, and newer than the row's last event.
         const outcome = await applyWebhookAction(store, {
             eventId: "evt_late",
-            occurredAt: requestedAt - 1,
+            occurredAt: requestedAt - 120_000,
             provider: "stripe",
             subscriptionId: "sub_1",
             type: "subscription.past_due",
@@ -2831,6 +2831,39 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
 
         expect(outcome).toStrictEqual({ applied: false, reason: "stale" });
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ priceId: "price_2", state: "active" });
+    });
+
+    it("applies a provider event created in the same second as a plan change", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), lastEventAt: 1000 });
+
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: async (id) => {
+                return { ...subscription("user_1", "active"), id, priceId: "price_2" };
+            },
+            updateSubscription: async (id) => {
+                return { ...subscription("user_1", "active"), id, priceId: "price_2" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+        const requestedAt = Date.now();
+
+        await payment.updateSubscription("sub_1", { priceId: "price_2" });
+
+        // The proration charge failed right after the change; Stripe stamps the event in whole seconds, below the call time.
+        const outcome = await applyWebhookAction(store, {
+            eventId: "evt_past_due",
+            occurredAt: Math.floor(requestedAt / 1000) * 1000,
+            provider: "stripe",
+            subscriptionId: "sub_1",
+            type: "subscription.past_due",
+        });
+
+        expect(outcome).toMatchObject({ applied: true });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "past_due" });
     });
 
     it("leaves the old plan retired when the provider's event wrote the new plan as canceled during the change", async () => {
