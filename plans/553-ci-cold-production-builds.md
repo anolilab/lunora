@@ -15,9 +15,9 @@
 - **Depends on**: none
 - **Planned at**: commit `90c9b63f4` (origin/alpha), 2026-11-12. Supersedes the 2026-11-11 draft
   (`4a7c48bfd`), which was unmeasured.
-- **State**: DONE (implemented): PR anolilab/lunora#1591. After-numbers pending: the PR's Tests run
-  was still queued behind ~220 runs at 16:13 UTC on 2026-11-12. Measure them from that run (see
-  "Verification after push").
+- **State**: DONE — PR anolilab/lunora#1591, all checks green (run 43242672264). Measured after:
+  `build-prod` 4.9 min (2.5 build), downloads+unpack 0.4 min across 17 jobs, consumer job minutes
+  104.5 → 67.6 (72.5 incl. build-prod): ~32 runner-min saved per run; artifact 6.4 MB.
 
 ## Measurement (done by the advisor, 2026-11-12)
 
