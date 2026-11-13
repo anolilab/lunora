@@ -2479,11 +2479,14 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
 
         await store.upsertSubscription(subscription("user_1", "active"));
 
-        // A webhook moves the old row between the facade's read and its retire, so the revision guard refuses the retire.
+        // A webhook writes the old row between the facade's read and its retire. The store's own revision guard then
+        // refuses the retire, because the facade's revision is stale.
+        let webhookWritten = false;
         const racing = Object.assign(Object.create(store) as object, {
-            upsertSubscription: (record: Subscription, guard?: RevisionGuard) => {
-                if (record.id === "sub_1" && guard !== undefined) {
-                    return Promise.resolve(false);
+            upsertSubscription: async (record: Subscription, guard?: RevisionGuard) => {
+                if (record.id === "sub_1" && guard !== undefined && !webhookWritten) {
+                    webhookWritten = true;
+                    await store.upsertSubscription({ ...subscription("user_1", "active"), priceId: "price_webhook" });
                 }
 
                 return store.upsertSubscription(record, guard);
