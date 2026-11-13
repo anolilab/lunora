@@ -798,6 +798,16 @@ Without that split, a socket dying mid-run left the client having ACKed a
 checkpoint whose remaining rows it never received: its next `sinceSeq` resolved
 as "already current" and the half-applied list was never re-snapshotted.
 
+A `settled` that arrives while a run is held, and a `delta` frame the decoder refuses,
+whether or not it is part of a run, discard the held frames and freeze the subscription,
+as a row change that cannot merge does. The settled cursor is past rows the client never
+applied, and a refused frame's rows never reached the base. A later valid `delta` would
+commit against a base missing them and advance the cursor past them, so a reconnect
+would never replay them. While frozen, `delta`, `resume` and `settled` frames are
+ignored until a `data` frame or a resubscribe clears the freeze. A refused frame
+reports `WIRE_DECODE_FAILED` once; a mid-run `settled` reports nothing. A
+resubscribe after the freeze replays the run from before it.
+
 A single-frame run is its own last frame and carries the cursor as before; so
 does the `data` snapshot.
 
