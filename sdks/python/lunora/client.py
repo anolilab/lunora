@@ -1409,12 +1409,13 @@ class LunoraClient:
         sub = self._subs.get(_frame_key(frame.get("id")))
         if sub is not None:
             sub.acked = True
-            # Settled leaves a held run alone: only a resume ends it, as in the reference client.
-            if kind == "resume":
-                sub.discard_run()
+            # Both end a held run. A settled that lands mid-run must not advance the cursor either:
+            # the run's rows were dropped, so resuming from the settled cursor would skip them.
+            held = sub.run_held
+            sub.discard_run()
         # A poisoned subscription ignores these frames too: their cursor would move
         # the resume position past the dropped row change.
-        if sub is not None and not sub.poisoned:
+        if sub is not None and not sub.poisoned and not (kind == "settled" and held):
             if isinstance(frame.get("cursor"), int) and not isinstance(frame["cursor"], bool):
                 sub.server_cursor = frame["cursor"]
             if "epoch" in frame:

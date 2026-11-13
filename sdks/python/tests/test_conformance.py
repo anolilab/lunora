@@ -320,7 +320,7 @@ class TestWsFrameConsumer(unittest.TestCase):
 
     def test_a_delta_run_is_held_until_its_last_frame(self):
         self._replay_delta_cases("pageDeltaRunCases")
-        self.assertEqual(len(load("ws-frames.json")["pageDeltaRunCases"]), 4)
+        self.assertEqual(len(load("ws-frames.json")["pageDeltaRunCases"]), 5)
 
     def test_an_identity_change_evicts_the_cached_base_and_the_poison(self):
         self._replay_delta_cases("identityChangeEvictionCases")
