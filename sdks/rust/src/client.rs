@@ -1294,18 +1294,30 @@ impl Client {
                         // callback, not on the socket read loop's stack. Letting
                         // it escape here ended that loop — and with it every
                         // OTHER subscription on this client — over one bad frame.
-                        let reported = SubscriptionError {
+                        let mut reported = SubscriptionError {
                             code: Some(CODE_INVALID_FRAME.to_string()),
                             message: error.to_string(),
                         };
+                        let mut already_frozen = false;
 
-                        // A partly held run can no longer complete on this base.
                         if let Some(entry) = self.subscriptions.get_mut(&id) {
+                            // A partly held run can no longer complete on this base.
                             entry.pending_run = None;
+
+                            // A refused delta frame would otherwise let a later one commit against a
+                            // base missing it: freeze, as an unmergeable row change does.
+                            if kind == "delta" {
+                                reported.code = Some(CODE_WIRE_DECODE_FAILED.to_string());
+                                already_frozen = entry.poisoned;
+                                entry.poisoned = true;
+                            }
                         }
 
-                        if let Some(handler) = self.subscriptions.get(&id).and_then(|entry| entry.on_error.as_ref()) {
-                            handler(&reported);
+                        // A frozen subscription ignores delta frames, so the refusal is already reported.
+                        if !already_frozen {
+                            if let Some(handler) = self.subscriptions.get(&id).and_then(|entry| entry.on_error.as_ref()) {
+                                handler(&reported);
+                            }
                         }
 
                         return Ok(Some("error".to_string()));
@@ -1402,8 +1414,11 @@ impl Client {
                     }
 
                     // A settled mid-run means the run was cut off: its tail never arrives, so the
-                    // cursor stays before the run and a resubscribe replays it whole.
+                    // cursor stays before the run and a resubscribe replays it whole. Freeze, or a
+                    // later delta would commit against a base missing the run.
                     if kind == "settled" && entry.pending_run.take().is_some() {
+                        entry.poisoned = true;
+
                         return Ok(Some(kind));
                     }
 

@@ -784,6 +784,45 @@ fn a_delta_run_commits_once_on_its_last_frame() {
     run_page_delta_cases("pageDeltaRunCases", 5);
 }
 
+/// A run frame the decoder refuses reports once, discards the run and freezes the
+/// subscription like an unmergeable row change.
+#[test]
+fn an_undecodable_run_frame_freezes_the_subscription() {
+    run_page_delta_cases("undecodableDeltaRunCases", 1);
+}
+
+/// Attaching a socket, over a live one or after a failed open, discards every held run: it
+/// is one socket's stream, so the next frame merges onto the committed base.
+#[test]
+fn attaching_a_socket_discards_every_held_run() {
+    let document = fixture("ws-frames.json");
+    let case = &document["pageDeltaRunCases"][0];
+    let mut harness = delta_harness(None);
+
+    harness.feed(&case["seedFrame"]);
+    harness.feed(&json!({
+        "id": "sub_1", "type": "delta", "more": true,
+        "delta": {"key": "m1", "op": "update", "table": "messages",
+                  "row": {"_creationTime": 1001, "_id": "m1", "text": "ONE"}},
+    }));
+
+    harness.client.attach_socket(Box::new(|_| {}), None);
+    harness.seen.lock().expect("seen").clear();
+    harness.feed(&json!({
+        "id": "sub_1", "type": "delta",
+        "delta": {"key": "m2", "op": "update", "table": "messages",
+                  "row": {"_creationTime": 1002, "_id": "m2", "text": "TWO"}},
+    }));
+
+    let seen = harness.seen.lock().expect("seen");
+
+    assert_eq!(seen.len(), 1, "the final frame publishes once");
+    assert!(
+        !canonical(&encode_wire(&seen[0]).expect("encode")).contains("ONE"),
+        "a run held before the attach must not commit"
+    );
+}
+
 /// A change of identity drops the cached base and the freeze with it: both belong
 /// to the session that was shown them.
 #[test]
