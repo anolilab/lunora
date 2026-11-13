@@ -481,6 +481,20 @@ const MAX_DETAIL_ID_LENGTH = 256;
 const detailId = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value.slice(0, MAX_DETAIL_ID_LENGTH) : undefined);
 
 /**
+ * The account an impersonated session acts as, which the administrator named in `impersonatedBy` acts for.
+ * `undefined` for an ordinary session.
+ */
+const impersonatedUserId = (context: AuditHookContext): string | undefined => {
+    const source = context.context?.newSession ?? context.context?.session;
+
+    if (stringOf(source?.session?.impersonatedBy) === undefined) {
+        return undefined;
+    }
+
+    return stringOf(source?.user?.id);
+};
+
+/**
  * The subject of an admin action whose body names no `userId`: `create-user` acts on the
  * account its response returns, and `stop-impersonating` on the impersonated session's user.
  */
@@ -610,7 +624,11 @@ const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Rec
         return [];
     })();
 
-    return Object.fromEntries(candidates.flatMap(([key, value]) => (value === undefined ? [] : [[key, value] as const])));
+    // An impersonated session's rows are about the impersonated account, unless the request names another subject.
+    const impersonated = event.startsWith("admin-") ? undefined : impersonatedUserId(context);
+    const entries = [...(impersonated === undefined ? [] : [["targetUserId", impersonated] as const]), ...candidates];
+
+    return Object.fromEntries(entries.flatMap(([key, value]) => (value === undefined ? [] : [[key, value] as const])));
 };
 
 /**
