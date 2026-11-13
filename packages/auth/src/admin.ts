@@ -560,8 +560,8 @@ const buildUserFields = (
     return out;
 };
 
-/** Roles are stored as a comma-joined string, so an owner is matched by substring — the convention already used elsewhere in this file. */
-const isOwnerRole = (role: unknown): boolean => typeof role === "string" && role.includes("owner");
+/** Roles are stored comma-joined, so match the whole `owner` token: a substring test would count a custom role such as `nonowner`. */
+const isOwnerRole = (role: unknown): boolean => typeof role === "string" && role.split(",").some((token) => token.trim() === "owner");
 
 /**
  * Refuse to delete a user who is the only owner left in an organization.
@@ -1326,12 +1326,13 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                     await assertOrganizationKeepsOwner(context_, member.organizationId, memberId);
                 }
 
-                await context_.adapter.delete({ model: "member", where: [{ field: "id", value: memberId }] });
-
                 // The team rows are keyed on the user, not the member, so they outlive the removal unless unwound here.
+                // Unwound first: the member row is what a retry needs to find the user and org if this fails midway.
                 if (member && typeof member.organizationId === "string" && typeof member.userId === "string" && tables["teamMember"] && tables["team"]) {
                     await deleteOrganizationTeamMemberships(context_, member.organizationId, member.userId);
                 }
+
+                await context_.adapter.delete({ model: "member", where: [{ field: "id", value: memberId }] });
             }),
 
         // `internalAdapter.deleteUser` removes only `session`/`account`/`user` rows.

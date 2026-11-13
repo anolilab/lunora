@@ -486,6 +486,23 @@ describe("createAuthAdmin", () => {
         expect(orgDatabase["member"]).toHaveLength(2);
     });
 
+    it("does not count a custom role containing 'owner' as an owner", async () => {
+        expect.assertions(3);
+
+        const { orgAdmin, orgDatabase } = createOrgFixture();
+        const owner = await orgAdmin.createUser({ email: "real-owner@example.com", name: "RealOwner" });
+        const helper = await orgAdmin.createUser({ email: "owner-helper@example.com", name: "OwnerHelper" });
+        const org = await orgAdmin.createOrganization({ name: "Lookalike Co", ownerId: owner.id });
+
+        await orgAdmin.addMember({ organizationId: org.id, role: "nonowner", userId: helper.id });
+
+        const memberId = memberIdOf(orgDatabase, owner.id, org.id);
+
+        await expect(orgAdmin.removeMember({ memberId })).rejects.toThrow(/LAST_ORGANIZATION_OWNER|last owner/iu);
+        await expect(orgAdmin.updateMemberRole({ memberId, role: "member" })).rejects.toThrow(/LAST_ORGANIZATION_OWNER|last owner/iu);
+        expect(orgDatabase["member"]).toHaveLength(2);
+    });
+
     it("allows removeMember of an owner when another owner remains", async () => {
         expect.assertions(2);
 
@@ -566,6 +583,53 @@ describe("createAuthAdmin", () => {
         expect(remaining.map((row) => row.id)).toContain(stayerRow.id);
         expect(remaining.map((row) => row.id)).toContain(otherOrgRow.id);
         expect(remaining).toHaveLength(2);
+    });
+
+    it("removeMember keeps the member row when team cleanup fails, so a retry can finish it", async () => {
+        expect.assertions(3);
+
+        const orgDatabase: Record<string, unknown[]> = {
+            ...seedMemoryDatabase(),
+            invitation: [],
+            member: [],
+            organization: [],
+            team: [],
+            teamMember: [],
+        };
+        const teamAuth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(orgDatabase),
+            emailAndPassword: { enabled: true },
+            plugins: [admin(), organization({ teams: { defaultTeam: { enabled: false }, enabled: true } })],
+            secret: SECRET,
+        });
+        const teamAdmin = createAuthAdmin(teamAuth);
+
+        const owner = await teamAdmin.createUser({ email: "retry-owner@example.com", name: "RetryOwner" });
+        const leaver = await teamAdmin.createUser({ email: "retry-leaver@example.com", name: "RetryLeaver" });
+        const org = await teamAdmin.createOrganization({ name: "Retry Org", ownerId: owner.id });
+
+        await teamAdmin.addMember({ organizationId: org.id, userId: leaver.id });
+
+        const team = await teamAdmin.createTeam({ name: "Retry Team", organizationId: org.id });
+
+        await teamAdmin.addTeamMember({ teamId: team.id, userId: leaver.id });
+
+        const memberId = memberIdOf(orgDatabase, leaver.id, org.id);
+        const { adapter } = await teamAuth.$context;
+        const deleteMany = adapter.deleteMany.bind(adapter);
+
+        adapter.deleteMany = async () => {
+            throw new Error("injected teamMember failure");
+        };
+
+        await expect(teamAdmin.removeMember({ memberId })).rejects.toThrow(/injected teamMember failure/u);
+        expect((orgDatabase["member"] as { id: string }[]).some((row) => row.id === memberId)).toBe(true);
+
+        adapter.deleteMany = deleteMany;
+        await teamAdmin.removeMember({ memberId });
+
+        expect((orgDatabase["teamMember"] as { userId: string }[]).some((row) => row.userId === leaver.id)).toBe(false);
     });
 
     it("reports capabilities from the enabled plugins", async () => {
