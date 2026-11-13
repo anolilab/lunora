@@ -1866,7 +1866,7 @@ describe("shardDO subscription delta push", () => {
         expect(last.delta).toStrictEqual({ key: "b", op: "insert", row: idRow("b", { text: "hi" }), table: DELTA_PLACEHOLDER_TABLE });
     });
 
-    it("a single-table query still names its table, even after an unvouchable read", async () => {
+    it("a single-table query still names its table alongside an unvouchable read", async () => {
         expect.assertions(2);
 
         const shard = new ReexecShard(state, {});
