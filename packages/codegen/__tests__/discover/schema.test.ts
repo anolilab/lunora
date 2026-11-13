@@ -1032,6 +1032,24 @@ describe("discoverSchema", () => {
         expect(buckets?.indexes).toEqual([{ fields: ["key"], name: "by_key", unique: true }]);
     });
 
+    it("reads an extension table written as a shorthand member", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
+
+            const buckets = defineTable({ key: v.string() });
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            }).extend(defineSchemaExtension("ext", { tables: { buckets } }));
+        `);
+
+        const buckets = discoverSchema(project, schemaPath).tables.find((table) => table.name === "ext_buckets");
+
+        expect(Object.keys(buckets?.shape ?? {})).toStrictEqual(["key"]);
+    });
+
     it("throws a located diagnostic for an extension key that is not a valid JS identifier", () => {
         expect.assertions(4);
 
@@ -1977,6 +1995,39 @@ describe("discoverSchema", () => {
         const dataModel = emitDataModel(schema);
 
         expect(dataModel).not.toContain("_unknown_");
+    });
+
+    it("reads a table whose defineTable is imported under an alias", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable as table, v } from "@lunora/server";
+
+            export const schema = defineSchema({ users: table({ email: v.string() }).global() });
+        `);
+
+        const users = discoverSchema(project, schemaPath).tables.find((entry) => entry.name === "users");
+
+        expect(Object.keys(users?.shape ?? {})).toStrictEqual(["email"]);
+        expect(users?.shardMode).toBe("global");
+    });
+
+    it("rejects a const table builder that another statement mutates", () => {
+        expect.assertions(1);
+
+        // Builder methods mutate and return the same object, so the runtime table
+        // also carries `removedAt`, which the `tasks` chain alone does not show.
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const base = defineTable({ title: v.string() });
+
+            base.softDelete({ field: "removedAt" });
+
+            export const schema = defineSchema({ tasks: base.timestamps({ field: "changedAt" }) });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/"base".*outside the chain/u);
     });
 
     it("reads a table bound to a same-file const, not an empty table", () => {

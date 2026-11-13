@@ -1,5 +1,5 @@
 import type { Expression, Identifier, Node as TsNode, ObjectLiteralExpression, PropertyAssignment, ShorthandPropertyAssignment } from "ts-morph";
-import { Node } from "ts-morph";
+import { Node, SyntaxKind } from "ts-morph";
 
 import { globalTtlMessage } from "../../../../../../shared/global-ttl";
 import { isInternalTableName } from "../../../../../../shared/internal-table-name";
@@ -856,6 +856,39 @@ const unreadableTable = (node: TsNode, name: string): CodegenDiagnosticError =>
     );
 
 /**
+ * Builder methods mutate and return the same object, so `base.softDelete()` as its
+ * own statement changes the table that `base.timestamps()` later returns. Codegen
+ * reads only the chain it walks, so a method call on the followed binding from
+ * anywhere else would leave the generated metadata short of the runtime table.
+ */
+const assertBindingNotMutatedElsewhere = (followed: Identifier, initializer: TsNode, name: string): void => {
+    const declaration = initializer.getParentIfKind(SyntaxKind.VariableDeclaration);
+    const bindingName = declaration?.getNameNode();
+
+    if (bindingName === undefined || !Node.isIdentifier(bindingName)) {
+        return;
+    }
+
+    for (const reference of bindingName.findReferencesAsNodes()) {
+        const access = reference.getParent();
+
+        if (
+            reference !== followed &&
+            Node.isPropertyAccessExpression(access) &&
+            access.getExpression() === reference &&
+            Node.isCallExpression(access.getParent()) &&
+            access.getParentIfKindOrThrow(SyntaxKind.CallExpression).getExpression() === access
+        ) {
+            throw diagnosticAt(
+                reference,
+                `table "${name}" is built from "${bindingName.getText()}", which also has .${access.getName()}(...) called on it outside the chain the schema uses. ` +
+                    `Table builder methods change the shared builder, so codegen cannot see that call. Chain every method in one expression.`,
+            );
+        }
+    }
+};
+
+/**
  * Reads the expressions a table's builder chain is written in, for one table: each
  * call returns the expression with parentheses and casts stripped and each
  * identifier followed to the `const` it names. The hop count is shared across the
@@ -883,11 +916,29 @@ const tableSourceReader = (name: string): ((node: TsNode) => TsNode) => {
                 throw unreadableTable(current, name);
             }
 
+            assertBindingNotMutatedElsewhere(current, initializer, name);
             current = unwrapExpression(initializer) ?? initializer;
         }
 
         return current;
     };
+};
+
+/**
+ * Whether `callee` names `defineTable`, by its local name or, for
+ * `import { defineTable as table }`, by the name it was imported under.
+ */
+const isDefineTableCallee = (callee: Identifier): boolean => {
+    if (callee.getText() === "defineTable") {
+        return true;
+    }
+
+    return (
+        callee
+            .getSymbol()
+            ?.getDeclarations()
+            .some((declaration) => Node.isImportSpecifier(declaration) && declaration.getName() === "defineTable") === true
+    );
 };
 
 /** The base shape of a `defineTable(...)` call, read from its first argument. */
@@ -942,7 +993,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         if (Node.isPropertyAccessExpression(callee)) {
             applyTableMethod(accumulator, callee.getName(), args, name);
             current = followSource(callee.getExpression());
-        } else if (Node.isIdentifier(callee) && callee.getText() === "defineTable") {
+        } else if (Node.isIdentifier(callee) && isDefineTableCallee(callee)) {
             // Reached the base defineTable({...}) call.
             shape = defineTableShape(args[0], name);
             basedOnDefineTable = true;
@@ -1046,4 +1097,4 @@ const parseBaseTables = (object: ObjectLiteralExpression, tables: TableIR[] = []
     return tables;
 };
 
-export { assertTableNameAllowed, parseBaseTables, parseTableBuilder, RESERVED_TABLE_NAMES, TABLE_NAME_IDENTIFIER_RE };
+export { assertTableNameAllowed, parseBaseTables, parseTableBuilder, RESERVED_TABLE_NAMES, TABLE_NAME_IDENTIFIER_RE, tableMemberSource };
