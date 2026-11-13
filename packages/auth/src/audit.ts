@@ -56,6 +56,8 @@ type AuthAuditEvent =
     | "device-approve"
     | "device-deny"
     | "email-change"
+    // A request that sends a confirmation link; the address changes later, under `email-verification`.
+    | "email-change-request"
     | "email-verification"
     | "mfa-backup-codes-regenerate"
     | "mfa-disable"
@@ -63,6 +65,7 @@ type AuthAuditEvent =
     | "one-time-token-create"
     | "passkey-add"
     | "passkey-remove"
+    | "passkey-rename"
     | "password-change"
     | "password-reset"
     | "phone-verification"
@@ -78,6 +81,8 @@ type AuthAuditEvent =
     | "sign-up"
     | "token-refresh"
     | "user-delete"
+    // A deletion request that sends a confirmation link; the account is removed by `user-delete`.
+    | "user-delete-request"
     | (string & {});
 
 /** Whether the recorded operation succeeded or failed (e.g. a rejected sign-in). */
