@@ -116,4 +116,17 @@ describe("audit rows name the organization, role, member and resource they act o
 
         expect(entry?.detail).toMatchObject({ role: "admin,member" });
     });
+
+    it("names the active organization a team change happens in, not one a body asserts", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({
+            body: { teamId: "team_1", organizationId: "org_forged" },
+            context: { session: { session: { activeOrganizationId: "org_a" } } },
+            method: "POST",
+            path: "/api/auth/organization/update-team",
+        });
+
+        expect(entry?.detail).toMatchObject({ organizationId: "org_a", teamId: "team_1" });
+    });
 });

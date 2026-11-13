@@ -712,18 +712,21 @@ const organizationIds = (context: AuditHookContext, event: AuthAuditEvent): Read
     const memberReferenceOf = (value: unknown): string | undefined => (typeof value === "string" && value.includes("@") ? undefined : detailId(value));
     const memberReference = memberReferenceOf(body["memberIdOrEmail"]);
 
+    // A team is found within the active organization, so a body that names another organization cannot move it.
+    const teamOrganizationId = event.startsWith("org-team-") ? activeOrganizationId : undefined;
+    const organizationId =
+        event === "org-create"
+            ? createdId
+            : (teamOrganizationId ??
+              invitationAnswerOrganizationId(context, event) ??
+              detailId(body["organizationId"]) ??
+              detailId(fieldOf(context.context?.returned, "organizationId")) ??
+              invitationOrganizationId(context, event) ??
+              switchedOrganizationId(context, event) ??
+              activeOrganizationId);
+
     return [
-        [
-            "organizationId",
-            event === "org-create"
-                ? createdId
-                : (invitationAnswerOrganizationId(context, event) ??
-                  detailId(body["organizationId"]) ??
-                  detailId(fieldOf(context.context?.returned, "organizationId")) ??
-                  invitationOrganizationId(context, event) ??
-                  switchedOrganizationId(context, event) ??
-                  activeOrganizationId),
-        ],
+        ["organizationId", organizationId],
         ["teamId", detailId(body["teamId"]) ?? (event === "org-team-create" ? createdId : undefined)],
         ["roleId", detailId(body["roleId"]) ?? (event === "org-role-change" ? createdId : undefined)],
         ["roleName", detailId(body["roleName"]) ?? (event === "org-role-change" ? detailId(body["role"]) : undefined)],
