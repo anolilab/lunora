@@ -798,6 +798,11 @@ Without that split, a socket dying mid-run left the client having ACKed a
 checkpoint whose remaining rows it never received: its next `sinceSeq` resolved
 as "already current" and the half-applied list was never re-snapshotted.
 
+A `settled` that arrives while a run is held discards the held frames and does not
+advance the cursor or epoch: its cursor is past rows the client never applied, so
+taking it would ACK a checkpoint the client does not have. A resume after it
+replays the run from before the run.
+
 A single-frame run is its own last frame and carries the cursor as before; so
 does the `data` snapshot.
 
