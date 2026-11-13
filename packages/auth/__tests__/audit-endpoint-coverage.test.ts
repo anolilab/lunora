@@ -104,7 +104,7 @@ const EXPECTED: Record<string, AuthAuditEvent | undefined> = {
     "/device/token": "sign-in",
     "/email-otp/change-email": "email-change",
     "/email-otp/check-verification-otp": undefined,
-    "/email-otp/request-email-change": undefined,
+    "/email-otp/request-email-change": "email-change-request",
     "/email-otp/request-password-reset": "password-reset-request", // secret-scanner:allow -- endpoint path or event name, not a credential
     "/email-otp/reset-password": "password-reset",
     "/email-otp/send-verification-otp": undefined,
