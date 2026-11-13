@@ -1096,14 +1096,148 @@ func TestPageDeltaFramesMergeIntoTheCachedResult(t *testing.T) {
 	}
 }
 
+// deltaHarness is one subscription on a client whose socket records the frames it is
+// sent, so the delta-frame runners share one step loop.
+type deltaHarness struct {
+	t      *testing.T
+	client *Client
+	id     string
+	sent   []map[string]any
+	seen   []any
+	errors []string
+}
+
+func newDeltaHarness(t *testing.T) *deltaHarness {
+	t.Helper()
+
+	harness := &deltaHarness{t: t, client: NewClient("https://app.example", nil)}
+	harness.client.AttachSocket(recordSubscriptionFrames(&harness.sent), nil)
+
+	harness.client.Subscribe(
+		"messages:list",
+		map[string]any{"channel": "general"},
+		func(value any) { harness.seen = append(harness.seen, value) },
+		func(failure SubscriptionError) { harness.errors = append(harness.errors, failure.Code) },
+		"",
+	)
+
+	harness.client.mu.Lock()
+	for key := range harness.client.subscriptions {
+		harness.id = key
+	}
+	harness.client.mu.Unlock()
+
+	return harness
+}
+
+// handle delivers a fixture frame addressed to this harness's generated subscription id.
+func (h *deltaHarness) handle(frame map[string]any) {
+	h.t.Helper()
+
+	frame["id"] = h.id
+	raw, _ := json.Marshal(frame)
+
+	if _, err := h.client.HandleFrame(raw); err != nil {
+		h.t.Fatalf("handle: %v", err)
+	}
+}
+
+// checkErrors asserts the error callback fired exactly want since the last check.
+func (h *deltaHarness) checkErrors(label string, want any) {
+	h.t.Helper()
+
+	var codes []string
+
+	if list, ok := want.([]any); ok {
+		for _, code := range list {
+			text, _ := code.(string)
+			codes = append(codes, text)
+		}
+	}
+
+	if !reflect.DeepEqual(h.errors, codes) {
+		h.t.Errorf("%s: error callback fired %v, want %v", label, h.errors, codes)
+	}
+
+	h.errors = nil
+}
+
+// runSteps plays fixture steps: a frame with its expected publish count, error codes and
+// value, or a resume checked against the query the next resend names.
+func (h *deltaHarness) runSteps(steps []any) {
+	h.t.Helper()
+
+	for index, raw := range steps {
+		step, _ := raw.(map[string]any)
+
+		if resume, ok := step["resume"].(map[string]any); ok {
+			h.sent = nil
+
+			if err := h.client.ResendSubscriptions(); err != nil {
+				h.t.Fatalf("step %d: resend: %v", index+1, err)
+			}
+
+			if len(h.sent) != 1 {
+				h.t.Fatalf("step %d: resend sent %d frames, want 1", index+1, len(h.sent))
+			}
+
+			query, _ := h.sent[0]["query"].(map[string]any)
+
+			if got, want := canonical(h.t, query["sinceSeq"]), canonical(h.t, resume["sinceSeq"]); got != want {
+				h.t.Errorf("step %d: sinceSeq = %s, want %s", index+1, got, want)
+			}
+
+			if got, want := canonical(h.t, query["sinceEpoch"]), canonical(h.t, resume["sinceEpoch"]); got != want {
+				h.t.Errorf("step %d: sinceEpoch = %s, want %s", index+1, got, want)
+			}
+
+			continue
+		}
+
+		h.seen = nil
+		h.errors = nil
+		frame, _ := step["frame"].(map[string]any)
+		h.handle(frame)
+
+		// Only a step that names its errors is asserted: other freezing cases raise the same
+		// notice without the fixture pinning it, so silence there is not a requirement.
+		if want, ok := step["errors"]; ok {
+			h.checkErrors(fmt.Sprintf("step %d", index+1), want)
+		}
+
+		want, _ := step["publishes"].(float64)
+		if len(h.seen) != int(want) {
+			h.t.Fatalf("step %d: published %d times, want %d", index+1, len(h.seen), int(want))
+		}
+
+		if wire, ok := step["valueWire"]; ok {
+			reEncoded, err := EncodeWire(h.seen[0])
+			if err != nil {
+				h.t.Fatalf("step %d: encode: %v", index+1, err)
+			}
+
+			if got, want := canonical(h.t, reEncoded), canonical(h.t, wire); got != want {
+				h.t.Errorf("step %d: value mismatch\n got: %s\nwant: %s", index+1, got, want)
+			}
+		}
+	}
+}
+
 // TestPageDeltaPoisonFreezesTheResumeCursor drives ws-frames.json's
 // pageDeltaPoisonCases: an unmergeable row change poisons the subscription, so a
 // later delta frame neither publishes nor moves the resume cursor, and only a
 // resubscribe or a data frame clears it.
 func TestPageDeltaPoisonFreezesTheResumeCursor(t *testing.T) {
-	cases, _ := loadFixture(t, "ws-frames.json")["pageDeltaPoisonCases"].([]any)
-	if len(cases) != 3 {
-		t.Fatalf("fixture has %d pageDeltaPoisonCases, want 3", len(cases))
+	runDeltaStepCases(t, "pageDeltaPoisonCases", 3)
+}
+
+// runDeltaStepCases plays every case under key: seed the subscription, then its steps.
+func runDeltaStepCases(t *testing.T, key string, wantCases int) {
+	t.Helper()
+
+	cases, _ := loadFixture(t, "ws-frames.json")[key].([]any)
+	if len(cases) != wantCases {
+		t.Fatalf("fixture has %d %s, want %d", len(cases), key, wantCases)
 	}
 
 	for _, entry := range cases {
@@ -1111,91 +1245,59 @@ func TestPageDeltaPoisonFreezesTheResumeCursor(t *testing.T) {
 		name, _ := testCase["name"].(string)
 
 		t.Run(name, func(t *testing.T) {
-			var sent []map[string]any
-
-			client := NewClient("https://app.example", nil)
-			client.AttachSocket(recordSubscriptionFrames(&sent), nil)
-
-			var seen []any
-
-			client.Subscribe(
-				"messages:list",
-				map[string]any{"channel": "general"},
-				func(value any) { seen = append(seen, value) },
-				nil,
-				"",
-			)
-
-			client.mu.Lock()
-			var generated string
-			for key := range client.subscriptions {
-				generated = key
-			}
-			client.mu.Unlock()
-
-			handle := func(frame map[string]any) {
-				t.Helper()
-
-				frame["id"] = generated
-				raw, _ := json.Marshal(frame)
-
-				if _, err := client.HandleFrame(raw); err != nil {
-					t.Fatalf("handle: %v", err)
-				}
-			}
+			harness := newDeltaHarness(t)
 
 			seed, _ := testCase["seedFrame"].(map[string]any)
-			handle(seed)
+			harness.handle(seed)
 
 			steps, _ := testCase["steps"].([]any)
+			harness.runSteps(steps)
+		})
+	}
+}
 
-			for index, raw := range steps {
-				step, _ := raw.(map[string]any)
+// TestIdentityChangeEvictsTheCachedBaseAndThePoison drives ws-frames.json's
+// identityChangeEvictionCases: a change to a different identity drops the cached base and
+// the freeze with it, so neither the previous identity's rows nor its dropped change
+// carry over to the next one.
+func TestIdentityChangeEvictsTheCachedBaseAndThePoison(t *testing.T) {
+	cases, _ := loadFixture(t, "ws-frames.json")["identityChangeEvictionCases"].([]any)
+	if len(cases) != 2 {
+		t.Fatalf("fixture has %d identityChangeEvictionCases, want 2", len(cases))
+	}
 
-				if resume, ok := step["resume"].(map[string]any); ok {
-					sent = nil
+	for _, entry := range cases {
+		testCase, _ := entry.(map[string]any)
+		name, _ := testCase["name"].(string)
 
-					if err := client.ResendSubscriptions(); err != nil {
-						t.Fatalf("step %d: resend: %v", index+1, err)
-					}
+		t.Run(name, func(t *testing.T) {
+			harness := newDeltaHarness(t)
 
-					if len(sent) != 1 {
-						t.Fatalf("step %d: resend sent %d frames, want 1", index+1, len(sent))
-					}
+			change, _ := testCase["identityChange"].(map[string]any)
 
-					query, _ := sent[0]["query"].(map[string]any)
-
-					if got, want := canonical(t, query["sinceSeq"]), canonical(t, resume["sinceSeq"]); got != want {
-						t.Errorf("step %d: sinceSeq = %s, want %s", index+1, got, want)
-					}
-
-					if got, want := canonical(t, query["sinceEpoch"]), canonical(t, resume["sinceEpoch"]); got != want {
-						t.Errorf("step %d: sinceEpoch = %s, want %s", index+1, got, want)
-					}
-
-					continue
+			// null in the fixture is an unset identity.
+			identityOf := func(value any) *string {
+				if text, ok := value.(string); ok {
+					return &text
 				}
 
-				seen = nil
-				frame, _ := step["frame"].(map[string]any)
-				handle(frame)
-
-				want, _ := step["publishes"].(float64)
-				if len(seen) != int(want) {
-					t.Fatalf("step %d: published %d times, want %d", index+1, len(seen), int(want))
-				}
-
-				if wire, ok := step["valueWire"]; ok {
-					reEncoded, err := EncodeWire(seen[0])
-					if err != nil {
-						t.Fatalf("step %d: encode: %v", index+1, err)
-					}
-
-					if got, want := canonical(t, reEncoded), canonical(t, wire); got != want {
-						t.Errorf("step %d: value mismatch\n got: %s\nwant: %s", index+1, got, want)
-					}
-				}
+				return nil
 			}
+
+			harness.client.SetIdentity(identityOf(change["from"]))
+
+			seed, _ := testCase["seedFrame"].(map[string]any)
+			harness.handle(seed)
+
+			if freeze, ok := testCase["freezeFrame"].(map[string]any); ok {
+				harness.handle(freeze)
+				harness.checkErrors("freeze frame", testCase["freezeErrors"])
+			}
+
+			harness.client.SetIdentity(identityOf(change["to"]))
+
+			steps, _ := testCase["steps"].([]any)
+			harness.runSteps(steps)
 		})
 	}
 }
