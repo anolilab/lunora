@@ -81,6 +81,9 @@ type AuthAuditEvent =
     | "sign-in-initiated"
     | "sign-out"
     | "sign-up"
+    | "sso-provider-delete"
+    | "sso-provider-register"
+    | "sso-provider-update"
     | "token-refresh"
     | "user-delete"
     // A deletion request that sends a confirmation link; the account is removed by `user-delete`.
@@ -198,14 +201,13 @@ const IDENTIFIER_DETAIL_KEYS: ReadonlySet<string> = new Set([
     "teamId",
 ]);
 
-/** Redact the free-form detail, leaving the allow-listed identifier keys as the hooks wrote them. */
-
 /**
  * An opaque identifier: no whitespace, and no `@`, `?`, `#` or `=`, which mark an email, a query, a fragment or a
  * key-value credential. A value that fails this is not an id, so it takes the ordinary redaction below.
  */
 const OPAQUE_IDENTIFIER = /^[^\s?#=@]{1,256}$/u;
 
+/** Redact the free-form detail, leaving the allow-listed identifier keys as the hooks wrote them. */
 const redactDetail = (detail: Record<string, unknown>): Record<string, unknown> => {
     const identifiers = Object.fromEntries(
         Object.entries(detail).filter(([key, value]) => IDENTIFIER_DETAIL_KEYS.has(key) && typeof value === "string" && OPAQUE_IDENTIFIER.test(value)),

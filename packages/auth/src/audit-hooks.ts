@@ -98,6 +98,8 @@ const SUFFIX_EVENTS: ReadonlyArray<readonly [suffix: string, event: AuthAuditEve
     ["/delete-user/callback", "user-delete"],
     ["/delete-anonymous-user", "user-delete"],
     ["/forget-password/email-otp", "password-reset-request"], // secret-scanner:allow -- endpoint path or event name, not a credential
+    // Also sends sign-in and verification codes; `refineEvent` keeps only the `forget-password` type.
+    ["/email-otp/send-verification-otp", "password-reset-request"], // secret-scanner:allow -- endpoint path or event name, not a credential
     ["/two-factor/generate-backup-codes", "mfa-backup-codes-regenerate"],
     ["/one-time-token/generate", "one-time-token-create"],
     ["/one-time-token/verify", "sign-in"],
@@ -112,6 +114,9 @@ const SUFFIX_EVENTS: ReadonlyArray<readonly [suffix: string, event: AuthAuditEve
     ["/sso/callback", "sign-in"],
     ["/multi-session/set-active", "session-switch"],
     ["/multi-session/revoke", "session-revoke"],
+    ["/sso/register", "sso-provider-register"],
+    ["/sso/update-provider", "sso-provider-update"],
+    ["/sso/delete-provider", "sso-provider-delete"],
 ];
 
 // The substring and suffix branches `eventForPath` falls back to. Order matters inside:
@@ -337,8 +342,10 @@ const fieldOf = (value: unknown, key: string): unknown =>
  */
 
 /**
- * The session an event is performed by. A revoke or a switch is made by the request's session, since its response can
- * leave another account's session in `newSession`. Every other event reads the identity it produces, which is `newSession`.
+ * The session an event is performed by. A revoke, a switch or an email change is made by the request's session: a
+ * revoke or switch can leave another account's session in `newSession`, and an immediate email change puts the new
+ * address there, while the forensic actor is the account that was signed in. Every other event reads the identity it
+ * produces, which is `newSession`.
  */
 type SessionShape = NonNullable<NonNullable<AuditHookContext["context"]>["session"]>;
 
@@ -346,7 +353,9 @@ const actingSession = (context: AuditHookContext, event: AuthAuditEvent | undefi
     const requestSession = context.context?.session;
     const resultingSession = context.context?.newSession;
 
-    return event === "session-revoke" || event === "session-switch" ? (requestSession ?? resultingSession) : (resultingSession ?? requestSession);
+    return event === "session-revoke" || event === "session-switch" || event === "email-change"
+        ? (requestSession ?? resultingSession)
+        : (resultingSession ?? requestSession);
 };
 
 const resolveActor = (context: AuditHookContext, event: AuthAuditEvent | undefined): { actorEmail?: string; actorId?: string } => {
@@ -464,6 +473,17 @@ const resolveTargetUserId = (context: AuditHookContext, event: AuthAuditEvent): 
     return undefined;
 };
 
+/**
+ * Whether `/change-email` changed the address at once rather than sending a link. Better-auth sets a new session only on
+ * that immediate path, and the session it sets carries the new address. A taken address, or a verified account, gets
+ * `{ status: true }` with no new session, so it stays a request.
+ */
+const isImmediateEmailChange = (context: AuditHookContext): boolean => {
+    const newEmail = stringOf(context.body?.["newEmail"])?.toLowerCase();
+
+    return newEmail !== undefined && context.context?.newSession?.user?.email === newEmail;
+};
+
 /** Device-flow errors that mean the user has not approved yet: the client polls again, and nothing failed. */
 const DEVICE_POLL_PENDING: ReadonlySet<string> = new Set(["authorization_pending", "slow_down"]);
 
@@ -488,6 +508,11 @@ const refineEvent = (context: AuditHookContext, event: AuthAuditEvent): AuthAudi
         refined = "user-delete-request";
     } else if (event === "sign-in" && path.endsWith("/device/token") && pendingDevicePoll) {
         refined = undefined;
+    } else if (event === "email-change-request" && path.endsWith("/change-email") && isImmediateEmailChange(context)) {
+        refined = "email-change";
+    } else if (event === "password-reset-request" && path.endsWith("/email-otp/send-verification-otp")) {
+        // The same endpoint sends sign-in and verification codes too; only a reset code is a password-reset request.
+        refined = context.body?.["type"] === "forget-password" ? event : undefined;
     }
 
     return refined;
