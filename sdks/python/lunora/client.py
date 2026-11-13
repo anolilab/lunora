@@ -513,6 +513,9 @@ class LunoraClient:
             self._send = None
             self._attach_generation += 1
             attach_generation = self._attach_generation
+            # The previous socket's run will not finish, and a failed connect below must not keep it either.
+            for sub in self._subs.values():
+                sub.discard_run()
         send(build_connect_frame(self.client_id, context, session))
         with self._lock:
             # A detach, or a newer attach, while connect was in flight supersedes this one: the
@@ -1314,10 +1317,16 @@ class LunoraClient:
             # the loop — and with it every OTHER subscription on this client —
             # over one bad frame, where the reference and the Java port both
             # surface it and keep reading.
-            reported = SubscriptionError(str(error), "INVALID_FRAME")
+            reported = SubscriptionError(str(error), "INVALID_FRAME" if has_data else WIRE_DECODE_FAILED)
             if sub is not None:
+                was_frozen = sub.poisoned
                 sub.discard_run()
-                deferred.extend(partial(cb, reported) for cb in sub.error_callbacks)
+                if not has_data:
+                    # The refused rows never reached the base, so a later delta would commit past them:
+                    # freeze until a snapshot or a resubscribe, and report only when the freeze starts.
+                    sub.poisoned = True
+                if has_data or not was_frozen:
+                    deferred.extend(partial(cb, reported) for cb in sub.error_callbacks)
             return {"kind": "error", "id": frame.get("id"), "error": reported}
         displayed = value
         if sub is not None:
@@ -1426,6 +1435,9 @@ class LunoraClient:
             # the run's rows were dropped, so resuming from the settled cursor would skip them.
             held = sub.run_held
             sub.discard_run()
+            if kind == "settled" and held:
+                # Freezes like an unmergeable row change, silently: the settled cursor is past rows never applied.
+                sub.poisoned = True
         # A poisoned subscription ignores these frames too: their cursor would move
         # the resume position past the dropped row change.
         if sub is not None and not sub.poisoned and not (kind == "settled" and held):

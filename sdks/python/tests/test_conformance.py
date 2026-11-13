@@ -354,6 +354,39 @@ class TestWsFrameConsumer(unittest.TestCase):
     def test_a_delta_run_is_held_until_its_last_frame(self):
         self._replay_delta_cases("pageDeltaRunCases")
         self.assertEqual(len(load("ws-frames.json")["pageDeltaRunCases"]), 5)
+        self._replay_delta_cases("undecodableDeltaRunCases")
+        self.assertEqual(len(load("ws-frames.json")["undecodableDeltaRunCases"]), 1)
+
+    def _client_holding_a_run(self, sender):
+        case = load("ws-frames.json")["pageDeltaRunCases"][0]
+        client = LunoraClient("https://app.example")
+        client.attach_socket(sender)
+        seen: list = []
+        client.subscribe("messages:list", {"channel": "general"}, seen.append)
+        client.handle_frame(case["seedFrame"])
+        seen.clear()
+        client.handle_frame(case["steps"][0]["frame"])
+        client.handle_frame(case["steps"][1]["frame"])
+        return client, seen, case["steps"][2]
+
+    def test_attaching_a_socket_discards_a_held_run(self):
+        client, seen, last = self._client_holding_a_run(lambda _frame: None)
+        client.attach_socket(lambda _frame: None)
+        client.handle_frame(last["frame"])
+        self.assertEqual(len(seen), 1)
+        self.assertNotEqual(encode_wire(seen[0]), last["valueWire"])
+
+    def test_a_failed_connect_still_discards_a_held_run(self):
+        client, seen, last = self._client_holding_a_run(lambda _frame: None)
+
+        def failing(_frame):
+            raise OSError("connect failed")
+
+        with self.assertRaises(OSError):
+            client.attach_socket(failing)
+        client.handle_frame(last["frame"])
+        self.assertEqual(len(seen), 1)
+        self.assertNotEqual(encode_wire(seen[0]), last["valueWire"])
 
     def test_an_identity_change_evicts_the_cached_base_and_the_poison(self):
         self._replay_delta_cases("identityChangeEvictionCases")
