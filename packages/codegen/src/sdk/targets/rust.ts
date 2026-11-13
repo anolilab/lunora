@@ -241,11 +241,34 @@ const renderSubscribe = (method: SdkMethod): string => {
     ].join("\n");
 };
 
+/**
+ * A query's stream form: the live query as a receiver. Each event arrives on it.
+ */
+const renderWatch = (method: SdkMethod): string => {
+    const argument = argsChoice(method, { none: "", typed: (type) => `args: &${type}, `, untyped: "args: &WireValue, " });
+    const payload = argsChoice(method, {
+        none: "WireValue::Object(Vec::new())",
+        typed: () =>
+            `from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?, ${rustPaths(method.argsNullPaths.optional)})`,
+        untyped: "args.clone()",
+    });
+
+    return [
+        `    /// live ${commentText(method.summary)}, as a receiver — each event arrives on it; \`unsubscribe\` the id to stop.`,
+        `    pub fn watch_${toSnakeCase(method.functionName)}(`,
+        `        &mut self,`,
+        `        ${argument}shard_key: Option<&str>,`,
+        `    ) -> Result<(Receiver<StreamEvent>, String), ClientError> {`,
+        `        Ok(self.client.stream("${stringLiteral(method.functionPath)}", ${payload}, shard_key))`,
+        `    }`,
+    ].join("\n");
+};
+
 const renderNamespaceStruct = (namespace: SdkNamespace): string => {
     const typeName = `${toPascalCase(namespace.name)}Api`;
 
     const body = namespace.methods
-        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}` : renderCall(method)))
+        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}\n\n${renderWatch(method)}` : renderCall(method)))
         .join("\n\n");
 
     return [
@@ -277,7 +300,8 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
         GENERATED_HEADER,
         `#![allow(dead_code, unused_imports)]\n`,
         `\n`,
-        `use lunora::client::{Client, ClientError, DataHandler, ErrorHandler, Verb};\n`,
+        `use lunora::client::{Client, ClientError, DataHandler, ErrorHandler, StreamEvent, Verb};\n`,
+        `use std::sync::mpsc::Receiver;\n`,
         `use lunora::wire::{encode_wire, from_model_json, WireValue};\n`,
         `\n`,
         `use crate::models::*;\n`,

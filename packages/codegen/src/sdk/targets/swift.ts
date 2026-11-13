@@ -247,11 +247,30 @@ const renderSubscribe = (method: SdkMethod): string => {
     ].join("\n");
 };
 
+/**
+ * A query's stream form: the live query as an `AsyncStream`, so `for await` binds it and leaving
+ * the loop unsubscribes. Wraps `client.stream` the way `subscribe` wraps `client.subscribe`.
+ */
+const renderWatch = (method: SdkMethod): string => {
+    const argument = argsChoice(method, { none: "", typed: (type) => `_ args: ${type}, `, untyped: "_ args: Any, " });
+    const payload = swiftPayload(method);
+
+    return [
+        `    /// live ${commentText(method.summary)}, as an \`AsyncStream\` — \`for await\` over it; leaving the loop unsubscribes.`,
+        `    public func watch${toPascalCase(method.functionName)}(`,
+        `        ${argument}shardKey: String? = nil`,
+        // eslint-disable-next-line no-secrets/no-secrets -- a Swift type name, not a credential
+        `    ) throws -> AsyncStream<LunoraClient.LunoraStreamEvent> {`,
+        `        client.stream("${stringLiteral(method.functionPath)}", args: ${payload}, shardKey: shardKey)`,
+        `    }`,
+    ].join("\n");
+};
+
 const renderNamespaceStruct = (namespace: SdkNamespace): string => {
     const typeName = `${toPascalCase(namespace.name)}API`;
 
     const body = namespace.methods
-        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}` : renderCall(method)))
+        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}\n\n${renderWatch(method)}` : renderCall(method)))
         .join("\n\n");
 
     return [`/// Functions declared in \`${commentText(namespace.name)}\`.`, `public struct ${typeName} {`, `    let client: LunoraClient`, ``, body, `}`].join(

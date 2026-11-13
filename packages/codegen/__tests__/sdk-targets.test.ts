@@ -269,6 +269,20 @@ describe.each(targets.map((target) => [target.id, target] as const))("target: %s
         expect(/subscribe/iu.test(surface)).toBe(true);
     });
 
+    it("renders a stream form named watch for every query, next to the callback form", async () => {
+        expect.assertions(1);
+
+        const spec: OpenRpcDocument = {
+            methods: [{ name: "messages:list", "x-lunora-function-kind": "query" }],
+        };
+
+        const { files } = await generateSdk(spec, target);
+        const surface = Object.values(files).join("\n");
+
+        // `watch` is the generated prefix in every language (plan 395 §1); Dart already emits it.
+        expect(/watch/iu.test(surface)).toBe(true);
+    });
+
     it("renders no subscription for a write, which the server cannot re-run", async () => {
         expect.assertions(1);
 

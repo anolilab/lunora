@@ -239,11 +239,27 @@ const renderSubscribe = (method: SdkMethod): string => {
     ].join("\n");
 };
 
+/**
+ * A query's stream form: the live query as a `Client.Stream`. Closing it unsubscribes.
+ */
+const renderWatch = (method: SdkMethod): string => {
+    const args = argsParameter(method);
+
+    return [
+        `    /** live ${commentText(method.summary)}, as a \`Client.Stream\` — close it to unsubscribe. */`,
+        `    public Client.Stream watch${toPascalCase(method.functionName)}(`,
+        `            ${args.type} args,`,
+        `            String shardKey) {`,
+        `        return client.stream("${stringLiteral(method.functionPath)}", ${args.payload}, shardKey);`,
+        `    }`,
+    ].join("\n");
+};
+
 const renderNamespaceClass = (namespace: SdkNamespace): string => {
     const typeName = `${toPascalCase(namespace.name)}Api`;
 
     const body = namespace.methods
-        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}` : renderCall(method)))
+        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}\n\n${renderWatch(method)}` : renderCall(method)))
         .join("\n\n");
 
     return [

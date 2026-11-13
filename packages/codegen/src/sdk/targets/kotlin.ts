@@ -148,11 +148,27 @@ const renderSubscribe = (method: SdkMethod): string => {
     ].join("\n");
 };
 
+/**
+ * A query's stream form: the live query as a `Client.Stream`. Closing it unsubscribes.
+ */
+const renderWatch = (method: SdkMethod): string => {
+    const args = argsParameter(method);
+
+    return [
+        `    /** live ${commentText(method.summary)}, as a \`Client.Stream\` — close it to unsubscribe. */`,
+        `    fun watch${toPascalCase(method.functionName)}(`,
+        `        ${args.declaration},`,
+        `        shardKey: String? = null,`,
+        `    ): Client.Stream =`,
+        `        client.stream("${kotlinLiteral(method.functionPath)}", ${args.payload}, shardKey)`,
+    ].join("\n");
+};
+
 const renderNamespaceClass = (namespace: SdkNamespace): string => {
     const typeName = `${toPascalCase(namespace.name)}Api`;
 
     const body = namespace.methods
-        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}` : renderCall(method)))
+        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}\n\n${renderWatch(method)}` : renderCall(method)))
         .join("\n\n");
 
     return [`/** Functions declared in \`${commentText(namespace.name)}\`. */`, `class ${typeName}(private val client: Client) {`, body, `}`].join("\n");

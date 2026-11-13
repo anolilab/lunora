@@ -162,9 +162,24 @@ const renderSubscribe = (method: SdkMethod): string => {
     ].join("\n");
 };
 
+/**
+ * A query's stream form: the live query as an Enumerator with a stop callable. Calling stop unsubscribes.
+ */
+const renderWatch = (method: SdkMethod): string => {
+    const parameters = method.argsType === undefined && !method.takesArgs ? "shard_key: nil" : "args, shard_key: nil";
+    const payload = rubyPayload(method);
+
+    return [
+        `    # live ${commentText(method.summary)}, as an Enumerator — call \`stop\` on the pair to unsubscribe.`,
+        `    def watch_${memberName(method.functionName)}(${parameters})`,
+        `      @client.stream("${rubyLiteral(method.functionPath)}", ${payload}, shard_key)`,
+        `    end`,
+    ].join("\n");
+};
+
 const renderNamespaceClass = (namespace: SdkNamespace): string => {
     const body = namespace.methods
-        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}` : renderCall(method)))
+        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}\n\n${renderWatch(method)}` : renderCall(method)))
         .join("\n\n");
 
     return [
