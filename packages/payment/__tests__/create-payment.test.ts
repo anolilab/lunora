@@ -2451,6 +2451,41 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         expect(updateSubscription).not.toHaveBeenCalled();
     });
 
+    it("does not give the old plan back when the destination was made to grant access during the race", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // A webhook activates the destination between the target lookup and the write, so the provider's answer is refused.
+        const racing = Object.assign(Object.create(store) as object, {
+            upsertSubscription: async (record: Subscription, guard?: RevisionGuard) => {
+                if (record.id === "sub_2") {
+                    await store.upsertSubscription({ ...subscription("user_1", "active"), id: "sub_2" });
+
+                    return false;
+                }
+
+                return store.upsertSubscription(record, guard);
+            },
+        }) as PaymentStore;
+
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: async () => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: "price_2" };
+            },
+            updateSubscription: async (_id, patch) => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: patch.priceId ?? "price_2" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: racing });
+
+        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
+        await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ state: "active" });
+    });
+
     it("gives the old plan back when the new row cannot be stored, instead of leaving the subscription with no access", async () => {
         expect.assertions(3);
 
