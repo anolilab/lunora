@@ -54,9 +54,9 @@ interface AuthAuditHookConfig extends AppendAuthAuditOptions {
 interface AuditHookContext {
     body?: Record<string, unknown>;
     context?: {
-        newSession?: { session?: { impersonatedBy?: string; userId?: string }; user?: { email?: string; id?: string } } | null;
+        newSession?: { session?: { activeOrganizationId?: string; impersonatedBy?: string; userId?: string }; user?: { email?: string; id?: string } } | null;
         returned?: unknown;
-        session?: { session?: { impersonatedBy?: string; userId?: string }; user?: { email?: string; id?: string } } | null;
+        session?: { session?: { activeOrganizationId?: string; impersonatedBy?: string; userId?: string }; user?: { email?: string; id?: string } } | null;
     };
     headers?: Headers;
     /** The HTTP verb. better-auth sets it for a request over `handler`, not for a direct `auth.api.*` call. */
@@ -141,7 +141,10 @@ const SUFFIX_EVENTS: ReadonlyArray<readonly [suffix: string, event: AuthAuditEve
     ["/organization/remove-member", "org-member-remove"],
     ["/organization/update-member-role", "org-member-role-change"],
     ["/organization/set-active", "org-switch"],
-    ["/organization/set-active-team", "org-switch"],
+    ["/organization/set-active-team", "org-team-switch"],
+    ["/organization/create-role", "org-role-change"],
+    ["/organization/update-role", "org-role-change"],
+    ["/organization/delete-role", "org-role-change"],
     ["/organization/create-team", "org-team-create"],
     ["/organization/update-team", "org-team-update"],
     ["/organization/remove-team", "org-team-remove"],
@@ -518,6 +521,39 @@ const refineEvent = (context: AuditHookContext, event: AuthAuditEvent): AuthAudi
     return refined;
 };
 
+/** The `client_id` in a consent request's `oauth_query`, which is the OAuth query string the consent page was opened with. */
+const clientIdOf = (oauthQuery: unknown): string | undefined => {
+    if (typeof oauthQuery !== "string") {
+        return undefined;
+    }
+
+    return detailId(new URLSearchParams(oauthQuery).get("client_id") ?? undefined);
+};
+
+/** The client id a client-registration response returns, for `oauth-client-create` (its request does not carry one). */
+const createdClientId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined =>
+    event === "oauth-client-create" ? detailId(fieldOf(context.context?.returned, "client_id")) : undefined;
+
+/**
+ * The organization, team, invitation and member ids an `org-*` row names. A create endpoint is named by its
+ * response, since its request need not carry the new id; any other call falls back to the session's active organization.
+ */
+const organizationIds = (context: AuditHookContext, event: AuthAuditEvent): ReadonlyArray<readonly [key: string, value: string | undefined]> => {
+    const body = context.body ?? {};
+    const createdId = detailId(fieldOf(context.context?.returned, "id"));
+    const activeOrganizationId = detailId(fieldOf(fieldOf(context.context?.session, "session"), "activeOrganizationId"));
+    const memberIdOrEmail = detailId(body["memberIdOrEmail"]);
+
+    return [
+        ["organizationId", event === "org-create" ? createdId : (detailId(body["organizationId"]) ?? activeOrganizationId)],
+        ["teamId", detailId(body["teamId"]) ?? (event === "org-team-create" ? createdId : undefined)],
+        ["invitationId", detailId(body["invitationId"]) ?? (event === "org-invitation-create" ? createdId : undefined)],
+        // `remove-member` takes a member id or an email; an email is never copied into the trail.
+        ["memberId", detailId(body["memberId"]) ?? (memberIdOrEmail?.includes("@") === true ? undefined : memberIdOrEmail)],
+        ["targetUserId", detailId(body["userId"])],
+    ];
+};
+
 /**
  * The ids an audit row names, per event family, copied from an allow-list only.
  * Bodies and params carry secrets (`rotate-secret` returns one, `set-user-password`
@@ -536,20 +572,22 @@ const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Rec
         }
 
         if (event.startsWith("org-")) {
-            return [
-                ["organizationId", detailId(body["organizationId"])],
-                ["teamId", detailId(body["teamId"])],
-                ["invitationId", detailId(body["invitationId"])],
-                ["memberId", detailId(body["memberId"])],
-                ["targetUserId", detailId(body["userId"])],
-            ];
+            return organizationIds(context, event);
         }
 
         if (event.startsWith("oauth-")) {
             return [
-                ["clientId", detailId(body["client_id"]) ?? detailId(params["client_id"])],
+                [
+                    "clientId",
+                    detailId(body["client_id"]) ?? detailId(params["client_id"]) ?? clientIdOf(body["oauth_query"]) ?? createdClientId(context, event),
+                ],
                 ["resourceIdentifier", detailId(params["identifier"])],
             ];
+        }
+
+        if (event === "token-refresh") {
+            // A refresh grant names the client it refreshes for; the row must say which.
+            return [["clientId", detailId(body["client_id"])]];
         }
 
         if (event.startsWith("scim-")) {
@@ -612,7 +650,7 @@ const buildAuditEntry = (
     return {
         ...resolveActor(context),
         event,
-        outcome: resolveOutcome(context),
+        outcome: event === "oauth-consent" && context.body?.["accept"] === false ? "failure" : resolveOutcome(context),
         ts: now,
         ...(ip === undefined ? {} : { ip }),
         ...(targetEmail === undefined ? {} : { targetEmail }),

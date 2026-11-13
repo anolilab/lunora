@@ -292,7 +292,7 @@ const EXPECTED_BY_METHOD: Record<string, AuthAuditEvent | undefined> = {
     "POST /organization/remove-team": "org-team-remove",
     "POST /organization/remove-team-member": "org-team-member-remove",
     "POST /organization/set-active": "org-switch",
-    "POST /organization/set-active-team": "org-switch",
+    "POST /organization/set-active-team": "org-team-switch",
     "POST /organization/update": "org-update",
     "POST /organization/update-member-role": "org-member-role-change",
     "POST /organization/update-team": "org-team-update",
