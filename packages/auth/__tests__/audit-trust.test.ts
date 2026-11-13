@@ -60,4 +60,30 @@ describe("audit rows trust the response and the session over a stray body field"
 
         expect(entry?.detail).toMatchObject({ targetUserId: "member_c" });
     });
+
+    it("names the organization a new team is made in from the request", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({
+            body: { name: "Platform", organizationId: "org_b" },
+            context: { session: { session: { activeOrganizationId: "org_a" } } },
+            method: "POST",
+            path: "/api/auth/organization/create-team",
+        });
+
+        expect(entry?.detail).toMatchObject({ organizationId: "org_b" });
+    });
+
+    it("does not take a cancelled invitation's organization from the request", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({
+            body: { invitationId: "inv_2", organizationId: "org_forged" },
+            context: { returned: { status: true } },
+            method: "POST",
+            path: "/api/auth/organization/cancel-invitation",
+        });
+
+        expect(entry?.detail).not.toHaveProperty("organizationId");
+    });
 });

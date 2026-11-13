@@ -605,15 +605,6 @@ const invitationOrganizationId = (context: AuditHookContext, event: AuthAuditEve
     return detailId(fieldOf(fieldOf(returned, "invitation"), "organizationId")) ?? detailId(fieldOf(fieldOf(returned, "member"), "organizationId"));
 };
 
-/**
- * An accept, reject or cancel of an existing invitation is about the organization that invitation belongs to. The
- * request's own organization id is not trusted for it, since the request can name any organization.
- */
-const invitationAnswerOrganizationId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined =>
-    event === "org-invitation-accept" || event === "org-invitation-reject" || event === "org-invitation-cancel"
-        ? invitationOrganizationId(context, event)
-        : undefined;
-
 /** The organization a switch moved to: the answer to `set-active` is that organization, and `null` when the switch cleared it. */
 const switchedOrganizationId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined =>
     event === "org-switch" ? detailId(fieldOf(context.context?.returned, "id")) : undefined;
@@ -691,6 +682,39 @@ const memberRoleOf = (value: unknown): string | undefined => {
 };
 
 /**
+ * The organization a row names. A new organization or team is named by its request or response. An existing team is found
+ * within the active organization, so a body cannot move it. An accept, reject or cancel is about its invitation's organization,
+ * and the request is not trusted for it. Otherwise the request's organization, then the response's, then the session's.
+ */
+const organizationOf = (
+    context: AuditHookContext,
+    event: AuthAuditEvent,
+    body: Record<string, unknown>,
+    createdId: string | undefined,
+    activeOrganizationId: string | undefined,
+): string | undefined => {
+    if (event === "org-create") {
+        return createdId;
+    }
+
+    if (event.startsWith("org-team-") && event !== "org-team-create") {
+        return activeOrganizationId;
+    }
+
+    if (event === "org-invitation-accept" || event === "org-invitation-reject" || event === "org-invitation-cancel") {
+        return invitationOrganizationId(context, event);
+    }
+
+    return (
+        detailId(body["organizationId"]) ??
+        detailId(fieldOf(context.context?.returned, "organizationId")) ??
+        invitationOrganizationId(context, event) ??
+        switchedOrganizationId(context, event) ??
+        activeOrganizationId
+    );
+};
+
+/**
  * The organization, team, invitation and member ids an `org-*` row names. A create endpoint is named by its
  * response, since its request need not carry the new id; any other call falls back to the session's active organization.
  */
@@ -712,21 +736,8 @@ const organizationIds = (context: AuditHookContext, event: AuthAuditEvent): Read
     const memberReferenceOf = (value: unknown): string | undefined => (typeof value === "string" && value.includes("@") ? undefined : detailId(value));
     const memberReference = memberReferenceOf(body["memberIdOrEmail"]);
 
-    // A team is found within the active organization, so a body that names another organization cannot move it.
-    const teamOrganizationId = event.startsWith("org-team-") ? activeOrganizationId : undefined;
-    const organizationId =
-        event === "org-create"
-            ? createdId
-            : (teamOrganizationId ??
-              invitationAnswerOrganizationId(context, event) ??
-              detailId(body["organizationId"]) ??
-              detailId(fieldOf(context.context?.returned, "organizationId")) ??
-              invitationOrganizationId(context, event) ??
-              switchedOrganizationId(context, event) ??
-              activeOrganizationId);
-
     return [
-        ["organizationId", organizationId],
+        ["organizationId", organizationOf(context, event, body, createdId, activeOrganizationId)],
         ["teamId", detailId(body["teamId"]) ?? (event === "org-team-create" ? createdId : undefined)],
         ["roleId", detailId(body["roleId"]) ?? (event === "org-role-change" ? createdId : undefined)],
         ["roleName", detailId(body["roleName"]) ?? (event === "org-role-change" ? detailId(body["role"]) : undefined)],
