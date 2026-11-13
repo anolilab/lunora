@@ -57,6 +57,7 @@ public final class ConformanceTest {
         pageDeltaFramesMergeIntoTheCachedResult();
         rowDeltaWithoutMergeableBaseIsNotPublishedAsAnEnvelope();
         unmergeableRunFreezesTheCursor();
+        identityChangeEvictsTheDeltaState();
         subscriptionStreamYieldsFrameValuesInOrder();
         shapeSubscribeFrame();
         shapeSubscriptionsResendAfterReconnect();
@@ -984,23 +985,66 @@ public final class ConformanceTest {
      * An unmergeable row change poisons the subscription: later deltas neither publish nor move the
      * resume cursor, until a resubscribe or a data frame clears it.
      */
-    @SuppressWarnings("unchecked")
     private static void unmergeableRunFreezesTheCursor() throws IOException {
-        List<Object> cases = (List<Object>) fixture("ws-frames.json").get("pageDeltaPoisonCases");
+        runDeltaCases("pageDeltaPoisonCases", 3);
+    }
 
-        check(cases.size() == 3, "ws-frames.json must carry 3 pageDeltaPoisonCases");
+    /**
+     * Changing identity drops the previous identity's cached base and its freeze along with the
+     * resume cursor, so neither carries over to the new one.
+     */
+    private static void identityChangeEvictsTheDeltaState() throws IOException {
+        runDeltaCases("identityChangeEvictionCases", 2);
+    }
+
+    /**
+     * One loop for every delta-sequence fixture key: seed, optionally freeze and change identity,
+     * then replay the steps. A step is a frame with its publish count (and value, and the error
+     * codes the subscription must report for that frame alone, when named) or a resend checked
+     * against the resume position it names.
+     */
+    @SuppressWarnings("unchecked")
+    private static void runDeltaCases(String key, int expected) throws IOException {
+        List<Object> cases = (List<Object>) fixture("ws-frames.json").get(key);
+
+        check(cases.size() == expected, "ws-frames.json must carry " + expected + " " + key);
 
         for (Object entry : cases) {
             Map<String, Object> testCase = (Map<String, Object>) entry;
             String name = (String) testCase.get("name");
+            Map<String, Object> change = (Map<String, Object>) testCase.get("identityChange");
             Client client = new Client("https://app.example", null);
             List<Map<String, Object>> sent = new ArrayList<>();
             List<Object> seen = new ArrayList<>();
+            List<String> errors = new ArrayList<>();
+
+            if (change != null) {
+                client.identity((String) change.get("from"));
+            }
 
             client.attachSocket(sent::add, null);
-            client.subscribe("messages:list", new LinkedHashMap<>(), seen::add, null, null);
+            client.subscribe(
+                    "messages:list",
+                    new LinkedHashMap<>(),
+                    seen::add,
+                    error -> errors.add(error.code()),
+                    null);
             client.handleFrame(Json.write(testCase.get("seedFrame")));
-            seen.clear();
+
+            if (testCase.containsKey("freezeFrame")) {
+                client.handleFrame(Json.write(testCase.get("freezeFrame")));
+                check(
+                        errors.equals(testCase.get("freezeErrors")),
+                        name
+                                + ": the freeze must report "
+                                + testCase.get("freezeErrors")
+                                + ", got "
+                                + errors);
+            }
+
+            if (change != null) {
+                client.identity((String) change.get("to"));
+            }
 
             for (Object stepEntry : (List<Object>) testCase.get("steps")) {
                 Map<String, Object> step = (Map<String, Object>) stepEntry;
@@ -1017,16 +1061,22 @@ public final class ConformanceTest {
                     check(
                             sameNumber(query.get("sinceSeq"), resume.get("sinceSeq"))
                                     && resume.get("sinceEpoch").equals(query.get("sinceEpoch")),
-                            name + ": the resume must carry the pre-run position, sent " + query);
+                            name + ": the resume must carry " + resume + ", sent " + query);
 
                     continue;
                 }
 
                 seen.clear();
+                errors.clear();
                 client.handleFrame(Json.write(step.get("frame")));
                 check(
                         seen.size() == ((Number) step.get("publishes")).intValue(),
                         name + ": publishes, got " + seen.size());
+                // Only a step that names its errors is pinned: a freeze the fixture does not list
+                // is not part of the contract.
+                if (step.containsKey("errors")) {
+                    check(errors.equals(step.get("errors")), name + ": errors, got " + errors);
+                }
 
                 if (step.containsKey("valueWire")) {
                     check(
