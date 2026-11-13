@@ -8006,7 +8006,12 @@ class LunoraClient {
             return;
         }
 
-        this.ackAndAdvanceCursor(state, message.cursor, message.epoch);
+        // The settled cursor is past rows of the held run this client never applied, so taking it would
+        // resume after them and ACK a checkpoint it does not have. The run is void; a resume starts before it.
+        const heldRun = state.pendingDeltaRun !== undefined;
+
+        state.pendingDeltaRun = undefined;
+        this.ackAndAdvanceCursor(state, heldRun ? undefined : message.cursor, heldRun ? undefined : message.epoch);
 
         if (message.lastMutationId !== undefined) {
             // `Math.max`, like the `data`-frame and cross-tab `settled` siblings.

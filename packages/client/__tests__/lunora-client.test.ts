@@ -1749,6 +1749,53 @@ describe("lunoraClient", () => {
             vi.useRealTimers();
         });
 
+        it("discards a held delta run on a settled frame without taking its cursor", () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            // The settled cursor is past rows of the run the client never applied; taking it would
+            // resume after them (protocol README 5.4).
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+            const first = latestSocket();
+
+            first.open();
+
+            const subId = firstSub(first).id as string;
+
+            first.receive({ cursor: 5, data: [{ _id: "a" }, { _id: "b" }], epoch: "e1", id: subId, type: "data" });
+            first.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: subId, more: true, type: "delta" });
+            first.receive({ cursor: 6, epoch: "e1", id: subId, type: "settled" });
+
+            // The held frame was discarded, never shown.
+            expect(received.at(-1)).toStrictEqual([{ _id: "a" }, { _id: "b" }]);
+
+            first.triggerClose();
+            vi.advanceTimersByTime(15);
+
+            const second = latestSocket();
+
+            second.open();
+
+            const resumed = firstSub(second) as { query: { sinceEpoch?: string; sinceSeq?: number } };
+
+            expect(resumed.query.sinceSeq).toBe(5);
+            expect(resumed.query.sinceEpoch).toBe("e1");
+
+            client.close();
+            vi.useRealTimers();
+        });
+
         it("commits a delta run once: one listener notification and one cross-tab broadcast", async () => {
             expect.assertions(4);
 
