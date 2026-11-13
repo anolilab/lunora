@@ -443,23 +443,34 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             throw conflict();
         }
 
-        const outcome = await storeSubscription(store, policy, target, synced, { ifRevision: target?.revision });
+        // The new row did not land, so the old one goes back to granting access. Only the row this call retired is
+        // restored: a revision another write has since moved past is left as that write made it. And not while a write
+        // has made the new row grant access, because that would leave two plans granting at once.
+        const restoreRetired = async (): Promise<void> => {
+            const current = await store.getSubscription(adapter.identifier, existing.id);
+            const destination = await store.getSubscription(adapter.identifier, synced.id);
+
+            if (current?.state === "canceled" && current.revision === (existing.revision ?? 0) + 1 && !ENTITLING_STATES.has(destination?.state ?? "canceled")) {
+                await store.upsertSubscription(existing, { ifRevision: current.revision });
+            }
+        };
+
+        let outcome: SubscriptionWrite;
+
+        try {
+            outcome = await storeSubscription(store, policy, target, synced, { ifRevision: target?.revision });
+        } catch (error) {
+            // A failed write after the retire leaves nothing granting access, so the old row is restored before the error goes up.
+            if (retires) {
+                await restoreRetired();
+            }
+
+            throw error;
+        }
 
         if (outcome === "rejected") {
             if (retires) {
-                // The new row did not land, so the old one goes back to granting access. Only the row this call retired
-                // is restored: a revision another write has since moved past is left as that write made it. And not while
-                // a write has made the new row grant access, because that would leave two plans granting at once.
-                const current = await store.getSubscription(adapter.identifier, existing.id);
-                const destination = await store.getSubscription(adapter.identifier, synced.id);
-
-                if (
-                    current?.state === "canceled" &&
-                    current.revision === (existing.revision ?? 0) + 1 &&
-                    !ENTITLING_STATES.has(destination?.state ?? "canceled")
-                ) {
-                    await store.upsertSubscription(existing, { ifRevision: current.revision });
-                }
+                await restoreRetired();
             }
 
             throw conflict();

@@ -2472,6 +2472,38 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         expect(updateSubscription).not.toHaveBeenCalled();
     });
 
+    it("gives the old plan back when the new row's write fails outright, and surfaces the error", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // The store fails the destination write itself, not a guard: the old row was already retired by then.
+        const failing = Object.assign(Object.create(store) as object, {
+            upsertSubscription: (record: Subscription, guard?: RevisionGuard) => {
+                if (record.id === "sub_2") {
+                    return Promise.reject(new Error("database unavailable"));
+                }
+
+                return store.upsertSubscription(record, guard);
+            },
+        }) as PaymentStore;
+
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: async () => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: "price_2" };
+            },
+            updateSubscription: async (_id, patch) => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: patch.priceId ?? "price_2" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: failing });
+
+        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).rejects.toThrow("database unavailable");
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
+    });
+
     it("refuses the plan change, and writes no new row, when the old plan changed before it could be retired", async () => {
         expect.assertions(3);
 
