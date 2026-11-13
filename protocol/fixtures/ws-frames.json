@@ -779,6 +779,201 @@
             ]
         }
     ],
+    "pageDeltaRunCases": [
+        {
+            "name": "run-commits-once-on-its-last-frame",
+            "$comment": "A run of delta frames marked more: true is held until its last frame, which carries no more. Nothing publishes mid-run; the last frame publishes once with every row of the run merged in order, and carries the cursor (protocol README 5.4).",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "messages" },
+                        "more": true
+                    },
+                    "publishes": 0
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m5", "op": "insert", "row": { "_id": "m5", "text": "five" }, "table": "messages" },
+                        "more": true
+                    },
+                    "publishes": 0
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m2", "op": "update", "row": { "_creationTime": 1002, "_id": "m2", "text": "TWO" }, "table": "messages" },
+                        "cursor": 6,
+                        "epoch": "e1"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_2",
+                        "isDone": false,
+                        "page": [
+                            { "_creationTime": 1001, "_id": "m1", "text": "ONE" },
+                            { "_creationTime": 1002, "_id": "m2", "text": "TWO" },
+                            { "_id": "m5", "text": "five" }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "run-held-when-the-socket-drops-resumes-from-before-the-run",
+            "$comment": "The cursor moves only when a run commits. A reconnect while a run is held resumes from the cursor before the run, so the server replays the whole run (protocol README 5.4).",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "messages" },
+                        "more": true
+                    },
+                    "publishes": 0
+                },
+                {
+                    "resume": { "sinceSeq": 5, "sinceEpoch": "e1" }
+                }
+            ]
+        },
+        {
+            "name": "data-frame-mid-run-discards-the-held-frames",
+            "$comment": "A data snapshot arriving mid-run is authoritative: the held frames are discarded, not merged onto the snapshot. A delta after the snapshot merges onto the snapshot alone, so the discarded row change does not reappear.",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "messages" },
+                        "more": true
+                    },
+                    "publishes": 0
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "data",
+                        "data": {
+                            "continueCursor": "c_3",
+                            "isDone": false,
+                            "page": [
+                                { "_creationTime": 1001, "_id": "m1", "text": "uno" },
+                                { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                            ]
+                        },
+                        "cursor": 7,
+                        "epoch": "e2"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_3",
+                        "isDone": false,
+                        "page": [
+                            { "_creationTime": 1001, "_id": "m1", "text": "uno" },
+                            { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                        ]
+                    }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m2", "op": "update", "row": { "_creationTime": 1002, "_id": "m2", "text": "TWO" }, "table": "messages" },
+                        "cursor": 8,
+                        "epoch": "e2"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_3",
+                        "isDone": false,
+                        "page": [
+                            { "_creationTime": 1001, "_id": "m1", "text": "uno" },
+                            { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "delta-without-more-publishes-on-arrival",
+            "$comment": "A delta with no more is a whole change on its own (a legacy broadcastDelta, or the last frame of a single-frame run) and is applied on arrival.",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [{ "_creationTime": 1001, "_id": "m1", "text": "one" }]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "messages" },
+                        "cursor": 6,
+                        "epoch": "e1"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_2",
+                        "isDone": false,
+                        "page": [{ "_creationTime": 1001, "_id": "m1", "text": "ONE" }]
+                    }
+                }
+            ]
+        }
+    ],
     "refreshBatchFrames": {
         "$comment": "refreshBatch only. Nothing is delivered until `batchEnd`; then each subscription's callback runs once, with its last value in the bracket.",
         "frames": [
