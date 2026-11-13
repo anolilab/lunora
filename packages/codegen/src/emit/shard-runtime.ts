@@ -778,6 +778,9 @@ const PAYMENT_METHODS = [
     "updateSubscription",
 ] as const;
 
+/** The `LunoraPayment` members that are data rather than methods; the stub throws when one is read. */
+const PAYMENT_PROPERTIES = ["provider", "store"] as const;
+
 /**
  * The `ctx.payments` code fragments woven into the generated ShardDO, or empty strings when the
  * project doesn't use payments. Unlike `ctx.ai` (a stateless binding), the facade is stateful —
@@ -820,6 +823,7 @@ const emitPaymentFragments = (
                 },`,
         stub: renderThrowingStub("paymentStub: LunoraPayment", "ctx.payments: no payment configured. Pass `payment` to createShardDO().", PAYMENT_METHODS, {
             cast: " as unknown as LunoraPayment",
+            getters: PAYMENT_PROPERTIES,
             sync: true,
         }),
     };
