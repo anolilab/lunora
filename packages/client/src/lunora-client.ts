@@ -3433,7 +3433,7 @@ class LunoraClient {
             }
         }
 
-        replaySubscriptionRefusal(state, errorCallback, replay === undefined);
+        replaySubscriptionRefusal(state, errorCallback);
 
         this.ensureSocket(options.shardKey);
         this.sendSubscribeIfOpen(state);
@@ -5539,7 +5539,8 @@ class LunoraClient {
             } else {
                 // A refusal answers the request, as for a refused slot below.
                 this.markQueryRejected(state, true);
-                failSubscription(state, { code: "WIRE_ENCODE_FAILED", message: "could not encode this subscription's args for a poll" });
+                state.refusal = { code: "WIRE_ENCODE_FAILED", message: "could not encode this subscription's args for a poll" };
+                failSubscription(state, state.refusal);
             }
         }
 
@@ -5588,10 +5589,8 @@ class LunoraClient {
             if (!slot.ok) {
                 // A refusal answers the request: without this a denied query on a polling shard stays pending forever.
                 this.markQueryRejected(state, true);
-                failSubscription(state, {
-                    code: slot.error.code,
-                    message: slot.error.message,
-                });
+                state.refusal = { code: slot.error.code, message: slot.error.message };
+                failSubscription(state, state.refusal);
 
                 continue;
             }
