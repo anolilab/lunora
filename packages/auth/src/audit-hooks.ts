@@ -10,6 +10,7 @@
  * break an auth request.
  */
 
+import { cyrb53 } from "@lunora/values";
 import { createAuthMiddleware } from "better-auth/api";
 
 import { onCloudflareEdge } from "../../../shared/on-cloudflare-edge";
@@ -95,7 +96,7 @@ const SUFFIX_EVENTS: ReadonlyArray<readonly [suffix: string, event: AuthAuditEve
     ["/delete-user", "user-delete"],
     ["/delete-user/callback", "user-delete"],
     ["/delete-anonymous-user", "user-delete"],
-    ["/forget-password/email-otp", "password-reset"],
+    ["/forget-password/email-otp", "password-reset-request"], // secret-scanner:allow -- endpoint path or event name, not a credential
     ["/two-factor/generate-backup-codes", "mfa-backup-codes-regenerate"],
     ["/one-time-token/generate", "one-time-token-create"],
     ["/one-time-token/verify", "sign-in"],
@@ -143,8 +144,12 @@ const branchEventForPath = (normalized: string): AuthAuditEvent | undefined => {
         return "password-change";
     }
 
-    if (ends("/reset-password") || ends("/request-password-reset") || ends("/forget-password")) {
+    if (ends("/reset-password")) {
         return "password-reset";
+    }
+
+    if (ends("/request-password-reset") || ends("/forget-password")) {
+        return "password-reset-request"; // secret-scanner:allow -- endpoint path or event name, not a credential
     }
 
     if (ends("/verify-email")) {
@@ -303,7 +308,12 @@ const MAX_DETAIL_ID_LENGTH = 256;
 const detailId = (value: unknown): string | undefined => {
     const id = stringOf(value);
 
-    return id === undefined ? undefined : id.slice(0, MAX_DETAIL_ID_LENGTH);
+    if (id === undefined || id.length <= MAX_DETAIL_ID_LENGTH) {
+        return id;
+    }
+
+    // Two long ids that share a prefix would otherwise read the same, so the cut keeps a hash of the whole value.
+    return `${id.slice(0, MAX_DETAIL_ID_LENGTH - 15)}~${cyrb53(id).toString(16).padStart(14, "0")}`;
 };
 
 const fieldOf = (value: unknown, key: string): unknown =>

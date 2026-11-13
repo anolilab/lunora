@@ -68,6 +68,8 @@ type AuthAuditEvent =
     | "passkey-rename"
     | "password-change"
     | "password-reset"
+    // A request that sends a reset code or link. The change itself is recorded by the reset event.
+    | "password-reset-request"
     | "phone-verification"
     | "session-revoke"
     | "session-switch"
@@ -172,6 +174,34 @@ interface ReadAuthAuditOptions {
 
 /** Merged rule set: credential/secret scrubbing (`standardRules`) plus PII (`piiRules`) for the free-form detail payload. */
 const AUDIT_REDACT_RULES = [...standardRules, ...piiRules];
+
+/**
+ * Detail keys that carry an identifier the hooks copied from a request, allow-listed by name. Value-based redaction
+ * would replace a numeric id (a five-digit user id reads as a phone or code), so these keys skip it. Credentials and
+ * emails never reach these keys: the hooks copy only the id fields named here.
+ */
+const IDENTIFIER_DETAIL_KEYS: ReadonlySet<string> = new Set([
+    "clientId",
+    "invitationId",
+    "keyId",
+    "memberId",
+    "organizationId",
+    "providerId",
+    "resourceIdentifier",
+    "roleId",
+    "scimGroupId",
+    "scimUserId",
+    "targetUserId",
+    "teamId",
+]);
+
+/** Redact the free-form detail, leaving the allow-listed identifier keys as the hooks wrote them. */
+const redactDetail = (detail: Record<string, unknown>): Record<string, unknown> => {
+    const identifiers = Object.fromEntries(Object.entries(detail).filter(([key]) => IDENTIFIER_DETAIL_KEYS.has(key)));
+    const rest = Object.fromEntries(Object.entries(detail).filter(([key]) => !IDENTIFIER_DETAIL_KEYS.has(key)));
+
+    return { ...redact(maskCredentials(rest) as Record<string, unknown>, AUDIT_REDACT_RULES), ...identifiers };
+};
 
 const DEFAULT_READ_LIMIT = 1000;
 
@@ -282,7 +312,7 @@ const appendAuthAuditEntry = async (
     let detail: Record<string, unknown> | undefined;
 
     if (entry.detail !== undefined) {
-        detail = options.redactDetail === false ? entry.detail : redact(maskCredentials(entry.detail) as Record<string, unknown>, AUDIT_REDACT_RULES);
+        detail = options.redactDetail === false ? entry.detail : redactDetail(entry.detail);
     }
 
     await executor.run(

@@ -105,12 +105,12 @@ const EXPECTED: Record<string, AuthAuditEvent | undefined> = {
     "/email-otp/change-email": "email-change",
     "/email-otp/check-verification-otp": undefined,
     "/email-otp/request-email-change": undefined,
-    "/email-otp/request-password-reset": "password-reset",
+    "/email-otp/request-password-reset": "password-reset-request", // secret-scanner:allow -- endpoint path or event name, not a credential
     "/email-otp/reset-password": "password-reset",
     "/email-otp/send-verification-otp": undefined,
     "/email-otp/verify-email": "email-verification",
     "/error": undefined,
-    "/forget-password/email-otp": "password-reset",
+    "/forget-password/email-otp": "password-reset-request", // secret-scanner:allow -- endpoint path or event name, not a credential
     "/get-access-token": undefined,
     "/get-session": undefined,
     "/is-username-available": undefined,
@@ -132,12 +132,12 @@ const EXPECTED: Record<string, AuthAuditEvent | undefined> = {
     "/passkey/update-passkey": "passkey-rename",
     "/passkey/verify-authentication": "sign-in",
     "/passkey/verify-registration": "passkey-add",
-    "/phone-number/request-password-reset": "password-reset",
+    "/phone-number/request-password-reset": "password-reset-request", // secret-scanner:allow -- endpoint path or event name, not a credential
     "/phone-number/reset-password": "password-reset",
     "/phone-number/send-otp": undefined,
     "/phone-number/verify": "sign-in",
     "/refresh-token": "token-refresh",
-    "/request-password-reset": "password-reset",
+    "/request-password-reset": "password-reset-request", // secret-scanner:allow -- endpoint path or event name, not a credential
     "/reset-password": "password-reset",
     "/reset-password/:token": undefined,
     "/revoke-other-sessions": "session-revoke",
