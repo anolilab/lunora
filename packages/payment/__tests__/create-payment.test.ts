@@ -2361,6 +2361,27 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
     });
 
+    it("gives a moved subscription the creation date of the plan it lands on, not the one it left", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), createdAt: 100 });
+
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: async () => {
+                return { ...subscription("user_1", "active"), createdAt: 500, id: "sub_2", priceId: "price_2" };
+            },
+            updateSubscription: async () => {
+                return { ...subscription("user_1", "active"), createdAt: 500, id: "sub_2", priceId: "price_2" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).resolves.toMatchObject({ createdAt: 500, id: "sub_2" });
+        await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ createdAt: 500, referenceId: "user_1" });
+    });
+
     it("returns to a plan whose row an earlier change canceled, replacing that row", async () => {
         expect.assertions(2);
 

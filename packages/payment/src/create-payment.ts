@@ -17,7 +17,7 @@ import { addMoney, compareMoney, isZeroMoney, maxMoney, subtractMoney } from "./
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
-import { overlayProviderSubscription } from "./store";
+import { overlayProviderSubscription, ownerOf } from "./store";
 import type { SubscriptionWrite } from "./subscription-policy";
 import { ENTITLING_STATES, storeSubscription } from "./subscription-policy";
 import applyWebhookAction from "./sync";
@@ -418,7 +418,6 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     // silently, and a retry is safe for the same reason.
     const recordSubscriptionAnswer = async (existing: Subscription, answer: Subscription, verb: "updated" | "resumed"): Promise<Subscription> => {
         const settled = await adapter.getSubscriptionStatus(answer.id);
-        const synced = overlayProviderSubscription(existing, settled);
         const policy = options.singleSubscriptionPerReference ?? false;
         const conflict = (): LunoraPaymentError =>
             new LunoraPaymentError(
@@ -428,8 +427,13 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
         // A provider can move the subscription to a new id (Autumn: a plan change is a new `customer::product` row). The
         // target is guarded by whatever row sits under its id now: absent, or a row from an earlier plan that is replaced.
-        const moved = synced.id !== existing.id;
-        const target = moved ? await store.getSubscription(adapter.identifier, synced.id) : existing;
+        const moved = settled.id !== existing.id;
+        const target = moved ? await store.getSubscription(adapter.identifier, settled.id) : existing;
+
+        // A moved row keeps the history of the row it lands on (its creation date and last event), not the one it left,
+        // and keeps the owner the subscription already had.
+        const overlaid = overlayProviderSubscription(target, settled);
+        const synced: Subscription = moved ? { ...overlaid, referenceId: ownerOf(existing.referenceId, settled.referenceId) } : overlaid;
 
         // The old row retires first, and only once the new one grants access: a retire that loses a race stops the write
         // there, so both rows never grant at once. A downgrade that leaves the old plan running keeps it active.
