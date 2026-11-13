@@ -269,18 +269,30 @@ class TestWsFrameConsumer(unittest.TestCase):
                 if "epoch" in expect:
                     self.assertEqual(descriptor.get("epoch"), expect["epoch"])
 
-    def test_an_unmergeable_row_change_freezes_the_resume_cursor(self):
-        cases = load("ws-frames.json")["pageDeltaPoisonCases"]
-        self.assertTrue(cases, "pageDeltaPoisonCases must carry cases")
+    def _replay_delta_cases(self, key):
+        """Drive every case under ``key`` through one client, checking each step's publishes, resend query and errors."""
+
+        cases = load("ws-frames.json")[key]
+        self.assertTrue(cases, f"{key} must carry cases")
 
         for case in cases:
             with self.subTest(case=case["name"]):
                 sent: list = []
-                client = LunoraClient("https://app.example")
+                # An identity of None is "unset": the constructor sets it directly, so a first identity evicts nothing.
+                client = LunoraClient("https://app.example", identity=case.get("identityChange", {}).get("from"))
                 client.attach_socket(sent.append)
                 seen: list = []
-                client.subscribe("messages:list", {"channel": "general"}, seen.append)
+                errors: list = []
+                client.subscribe("messages:list", {"channel": "general"}, seen.append, errors.append)
                 client.handle_frame(case["seedFrame"])
+
+                if "freezeFrame" in case:
+                    client.handle_frame(case["freezeFrame"])
+                    self.assertEqual([error.code for error in errors], case["freezeErrors"])
+                    errors.clear()
+                if "identityChange" in case:
+                    client.identity = case["identityChange"]["to"]
+                    seen.clear()
 
                 for step in case["steps"]:
                     if "resume" in step:
@@ -293,10 +305,22 @@ class TestWsFrameConsumer(unittest.TestCase):
                         continue
 
                     seen.clear()
+                    errors.clear()
                     client.handle_frame(step["frame"])
                     self.assertEqual(len(seen), step["publishes"])
                     if "valueWire" in step:
                         self.assertEqual(encode_wire(seen[-1]), step["valueWire"])
+                    # Only a step that names its errors is checked: a held row change also notifies, and the
+                    # fixture pins the notice where it matters rather than on every held step.
+                    if "errors" in step:
+                        self.assertEqual([error.code for error in errors], step["errors"])
+
+    def test_an_unmergeable_row_change_freezes_the_resume_cursor(self):
+        self._replay_delta_cases("pageDeltaPoisonCases")
+
+    def test_an_identity_change_evicts_the_cached_base_and_the_poison(self):
+        self._replay_delta_cases("identityChangeEvictionCases")
+        self.assertEqual(len(load("ws-frames.json")["identityChangeEvictionCases"]), 2)
 
     def test_row_delta_without_a_mergeable_base_never_publishes_the_envelope(self):
         delta = {"key": "m1", "op": "update", "row": {"_id": "m1"}, "table": "messages"}
