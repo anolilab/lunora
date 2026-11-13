@@ -42,7 +42,8 @@ rows.
 
 ```ts
 const frames = subscriptionFrames({
-    ...subId,
+    // … cursorSuffix, diffKey, lastMutationId, nextResult, pageDeltas, previousJson, snapshotJson,
+    subId,
     // First REAL dependency, never the unvouchable sentinel. `tables` is
     // insertion-ordered, so a query that read `ctx.kv` before touching a
     // table would otherwise put `UNVOUCHABLE_DEP` on the wire as this
@@ -322,10 +323,13 @@ Verify (runnable here):
 - `packages/client/src/delta-merge.ts`, the local `interface MutationDelta`: add a doc comment on
   `table` saying it is the single table the query read, or `"__lunora__"` when it read several or
   none, and that the merge never uses it (protocol README §5.1.1). Do not change code.
-- `sdks/README.md` footnote ⁷ (the line starting `⁷ **A row-change \`delta\` frame is merged`):
-after "...by `_id`, with the normative insert placement (protocol README §5.1.1)." insert:
-"`table`is the query's one read table, or`\"**lunora**\"` for a query that read several or
-  none; no port routes or keys by it."
+- `sdks/README.md` footnote 7 (the line starting with the superscript seven and
+  "**A row-change `delta` frame is merged"): directly after the sentence ending
+  "with the normative insert placement (protocol README §5.1.1)." insert this exact text:
+
+```text
+`table` is the query's one read table, or `"__lunora__"` for a query that read several or none; no port routes or keys by it.
+```
 
 ### Step 9 — gates
 
