@@ -16,6 +16,7 @@ import { derivedIdempotencyKey, LOCAL_REFUND_CLAIM_TYPE, localRefundKey } from "
 import { addMoney, compareMoney, isZeroMoney, maxMoney, subtractMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
+import { SUBSCRIPTION_TERMINAL_STATES } from "./state-machine";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription, ownerOf } from "./store";
 import type { SubscriptionWrite } from "./subscription-policy";
@@ -67,6 +68,32 @@ let lastUsageStamp = 0;
 const swapPrimaryPrice = (stored: Subscription, answer: Subscription): ReadonlyArray<string> => [
     ...new Set([answer.priceId, ...(stored.priceIds ?? []).filter((id) => id !== stored.priceId)]),
 ];
+
+/**
+ * The row an update or resume answer is recorded as, over `target` (the row under the answer's id).
+ *
+ * A moved row keeps the history of the row it lands on (its creation date and last event), not the one it left, and the
+ * owner the subscription already had. A status read that failed can leave the price set unknown, and a full-row write
+ * would then erase the one stored; these operations change only the primary price, so the stored set stands with that
+ * price swapped. The seat count is kept the same way, since a mutation answer can omit it (Creem maps missing units to
+ * one). An accepted resume clears the period-end cancel even when the status read still reports it (Autumn derives the
+ * flag from `canceled_at`, which can trail the uncancel). And any provider event created before the call describes the
+ * row as it was, so the time the call started is the floor for the last applied event.
+ */
+const answerRow = (
+    existing: Subscription,
+    target: Subscription | undefined,
+    answer: { calledAt: number; moved: boolean; readFailed: boolean; setsQuantity: boolean; settled: Subscription; verb: "resumed" | "updated" },
+): Subscription => {
+    const { calledAt, moved, readFailed, settled } = answer;
+    const priceIds = !moved && settled.priceIds === undefined && existing.priceIds !== undefined ? swapPrimaryPrice(existing, settled) : settled.priceIds;
+    const quantity = readFailed && !answer.setsQuantity ? existing.quantity : settled.quantity;
+    const cancelAtPeriodEnd = answer.verb === "resumed" ? false : settled.cancelAtPeriodEnd;
+    const overlaid = overlayProviderSubscription(target, { ...settled, cancelAtPeriodEnd, priceIds, quantity });
+    const row: Subscription = { ...overlaid, lastEventAt: Math.max(overlaid.lastEventAt ?? 0, calledAt) };
+
+    return moved ? { ...row, referenceId: ownerOf(existing.referenceId, settled.referenceId) } : row;
+};
 
 /** How many guarded writes record a cancel answer over a row that keeps moving under it, before the conflict is raised. */
 const CANCEL_RECORD_ATTEMPTS = 3;
@@ -418,6 +445,11 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
         }
 
+        // A canceled subscription has no way back in the state machine, so it is refused before the provider sees it.
+        if (SUBSCRIPTION_TERMINAL_STATES.has(existing.state)) {
+            throw new LunoraPaymentError("INVALID_TRANSITION", `subscription "${subscriptionId}" is ${existing.state} and cannot be changed`);
+        }
+
         return existing;
     };
 
@@ -439,7 +471,17 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     // state, so a row a webhook moved during the call is not merged onto: the provider has accepted the change and its
     // own event for it follows. The conflict is raised rather than the answer dropped silently. Repeating the call is not
     // safe, since Creem and Dodo charge a proration again, so the caller is sent to reconcile instead.
-    const recordSubscriptionAnswer = async (existing: Subscription, answer: Subscription, verb: "updated" | "resumed"): Promise<Subscription> => {
+    // `call` makes the provider request. `sets.quantity` says whether that request changes the seat count.
+    const recordSubscriptionAnswer = async (
+        existing: Subscription,
+        call: () => Promise<Subscription>,
+        verb: "updated" | "resumed",
+        sets: { quantity: boolean },
+    ): Promise<Subscription> => {
+        // Any provider event created before the call describes the row as it was, so it must not land on top of the answer.
+        const calledAt = Date.now();
+        const answer = await call();
+
         // A provider can move the subscription to a new id (Autumn: a plan change is a new `customer::product` row). The
         // target is guarded by whatever row sits under its id now: absent, or a row from an earlier plan that is replaced.
         // It is read before the provider's state, so a webhook that writes it afterwards makes the guarded write refuse,
@@ -449,7 +491,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
         // If the status read fails, the answer the provider accepted is recorded instead: losing a completed change is worse
         // than a stale field that the provider's later event corrects.
-        const settled = await adapter.getSubscriptionStatus(answer.id).catch(() => answer);
+        const status = await adapter.getSubscriptionStatus(answer.id).then(
+            (settled) => {
+                return { readFailed: false, settled };
+            },
+            () => {
+                return { readFailed: true, settled: answer };
+            },
+        );
         const policy = options.singleSubscriptionPerReference ?? false;
         const conflict = (): LunoraPaymentError =>
             new LunoraPaymentError(
@@ -457,13 +506,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 `the subscription changed while it was being ${verb}; the provider has accepted the change, so reconcile this subscription rather than repeating the change`,
             );
 
-        // A moved row keeps the history of the row it lands on (its creation date and last event), not the one it left,
-        // and keeps the owner the subscription already had.
-        // A status read that failed can leave the price set unknown, and a full-row write would then erase the one stored. The
-        // operations here change only the primary price, so the stored set stands with that price swapped.
-        const carried = !moved && settled.priceIds === undefined && existing.priceIds !== undefined ? swapPrimaryPrice(existing, settled) : settled.priceIds;
-        const overlaid = overlayProviderSubscription(target, { ...settled, priceIds: carried });
-        const synced: Subscription = moved ? { ...overlaid, referenceId: ownerOf(existing.referenceId, settled.referenceId) } : overlaid;
+        const synced = answerRow(existing, target, { ...status, calledAt, moved, setsQuantity: sets.quantity, verb });
 
         // The old row retires first, and only once the new one grants access: a retire that loses a race stops the write
         // there, so both rows never grant at once. A downgrade that leaves the old plan running keeps it active.
@@ -474,13 +517,15 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         }
 
         // The new row did not land, so the old one goes back to granting access. Only the row this call retired is
-        // restored: a revision another write has since moved past is left as that write made it. And not while a write
-        // has made the new row grant access, because that would leave two plans granting at once.
+        // restored: a revision another write has since moved past is left as that write made it. Nor once anything has
+        // written the new row since it was read: that is the provider's own event for the new plan (active, past due, or
+        // canceled), and it says what the customer has now, so the old plan stays retired.
         const restoreRetired = async (): Promise<void> => {
             const current = await store.getSubscription(adapter.identifier, existing.id);
             const destination = await store.getSubscription(adapter.identifier, synced.id);
+            const destinationUntouched = destination?.revision === target?.revision && !ENTITLING_STATES.has(destination?.state ?? "canceled");
 
-            if (current?.state === "canceled" && current.revision === (existing.revision ?? 0) + 1 && !ENTITLING_STATES.has(destination?.state ?? "canceled")) {
+            if (current?.state === "canceled" && current.revision === (existing.revision ?? 0) + 1 && destinationUntouched) {
                 await restoreSubscription(store, policy, current, existing);
             }
         };
@@ -841,7 +886,9 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             await claimKeyedChange(key, "marker.resume_subscription", subscriptionId);
 
-            return recordSubscriptionAnswer(existing, await adapter.resumeSubscription(subscriptionId, { idempotencyKey: key }), "resumed");
+            return recordSubscriptionAnswer(existing, () => adapter.resumeSubscription(subscriptionId, { idempotencyKey: key }), "resumed", {
+                quantity: false,
+            });
         },
 
         refundPayment: async (input) => {
@@ -1041,7 +1088,9 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             await claimKeyedChange(key, "marker.update_subscription", subscriptionId);
 
-            return recordSubscriptionAnswer(existing, await adapter.updateSubscription(subscriptionId, { ...patch, idempotencyKey: key }), "updated");
+            return recordSubscriptionAnswer(existing, () => adapter.updateSubscription(subscriptionId, { ...patch, idempotencyKey: key }), "updated", {
+                quantity: patch.quantity !== undefined,
+            });
         },
     };
 };

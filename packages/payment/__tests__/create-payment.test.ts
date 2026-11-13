@@ -2712,6 +2712,130 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         expect(stored?.priceIds).toStrictEqual(["price_2", "addon_1"]);
     });
 
+    it("keeps the stored seat count when a plan change's status read fails and the answer reports one seat", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), quantity: 5 });
+
+        // The upgrade answer omits item units, which the adapter maps to one, and the follow-up status read fails.
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: () => Promise.reject(new Error("provider read unavailable")),
+            updateSubscription: async (id, patch) => {
+                return { ...subscription("user_1", "active"), id, priceId: patch.priceId ?? "price_1", quantity: 1 };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.updateSubscription("sub_1", { priceId: "price_2" });
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ priceId: "price_2", quantity: 5 });
+    });
+
+    it("refuses to resume or change a canceled subscription without calling the provider", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "canceled"));
+
+        const resumeSubscription = vi.fn<PaymentAdapter["resumeSubscription"]>();
+        const updateSubscription = vi.fn<PaymentAdapter["updateSubscription"]>();
+        const payment = createPayment({ adapter: fakeAdapter({ resumeSubscription, updateSubscription }), authorize: () => true, store });
+
+        await expect(payment.resumeSubscription("sub_1")).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+        expect([...resumeSubscription.mock.calls, ...updateSubscription.mock.calls]).toHaveLength(0);
+    });
+
+    it("records a resume as no longer cancelling even when the provider's status read still reports it", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), cancelAtPeriodEnd: true });
+
+        // The uncancel landed, but the re-read derives the flag from a cancel timestamp that trails it.
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: async (id) => {
+                return { ...subscription("user_1", "active"), cancelAtPeriodEnd: true, id };
+            },
+            resumeSubscription: async (id) => {
+                return { ...subscription("user_1", "active"), cancelAtPeriodEnd: false, id };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await expect(payment.resumeSubscription("sub_1")).resolves.toMatchObject({ cancelAtPeriodEnd: false });
+    });
+
+    it("drops a webhook created before a plan change that arrives after it", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), lastEventAt: 1000 });
+
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: async (id) => {
+                return { ...subscription("user_1", "active"), id, priceId: "price_2" };
+            },
+            updateSubscription: async (id) => {
+                return { ...subscription("user_1", "active"), id, priceId: "price_2" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        const requestedAt = Date.now();
+
+        await payment.updateSubscription("sub_1", { priceId: "price_2" });
+
+        // Created at the provider before the change was requested, newer than the last event the row had applied.
+        const outcome = await applyWebhookAction(store, {
+            eventId: "evt_late",
+            occurredAt: requestedAt - 1,
+            provider: "stripe",
+            subscriptionId: "sub_1",
+            type: "subscription.past_due",
+        });
+
+        expect(outcome).toStrictEqual({ applied: false, reason: "stale" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ priceId: "price_2", state: "active" });
+    });
+
+    it("leaves the old plan retired when the provider's event wrote the new plan as canceled during the change", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // The new plan's cancellation webhook lands between the retire and the guarded destination write.
+        const racing = Object.assign(Object.create(store) as object, {
+            upsertSubscription: async (record: Subscription, guard?: RevisionGuard) => {
+                if (record.id === "sub_2" && guard !== undefined) {
+                    await store.upsertSubscription({ ...subscription("user_1", "canceled"), id: "sub_2" });
+                }
+
+                return store.upsertSubscription(record, guard);
+            },
+        }) as PaymentStore;
+
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: async () => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: "price_2" };
+            },
+            updateSubscription: async () => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: "price_2" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: racing });
+
+        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
+    });
+
     it("refuses the plan change, and writes no new row, when the old plan changed before it could be retired", async () => {
         expect.assertions(3);
 
