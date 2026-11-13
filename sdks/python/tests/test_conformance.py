@@ -318,6 +318,10 @@ class TestWsFrameConsumer(unittest.TestCase):
     def test_an_unmergeable_row_change_freezes_the_resume_cursor(self):
         self._replay_delta_cases("pageDeltaPoisonCases")
 
+    def test_a_delta_run_is_held_until_its_last_frame(self):
+        self._replay_delta_cases("pageDeltaRunCases")
+        self.assertEqual(len(load("ws-frames.json")["pageDeltaRunCases"]), 4)
+
     def test_an_identity_change_evicts_the_cached_base_and_the_poison(self):
         self._replay_delta_cases("identityChangeEvictionCases")
         self.assertEqual(len(load("ws-frames.json")["identityChangeEvictionCases"]), 2)

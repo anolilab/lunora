@@ -319,6 +319,10 @@ class SocketRunInProgressError(RuntimeError):
 
 
 class _Subscription:
+    def discard_run(self) -> None:
+        self.pending_run = None
+        self.run_held = False
+
     def __init__(self, sub_id: str, function_path: str, args: Any, shard_key: Optional[str]) -> None:
         self.id = sub_id
         self.function_path = function_path
@@ -336,6 +340,11 @@ class _Subscription:
         #: or a resubscribe clears it, delta frames are ignored whole, so a later frame's cursor
         #: cannot move the resume position past the dropped change.
         self.poisoned = False
+        #: Row changes of an unfinished run (``more: true`` frames), merged but not committed. Held
+        #: apart from ``server_base`` so the resume cursor only moves when the run's last frame lands;
+        #: anything that ends the run drops it, and the server replays the whole run from the cursor.
+        self.pending_run: Any = None
+        self.run_held = False
         #: The DISPLAYED value: ``server_base`` folded through
         #: ``optimistic_layers``.
         self.last_value: Any = None
@@ -542,6 +551,9 @@ class LunoraClient:
         with self._lock:
             self._send = None
             self._attach_generation += 1
+            # The cursor never moved for a held run, so the next resend replays it whole.
+            for sub in self._subs.values():
+                sub.discard_run()
             notify = close_code == TOKEN_EXPIRED_CLOSE
             if close_code == REFUSED_CLOSE and reason != CONNECT_DEADLINE_REASON:
                 opened = self._socket_generation
@@ -784,6 +796,7 @@ class LunoraClient:
         for sub in self._subs.values():
             sub.server_base = None
             sub.poisoned = False
+            sub.discard_run()
             sub.server_cursor = None
             sub.server_epoch = None
             sub.acked = False
@@ -1150,6 +1163,7 @@ class LunoraClient:
             # replayed; if it is still unmergeable the flag is set again.
             for sub in self._subs.values():
                 sub.poisoned = False
+                sub.discard_run()
             frames = [
                 build_subscribe_frame(sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch)
                 for sub in self._subs.values()
@@ -1289,6 +1303,7 @@ class LunoraClient:
             # surface it and keep reading.
             reported = SubscriptionError(str(error), "INVALID_FRAME")
             if sub is not None:
+                sub.discard_run()
                 deferred.extend(partial(cb, reported) for cb in sub.error_callbacks)
             return {"kind": "error", "id": frame.get("id"), "error": reported}
         displayed = value
@@ -1296,12 +1311,13 @@ class LunoraClient:
             if has_data:
                 # A snapshot is authoritative: it supersedes whatever change was dropped.
                 sub.poisoned = False
+                sub.discard_run()
             elif sub.poisoned:
                 return {"kind": "delta", "id": frame.get("id"), "value": sub.server_base, "displayed": sub.last_value, "unmerged": True}
         if not has_data and is_mutation_delta(value) and sub is not None:
             # A row change merges into the SERVER BASE, never the displayed value: the optimistic
             # layers are re-folded onto the result below, exactly as for a `data` frame.
-            merged = apply_delta(sub.server_base, value)
+            merged = apply_delta(sub.pending_run if sub.run_held else sub.server_base, value)
             if merged is None:
                 # DIVERGENCE from the reference, which re-snapshots here: this port has no
                 # resubscribe-for-snapshot path. Publishing the `{key, op, table, row}` envelope
@@ -1311,6 +1327,7 @@ class LunoraClient:
                 # this change. Delta frames are ignored until a snapshot or a resubscribe, and
                 # that resubscribe resumes from the last applied cursor, so the server replays it.
                 sub.poisoned = True
+                sub.discard_run()
                 # Reported once, when the freeze starts: an app that stays silent shows a stale list.
                 notice = SubscriptionError("row change could not be merged; subscription frozen until a snapshot or resubscribe", "delta_unmergeable")
                 deferred.extend(partial(cb, notice) for cb in sub.error_callbacks)
@@ -1321,8 +1338,14 @@ class LunoraClient:
                     "displayed": sub.last_value,
                     "unmerged": True,
                 }
+            if frame.get("more") is True:
+                # Mid-run: nothing publishes, and cursor, epoch and optimistic layers wait for the last frame.
+                sub.pending_run = merged
+                sub.run_held = True
+                return {"kind": "delta", "id": frame.get("id"), "value": sub.server_base, "displayed": sub.last_value, "held": True}
             value = displayed = merged
         if sub is not None:
+            sub.discard_run()
             sub.server_base = value
             # Only an integer cursor advances the tracked one. A frame that omits
             # it, or sends an explicit null, must LEAVE it where it was — the
@@ -1386,6 +1409,9 @@ class LunoraClient:
         sub = self._subs.get(_frame_key(frame.get("id")))
         if sub is not None:
             sub.acked = True
+            # Settled leaves a held run alone: only a resume ends it, as in the reference client.
+            if kind == "resume":
+                sub.discard_run()
         # A poisoned subscription ignores these frames too: their cursor would move
         # the resume position past the dropped row change.
         if sub is not None and not sub.poisoned:
