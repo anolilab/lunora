@@ -262,7 +262,7 @@ void casePoisonedSubscriptionFreezesTheResumeCursor() => _playFrameCases('pageDe
 
 /// `pageDeltaRunCases`: a delta marked `more` is held, not published, and the run
 /// commits once on its last frame; a data frame or a resend discards what is held.
-void casePageDeltaRunIsHeldUntilItsLastFrame() => _playFrameCases('pageDeltaRunCases', 4);
+void casePageDeltaRunIsHeldUntilItsLastFrame() => _playFrameCases('pageDeltaRunCases', 5);
 
 /// `identityChangeEvictionCases`: changing identity drops the cached base and the
 /// freeze with the cursor, so a row change cannot merge onto rows the new identity

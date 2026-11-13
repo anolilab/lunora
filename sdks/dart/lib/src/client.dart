@@ -1012,9 +1012,15 @@ class LunoraClient {
         }
 
         if (entry != null) {
-          // A resume restarts the stream the run was part of. A `settled` frame does not touch it.
-          if (kind == 'resume') {
-            entry.pendingRun = null;
+          // A resume restarts the stream the run was part of. A `settled` frame mid-run
+          // discards it too, and must not advance the cursor: the run's frames were never
+          // taken, so a resume from past them would skip the whole run.
+          final heldRun = entry.pendingRun != null;
+
+          entry.pendingRun = null;
+
+          if (kind == 'settled' && heldRun) {
+            return kind;
           }
 
           _advance(entry, frame);
