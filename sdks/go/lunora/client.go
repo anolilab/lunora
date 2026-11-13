@@ -258,6 +258,11 @@ type subscription struct {
 	// and a reconnect would never replay it. While set, delta frames are ignored;
 	// a data frame (an authoritative snapshot) or a resubscribe clears it.
 	poisoned bool
+	// pending is the value of a delta run held so far (frames marked more). A run commits only
+	// on its last frame, so the held frames never move the cursor, and a run cut off by a
+	// reconnect leaves the resume point before it: the server replays the whole run.
+	pending    any
+	hasPending bool
 	// state carries the displayed value and its optimistic overlays. See
 	// optimistic.go.
 	state OptimisticState
@@ -435,6 +440,7 @@ func (c *Client) evictSessionLocked(deferred *[]func()) {
 		entry.epoch = nil
 		// A freeze belongs to the previous identity, as its cached base does.
 		entry.poisoned = false
+		entry.discardRun()
 		entry.state.ServerBase = nil
 		entry.state.ServerCursor = nil
 		NotifySubscription(&entry.state, FoldOptimistic(nil, entry.state.Layers), deferred)
@@ -477,6 +483,8 @@ func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 	// socket whose connect failed is never a refusal of the current credential.
 	c.send = nil
 	c.socketGeneration = -1
+	// A run held on the previous socket never finishes on this one.
+	c.discardRunsLocked()
 
 	if send(BuildConnectFrame(c.clientID, context, c.sessionToken, PageDeltaCapability)) != nil {
 		return
@@ -514,6 +522,7 @@ func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 func (c *Client) DetachSocket(closeCode int, reason string) {
 	c.mu.Lock()
 	c.send = nil
+	c.discardRunsLocked()
 
 	expired := closeCode == 4001
 
@@ -1441,6 +1450,8 @@ func (c *Client) ResendSubscriptions() error {
 		c.mu.Lock()
 		wasPoisoned := entry.sub.poisoned
 		entry.sub.poisoned = false
+		// The replay re-sends the whole run from the cursor before it.
+		entry.sub.discardRun()
 		c.mu.Unlock()
 
 		if err := send(frame); err != nil {
@@ -1507,6 +1518,14 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			// not on the socket read loop's stack. Returning it ended the caller's
 			// loop — and with it every other subscription on this client — over one
 			// bad frame.
+			if entry != nil {
+				// A run that lost a frame cannot complete: drop it so a later frame merges onto
+				// the committed base, not the abandoned partial one.
+				c.mu.Lock()
+				entry.discardRun()
+				c.mu.Unlock()
+			}
+
 			if entry != nil && entry.onError != nil {
 				entry.onError(SubscriptionError{Code: "INVALID_FRAME", Message: err.Error()})
 			}
@@ -1523,15 +1542,24 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			// sees: the overlay is re-folded onto the merged base below.
 			if kind == "data" {
 				entry.poisoned = false
+				// A snapshot is authoritative: held frames are not merged onto it.
+				entry.discardRun()
 			} else if entry.poisoned {
 				c.mu.Unlock()
 
 				return kind, nil
 			}
 
-			merged, publish := resolveDataPayload(kind, entry.state.ServerBase, value)
+			// A run's later frames merge onto the frames before them, not the committed base.
+			base := entry.state.ServerBase
+			if entry.hasPending {
+				base = entry.pending
+			}
+
+			merged, publish := resolveDataPayload(kind, base, value)
 			if !publish {
 				entry.poisoned = true
+				entry.discardRun()
 				notice := entry.onError
 				c.mu.Unlock()
 
@@ -1543,6 +1571,17 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 				return kind, nil
 			}
 
+			// A non-final frame of a run is held: no publish, and no cursor, epoch or overlay
+			// movement until the run's last frame commits it.
+			if kind == "delta" && frame["more"] == true {
+				entry.pending = merged
+				entry.hasPending = true
+				c.mu.Unlock()
+
+				return kind, nil
+			}
+
+			entry.discardRun()
 			c.advanceLocked(entry, frame)
 			entry.state.ServerBase = merged
 
@@ -1574,6 +1613,12 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			var deferred []func()
 
 			c.mu.Lock()
+
+			// The cached value is current as of the cursor it resumed from, so a run cut off
+			// before it is void.
+			if kind == "resume" {
+				entry.discardRun()
+			}
 
 			// A poisoned subscription ignores these frames too: their cursor would move
 			// the resume position past the dropped row change.
@@ -1968,6 +2013,20 @@ func removeKey(keys []string, key string) []string {
 	}
 
 	return keys
+}
+
+// discardRun drops a held delta run; call with mu held.
+func (s *subscription) discardRun() {
+	s.pending = nil
+	s.hasPending = false
+}
+
+// discardRunsLocked drops every held run, for a socket that ended or never opened; call
+// with mu held.
+func (c *Client) discardRunsLocked() {
+	for _, entry := range c.subscriptions {
+		entry.discardRun()
+	}
 }
 
 // advanceLocked moves the resume point. The caller holds the mutex: every frame

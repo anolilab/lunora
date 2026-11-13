@@ -1301,3 +1301,9 @@ func TestIdentityChangeEvictsTheCachedBaseAndThePoison(t *testing.T) {
 		})
 	}
 }
+
+// TestPageDeltaRunsAreHeldUntilTheirLastFrame drives ws-frames.json's pageDeltaRunCases: a
+// delta marked more is held, and the run publishes once, on its last frame.
+func TestPageDeltaRunsAreHeldUntilTheirLastFrame(t *testing.T) {
+	runDeltaStepCases(t, "pageDeltaRunCases", 4)
+}
