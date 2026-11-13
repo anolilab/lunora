@@ -1060,6 +1060,7 @@ public final class ConformanceTest {
      */
     private static void deltaRunIsHeldUntilItsLastFrame() throws IOException {
         runDeltaCases("pageDeltaRunCases", 5);
+        runDeltaCases("undecodableDeltaRunCases", 1);
     }
 
     /**

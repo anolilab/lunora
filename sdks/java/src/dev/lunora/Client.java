@@ -1599,14 +1599,33 @@ public final class Client {
                     // callback rather than vanish or escape handleFrame — silently
                     // dropping the frame trades a crash for a subscription that goes
                     // quietly stale.
-                    Consumer<SubscriptionError> onError;
+                    Consumer<SubscriptionError> onError = null;
+                    String code = CODE_INVALID_FRAME;
 
                     synchronized (lock) {
                         Subscription entry = subscriptions.get(id);
-                        onError = entry != null ? entry.onError : null;
 
                         if (entry != null) {
+                            // A run frame the decoder refuses leaves the run incomplete: drop it
+                            // and freeze, so a later frame cannot commit past the refused row.
+                            boolean runFrame =
+                                    "delta".equals(kind)
+                                            && (Boolean.TRUE.equals(frame.get("more"))
+                                                    || entry.holding);
+
                             discardRun(entry);
+
+                            if (runFrame) {
+                                code = CODE_WIRE_DECODE_FAILED;
+
+                                // Already frozen: the freeze was reported once.
+                                if (!entry.poisoned) {
+                                    entry.poisoned = true;
+                                    onError = entry.onError;
+                                }
+                            } else {
+                                onError = entry.onError;
+                            }
                         }
                     }
 
@@ -1617,8 +1636,7 @@ public final class Client {
                         // was delivered.
                         onError.accept(
                                 new SubscriptionError(
-                                        CODE_INVALID_FRAME,
-                                        "malformed wire value: " + error.getMessage()));
+                                        code, "malformed wire value: " + error.getMessage()));
                     }
 
                     return "error";
@@ -1735,9 +1753,11 @@ public final class Client {
 
                     // A resume means the server is about to replay a held run. A settled frame
                     // mid-run carries a cursor past rows this client never applied, so taking it
-                    // would ack a checkpoint it does not have: drop the run and keep the cursor.
+                    // would ack a checkpoint it does not have: drop the run, keep the cursor, and
+                    // freeze so a later delta cannot commit past the dropped part.
                     if ("settled".equals(kind) && entry.holding) {
                         discardRun(entry);
+                        entry.poisoned = true;
 
                         return kind;
                     }
