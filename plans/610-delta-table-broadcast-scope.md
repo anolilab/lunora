@@ -8,8 +8,17 @@
 > `origin/alpha` `e365349c9`. `git log --oneline -1` → `e365349c9`.
 
 **Baseline:** `e365349c9` (`origin/alpha`, 2026-11-13, after PR #1595 merged)
-**Status:** TODO — owner decision 2026-11-13: option (b) prevent the overlap, plus the docs half of
-(a); investigate broadcast authorization and fix it in the same change if it is real and bounded.
+**Status:** DONE — PR https://github.com/anolilab/lunora/pull/1597 (commit `cb218a6b0`, plus merge
+`c26c5d2a2` bringing in alpha's #1596, whose only conflict was the `sdks/README.md` footnote 7 line,
+resolved as alpha's line plus this plan's sentence swap). APPROVED after one review round. The
+executor STOPPED on `shard-do.delivery-context.test.ts`, which asserted an unguarded broadcast
+reaching a function-path sub on a re-executing, authenticated shard; the reviewer added that test to
+scope. Deviations accepted: the skip and the one-shot warning are folded into `skipsForReexecution`
+inside the existing `continue` condition (sonarjs cognitive complexity), and the helpers sit in the
+private section for member-ordering. Reviewer re-ran: `@lunora/do` unit (1553, also after the merge)
+and workerd (193 passed, 17 skipped), client conformance (224), `api:check` on a fresh full build,
+`lint:generated`, eslint/types, and red-without-fix (3 tests fail on alpha's `shard-do.ts`). Reply on
+#1595: https://github.com/anolilab/lunora/pull/1595#issuecomment-6855753164.
 **Source:** review-bot finding on PR #1595 (§5.1.1 `delta.table` paragraph over-broad).
 
 ## Status
