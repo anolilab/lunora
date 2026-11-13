@@ -1252,11 +1252,11 @@ public final class LunoraClient {
 
                     // A refused row change never reaches the base, so the run is dropped and the
                     // subscription frozen; a later frame must not commit past it.
-                    let isRunFrame = kind == "delta"
+                    let isDeltaFrame = kind == "delta"
 
                     entry.discardRun()
 
-                    if isRunFrame {
+                    if isDeltaFrame {
                         // Already frozen: the delta is ignored, and the freeze was reported once.
                         if entry.poisoned { return [] }
 
@@ -1265,7 +1265,7 @@ public final class LunoraClient {
 
                     guard let onError = entry.onError else { return [] }
 
-                    return [(onError, isRunFrame ? LunoraAPIError.wireDecodeFailed : "INVALID_FRAME")]
+                    return [(onError, isDeltaFrame ? LunoraAPIError.wireDecodeFailed : "INVALID_FRAME")]
                 }
 
                 for notice in notices {

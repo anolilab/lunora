@@ -1608,11 +1608,11 @@ public final class Client {
                         if (entry != null) {
                             // A refused row change never reaches the base, so drop any held run and
                             // freeze: a later frame cannot commit past the refused row.
-                            boolean runFrame = "delta".equals(kind);
+                            boolean deltaFrame = "delta".equals(kind);
 
                             discardRun(entry);
 
-                            if (runFrame) {
+                            if (deltaFrame) {
                                 code = CODE_WIRE_DECODE_FAILED;
 
                                 // Already frozen: the freeze was reported once.

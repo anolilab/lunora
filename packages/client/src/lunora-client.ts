@@ -7614,7 +7614,7 @@ class LunoraClient {
 
         // Set whether or not the snapshot request went out: a base missing rows stays refused until a
         // data frame commits, even if the send fails.
-        // eslint-disable-next-line no-param-reassign -- the flag is the subscription's own state, read by handleDataMessage
+        // eslint-disable-next-line no-param-reassign -- the flag is the subscription's own state, read by the frame handlers
         state.baseIncomplete = true;
 
         if (this.resnapshotSubscription(state)) {

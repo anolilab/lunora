@@ -152,6 +152,17 @@ const wireFrames = (socket: MockSocket) =>
 /** The first subscribe/unsubscribe frame a socket sent, past the connect envelope. */
 const firstSub = (socket: MockSocket) => wireFrames(socket)[0];
 
+// A row nested past the codec's depth cap, so `decodeWire` refuses any frame that carries it.
+const tooDeepRow = (): unknown => {
+    let deep: unknown = 1;
+
+    for (let level = 0; level < 80; level += 1) {
+        deep = { a: deep };
+    }
+
+    return deep;
+};
+
 const fnRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
 };
@@ -1858,12 +1869,7 @@ describe("lunoraClient", () => {
             socket.receive({ id: subId, type: "ack" });
             socket.receive({ cursor: 5, data: [{ _id: "a" }, { _id: "b" }], epoch: "e1", id: subId, type: "data" });
 
-            let deep: unknown = 1;
-
-            for (let level = 0; level < 80; level += 1) {
-                deep = { a: deep };
-            }
-
+            const deep = tooDeepRow();
             // The first frame of the run is refused, so its rows never reach the base.
             socket.receive({ delta: { key: "c", op: "insert", row: deep, table: "messages" }, id: subId, more: true, type: "delta" });
             // The run's last frame must not merge onto a base that is missing the refused rows.
@@ -1902,12 +1908,7 @@ describe("lunoraClient", () => {
             first.receive({ cursor: 5, data: [{ _id: "a" }, { _id: "b" }], epoch: "e1", id: subId, type: "data" });
             first.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: subId, more: true, type: "delta" });
 
-            let deep: unknown = 1;
-
-            for (let level = 0; level < 80; level += 1) {
-                deep = { a: deep };
-            }
-
+            const deep = tooDeepRow();
             // The second frame is refused, which cuts the held run short and leaves a snapshot pending.
             first.receive({ delta: { key: "c", op: "insert", row: deep, table: "messages" }, id: subId, more: true, type: "delta" });
             // A settled cursor past the refused rows must not be taken while the snapshot is pending.
@@ -1954,12 +1955,7 @@ describe("lunoraClient", () => {
             socket.receive({ cursor: 5, data: [{ _id: "a" }, { _id: "b" }], epoch: "e1", id: subId, type: "data" });
             socket.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: subId, more: true, type: "delta" });
 
-            let deep: unknown = 1;
-
-            for (let level = 0; level < 80; level += 1) {
-                deep = { a: deep };
-            }
-
+            const deep = tooDeepRow();
             socket.receive({ delta: { key: "c", op: "insert", row: deep, table: "messages" }, id: subId, more: true, type: "delta" });
 
             const subscribes = socket.sent.map((frame) => JSON.parse(frame) as { type?: string }).filter((frame) => frame.type === "subscribe");
@@ -1970,7 +1966,7 @@ describe("lunoraClient", () => {
             client.close();
         });
 
-        it("keeps a delta from committing onto a base that a settled frame was taken against after a refused single delta", () => {
+        it("does not commit a later delta after a lone refused delta", () => {
             expect.assertions(2);
 
             const client = new LunoraClient({
@@ -1992,12 +1988,7 @@ describe("lunoraClient", () => {
             socket.receive({ id: subId, type: "ack" });
             socket.receive({ cursor: 5, data: [{ _id: "a" }, { _id: "b" }], epoch: "e1", id: subId, type: "data" });
 
-            let deep: unknown = 1;
-
-            for (let level = 0; level < 80; level += 1) {
-                deep = { a: deep };
-            }
-
+            const deep = tooDeepRow();
             // A lone refused delta: its row never reaches the base, and it is not a run.
             socket.receive({ cursor: 6, delta: { key: "c", op: "insert", row: deep, table: "messages" }, id: subId, type: "delta" });
             // A later valid delta must not commit onto the base that is missing that row.
@@ -2031,12 +2022,7 @@ describe("lunoraClient", () => {
             socket.receive({ cursor: 5, data: [{ _id: "a" }, { _id: "b" }], epoch: "e1", id: subId, type: "data" });
             socket.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: subId, more: true, type: "delta" });
 
-            let deep: unknown = 1;
-
-            for (let level = 0; level < 80; level += 1) {
-                deep = { a: deep };
-            }
-
+            const deep = tooDeepRow();
             // The refused frame cuts the held run short; the recovery snapshot request follows.
             socket.receive({ delta: { key: "c", op: "insert", row: deep, table: "messages" }, id: subId, more: true, type: "delta" });
 
