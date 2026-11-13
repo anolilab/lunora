@@ -750,9 +750,9 @@ const oauthIds = (context: AuditHookContext, event: AuthAuditEvent): ReadonlyArr
  * The ids an audit row names, per event family, copied from an allow-list only.
  * Bodies and params carry secrets (`rotate-secret` returns one, `set-user-password`
  * sends one) and emails (invitations), so no other field is ever copied. The
- * `admin-*` subject stays `targetUserId`: an impersonation row says who was
- * impersonated. `oauth-*` deliberately does not use it, so an OAuth client operation
- * is not read as an operator acting on a user.
+ * `admin-*` subject stays `targetUserId`: an administrator acting on a user names that user. An impersonated
+ * session's rows name the impersonated account whatever the event, OAuth ones included, since that account is the one
+ * the session acts for. Otherwise an OAuth row carries no `targetUserId`.
  */
 const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Record<string, string> => {
     const body = context.body ?? {};
