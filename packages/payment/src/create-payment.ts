@@ -466,6 +466,23 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         }
     };
 
+    // Runs the provider call for a claimed key. An adapter raises VALIDATION_ERROR only for a request it refused before
+    // sending it (Autumn's seat change, the combined plan-and-seat patch on Creem and Polar), so that outcome is known:
+    // nothing changed, and the key is released for a corrected retry. Every other failure keeps the claim.
+    const callUnderClaim =
+        (key: string | undefined, call: () => Promise<Subscription>): (() => Promise<Subscription>) =>
+        async () => {
+            try {
+                return await call();
+            } catch (error) {
+                if (key !== undefined && error instanceof LunoraPaymentError && error.code === "VALIDATION_ERROR") {
+                    await store.releaseEvent(adapter.identifier, key);
+                }
+
+                throw error;
+            }
+        };
+
     // Stores the provider's answer to an update or a resume, settled against the provider's current state: the answer is
     // what the provider accepted, and its status read also carries what a webhook changed since. Both calls set absolute
     // state, so a row a webhook moved during the call is not merged onto: the provider has accepted the change and its
@@ -886,9 +903,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             await claimKeyedChange(key, "marker.resume_subscription", subscriptionId);
 
-            return recordSubscriptionAnswer(existing, () => adapter.resumeSubscription(subscriptionId, { idempotencyKey: key }), "resumed", {
-                quantity: false,
-            });
+            return recordSubscriptionAnswer(
+                existing,
+                callUnderClaim(key, () => adapter.resumeSubscription(subscriptionId, { idempotencyKey: key })),
+                "resumed",
+                {
+                    quantity: false,
+                },
+            );
         },
 
         refundPayment: async (input) => {
@@ -1088,9 +1110,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             await claimKeyedChange(key, "marker.update_subscription", subscriptionId);
 
-            return recordSubscriptionAnswer(existing, () => adapter.updateSubscription(subscriptionId, { ...patch, idempotencyKey: key }), "updated", {
-                quantity: patch.quantity !== undefined,
-            });
+            return recordSubscriptionAnswer(
+                existing,
+                callUnderClaim(key, () => adapter.updateSubscription(subscriptionId, { ...patch, idempotencyKey: key })),
+                "updated",
+                {
+                    quantity: patch.quantity !== undefined,
+                },
+            );
         },
     };
 };

@@ -2431,6 +2431,35 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         expect(resumeSubscription).toHaveBeenCalledTimes(1);
     });
 
+    it("releases the key when the adapter refuses the change before sending it, so a corrected retry goes through", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        const updateSubscription = vi
+            .fn<PaymentAdapter["updateSubscription"]>()
+            .mockRejectedValueOnce(new LunoraPaymentError("VALIDATION_ERROR", "plan and seats cannot change in one update"))
+            .mockImplementation(async (id) => {
+                return { ...subscription("user_1", "active"), id, priceId: "price_2" };
+            });
+        const getSubscriptionStatus = async (id: string): Promise<Subscription> => {
+            return { ...subscription("user_1", "active"), id, priceId: "price_2" };
+        };
+        const payment = createPayment({
+            adapter: fakeAdapter({ getSubscriptionStatus, updateSubscription }),
+            authorize: (referenceId) => referenceId === "user_1",
+            store,
+        });
+
+        await expect(payment.updateSubscription("sub_1", { idempotencyKey: "change-1", priceId: "price_2", quantity: 3 })).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+        });
+        await expect(payment.updateSubscription("sub_1", { idempotencyKey: "change-1", priceId: "price_2" })).resolves.toMatchObject({ priceId: "price_2" });
+        expect(updateSubscription).toHaveBeenCalledTimes(2);
+    });
+
     it("forwards unkeyed plan changes each time, since they are new requests", async () => {
         expect.assertions(1);
 

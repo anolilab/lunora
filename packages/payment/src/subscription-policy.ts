@@ -29,27 +29,25 @@ type SubscriptionWrite = "refused" | "rejected" | "written";
 const MAX_CLAIM_ATTEMPTS = 5;
 
 /**
- * Write `change(row)` over the row `provider`/`id` holds now, guarded by that row's revision, and read again if a write
- * got in between. A row that no longer grants access is left as it is. Used to step a grant back, so it must not give up quietly: a row that kept granting access would leave
- * two rows granting.
+ * Step back the grant that wrote revision `written` of `provider`/`id`, by writing `change(row)` over it with that
+ * revision as the guard. Only that revision is ours to undo. A row written since belongs to the write that moved it: one
+ * that stopped granting needs nothing, and one that grants again went through its own claim and settles itself.
  */
-const rewrite = async (store: PaymentStore, provider: ProviderId, id: string, change: (row: Subscription) => Subscription): Promise<void> => {
-    for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt += 1) {
-        // eslint-disable-next-line no-await-in-loop -- each attempt reads what the previous one wrote, so they cannot run together
-        const row = await store.getSubscription(provider, id);
+const rewrite = async (
+    store: PaymentStore,
+    provider: ProviderId,
+    id: string,
+    written: number | undefined,
+    change: (row: Subscription) => Subscription,
+): Promise<void> => {
+    const row = await store.getSubscription(provider, id);
 
-        // A row a write has since moved to a state that grants nothing (canceled by a webhook) has nothing to step back.
-        if (row === undefined || !ENTITLING_STATES.has(row.state)) {
-            return;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- see above
-        if (await store.upsertSubscription(change(row), { ifRevision: row.revision })) {
-            return;
-        }
+    if (row === undefined || row.revision !== written || !ENTITLING_STATES.has(row.state)) {
+        return;
     }
 
-    throw new LunoraPaymentError("INVALID_TRANSITION", `subscription "${id}" could not be stepped back from a duplicate grant; reconcile it`);
+    // A rejection means a write landed after the read above, which makes the row that write's, as above.
+    await store.upsertSubscription(change(row), { ifRevision: written });
 };
 
 /**
@@ -150,7 +148,11 @@ const storeSubscription = async (
         return "rejected";
     }
 
-    const kept = await settleGrant(store, next, revision, () => rewrite(store, next.provider, next.id, (row) => refusalRecord(previous, row)));
+    // The revision this write produced: one past the guard's, or read back for an unguarded write. A write that lands
+    // between that write and the read back is taken for ours, the one case the step back cannot tell apart.
+    const readBack = guard === undefined ? await store.getSubscription(next.provider, next.id) : undefined;
+    const written = guard === undefined ? readBack?.revision : (guard.ifRevision ?? 0) + 1;
+    const kept = await settleGrant(store, next, revision, () => rewrite(store, next.provider, next.id, written, (row) => refusalRecord(previous, row)));
 
     return kept ? "written" : "refused";
 };
@@ -179,7 +181,7 @@ const restoreSubscription = async (
     }
 
     await settleGrant(store, original, revision, () =>
-        rewrite(store, original.provider, original.id, (row) => {
+        rewrite(store, original.provider, original.id, (retired.revision ?? 0) + 1, (row) => {
             return { ...row, state: "canceled" };
         }),
     );

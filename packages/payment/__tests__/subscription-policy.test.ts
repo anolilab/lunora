@@ -125,6 +125,33 @@ describe("storeSubscription — concurrent grants under singleSubscriptionPerRef
         await expect(granting(store, "user_1")).resolves.toStrictEqual([]);
     });
 
+    it("does not step back a newer grant of the same row that a later write made", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const bump = store.bumpReferenceRevision.bind(store);
+        let raced = false;
+
+        // Another grant wins, and then a webhook cancels this row and a later write grants it again, all before this grant
+        // settles. That later grant is not this one, so stepping back must leave it to settle itself.
+        store.bumpReferenceRevision = async (referenceId, ifRevision) => {
+            if (!raced) {
+                raced = true;
+                await store.upsertSubscription(subscription("sub_2", "user_1", "active"));
+                await bump(referenceId, ifRevision);
+                await store.upsertSubscription({ ...subscription("sub_1", "user_1", "canceled"), updatedAt: 2 });
+                await store.upsertSubscription({ ...subscription("sub_1", "user_1", "active"), updatedAt: 3 });
+
+                return false;
+            }
+
+            return bump(referenceId, ifRevision);
+        };
+
+        await expect(storeSubscription(store, true, undefined, subscription("sub_1", "user_1", "active"))).resolves.toBe("refused");
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active", updatedAt: 3 });
+    });
+
     it("does not serialize grants for different references", async () => {
         expect.assertions(2);
 
