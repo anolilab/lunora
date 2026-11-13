@@ -698,7 +698,8 @@
                         "cursor": 6,
                         "epoch": "e1"
                     },
-                    "publishes": 0
+                    "publishes": 0,
+                    "errors": ["delta_unmergeable"]
                 },
                 {
                     "resume": {
@@ -750,7 +751,8 @@
                         "cursor": 6,
                         "epoch": "e1"
                     },
-                    "publishes": 0
+                    "publishes": 0,
+                    "errors": ["delta_unmergeable"]
                 },
                 {
                     "resume": {
@@ -954,6 +956,60 @@
                         "isDone": false,
                         "page": [
                             { "_creationTime": 1001, "_id": "m1", "text": "uno" },
+                            { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "settled-mid-run-discards-the-run-and-holds-the-cursor",
+            "$comment": "A settled frame that arrives while a run is held discards the held frames and does not advance the resume cursor or epoch. The settled cursor is past rows the client never applied, so taking it would ACK a checkpoint the client does not have. A resume after the settled still starts from before the run (protocol README 5.4).",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "messages" },
+                        "more": true
+                    },
+                    "publishes": 0
+                },
+                {
+                    "frame": { "id": "sub_1", "type": "settled", "cursor": 6, "epoch": "e1" },
+                    "publishes": 0
+                },
+                {
+                    "resume": { "sinceSeq": 5, "sinceEpoch": "e1" }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m2", "op": "update", "row": { "_creationTime": 1002, "_id": "m2", "text": "TWO" }, "table": "messages" },
+                        "cursor": 7,
+                        "epoch": "e1"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_2",
+                        "isDone": false,
+                        "page": [
+                            { "_creationTime": 1001, "_id": "m1", "text": "one" },
                             { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
                         ]
                     }
