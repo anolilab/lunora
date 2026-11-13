@@ -963,8 +963,8 @@
             ]
         },
         {
-            "name": "settled-mid-run-discards-the-run-and-holds-the-cursor",
-            "$comment": "A settled frame that arrives while a run is held discards the held frames and does not advance the resume cursor or epoch. The settled cursor is past rows the client never applied, so taking it would ACK a checkpoint the client does not have. A resume after the settled still starts from before the run (protocol README 5.4).",
+            "name": "settled-mid-run-freezes-the-subscription",
+            "$comment": "A settled frame that arrives while a run is held discards the held frames and freezes the subscription, as an unmergeable row change does: the cursor and epoch do not move, and later delta, resume and settled frames are ignored until a data frame or a resubscribe clears the freeze. The settled cursor is past rows the client never applied, and a later valid delta would otherwise commit against a base missing them, so a reconnect could never replay them (protocol README 5.4).",
             "seedFrame": {
                 "id": "sub_1",
                 "type": "data",
@@ -994,9 +994,6 @@
                     "publishes": 0
                 },
                 {
-                    "resume": { "sinceSeq": 5, "sinceEpoch": "e1" }
-                },
-                {
                     "frame": {
                         "id": "sub_1",
                         "type": "delta",
@@ -1004,9 +1001,29 @@
                         "cursor": 7,
                         "epoch": "e1"
                     },
+                    "publishes": 0
+                },
+                {
+                    "resume": { "sinceSeq": 5, "sinceEpoch": "e1" }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "data",
+                        "data": {
+                            "continueCursor": "c_3",
+                            "isDone": false,
+                            "page": [
+                                { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                                { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                            ]
+                        },
+                        "cursor": 8,
+                        "epoch": "e2"
+                    },
                     "publishes": 1,
                     "valueWire": {
-                        "continueCursor": "c_2",
+                        "continueCursor": "c_3",
                         "isDone": false,
                         "page": [
                             { "_creationTime": 1001, "_id": "m1", "text": "one" },
@@ -1044,6 +1061,81 @@
                         "continueCursor": "c_2",
                         "isDone": false,
                         "page": [{ "_creationTime": 1001, "_id": "m1", "text": "ONE" }]
+                    }
+                }
+            ]
+        }
+    ],
+    "undecodableDeltaRunCases": [
+        {
+            "name": "undecodable-run-frame-freezes-the-subscription",
+            "$comment": "A run frame the decoder refuses discards the held run and freezes the subscription. The refused frame reports WIRE_DECODE_FAILED once. A later valid final delta must not commit: the base never received the refused row, so the cursor stays put and the resume after the freeze replays the run from before it (protocol README 5.4).",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": {
+                            "key": "m1",
+                            "op": "update",
+                            "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE", "n": ["$lunora.wire$", "bigint", "not-a-number"] },
+                            "table": "messages"
+                        },
+                        "more": true
+                    },
+                    "publishes": 0,
+                    "errors": ["WIRE_DECODE_FAILED"]
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m2", "op": "update", "row": { "_creationTime": 1002, "_id": "m2", "text": "TWO" }, "table": "messages" },
+                        "cursor": 6,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0
+                },
+                {
+                    "resume": { "sinceSeq": 5, "sinceEpoch": "e1" }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "data",
+                        "data": {
+                            "continueCursor": "c_3",
+                            "isDone": false,
+                            "page": [
+                                { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                                { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                            ]
+                        },
+                        "cursor": 7,
+                        "epoch": "e2"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_3",
+                        "isDone": false,
+                        "page": [
+                            { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                            { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                        ]
                     }
                 }
             ]
