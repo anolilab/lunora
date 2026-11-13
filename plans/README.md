@@ -211,6 +211,7 @@ Findings are numbered as in [`audit-2026-11-11-findings.md`](./audit-2026-11-11-
 | 604      | 11 (phase 2)                                                                   | #1550, #1578-#1580 | commits on those PRs                                                                                       |
 | 605      | investigate: Convex value types                                                | #1585              | open                                                                                                       |
 | 606      | investigate: alert-policy pagination                                           | —                  | rejected: the Cloudflare list endpoint is not paginated                                                    |
+| 609      | found during the audit: row deltas carry the first table the query read        | —                  | blocked: needs an owner decision on what `delta.table` means for a multi-table query                       |
 
 ## Audit 2026-10-19 — still open after PR #1272
 
