@@ -16,12 +16,12 @@
 import { encodeWire, isPlainObject, needsWireEncoding, stableStringify } from "@lunora/wire";
 
 import { ID_FIELD, insertionIndexFor, PAGE_DELTA_CAPABILITY, PAGE_FIELD } from "../../../shared/page-result";
-import { UNVOUCHABLE_DEP } from "./read-footprint";
+import { ADMIN_WILDCARD, UNVOUCHABLE_DEP } from "./read-footprint";
 import type { MutationDelta } from "./types";
 
 /**
  * The `table` stamped on a row delta when the subscription's read set does not
- * name exactly one table (several, or none). A result row carries no record of
+ * name exactly one table (several, none, or the admin wildcard). A result row carries no record of
  * the table it came from, so the server cannot name the source of each changed
  * row. The leading `__` is reserved by `isInternalTableName`, so no user table
  * can collide with it. Clients merge by `key` and must not route by `table`
@@ -31,14 +31,19 @@ const DELTA_PLACEHOLDER_TABLE = "__lunora__";
 
 /**
  * The `table` a subscription's row deltas carry: the one table it read, or
- * {@link DELTA_PLACEHOLDER_TABLE} when it read several or none. Naming the
- * first of several would claim every changed row came from that table.
+ * {@link DELTA_PLACEHOLDER_TABLE} when it read several, none, or the admin
+ * wildcard (its result may depend on any table, so no single table is faithful).
+ * Naming the first of several would claim every changed row came from that table.
  * @returns the single read table, or the placeholder
  */
 const deltaTableFor = (tables: Iterable<string>): string => {
     let only: string | undefined;
 
     for (const table of tables) {
+        if (table === ADMIN_WILDCARD) {
+            return DELTA_PLACEHOLDER_TABLE;
+        }
+
         if (table === UNVOUCHABLE_DEP) {
             continue;
         }

@@ -2,7 +2,7 @@ import { serialize } from "node:v8";
 
 import { LunoraError } from "@lunora/errors";
 import type { IndexKeyEntry, KeyRange, MutationDelta, SocketAttachment, SubscriptionEnvelope, TransactionHeadroomTracker } from "@lunora/shard-engine";
-import { DELTA_PLACEHOLDER_TABLE, UNVOUCHABLE_DEP } from "@lunora/shard-engine";
+import { ADMIN_WILDCARD, DELTA_PLACEHOLDER_TABLE, UNVOUCHABLE_DEP } from "@lunora/shard-engine";
 import { encodeWire } from "@lunora/wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -1888,6 +1888,30 @@ describe("shardDO subscription delta push", () => {
 
         expect(last).toMatchObject({ id: "sub-1", type: "delta" });
         expect(last.delta).toStrictEqual({ key: "b", op: "insert", row: idRow("b", { text: "hi" }), table: "messages" });
+    });
+
+    it("an admin read that depends on every table stamps the placeholder, not the wildcard", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a")], tables: new Set([ADMIN_WILDCARD]) });
+
+        await subscribeMessages(shard, ws);
+
+        shard.outcomes.set("messages:list", {
+            result: [...filler(16), idRow("a"), idRow("b", { text: "hi" })],
+            tables: new Set([ADMIN_WILDCARD]),
+        });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const last = JSON.parse(ws.sent.at(-1)!);
+
+        expect(last).toMatchObject({ id: "sub-1", type: "delta" });
+        expect(last.delta).toStrictEqual({ key: "b", op: "insert", row: idRow("b", { text: "hi" }), table: DELTA_PLACEHOLDER_TABLE });
     });
 
     it("a non-list result still pushes a data snapshot on a subsequent change", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { UNVOUCHABLE_DEP } from "../src/read-footprint";
+import { ADMIN_WILDCARD, UNVOUCHABLE_DEP } from "../src/read-footprint";
 import { DELTA_PLACEHOLDER_TABLE, deltaTableFor, subscriptionFrames } from "../src/subscription-delivery";
 
 /**
@@ -395,6 +395,14 @@ describe("deltaTableFor", () => {
 
         expect(deltaTableFor([])).toBe(DELTA_PLACEHOLDER_TABLE);
         expect(deltaTableFor([UNVOUCHABLE_DEP])).toBe(DELTA_PLACEHOLDER_TABLE);
+    });
+
+    it("stamps the placeholder for the admin wildcard, alone or beside a table", () => {
+        expect.assertions(3);
+
+        expect(deltaTableFor([ADMIN_WILDCARD])).toBe(DELTA_PLACEHOLDER_TABLE);
+        expect(deltaTableFor([ADMIN_WILDCARD, "messages"])).toBe(DELTA_PLACEHOLDER_TABLE);
+        expect(deltaTableFor(["messages", ADMIN_WILDCARD])).toBe(DELTA_PLACEHOLDER_TABLE);
     });
 
     it("pins the placeholder's wire value", () => {
