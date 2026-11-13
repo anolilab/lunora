@@ -1620,6 +1620,15 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 				entry.discardRun()
 			}
 
+			// A settled mid-run is not the run's last frame: its cursor would move the resume
+			// position past frames that were never applied, so drop the run and hold the cursor.
+			if kind == "settled" && entry.hasPending {
+				entry.discardRun()
+				c.mu.Unlock()
+
+				return kind, nil
+			}
+
 			// A poisoned subscription ignores these frames too: their cursor would move
 			// the resume position past the dropped row change.
 			if entry.poisoned {
