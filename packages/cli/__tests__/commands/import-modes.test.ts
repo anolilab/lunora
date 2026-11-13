@@ -444,7 +444,7 @@ describe("lunora import --mode", () => {
     });
 
     it("a failed append that wrote rows without an _id does not promise a conflict-safe re-run", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const worker = fakeWorker({}, { failWriteAt: 2 });
         const { lines, logger } = capture();
@@ -459,6 +459,8 @@ describe("lunora import --mode", () => {
         expect(result.code).toBe(1);
         expect(lines.join("\n")).toMatch(/duplicates|a second time/u);
         expect(lines.join("\n")).not.toContain("conflict rather than duplicate");
+        // Fresh ids cannot match the ids the target already assigned, so adding them is no recovery.
+        expect(lines.join("\n")).not.toContain("give every row an _id");
     });
 
     it("an append of rows without an _id warns, before anything is written, with the count", async () => {

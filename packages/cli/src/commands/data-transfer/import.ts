@@ -492,7 +492,7 @@ const drainFailureAdvice = (received: number, unkeyed: number): string => {
 
     return received === 0
         ? `re-run the same command once the worker is reachable; any of the ${keyless} that did land are written a second time`
-        : `the rows below had already been written — re-running the same command duplicates the ${keyless} that already landed; give every row an _id (or remove the imported ones) before re-running`;
+        : `the rows below had already been written — re-running the same command writes any of the ${keyless} that landed a second time; remove the imported rows from the source before re-running (an _id added now would not match the id the target already gave them)`;
 };
 
 /**
