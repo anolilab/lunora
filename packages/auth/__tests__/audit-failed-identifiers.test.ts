@@ -9,26 +9,30 @@ import { appendAuthAuditEntry, readAuthAuditLog } from "../src/audit";
 import { createAuth } from "../src/create-auth";
 import type { SqlExecutor } from "../src/sql-store";
 
-const executorFor = (database: DatabaseSync): SqlExecutor => {return {
-    all: (sql, parameters) => Promise.resolve(database.prepare(sql).all(...(parameters as never[])) as Record<string, unknown>[]),
-    run: (sql, parameters) => {
-        database.prepare(sql).run(...(parameters as never[]));
+const executorFor = (database: DatabaseSync): SqlExecutor => {
+    return {
+        all: (sql, parameters) => Promise.resolve(database.prepare(sql).all(...(parameters as never[])) as Record<string, unknown>[]),
+        run: (sql, parameters) => {
+            database.prepare(sql).run(...(parameters as never[]));
 
-        return Promise.resolve();
-    },
-}};
+            return Promise.resolve();
+        },
+    };
+};
 
 const PASTED = "hunter2-pasted-as-an-identifier";
 
 let database: DatabaseSync;
 let executor: SqlExecutor;
 
-const failedEntry = (clientId: string): AppendAuthAuditEntry => {return {
-    detail: { clientId, path: "/api/auth/oauth2/token" },
-    event: "token-refresh",
-    outcome: "failure",
-    ts: 1,
-}};
+const failedEntry = (clientId: string): AppendAuthAuditEntry => {
+    return {
+        detail: { clientId, path: "/api/auth/oauth2/token" },
+        event: "token-refresh",
+        outcome: "failure",
+        ts: 1,
+    };
+};
 
 describe("failed-attempt identifiers are keyed digests, not the caller's text", () => {
     beforeEach(() => {

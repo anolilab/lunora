@@ -53,8 +53,8 @@ interface AppendAuthAuditEntry {
 
 ```ts
 interface AppendAuthAuditOptions {
-    redactDetail?: boolean;
     hashKey?: string;
+    redactDetail?: boolean;
     retention?: number;
 }
 ```
