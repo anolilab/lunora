@@ -419,6 +419,13 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     // accepted the change and its own event for it follows. The conflict is raised rather than the answer dropped
     // silently, and a retry is safe for the same reason.
     const recordSubscriptionAnswer = async (existing: Subscription, answer: Subscription, verb: "updated" | "resumed"): Promise<Subscription> => {
+        // A provider can move the subscription to a new id (Autumn: a plan change is a new `customer::product` row). The
+        // target is guarded by whatever row sits under its id now: absent, or a row from an earlier plan that is replaced.
+        // It is read before the provider's state, so a webhook that writes it afterwards makes the guarded write refuse,
+        // rather than replace a newer row with an older snapshot.
+        const moved = answer.id !== existing.id;
+        const target = moved ? await store.getSubscription(adapter.identifier, answer.id) : existing;
+
         // The status read settles a caller-keyed replay to the provider's current state. If that read fails, the answer the
         // provider accepted is recorded instead: losing a completed change is worse than a replay that a later event corrects.
         const settled = await adapter.getSubscriptionStatus(answer.id).catch(() => answer);
@@ -428,11 +435,6 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 "INVALID_TRANSITION",
                 `the subscription changed while it was being ${verb}; the provider has accepted the change, so retry or reconcile this subscription`,
             );
-
-        // A provider can move the subscription to a new id (Autumn: a plan change is a new `customer::product` row). The
-        // target is guarded by whatever row sits under its id now: absent, or a row from an earlier plan that is replaced.
-        const moved = settled.id !== existing.id;
-        const target = moved ? await store.getSubscription(adapter.identifier, settled.id) : existing;
 
         // A moved row keeps the history of the row it lands on (its creation date and last event), not the one it left,
         // and keeps the owner the subscription already had.

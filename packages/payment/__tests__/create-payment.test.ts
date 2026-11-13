@@ -2427,6 +2427,30 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ state: "paused" });
     });
 
+    it("refuses a plan change whose destination a webhook wrote while the provider's state was read", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // The provider's state is read after a webhook wrote the destination, so the snapshot is older than the row.
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: async () => {
+                await store.upsertSubscription({ ...subscription("user_1", "active"), id: "sub_2", priceId: "price_webhook" });
+
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: "price_2" };
+            },
+            updateSubscription: async (_id, patch) => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: patch.priceId ?? "price_2" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+        await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ priceId: "price_webhook" });
+    });
+
     it("records the provider's answer when reading its current state fails, so a completed change is not lost", async () => {
         expect.assertions(1);
 
