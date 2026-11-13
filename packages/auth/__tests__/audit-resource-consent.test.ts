@@ -25,4 +25,27 @@ describe("resource and consent rows name what they act on, without the secrets a
         expect(update?.detail).toMatchObject({ consentId: "consent_1" });
         expect(revoke?.detail).toMatchObject({ consentId: "consent_2" });
     });
+
+    it("keeps a malformed resource identifier's path, and never the query after it", () => {
+        expect.assertions(2);
+
+        const entry = buildAuditEntry({
+            body: { identifier: "https://resource.example:invalid/?access_token=secret" },
+            method: "POST",
+            path: "/api/auth/admin/oauth2/resources",
+        });
+
+        expect(entry?.detail).toMatchObject({ resourceIdentifier: "https://resource.example:invalid/" });
+        expect(JSON.stringify(entry?.detail)).not.toContain("secret");
+    });
+
+    it("keeps a non-web resource identifier as written", () => {
+        expect.assertions(2);
+
+        const service = buildAuditEntry({ body: { identifier: "api://billing" }, method: "POST", path: "/api/auth/admin/oauth2/resources" });
+        const urn = buildAuditEntry({ body: { identifier: "urn:example:api" }, method: "POST", path: "/api/auth/admin/oauth2/resources" });
+
+        expect(service?.detail).toMatchObject({ resourceIdentifier: "api://billing" });
+        expect(urn?.detail).toMatchObject({ resourceIdentifier: "urn:example:api" });
+    });
 });

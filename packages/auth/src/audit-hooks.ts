@@ -574,6 +574,9 @@ const BASIC_SCHEME = /^basic /iu;
 const switchedOrganizationId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined =>
     event === "org-switch" ? detailId(fieldOf(context.context?.returned, "id")) : undefined;
 
+/** The part of a value before any query or fragment. */
+const BEFORE_QUERY = /^[^?#]*/u;
+
 /**
  * A resource identifier is a URI, and a URI can carry credentials or a token in its query. Only the origin and path are
  * kept, so the trail names the resource without the secret that rode along with it.
@@ -586,11 +589,21 @@ const resourceIdentifierOf = (value: unknown): string | undefined => {
     }
 
     try {
+        // Clearing the userinfo, query and fragment keeps every scheme, where an origin would read as "null" for most.
         const url = new URL(identifier);
 
-        return detailId(`${url.origin}${url.pathname === "/" ? "" : url.pathname}`);
+        url.username = "";
+        url.password = "";
+        url.search = "";
+        url.hash = "";
+
+        // A special scheme gains a trailing slash on an empty path; the identifier as the caller wrote it has none.
+        const cleaned = url.href;
+
+        return detailId(cleaned.endsWith("/") && !identifier.endsWith("/") ? cleaned.slice(0, -1) : cleaned);
     } catch {
-        return detailId(identifier);
+        // Not a parseable URI, so the value before any query or fragment is all that is safe to keep.
+        return detailId(BEFORE_QUERY.exec(identifier)?.[0]);
     }
 };
 
