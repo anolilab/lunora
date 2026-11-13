@@ -66,5 +66,5 @@ const storeSubscription = async (
     return (await store.upsertSubscription(next, guard)) ? "written" : "rejected";
 };
 
-export { ENTITLING_STATES, storeSubscription };
+export { ENTITLING_STATES, hasOtherLiveSubscription, storeSubscription };
 export type { SubscriptionWrite };

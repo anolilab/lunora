@@ -19,7 +19,7 @@ import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription, ownerOf } from "./store";
 import type { SubscriptionWrite } from "./subscription-policy";
-import { ENTITLING_STATES, storeSubscription } from "./subscription-policy";
+import { ENTITLING_STATES, hasOtherLiveSubscription, storeSubscription } from "./subscription-policy";
 import applyWebhookAction from "./sync";
 import type {
     AttachInput,
@@ -249,7 +249,8 @@ export interface LunoraPayment {
     /**
      * Undo a period-end cancel, or resume a paused subscription (Creem; the others clear `cancelAtPeriodEnd`).
      * Authorized against the subscription's owner, unknown and not-owner both raise NOT_FOUND, and the provider's
-     * answer is stored. Only a caller-supplied key is forwarded: the change is absolute, so a derived key would
+     * answer is stored. A resume the single-subscription policy blocks raises INVALID_TRANSITION before the provider
+     * is called. Only a caller-supplied key is forwarded: the change is absolute, so a derived key would
      * replay a stale answer if the subscription is cancelled and resumed again inside the provider's key window.
      */
     resumeSubscription: (subscriptionId: string, options?: { idempotencyKey?: string }) => Promise<Subscription>;
@@ -796,6 +797,19 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
         resumeSubscription: async (subscriptionId, resumeOptions) => {
             const existing = await changeableSubscription(subscriptionId);
+
+            // A resume that would start granting access while another subscription already does is refused before the provider
+            // is called, so the provider does not bill for a subscription the policy will not grant. A row that already grants
+            // access (an undone period-end cancel) adds nothing, so it is not refused.
+            if ((options.singleSubscriptionPerReference ?? false) && !ENTITLING_STATES.has(existing.state) && await hasOtherLiveSubscription(store, existing.referenceId, existing.provider, existing.id)) {
+                    notifyObserver(options.observability, { provider: existing.provider, subscriptionId: existing.id, type: "subscription.duplicate" });
+
+                    throw new LunoraPaymentError(
+                        "INVALID_TRANSITION",
+                        "the single-subscription policy refuses this resume: another subscription for this reference already grants access",
+                    );
+                }
+
             // `undefined` is forwarded as-is, not derived: see the interface comment on why a derived key is wrong here.
             const key =
                 resumeOptions?.idempotencyKey === undefined

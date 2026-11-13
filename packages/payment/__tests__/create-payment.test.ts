@@ -2311,31 +2311,48 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         expect(cancelSubscription).toHaveBeenCalledTimes(2);
     });
 
-    it("reports a resume the single-subscription policy refuses, and leaves the row unchanged", async () => {
-        expect.assertions(3);
+    it("refuses a resume the single-subscription policy blocks before the provider is called", async () => {
+        expect.assertions(4);
 
         const store = new MemoryPaymentStore();
         const observer = vi.fn<PaymentObserver>();
+        const resumeSubscription = vi.fn<PaymentAdapter["resumeSubscription"]>(async (id) => {return { ...subscription("user_1", "active"), id }});
 
         await store.upsertSubscription({ ...subscription("user_1", "active"), id: "sub_2" });
         await store.upsertSubscription(subscription("user_1", "paused"));
 
-        const adapter = fakeAdapter({
-            resumeSubscription: async (id) => {
-                return { ...subscription("user_1", "active"), id };
-            },
-        });
         const payment = createPayment({
-            adapter,
+            adapter: fakeAdapter({ resumeSubscription }),
             authorize: (referenceId) => referenceId === "user_1",
             observability: observer,
             singleSubscriptionPerReference: true,
             store,
         });
 
-        await expect(payment.resumeSubscription("sub_1")).resolves.toMatchObject({ id: "sub_1" });
+        await expect(payment.resumeSubscription("sub_1")).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+        expect(resumeSubscription).not.toHaveBeenCalled();
         expect(observer).toHaveBeenCalledWith(expect.objectContaining({ subscriptionId: "sub_1", type: "subscription.duplicate" }));
-        await expect(store.getSubscription("stripe", "sub_1")).resolves.not.toMatchObject({ state: "active" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "paused" });
+    });
+
+    it("lets a resume of a row that already grants access through, since it adds no access", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), id: "sub_2" });
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        const resumeSubscription = vi.fn<PaymentAdapter["resumeSubscription"]>(async (id) => {return { ...subscription("user_1", "active"), id }});
+        const payment = createPayment({
+            adapter: fakeAdapter({ resumeSubscription }),
+            authorize: (referenceId) => referenceId === "user_1",
+            singleSubscriptionPerReference: true,
+            store,
+        });
+
+        await expect(payment.resumeSubscription("sub_1")).resolves.toMatchObject({ id: "sub_1", state: "active" });
+        expect(resumeSubscription).toHaveBeenCalledTimes(1);
     });
 
     it("records a provider plan change that moves to a new id, and retires the old row", async () => {
