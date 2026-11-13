@@ -67,7 +67,7 @@ overrides:
   # graph to 10.2.6, and dependency-review fails on any new version whose advisory has no
   # fix inside its own major (GHSA-g3hv-75wg-m249, patched only in 11.0.1). 10.2.5 is
   # already on alpha, so this PR adds no new exposure. Moving to 11.x is a separate change.
-  "minimatch@>=10.2.6 <11.0.1": 10.2.5
+  "minimatch@>=10.2.6 <11.0.1": 11.0.1
   # Force a single `jose`. `@lunora/cloudflare-access` takes it from the `auth`
   # catalog while better-auth's own dependency range resolves its own copy; two
   # copies split `@better-auth/core` into two peer instances, and its
@@ -1343,6 +1343,8 @@ minimumReleaseAgeExclude:
   - glob@14.0.2
   - node-forge@1.4.1
   - '@nuxt/vite-builder@4.6.3'
+  # Renovate security update: minimatch@11.0.1
+  - minimatch@11.0.1
 
 # recast@0.23.11 loads `@babel/parser` via a bare (phantom) require, so pnpm
 # hands it the hoisted @babel/parser@8.0.0. recast's parser plugin list is
