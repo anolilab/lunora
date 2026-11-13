@@ -7613,14 +7613,15 @@ class LunoraClient {
         const { serverCursor, serverEpoch } = state;
 
         if (this.resnapshotSubscription(state)) {
-            // eslint-disable-next-line no-param-reassign -- the flag is the shared subscription's own state
+            // eslint-disable-next-line no-param-reassign -- the flag is the subscription's own state, read by handleDataMessage
             state.awaitingSnapshot = true;
         }
 
-        /* eslint-disable no-param-reassign -- restore the resume position the snapshot request just dropped */
+        // The snapshot request drops the resume position; put it back so a reconnect still resumes before the run.
+        // eslint-disable-next-line no-param-reassign -- restores the cursor the snapshot request just dropped
         state.serverCursor = serverCursor;
+        // eslint-disable-next-line no-param-reassign -- restores the epoch the snapshot request just dropped
         state.serverEpoch = serverEpoch;
-        /* eslint-enable no-param-reassign */
     }
 
     /** Report one `WIRE_DECODE_FAILED` for a frame `decodeWire` refused, and re-snapshot when it cut a held run short. */
@@ -7675,8 +7676,6 @@ class LunoraClient {
             // value dies identically — the subscription frozen with the
             // indicator still reading `connected`. Surface it to the subscriber
             // instead and leave the cached value + cursor untouched.
-            // A run that was partly held can no longer complete on this base: drop it, so a later
-            // frame merges onto the committed value and not onto the abandoned partial one.
             // A run that was partly held can no longer complete on this base: drop it, so a later
             // frame merges onto the committed value and not onto the abandoned partial one.
             state.pendingDeltaRun = undefined;
