@@ -293,6 +293,19 @@ const resolveIp = (context: AuditHookContext, trustProxyHeaders: boolean | undef
 
 const stringOf = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 
+/** Longest id copied into `detail`; a longer value is cut rather than dropped. */
+const MAX_DETAIL_ID_LENGTH = 256;
+
+/**
+ * An id read from a request body or response and copied into `detail`. Capped, because a caller can send any length
+ * and a failed request is still written.
+ */
+const detailId = (value: unknown): string | undefined => {
+    const id = stringOf(value);
+
+    return id === undefined ? undefined : id.slice(0, MAX_DETAIL_ID_LENGTH);
+};
+
 const fieldOf = (value: unknown, key: string): unknown =>
     typeof value === "object" && value !== null && key in value ? (value as Record<string, unknown>)[key] : undefined;
 
@@ -399,18 +412,18 @@ const resolveTargetUserId = (context: AuditHookContext, event: AuthAuditEvent): 
         return impersonatedUserId(context);
     }
 
-    const fromBody = stringOf(context.body?.["userId"]);
+    const fromBody = detailId(context.body?.["userId"]);
 
     if (fromBody !== undefined) {
         return fromBody;
     }
 
     if (event === "admin-user-create") {
-        return stringOf(fieldOf(fieldOf(context.context?.returned, "user"), "id"));
+        return detailId(fieldOf(fieldOf(context.context?.returned, "user"), "id"));
     }
 
     if (event === "admin-impersonate-stop") {
-        return stringOf(fieldOf(fieldOf(context.context?.session, "user"), "id")) ?? stringOf(fieldOf(fieldOf(context.context?.session, "session"), "userId"));
+        return detailId(fieldOf(fieldOf(context.context?.session, "user"), "id")) ?? detailId(fieldOf(fieldOf(context.context?.session, "session"), "userId"));
     }
 
     return undefined;
@@ -447,11 +460,11 @@ const refineEvent = (context: AuditHookContext, event: AuthAuditEvent): AuthAudi
  */
 const resolveKeyId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined => {
     if (event === "api-key-create") {
-        return stringOf(fieldOf(context.context?.returned, "id"));
+        return detailId(fieldOf(context.context?.returned, "id"));
     }
 
     if (event === "api-key-update" || event === "api-key-delete") {
-        return stringOf(context.body?.["keyId"]);
+        return detailId(context.body?.["keyId"]);
     }
 
     return undefined;
