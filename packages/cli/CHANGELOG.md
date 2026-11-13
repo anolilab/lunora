@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.493](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.492...@lunora/cli@1.0.0-alpha.493) (2026-11-13)
+
+- security(cli): keep convex table reads inside the snapshot directory (#1543)
+
 ## @lunora/cli [1.0.0-alpha.492](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.491...@lunora/cli@1.0.0-alpha.492) (2026-11-13)
 
 - security(payment)!: owner-checked subscription changes, replace the raw adapter with provider (#1544)
