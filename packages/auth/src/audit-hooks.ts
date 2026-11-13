@@ -10,6 +10,7 @@
  * break an auth request.
  */
 
+import { cyrb53 } from "@lunora/values";
 import { createAuthMiddleware } from "better-auth/api";
 
 import { onCloudflareEdge } from "../../../shared/on-cloudflare-edge";
@@ -99,7 +100,7 @@ const SUFFIX_EVENTS: ReadonlyArray<readonly [suffix: string, event: AuthAuditEve
     ["/delete-user", "user-delete"],
     ["/delete-user/callback", "user-delete"],
     ["/delete-anonymous-user", "user-delete"],
-    ["/forget-password/email-otp", "password-reset"],
+    ["/forget-password/email-otp", "password-reset-request"], // secret-scanner:allow -- endpoint path or event name, not a credential
     ["/two-factor/generate-backup-codes", "mfa-backup-codes-regenerate"],
     ["/one-time-token/generate", "one-time-token-create"],
     ["/one-time-token/verify", "sign-in"],
@@ -232,8 +233,12 @@ const branchEventForPath = (normalized: string): AuthAuditEvent | undefined => {
         return "password-change";
     }
 
-    if (ends("/reset-password") || ends("/request-password-reset") || ends("/forget-password")) {
+    if (ends("/reset-password")) {
         return "password-reset";
+    }
+
+    if (ends("/request-password-reset") || ends("/forget-password")) {
+        return "password-reset-request"; // secret-scanner:allow -- endpoint path or event name, not a credential
     }
 
     if (ends("/verify-email")) {
@@ -397,6 +402,24 @@ const resolveIp = (context: AuditHookContext, trustProxyHeaders: boolean | undef
 
 const stringOf = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 
+/** Longest id copied into `detail`; a longer value is cut rather than dropped. */
+const MAX_DETAIL_ID_LENGTH = 256;
+
+/**
+ * An id read from a request body or response and copied into `detail`. Capped, because a caller can send any length
+ * and a failed request is still written.
+ */
+const detailId = (value: unknown): string | undefined => {
+    const id = stringOf(value);
+
+    if (id === undefined || id.length <= MAX_DETAIL_ID_LENGTH) {
+        return id;
+    }
+
+    // Two long ids that share a prefix would otherwise read the same, so the cut keeps a hash of the whole value.
+    return `${id.slice(0, MAX_DETAIL_ID_LENGTH - 15)}~${cyrb53(id).toString(16).padStart(14, "0")}`;
+};
+
 const fieldOf = (value: unknown, key: string): unknown =>
     typeof value === "object" && value !== null && key in value ? (value as Record<string, unknown>)[key] : undefined;
 
@@ -474,11 +497,6 @@ const resolveTargetEmail = (context: AuditHookContext, event: AuthAuditEvent): s
 
     return candidate.length > MAX_TARGET_EMAIL_LENGTH ? candidate.slice(0, MAX_TARGET_EMAIL_LENGTH) : candidate;
 };
-
-/** Longest id copied into `detail`; a longer value is cut rather than dropped. */
-const MAX_DETAIL_ID_LENGTH = 256;
-
-const detailId = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value.slice(0, MAX_DETAIL_ID_LENGTH) : undefined);
 
 /**
  * The account an impersonated session acts as, which the administrator named in `impersonatedBy` acts for.
