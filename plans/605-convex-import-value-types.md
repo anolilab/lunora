@@ -326,7 +326,10 @@ Add `const refuseLegacyLossyTable = async (snapshot: ConvexSnapshot, tableEntry:
    Hoist the regex literal into a module-level constant if the lint rules
    require it.
 2. Check that it exists:
-    - `snapshot.kind === "directory"` → `(await stat(sidecar.file).catch(() => undefined))?.isFile() === true`;
+    - `snapshot.kind === "directory"` → `(await stat(sidecar.file).catch(() => undefined))?.isFile() === true`,
+      and `isInsideDirectory(await realpath(snapshot.root), await realpath(sidecar.file))` (the containment
+      `convex-snapshot.ts` applies to `documents.jsonl`; a symlinked sidecar must not read outside the export);
+      a sidecar outside the export is refused like a table file outside it;
     - otherwise → `snapshot.zip.getEntry(sidecar.file) !== null`.
     - If it does not exist, return.
 3. Read lines with `for await (const raw of readSnapshotLines(snapshot, sidecar))`.

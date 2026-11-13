@@ -88,6 +88,7 @@ landed the plan; a follow-up commit that completed it is listed after the first.
 
 | Plan | Title                                                                       | Commit               |
 | ---- | --------------------------------------------------------------------------- | -------------------- |
+| 609  | A row delta names its table only when the query read exactly one            | #1595                |
 | 555  | Reconcile versions pinned differently across pnpm catalogs                  | #1590                |
 | 553  | Measure, then stop rebuilding the production build cold per CI job          | #1591                |
 | 549  | Run celld, MySQL, SDK conformance and SaaS e2e in the nightly               | #1537                |
@@ -109,8 +110,8 @@ Findings audited at `5ed1688b6`, re-verified and planned against `4a7c48bfd` (`o
 Plans 536-551 except 546 (blocked on an owner decision) were dispatched to executor agents, each on its
 own branch `<type>/improve-<NNN>-<slug>` cut from `4a7c48bfd` (542 is stacked on 543); a plan's Status
 line records the review verdict. 550's Nuxt-module part is blocked on an owner decision.
-Plans 552-557 are plan-only: each is large, needs a maintainer decision, or cannot be verified
-without CI, npm or a release.
+Plans 552, 554, 556 and 557 are plan-only (553 and 555 have since shipped): each is large, needs
+a maintainer decision, or cannot be verified without CI, npm or a release.
 
 **Execution order.** 536, 537, 538, 547 (small, independent); then 539, 540, 541; then 543, 544,
 545; then 542 alone; then 548, 549, 550, 551. 546 is blocked on an owner decision.
@@ -211,7 +212,7 @@ Findings are numbered as in [`audit-2026-11-11-findings.md`](./audit-2026-11-11-
 | 604      | 11 (phase 2)                                                                      | #1550, #1578-#1580 | commits on those PRs                                                                                       |
 | 605      | investigate: Convex value types                                                   | #1585              | open                                                                                                       |
 | 606      | investigate: alert-policy pagination                                              | —                  | rejected: the Cloudflare list endpoint is not paginated                                                    |
-| 609      | found during the audit: row deltas carry the first table the query read           | #1595              | merged                                                                                                     |
+| 609      | found during the audit: row deltas carry the first table the query read           | #1595              | merged; plan file deleted                                                                                  |
 | 610      | follow-up to #1595: broadcast deltas reached subscriptions served by re-execution | #1597              | open                                                                                                       |
 
 ## Audit 2026-10-19 — still open after PR #1272

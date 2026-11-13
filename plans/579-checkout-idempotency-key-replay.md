@@ -71,8 +71,9 @@ client double in `stripe.test.ts`.
 longer `open`. No clock in the key.
 
 - After `create`, when `session.status` is `"complete"` or `"expired"`, call `create` once more with
-  the same parameters and the key `${input.idempotencyKey}:${session.id}` (only when an
-  `idempotencyKey` was given; without one there is no replay to escape). The suffix is
+  the same parameters and the key `${input.idempotencyKey}:${session.id}`. `startCheckout` always hands the adapter a key
+  (`create-payment.ts:395` derives one from the request when the caller gave none), so a keyless
+  caller replays too; only a direct adapter call with no key skips the retry. The suffix is
   deterministic, so a double-click after the first session finished still collapses onto one new
   session.
 - If the second response is also not `open`, throw `PROVIDER_ERROR`:
@@ -139,8 +140,8 @@ In `stripe.test.ts`, beside the checkout key test (line ~147), using a client do
 3. First response `status: "open"`: one call only, result is that session.
 4. Two non-open responses in a row: rejects with `LunoraPaymentError` code `"PROVIDER_ERROR"`, two
    calls made.
-5. No `idempotencyKey` in the input and a `complete` response: one call, no retry (nothing to
-   escape).
+5. The adapter called directly with no `idempotencyKey` and a `complete` response: one call, no
+   retry (Stripe had no key to replay against).
 
 **Verify:** test-file command → cases 1, 2 and 4 FAIL.
 
