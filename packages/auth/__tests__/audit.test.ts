@@ -519,7 +519,13 @@ describe("auth audit trail", () => {
         it("records a phone-code sign-in as sign-in, and an attached number as phone-verification", () => {
             expect.assertions(2);
 
-            expect(buildAuditEntry({ body: { code: "123456", phoneNumber: "+15550100" }, path: "/api/auth/phone-number/verify" })?.event).toBe("sign-in");
+            expect(
+                buildAuditEntry({
+                    body: { code: "123456", phoneNumber: "+15550100" },
+                    context: { returned: { token: "session_token", status: true } },
+                    path: "/api/auth/phone-number/verify",
+                })?.event,
+            ).toBe("sign-in");
             expect(
                 buildAuditEntry({ body: { code: "123456", phoneNumber: "+15550100", updatePhoneNumber: true }, path: "/api/auth/phone-number/verify" })?.event,
             ).toBe("phone-verification");

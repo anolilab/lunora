@@ -20,4 +20,25 @@ describe("a phone code records a sign-in only when it signs someone in", () => {
 
         expect(entry?.event).toBe("phone-verification");
     });
+
+    it("records a verification, not a sign-in, when a successful response omits the token altogether", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({ body: { code: "123456" }, context: { returned: { status: true } }, path });
+
+        expect(entry?.event).toBe("phone-verification");
+    });
+
+    it("keeps a failed code as a sign-in attempt, which failed", () => {
+        expect.assertions(2);
+
+        const entry = buildAuditEntry({
+            body: { code: "000000" },
+            context: { returned: Object.assign(new Error("invalid code"), { status: 400 }) },
+            path,
+        });
+
+        expect(entry?.event).toBe("sign-in");
+        expect(entry?.outcome).toBe("failure");
+    });
 });

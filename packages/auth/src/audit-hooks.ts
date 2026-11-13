@@ -549,7 +549,9 @@ const refineEvent = (context: AuditHookContext, event: AuthAuditEvent): AuthAudi
     if (event === "sign-in" && path.endsWith("/phone-number/verify")) {
         // Without `updatePhoneNumber` the code signs the caller in, unless sessions are disabled: a verified number then comes
         // back with no token, and nobody is signed in. With `updatePhoneNumber` the number is attached to an existing account.
-        const signsIn = context.body?.["updatePhoneNumber"] !== true && fieldOf(returned, "token") !== null;
+        // A failed request is recorded as a failed sign-in attempt, as before. A successful one signs in only with a token.
+        const hasToken = stringOf(fieldOf(returned, "token")) !== undefined;
+        const signsIn = context.body?.["updatePhoneNumber"] !== true && (hasToken || resolveOutcome(context) === "failure");
         refined = signsIn ? "sign-in" : "phone-verification";
     } else if (event === "user-delete" && path.endsWith("/delete-user") && stringOf(fieldOf(returned, "message")) === "Verification email sent") {
         refined = "user-delete-request";
