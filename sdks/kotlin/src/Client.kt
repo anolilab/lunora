@@ -252,6 +252,13 @@ class Client(
         var poisoned: Boolean = false
 
         /**
+         * The payload of a run of `more: true` deltas, merged but not yet committed. Frames of a run
+         * merge onto this rather than onto the base, and cursor, epoch and the layers move only when
+         * the run's last frame commits it, so a reconnect mid-run resumes from before the whole run.
+         */
+        var heldRun: WireValue? = null
+
+        /**
          * The stable wire key of [args], computed once at subscribe time so a
          * write's optimistic targeting can compare without re-serialising every
          * subscription's args on every write.
@@ -585,6 +592,7 @@ class Client(
         // socket with a generation newer than the credential it presents.
         val (generation, credential, provider) = synchronized(lock) {
             send = null
+            discardHeldRuns()
             Triple(++attachGeneration, credentialGeneration, wsToken)
         }
         sender(buildConnectFrame(clientId = clientId, context = context, token = provider?.invoke(), caps = CAPABILITIES))
@@ -629,6 +637,7 @@ class Client(
         val expired = synchronized(lock) {
             send = null
             attachGeneration++
+            discardHeldRuns()
 
             when {
                 closeCode == CLOSE_TOKEN_EXPIRED -> true
@@ -1095,6 +1104,7 @@ class Client(
                     // exists — silently, and for the rest of the process's life.
                     subscriptions.map { (id, entry) ->
                         entry.poisoned = false
+                        entry.heldRun = null
                         buildSubscribeFrame(id, entry.functionPath, entry.args, null, entry.cursor, entry.epoch)
                     } +
                         shapes.map { (id, shape) ->
@@ -1144,7 +1154,10 @@ class Client(
                     // EVERY other subscription on this client, so it is delivered
                     // to the addressed subscription's error callbacks instead and
                     // the frame is reported as the error it is.
-                    val handler = synchronized(lock) { subscriptions[id]?.onError }
+                    val handler = synchronized(lock) {
+                        // A frame that cannot be read leaves the run incomplete, so it is not committed.
+                        subscriptions[id]?.also { it.heldRun = null }?.onError
+                    }
 
                     handler?.invoke(SubscriptionError("INVALID_FRAME", error.message ?: "subscription payload could not be decoded"))
 
@@ -1161,10 +1174,10 @@ class Client(
                             entry.poisoned = false
                         }
 
-                        // The merge applies to the server base, never to the value the caller
-                        // sees: the overlays are re-folded onto the result below.
+                        // The merge applies to the server base (or the run held on top of it), never to
+                        // the value the caller sees: the overlays are re-folded onto the result below.
                         val resolved = if (isDelta) {
-                            RowDelta.resolve(value, if (entry.state.hasBase) entry.state.serverBase else null)
+                            RowDelta.resolve(value, entry.heldRun ?: if (entry.state.hasBase) entry.state.serverBase else null)
                         } else {
                             RowDelta.Resolution.Publish(value)
                         }
@@ -1173,6 +1186,7 @@ class Client(
                         // It also poisons the subscription so a later frame's cursor cannot skip it.
                         if (resolved !is RowDelta.Resolution.Publish) {
                             entry.poisoned = true
+                            entry.heldRun = null
                             // Reported once, when the freeze starts: an app that stays silent shows a stale list.
                             val onError = entry.onError
 
@@ -1188,6 +1202,16 @@ class Client(
                             return@let
                         }
 
+                        // Nothing of a run is visible until its last frame: publishing mid-run would show a
+                        // half-applied change, and advancing the cursor would skip the rest on a reconnect.
+                        if (isDelta && frame["more"] == true) {
+                            entry.heldRun = resolved.value
+
+                            return@let
+                        }
+
+                        // A data frame commits too, which is what discards a run it interrupts.
+                        entry.heldRun = null
                         entry.state.serverBase = resolved.value
                         entry.state.hasBase = true
                         // Advanced only once the frame is applied: an unmergeable row change returned above
@@ -1224,6 +1248,9 @@ class Client(
                         // A poisoned subscription ignores these frames too: their cursor would
                         // move the resume position past the dropped row change.
                         if (entry.poisoned) return@let
+
+                        // Only a resume discards the run: the reference leaves it alone on `settled`.
+                        if (kind == "resume") entry.heldRun = null
 
                         advance(entry, frame)
                         // A resume/settled frame advances the cursor without a
@@ -1348,6 +1375,11 @@ class Client(
         return hydrated.shardKeys
     }
 
+    /** Call with [lock] held: a dropped socket never delivers the rest of a run, so its held frames are void. */
+    private fun discardHeldRuns() {
+        for (entry in subscriptions.values) entry.heldRun = null
+    }
+
     /**
      * Drops the resume state the previous identity left, under the lock; returns
      * the shape callbacks to tell (outside it) that their view is now empty.
@@ -1357,6 +1389,7 @@ class Client(
             entry.cursor = null
             entry.epoch = null
             entry.poisoned = false
+            entry.heldRun = null
             // A cached base belongs to the previous identity; a row change must not merge into it.
             entry.state.hasBase = false
         }

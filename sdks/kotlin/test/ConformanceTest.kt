@@ -998,16 +998,11 @@ private fun seededClient(seedFrame: Any?, identity: String? = null): Triple<Clie
     return Triple(client, seen, errors)
 }
 
-/**
- * An unmergeable row change poisons the subscription: later deltas neither publish nor move the
- * resume cursor, and only a `data` frame or a resubscribe clears it.
- */
-private fun unmergeableRowChangeFreezesTheCursor() {
-    covers("unmergeable_row_change_freezes_the_cursor")
+/** Runs every case under `ws-frames.json`'s [key]: a seed snapshot, then [runDeltaSteps]. */
+private fun runDeltaCases(key: String, expected: Int) {
+    val cases = fixture("ws-frames.json")[key] as List<*>
 
-    val cases = fixture("ws-frames.json")["pageDeltaPoisonCases"] as List<*>
-
-    check(cases.size == 3, "pageDeltaPoisonCases must carry 3 cases, got ${cases.size}")
+    check(cases.size == expected, "$key must carry $expected cases, got ${cases.size}")
 
     for (entry in cases) {
         val testCase = entry as Map<*, *>
@@ -1015,6 +1010,20 @@ private fun unmergeableRowChangeFreezesTheCursor() {
 
         runDeltaSteps(testCase["name"], client, testCase["steps"] as List<*>, seen, errors)
     }
+}
+
+/**
+ * An unmergeable row change poisons the subscription: later deltas neither publish nor move the
+ * resume cursor, and only a `data` frame or a resubscribe clears it.
+ */
+private fun unmergeableRowChangeFreezesTheCursor() {
+    covers("unmergeable_row_change_freezes_the_cursor")
+    runDeltaCases("pageDeltaPoisonCases", 3)
+}
+
+/** A run of `more: true` deltas is held and publishes once, on its last frame. */
+private fun deltaRunsCommitOnTheirLastFrame() {
+    runDeltaCases("pageDeltaRunCases", 4)
 }
 
 /**
@@ -1751,6 +1760,7 @@ fun main() {
     rowDeltaFramesMergeIntoTheBase()
     unmergeableRowChangeFreezesTheCursor()
     identityChangeEvictsTheDeltaState()
+    deltaRunsCommitOnTheirLastFrame()
     subscriptionStreamYieldsFrameValuesInOrder()
     shapeSubscribeFrame()
     shapeSubscriptionsResendAfterReconnect()
