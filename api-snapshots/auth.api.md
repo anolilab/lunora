@@ -1088,7 +1088,7 @@ const ensureAuthAuditTable: (executor: SqlExecutor) => Promise<void>;
 ### `eventForPath` (const)
 
 ```ts
-const eventForPath: (path: string, method?: string) => AuthAuditEvent | undefined;
+const eventForPath: (path: string, method?: string, grantType?: string) => AuthAuditEvent | undefined;
 ```
 
 ### `handleAuthDiscoveryRequest` (const)
