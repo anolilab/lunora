@@ -415,6 +415,11 @@ pub(crate) struct Subscription {
     /// frames are ignored whole, so a later frame's cursor cannot move the resume
     /// position past the dropped change. A `data` frame or a resubscribe clears it.
     poisoned: bool,
+    /// The merged payload of a delta run still waiting for its last frame (`more: false`).
+    /// Later frames of the run merge onto it rather than onto the committed base, and nothing
+    /// is published or advanced until the run ends, so a reconnect mid-run resumes from the
+    /// cursor before the run and the server replays all of it.
+    pending_run: Option<WireValue>,
     /// The displayed value and its optimistic overlays. See `crate::optimistic`.
     pub(crate) state: OptimisticState,
 }
@@ -637,6 +642,8 @@ impl Client {
     pub fn attach_socket(&mut self, send: FrameSender, context: Option<&Value>) {
         // Until this open has written its frames, nothing routes to the new socket.
         self.send = None;
+        // A run is one socket's stream; a failed open never delivered the rest of it.
+        self.discard_pending_runs();
 
         send(&build_connect_frame(Some(self.client_id.as_str()), context, self.session_token.as_deref()));
 
@@ -663,6 +670,7 @@ impl Client {
     /// unwinds out of this call, as every other callback here does.
     pub fn detach_socket(&mut self, close_code: Option<u16>, reason: Option<&str>) {
         self.send = None;
+        self.discard_pending_runs();
 
         let opened = self.socket_generation.take();
 
@@ -903,6 +911,12 @@ impl Client {
         }
     }
 
+    fn discard_pending_runs(&mut self) {
+        for entry in self.subscriptions.values_mut() {
+            entry.pending_run = None;
+        }
+    }
+
     /// Drops every resume cursor, epoch and shape row, telling each shape view.
     fn evict_session(&mut self) {
         for entry in self.subscriptions.values_mut() {
@@ -911,6 +925,7 @@ impl Client {
             entry.poisoned = false;
             // A cached base belongs to the previous identity; a row change must not merge into it.
             entry.has_base = false;
+            entry.pending_run = None;
         }
 
         // A poke half-received under the previous session must not land on the
@@ -1116,6 +1131,7 @@ impl Client {
                 epoch: None,
                 function_path: function_path.to_string(),
                 has_base: false,
+                pending_run: None,
                 poisoned: false,
                 on_data,
                 on_error,
@@ -1182,6 +1198,8 @@ impl Client {
             // The resend replays from the old cursor, which re-applies the dropped
             // change; if it is still unmergeable the flag is set again.
             entry.poisoned = false;
+            // The resend resumes from the cursor before the run, so the server replays it.
+            entry.pending_run = None;
 
             frames.push(build_subscribe_frame(
                 id,
@@ -1281,6 +1299,11 @@ impl Client {
                             message: error.to_string(),
                         };
 
+                        // A partly held run can no longer complete on this base.
+                        if let Some(entry) = self.subscriptions.get_mut(&id) {
+                            entry.pending_run = None;
+                        }
+
                         if let Some(handler) = self.subscriptions.get(&id).and_then(|entry| entry.on_error.as_ref()) {
                             handler(&reported);
                         }
@@ -1293,6 +1316,7 @@ impl Client {
                     // A snapshot is authoritative, so it ends a poisoning.
                     if kind == "data" {
                         entry.poisoned = false;
+                        entry.pending_run = None;
                     }
 
                     // A `data` frame replaces the base. A `delta` frame is merged into
@@ -1303,15 +1327,23 @@ impl Client {
                             return Ok(Some(kind));
                         }
 
-                        let base = entry.has_base.then_some(&entry.state.server_base);
+                        // A run's later frames merge onto the frames before them, not the committed base.
+                        let base = entry.pending_run.as_ref().or(entry.has_base.then_some(&entry.state.server_base));
 
                         match resolve_delta(value, base) {
+                            Resolved::Adopt(adopted) if kind == "delta" && frame.get("more").and_then(Value::as_bool) == Some(true) => {
+                                // Held: committing, publishing and the cursor wait for the run's last frame.
+                                entry.pending_run = Some(adopted);
+
+                                return Ok(Some(kind));
+                            }
                             Resolved::Adopt(adopted) => adopted,
                             // Only the last frame of a run carries the cursor, so a
                             // later frame would advance the resume position past the
                             // dropped change. Freeze until a snapshot or a resubscribe.
                             Resolved::Keep => {
                                 entry.poisoned = true;
+                                entry.pending_run = None;
 
                                 // Reported once, when the freeze starts: an app that stays silent shows a stale list.
                                 if let Some(handler) = &entry.on_error {
@@ -1328,6 +1360,7 @@ impl Client {
                         value
                     };
 
+                    entry.pending_run = None;
                     advance(entry, &frame);
                     entry.has_base = true;
                     entry.state.server_base = value;
@@ -1361,6 +1394,11 @@ impl Client {
                     // move the resume position past the dropped row change.
                     if entry.poisoned {
                         return Ok(Some(kind));
+                    }
+
+                    // A resume answers from the cursor the run began after, so a run cut off before it is void.
+                    if kind == "resume" {
+                        entry.pending_run = None;
                     }
 
                     advance(entry, &frame);
