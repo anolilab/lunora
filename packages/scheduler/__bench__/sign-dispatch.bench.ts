@@ -2,9 +2,11 @@ import { bench, describe } from "vitest";
 
 import { toBase64Url } from "../../../shared/base64";
 import { signCanonical } from "../../../shared/hmac-url";
+import { schedulerDispatchCanonical } from "../../../shared/scheduler-dispatch";
 
 /*
- * Every alarm-fired dispatch HMAC-signs its JSON body with
+ * Every alarm-fired dispatch HMAC-signs `schedulerDispatchCanonical` (the timestamp, the
+ * forwarded `x-lunora-userid` and `x-lunora-identity` headers, and the JSON body) with
  * LUNORA_SCHEDULER_SECRET.
  *
  * old — `crypto.subtle.importKey` on every dispatch, then `sign` and the base64url encode.
@@ -23,6 +25,6 @@ describe("SchedulerDO.signDispatch", () => {
     });
 
     bench("memoized key via signCanonical (new)", async () => {
-        await signCanonical(secret, body);
+        await signCanonical(secret, schedulerDispatchCanonical({ body, timestamp: 1_700_000_000_000 }));
     });
 });
