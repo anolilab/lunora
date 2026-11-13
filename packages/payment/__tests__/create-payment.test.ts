@@ -2698,6 +2698,45 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ state: "paused" });
     });
 
+    it("reports a reconcile error when a webhook moves the retired row before the restore lands", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // The new row's write fails, and a webhook writes the retired row between the rollback's read and its guarded write.
+        const failing = Object.assign(Object.create(store) as object, {
+            upsertSubscription: async (record: Subscription, guard?: RevisionGuard) => {
+                if (record.id === "sub_2") {
+                    throw new Error("database unavailable");
+                }
+
+                if (record.id === "sub_1" && record.state === "active") {
+                    await store.upsertSubscription({ ...subscription("user_1", "canceled"), updatedAt: 5 });
+                }
+
+                return store.upsertSubscription(record, guard);
+            },
+        }) as PaymentStore;
+
+        const adapter = fakeAdapter({
+            getSubscriptionStatus: async () => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: "price_2" };
+            },
+            updateSubscription: async () => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: "price_2" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: failing });
+
+        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).rejects.toMatchObject({
+            code: "INVALID_TRANSITION",
+            message: expect.stringContaining("reconcile it"),
+        });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled", updatedAt: 5 });
+    });
+
     it("reports a failed restore with both failures, so the subscription can be reconciled", async () => {
         expect.assertions(3);
 

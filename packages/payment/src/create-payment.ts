@@ -553,9 +553,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             const destinationUntouched = destination?.revision === target?.revision && !ENTITLING_STATES.has(destination?.state ?? "canceled");
 
             if (current?.state === "canceled" && current.revision === (existing.revision ?? 0) + 1 && destinationUntouched) {
-                await restoreSubscription(store, policy, current, existing);
-
-                return true;
+                return restoreSubscription(store, policy, current, existing);
             }
 
             return ENTITLING_STATES.has(destination?.state ?? "canceled");

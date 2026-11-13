@@ -167,30 +167,39 @@ const storeSubscription = async (
  * Put back a row that was retired (set to canceled) so a plan change could move off it, once the change did not land.
  * `retired` is the canceled row as stored, `original` what it held before. Restoring grants access again, so under the
  * policy it goes through the same claim as any other grant, and a restore that loses to another grant leaves the row
- * canceled: the plan that took over keeps the access.
+ * canceled: the plan that took over keeps the access. Says whether a plan grants access for the reference afterwards.
  */
 const restoreSubscription = async (
     store: PaymentStore,
     singleSubscriptionPerReference: boolean,
     retired: Subscription,
     original: Subscription,
-): Promise<void> => {
+): Promise<boolean> => {
     const claims = singleSubscriptionPerReference && ENTITLING_STATES.has(original.state) && original.referenceId.trim() !== "";
     const revision = claims ? await store.getReferenceRevision(original.referenceId) : 0;
 
+    // Another plan grants access already, so the reference is not left without one.
     if (claims && (await hasOtherLiveSubscription(store, original.referenceId, original.provider, original.id))) {
-        return;
+        return true;
     }
 
-    if (!(await store.upsertSubscription(original, { ifRevision: retired.revision })) || !claims) {
-        return;
+    // A rejected write means a webhook moved the retired row first, and that write stands: nothing was restored.
+    if (!(await store.upsertSubscription(original, { ifRevision: retired.revision }))) {
+        return false;
     }
 
+    if (!claims) {
+        return true;
+    }
+
+    // A step back hands the access to the plan that won the counter, so a plan grants either way.
     await settleGrant(store, original, revision, () =>
         rewrite(store, original.provider, original.id, (retired.revision ?? 0) + 1, (row) => {
             return { ...row, state: "canceled" };
         }),
     );
+
+    return true;
 };
 
 export { ENTITLING_STATES, hasOtherLiveSubscription, restoreSubscription, storeSubscription };
