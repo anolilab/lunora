@@ -562,6 +562,27 @@ const clientIdOf = (oauthQuery: unknown): string | undefined => {
     return detailId(new URLSearchParams(oauthQuery).get("client_id") ?? undefined);
 };
 
+const BASIC_SCHEME = /^basic /iu;
+
+/**
+ * The client id a `client_secret_basic` credential names. The header is `Basic base64(client_id:client_secret)` with the
+ * client id form-encoded, and only that part is read: the secret is never copied.
+ */
+const clientIdFromBasic = (authorization: string | undefined): string | undefined => {
+    if (authorization === undefined || !BASIC_SCHEME.test(authorization)) {
+        return undefined;
+    }
+
+    try {
+        const decoded = atob(authorization.slice("basic ".length).trim());
+        const separator = decoded.indexOf(":");
+
+        return detailId(decodeURIComponent(separator === -1 ? decoded : decoded.slice(0, separator)));
+    } catch {
+        return undefined;
+    }
+};
+
 /** The client id a client-registration response returns, for `oauth-client-create` (its request does not carry one). */
 const createdClientId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined =>
     event === "oauth-client-create" ? detailId(fieldOf(context.context?.returned, "client_id")) : undefined;
@@ -576,7 +597,11 @@ const organizationIds = (context: AuditHookContext, event: AuthAuditEvent): Read
     // Only a call that acts within the active organization is attributed to it. A switch, an invitation (which may belong to
     // another organization) or a create names its organization from the request or the response.
     const activeOrganizationId =
-        event.startsWith("org-member-") || event.startsWith("org-team-") || event === "org-role-change"
+        event.startsWith("org-member-") ||
+        event.startsWith("org-team-") ||
+        event === "org-role-change" ||
+        event === "org-update" ||
+        event === "org-invitation-create"
             ? detailId(fieldOf(fieldOf(context.context?.session, "session"), "activeOrganizationId"))
             : undefined;
     // `remove-member` takes a member id or an email. The `@` check runs on the whole value, since cutting it first could leave
@@ -585,9 +610,15 @@ const organizationIds = (context: AuditHookContext, event: AuthAuditEvent): Read
     const memberReference = typeof rawMemberReference === "string" && rawMemberReference.includes("@") ? undefined : detailId(rawMemberReference);
 
     return [
-        ["organizationId", event === "org-create" ? createdId : (detailId(body["organizationId"]) ?? activeOrganizationId)],
+        [
+            "organizationId",
+            event === "org-create"
+                ? createdId
+                : (detailId(body["organizationId"]) ?? detailId(fieldOf(context.context?.returned, "organizationId")) ?? activeOrganizationId),
+        ],
         ["teamId", detailId(body["teamId"]) ?? (event === "org-team-create" ? createdId : undefined)],
         ["roleId", detailId(body["roleId"]) ?? (event === "org-role-change" ? createdId : undefined)],
+        ["roleName", detailId(body["roleName"])],
         ["invitationId", detailId(body["invitationId"]) ?? (event === "org-invitation-create" ? createdId : undefined)],
         ["memberId", detailId(body["memberId"]) ?? memberReference],
         ["targetUserId", detailId(body["userId"])],
@@ -621,7 +652,11 @@ const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Rec
             return [
                 [
                     "clientId",
-                    detailId(body["client_id"]) ?? detailId(params["client_id"]) ?? clientIdOf(body["oauth_query"]) ?? createdClientId(context, event),
+                    detailId(body["client_id"]) ??
+                        detailId(params["client_id"]) ??
+                        clientIdOf(body["oauth_query"]) ??
+                        clientIdFromBasic(header(context, "authorization")) ??
+                        createdClientId(context, event),
                 ],
                 // A resource is named by its path, or by the `identifier` a create request carries.
                 ["resourceIdentifier", detailId(params["identifier"]) ?? detailId(body["identifier"])],
@@ -630,7 +665,7 @@ const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Rec
 
         if (event === "token-refresh") {
             // A refresh grant names the client it refreshes for; the row must say which.
-            return [["clientId", detailId(body["client_id"])]];
+            return [["clientId", detailId(body["client_id"]) ?? clientIdFromBasic(header(context, "authorization"))]];
         }
 
         if (event.startsWith("scim-")) {
