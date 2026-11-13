@@ -325,6 +325,58 @@ void casePoisonedSubscriptionStaysFrozenWhenTheResendCannotRun() {
   );
 }
 
+/// A resend whose write throws did not reach the server, so the position it would
+/// have resumed from was never asked for: the subscription stays frozen.
+void casePoisonedSubscriptionStaysFrozenWhenTheResendThrows() {
+  final testCase = objectList(fixture('ws-frames.json')['pageDeltaPoisonCases']).first;
+  final run = _FrameCase(testCase);
+
+  run.feed((testCase['steps']! as List<Object?>).cast<Map<String, Object?>>().first['frame']);
+
+  // Swapping the socket for one that refuses every write; `attachSocket` itself writes `connect`.
+  var failing = false;
+  run.client.attachSocket((frame) {
+    if (failing) {
+      throw StateError('socket closed');
+    }
+  });
+  failing = true;
+
+  var threw = false;
+
+  try {
+    run.client.resendSubscriptions();
+  } on StateError {
+    threw = true;
+  }
+
+  equals(threw, true, 'the failed write reaches the caller');
+  failing = false;
+
+  run.feed(<String, Object?>{
+    'id': 'sub_1',
+    'type': 'delta',
+    'delta': <String, Object?>{
+      'key': 'm2',
+      'op': 'update',
+      'table': 'messages',
+      'row': <String, Object?>{'_id': 'm2', '_creationTime': 1002, 'text': 'TWO'},
+    },
+    'cursor': 9,
+    'epoch': 'e1',
+  });
+  equals(run.seen.length, 0, 'a subscription whose resend threw is still frozen and ignores a later delta');
+
+  run.client.attachSocket(run.sent.add);
+  run.sent.clear();
+  run.client.resendSubscriptions();
+  equals(
+    (run.sent.singleWhere((frame) => frame['type'] == 'subscribe')['query']! as Map<String, Object?>)['sinceSeq'],
+    5,
+    'and the next resend still names the position before the frozen change',
+  );
+}
+
 /// The `Stream` form of a live query: same subscription, same decode, same order
 /// as the callback form.
 Future<void> caseSubscriptionStreamYieldsFrameValuesInOrder() async {

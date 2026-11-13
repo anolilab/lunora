@@ -808,10 +808,16 @@ class LunoraClient {
     // throws into a handler that does — would otherwise mutate `_subscriptions`
     // while it is being iterated. Swift's port serialises this under its lock
     // for the same reason.
+    final frozen = <_Subscription>{};
+
     for (final entry in _subscriptions.values) {
       // The resent position predates the dropped change, so the replay
       // re-applies it; if it is still unmergeable the flag is set again. The
       // resend also replays any held run from before it, so the held frames go.
+      if (entry.poisoned) {
+        frozen.add(entry);
+      }
+
       entry.poisoned = false;
       entry.pendingRun = null;
     }
@@ -825,8 +831,23 @@ class LunoraClient {
       ..._shapeRegistry.resendFrames(),
     ];
 
-    for (final frame in frames) {
-      sender(frame);
+    final queries = _subscriptions.values.toList();
+
+    for (var i = 0; i < frames.length; i++) {
+      try {
+        sender(frames[i]);
+      } catch (_) {
+        // A frame that never left asked for nothing, so its subscription stays frozen: a later
+        // delta would otherwise advance the cursor past the change the replay was to re-apply.
+        // Frames already written keep their cleared flag, as they are replaying now.
+        for (final entry in queries.skip(i)) {
+          if (frozen.contains(entry)) {
+            entry.poisoned = true;
+          }
+        }
+
+        rethrow;
+      }
     }
   }
 

@@ -62,6 +62,7 @@ Future<void> main() async {
   await run(casePageDeltaRunIsHeldUntilItsLastFrame);
   await run(caseIdentityChangeEvictsTheBaseAndThePoison);
   await run(casePoisonedSubscriptionStaysFrozenWhenTheResendCannotRun);
+  await run(casePoisonedSubscriptionStaysFrozenWhenTheResendThrows);
   await run(caseSubscriptionStreamYieldsFrameValuesInOrder);
   await run(caseShapeSubscribeFrame);
   await run(caseShapeSubscriptionsResendAfterReconnect);
