@@ -48,4 +48,16 @@ describe("resource and consent rows name what they act on, without the secrets a
         expect(service?.detail).toMatchObject({ resourceIdentifier: "api://billing" });
         expect(urn?.detail).toMatchObject({ resourceIdentifier: "urn:example:api" });
     });
+
+    it("records an unauthenticated token request, and drops an email sent where its client id belongs", () => {
+        expect.assertions(2);
+
+        const entry = buildAuditEntry({
+            body: { client_id: "alice@example.com", code: "c", grant_type: "authorization_code" },
+            path: "/api/auth/oauth2/token",
+        });
+
+        expect(entry?.event).toBe("oauth-token-issue");
+        expect(entry?.detail).not.toHaveProperty("clientId");
+    });
 });
