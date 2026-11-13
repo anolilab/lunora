@@ -250,8 +250,9 @@ export interface LunoraPayment {
      * Undo a period-end cancel, or resume a paused subscription (Creem; the others clear `cancelAtPeriodEnd`).
      * Authorized against the subscription's owner, unknown and not-owner both raise NOT_FOUND, and the provider's
      * answer is stored. A resume the single-subscription policy blocks raises INVALID_TRANSITION before the provider
-     * is called. Only a caller-supplied key is forwarded: the change is absolute, so a derived key would
-     * replay a stale answer if the subscription is cancelled and resumed again inside the provider's key window.
+     * is called. A caller-supplied key is claimed before the provider call, and a retry with a key already claimed is
+     * refused rather than replayed: the provider's own key window does not cover every provider, and a replayed answer
+     * can be stale.
      */
     resumeSubscription: (subscriptionId: string, options?: { idempotencyKey?: string }) => Promise<Subscription>;
     readonly store: PaymentStore;
@@ -418,6 +419,19 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         }
 
         return existing;
+    };
+
+    // A keyed update or resume is claimed before the provider is called, and a claim that is already taken is refused. The
+    // attempt that took it may have reached the provider, so the provider is not called again under the same key: Creem and
+    // Dodo ignore the key on a proration, so a second call would charge it twice. The claim is kept on failure too, since a
+    // rejection cannot be told apart from a lost response here.
+    const claimKeyedChange = async (key: string | undefined, type: string, subscriptionId: string): Promise<void> => {
+        if (key !== undefined && !(await store.markEventProcessed(adapter.identifier, key, type))) {
+            throw new LunoraPaymentError(
+                "INVALID_TRANSITION",
+                `the change to subscription "${subscriptionId}" was already attempted with this idempotency key and its outcome is unknown; check the subscription and retry with a new key`,
+            );
+        }
     };
 
     // Stores the provider's answer to an update or a resume. The row is settled against the provider's current state,
@@ -801,20 +815,26 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // A resume that would start granting access while another subscription already does is refused before the provider
             // is called, so the provider does not bill for a subscription the policy will not grant. A row that already grants
             // access (an undone period-end cancel) adds nothing, so it is not refused.
-            if ((options.singleSubscriptionPerReference ?? false) && !ENTITLING_STATES.has(existing.state) && await hasOtherLiveSubscription(store, existing.referenceId, existing.provider, existing.id)) {
-                    notifyObserver(options.observability, { provider: existing.provider, subscriptionId: existing.id, type: "subscription.duplicate" });
+            if (
+                (options.singleSubscriptionPerReference ?? false) &&
+                !ENTITLING_STATES.has(existing.state) &&
+                (await hasOtherLiveSubscription(store, existing.referenceId, existing.provider, existing.id))
+            ) {
+                notifyObserver(options.observability, { provider: existing.provider, subscriptionId: existing.id, type: "subscription.duplicate" });
 
-                    throw new LunoraPaymentError(
-                        "INVALID_TRANSITION",
-                        "the single-subscription policy refuses this resume: another subscription for this reference already grants access",
-                    );
-                }
+                throw new LunoraPaymentError(
+                    "INVALID_TRANSITION",
+                    "the single-subscription policy refuses this resume: another subscription for this reference already grants access",
+                );
+            }
 
-            // `undefined` is forwarded as-is, not derived: see the interface comment on why a derived key is wrong here.
+            // A caller-supplied key is derived here, then claimed before the provider call (see claimKeyedChange).
             const key =
                 resumeOptions?.idempotencyKey === undefined
                     ? undefined
                     : await derivedIdempotencyKey("resume_subscription", adapter.identifier, subscriptionId, resumeOptions.idempotencyKey);
+
+            await claimKeyedChange(key, "marker.resume_subscription", subscriptionId);
 
             return recordSubscriptionAnswer(existing, await adapter.resumeSubscription(subscriptionId, { idempotencyKey: key }), "resumed");
         },
@@ -1013,6 +1033,8 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 patch.idempotencyKey === undefined
                     ? undefined
                     : await derivedIdempotencyKey("update_subscription", adapter.identifier, subscriptionId, patch.idempotencyKey);
+
+            await claimKeyedChange(key, "marker.update_subscription", subscriptionId);
 
             return recordSubscriptionAnswer(existing, await adapter.updateSubscription(subscriptionId, { ...patch, idempotencyKey: key }), "updated");
         },

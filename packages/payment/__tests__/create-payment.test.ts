@@ -2316,7 +2316,9 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
 
         const store = new MemoryPaymentStore();
         const observer = vi.fn<PaymentObserver>();
-        const resumeSubscription = vi.fn<PaymentAdapter["resumeSubscription"]>(async (id) => {return { ...subscription("user_1", "active"), id }});
+        const resumeSubscription = vi.fn<PaymentAdapter["resumeSubscription"]>(async (id) => {
+            return { ...subscription("user_1", "active"), id };
+        });
 
         await store.upsertSubscription({ ...subscription("user_1", "active"), id: "sub_2" });
         await store.upsertSubscription(subscription("user_1", "paused"));
@@ -2343,7 +2345,9 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         await store.upsertSubscription({ ...subscription("user_1", "active"), id: "sub_2" });
         await store.upsertSubscription(subscription("user_1", "active"));
 
-        const resumeSubscription = vi.fn<PaymentAdapter["resumeSubscription"]>(async (id) => {return { ...subscription("user_1", "active"), id }});
+        const resumeSubscription = vi.fn<PaymentAdapter["resumeSubscription"]>(async (id) => {
+            return { ...subscription("user_1", "active"), id };
+        });
         const payment = createPayment({
             adapter: fakeAdapter({ resumeSubscription }),
             authorize: (referenceId) => referenceId === "user_1",
@@ -2376,6 +2380,73 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).resolves.toMatchObject({ id: "sub_2", priceId: "price_2" });
         await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ priceId: "price_2", state: "active" });
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
+    });
+
+    it("refuses a keyed plan change retried under a key already claimed, without calling the provider again", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        const updateSubscription = vi.fn<PaymentAdapter["updateSubscription"]>(async (id, patch) => {return {
+            ...subscription("user_1", "active"),
+            id,
+            priceId: patch.priceId ?? "price_1",
+        }});
+        const payment = createPayment({
+            adapter: fakeAdapter({ updateSubscription }),
+            authorize: (referenceId) => referenceId === "user_1",
+            store,
+        });
+
+        await payment.updateSubscription("sub_1", { idempotencyKey: "change-1", priceId: "price_2" });
+
+        await expect(payment.updateSubscription("sub_1", { idempotencyKey: "change-1", priceId: "price_2" })).rejects.toMatchObject({
+            code: "INVALID_TRANSITION",
+        });
+        expect(updateSubscription).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not call the provider again under a key whose first attempt failed, since its outcome is unknown", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "paused"));
+
+        const resumeSubscription = vi.fn<PaymentAdapter["resumeSubscription"]>(async () => {
+            throw new Error("provider timed out");
+        });
+        const payment = createPayment({
+            adapter: fakeAdapter({ resumeSubscription }),
+            authorize: (referenceId) => referenceId === "user_1",
+            store,
+        });
+
+        await expect(payment.resumeSubscription("sub_1", { idempotencyKey: "resume-1" })).rejects.toThrow("provider timed out");
+        await expect(payment.resumeSubscription("sub_1", { idempotencyKey: "resume-1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+        expect(resumeSubscription).toHaveBeenCalledTimes(1);
+    });
+
+    it("forwards unkeyed plan changes each time, since they are new requests", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        const updateSubscription = vi.fn<PaymentAdapter["updateSubscription"]>(async (id) => {return { ...subscription("user_1", "active"), id }});
+        const payment = createPayment({
+            adapter: fakeAdapter({ updateSubscription }),
+            authorize: (referenceId) => referenceId === "user_1",
+            store,
+        });
+
+        await payment.updateSubscription("sub_1", { priceId: "price_2" });
+        await payment.updateSubscription("sub_1", { priceId: "price_2" });
+
+        expect(updateSubscription).toHaveBeenCalledTimes(2);
     });
 
     it("gives a moved subscription the creation date of the plan it lands on, not the one it left", async () => {
