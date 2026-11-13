@@ -64,3 +64,35 @@ describe("the actor of a revoke is the account that made it", () => {
         expect(entry?.actorId).toBe("user_a");
     });
 });
+
+describe("a session switch and an impersonated revoke are made by the request's session", () => {
+    it("names the account that switched, not the one it switched to", () => {
+        expect.assertions(2);
+
+        const entry = buildAuditEntry({
+            context: {
+                newSession: { session: { userId: "user_b" }, user: { email: "b@example.com", id: "user_b" } },
+                session: { session: { userId: "user_a" }, user: { email: "a@example.com", id: "user_a" } },
+            },
+            path: "/api/auth/multi-session/set-active",
+        });
+
+        expect(entry?.actorId).toBe("user_a");
+        expect(entry?.actorEmail).toBe("a@example.com");
+    });
+
+    it("names the impersonated account a revoke was made from, when the revoke leaves an ordinary session", () => {
+        expect.assertions(2);
+
+        const entry = buildAuditEntry({
+            context: {
+                newSession: { session: { userId: "user_c" }, user: { id: "user_c" } },
+                session: { session: { impersonatedBy: "admin_a", userId: "user_b" }, user: { id: "user_b" } },
+            },
+            path: "/api/auth/revoke-session",
+        });
+
+        expect(entry?.actorId).toBe("admin_a");
+        expect(entry?.detail).toMatchObject({ targetUserId: "user_b" });
+    });
+});
