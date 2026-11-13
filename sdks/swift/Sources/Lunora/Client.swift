@@ -1247,16 +1247,29 @@ public final class LunoraClient {
                 // here ends the caller's read loop, and with it every OTHER
                 // subscription on this client — one peer's malformed payload
                 // silently taking the whole socket down.
-                let handlers = withLock { () -> [(LunoraSubscriptionError) -> Void] in
-                    // A run with an undecodable frame cannot be completed in order.
-                    if let id { subscriptions[id]?.discardRun() }
-                    guard let id, let onError = subscriptions[id]?.onError else { return [] }
+                let notices = withLock { () -> [(handler: (LunoraSubscriptionError) -> Void, code: String)] in
+                    guard let id, let entry = subscriptions[id] else { return [] }
 
-                    return [onError]
+                    // A run frame the decoder refuses leaves the run incomplete, so the run is
+                    // dropped and the subscription frozen; a later frame must not commit past it.
+                    let isRunFrame = kind == "delta" && (frame["more"] as? Bool == true || entry.hasPendingRun)
+
+                    entry.discardRun()
+
+                    if isRunFrame {
+                        // Already frozen: the delta is ignored, and the freeze was reported once.
+                        if entry.poisoned { return [] }
+
+                        entry.poisoned = true
+                    }
+
+                    guard let onError = entry.onError else { return [] }
+
+                    return [(onError, isRunFrame ? LunoraAPIError.wireDecodeFailed : "INVALID_FRAME")]
                 }
 
-                for handler in handlers {
-                    handler(LunoraSubscriptionError(code: "INVALID_FRAME", message: "frame payload could not be decoded: \(error)"))
+                for notice in notices {
+                    notice.handler(LunoraSubscriptionError(code: notice.code, message: "frame payload could not be decoded: \(error)"))
                 }
 
                 return "error"
@@ -1347,9 +1360,11 @@ public final class LunoraClient {
                 if kind == "resume" { entry.discardRun() }
 
                 // A settled mid-run means the run was cut short, so the frames held so far
-                // are not a complete change: advancing would resume past the rest of it.
+                // are not a complete change: advancing would resume past the rest of it. The
+                // freeze keeps a later delta from committing past the dropped part.
                 if kind == "settled", entry.hasPendingRun {
                     entry.discardRun()
+                    entry.poisoned = true
 
                     return []
                 }
