@@ -1093,6 +1093,7 @@ class Client(
         // The frames are BUILT under the lock, not just the iteration: each one
         // reads `cursor`/`epoch`, which the frame handler writes. Snapshotting the
         // entries and reading their cursors afterwards resends a torn one.
+        val frozen = LinkedHashMap<String, Subscription>()
         val (sender, frames) = synchronized(lock) {
             val sender = send
             val frames =
@@ -1103,6 +1104,8 @@ class Client(
                     // every shape view subscribed to a socket that no longer
                     // exists — silently, and for the rest of the process's life.
                     subscriptions.map { (id, entry) ->
+                        // A send that fails below puts the freeze back.
+                        if (entry.poisoned) frozen[id] = entry
                         entry.poisoned = false
                         entry.heldRun = null
                         buildSubscribeFrame(id, entry.functionPath, entry.args, null, entry.cursor, entry.epoch)
@@ -1117,7 +1120,20 @@ class Client(
 
         if (sender == null) return
 
-        for (frame in frames) sender(frame)
+        for (frame in frames) {
+            try {
+                sender(frame)
+            } catch (error: Exception) {
+                // Nothing replayed the dropped change for the frames that never went out, so a
+                // later delta would move the cursor past it. The failed one and every unsent
+                // frame stay frozen; the ones already sent are replaying.
+                synchronized(lock) { frozen.values.forEach { it.poisoned = true } }
+
+                throw error
+            }
+
+            frozen.remove(frame["id"])
+        }
     }
 
     /**

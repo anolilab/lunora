@@ -1021,6 +1021,41 @@ private fun unmergeableRowChangeFreezesTheCursor() {
     runDeltaCases("pageDeltaPoisonCases", 3)
 }
 
+/**
+ * A resend that fails to send leaves the subscription frozen: nothing replayed the dropped change,
+ * so a later delta must not publish or move the resume cursor past it.
+ */
+private fun failedResendKeepsTheSubscriptionFrozen() {
+    val poison = (fixture("ws-frames.json")["pageDeltaPoisonCases"] as List<*>)[0] as Map<*, *>
+    val steps = poison["steps"] as List<*>
+    val (client, seen, errors) = seededClient(poison["seedFrame"])
+
+    client.handleFrame(Json.write((steps[0] as Map<*, *>)["frame"]))
+    check(errors == listOf<String?>("delta_unmergeable"), "the unmergeable change must freeze, got $errors")
+
+    var closed = false
+
+    client.attachSocket { if (closed) throw IllegalStateException("socket closed") }
+    closed = true
+
+    var failed = false
+
+    try {
+        client.resendSubscriptions()
+    } catch (expected: IllegalStateException) {
+        failed = true
+    }
+
+    check(failed, "the failed send must surface")
+
+    client.handleFrame(Json.write((steps[1] as Map<*, *>)["frame"]))
+    check(seen.isEmpty(), "a delta after a failed resend must not publish, got ${seen.size}")
+
+    val query = resent(client).first { it["type"] == "subscribe" }["query"] as Map<*, *>
+
+    check(number(query["sinceSeq"]) == 5.0, "the cursor must stay at 5, sent ${query["sinceSeq"]}")
+}
+
 /** A run of `more: true` deltas is held and publishes once, on its last frame. */
 private fun deltaRunsCommitOnTheirLastFrame() {
     runDeltaCases("pageDeltaRunCases", 5)
@@ -1759,6 +1794,7 @@ fun main() {
     serverFrameConsumer()
     rowDeltaFramesMergeIntoTheBase()
     unmergeableRowChangeFreezesTheCursor()
+    failedResendKeepsTheSubscriptionFrozen()
     identityChangeEvictsTheDeltaState()
     deltaRunsCommitOnTheirLastFrame()
     subscriptionStreamYieldsFrameValuesInOrder()
