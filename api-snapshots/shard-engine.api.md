@@ -118,6 +118,12 @@ const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 const ADMIN_TOKEN_TABLE = "__lunora_admin_tokens__";
 ```
 
+### `ADMIN_WILDCARD` (const)
+
+```ts
+const ADMIN_WILDCARD = "*";
+```
+
 ### `AGGREGATE_SQL_FUNCTION` (const)
 
 ```ts
