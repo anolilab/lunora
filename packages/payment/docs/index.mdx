@@ -272,7 +272,7 @@ Call the facade from an action. Every method authorizes the caller against the
 | `track(input)`                                 | `TrackResult`      | Record metered usage (exactly-once by idempotency key).                                                         |
 | `handleWebhook(request)`                       | `Response`         | Verify + normalize + apply a provider webhook.                                                                  |
 
-`refundPayment` derives the provider's idempotency key from the session, the amount sent and the reason. A same-amount refund without a caller `idempotencyKey` can therefore be replayed by the provider: no money moves, the call returns the session unchanged and the observer receives a `refund.replayed` event. Pass a distinct `idempotencyKey` for an intentional second refund of the same amount.
+`refundPayment` derives the provider's idempotency key from the session, the amount sent and the reason. On a provider whose refund endpoint takes that key (Stripe), a same-amount refund without a caller `idempotencyKey` can therefore be replayed by the provider: no money moves, the call returns the session unchanged and the observer receives a `refund.replayed` event. Pass a distinct `idempotencyKey` for an intentional second refund of the same amount. Polar and Dodo take no refund key, so there a repeated refund is a new refund, bounded only by the local over-refund guard.
 
 <Callout type="warn">
     `ctx.payments.adapter` is the provider adapter, exposed for the surfaces the facade does not wrap (`updateSubscription`, `resumeSubscription`,

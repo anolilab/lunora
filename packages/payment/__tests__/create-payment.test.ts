@@ -1006,6 +1006,40 @@ describe("createPayment", () => {
         expect(observer).toHaveBeenCalledWith({ provider: "stripe", referenceId: "user_1", refundId: "re_1", sessionId: "pi_1", type: "refund.replayed" });
     });
 
+    it("does not report a replay when the confirming webhook booked the refund first", async () => {
+        expect.assertions(2);
+
+        // The provider settles the refund and its webhook claims the marker while the facade still waits
+        // on the refund response: the facade's own claim then fails, but money did move.
+        const store = new MemoryPaymentStore();
+        const polarSession = { ...paymentSession("user_1"), id: "ord_1", provider: "polar" as const };
+
+        await store.upsertPaymentSession(polarSession);
+
+        const adapter = fakeAdapter({
+            identifier: "polar",
+            refundPayment: async () => {
+                await applyWebhookAction(store, {
+                    amount: money(250, "USD"),
+                    eventId: "evt_1",
+                    provider: "polar",
+                    refundId: "ref_1",
+                    sessionId: "ord_1",
+                    type: "payment.refunded",
+                });
+
+                return { ...polarSession, refundedAmount: money(250, "USD"), refundId: "ref_1" };
+            },
+        });
+        const observer = vi.fn<PaymentObserver>();
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", observability: observer, store });
+
+        const refunded = await payment.refundPayment({ amount: money(250, "USD"), sessionId: "ord_1" });
+
+        expect(refunded.refundedAmount.minorUnits).toBe(250n);
+        expect(observer).not.toHaveBeenCalledWith(expect.objectContaining({ type: "refund.replayed" }));
+    });
+
     it("books the amount the provider reports refunding, not the amount asked for", async () => {
         expect.assertions(2);
 

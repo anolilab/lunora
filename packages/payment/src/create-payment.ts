@@ -704,6 +704,15 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // a provider `refundId` short-circuits.) The caller asked for a refund that never happened,
             // so the observer is told; the return value stays the row as it stands.
             if (!freshRefund && issuedRefund.refundId !== undefined) {
+                // The confirming webhook claims the same marker, and can land while the refund call is in
+                // flight. Its booking shows as a refunded total that grew since the read above; an earlier
+                // facade call's booking is already in that read, so only a replay leaves the total unchanged.
+                const current = (await store.getPaymentSession(adapter.identifier, existing.id)) ?? existing;
+
+                if (compareMoney(current.refundedAmount, existing.refundedAmount) > 0) {
+                    return current;
+                }
+
                 notifyObserver(options.observability, {
                     provider: adapter.identifier,
                     referenceId: existing.referenceId,
