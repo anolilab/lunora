@@ -549,7 +549,7 @@
     "pageDeltaPoisonCases": [
         {
             "name": "unmergeable-run-freezes-the-cursor",
-            "$comment": "A row change that cannot be merged (an update with no row) poisons the subscription: later delta frames are not merged, published or allowed to advance the resume cursor, even when they carry one. Only a data frame or a resubscribe clears the poison. Without this a later frame's cursor would move the resume position past the dropped change, so a reconnect would not replay it (protocol README 5.4).",
+            "$comment": "A row change that cannot be merged (an update with no row) poisons the subscription: later delta frames are not merged, published or allowed to advance the resume cursor, even when they carry one. Only a data frame or a resubscribe clears the poison. The freezing frame raises one delta_unmergeable error. Without this a later frame's cursor would move the resume position past the dropped change, so a reconnect would not replay it (protocol README 5.4).",
             "steps": [
                 {
                     "frame": {
@@ -562,7 +562,8 @@
                         },
                         "more": true
                     },
-                    "publishes": 0
+                    "publishes": 0,
+                    "errors": ["delta_unmergeable"]
                 },
                 {
                     "frame": {
@@ -839,7 +840,7 @@
         },
         {
             "name": "run-held-when-the-socket-drops-resumes-from-before-the-run",
-            "$comment": "The cursor moves only when a run commits. A reconnect while a run is held resumes from the cursor before the run, so the server replays the whole run (protocol README 5.4).",
+            "$comment": "The cursor moves only when a run commits. A socket drop or reconnect while a run is held discards the held frames and resumes from the cursor before the run, so the server replays the whole run (protocol README 5.4). A delta after the resend merges onto the committed base alone, so the discarded change does not reappear.",
             "seedFrame": {
                 "id": "sub_1",
                 "type": "data",
@@ -866,6 +867,24 @@
                 },
                 {
                     "resume": { "sinceSeq": 5, "sinceEpoch": "e1" }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m2", "op": "update", "row": { "_creationTime": 1002, "_id": "m2", "text": "TWO" }, "table": "messages" },
+                        "cursor": 6,
+                        "epoch": "e1"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_2",
+                        "isDone": false,
+                        "page": [
+                            { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                            { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                        ]
+                    }
                 }
             ]
         },
@@ -970,6 +989,74 @@
                         "isDone": false,
                         "page": [{ "_creationTime": 1001, "_id": "m1", "text": "ONE" }]
                     }
+                }
+            ]
+        }
+    ],
+    "identityChangeEvictionCases": [
+        {
+            "name": "identity-change-evicts-the-cached-base",
+            "$comment": "After a change to a different identity the cached base is gone, so a row change cannot merge into it: it is held and publishes nothing. A port that keeps the old base merges onto rows this identity was never shown (see identityChange).",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "identityChange": { "from": "user-a", "to": "user-b" },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "messages" },
+                        "cursor": 6,
+                        "epoch": "e2"
+                    },
+                    "publishes": 0
+                }
+            ]
+        },
+        {
+            "name": "identity-change-evicts-the-poison",
+            "$comment": "The freeze is per identity too. After the change a resume frame advances the cursor again, so the next resend names the new cursor. A port that keeps the poison ignores the frame and resends with no cursor.",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "freezeFrame": {
+                "id": "sub_1",
+                "type": "delta",
+                "delta": { "key": "m1", "op": "update", "table": "messages" },
+                "more": true
+            },
+            "freezeErrors": ["delta_unmergeable"],
+            "identityChange": { "from": "user-a", "to": "user-b" },
+            "steps": [
+                {
+                    "frame": { "id": "sub_1", "type": "resume", "cursor": 7, "epoch": "e2" },
+                    "publishes": 0
+                },
+                {
+                    "resume": { "sinceSeq": 7, "sinceEpoch": "e2" }
                 }
             ]
         }
