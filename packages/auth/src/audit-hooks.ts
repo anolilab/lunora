@@ -597,10 +597,10 @@ const resourceIdentifierOf = (value: unknown): string | undefined => {
         url.search = "";
         url.hash = "";
 
-        // A special scheme gains a trailing slash on an empty path; the identifier as the caller wrote it has none.
-        const cleaned = url.href;
+        // A special scheme gives an empty path a trailing slash. Only that one is dropped, never a slash in a real path.
+        const cleaned = url.pathname === "/" ? url.href.slice(0, -1) : url.href;
 
-        return detailId(cleaned.endsWith("/") && !identifier.endsWith("/") ? cleaned.slice(0, -1) : cleaned);
+        return detailId(cleaned);
     } catch {
         // Not a parseable URI, so the value before any query or fragment is all that is safe to keep.
         return detailId(BEFORE_QUERY.exec(identifier)?.[0]);

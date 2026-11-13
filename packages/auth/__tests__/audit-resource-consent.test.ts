@@ -60,4 +60,16 @@ describe("resource and consent rows name what they act on, without the secrets a
         expect(entry?.event).toBe("oauth-token-issue");
         expect(entry?.detail).not.toHaveProperty("clientId");
     });
+
+    it("keeps the slash that ends a real path, and drops only the query after it", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({
+            body: { identifier: "https://api.example.com/v1/?access_token=secret" },
+            method: "POST",
+            path: "/api/auth/admin/oauth2/resources",
+        });
+
+        expect(entry?.detail).toMatchObject({ resourceIdentifier: "https://api.example.com/v1/" });
+    });
 });
