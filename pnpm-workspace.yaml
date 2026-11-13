@@ -646,7 +646,7 @@ catalogs:
     tailwind-merge: ^3.7.0
   frontend:
     # Meta-frameworks the `@lunora/astro` / `@lunora/nuxt` integrations build against.
-    astro: 7.3.5
+    astro: 7.4.7
     "@nuxt/kit": ^4.6.3
     diff: ^9.0.0
     html-to-image: ^1.11.13
