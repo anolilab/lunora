@@ -1,3 +1,7 @@
+## @lunora/client [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.291...@lunora/client@1.0.0-alpha.292) (2026-11-13)
+
+- fix(do): name a delta's table only for a single-table query (#1595)
+
 ## @lunora/client [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.290...@lunora/client@1.0.0-alpha.291) (2026-11-11)
 
 - feat(client): move admin auth hook logic into @lunora/client (#1552)
