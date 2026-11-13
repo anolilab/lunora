@@ -694,6 +694,7 @@ final class ConformanceTests: XCTestCase {
     func casePageDeltaPoison() throws {
         try runDeltaFrameCases("pageDeltaPoisonCases", count: 3)
         try runDeltaFrameCases("identityChangeEvictionCases", count: 2)
+        try runDeltaFrameCases("pageDeltaRunCases", count: 4)
     }
 
     /// Drives one fixture list of `seedFrame` + `steps` cases against a fresh client.
