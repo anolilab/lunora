@@ -415,7 +415,7 @@ class TestWsFrameConsumer(unittest.TestCase):
     def test_a_subscription_streams_its_frame_values_in_order(self):
         covers("subscription_stream_yields_frame_values_in_order")
 
-        case = load("ws-frames.json")["stream"]
+        case = load("ws-frames.json")["watch"]
 
         async def collect() -> list:
             client = LunoraClient("https://app.example")

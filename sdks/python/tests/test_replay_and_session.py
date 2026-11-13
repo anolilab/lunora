@@ -447,8 +447,8 @@ class TestFrameManifestCases(unittest.TestCase):
 
     def test_subscription_stream_ends_on_close(self):
         covers("subscription_stream_ends_on_close")
-        frame = FRAMES["stream"]["frames"][0]
-        expected = FRAMES["stream"]["yielded"][0]
+        frame = FRAMES["watch"]["frames"][0]
+        expected = FRAMES["watch"]["yielded"][0]
 
         async def run():
             client = LunoraClient("https://app.example")

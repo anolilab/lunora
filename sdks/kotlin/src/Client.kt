@@ -229,8 +229,8 @@ class Client(
     private val shapes = LinkedHashMap<String, Shape>()
     private val pokes = LinkedHashMap<String, PokeBuffer>()
 
-    /** The open [Stream]s, so [close] can end them. */
-    private val streams = mutableSetOf<Stream>()
+    /** The open [Watch]s, so [close] can end them. */
+    private val streams = mutableSetOf<Watch>()
     private var nextId = 0
     private var nextShapeId = 0
 
@@ -786,7 +786,7 @@ class Client(
 
     /**
      * Rejects every queued write so no caller waits on a dead client, and ends
-     * every open [Stream], so a loop blocked on one returns instead of waiting
+     * every open [Watch], so a loop blocked on one returns instead of waiting
      * forever on a client nothing will deliver to again. Durable storage is
      * untouched: the next session restores those writes.
      */
@@ -975,7 +975,7 @@ class Client(
      * consumer polling two of them can read them out of order, and the whole
      * point of a stream is that what arrived first is delivered first.
      */
-    data class StreamEvent(val value: WireValue?, val error: SubscriptionError?)
+    data class WatchEvent(val value: WireValue?, val error: SubscriptionError?)
 
     /**
      * A live query as a closeable [Sequence], for `for (event in stream)`.
@@ -989,21 +989,21 @@ class Client(
      * `Flow` lives in kotlinx-coroutines, and this transport takes no
      * dependencies beyond the JDK.
      */
-    class Stream internal constructor() :
-        Sequence<StreamEvent>,
+    class Watch internal constructor() :
+        Sequence<WatchEvent>,
         AutoCloseable {
         // Unbounded, so the frame dispatcher never blocks on a slow consumer; the
         // trade is that one which stops reading without closing grows the buffer.
-        internal val events = LinkedBlockingQueue<StreamEvent>()
+        internal val events = LinkedBlockingQueue<WatchEvent>()
 
         // The sentinel the iterator stops on. A distinct instance rather than a
         // null, because LinkedBlockingQueue rejects nulls outright.
-        private val end = StreamEvent(null, null)
+        private val end = WatchEvent(null, null)
         private val closed = AtomicBoolean()
         internal var unsubscribe: () -> Unit = {}
 
-        override fun iterator(): Iterator<StreamEvent> = object : Iterator<StreamEvent> {
-            private var next: StreamEvent? = null
+        override fun iterator(): Iterator<WatchEvent> = object : Iterator<WatchEvent> {
+            private var next: WatchEvent? = null
 
             override fun hasNext(): Boolean {
                 if (next != null) return true
@@ -1013,7 +1013,7 @@ class Client(
                 return next !== end
             }
 
-            override fun next(): StreamEvent {
+            override fun next(): WatchEvent {
                 if (!hasNext()) throw NoSuchElementException("the stream is closed")
 
                 return checkNotNull(next).also { next = null }
@@ -1031,19 +1031,19 @@ class Client(
     }
 
     /**
-     * Opens a live query as a [Stream].
+     * Opens a live query as a [Watch].
      *
      * Each call opens its OWN subscription — at CALL time, so a frame arriving
-     * before the loop starts is not lost — and [Stream.close] tears it down. Use
+     * before the loop starts is not lost — and [Watch.close] tears it down. Use
      * [subscribe] directly when the value outlives one loop.
      */
-    fun watch(functionPath: String, args: WireValue? = null, shardKey: String? = null): Stream {
-        val stream = Stream()
+    fun watch(functionPath: String, args: WireValue? = null, shardKey: String? = null): Watch {
+        val stream = Watch()
         val unsubscribe = subscribe(
             functionPath,
             args,
-            { value -> stream.events.add(StreamEvent(value, null)) },
-            { error -> stream.events.add(StreamEvent(null, error)) },
+            { value -> stream.events.add(WatchEvent(value, null)) },
+            { error -> stream.events.add(WatchEvent(null, error)) },
             shardKey,
         )
 

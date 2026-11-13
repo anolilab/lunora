@@ -1168,7 +1168,7 @@ private fun serverFrameConsumer() {
 private fun subscriptionStreamYieldsFrameValuesInOrder() {
     covers("subscription_stream_yields_frame_values_in_order")
 
-    val case = fixture("ws-frames.json")["stream"] as Map<*, *>
+    val case = fixture("ws-frames.json")["watch"] as Map<*, *>
     val client = Client("https://app.example")
 
     client.attachSocket { }

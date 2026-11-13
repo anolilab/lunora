@@ -411,7 +411,7 @@ func TestClientFrameBuilders(t *testing.T) {
 func TestSubscriptionStreamYieldsFrameValuesInOrder(t *testing.T) {
 	covers("subscription_stream_yields_frame_values_in_order")
 
-	streamCase, ok := loadFixture(t, "ws-frames.json")["stream"].(map[string]any)
+	streamCase, ok := loadFixture(t, "ws-frames.json")["watch"].(map[string]any)
 	if !ok {
 		t.Fatal("ws-frames.json has no stream block")
 	}

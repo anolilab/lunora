@@ -258,7 +258,7 @@ const renderWatch = (method: SdkMethod): string => {
         `    pub fn watch_${toSnakeCase(method.functionName)}(`,
         `        &mut self,`,
         `        ${argument}shard_key: Option<&str>,`,
-        `    ) -> Result<(Receiver<StreamEvent>, String), ClientError> {`,
+        `    ) -> Result<(Receiver<WatchEvent>, String), ClientError> {`,
         `        Ok(self.client.watch("${stringLiteral(method.functionPath)}", ${payload}, shard_key))`,
         `    }`,
     ].join("\n");
@@ -300,7 +300,7 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
         GENERATED_HEADER,
         `#![allow(dead_code, unused_imports)]\n`,
         `\n`,
-        `use lunora::client::{Client, ClientError, DataHandler, ErrorHandler, StreamEvent, Verb};\n`,
+        `use lunora::client::{Client, ClientError, DataHandler, ErrorHandler, WatchEvent, Verb};\n`,
         `use std::sync::mpsc::Receiver;\n`,
         `use lunora::wire::{encode_wire, from_model_json, WireValue};\n`,
         `\n`,

@@ -811,7 +811,7 @@ final class ConformanceTests: XCTestCase {
     /// The `AsyncStream` form of a live query: same subscription, same decode,
     /// same order as the callback form.
     func caseSubscriptionStreamYieldsFrameValuesInOrder() throws {
-        let testCase = try XCTUnwrap(fixture("ws-frames.json")["stream"] as? [String: Any])
+        let testCase = try XCTUnwrap(fixture("ws-frames.json")["watch"] as? [String: Any])
         let frames = try XCTUnwrap(testCase["frames"] as? [Any])
         let client = LunoraClient(url: "https://app.example")
         client.attachSocket { _ in }
@@ -841,7 +841,7 @@ final class ConformanceTests: XCTestCase {
     /// then the `for await` loop finishes instead of waiting forever on a client
     /// that will never deliver again.
     func caseSubscriptionStreamEndsOnClose() throws {
-        let testCase = try XCTUnwrap(fixture("ws-frames.json")["stream"] as? [String: Any])
+        let testCase = try XCTUnwrap(fixture("ws-frames.json")["watch"] as? [String: Any])
         let frame = try XCTUnwrap((testCase["frames"] as? [Any])?.first)
         let client = LunoraClient(url: "https://app.example")
 

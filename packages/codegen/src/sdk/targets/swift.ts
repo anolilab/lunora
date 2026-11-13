@@ -260,7 +260,7 @@ const renderWatch = (method: SdkMethod): string => {
         `    public func watch${toPascalCase(method.functionName)}(`,
         `        ${argument}shardKey: String? = nil`,
         // eslint-disable-next-line no-secrets/no-secrets -- a Swift type name, not a credential
-        `    ) throws -> AsyncStream<LunoraClient.LunoraStreamEvent> {`,
+        `    ) throws -> AsyncStream<LunoraClient.LunoraWatchEvent> {`,
         `        client.watch("${stringLiteral(method.functionPath)}", args: ${payload}, shardKey: shardKey)`,
         `    }`,
     ].join("\n");

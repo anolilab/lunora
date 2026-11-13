@@ -1005,7 +1005,7 @@ public final class LunoraClient {
     /// One sequence carrying both, rather than a value stream plus an error
     /// stream: a consumer awaiting two of them can read them out of order, and
     /// the whole point of a stream is that what arrived first is delivered first.
-    public enum LunoraStreamEvent {
+    public enum LunoraWatchEvent {
         case value(Any)
         case failure(LunoraSubscriptionError)
     }
@@ -1022,8 +1022,8 @@ public final class LunoraClient {
     /// The buffer is UNBOUNDED, so the frame dispatcher never blocks on a slow
     /// consumer; the trade is that one which stops reading without ending the
     /// loop grows the buffer.
-    public func watch(_ functionPath: String, args: Any? = nil, shardKey: String? = nil) -> AsyncStream<LunoraStreamEvent> {
-        AsyncStream(LunoraStreamEvent.self, bufferingPolicy: .unbounded) { continuation in
+    public func watch(_ functionPath: String, args: Any? = nil, shardKey: String? = nil) -> AsyncStream<LunoraWatchEvent> {
+        AsyncStream(LunoraWatchEvent.self, bufferingPolicy: .unbounded) { continuation in
             let unsubscribe = subscribe(
                 functionPath,
                 args: args,
