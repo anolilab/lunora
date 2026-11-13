@@ -84,20 +84,32 @@ const refusalRecord = (previous: Subscription | undefined, next: Subscription): 
 const settleGrant = async (store: PaymentStore, granted: Subscription, revision: number, demote: () => Promise<void>): Promise<boolean> => {
     let observed = revision;
 
-    for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt += 1) {
-        // eslint-disable-next-line no-await-in-loop -- each attempt reads what the previous one wrote, so they cannot run together
-        if (await store.bumpReferenceRevision(granted.referenceId, observed)) {
-            return true;
-        }
+    try {
+        for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each attempt reads what the previous one wrote, so they cannot run together
+            if (await store.bumpReferenceRevision(granted.referenceId, observed)) {
+                return true;
+            }
 
-        // The counter is read before the rows it vouches for, never after.
-        // eslint-disable-next-line no-await-in-loop -- each attempt reads what the previous one wrote, so they cannot run together
-        observed = await store.getReferenceRevision(granted.referenceId);
+            // The counter is read before the rows it vouches for, never after.
+            // eslint-disable-next-line no-await-in-loop -- each attempt reads what the previous one wrote, so they cannot run together
+            observed = await store.getReferenceRevision(granted.referenceId);
 
-        // eslint-disable-next-line no-await-in-loop -- each attempt reads what the previous one wrote, so they cannot run together
-        if (await hasOtherLiveSubscription(store, granted.referenceId, granted.provider, granted.id)) {
-            break;
+            // eslint-disable-next-line no-await-in-loop -- each attempt reads what the previous one wrote, so they cannot run together
+            if (await hasOtherLiveSubscription(store, granted.referenceId, granted.provider, granted.id)) {
+                break;
+            }
         }
+    } catch (error) {
+        // The grant's row is already written, and an unsettled grant may be the second one granting. It steps back before
+        // the error goes up, so a storage failure here fails closed; the caller's retry grants it again once storage works.
+        await demote().catch((demoteError: unknown) => {
+            throw new LunoraPaymentError("INVALID_TRANSITION", `subscription "${granted.id}" could not be settled or stepped back; reconcile it`, {
+                cause: { demoteError, settleError: error },
+            });
+        });
+
+        throw error;
     }
 
     await demote();

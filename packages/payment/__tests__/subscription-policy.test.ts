@@ -112,6 +112,19 @@ describe("storeSubscription — concurrent grants under singleSubscriptionPerRef
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
     });
 
+    it("steps a grant back and raises the error when the counter bump throws", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        store.bumpReferenceRevision = async () => {
+            throw new Error("storage unavailable");
+        };
+
+        await expect(storeSubscription(store, true, undefined, subscription("sub_1", "user_1", "active"))).rejects.toThrow("storage unavailable");
+        await expect(granting(store, "user_1")).resolves.toStrictEqual([]);
+    });
+
     it("does not serialize grants for different references", async () => {
         expect.assertions(2);
 
@@ -155,6 +168,29 @@ describe("restoreSubscription", () => {
 
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
         await expect(store.getReferenceRevision("user_1")).resolves.toBe(1);
+    });
+
+    it("leaves the restored row canceled when the counter bump throws after another plan activated", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const original = subscription("sub_1", "user_1", "active");
+
+        await store.upsertSubscription(original);
+        await store.upsertSubscription({ ...original, state: "canceled" }, { ifRevision: 1 });
+
+        const retired = (await store.getSubscription("stripe", "sub_1")) as Subscription;
+
+        // The destination activates after the restore wrote its row, and the bump that would order the two then fails.
+        store.bumpReferenceRevision = async () => {
+            await store.upsertSubscription(subscription("sub_2", "user_1", "active"));
+
+            throw new Error("storage unavailable");
+        };
+
+        await expect(restoreSubscription(store, true, retired, original)).rejects.toThrow("storage unavailable");
+        await expect(granting(store, "user_1")).resolves.toStrictEqual(["sub_2"]);
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
     });
 
     it("keeps the retired row canceled when another plan takes the access during the restore", async () => {
