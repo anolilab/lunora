@@ -798,7 +798,8 @@ const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Rec
         return [];
     })();
 
-    // An impersonated session's rows are about the impersonated account, unless the request names another subject.
+    // An impersonated session's rows are about the impersonated account. The entry is added last, so it overrides the
+    // subject any body field names: a stray field cannot hide who was impersonated.
     // A team membership change names the user it acts on in the body, which is the subject. Every other event takes the
     // impersonated account, so a stray body field cannot hide who was impersonated.
     const namesUser = event.startsWith("org-team-member-");
