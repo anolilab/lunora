@@ -84,4 +84,17 @@ describe("resource and consent rows name what they act on, without the secrets a
 
         expect(entry?.detail).toMatchObject({ resourceIdentifier: "https://api.example.com/users/@me" });
     });
+
+    it("keeps no part of the credentials of a malformed resource URI", () => {
+        expect.assertions(2);
+
+        const entry = buildAuditEntry({
+            body: { identifier: "https://alice:s3cretpass@resource.example:bad/path" },
+            method: "POST",
+            path: "/api/auth/admin/oauth2/resources",
+        });
+
+        expect(JSON.stringify(entry?.detail ?? {})).not.toContain("s3cretpass");
+        expect(JSON.stringify(entry?.detail ?? {})).not.toContain("alice");
+    });
 });
