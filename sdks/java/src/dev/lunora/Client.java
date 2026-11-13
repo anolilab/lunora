@@ -1420,7 +1420,7 @@ public final class Client {
      * starts is not lost — and {@link Stream#close} tears it down. Use {@link #subscribe} directly
      * when the value outlives one loop.
      */
-    public Stream stream(String functionPath, Object args, String shardKey) {
+    public Stream watch(String functionPath, Object args, String shardKey) {
         Stream stream = new Stream();
         Runnable unsubscribe =
                 subscribe(

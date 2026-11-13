@@ -1262,7 +1262,7 @@ type StreamEvent struct {
 //
 // [Client.Close] ends every open stream too: the channel closes, so a `range`
 // over it returns rather than waiting on a client that will never send again.
-func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan StreamEvent, Unsubscribe) {
+func (c *Client) Watch(functionPath string, args any, shardKey string) (<-chan StreamEvent, Unsubscribe) {
 	events := make(chan StreamEvent, streamBufferSize)
 	done := make(chan struct{})
 

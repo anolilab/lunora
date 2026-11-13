@@ -1208,7 +1208,7 @@ public final class ConformanceTest {
 
         // Closed at the end rather than in a try-with-resources: the frames are fed from this same
         // thread, so the loop has to be driven one `next()` at a time.
-        Client.Stream stream = client.stream("messages:list", args, null);
+        Client.Stream stream = client.watch("messages:list", args, null);
         Iterator<Client.StreamEvent> events = stream.iterator();
 
         for (Object raw : (List<Object>) testCase.get("frames")) {
@@ -1778,7 +1778,7 @@ public final class ConformanceTest {
 
         client.attachSocket(frame -> {}, null);
 
-        Client.Stream stream = client.stream("messages:list", Map.of("channel", "general"), null);
+        Client.Stream stream = client.watch("messages:list", Map.of("channel", "general"), null);
         List<Object> seen = java.util.Collections.synchronizedList(new ArrayList<>());
         Thread consumer =
                 new Thread(

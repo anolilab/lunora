@@ -160,7 +160,7 @@ const renderWatch = (method: SdkMethod): string => {
         `        ${args.declaration},`,
         `        shardKey: String? = null,`,
         `    ): Client.Stream =`,
-        `        client.stream("${kotlinLiteral(method.functionPath)}", ${args.payload}, shardKey)`,
+        `        client.watch("${kotlinLiteral(method.functionPath)}", ${args.payload}, shardKey)`,
     ].join("\n");
 };
 

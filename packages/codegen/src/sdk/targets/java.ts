@@ -250,7 +250,7 @@ const renderWatch = (method: SdkMethod): string => {
         `    public Client.Stream watch${toPascalCase(method.functionName)}(`,
         `            ${args.type} args,`,
         `            String shardKey) {`,
-        `        return client.stream("${stringLiteral(method.functionPath)}", ${args.payload}, shardKey);`,
+        `        return client.watch("${stringLiteral(method.functionPath)}", ${args.payload}, shardKey);`,
         `    }`,
     ].join("\n");
 };

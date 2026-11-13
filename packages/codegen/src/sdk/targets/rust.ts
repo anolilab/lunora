@@ -259,7 +259,7 @@ const renderWatch = (method: SdkMethod): string => {
         `        &mut self,`,
         `        ${argument}shard_key: Option<&str>,`,
         `    ) -> Result<(Receiver<StreamEvent>, String), ClientError> {`,
-        `        Ok(self.client.stream("${stringLiteral(method.functionPath)}", ${payload}, shard_key))`,
+        `        Ok(self.client.watch("${stringLiteral(method.functionPath)}", ${payload}, shard_key))`,
         `    }`,
     ].join("\n");
 };

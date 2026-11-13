@@ -644,7 +644,7 @@ module Lunora
     # what stops a caller mistaking it for data. Backed by a +Thread::Queue+, so
     # a consumer on one thread and the frame dispatcher on another is the normal
     # case rather than a hazard.
-    def stream(function_path, args = nil, shard_key = nil)
+    def watch(function_path, args = nil, shard_key = nil)
       values = Thread::Queue.new
       @mutex.synchronize { @streams << values }
       unsubscribe = subscribe(function_path, args, ->(value) { values << [:value, value] },

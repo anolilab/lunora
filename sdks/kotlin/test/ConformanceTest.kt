@@ -1175,7 +1175,7 @@ private fun subscriptionStreamYieldsFrameValuesInOrder() {
 
     // Closed at the end rather than in a `use { }`: the frames are fed from this
     // same thread, so the loop has to be driven one `next()` at a time.
-    val stream = client.stream("messages:list", WireValue.Obj(listOf("channel" to WireValue.Text("general"))))
+    val stream = client.watch("messages:list", WireValue.Obj(listOf("channel" to WireValue.Text("general"))))
     val events = stream.iterator()
     val seen = mutableListOf<WireValue>()
 
@@ -1704,7 +1704,7 @@ private fun subscriptionStreamEndsOnClose() {
 
     client.attachSocket { }
 
-    val stream = client.stream("messages:list")
+    val stream = client.watch("messages:list")
     val yielded = java.util.Collections.synchronizedList(mutableListOf<WireValue?>())
     val consumer = Thread { for (event in stream) yielded.add(event.value) }
 

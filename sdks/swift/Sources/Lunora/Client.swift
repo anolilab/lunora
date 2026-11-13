@@ -1022,7 +1022,7 @@ public final class LunoraClient {
     /// The buffer is UNBOUNDED, so the frame dispatcher never blocks on a slow
     /// consumer; the trade is that one which stops reading without ending the
     /// loop grows the buffer.
-    public func stream(_ functionPath: String, args: Any? = nil, shardKey: String? = nil) -> AsyncStream<LunoraStreamEvent> {
+    public func watch(_ functionPath: String, args: Any? = nil, shardKey: String? = nil) -> AsyncStream<LunoraStreamEvent> {
         AsyncStream(LunoraStreamEvent.self, bufferingPolicy: .unbounded) { continuation in
             let unsubscribe = subscribe(
                 functionPath,

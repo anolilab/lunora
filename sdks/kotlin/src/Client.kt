@@ -1037,7 +1037,7 @@ class Client(
      * before the loop starts is not lost — and [Stream.close] tears it down. Use
      * [subscribe] directly when the value outlives one loop.
      */
-    fun stream(functionPath: String, args: WireValue? = null, shardKey: String? = null): Stream {
+    fun watch(functionPath: String, args: WireValue? = null, shardKey: String? = null): Stream {
         val stream = Stream()
         val unsubscribe = subscribe(
             functionPath,

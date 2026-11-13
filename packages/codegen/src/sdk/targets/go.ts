@@ -119,7 +119,7 @@ const renderWatch = (namespaceType: string, method: SdkMethod): string => {
     return [
         `// ${name} opens a live ${commentText(method.functionPath)} as a channel; the returned Unsubscribe closes it.`,
         `func (a *${namespaceType}) ${name}(${argument}shardKey string) (<-chan lunora.StreamEvent, lunora.Unsubscribe) {`,
-        `\treturn a.client.Stream("${stringLiteral(method.functionPath)}", ${payload}, shardKey)`,
+        `\treturn a.client.Watch("${stringLiteral(method.functionPath)}", ${payload}, shardKey)`,
         `}`,
     ].join("\n");
 };

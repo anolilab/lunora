@@ -283,6 +283,22 @@ describe.each(targets.map((target) => [target.id, target] as const))("target: %s
         expect(/watch/iu.test(surface)).toBe(true);
     });
 
+    it("binds the watch form to the watch primitive, not the wire stream's stream primitive", async () => {
+        expect.assertions(2);
+
+        const spec: OpenRpcDocument = {
+            methods: [{ name: "messages:list", "x-lunora-function-kind": "query" }],
+        };
+
+        const { files } = await generateSdk(spec, target);
+        const surface = Object.values(files).join("\n");
+
+        // `stream` is reserved for the wire stream client (plan 395 naming split); the watch
+        // form calls the subscription-backed `watch` primitive that every port exposes.
+        expect(/\.(?:stream|Stream)\(/u.test(surface)).toBe(false);
+        expect(/\.(?:watch|Watch)\(/u.test(surface)).toBe(true);
+    });
+
     it("renders no subscription for a write, which the server cannot re-run", async () => {
         expect.assertions(1);
 

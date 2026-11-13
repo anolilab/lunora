@@ -162,7 +162,7 @@ const renderWatch = (method: SdkMethod): string => {
         ...parameters.map((parameter) => `        ${parameter},`),
         `    ) -> AsyncIterator:`,
         `        """live ${commentText(method.summary)} as an async iterator — \`async for\` over it; leaving the loop unsubscribes."""`,
-        `        return self._client.stream("${stringLiteral(method.functionPath)}", ${payload}, shard_key)`,
+        `        return self._client.watch("${stringLiteral(method.functionPath)}", ${payload}, shard_key)`,
     ].join("\n");
 };
 

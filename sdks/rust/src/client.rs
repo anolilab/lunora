@@ -1157,7 +1157,7 @@ impl Client {
     /// consumer; the trade is that one which stops reading without unsubscribing
     /// grows the buffer. `std::sync::mpsc` is the only channel in the standard
     /// library, and this crate takes no dependency for one.
-    pub fn stream(&mut self, function_path: &str, args: WireValue, shard_key: Option<&str>) -> (Receiver<StreamEvent>, String) {
+    pub fn watch(&mut self, function_path: &str, args: WireValue, shard_key: Option<&str>) -> (Receiver<StreamEvent>, String) {
         let (sender, receiver) = channel::<StreamEvent>();
         let errors = sender.clone();
         let id = self.subscribe_on_shard(

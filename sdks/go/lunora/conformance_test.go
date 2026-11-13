@@ -421,7 +421,7 @@ func TestSubscriptionStreamYieldsFrameValuesInOrder(t *testing.T) {
 
 	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
-	events, unsubscribe := client.Stream("messages:list", map[string]any{"channel": "general"}, "")
+	events, unsubscribe := client.Watch("messages:list", map[string]any{"channel": "general"}, "")
 
 	defer unsubscribe()
 

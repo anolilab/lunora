@@ -453,7 +453,7 @@ class TestFrameManifestCases(unittest.TestCase):
         async def run():
             client = LunoraClient("https://app.example")
             client.attach_socket(lambda _frame: None)
-            values = client.stream("messages:list", {"channel": "general"})
+            values = client.watch("messages:list", {"channel": "general"})
             client.handle_frame(frame)
             client.close()
 
@@ -470,7 +470,7 @@ class TestPortLocal(unittest.TestCase):
         async def run():
             client = LunoraClient("https://app.example")
             client.attach_socket(lambda _frame: None)
-            client.stream("messages:list", {})
+            client.watch("messages:list", {})
             return client._close_hooks
 
         self.assertEqual(asyncio.run(run()), [])

@@ -816,7 +816,7 @@ final class ConformanceTests: XCTestCase {
         let client = LunoraClient(url: "https://app.example")
         client.attachSocket { _ in }
 
-        let events = client.stream("messages:list", args: ["channel": "general"])
+        let events = client.watch("messages:list", args: ["channel": "general"])
         var iterator = events.makeAsyncIterator()
         var seen: [Any] = []
 
@@ -847,7 +847,7 @@ final class ConformanceTests: XCTestCase {
 
         client.attachSocket { _ in }
 
-        var iterator = client.stream("messages:list", args: ["channel": "general"]).makeAsyncIterator()
+        var iterator = client.watch("messages:list", args: ["channel": "general"]).makeAsyncIterator()
 
         client.handleFrame(frameText(frame))
 

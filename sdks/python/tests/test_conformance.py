@@ -421,7 +421,7 @@ class TestWsFrameConsumer(unittest.TestCase):
             client = LunoraClient("https://app.example")
             client._send = lambda _frame: None
             seen: list = []
-            values = client.stream("messages:list", {"channel": "general"})
+            values = client.watch("messages:list", {"channel": "general"})
 
             for frame in case["frames"]:
                 client.handle_frame(frame)

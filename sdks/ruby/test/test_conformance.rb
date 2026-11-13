@@ -512,7 +512,7 @@ class TestWsFrames < Minitest::Test
     client = Lunora::Client.new("https://app.example")
     client.attach_socket(->(_frame) {})
 
-    values, stop = client.stream("messages:list", { "channel" => "general" })
+    values, stop = client.watch("messages:list", { "channel" => "general" })
     seen = []
 
     case_data["frames"].each do |frame|

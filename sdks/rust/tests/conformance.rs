@@ -908,7 +908,7 @@ fn subscription_stream_yields_frame_values_in_order() {
 
     client.attach_socket(Box::new(|_frame| {}), None);
 
-    let (events, id) = client.stream(
+    let (events, id) = client.watch(
         "messages:list",
         WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
         None,
@@ -1402,7 +1402,7 @@ fn subscription_stream_ends_on_close() {
 
     client.attach_socket(Box::new(|_frame| {}), None);
 
-    let (events, id) = client.stream("messages:list", WireValue::Object(Vec::new()), None);
+    let (events, id) = client.watch("messages:list", WireValue::Object(Vec::new()), None);
 
     client
         .handle_frame(&json!({ "type": "data", "id": id, "data": 1, "cursor": 1 }).to_string())

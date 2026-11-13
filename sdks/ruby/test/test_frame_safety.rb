@@ -235,7 +235,7 @@ class TestFrameSafety < Minitest::Test
     ConformanceManifest.covers("subscription_stream_ends_on_close")
     client = Lunora::Client.new("https://app.example")
     client.attach_socket(->(_frame) {})
-    values, _stop = client.stream("messages:list", {})
+    values, _stop = client.watch("messages:list", {})
     client.handle_frame(JSON.generate({ "type" => "data", "id" => "sub_1", "data" => { "n" => 1 } }))
 
     client.close

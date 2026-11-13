@@ -172,7 +172,7 @@ const renderWatch = (method: SdkMethod): string => {
     return [
         `    # live ${commentText(method.summary)}, as an Enumerator — call \`stop\` on the pair to unsubscribe.`,
         `    def watch_${memberName(method.functionName)}(${parameters})`,
-        `      @client.stream("${rubyLiteral(method.functionPath)}", ${payload}, shard_key)`,
+        `      @client.watch("${rubyLiteral(method.functionPath)}", ${payload}, shard_key)`,
         `    end`,
     ].join("\n");
 };

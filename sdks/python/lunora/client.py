@@ -814,7 +814,7 @@ class LunoraClient:
     def close(self) -> None:
         """Reject every queued write so no caller waits on a dead client, and end every stream.
 
-        Every :meth:`stream` generator returns and :meth:`connect_and_run`
+        Every :meth:`watch` generator returns and :meth:`connect_and_run`
         returns — without this a consumer's ``async for`` over a closed client
         waited forever, and the read loop went on delivering frames to it.
         Durable storage is untouched: the next session restores those writes.
@@ -1055,7 +1055,7 @@ class LunoraClient:
 
         return unsubscribe
 
-    def stream(self, function_path: str, args: Any = None, shard_key: Optional[str] = None) -> AsyncIterator:
+    def watch(self, function_path: str, args: Any = None, shard_key: Optional[str] = None) -> AsyncIterator:
         """A live query as an async generator, for ``async for`` and the loops built on it.
 
         Each call opens its OWN subscription — at CALL time, not at first
