@@ -10,8 +10,14 @@
 > must print nothing.
 
 **Baseline:** `26351bfca` (`origin/alpha`, 2026-11-13)
-**Status:** IN PROGRESS — follow-up B (Studio wildcard) on PR #1595. Part A DONE: APPROVED after
-one review round; commits `0cd8b7741`, `d2810720b`, `ba5ac565d`.
+**Status:** DONE — PR https://github.com/anolilab/lunora/pull/1595. Part A: commits `0cd8b7741`,
+`d2810720b`, `ba5ac565d` (APPROVED after one review round). Follow-up B (admin wildcard): commits
+`5b81a3209`, `dccad4aee` (APPROVED first round; deviation accepted: `admin-readers.ts` re-exports the
+constant with `export { ADMIN_WILDCARD } from "@lunora/shard-engine"` because of
+`unicorn/prefer-export-from`). Reviewer re-ran after B: `@lunora/do` and `@lunora/shard-engine` unit
+and workerd projects, client conformance, `api:check` on a fresh full build, eslint/types, and
+red-without-fix (`"*"` received). Not run: Swift (no XCTest here), Go, Ruby, Kotlin, Dart, the
+Studio tests (no Studio change).
 **Source:** lead from the review of PR #1593 (team-chat membership): a member's socket received a
 new message for `messages:list` as a `delta` frame with `"table": "members"`.
 
