@@ -83,6 +83,12 @@ class _Subscription implements OptimisticTarget {
   /// position past the dropped change. A `data` frame or a resend clears it.
   bool poisoned = false;
 
+  /// The payload a run of `more` deltas has built so far, merged onto [serverBase]
+  /// and not yet published. Null when no run is held; a merged payload is never
+  /// null, so presence needs no flag. Held frames move neither the cursor nor the
+  /// optimistic layers: only the frame that ends the run does.
+  Object? pendingRun;
+
   @override
   Object? lastValue;
 
@@ -186,6 +192,7 @@ class LunoraClient {
         ..cursor = null
         ..epoch = null
         ..poisoned = false
+        ..pendingRun = null
         ..hasServerBase = false
         ..serverBase = null;
     }
@@ -252,6 +259,7 @@ class LunoraClient {
     // Offline until every write below has returned: a write that throws leaves the client offline, and a
     // detach the sender makes during the writes supersedes this attach.
     _send = null;
+    _discardHeldRuns();
     final attachGeneration = ++_attachGeneration;
 
     if (_closed) {
@@ -324,6 +332,7 @@ class LunoraClient {
     // undone by this method clearing the sender afterwards.
     _send = null;
     _attachGeneration++;
+    _discardHeldRuns();
 
     if (code == 4001) {
       _notifyTokenExpired();
@@ -774,6 +783,14 @@ class LunoraClient {
   LunoraUnsubscribe subscribeShape(String name, {Object? args, LunoraRowsCallback? onRows, LunoraErrorCallback? onError}) =>
       _shapeRegistry.subscribe(name, sender: () => _send, args: args, onRows: onRows, onError: onError);
 
+  /// A run is held against one socket's stream. Its cursor was never taken, so the
+  /// next resume replays the whole run and keeping the held frames would apply it twice.
+  void _discardHeldRuns() {
+    for (final entry in _subscriptions.values) {
+      entry.pendingRun = null;
+    }
+  }
+
   /// Re-subscribes everything after a reconnect, carrying each subscription's
   /// resume cursor so the server can skip results that have not changed.
   ///
@@ -793,8 +810,10 @@ class LunoraClient {
     // for the same reason.
     for (final entry in _subscriptions.values) {
       // The resent position predates the dropped change, so the replay
-      // re-applies it; if it is still unmergeable the flag is set again.
+      // re-applies it; if it is still unmergeable the flag is set again. The
+      // resend also replays any held run from before it, so the held frames go.
       entry.poisoned = false;
+      entry.pendingRun = null;
     }
 
     final frames = <Map<String, Object?>>[
@@ -914,6 +933,7 @@ class LunoraClient {
           // not on the socket read loop's stack. Letting it escape ended that
           // loop — and with it every OTHER subscription on this client — over one
           // bad frame.
+          entry?.pendingRun = null;
           entry?.onError?.call(LunoraSubscriptionError('INVALID_FRAME', error.message));
 
           return 'error';
@@ -924,7 +944,13 @@ class LunoraClient {
         // `data` wins when both are present, as it does for the decode above.
         if (frame['data'] == null && entry != null && isMutationDelta(value)) {
           // With no base, or a committed null, the row change cannot merge and is held like any other.
-          final merged = entry.hasServerBase ? applyDelta(entry.serverBase, value! as Map<String, Object?>) : null;
+          // Merged onto the held run when there is one, so a run builds on itself and not on the committed base.
+          final held = entry.pendingRun;
+          final merged = held != null
+              ? applyDelta(held, value! as Map<String, Object?>)
+              : entry.hasServerBase
+                  ? applyDelta(entry.serverBase, value! as Map<String, Object?>)
+                  : null;
 
           // Unmergeable against a base we hold. The reference re-snapshots here;
           // this port has no resubscribe-for-snapshot path, so the previous value
@@ -934,6 +960,7 @@ class LunoraClient {
           // `data` frame or a resend, so a reconnect replays from before it.
           if (merged == null) {
             entry.poisoned = true;
+            entry.pendingRun = null;
             // Reported once, when the freeze starts: an app that stays silent shows a stale list.
             entry.onError
                 ?.call(LunoraSubscriptionError('delta_unmergeable', 'row change could not be merged; subscription frozen until a snapshot or resubscribe'));
@@ -941,6 +968,15 @@ class LunoraClient {
             return kind;
           }
 
+          // `more` holds the frame: nothing publishes and no cursor, epoch or layer moves until
+          // the run's last frame, so a drop mid-run resumes from before the whole run.
+          if (frame['more'] == true) {
+            entry.pendingRun = merged;
+
+            return kind;
+          }
+
+          entry.pendingRun = null;
           value = merged;
         }
 
@@ -955,6 +991,9 @@ class LunoraClient {
             // A snapshot is authoritative, so it supersedes the dropped change.
             entry.poisoned = false;
           }
+
+          // Whatever is held was built on a base this frame replaces or settles.
+          entry.pendingRun = null;
 
           entry.serverBase = value;
           entry.hasServerBase = true;
@@ -973,6 +1012,11 @@ class LunoraClient {
         }
 
         if (entry != null) {
+          // A resume restarts the stream the run was part of. A `settled` frame does not touch it.
+          if (kind == 'resume') {
+            entry.pendingRun = null;
+          }
+
           _advance(entry, frame);
 
           // A `resume`/`settled` frame advances the cursor without a value

@@ -243,19 +243,26 @@ void _playFrameSteps(_FrameCase run, Object? steps, Object? name) {
   }
 }
 
-/// `pageDeltaPoisonCases`: an unmergeable row change poisons the subscription, so
-/// a later delta in the run neither publishes nor moves the resume position, a
-/// resend asks for the pre-change position, and a `data` frame clears the poison.
-/// The freezing frame raises `delta_unmergeable` once.
-void casePoisonedSubscriptionFreezesTheResumeCursor() {
-  final cases = objectList(fixture('ws-frames.json')['pageDeltaPoisonCases']);
+/// Plays every case under the fixture key [key] through the shared step loop.
+void _playFrameCases(String key, int count) {
+  final cases = objectList(fixture('ws-frames.json')[key]);
 
-  equals(cases.length, 3, 'pageDeltaPoisonCases must carry its three cases');
+  equals(cases.length, count, '$key must carry its $count cases');
 
   for (final testCase in cases) {
     _playFrameSteps(_FrameCase(testCase), testCase['steps'], testCase['name']);
   }
 }
+
+/// `pageDeltaPoisonCases`: an unmergeable row change poisons the subscription, so
+/// a later delta in the run neither publishes nor moves the resume position, a
+/// resend asks for the pre-change position, and a `data` frame clears the poison.
+/// The freezing frame raises `delta_unmergeable` once.
+void casePoisonedSubscriptionFreezesTheResumeCursor() => _playFrameCases('pageDeltaPoisonCases', 3);
+
+/// `pageDeltaRunCases`: a delta marked `more` is held, not published, and the run
+/// commits once on its last frame; a data frame or a resend discards what is held.
+void casePageDeltaRunIsHeldUntilItsLastFrame() => _playFrameCases('pageDeltaRunCases', 4);
 
 /// `identityChangeEvictionCases`: changing identity drops the cached base and the
 /// freeze with the cursor, so a row change cannot merge onto rows the new identity
