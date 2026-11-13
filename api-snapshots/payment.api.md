@@ -268,6 +268,8 @@ class MemoryPaymentStore implements PaymentStore {
     getSubscription(provider: ProviderId, id: string): Promise<Subscription | undefined>;
     listSubscriptionsByReference(referenceId: string): Promise<Subscription[]>;
     listUnreportedUsage(provider: ProviderId, limit: number): Promise<UsageEvent[]>;
+    getReferenceRevision(referenceId: string): Promise<number>;
+    bumpReferenceRevision(referenceId: string, ifRevision: number): Promise<boolean>;
     markEventProcessed(provider: ProviderId, eventId: string, _type: string): Promise<boolean>;
     releaseEvent(provider: ProviderId, eventId: string): Promise<void>;
     markUsageReported(provider: ProviderId, idempotencyKey: string): Promise<void>;
@@ -484,9 +486,11 @@ type PaymentState = "authorized" | "canceled" | "captured" | "failed" | "initiat
 
 ```ts
 interface PaymentStore {
+    bumpReferenceRevision: (referenceId: string, ifRevision: number) => Promise<boolean>;
     getCustomerByReference: (provider: ProviderId, referenceId: string) => Promise<Customer | undefined>;
     getPaymentSession: (provider: ProviderId, id: string) => Promise<PaymentSession | undefined>;
     getPaymentSessionBySubscription: (provider: ProviderId, subscriptionId: string) => Promise<PaymentSession | undefined>;
+    getReferenceRevision: (referenceId: string) => Promise<number>;
     getSubscription: (provider: ProviderId, id: string) => Promise<Subscription | undefined>;
     listSubscriptionsByReference: (referenceId: string) => Promise<Subscription[]>;
     listUnreportedUsage: (provider: ProviderId, limit: number) => Promise<UsageEvent[]>;
@@ -938,7 +942,7 @@ const nextSubscriptionState: (from: SubscriptionState, action: SubscriptionActio
 ### `paymentExtension` (const)
 
 ```ts
-const paymentExtension: SchemaExtension<Record<"customers" | "events" | "sessions" | "subscriptions" | "usageEvents", TableDefinition>, "payment">;
+const paymentExtension: SchemaExtension<Record<"customers" | "events" | "referenceRevisions" | "sessions" | "subscriptions" | "usageEvents", TableDefinition>, "payment">;
 ```
 
 ### `paymentsFromContext` (const)

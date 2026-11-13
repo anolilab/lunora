@@ -19,7 +19,7 @@ import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription, ownerOf } from "./store";
 import type { SubscriptionWrite } from "./subscription-policy";
-import { ENTITLING_STATES, hasOtherLiveSubscription, storeSubscription } from "./subscription-policy";
+import { ENTITLING_STATES, hasOtherLiveSubscription, restoreSubscription, storeSubscription } from "./subscription-policy";
 import applyWebhookAction from "./sync";
 import type {
     AttachInput,
@@ -481,7 +481,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             const destination = await store.getSubscription(adapter.identifier, synced.id);
 
             if (current?.state === "canceled" && current.revision === (existing.revision ?? 0) + 1 && !ENTITLING_STATES.has(destination?.state ?? "canceled")) {
-                await store.upsertSubscription(existing, { ifRevision: current.revision });
+                await restoreSubscription(store, policy, current, existing);
             }
         };
 
