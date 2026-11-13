@@ -523,6 +523,27 @@
             "baseWire": { "continueCursor": "c_2", "isDone": false, "page": [{ "_creationTime": 1001, "_id": "m1", "text": "one" }] },
             "frame": { "id": "sub_1", "type": "delta", "delta": { "count": 1 } },
             "expect": { "kind": "delta", "id": "sub_1", "valueWire": { "count": 1 } }
+        },
+        {
+            "name": "delta-multi-table-placeholder",
+            "$comment": "A query that read more than one table (here a membership check, then messages) stamps the placeholder \"__lunora__\" on its row deltas (protocol README 5.1.1). The merge is by key; the table field only has to be a string.",
+            "baseWire": [
+                { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                { "_creationTime": 1002, "_id": "m2", "text": "two" }
+            ],
+            "frame": {
+                "id": "sub_1",
+                "type": "delta",
+                "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "__lunora__" }
+            },
+            "expect": {
+                "kind": "delta",
+                "id": "sub_1",
+                "valueWire": [
+                    { "_creationTime": 1001, "_id": "m1", "text": "ONE" },
+                    { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                ]
+            }
         }
     ],
     "pageDeltaPoisonCases": [

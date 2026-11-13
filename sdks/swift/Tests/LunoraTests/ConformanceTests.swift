@@ -642,7 +642,7 @@ final class ConformanceTests: XCTestCase {
     func casePageDeltaFrames() throws {
         let cases = try XCTUnwrap(fixture("ws-frames.json")["pageDeltaFrames"] as? [[String: Any]])
 
-        XCTAssertEqual(cases.count, 8, "pageDeltaFrames must carry its eight cases")
+        XCTAssertEqual(cases.count, 9, "pageDeltaFrames must carry its nine cases")
 
         func feed(_ client: LunoraClient, _ frame: Any?) throws {
             let raw = try JSONSerialization.data(withJSONObject: try XCTUnwrap(frame))
