@@ -38,4 +38,10 @@ describe("a callback is a sign-in, whatever its provider id is", () => {
         expect(buildAuditEntry({ path: "/api/auth/callback/delete-user" })?.event).toBe("sign-in");
         expect(buildAuditEntry({ path: "/api/auth/callback/change-email" })?.event).toBe("sign-in");
     });
+
+    it("does not read a callback whose provider id is sign-up as a sign-up", () => {
+        expect.assertions(1);
+
+        expect(buildAuditEntry({ path: "/api/auth/sso/callback/sign-up" })?.event).toBe("sign-in");
+    });
 });
