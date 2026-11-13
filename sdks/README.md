@@ -243,9 +243,8 @@ the server had stopped sending. `shape_subscriptions_resend_after_reconnect` in
 ⁸ **`chunk` is not handled.** A streaming-query chunk carries a durable `seq`/`generation`
 resume watermark (`protocol/README.md` §5.2). It reaches the default arm of every port's frame
 switch and is ignored. No port sends `stream`, so no chunk arrives to drop; the gap is that a
-deployment using streaming queries has no non-JS client for them. Deferred: the stream forms
-(`stream` sends, `sinceChunk`/`generation` resume, `STREAM_INTERRUPTED`) are plan 395, not part
-of the row-delta follow-up.
+deployment using streaming queries has no non-JS client for them. The wire `stream` client is a
+follow-up change, outside the row-delta follow-up.
 
 ⁹ **A write refused for its credential (`TOKEN_EXPIRED`, `UNAUTHENTICATED`,
 `UNAUTHORIZED`) is held in all eight, and every replay reads the token current
