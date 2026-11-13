@@ -7604,6 +7604,42 @@ class LunoraClient {
     }
 
     /**
+     * Discard a held delta run and ask for a full snapshot. The run's rows are lost, so the cursor
+     * and epoch stay where the committed base left them: the snapshot request omits them, but a
+     * reconnect before it lands still resumes from before the run. Deltas are refused until the
+     * snapshot lands (see `handleDataMessage`).
+     */
+    private resnapshotDiscardedRun(state: SubscriptionState): void {
+        const { serverCursor, serverEpoch } = state;
+
+        if (this.resnapshotSubscription(state)) {
+            // eslint-disable-next-line no-param-reassign -- the flag is the shared subscription's own state
+            state.awaitingSnapshot = true;
+        }
+
+        /* eslint-disable no-param-reassign -- restore the resume position the snapshot request just dropped */
+        state.serverCursor = serverCursor;
+        state.serverEpoch = serverEpoch;
+        /* eslint-enable no-param-reassign */
+    }
+
+    /** Report one `WIRE_DECODE_FAILED` for a frame `decodeWire` refused, and re-snapshot when it cut a held run short. */
+    private failUndecodableFrame(state: SubscriptionState, error: unknown, heldRun: boolean): void {
+        failSubscription(state, {
+            code: "WIRE_DECODE_FAILED",
+            message: `could not decode a server frame for this subscription — ${error instanceof Error ? error.message : String(error)}`,
+        });
+
+        // The refused frame's rows never applied, so the rest of the run cannot either.
+        if (heldRun) {
+            this.resnapshotDiscardedRun(state);
+        }
+
+        // The answer arrived and cannot be read: waiting longer only wedges the shard's writes.
+        this.settleAwaitedAnswer(state, false);
+    }
+
+    /**
      * Apply one `data` frame. `snapshotMark` is set only for a frame synthesized
      * by a poll, which carries no cursor: see {@link pollSubscriptions}.
      */
@@ -7617,6 +7653,11 @@ class LunoraClient {
 
         // The older of two seeds from a re-sent `subscribe`, arriving last: it would roll the value and the resume cursor back.
         if (message.type === "data" && isStaleDataFrame(state, message)) {
+            return;
+        }
+
+        // A snapshot is on its way because the base is known to be incomplete: a delta would merge onto it.
+        if (message.type === "delta" && state.awaitingSnapshot === true) {
             return;
         }
 
@@ -7636,13 +7677,10 @@ class LunoraClient {
             // instead and leave the cached value + cursor untouched.
             // A run that was partly held can no longer complete on this base: drop it, so a later
             // frame merges onto the committed value and not onto the abandoned partial one.
+            // A run that was partly held can no longer complete on this base: drop it, so a later
+            // frame merges onto the committed value and not onto the abandoned partial one.
             state.pendingDeltaRun = undefined;
-            failSubscription(state, {
-                code: "WIRE_DECODE_FAILED",
-                message: `could not decode a server frame for this subscription — ${error instanceof Error ? error.message : String(error)}`,
-            });
-            // The answer arrived and cannot be read: waiting longer only wedges the shard's writes.
-            this.settleAwaitedAnswer(state, false);
+            this.failUndecodableFrame(state, error, pendingRun !== undefined);
 
             return;
         }
@@ -7968,6 +8006,8 @@ class LunoraClient {
 
         // The cached value is current as of the cursor it resumed from, so a run cut off before it is void.
         state.pendingDeltaRun = undefined;
+        // A reconnect after a discarded run resumes from the cursor before it, which proves the base current.
+        state.awaitingSnapshot = false;
         // A resume is only answered when the shard found these claims to be the ones the cursor was read under.
         state.serverClaims = this.frameClaims;
         this.ackAndAdvanceCursor(state, message.cursor, message.epoch);
@@ -8007,11 +8047,13 @@ class LunoraClient {
         }
 
         // The settled cursor is past rows of the held run this client never applied, so taking it would
-        // resume after them and ACK a checkpoint it does not have. The run is void; a resume starts before it.
-        const heldRun = state.pendingDeltaRun !== undefined;
-
-        state.pendingDeltaRun = undefined;
-        this.ackAndAdvanceCursor(state, heldRun ? undefined : message.cursor, heldRun ? undefined : message.epoch);
+        // resume after them and ACK a checkpoint it does not have. The run is void: re-snapshot, since a
+        // later delta would merge onto a base that is missing its rows.
+        if (state.pendingDeltaRun === undefined) {
+            this.ackAndAdvanceCursor(state, message.cursor, message.epoch);
+        } else {
+            this.resnapshotDiscardedRun(state);
+        }
 
         if (message.lastMutationId !== undefined) {
             // `Math.max`, like the `data`-frame and cross-tab `settled` siblings.

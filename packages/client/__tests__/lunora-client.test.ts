@@ -1796,6 +1796,90 @@ describe("lunoraClient", () => {
             vi.useRealTimers();
         });
 
+        it("re-snapshots after a settled frame discards a held run, and refuses a delta onto the stale base", () => {
+            expect.assertions(4);
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const subId = firstSub(socket).id as string;
+
+            socket.receive({ id: subId, type: "ack" });
+            socket.receive({ cursor: 5, data: [{ _id: "a" }, { _id: "b" }], epoch: "e1", id: subId, type: "data" });
+            socket.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: subId, more: true, type: "delta" });
+            socket.receive({ cursor: 6, epoch: "e1", id: subId, type: "settled" });
+
+            const subscribes = (): { query: { sinceSeq?: number } }[] =>
+                socket.sent.map((frame) => JSON.parse(frame) as { query: { sinceSeq?: number }; type?: string }).filter((frame) => frame.type === "subscribe");
+
+            expect(subscribes()).toHaveLength(2);
+            expect(subscribes()[1]?.query.sinceSeq).toBeUndefined();
+
+            // A later delta would merge onto the base the discarded run never reached.
+            socket.receive({ cursor: 7, delta: { key: "b", op: "delete", table: "messages" }, id: subId, type: "delta" });
+
+            expect(received.at(-1)).toStrictEqual([{ _id: "a" }, { _id: "b" }]);
+
+            socket.receive({ cursor: 8, data: [{ _id: "b" }], epoch: "e1", id: subId, type: "data" });
+
+            expect(received.at(-1)).toStrictEqual([{ _id: "b" }]);
+
+            client.close();
+        });
+
+        it("reports one decode error and re-snapshots when a frame of a held run is refused", () => {
+            expect.assertions(4);
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+            const errors: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined, { onError: (error) => errors.push(error) });
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const subId = firstSub(socket).id as string;
+
+            socket.receive({ id: subId, type: "ack" });
+            socket.receive({ cursor: 5, data: [{ _id: "a" }, { _id: "b" }], epoch: "e1", id: subId, type: "data" });
+            socket.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: subId, more: true, type: "delta" });
+
+            let deep: unknown = 1;
+
+            for (let level = 0; level < 80; level += 1) {
+                deep = { a: deep };
+            }
+
+            // Past the codec's depth cap, so `decodeWire` refuses the frame.
+            socket.receive({ delta: { key: "c", op: "insert", row: deep, table: "messages" }, id: subId, more: true, type: "delta" });
+
+            const subscribes = socket.sent
+                .map((frame) => JSON.parse(frame) as { query: { sinceSeq?: number }; type?: string })
+                .filter((frame) => frame.type === "subscribe");
+
+            expect(errors).toHaveLength(1);
+            expect(errors[0]).toMatchObject({ code: "WIRE_DECODE_FAILED" });
+            expect(subscribes).toHaveLength(2);
+            expect(subscribes[1]?.query.sinceSeq).toBeUndefined();
+
+            client.close();
+        });
+
         it("commits a delta run once: one listener notification and one cross-tab broadcast", async () => {
             expect.assertions(4);
 
