@@ -602,6 +602,15 @@ const invitationOrganizationId = (context: AuditHookContext, event: AuthAuditEve
     return detailId(fieldOf(fieldOf(returned, "invitation"), "organizationId")) ?? detailId(fieldOf(fieldOf(returned, "member"), "organizationId"));
 };
 
+/**
+ * An accept, reject or cancel of an existing invitation is about the organization that invitation belongs to. The
+ * request's own organization id is not trusted for it, since the request can name any organization.
+ */
+const invitationAnswerOrganizationId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined =>
+    event === "org-invitation-accept" || event === "org-invitation-reject" || event === "org-invitation-cancel"
+        ? invitationOrganizationId(context, event)
+        : undefined;
+
 /** The organization a switch moved to: the answer to `set-active` is that organization, and `null` when the switch cleared it. */
 const switchedOrganizationId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined =>
     event === "org-switch" ? detailId(fieldOf(context.context?.returned, "id")) : undefined;
@@ -661,7 +670,7 @@ const clientIdFromBasic = (authorization: string | undefined): string | undefine
 
 /** The client id a client-registration response returns, for `oauth-client-create` (its request does not carry one). */
 const createdClientId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined =>
-    event === "oauth-client-create" ? detailId(fieldOf(context.context?.returned, "client_id")) : undefined;
+    event === "oauth-client-create" && resolveOutcome(context) === "success" ? detailId(fieldOf(context.context?.returned, "client_id")) : undefined;
 
 /** The role or roles a member is set to: one name, or several names joined, so a multi-role change keeps every role it assigned. */
 const memberRoleOf = (value: unknown): string | undefined => {
@@ -699,7 +708,8 @@ const organizationIds = (context: AuditHookContext, event: AuthAuditEvent): Read
             "organizationId",
             event === "org-create"
                 ? createdId
-                : (detailId(body["organizationId"]) ??
+                : (invitationAnswerOrganizationId(context, event) ??
+                  detailId(body["organizationId"]) ??
                   detailId(fieldOf(context.context?.returned, "organizationId")) ??
                   invitationOrganizationId(context, event) ??
                   switchedOrganizationId(context, event) ??
@@ -790,7 +800,7 @@ const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Rec
 
     // An impersonated session's rows are about the impersonated account, unless the request names another subject.
     const impersonated = event.startsWith("admin-") ? undefined : impersonatedUserId(context, event);
-    const entries = [...(impersonated === undefined ? [] : [["targetUserId", impersonated] as const]), ...candidates];
+    const entries = [...candidates, ...(impersonated === undefined ? [] : [["targetUserId", impersonated] as const])];
 
     return Object.fromEntries(entries.flatMap(([key, value]) => (value === undefined ? [] : [[key, value] as const])));
 };
