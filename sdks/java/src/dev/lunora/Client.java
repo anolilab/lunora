@@ -252,6 +252,16 @@ public final class Client {
          */
         boolean poisoned;
 
+        /**
+         * The server base with the frames of an unfinished {@code more} run merged in. Row changes
+         * in a run build on it rather than on the committed base, but nothing is published and the
+         * resume position stays put until the run's last frame: a drop mid-run must replay the
+         * whole run from the cursor before it.
+         */
+        Object heldBase;
+
+        boolean holding;
+
         /** The displayed value and its optimistic overlays. See {@link Optimistic}. */
         final Optimistic.State state = new Optimistic.State(null);
 
@@ -473,9 +483,23 @@ public final class Client {
         return token == null ? Offline.Identity.signedOut() : Offline.Identity.tokenStamp(token);
     }
 
+    /** Call with {@link #lock} held. */
+    private void discardRuns() {
+        for (Subscription subscription : subscriptions.values()) {
+            discardRun(subscription);
+        }
+    }
+
+    /** Forgets a run's held frames; the server replays the whole run from the last cursor. */
+    private static void discardRun(Subscription subscription) {
+        subscription.holding = false;
+        subscription.heldBase = null;
+    }
+
     /** Drops every resume cursor and shape row; call with {@link #lock} held. */
     private void evictSession(List<Delivery> deliveries) {
         for (Subscription subscription : subscriptions.values()) {
+            discardRun(subscription);
             subscription.cursor = null;
             subscription.epoch = null;
             subscription.poisoned = false;
@@ -547,6 +571,7 @@ public final class Client {
         // attach must not tag the socket with a generation newer than the credential it presents.
         synchronized (lock) {
             this.sender = null;
+            discardRuns();
             generation = ++this.attachGeneration;
             provider = wsTokenProvider;
             credential = credentialGeneration;
@@ -611,6 +636,7 @@ public final class Client {
         synchronized (lock) {
             this.sender = null;
             this.attachGeneration++;
+            discardRuns();
 
             if (closeCode != null && closeCode == CLOSE_TOKEN_EXPIRED) {
                 expired = true;
@@ -862,6 +888,7 @@ public final class Client {
         synchronized (lock) {
             closed = true;
             sender = null;
+            discardRuns();
             discarded = offlineQueue.clear();
             open = new ArrayList<>(streams);
         }
@@ -1461,6 +1488,7 @@ public final class Client {
     public void resendSubscriptions() {
         FrameSender socket;
         List<Map<String, Object>> frames = new ArrayList<>();
+        Map<String, Subscription> frozen = new LinkedHashMap<>();
 
         // The frames are BUILT under the lock, not just the iteration: each one
         // reads `cursor`/`epoch`, which the frame handler writes. Snapshotting the
@@ -1476,8 +1504,13 @@ public final class Client {
                 Subscription subscription = entry.getValue();
 
                 // The replay from the old cursor re-applies the dropped change, and poisons again
-                // if it is still unmergeable.
+                // if it is still unmergeable. A send that fails below puts the freeze back.
+                if (subscription.poisoned) {
+                    frozen.put(entry.getKey(), subscription);
+                }
+
                 subscription.poisoned = false;
+                discardRun(subscription);
                 frames.add(
                         buildSubscribeFrame(
                                 entry.getKey(),
@@ -1505,7 +1538,22 @@ public final class Client {
         }
 
         for (Map<String, Object> frame : frames) {
-            socket.send(frame);
+            try {
+                socket.send(frame);
+            } catch (RuntimeException error) {
+                // Nothing replayed the dropped change for the frames that never went out, so a
+                // later delta would move the cursor past it. The failed one and every unsent
+                // frame stay frozen; the ones already sent are replaying.
+                synchronized (lock) {
+                    for (Map.Entry<String, Subscription> entry : frozen.entrySet()) {
+                        entry.getValue().poisoned = true;
+                    }
+                }
+
+                throw error;
+            }
+
+            frozen.remove(frame.get("id"));
         }
     }
 
@@ -1551,11 +1599,31 @@ public final class Client {
                     // callback rather than vanish or escape handleFrame — silently
                     // dropping the frame trades a crash for a subscription that goes
                     // quietly stale.
-                    Consumer<SubscriptionError> onError;
+                    Consumer<SubscriptionError> onError = null;
+                    String code = CODE_INVALID_FRAME;
 
                     synchronized (lock) {
                         Subscription entry = subscriptions.get(id);
-                        onError = entry != null ? entry.onError : null;
+
+                        if (entry != null) {
+                            // A refused row change never reaches the base, so drop any held run and
+                            // freeze: a later frame cannot commit past the refused row.
+                            boolean deltaFrame = "delta".equals(kind);
+
+                            discardRun(entry);
+
+                            if (deltaFrame) {
+                                code = CODE_WIRE_DECODE_FAILED;
+
+                                // Already frozen: the freeze was reported once.
+                                if (!entry.poisoned) {
+                                    entry.poisoned = true;
+                                    onError = entry.onError;
+                                }
+                            } else {
+                                onError = entry.onError;
+                            }
+                        }
                     }
 
                     if (onError != null) {
@@ -1565,8 +1633,7 @@ public final class Client {
                         // was delivered.
                         onError.accept(
                                 new SubscriptionError(
-                                        CODE_INVALID_FRAME,
-                                        "malformed wire value: " + error.getMessage()));
+                                        code, "malformed wire value: " + error.getMessage()));
                     }
 
                     return "error";
@@ -1590,6 +1657,7 @@ public final class Client {
                     if ("data".equals(kind)) {
                         // A snapshot is authoritative, so it ends any poisoning.
                         entry.poisoned = false;
+                        discardRun(entry);
                         entry.state.serverBase = value;
                     } else {
                         if (entry.poisoned) {
@@ -1598,10 +1666,25 @@ public final class Client {
                             return kind;
                         }
 
-                        if (DeltaMerge.resolve(entry.state.serverBase, value)
+                        Object base = entry.holding ? entry.heldBase : entry.state.serverBase;
+
+                        if (DeltaMerge.resolve(base, value)
                                 instanceof DeltaMerge.Outcome.Publish publish) {
+                            if (Boolean.TRUE.equals(frame.get("more"))) {
+                                // Neither the cursor nor the optimistic layers move until the run's
+                                // last frame commits it.
+                                entry.heldBase = publish.value();
+                                entry.holding = true;
+
+                                return kind;
+                            }
+
+                            discardRun(entry);
                             entry.state.serverBase = publish.value();
                         } else {
+                            // The run cannot commit, and replaying it needs the cursor from before
+                            // it.
+                            discardRun(entry);
                             // Nothing changed, so nothing is published. Poisoned until a data
                             // frame or a resubscribe, so a later frame's cursor cannot move the
                             // resume position past the dropped change.
@@ -1663,6 +1746,21 @@ public final class Client {
                     // the resume position past the dropped row change.
                     if (entry.poisoned) {
                         return kind;
+                    }
+
+                    // A resume means the server is about to replay a held run. A settled frame
+                    // mid-run carries a cursor past rows this client never applied, so taking it
+                    // would ack a checkpoint it does not have: drop the run, keep the cursor, and
+                    // freeze so a later delta cannot commit past the dropped part.
+                    if ("settled".equals(kind) && entry.holding) {
+                        discardRun(entry);
+                        entry.poisoned = true;
+
+                        return kind;
+                    }
+
+                    if ("resume".equals(kind)) {
+                        discardRun(entry);
                     }
 
                     advance(entry, frame);
