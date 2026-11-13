@@ -386,7 +386,7 @@ void casePoisonedSubscriptionStaysFrozenWhenTheResendThrows() {
 Future<void> caseSubscriptionStreamYieldsFrameValuesInOrder() async {
   covers('subscription_stream_yields_frame_values_in_order');
 
-  final case_ = fixture('ws-frames.json')['stream']! as Map<String, Object?>;
+  final case_ = fixture('ws-frames.json')['watch']! as Map<String, Object?>;
   final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
   // A queued iterator, not `await for`: the frames are fed from this same
   // isolate, so the loop has to be driven one `moveNext()` at a time.

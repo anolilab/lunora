@@ -713,7 +713,7 @@ func (c *Client) Online() bool {
 }
 
 // Close rejects every queued write so no caller waits on a dead client, and ends
-// every open [Client.Stream]. Durable storage is untouched: the next session
+// every open [Client.Watch]. Durable storage is untouched: the next session
 // restores those writes.
 func (c *Client) Close() {
 	c.mu.Lock()
@@ -1237,13 +1237,13 @@ func (c *Client) Subscribe(functionPath string, args any, onData DataHandler, on
 	}
 }
 
-// StreamEvent is one item delivered by [Client.Stream]: a value, or the
+// WatchEvent is one item delivered by [Client.Watch]: a value, or the
 // subscription error that ended it.
 //
 // One channel carrying both, rather than a value channel plus an error channel:
 // a consumer selecting on two channels can read them out of order, and the whole
 // point of a stream is that what arrived first is delivered first.
-type StreamEvent struct {
+type WatchEvent struct {
 	Value any
 	Err   error
 }
@@ -1262,8 +1262,8 @@ type StreamEvent struct {
 //
 // [Client.Close] ends every open stream too: the channel closes, so a `range`
 // over it returns rather than waiting on a client that will never send again.
-func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan StreamEvent, Unsubscribe) {
-	events := make(chan StreamEvent, streamBufferSize)
+func (c *Client) Watch(functionPath string, args any, shardKey string) (<-chan WatchEvent, Unsubscribe) {
+	events := make(chan WatchEvent, streamBufferSize)
 	done := make(chan struct{})
 
 	// sending is held (shared) for the whole of every send and taken exclusively
@@ -1278,7 +1278,7 @@ func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan 
 		closed  bool
 	)
 
-	emit := func(event StreamEvent) {
+	emit := func(event WatchEvent) {
 		sending.RLock()
 		defer sending.RUnlock()
 
@@ -1295,8 +1295,8 @@ func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan 
 	unsubscribe := c.Subscribe(
 		functionPath,
 		args,
-		func(value any) { emit(StreamEvent{Value: value}) },
-		func(err SubscriptionError) { emit(StreamEvent{Err: err}) },
+		func(value any) { emit(WatchEvent{Value: value}) },
+		func(err SubscriptionError) { emit(WatchEvent{Err: err}) },
 		shardKey,
 	)
 
@@ -1340,7 +1340,7 @@ func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan 
 	return events, end
 }
 
-// streamBufferSize is how many values [Client.Stream] holds before its sends
+// streamBufferSize is how many values [Client.Watch] holds before its sends
 // block. Big enough that an ordinary consumer never sees backpressure, small
 // enough that a stalled one is noticed rather than growing without bound.
 const streamBufferSize = 64

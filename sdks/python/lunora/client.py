@@ -287,8 +287,48 @@ def _decode_row_op(op: Any) -> tuple:
 #: Sentinel ``_decode_row_op`` returns for a delete.
 _DELETE = object()
 
-#: Sentinel a :meth:`LunoraClient.stream` buffer receives when the client closes.
+#: Sentinel a :meth:`LunoraClient.watch` buffer receives when the client closes.
 _CLOSED = object()
+
+
+def _once(release: Unsubscribe) -> Unsubscribe:
+    """Make a release safe to reach from both the loop's exit and ``aclose()``."""
+    lock = threading.Lock()
+    done = False
+
+    def run() -> None:
+        nonlocal done
+        with lock:
+            if done:
+                return
+            done = True
+        release()
+
+    return run
+
+
+class WatchStream:
+    """The iterator :meth:`LunoraClient.watch` returns.
+
+    ``async for`` yields each value. ``aclose()`` releases the subscription whether
+    or not the loop ever started, which is the only release a watch that was never
+    iterated has.
+    """
+
+    def __init__(self, inner: AsyncIterator, release: Unsubscribe) -> None:
+        self._inner = inner
+        self._release = release
+
+    def __aiter__(self) -> WatchStream:
+        return self
+
+    async def __anext__(self) -> Any:
+        return await self._inner.__anext__()
+
+    async def aclose(self) -> None:
+        self._release()
+        await self._inner.aclose()
+
 
 #: Default for an RPC's ``token``: send the bearer held when the request goes
 #: out. ``None`` cannot mean that, since it is a real value: no bearer at all.
@@ -814,7 +854,7 @@ class LunoraClient:
     def close(self) -> None:
         """Reject every queued write so no caller waits on a dead client, and end every stream.
 
-        Every :meth:`stream` generator returns and :meth:`connect_and_run`
+        Every :meth:`watch` generator returns and :meth:`connect_and_run`
         returns — without this a consumer's ``async for`` over a closed client
         waited forever, and the read loop went on delivering frames to it.
         Durable storage is untouched: the next session restores those writes.
@@ -1055,15 +1095,17 @@ class LunoraClient:
 
         return unsubscribe
 
-    def stream(self, function_path: str, args: Any = None, shard_key: Optional[str] = None) -> AsyncIterator:
+    def watch(self, function_path: str, args: Any = None, shard_key: Optional[str] = None) -> AsyncIterator:
         """A live query as an async generator, for ``async for`` and the loops built on it.
 
         Each call opens its OWN subscription — at CALL time, not at first
-        ``__anext__``, so a frame arriving before the loop starts is not lost —
-        and tears it down when the generator is closed: breaking out of the loop,
-        cancelling the task, or calling ``aclose()``. A consumer never holds an
-        unsubscribe handle. Use :meth:`subscribe` directly when the value
-        outlives one loop.
+        ``__anext__``, so a frame arriving before the loop starts is not lost.
+        The subscription is released by ``aclose()``, which also works on a watch
+        that was never iterated, and when the loop exits after it started (a
+        ``break``, an exception, or a cancelled task). A watch the loop never
+        started is released only by ``aclose()``, so close it in a ``try`` /
+        ``finally`` that awaits ``aclose()``. Use :meth:`subscribe` directly when
+        the value outlives one loop.
 
         A subscription error is raised into the loop rather than delivered as a
         value, which is what stops a caller from mistaking it for data.
@@ -1088,7 +1130,7 @@ class LunoraClient:
             with contextlib.suppress(RuntimeError):  # the loop is already closed
                 loop.call_soon_threadsafe(values.put_nowait, _CLOSED)
 
-        unsubscribe = self.subscribe(function_path, args, values.put_nowait, values.put_nowait, shard_key)
+        release = _once(self.subscribe(function_path, args, values.put_nowait, values.put_nowait, shard_key))
 
         async def iterate() -> AsyncIterator:
             # Registered on the first `__anext__`, not at call time: a generator
@@ -1111,9 +1153,9 @@ class LunoraClient:
             finally:
                 with self._lock:
                     self._close_hooks.remove(end)
-                unsubscribe()
+                release()
 
-        return iterate()
+        return WatchStream(iterate(), release)
 
     def subscribe_shape(
         self,

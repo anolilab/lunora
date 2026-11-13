@@ -182,7 +182,7 @@ impl Room {
 /// a consumer selecting over two receivers can read them out of order, and the
 /// whole point of a stream is that what arrived first is delivered first.
 #[derive(Clone, Debug, PartialEq)]
-pub enum StreamEvent {
+pub enum WatchEvent {
     Value(WireValue),
     Error(SubscriptionError),
 }
@@ -1157,8 +1157,8 @@ impl Client {
     /// consumer; the trade is that one which stops reading without unsubscribing
     /// grows the buffer. `std::sync::mpsc` is the only channel in the standard
     /// library, and this crate takes no dependency for one.
-    pub fn stream(&mut self, function_path: &str, args: WireValue, shard_key: Option<&str>) -> (Receiver<StreamEvent>, String) {
-        let (sender, receiver) = channel::<StreamEvent>();
+    pub fn watch(&mut self, function_path: &str, args: WireValue, shard_key: Option<&str>) -> (Receiver<WatchEvent>, String) {
+        let (sender, receiver) = channel::<WatchEvent>();
         let errors = sender.clone();
         let id = self.subscribe_on_shard(
             function_path,
@@ -1167,10 +1167,10 @@ impl Client {
                 // A closed receiver is a consumer that has gone away, which is
                 // not an error here: the subscription simply has nowhere to
                 // deliver until it is unsubscribed.
-                let _ = sender.send(StreamEvent::Value(value.clone()));
+                let _ = sender.send(WatchEvent::Value(value.clone()));
             })),
             Some(Box::new(move |error: &SubscriptionError| {
-                let _ = errors.send(StreamEvent::Error(error.clone()));
+                let _ = errors.send(WatchEvent::Error(error.clone()));
             })),
             shard_key,
         );

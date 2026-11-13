@@ -9,7 +9,7 @@ use std::thread;
 
 use lunora::client::{
     build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_subscribe_frame, build_unsubscribe_frame, parse_rpc_response, Client, ClientError,
-    StreamEvent, CODE_INVALID_FRAME, MAX_PENDING_POKES,
+    WatchEvent, CODE_INVALID_FRAME, MAX_PENDING_POKES,
 };
 use lunora::key::{stable_stringify, stable_wire_key};
 use lunora::submit::is_transient;
@@ -903,12 +903,12 @@ fn a_refused_payload_stays_on_its_own_subscription() {
 /// as the callback form.
 fn subscription_stream_yields_frame_values_in_order() {
     let document = fixture("ws-frames.json");
-    let case = &document["stream"];
+    let case = &document["watch"];
     let mut client = Client::new("https://app.example", None);
 
     client.attach_socket(Box::new(|_frame| {}), None);
 
-    let (events, id) = client.stream(
+    let (events, id) = client.watch(
         "messages:list",
         WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
         None,
@@ -919,8 +919,8 @@ fn subscription_stream_yields_frame_values_in_order() {
         client.handle_frame(&frame.to_string()).expect("handle");
 
         match events.recv().expect("a streamed event") {
-            StreamEvent::Value(value) => seen.push(encode_wire(&value).expect("encode")),
-            StreamEvent::Error(error) => panic!("stream error: {}", error.message),
+            WatchEvent::Value(value) => seen.push(encode_wire(&value).expect("encode")),
+            WatchEvent::Error(error) => panic!("stream error: {}", error.message),
         }
     }
 
@@ -1402,7 +1402,7 @@ fn subscription_stream_ends_on_close() {
 
     client.attach_socket(Box::new(|_frame| {}), None);
 
-    let (events, id) = client.stream("messages:list", WireValue::Object(Vec::new()), None);
+    let (events, id) = client.watch("messages:list", WireValue::Object(Vec::new()), None);
 
     client
         .handle_frame(&json!({ "type": "data", "id": id, "data": 1, "cursor": 1 }).to_string())
@@ -1411,7 +1411,7 @@ fn subscription_stream_ends_on_close() {
 
     assert_eq!(
         events.recv_timeout(Duration::from_secs(2)).expect("the delivered value"),
-        StreamEvent::Value(WireValue::Number(1.0))
+        WatchEvent::Value(WireValue::Number(1.0))
     );
     assert_eq!(
         events.recv_timeout(Duration::from_secs(2)),
