@@ -391,6 +391,16 @@ class TestWsFrames < Minitest::Test
     end
   end
 
+  def test_an_undecodable_run_frame_freezes_the_subscription
+    cases = fixture("ws-frames.json")["undecodableDeltaRunCases"]
+    assert_equal 1, cases.length, "undecodableDeltaRunCases must carry its one case"
+
+    cases.each do |entry|
+      client, sent, seen, errors = delta_case_client(entry)
+      run_delta_steps(entry, client, sent, seen, errors)
+    end
+  end
+
   def test_identity_change_evicts_the_cached_base_and_the_poison
     cases = fixture("ws-frames.json")["identityChangeEvictionCases"]
     assert_equal 2, cases.length, "identityChangeEvictionCases must carry both cases"

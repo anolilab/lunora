@@ -1002,6 +1002,19 @@ module Lunora
       rescue WireFormatError => e
         # A run with a frame missing can no longer be completed.
         entry[:run] = nil if entry
+
+        # A refused run frame is a lost row change, like an unmergeable one: freeze so
+        # the cursor stays before it, and report once, when the freeze starts.
+        if entry && kind == "delta"
+          return kind if entry[:poisoned]
+
+          entry[:poisoned] = true
+          handler = entry[:on_error]
+          notice = SubscriptionError.new(WIRE_DECODE_FAILED, e.message)
+          deferred << -> { handler.call(notice) } if handler
+          return kind
+        end
+
         # Delivered to the ONE subscription the frame is addressed to, never
         # raised out of +handle_frame+: the caller is a socket read loop, so a
         # raise here ends it and with it every other subscription on this client
@@ -1085,11 +1098,14 @@ module Lunora
 
       # A resume frame replays from the committed cursor, so it drops a held run.
       # A settled frame's cursor sits past the held frames, which are never
-      # published: advancing would resume beyond them, so it drops the run and
-      # holds the cursor and epoch instead.
+      # published: advancing would resume beyond them, so it drops the run, freezes
+      # the subscription and holds the cursor and epoch instead.
       if entry && entry[:run]
         entry[:run] = nil
-        return kind if kind == "settled"
+        if kind == "settled"
+          entry[:poisoned] = true
+          return kind
+        end
       end
 
       if entry
