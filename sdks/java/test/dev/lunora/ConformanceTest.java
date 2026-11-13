@@ -57,6 +57,7 @@ public final class ConformanceTest {
         pageDeltaFramesMergeIntoTheCachedResult();
         rowDeltaWithoutMergeableBaseIsNotPublishedAsAnEnvelope();
         unmergeableRunFreezesTheCursor();
+        failedResendKeepsTheSubscriptionFrozen();
         identityChangeEvictsTheDeltaState();
         deltaRunIsHeldUntilItsLastFrame();
         subscriptionStreamYieldsFrameValuesInOrder();
@@ -988,6 +989,61 @@ public final class ConformanceTest {
      */
     private static void unmergeableRunFreezesTheCursor() throws IOException {
         runDeltaCases("pageDeltaPoisonCases", 3);
+    }
+
+    /**
+     * A resend that fails to send leaves the subscription frozen: nothing replayed the dropped
+     * change, so a later delta must not publish or move the resume cursor past it.
+     */
+    @SuppressWarnings("unchecked")
+    private static void failedResendKeepsTheSubscriptionFrozen() {
+        Client client = new Client("https://app.example", null);
+        List<Object> seen = new ArrayList<>();
+        boolean[] failing = {false};
+
+        client.attachSocket(
+                frame -> {
+                    if (failing[0]) {
+                        throw new IllegalStateException("socket closed");
+                    }
+                },
+                null);
+        client.subscribe("messages:list", new LinkedHashMap<>(), seen::add, error -> {}, null);
+        client.handleFrame(
+                "{\"type\":\"data\",\"id\":\"sub_1\",\"cursor\":5,\"epoch\":\"e1\","
+                        + "\"data\":{\"continueCursor\":\"c\",\"isDone\":false,\"page\":"
+                        + "[{\"_id\":\"m1\",\"_creationTime\":1,\"text\":\"one\"}]}}");
+        client.handleFrame(
+                "{\"type\":\"delta\",\"id\":\"sub_1\",\"delta\":"
+                        + "{\"key\":\"m1\",\"op\":\"update\",\"table\":\"messages\"}}");
+
+        failing[0] = true;
+
+        boolean threw = false;
+
+        try {
+            client.resendSubscriptions();
+        } catch (IllegalStateException expected) {
+            threw = true;
+        }
+
+        check(threw, "the failed send must surface");
+
+        seen.clear();
+        client.handleFrame(
+                "{\"type\":\"delta\",\"id\":\"sub_1\",\"cursor\":9,\"epoch\":\"e1\","
+                        + "\"delta\":{\"key\":\"m1\",\"op\":\"update\",\"table\":\"messages\","
+                        + "\"row\":{\"_id\":\"m1\",\"_creationTime\":1,\"text\":\"ONE\"}}}");
+        check(seen.isEmpty(), "a delta after a failed resend must not publish");
+
+        List<Map<String, Object>> sent = new ArrayList<>();
+
+        client.attachSocket(sent::add, null);
+        client.resendSubscriptions();
+
+        Map<String, Object> query = (Map<String, Object>) resent(sent, "sub_1").get("query");
+
+        check(sameNumber(query.get("sinceSeq"), 5), "the cursor must stay at 5, sent " + query);
     }
 
     /**

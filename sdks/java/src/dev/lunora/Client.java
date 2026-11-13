@@ -1488,6 +1488,7 @@ public final class Client {
     public void resendSubscriptions() {
         FrameSender socket;
         List<Map<String, Object>> frames = new ArrayList<>();
+        Map<String, Subscription> frozen = new LinkedHashMap<>();
 
         // The frames are BUILT under the lock, not just the iteration: each one
         // reads `cursor`/`epoch`, which the frame handler writes. Snapshotting the
@@ -1503,7 +1504,11 @@ public final class Client {
                 Subscription subscription = entry.getValue();
 
                 // The replay from the old cursor re-applies the dropped change, and poisons again
-                // if it is still unmergeable.
+                // if it is still unmergeable. A send that fails below puts the freeze back.
+                if (subscription.poisoned) {
+                    frozen.put(entry.getKey(), subscription);
+                }
+
                 subscription.poisoned = false;
                 discardRun(subscription);
                 frames.add(
@@ -1533,7 +1538,22 @@ public final class Client {
         }
 
         for (Map<String, Object> frame : frames) {
-            socket.send(frame);
+            try {
+                socket.send(frame);
+            } catch (RuntimeException error) {
+                // Nothing replayed the dropped change for the frames that never went out, so a
+                // later delta would move the cursor past it. The failed one and every unsent
+                // frame stay frozen; the ones already sent are replaying.
+                synchronized (lock) {
+                    for (Map.Entry<String, Subscription> entry : frozen.entrySet()) {
+                        entry.getValue().poisoned = true;
+                    }
+                }
+
+                throw error;
+            }
+
+            frozen.remove(frame.get("id"));
         }
     }
 
