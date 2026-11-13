@@ -1346,6 +1346,14 @@ public final class LunoraClient {
 
                 if kind == "resume" { entry.discardRun() }
 
+                // A settled mid-run means the run was cut short, so the frames held so far
+                // are not a complete change: advancing would resume past the rest of it.
+                if kind == "settled", entry.hasPendingRun {
+                    entry.discardRun()
+
+                    return []
+                }
+
                 advance(entry, frame)
 
                 // A resume/settled frame advances the cursor without a value
