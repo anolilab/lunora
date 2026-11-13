@@ -1161,19 +1161,32 @@ class LunoraClient:
                 return
             # The resubscribe resumes from the last applied cursor, so a dropped change is
             # replayed; if it is still unmergeable the flag is set again.
-            for sub in self._subs.values():
-                sub.poisoned = False
-                sub.discard_run()
-            frames = [
-                build_subscribe_frame(sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch)
+            queries = [
+                (sub, build_subscribe_frame(sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch))
                 for sub in self._subs.values()
             ]
-            frames += [
+            shapes = [
                 build_shape_subscribe_frame(shape.id, shape.name, shape.args, since_checkpoint=shape.server_cursor, since_epoch=shape.server_epoch)
                 for shape in self._shapes.values()
             ]
 
-        for frame in frames:
+        for sub, frame in queries:
+            # The flag clears per send, not up front: a send that fails means the server never
+            # saw the replay, so the dropped change is still unapplied and a later delta must
+            # not advance the cursor past it.
+            with self._lock:
+                was_poisoned = sub.poisoned
+                sub.poisoned = False
+                sub.discard_run()
+            try:
+                sender(frame)
+            except BaseException:
+                if was_poisoned:
+                    with self._lock:
+                        sub.poisoned = True
+                raise
+
+        for frame in shapes:
             sender(frame)
 
     # --- Inbound frame dispatch (fixture-tested) ---------------------------

@@ -318,6 +318,39 @@ class TestWsFrameConsumer(unittest.TestCase):
     def test_an_unmergeable_row_change_freezes_the_resume_cursor(self):
         self._replay_delta_cases("pageDeltaPoisonCases")
 
+    def test_a_failed_resend_keeps_a_poisoned_subscription_frozen(self):
+        case = load("ws-frames.json")["pageDeltaPoisonCases"][0]
+        freeze, later = case["steps"][0]["frame"], case["steps"][1]["frame"]
+        sent: list = []
+        broken = {"on": False}
+
+        def sender(frame):
+            if broken["on"]:
+                raise OSError("socket gone")
+            sent.append(frame)
+
+        client = LunoraClient("https://app.example")
+        client.attach_socket(sender)
+        seen: list = []
+        client.subscribe("messages:list", {"channel": "general"}, seen.append, lambda _error: None)
+        client.handle_frame(case["seedFrame"])
+        client.handle_frame(freeze)
+
+        broken["on"] = True
+        with self.assertRaises(OSError):
+            client.resend_subscriptions()
+
+        # The replay never reached the server, so the dropped change is still unapplied.
+        seen.clear()
+        client.handle_frame(later)
+        self.assertEqual(seen, [])
+
+        broken["on"] = False
+        sent.clear()
+        client.resend_subscriptions()
+        query = next(frame for frame in sent if frame["type"] == "subscribe")["query"]
+        self.assertEqual(query.get("sinceSeq"), case["steps"][4]["resume"]["sinceSeq"])
+
     def test_a_delta_run_is_held_until_its_last_frame(self):
         self._replay_delta_cases("pageDeltaRunCases")
         self.assertEqual(len(load("ws-frames.json")["pageDeltaRunCases"]), 5)
