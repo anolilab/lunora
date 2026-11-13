@@ -54,7 +54,7 @@ describe("paymentExtension", () => {
         const schema = defineSchema({}).extend(paymentExtension);
 
         expectTypeOf<keyof typeof schema.tables>().toEqualTypeOf<
-            "payment_customers" | "payment_events" | "payment_sessions" | "payment_subscriptions" | "payment_usageEvents"
+            "payment_customers" | "payment_events" | "payment_referenceRevisions" | "payment_sessions" | "payment_subscriptions" | "payment_usageEvents"
         >();
 
         expect(Object.keys(schema.tables).toSorted((a, b) => a.localeCompare(b))).toEqual(Object.values(PAYMENT_TABLES).toSorted((a, b) => a.localeCompare(b)));
