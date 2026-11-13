@@ -354,8 +354,8 @@ const failStep = async (
         return "failed" as const;
     });
 
-/** The erasure statuses that block an export of the subject: its data may be partly gone, or the subject was erased. */
-const ERASURE_BLOCKING: ReadonlySet<RequestStatus> = new Set(["completed", "failed", "processing"]);
+/** The erasure statuses that block an export of the subject: its data may be partly gone, or the subject was erased (again, for `restored`). */
+const ERASURE_BLOCKING: ReadonlySet<RequestStatus> = new Set(["completed", "failed", "processing", "restored"]);
 
 /**
  * Whether an erasure request blocks exports of its subject. A failure that stopped before the tombstone erased nothing, so it

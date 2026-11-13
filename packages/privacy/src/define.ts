@@ -31,7 +31,6 @@ import {
     inlineSteps,
     requireTombstones,
     retireSubjectRequests,
-    setStatus,
 } from "./run";
 import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
 
@@ -344,13 +343,25 @@ const downloadUrlFor = async (scope: Scope, requestId: string): Promise<string> 
 const markReErased = async (scope: Scope, requestIds: ReadonlyArray<string>): Promise<void> => {
     await Promise.all(
         requestIds.map(async (requestId) => {
-            const current = await requireRequest(scope.ports.store, requestId);
+            for (;;) {
+                // eslint-disable-next-line no-await-in-loop -- re-read after a lost claim
+                const current = await requireRequest(scope.ports.store, requestId);
 
-            if (current.status === "cancelled" || current.status === "restored") {
-                return;
+                if (current.status === "cancelled" || current.status === "restored") {
+                    return;
+                }
+
+                const status = transition(current.status, "restored");
+
+                // Conditional on the status just read: a run or a cancel that committed in between is read again, never written over.
+                // eslint-disable-next-line no-await-in-loop -- one claim per read
+                if (await scope.ports.store.claim(requestId, current.status, { status })) {
+                    // eslint-disable-next-line no-await-in-loop -- the event follows its claim
+                    await scope.ports.store.addEvent(requestId, scope.ports.now(), status, "re-erased after a backup restore");
+
+                    return;
+                }
             }
-
-            await setStatus(scope.ports, requestId, { detail: "re-erased after a backup restore", from: current.status, to: "restored" });
         }),
     );
 };
@@ -368,13 +379,16 @@ const restoreSubjects = async (scope: Scope, restoredSubjectIds: ReadonlyArray<s
     const subjects = await subjectsToReerase(restoredSubjectIds, tombstones.port, tombstones.secret);
     // Listed before the loop: the rekey below takes the raw id off these requests, and each subject's rows are only its own.
     const erasureIdsBySubject = await Promise.all(subjects.map(async (subjectId) => erasureIdsOf(scope, subjectId)));
-    const erasureIds = erasureIdsBySubject.flat();
 
-    for (const subjectId of subjects) {
+    for (const [index, subjectId] of subjects.entries()) {
         for (const dataset of erasureOrder(scope.datasets)) {
             // eslint-disable-next-line no-await-in-loop -- one drain per dataset, in order
             await eraseDataset(scope, dataset, subjectId);
         }
+
+        // Marked before the rekey, while the requests still carry the raw id, so a retried restore lists them again.
+        // eslint-disable-next-line no-await-in-loop -- one subject at a time, like the erasure above
+        await markReErased(scope, erasureIdsBySubject[index] ?? []);
 
         // The backup also brought back the subject's requests with their raw id and their files; retire them as a first erasure does.
         const key = tombstoneKeyOf(subjectId, tombstones.secret);
@@ -382,8 +396,6 @@ const restoreSubjects = async (scope: Scope, restoredSubjectIds: ReadonlyArray<s
         // eslint-disable-next-line no-await-in-loop -- one subject at a time, like the erasure above
         await retireSubjectRequests(scope.ports, subjectId, key);
     }
-
-    await markReErased(scope, erasureIds);
 
     return subjects;
 };

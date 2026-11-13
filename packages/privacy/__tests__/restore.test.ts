@@ -251,6 +251,81 @@ describe("restore", () => {
             expect(store.rows.get(erased.id)?.status).toBe("restored");
         });
 
+        it("keeps a status that committed between the restore's read and its write", async () => {
+            const { operator, privacy, rows, runErasureWorkflow, store } = build(memoryTombstones());
+            const erased = await privacy.requestErasure();
+
+            await runErasureWorkflow(erased.id);
+            rows.tasks = 150;
+            store.rows.set(erased.id, { ...store.rows.get(erased.id)!, status: "grace", subjectId: "u1" });
+
+            const { claim, update } = store;
+
+            // The subject's cancel commits after the restore read the request as in grace, before its write lands.
+            const cancelFirst = (id: string): void => {
+                const record = store.rows.get(id);
+
+                if (id === erased.id && record?.status === "grace") {
+                    store.rows.set(id, { ...record, status: "cancelled" });
+                }
+            };
+
+            store.claim = async (id, from, patch) => {
+                cancelFirst(id);
+
+                return claim(id, from, patch);
+            };
+            store.update = async (id, patch) => {
+                if (patch.status === "restored") {
+                    cancelFirst(id);
+                }
+
+                return update(id, patch);
+            };
+
+            await operator.restore({ restoredSubjectIds: ["u1"] });
+
+            expect(store.rows.get(erased.id)?.status).toBe("cancelled");
+        });
+
+        it("marks the erasure restored even when retiring the subject's requests fails, so a retry finds it", async () => {
+            const { operator, privacy, rows, runErasureWorkflow, store } = build(memoryTombstones());
+            const erased = await privacy.requestErasure();
+
+            await runErasureWorkflow(erased.id);
+            rows.tasks = 150;
+            store.rows.set(erased.id, { ...store.rows.get(erased.id)!, status: "processing", subjectId: "u1" });
+
+            const { update } = store;
+
+            store.update = async (id, patch) => {
+                if (patch.subjectId !== undefined) {
+                    throw new Error("store unavailable");
+                }
+
+                return update(id, patch);
+            };
+
+            await expect(operator.restore({ restoredSubjectIds: ["u1"] })).rejects.toThrow("store unavailable");
+            expect(store.rows.get(erased.id)).toMatchObject({ status: "restored", subjectId: "u1" });
+        });
+
+        it("still blocks a retry of a failed export once the subject's erasure is restored", async () => {
+            const { operator, privacy, rows, runErasureWorkflow, store } = build(memoryTombstones());
+            const exported = await privacy.requestExport();
+            const erased = await privacy.requestErasure();
+
+            await runErasureWorkflow(erased.id);
+            rows.tasks = 150;
+            store.rows.set(erased.id, { ...store.rows.get(erased.id)!, status: "processing", subjectId: "u1" });
+            store.rows.set(exported.id, { ...store.rows.get(exported.id)!, status: "failed", subjectId: "u1" });
+            await operator.restore({ restoredSubjectIds: ["u1"] });
+
+            expect(store.rows.get(erased.id)?.status).toBe("restored");
+            await expect(operator.admin.retry(exported.id)).rejects.toMatchObject({ code: "UNPROCESSABLE" });
+            expect(store.rows.get(exported.id)?.status).toBe("failed");
+        });
+
         it("leaves a restored request restored when the same subject is restored again", async () => {
             const { operator, privacy, rows, runErasureWorkflow, store } = build(memoryTombstones());
             const erased = await privacy.requestErasure();
