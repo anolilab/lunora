@@ -330,10 +330,22 @@ const fieldOf = (value: unknown, key: string): unknown =>
  * An impersonated session names the administrator in `impersonatedBy`, and that is the actor: its
  * `user` is the impersonated account. The administrator's email is not on the session, so none is recorded.
  */
+
+/**
+ * The session an event is performed by. A revoke or a switch is made by the request's session, since its response can
+ * leave another account's session in `newSession`. Every other event reads the identity it produces, which is `newSession`.
+ */
+type SessionShape = NonNullable<NonNullable<AuditHookContext["context"]>["session"]>;
+
+const actingSession = (context: AuditHookContext, event: AuthAuditEvent | undefined): SessionShape | null | undefined => {
+    const requestSession = context.context?.session;
+    const resultingSession = context.context?.newSession;
+
+    return event === "session-revoke" || event === "session-switch" ? (requestSession ?? resultingSession) : (resultingSession ?? requestSession);
+};
+
 const resolveActor = (context: AuditHookContext, event: AuthAuditEvent | undefined): { actorEmail?: string; actorId?: string } => {
-    // A revoke can leave another account's session in `newSession`, so the request session is the actor for it.
-    const source =
-        event === "session-revoke" ? (context.context?.session ?? context.context?.newSession) : (context.context?.newSession ?? context.context?.session);
+    const source = actingSession(context, event);
     const impersonator = stringOf(source?.session?.impersonatedBy);
 
     if (impersonator !== undefined) {
@@ -406,8 +418,8 @@ const resolveTargetEmail = (context: AuditHookContext, event: AuthAuditEvent): s
  * The account an impersonated session acts as, which the administrator named in `impersonatedBy` is acting for.
  * `undefined` for an ordinary session.
  */
-const impersonatedUserId = (context: AuditHookContext): string | undefined => {
-    const source = context.context?.newSession ?? context.context?.session;
+const impersonatedUserId = (context: AuditHookContext, event: AuthAuditEvent | undefined): string | undefined => {
+    const source = actingSession(context, event);
 
     if (stringOf(source?.session?.impersonatedBy) === undefined) {
         return undefined;
@@ -427,7 +439,7 @@ const impersonatedUserId = (context: AuditHookContext): string | undefined => {
 const resolveTargetUserId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined => {
     if (!event.startsWith("admin-")) {
         // An impersonated session acts as the impersonated account, so that account is what the row is about.
-        return impersonatedUserId(context);
+        return impersonatedUserId(context, event);
     }
 
     const fromBody = detailId(context.body?.["userId"]);
