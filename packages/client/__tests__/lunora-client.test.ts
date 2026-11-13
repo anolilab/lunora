@@ -2009,6 +2009,53 @@ describe("lunoraClient", () => {
             client.close();
         });
 
+        it("keeps a delta refused after a recovery snapshot that a refused frame cut short from merging onto the old base", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d), { onError: () => undefined });
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const subId = firstSub(socket).id as string;
+
+            socket.receive({ id: subId, type: "ack" });
+            socket.receive({ cursor: 5, data: [{ _id: "a" }, { _id: "b" }], epoch: "e1", id: subId, type: "data" });
+            socket.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: subId, more: true, type: "delta" });
+
+            let deep: unknown = 1;
+
+            for (let level = 0; level < 80; level += 1) {
+                deep = { a: deep };
+            }
+
+            // The refused frame cuts the held run short; the recovery snapshot request follows.
+            socket.receive({ delta: { key: "c", op: "insert", row: deep, table: "messages" }, id: subId, more: true, type: "delta" });
+
+            // The recovery snapshot's own reply is refused by the decoder too. Refusing it must not reopen the
+            // delta gate: a later delta would commit onto the base that is still missing the refused rows.
+            socket.receive({
+                cursor: 6,
+                data: [{ _id: "x", n: ["$lunora.wire$", "bigint", "not-a-number"] }],
+                epoch: "e1",
+                id: subId,
+                type: "data",
+            });
+            socket.receive({ cursor: 7, delta: { key: "a", op: "delete", table: "messages" }, id: subId, type: "delta" });
+
+            expect(received.at(-1)).toStrictEqual([{ _id: "a" }, { _id: "b" }]);
+
+            client.close();
+        });
+
         it("does not forward the watermark of a settled frame that cuts a held run short", () => {
             expect.assertions(1);
 

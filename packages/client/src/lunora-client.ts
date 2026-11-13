@@ -7612,6 +7612,11 @@ class LunoraClient {
     private resnapshotDiscardedRun(state: SubscriptionState): void {
         const { serverCursor, serverEpoch } = state;
 
+        // Set whether or not the snapshot request went out: a base missing rows stays refused until a
+        // data frame commits, even if the send fails.
+        // eslint-disable-next-line no-param-reassign -- the flag is the subscription's own state, read by handleDataMessage
+        state.baseIncomplete = true;
+
         if (this.resnapshotSubscription(state)) {
             // eslint-disable-next-line no-param-reassign -- the flag is the subscription's own state, read by handleDataMessage
             state.awaitingSnapshot = true;
@@ -7658,8 +7663,8 @@ class LunoraClient {
             return;
         }
 
-        // A snapshot is on its way because the base is known to be incomplete: a delta would merge onto it.
-        if (message.type === "delta" && state.awaitingSnapshot === true) {
+        // The base is known to be incomplete: a delta would merge onto it and advance the cursor past rows it lacks.
+        if (message.type === "delta" && state.baseIncomplete === true) {
             return;
         }
 
@@ -8009,6 +8014,7 @@ class LunoraClient {
         state.pendingDeltaRun = undefined;
         // A reconnect after a discarded run resumes from the cursor before it, which proves the base current.
         state.awaitingSnapshot = false;
+        state.baseIncomplete = false;
         // A resume is only answered when the shard found these claims to be the ones the cursor was read under.
         state.serverClaims = this.frameClaims;
         this.ackAndAdvanceCursor(state, message.cursor, message.epoch);
@@ -8057,7 +8063,7 @@ class LunoraClient {
             this.resnapshotDiscardedRun(state);
         }
 
-        if (runHeld || state.awaitingSnapshot === true) {
+        if (runHeld || state.baseIncomplete === true) {
             return;
         }
 
