@@ -407,9 +407,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     const recordSubscriptionAnswer = async (existing: Subscription, answer: Subscription, verb: "updated" | "resumed"): Promise<Subscription> => {
         const synced = overlayProviderSubscription(existing, answer);
         const policy = options.singleSubscriptionPerReference ?? false;
-        const outcome = await storeSubscription(store, policy, existing, synced, { ifRevision: existing.revision });
+        // A provider can move the subscription to a new id (Autumn: a plan change is a new `customer::product` row). There is
+        // no row under the new id to guard with the old revision, so the new row is written as new and the old one is retired
+        // under its own revision. Otherwise the old plan stays active beside the new one.
+        const moved = synced.id !== existing.id;
+        const outcome = await storeSubscription(store, policy, existing, synced, { ifRevision: moved ? undefined : existing.revision });
+        const retired = !moved || (await store.upsertSubscription({ ...existing, state: "canceled" }, { ifRevision: existing.revision }));
 
-        if (outcome === "rejected") {
+        if (outcome === "rejected" || !retired) {
             throw new LunoraPaymentError(
                 "INVALID_TRANSITION",
                 `the subscription changed while it was being ${verb}; the provider has accepted the change, so retry or reconcile this subscription`,
@@ -420,7 +425,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             notifyObserver(options.observability, { provider: synced.provider, subscriptionId: synced.id, type: "subscription.duplicate" });
         }
 
-        return (await store.getSubscription(adapter.identifier, existing.id)) ?? synced;
+        return (await store.getSubscription(adapter.identifier, synced.id)) ?? synced;
     };
 
     // Shared ownership guard for the money-moving session operations. Collapse "doesn't exist" and

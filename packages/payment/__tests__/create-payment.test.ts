@@ -2334,6 +2334,26 @@ describe("createPayment — updateSubscription / resumeSubscription", () => {
         await expect(store.getSubscription("stripe", "sub_1")).resolves.not.toMatchObject({ state: "active" });
     });
 
+    it("records a provider plan change that moves to a new id, and retires the old row", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // Autumn names a plan change by its new `customer::product` id, so no row exists under the old revision's id.
+        const adapter = fakeAdapter({
+            updateSubscription: async (_id, patch) => {
+                return { ...subscription("user_1", "active"), id: "sub_2", priceId: patch.priceId ?? "price_1" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await expect(payment.updateSubscription("sub_1", { priceId: "price_2" })).resolves.toMatchObject({ id: "sub_2", priceId: "price_2" });
+        await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ priceId: "price_2", state: "active" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
+    });
+
     it("raises a conflict when a webhook moves the row during the provider call, and keeps the stored plan", async () => {
         expect.assertions(2);
 
