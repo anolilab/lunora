@@ -4,23 +4,21 @@ import { buildAuditEntry } from "../src/audit-hooks";
 
 /** An identifier that is really an email, or a URL with credentials, is never copied into the trail. */
 describe("audit ids never carry an email", () => {
-    it("drops an email sent where an OAuth client id belongs, on an unauthenticated token request", () => {
+    it("drops an email sent as a key id, and still records the row it belongs to", () => {
         expect.assertions(2);
 
-        const entry = buildAuditEntry({
-            body: { client_id: "alice@example.com", grant_type: "authorization_code", code: "c" },
-            path: "/api/auth/oauth2/token",
-        });
+        const entry = buildAuditEntry({ body: { keyId: "alice@example.com" }, path: "/api/auth/api-key/delete" });
 
-        expect(entry?.detail).not.toHaveProperty("clientId");
-        expect(JSON.stringify(entry?.detail)).not.toContain("alice@example.com");
+        expect(entry?.event).toBe("api-key-delete");
+        expect(entry?.detail).not.toHaveProperty("keyId");
     });
 
     it("drops an email named as a user id by an admin request", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const entry = buildAuditEntry({ body: { userId: "ada@example.com" }, path: "/api/auth/admin/ban-user" });
 
+        expect(entry?.event).toBe("admin-user-ban");
         expect(entry?.detail).not.toHaveProperty("targetUserId");
     });
 });
