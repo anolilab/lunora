@@ -1,3 +1,7 @@
+## @lunora/client [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.292...@lunora/client@1.0.0-alpha.293) (2026-11-13)
+
+- fix(sdk): hold delta runs until their last frame in every port (#1596)
+
 ## @lunora/client [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.291...@lunora/client@1.0.0-alpha.292) (2026-11-13)
 
 - fix(do): name a delta's table only for a single-table query (#1595)
