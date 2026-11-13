@@ -1170,12 +1170,26 @@ class Client(
                     // EVERY other subscription on this client, so it is delivered
                     // to the addressed subscription's error callbacks instead and
                     // the frame is reported as the error it is.
-                    val handler = synchronized(lock) {
+                    val (handler, alreadyFrozen) = synchronized(lock) {
                         // A frame that cannot be read leaves the run incomplete, so it is not committed.
-                        subscriptions[id]?.also { it.heldRun = null }?.onError
+                        val entry = subscriptions[id]
+                        val frozen = entry?.poisoned == true
+
+                        entry?.heldRun = null
+
+                        // A refused delta never reached the base, so a later delta would commit past it:
+                        // the subscription freezes until a data frame or a resubscribe.
+                        if (isDelta && entry != null) entry.poisoned = true
+
+                        entry?.onError to frozen
                     }
 
-                    handler?.invoke(SubscriptionError("INVALID_FRAME", error.message ?: "subscription payload could not be decoded"))
+                    // A frozen subscription ignores delta frames, so the refusal is not reported twice.
+                    if (isDelta && alreadyFrozen) return "error"
+
+                    val code = if (isDelta) WIRE_DECODE_FAILED else "INVALID_FRAME"
+
+                    handler?.invoke(SubscriptionError(code, error.message ?: "subscription payload could not be decoded"))
 
                     return "error"
                 }
@@ -1268,8 +1282,10 @@ class Client(
                         // A run still held when `settled` arrives was cut short: its rest is
                         // not coming, so the held frames are void and the cursor stays at the
                         // last published state, or a reconnect would resume past the lost rows.
+                        // It freezes the subscription, as an unmergeable row change does, silently.
                         if (kind == "settled" && entry.heldRun != null) {
                             entry.heldRun = null
+                            entry.poisoned = true
                             return@let
                         }
 

@@ -1059,6 +1059,21 @@ private fun failedResendKeepsTheSubscriptionFrozen() {
 /** A run of `more: true` deltas is held and publishes once, on its last frame. */
 private fun deltaRunsCommitOnTheirLastFrame() {
     runDeltaCases("pageDeltaRunCases", 5)
+    runDeltaCases("undecodableDeltaRunCases", 1)
+}
+
+/** Attaching a socket over a live one voids every held run: the old socket's rest of it is not coming. */
+private fun attachingASocketDiscardsHeldRuns() {
+    val run = ((fixture("ws-frames.json")["pageDeltaRunCases"] as List<*>)[0] as Map<*, *>)
+    val steps = run["steps"] as List<*>
+    val (client, seen, _) = seededClient(run["seedFrame"])
+
+    client.handleFrame(Json.write((steps[0] as Map<*, *>)["frame"]))
+    client.handleFrame(Json.write((steps[1] as Map<*, *>)["frame"]))
+    client.attachSocket { }
+    client.handleFrame(Json.write((steps[2] as Map<*, *>)["frame"]))
+    check(seen.size == 1, "the final frame publishes once, published ${seen.size}")
+    check(canonical(Wire.encode(seen[0])) != canonical((steps[2] as Map<*, *>)["valueWire"]), "rows held before the attach must not be committed")
 }
 
 /**
@@ -1797,6 +1812,7 @@ fun main() {
     failedResendKeepsTheSubscriptionFrozen()
     identityChangeEvictsTheDeltaState()
     deltaRunsCommitOnTheirLastFrame()
+    attachingASocketDiscardsHeldRuns()
     subscriptionStreamYieldsFrameValuesInOrder()
     shapeSubscribeFrame()
     shapeSubscriptionsResendAfterReconnect()
