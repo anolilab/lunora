@@ -1713,8 +1713,15 @@ public final class Client {
                         return kind;
                     }
 
-                    // A settled frame leaves a held run alone; a resume means the server is about
-                    // to replay it.
+                    // A resume means the server is about to replay a held run. A settled frame
+                    // mid-run carries a cursor past rows this client never applied, so taking it
+                    // would ack a checkpoint it does not have: drop the run and keep the cursor.
+                    if ("settled".equals(kind) && entry.holding) {
+                        discardRun(entry);
+
+                        return kind;
+                    }
+
                     if ("resume".equals(kind)) {
                         discardRun(entry);
                     }

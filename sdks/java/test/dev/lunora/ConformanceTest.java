@@ -1003,7 +1003,7 @@ public final class ConformanceTest {
      * and the resume position moves only then.
      */
     private static void deltaRunIsHeldUntilItsLastFrame() throws IOException {
-        runDeltaCases("pageDeltaRunCases", 4);
+        runDeltaCases("pageDeltaRunCases", 5);
     }
 
     /**
