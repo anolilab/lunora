@@ -1168,14 +1168,14 @@ private fun serverFrameConsumer() {
 private fun subscriptionStreamYieldsFrameValuesInOrder() {
     covers("subscription_stream_yields_frame_values_in_order")
 
-    val case = fixture("ws-frames.json")["stream"] as Map<*, *>
+    val case = fixture("ws-frames.json")["watch"] as Map<*, *>
     val client = Client("https://app.example")
 
     client.attachSocket { }
 
     // Closed at the end rather than in a `use { }`: the frames are fed from this
     // same thread, so the loop has to be driven one `next()` at a time.
-    val stream = client.stream("messages:list", WireValue.Obj(listOf("channel" to WireValue.Text("general"))))
+    val stream = client.watch("messages:list", WireValue.Obj(listOf("channel" to WireValue.Text("general"))))
     val events = stream.iterator()
     val seen = mutableListOf<WireValue>()
 
@@ -1704,7 +1704,7 @@ private fun subscriptionStreamEndsOnClose() {
 
     client.attachSocket { }
 
-    val stream = client.stream("messages:list")
+    val stream = client.watch("messages:list")
     val yielded = java.util.Collections.synchronizedList(mutableListOf<WireValue?>())
     val consumer = Thread { for (event in stream) yielded.add(event.value) }
 

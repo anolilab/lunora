@@ -120,6 +120,26 @@ public typealias LunoraFrameSender = ([String: Any]) -> Void
 /// Cancels a subscription and tells the server to stop.
 public typealias LunoraUnsubscribe = () -> Void
 
+/// Runs a release at most once. It takes the body out before running it, so a
+/// release that re-enters itself through the stream's termination is a no-op.
+private final class LunoraOnceRelease {
+    private let lock = NSLock()
+    private var body: (() -> Void)?
+
+    init(_ body: @escaping () -> Void) {
+        self.body = body
+    }
+
+    func run() {
+        lock.lock()
+        let work = body
+        body = nil
+        lock.unlock()
+
+        work?()
+    }
+}
+
 /// A Lunora deployment client.
 public final class LunoraClient {
     private let baseURL: String
@@ -213,7 +233,7 @@ public final class LunoraClient {
     private var nextShapeID = 0
     private var nextStreamID = 0
 
-    /// How ``close()`` ends each live ``stream(_:args:shardKey:)``, by stream.
+    /// How ``close()`` ends each live ``watch(_:args:shardKey:)``, by stream.
     private var streamFinishers: [Int: () -> Void] = [:]
 
     /// Serialises every mutable field above, and the `cursor`/`epoch`/row state
@@ -553,7 +573,7 @@ public final class LunoraClient {
     }
 
     /// Rejects every queued write so no caller waits on a dead client, and ENDS
-    /// every live ``stream(_:args:shardKey:)`` — a `for await` loop over one
+    /// every live ``watch(_:args:shardKey:)`` — a `for await` loop over one
     /// would otherwise wait forever on a client that will never deliver again.
     /// Durable storage is untouched: the next session restores those writes.
     public func close() {
@@ -999,31 +1019,32 @@ public final class LunoraClient {
         }
     }
 
-    /// One item delivered by ``stream(_:args:shardKey:)``: a value, or the
+    /// One item delivered by ``watch(_:args:shardKey:)``: a value, or the
     /// subscription error the server pushed.
     ///
     /// One sequence carrying both, rather than a value stream plus an error
     /// stream: a consumer awaiting two of them can read them out of order, and
     /// the whole point of a stream is that what arrived first is delivered first.
-    public enum LunoraStreamEvent {
+    public enum LunoraWatchEvent {
         case value(Any)
         case failure(LunoraSubscriptionError)
     }
 
-    /// A live query as an `AsyncStream`, for `for await event in stream`.
+    /// A live query as a sequence, for `for await event in watch`.
     ///
-    /// Each call opens its OWN subscription — at CALL time, so a frame arriving
-    /// before the loop starts is not lost — and it is torn down when the stream
-    /// terminates: breaking out of the loop, cancelling the task, or finishing
-    /// it. A consumer never holds an unsubscribe handle. Use
-    /// ``subscribe(_:args:onData:onError:shardKey:)`` directly when the value
-    /// outlives one loop.
+    /// Each call opens its OWN subscription at CALL time, so a frame arriving
+    /// before the loop starts is not lost. The subscription is released by
+    /// ``LunoraWatch/cancel()``, by the client closing, or when the stream
+    /// finishes. Leaving the loop does NOT release it: a retained stream keeps
+    /// running after a `break`, so a watch that is done must be cancelled.
     ///
     /// The buffer is UNBOUNDED, so the frame dispatcher never blocks on a slow
-    /// consumer; the trade is that one which stops reading without ending the
-    /// loop grows the buffer.
-    public func stream(_ functionPath: String, args: Any? = nil, shardKey: String? = nil) -> AsyncStream<LunoraStreamEvent> {
-        AsyncStream(LunoraStreamEvent.self, bufferingPolicy: .unbounded) { continuation in
+    /// consumer; the trade is that one which stops reading without cancelling
+    /// grows the buffer.
+    public func watch(_ functionPath: String, args: Any? = nil, shardKey: String? = nil) -> LunoraWatch {
+        var release: LunoraOnceRelease?
+
+        let stream = AsyncStream(LunoraWatchEvent.self, bufferingPolicy: .unbounded) { continuation in
             let unsubscribe = subscribe(
                 functionPath,
                 args: args,
@@ -1038,12 +1059,53 @@ public final class LunoraClient {
                 return (nextStreamID, closed)
             }
 
+            // Finishing the stream runs onTermination, which runs this again: the
+            // once-guard makes that second run a no-op rather than a second unsubscribe.
+            let once = LunoraOnceRelease {
+                unsubscribe()
+                continuation.finish()
+            }
+
+            release = once
+
             continuation.onTermination = { [weak self] _ in
                 _ = self?.withLock { self?.streamFinishers.removeValue(forKey: token) }
-                unsubscribe()
+                once.run()
             }
 
             if alreadyClosed { continuation.finish() }
+        }
+
+        // The builder runs synchronously inside AsyncStream's initializer, so `release` is set.
+        guard let release else { preconditionFailure("AsyncStream runs its builder synchronously") }
+
+        return LunoraWatch(stream: stream, release: release)
+    }
+
+    /// The sequence ``watch(_:args:shardKey:)`` returns.
+    ///
+    /// Iterating it yields each ``LunoraWatchEvent``. ``cancel()`` is the only
+    /// way to release the subscription early; it works before the first value and
+    /// after the loop has started.
+    public struct LunoraWatch: AsyncSequence {
+        public typealias Element = LunoraWatchEvent
+        public typealias AsyncIterator = AsyncStream<LunoraWatchEvent>.Iterator
+
+        private let stream: AsyncStream<LunoraWatchEvent>
+        private let release: LunoraOnceRelease
+
+        fileprivate init(stream: AsyncStream<LunoraWatchEvent>, release: LunoraOnceRelease) {
+            self.stream = stream
+            self.release = release
+        }
+
+        public func makeAsyncIterator() -> AsyncIterator {
+            stream.makeAsyncIterator()
+        }
+
+        /// Unsubscribes and ends the sequence. Calling it again does nothing.
+        public func cancel() {
+            release.run()
         }
     }
 

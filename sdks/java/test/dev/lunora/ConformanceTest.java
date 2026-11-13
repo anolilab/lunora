@@ -1194,8 +1194,7 @@ public final class ConformanceTest {
     private static void subscriptionStreamYieldsFrameValuesInOrder() throws IOException {
         covers("subscription_stream_yields_frame_values_in_order");
 
-        Map<String, Object> testCase =
-                (Map<String, Object>) fixture("ws-frames.json").get("stream");
+        Map<String, Object> testCase = (Map<String, Object>) fixture("ws-frames.json").get("watch");
         Client client = new Client("https://app.example", null);
 
         client.attachSocket(frame -> {}, null);
@@ -1208,13 +1207,13 @@ public final class ConformanceTest {
 
         // Closed at the end rather than in a try-with-resources: the frames are fed from this same
         // thread, so the loop has to be driven one `next()` at a time.
-        Client.Stream stream = client.stream("messages:list", args, null);
-        Iterator<Client.StreamEvent> events = stream.iterator();
+        Client.Watch stream = client.watch("messages:list", args, null);
+        Iterator<Client.WatchEvent> events = stream.iterator();
 
         for (Object raw : (List<Object>) testCase.get("frames")) {
             client.handleFrame(Json.write(raw));
 
-            Client.StreamEvent event = events.next();
+            Client.WatchEvent event = events.next();
 
             check(event.error() == null, "a streamed event carries a value, not an error");
             seen.add(event.value());
@@ -1772,18 +1771,17 @@ public final class ConformanceTest {
     private static void subscriptionStreamEndsOnClose() throws IOException, InterruptedException {
         covers("subscription_stream_ends_on_close");
 
-        Map<String, Object> testCase =
-                (Map<String, Object>) fixture("ws-frames.json").get("stream");
+        Map<String, Object> testCase = (Map<String, Object>) fixture("ws-frames.json").get("watch");
         Client client = new Client("https://app.example", null);
 
         client.attachSocket(frame -> {}, null);
 
-        Client.Stream stream = client.stream("messages:list", Map.of("channel", "general"), null);
+        Client.Watch stream = client.watch("messages:list", Map.of("channel", "general"), null);
         List<Object> seen = java.util.Collections.synchronizedList(new ArrayList<>());
         Thread consumer =
                 new Thread(
                         () -> {
-                            for (Client.StreamEvent event : stream) {
+                            for (Client.WatchEvent event : stream) {
                                 seen.add(event.value());
                             }
                         });

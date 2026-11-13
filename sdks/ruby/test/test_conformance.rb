@@ -508,11 +508,11 @@ class TestWsFrames < Minitest::Test
   def test_a_subscription_streams_its_frame_values_in_order
     ConformanceManifest.covers("subscription_stream_yields_frame_values_in_order")
 
-    case_data = fixture("ws-frames.json")["stream"]
+    case_data = fixture("ws-frames.json")["watch"]
     client = Lunora::Client.new("https://app.example")
     client.attach_socket(->(_frame) {})
 
-    values, stop = client.stream("messages:list", { "channel" => "general" })
+    values, stop = client.watch("messages:list", { "channel" => "general" })
     seen = []
 
     case_data["frames"].each do |frame|

@@ -208,7 +208,7 @@ is where those guarantees are asserted instead.
   reconnect, since the reseed is the same frame. The Durable Object caps only the
   frames it RECEIVES; what it sends is bounded by the Workers per-message limit.
 - **`close()` ends it.** `close()` makes `connect_and_run` return and ends every
-  `stream()` generator; frames that arrive after close are ignored.
+  `watch()` generator; frames that arrive after close are ignored.
 - **No `lunora-ping`, deliberately.** The reference client sends one every 30 s
   and watchdogs `lastFrameAt`; this loop sends none. `websockets` already pings
   at the protocol level every 20 s and closes the connection when a ping goes
@@ -243,9 +243,8 @@ the server had stopped sending. `shape_subscriptions_resend_after_reconnect` in
 ⁸ **`chunk` is not handled.** A streaming-query chunk carries a durable `seq`/`generation`
 resume watermark (`protocol/README.md` §5.2). It reaches the default arm of every port's frame
 switch and is ignored. No port sends `stream`, so no chunk arrives to drop; the gap is that a
-deployment using streaming queries has no non-JS client for them. Deferred: the stream forms
-(`stream` sends, `sinceChunk`/`generation` resume, `STREAM_INTERRUPTED`) are plan 395, not part
-of the row-delta follow-up.
+deployment using streaming queries has no non-JS client for them. The wire `stream` client is a
+follow-up change, outside the row-delta follow-up.
 
 ⁹ **A write refused for its credential (`TOKEN_EXPIRED`, `UNAUTHENTICATED`,
 `UNAUTHORIZED`) is held in all eight, and every replay reads the token current
@@ -535,7 +534,7 @@ fed by the same frame. The reference catches per callback too.
 missing poster is a configuration gap, not a verdict on the write. A lone write
 was rejected and a batch re-queued before.
 
-**Go's `Stream`** closes its channel under the same lock every send holds, so a
+**Go's `Watch`** closes its channel under the same lock every send holds, so a
 frame racing an unsubscribe or `Close()` can no longer send on a closed channel
 (a data race, and a panic when it lost); `hardening_test.go` catches it under
 the `-race` that `run-all.sh` always passes.

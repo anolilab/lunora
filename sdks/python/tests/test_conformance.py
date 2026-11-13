@@ -415,13 +415,13 @@ class TestWsFrameConsumer(unittest.TestCase):
     def test_a_subscription_streams_its_frame_values_in_order(self):
         covers("subscription_stream_yields_frame_values_in_order")
 
-        case = load("ws-frames.json")["stream"]
+        case = load("ws-frames.json")["watch"]
 
         async def collect() -> list:
             client = LunoraClient("https://app.example")
             client._send = lambda _frame: None
             seen: list = []
-            values = client.stream("messages:list", {"channel": "general"})
+            values = client.watch("messages:list", {"channel": "general"})
 
             for frame in case["frames"]:
                 client.handle_frame(frame)
