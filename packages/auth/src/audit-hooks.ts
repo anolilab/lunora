@@ -93,7 +93,9 @@ const SUFFIX_EVENTS: ReadonlyArray<readonly [suffix: string, event: AuthAuditEve
     ["/device/approve", "device-approve"],
     ["/device/deny", "device-deny"],
     ["/device/token", "sign-in"],
-    ["/change-email", "email-change"],
+    // Before `/change-email`, which it ends with: the OTP flow changes the address itself, the plain request only sends a link.
+    ["/email-otp/change-email", "email-change"],
+    ["/change-email", "email-change-request"],
     ["/delete-user", "user-delete"],
     ["/delete-user/callback", "user-delete"],
     ["/delete-anonymous-user", "user-delete"],
@@ -105,7 +107,9 @@ const SUFFIX_EVENTS: ReadonlyArray<readonly [suffix: string, event: AuthAuditEve
     ["/passkey/verify-authentication", "sign-in"],
     ["/passkey/verify-registration", "passkey-add"],
     ["/passkey/delete-passkey", "passkey-remove"],
-    ["/phone-number/verify", "phone-verification"],
+    ["/passkey/update-passkey", "passkey-rename"],
+    // Verification signs the caller in unless it attaches a number (see `refineEvent`).
+    ["/phone-number/verify", "sign-in"],
     ["/siwe/verify", "sign-in"],
     ["/sso/callback", "sign-in"],
     ["/multi-session/set-active", "session-switch"],
@@ -489,6 +493,31 @@ const adminSubject = (context: AuditHookContext, event: AuthAuditEvent): string 
     return undefined;
 };
 
+/** Device-flow errors that mean the user has not approved yet: the client polls again, and nothing failed. */
+const DEVICE_POLL_PENDING: ReadonlySet<string> = new Set(["authorization_pending", "slow_down"]);
+
+/**
+ * Settle the endpoint's event from the request body and the response, where the path alone cannot tell.
+ * Returns `undefined` for a device poll that is still waiting for approval.
+ */
+const refineEvent = (context: AuditHookContext, event: AuthAuditEvent): AuthAuditEvent | undefined => {
+    const path = context.path?.toLowerCase() ?? "";
+    const returned = context.context?.returned;
+    const pendingDevicePoll = DEVICE_POLL_PENDING.has(stringOf(fieldOf(fieldOf(returned, "body"), "error")) ?? "");
+    let refined: AuthAuditEvent | undefined = event;
+
+    if (event === "sign-in" && path.endsWith("/phone-number/verify")) {
+        // Without `updatePhoneNumber` the code signs the caller in; with it, the number is attached to an existing account.
+        refined = context.body?.["updatePhoneNumber"] === true ? "phone-verification" : "sign-in";
+    } else if (event === "user-delete" && path.endsWith("/delete-user") && stringOf(fieldOf(returned, "message")) === "Verification email sent") {
+        refined = "user-delete-request";
+    } else if (event === "sign-in" && path.endsWith("/device/token") && pendingDevicePoll) {
+        refined = undefined;
+    }
+
+    return refined;
+};
+
 /**
  * The ids an audit row names, per event family, copied from an allow-list only.
  * Bodies and params carry secrets (`rotate-secret` returns one, `set-user-password`
@@ -531,6 +560,11 @@ const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Rec
             ];
         }
 
+        if (event.startsWith("api-key-")) {
+            // The created key's id, or the `keyId` the caller named. The key secret is never copied.
+            return [["keyId", event === "api-key-create" ? detailId(fieldOf(context.context?.returned, "id")) : detailId(body["keyId"])]];
+        }
+
         if (event.startsWith("sso-provider-")) {
             return [["providerId", detailId(body["providerId"])]];
         }
@@ -564,7 +598,8 @@ const buildAuditEntry = (
 ): AppendAuthAuditEntry | undefined => {
     const rawGrantType = context.body?.["grant_type"];
     const grantType = typeof rawGrantType === "string" ? rawGrantType : undefined;
-    const event = context.path === undefined ? undefined : eventForPath(context.path, context.method, grantType);
+    const endpointEvent = context.path === undefined ? undefined : eventForPath(context.path, context.method, grantType);
+    const event = endpointEvent === undefined ? undefined : refineEvent(context, endpointEvent);
 
     if (event === undefined) {
         return undefined;

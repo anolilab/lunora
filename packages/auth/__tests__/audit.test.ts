@@ -516,6 +516,57 @@ describe("auth audit trail", () => {
             expect(entry?.targetEmail).toBe("victim@example.com");
         });
 
+        it("records a phone-code sign-in as sign-in, and an attached number as phone-verification", () => {
+            expect.assertions(2);
+
+            expect(buildAuditEntry({ body: { code: "123456", phoneNumber: "+15550100" }, path: "/api/auth/phone-number/verify" })?.event).toBe("sign-in");
+            expect(
+                buildAuditEntry({ body: { code: "123456", phoneNumber: "+15550100", updatePhoneNumber: true }, path: "/api/auth/phone-number/verify" })?.event,
+            ).toBe("phone-verification");
+        });
+
+        it("skips a device poll that is still waiting for approval, and records a terminal device error as a failed sign-in", () => {
+            expect.assertions(3);
+
+            const pending = Object.assign(new Error("pending"), { body: { error: "authorization_pending" } });
+            const expired = Object.assign(new Error("expired"), { body: { error: "expired_token" } });
+
+            expect(buildAuditEntry({ context: { returned: pending }, path: "/api/auth/device/token" })).toBeUndefined();
+            expect(buildAuditEntry({ context: { returned: expired }, path: "/api/auth/device/token" })?.outcome).toBe("failure");
+            expect(buildAuditEntry({ context: { returned: { access_token: "t" } }, path: "/api/auth/device/token" })?.event).toBe("sign-in");
+        });
+
+        it("records a deletion that only sends a confirmation link as user-delete-request, and the removal as user-delete", () => {
+            expect.assertions(2);
+
+            expect(
+                buildAuditEntry({ context: { returned: { message: "Verification email sent", success: true } }, path: "/api/auth/delete-user" })?.event,
+            ).toBe("user-delete-request");
+            expect(buildAuditEntry({ context: { returned: { message: "User deleted", success: true } }, path: "/api/auth/delete-user" })?.event).toBe(
+                "user-delete",
+            );
+        });
+
+        it("records a passkey rename as passkey-rename, without its request body", () => {
+            expect.assertions(2);
+
+            const entry = buildAuditEntry({ body: { id: "pk_1", name: "Work laptop" }, path: "/api/auth/passkey/update-passkey" });
+
+            expect(entry?.event).toBe("passkey-rename");
+            expect(entry?.detail).toStrictEqual({ path: "/api/auth/passkey/update-passkey" });
+        });
+
+        it("names the key a key-management row is about, and never copies the key secret", () => {
+            expect.assertions(3);
+
+            expect(buildAuditEntry({ body: { keyId: "key_1", name: "ci" }, path: "/api/auth/api-key/update" })?.detail).toMatchObject({ keyId: "key_1" });
+            expect(buildAuditEntry({ body: { keyId: "key_2" }, path: "/api/auth/api-key/delete" })?.detail).toMatchObject({ keyId: "key_2" });
+
+            const created = buildAuditEntry({ context: { returned: { id: "key_3", key: "sk_live_secret" } }, path: "/api/auth/api-key/create" });
+
+            expect(created?.detail).toMatchObject({ keyId: "key_3" });
+        });
+
         it("skips non-security endpoints (returns undefined)", () => {
             expect.assertions(2);
 
