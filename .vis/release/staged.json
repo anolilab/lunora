@@ -3,6 +3,18 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-13T10:18:11.775Z",
+      "key": "@lunora/client@1.0.0-alpha.292"
+    },
+    {
+      "at": "2026-11-13T10:18:11.775Z",
+      "key": "@lunora/shard-engine@1.0.0-alpha.195"
+    },
+    {
+      "at": "2026-11-13T10:18:11.775Z",
+      "key": "@lunora/do@1.0.0-alpha.285"
+    },
+    {
       "at": "2026-11-13T08:43:56.903Z",
       "key": "@lunora/cli@1.0.0-alpha.491"
     },
@@ -389,20 +401,8 @@
     {
       "at": "2026-11-04T21:02:45.306Z",
       "key": "@lunora/cli@1.0.0-alpha.484"
-    },
-    {
-      "at": "2026-11-04T21:02:45.306Z",
-      "key": "@lunora/notify@1.0.0-alpha.112"
-    },
-    {
-      "at": "2026-11-04T20:06:50.177Z",
-      "key": "@lunora/advisor@1.0.0-alpha.289"
-    },
-    {
-      "at": "2026-11-04T20:06:50.177Z",
-      "key": "@lunora/config@1.0.0-alpha.456"
     }
   ],
-  "updatedAt": "2026-11-13T08:43:56.904Z",
+  "updatedAt": "2026-11-13T10:18:11.776Z",
   "version": 1
 }
