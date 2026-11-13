@@ -49,6 +49,15 @@ describe("authorizeSignedGet", () => {
         await expect(authorize({ key: "b.png", request: new Request(url) })).resolves.toBe(false);
     });
 
+    it("rejects a GET URL sent with another method, as an app.all route would pass it", async () => {
+        expect.assertions(1);
+
+        const url = await mint();
+        const authorize = authorizeSignedGet("shh", { bucketName: "default" });
+
+        await expect(authorize({ key: "a.png", request: new Request(url, { method: "POST" }) })).resolves.toBe(false);
+    });
+
     it("rejects a GET URL signed with a different secret", async () => {
         expect.assertions(1);
 
