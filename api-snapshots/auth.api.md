@@ -1965,6 +1965,7 @@ interface AuditHookContext {
     context?: {
         newSession?: {
             session?: {
+                impersonatedBy?: string;
                 userId?: string;
             };
             user?: {
@@ -1975,6 +1976,7 @@ interface AuditHookContext {
         returned?: unknown;
         session?: {
             session?: {
+                impersonatedBy?: string;
                 userId?: string;
             };
             user?: {
