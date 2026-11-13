@@ -631,6 +631,12 @@ const DEFAULT_PROMOTION_THRESHOLDS: PromotionThresholds;
 const DEFAULT_TRANSACTION_LIMITS: TransactionLimits;
 ```
 
+### `DELTA_PLACEHOLDER_TABLE` (const)
+
+```ts
+const DELTA_PLACEHOLDER_TABLE = "__lunora__";
+```
+
 ### `DOC_COLUMN` (const)
 
 ```ts
@@ -4266,6 +4272,12 @@ const deleteShapePokeCursorsForConnection: (sql: SqlExec, connectionId: string) 
 
 ```ts
 const deleteStreamRun: (sql: SqlExec, runKey: string) => void;
+```
+
+### `deltaTableFor` (const)
+
+```ts
+const deltaTableFor: (tables: Iterable<string>) => string;
 ```
 
 ### `depKey` (const)
