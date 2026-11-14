@@ -80,10 +80,19 @@ const normaliseFile = (file: string): string => file.replace(LUNORA_PREFIX, "").
 /** A JSONC line that holds no key: blank or a line comment. */
 const isNonKeyLine = (trimmed: string): boolean => trimmed === "" || trimmed.startsWith("//");
 
-/** 1-based index of the first line after `line` that is not blank or a line comment, or `undefined`. */
+/** 1-based index of the first line after `line` that is not blank or a comment, or `undefined`. */
 const nextKeyLine = (lines: ReadonlyArray<string>, line: number): number | undefined => {
+    let inBlock = false;
+
     for (let index = line; index < lines.length; index += 1) {
-        if (!isNonKeyLine((lines[index] ?? "").trim())) {
+        const trimmed = (lines[index] ?? "").trim();
+
+        if (inBlock) {
+            inBlock = !trimmed.includes("*/");
+        } else if (trimmed.startsWith("/*")) {
+            // A block comment that does not close on its own line hides the lines up to `*/`.
+            inBlock = !trimmed.slice(2).includes("*/");
+        } else if (!isNonKeyLine(trimmed)) {
             return index + 1;
         }
     }
