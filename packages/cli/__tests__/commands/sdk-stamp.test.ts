@@ -234,5 +234,20 @@ describe("sdk stamp", () => {
             expect(readFileSync(join(outsideDirectory, "victim.txt"), "utf8")).toBe("keep\n");
             expect(lstatSync(join(outputDirectory, "link.txt")).isSymbolicLink()).toBe(true);
         });
+
+        it("refuses a file under a symlinked directory even when the link stays inside the output directory", () => {
+            expect.assertions(3);
+
+            // A generated directory the user replaced with a link to their own directory beside it.
+            mkdirSync(join(outputDirectory, "mine"));
+            writeFileSync(join(outputDirectory, "mine", "model.dart"), "user code\n", "utf8");
+            symlinkSync(join(outputDirectory, "mine"), join(outputDirectory, "models"));
+
+            const result = pruneStale(outputDirectory, previous([], ["models/model.dart"]), { generatedFiles: [], transportFiles: [] });
+
+            expect(result.deleted).toStrictEqual([]);
+            expect(result.refused.map((entry) => entry.path)).toStrictEqual(["models/model.dart"]);
+            expect(readFileSync(join(outputDirectory, "mine", "model.dart"), "utf8")).toBe("user code\n");
+        });
     });
 });

@@ -151,9 +151,10 @@ const judge = (outputDirectory: string, candidate: unknown): Verdict => {
         return { kind: "refuse", reason: "resolves outside the output directory" };
     }
 
-    // A symlinked parent can redirect the delete to another directory even though
-    // the lexical path looks inside. The parent is resolved, not the file, because
-    // the file itself may be a symlink that lstat must see as one.
+    // A symlinked parent redirects the delete to another directory, even one inside the
+    // output directory that holds the user's own files, so the resolved parent must be the
+    // lexical one. The parent is resolved, not the file, because the file itself may be a
+    // symlink that lstat must see as one.
     let parentReal: string;
 
     try {
@@ -163,8 +164,8 @@ const judge = (outputDirectory: string, candidate: unknown): Verdict => {
         return inspectionFailure(error);
     }
 
-    if (!isInside(realpathSync(outputDirectory), parentReal)) {
-        return { kind: "refuse", reason: "its parent directory is a symlink that leads outside the output directory" };
+    if (parentReal !== resolve(realpathSync(outputDirectory), dirname(normalized))) {
+        return { kind: "refuse", reason: "its parent directory is reached through a symlink" };
     }
 
     let stats: Stats;
