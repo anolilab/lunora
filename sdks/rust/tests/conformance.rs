@@ -9,7 +9,7 @@ use std::thread;
 
 use lunora::client::{
     build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_subscribe_frame, build_unsubscribe_frame, parse_rpc_response, Client, ClientError,
-    StreamEvent, CODE_INVALID_FRAME, MAX_PENDING_POKES,
+    WatchEvent, CODE_INVALID_FRAME, MAX_PENDING_POKES,
 };
 use lunora::key::{stable_stringify, stable_wire_key};
 use lunora::submit::is_transient;
@@ -636,7 +636,7 @@ fn page_delta_frames_merge_into_the_cached_result() {
     let document = fixture("ws-frames.json");
     let cases = document["pageDeltaFrames"].as_array().expect("pageDeltaFrames");
 
-    assert_eq!(cases.len(), 8, "pageDeltaFrames must carry the eight merge cases");
+    assert_eq!(cases.len(), 9, "pageDeltaFrames must carry the nine merge cases");
 
     for case in cases {
         let name = case["name"].as_str().unwrap_or("?");
@@ -678,42 +678,59 @@ fn page_delta_frames_merge() {
     page_delta_frames_merge_into_the_cached_result();
 }
 
-/// An unmergeable row change poisons the subscription: later delta frames neither
-/// publish nor move the resume cursor. A resubscribe or a `data` frame clears it.
-#[test]
-fn an_unmergeable_run_freezes_the_cursor() {
-    let document = fixture("ws-frames.json");
-    let cases = document["pageDeltaPoisonCases"].as_array().expect("pageDeltaPoisonCases");
+/// A subscription on `messages:list` with every observable recorded: the frames
+/// it sends, the values it publishes and the error codes it raises.
+struct DeltaHarness {
+    client: Client,
+    sent: Arc<Mutex<Vec<Value>>>,
+    seen: Arc<Mutex<Vec<WireValue>>>,
+    errors: Arc<Mutex<Vec<String>>>,
+}
 
-    assert_eq!(cases.len(), 3, "pageDeltaPoisonCases must carry its three cases");
+fn delta_harness(identity: Option<String>) -> DeltaHarness {
+    let mut client = Client::new("https://app.example", None);
+    let sent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let outbound = Arc::clone(&sent);
 
-    for case in cases {
-        let name = case["name"].as_str().unwrap_or("?");
-        let mut client = Client::new("https://app.example", None);
-        let sent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
-        let outbound = Arc::clone(&sent);
+    client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())), None);
+    client.set_identity(identity);
 
-        client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())), None);
+    let seen: Arc<Mutex<Vec<WireValue>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen_handle = Arc::clone(&seen);
+    let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let errors_handle = Arc::clone(&errors);
 
-        let seen: Arc<Mutex<Vec<WireValue>>> = Arc::new(Mutex::new(Vec::new()));
-        let seen_handle = Arc::clone(&seen);
+    client.subscribe(
+        "messages:list",
+        WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
+        Some(Box::new(move |value| seen_handle.lock().expect("seen").push(value.clone()))),
+        Some(Box::new(move |error| {
+            errors_handle.lock().expect("errors").push(error.code.clone().unwrap_or_default());
+        })),
+    );
 
-        client.subscribe(
-            "messages:list",
-            WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
-            Some(Box::new(move |value| seen_handle.lock().expect("seen").push(value.clone()))),
-            None,
-        );
+    DeltaHarness { client, sent, seen, errors }
+}
 
-        client.handle_frame(&case["seedFrame"].to_string()).expect("seed");
-        seen.lock().expect("seen").clear();
+impl DeltaHarness {
+    /// Feeds one frame and returns the error codes it raised.
+    fn feed(&mut self, frame: &Value) -> Vec<String> {
+        self.errors.lock().expect("errors").clear();
+        self.client.handle_frame(&frame.to_string()).expect("handle");
 
-        for (index, step) in case["steps"].as_array().expect("steps").iter().enumerate() {
+        self.errors.lock().expect("errors").clone()
+    }
+
+    /// Runs fixture steps: a frame with its publish count (and optionally the
+    /// published value and the error codes it raised), or a resend checked against
+    /// the resume position it names.
+    fn run_steps(&mut self, name: &str, steps: &Value) {
+        for (index, step) in steps.as_array().expect("steps").iter().enumerate() {
             if let Some(resume) = step.get("resume") {
-                sent.lock().expect("sent").clear();
-                client.resend_subscriptions().expect("resend");
+                self.sent.lock().expect("sent").clear();
+                self.client.resend_subscriptions().expect("resend");
 
-                let frames = sent.lock().expect("sent");
+                let frames = self.sent.lock().expect("sent");
                 let subscribe = frames.iter().find(|frame| frame["type"] == json!("subscribe")).expect("a resent subscribe");
 
                 assert_eq!(subscribe["query"]["sinceSeq"], resume["sinceSeq"], "{name} step {index}");
@@ -722,10 +739,15 @@ fn an_unmergeable_run_freezes_the_cursor() {
                 continue;
             }
 
-            seen.lock().expect("seen").clear();
-            client.handle_frame(&step["frame"].to_string()).expect("handle");
+            self.seen.lock().expect("seen").clear();
 
-            let seen = seen.lock().expect("seen");
+            let raised = self.feed(&step["frame"]);
+
+            if let Some(expected) = step.get("errors") {
+                assert_eq!(json!(raised), *expected, "{name} step {index}: error codes");
+            }
+
+            let seen = self.seen.lock().expect("seen");
 
             assert_eq!(seen.len() as u64, step["publishes"].as_u64().expect("publishes"), "{name} step {index}");
 
@@ -733,6 +755,102 @@ fn an_unmergeable_run_freezes_the_cursor() {
                 assert_eq!(canonical(&encode_wire(&seen[0]).expect("encode")), canonical(value_wire), "{name} step {index}");
             }
         }
+    }
+}
+
+/// Runs every case under `key`: seed the subscription, then replay the steps.
+fn run_page_delta_cases(key: &str, expected: usize) {
+    let document = fixture("ws-frames.json");
+    let cases = document[key].as_array().unwrap_or_else(|| panic!("{key}"));
+
+    assert_eq!(cases.len(), expected, "{key} must carry its {expected} cases");
+
+    for case in cases {
+        let name = case["name"].as_str().unwrap_or("?");
+        let mut harness = delta_harness(None);
+
+        harness.feed(&case["seedFrame"]);
+        harness.run_steps(name, &case["steps"]);
+    }
+}
+
+/// An unmergeable row change poisons the subscription: later delta frames neither
+/// publish nor move the resume cursor. A resubscribe or a `data` frame clears it.
+#[test]
+fn an_unmergeable_run_freezes_the_cursor() {
+    run_page_delta_cases("pageDeltaPoisonCases", 3);
+}
+
+/// A run of delta frames marked `more` is held and commits once, on its last frame.
+#[test]
+fn a_delta_run_commits_once_on_its_last_frame() {
+    run_page_delta_cases("pageDeltaRunCases", 5);
+}
+
+/// A delta frame the decoder refuses reports once, discards the run and freezes the
+/// subscription like an unmergeable row change.
+#[test]
+fn an_undecodable_run_frame_freezes_the_subscription() {
+    run_page_delta_cases("undecodableDeltaRunCases", 2);
+}
+
+/// Attaching a socket, over a live one or after a failed open, discards every held run: it
+/// is one socket's stream, so the next frame merges onto the committed base.
+#[test]
+fn attaching_a_socket_discards_every_held_run() {
+    let document = fixture("ws-frames.json");
+    let case = &document["pageDeltaRunCases"][0];
+    let mut harness = delta_harness(None);
+
+    harness.feed(&case["seedFrame"]);
+    harness.feed(&json!({
+        "id": "sub_1", "type": "delta", "more": true,
+        "delta": {"key": "m1", "op": "update", "table": "messages",
+                  "row": {"_creationTime": 1001, "_id": "m1", "text": "ONE"}},
+    }));
+
+    harness.client.attach_socket(Box::new(|_| {}), None);
+    harness.seen.lock().expect("seen").clear();
+    harness.feed(&json!({
+        "id": "sub_1", "type": "delta",
+        "delta": {"key": "m2", "op": "update", "table": "messages",
+                  "row": {"_creationTime": 1002, "_id": "m2", "text": "TWO"}},
+    }));
+
+    let seen = harness.seen.lock().expect("seen");
+
+    assert_eq!(seen.len(), 1, "the final frame publishes once");
+    assert!(
+        !canonical(&encode_wire(&seen[0]).expect("encode")).contains("ONE"),
+        "a run held before the attach must not commit"
+    );
+}
+
+/// A change of identity drops the cached base and the freeze with it: both belong
+/// to the session that was shown them.
+#[test]
+fn an_identity_change_evicts_the_cached_base_and_the_poison() {
+    let document = fixture("ws-frames.json");
+    let cases = document["identityChangeEvictionCases"].as_array().expect("identityChangeEvictionCases");
+    let identity = |value: &Value| value.as_str().map(str::to_string);
+
+    assert_eq!(cases.len(), 2, "identityChangeEvictionCases must carry its two cases");
+
+    for case in cases {
+        let name = case["name"].as_str().unwrap_or("?");
+        let change = &case["identityChange"];
+        let mut harness = delta_harness(identity(&change["from"]));
+
+        harness.feed(&case["seedFrame"]);
+
+        if let Some(freeze) = case.get("freezeFrame") {
+            let raised = harness.feed(freeze);
+
+            assert_eq!(json!(raised), case["freezeErrors"], "{name}: the freeze is reported once");
+        }
+
+        harness.client.set_identity(identity(&change["to"]));
+        harness.run_steps(name, &case["steps"]);
     }
 }
 
@@ -788,12 +906,12 @@ fn a_refused_payload_stays_on_its_own_subscription() {
 /// as the callback form.
 fn subscription_stream_yields_frame_values_in_order() {
     let document = fixture("ws-frames.json");
-    let case = &document["stream"];
+    let case = &document["watch"];
     let mut client = Client::new("https://app.example", None);
 
     client.attach_socket(Box::new(|_frame| {}), None);
 
-    let (events, id) = client.stream(
+    let (events, id) = client.watch(
         "messages:list",
         WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
         None,
@@ -804,8 +922,8 @@ fn subscription_stream_yields_frame_values_in_order() {
         client.handle_frame(&frame.to_string()).expect("handle");
 
         match events.recv().expect("a streamed event") {
-            StreamEvent::Value(value) => seen.push(encode_wire(&value).expect("encode")),
-            StreamEvent::Error(error) => panic!("stream error: {}", error.message),
+            WatchEvent::Value(value) => seen.push(encode_wire(&value).expect("encode")),
+            WatchEvent::Error(error) => panic!("stream error: {}", error.message),
         }
     }
 
@@ -1287,7 +1405,7 @@ fn subscription_stream_ends_on_close() {
 
     client.attach_socket(Box::new(|_frame| {}), None);
 
-    let (events, id) = client.stream("messages:list", WireValue::Object(Vec::new()), None);
+    let (events, id) = client.watch("messages:list", WireValue::Object(Vec::new()), None);
 
     client
         .handle_frame(&json!({ "type": "data", "id": id, "data": 1, "cursor": 1 }).to_string())
@@ -1296,7 +1414,7 @@ fn subscription_stream_ends_on_close() {
 
     assert_eq!(
         events.recv_timeout(Duration::from_secs(2)).expect("the delivered value"),
-        StreamEvent::Value(WireValue::Number(1.0))
+        WatchEvent::Value(WireValue::Number(1.0))
     );
     assert_eq!(
         events.recv_timeout(Duration::from_secs(2)),

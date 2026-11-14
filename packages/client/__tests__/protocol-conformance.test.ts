@@ -488,7 +488,6 @@ interface WsFixtures {
         "shape-subscribe-cold": unknown;
     };
     /** A live query consumed as the language's own pull type; see the fixture's `$comment`. */
-    stream: { frames: Record<string, unknown>[]; subscriptionId: string; yielded: unknown[] };
     subscriptionRetry: {
         cancelFrames: { frame: Record<string, unknown>; name: string }[];
         hintFrame: Record<string, unknown>;
@@ -500,6 +499,7 @@ interface WsFixtures {
         seedFrame: Record<string, unknown>;
         subscriptionId: string;
     };
+    watch: { frames: Record<string, unknown>[]; subscriptionId: string; yielded: unknown[] };
 }
 
 describe("ws-frames fixtures", () => {
@@ -680,7 +680,7 @@ describe("ws-frames fixtures", () => {
     it("delivers a subscription's frame values in order", () => {
         expect.hasAssertions();
 
-        // The `stream` section: every port consumes a live query as its own PULL
+        // The `watch` section: every port consumes a live query as its own PULL
         // type (an async generator, a channel, an Enumerator) and must yield
         // exactly what the callback form delivers, decoded. This reference has no
         // pull type — a callback IS the JS idiom — so it asserts the other half of
@@ -692,11 +692,11 @@ describe("ws-frames fixtures", () => {
         client.subscribe(fnRef("messages:list"), { channel: "general" }, (value) => values.push(value));
         latestSocket().open();
 
-        for (const frame of ws.stream.frames) {
+        for (const frame of ws.watch.frames) {
             latestSocket().receive(frame);
         }
 
-        expect(values).toStrictEqual(ws.stream.yielded);
+        expect(values).toStrictEqual(ws.watch.yielded);
 
         const subscribeFrame = latestSocket()
             .sent.map((raw) => JSON.parse(raw))
@@ -704,7 +704,7 @@ describe("ws-frames fixtures", () => {
 
         // `sub_1` is the id every port mints for a first subscription, and the
         // frames above are addressed to it.
-        expect(subscribeFrame.id).toBe(ws.stream.subscriptionId);
+        expect(subscribeFrame.id).toBe(ws.watch.subscriptionId);
     });
 
     it("materialises rows from a poke sequence", () => {

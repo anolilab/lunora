@@ -209,7 +209,7 @@ is where those guarantees are asserted instead.
   reconnect, since the reseed is the same frame. The Durable Object caps only the
   frames it RECEIVES; what it sends is bounded by the Workers per-message limit.
 - **`close()` ends it.** `close()` makes `connect_and_run` return and ends every
-  `stream()` generator; frames that arrive after close are ignored.
+  `watch()` generator; frames that arrive after close are ignored.
 - **No `lunora-ping`, deliberately.** The reference client sends one every 30 s
   and watchdogs `lastFrameAt`; this loop sends none. `websockets` already pings
   at the protocol level every 20 s and closes the connection when a ping goes
@@ -239,12 +239,13 @@ for the life of the process — silently, because a shape is only ever fed by po
 the server had stopped sending. `shape_subscriptions_resend_after_reconnect` in
 `conformance-cases.json` is what makes the claim checkable rather than asserted.
 
-⁷ **A row-change `delta` frame is merged, once a port announces `pageDelta`.** Every port sends `caps: ["pageDelta"]` on `connect` and merges a `{ key, op, table, row }` change into the subscription's server base by `_id`, with the normative insert placement (protocol README §5.1.1). The goldens are `pageDeltaFrames` in `protocol/fixtures/ws-frames.json`. **Divergence:** when a row change cannot be merged into the base, which includes no base yet and a committed `null`, the port keeps the previous value and freezes that subscription's resume cursor. Later `delta`, `resume` and `settled` frames on the subscription are ignored (no publish, no cursor advance) until a `data` frame or a resubscribe clears the freeze. A `data` frame clears it only once its payload decodes. A resubscribe replays from the frozen cursor, so the dropped change is sent again. The reference re-snapshots instead. Ports do not yet hold a `more: true` run and commit it atomically (protocol §5.4 SHOULD), so frames earlier in a run can publish before a later frame freezes the cursor.
+⁷ **A row-change `delta` frame is merged, once a port announces `pageDelta`.** Every port sends `caps: ["pageDelta"]` on `connect` and merges a `{ key, op, table, row }` change into the subscription's server base by `_id`, with the normative insert placement (protocol README §5.1.1). `table` is the query's one read table, or `"__lunora__"` for a query that read several, none, or every table (Studio's admin reads); no port routes or keys by it. The goldens are `pageDeltaFrames` in `protocol/fixtures/ws-frames.json`. A run of `delta` frames marked `more: true` is held and committed once, on its last frame (protocol README §5.4), so a subscriber sees one publish per run, and a socket that drops mid-run discards the held frames and the resume replays the run whole. A `settled` that arrives mid-run, and a `delta` frame the decoder refuses, run or not, discard the held frames and freeze the subscription, as an unmergeable row change does: the cursor does not move, and a later valid delta is not committed against the base that is missing those rows (protocol README §5.4). **Divergence:** when a row change cannot be merged into the base, which includes no base yet and a committed `null`, the port keeps the previous value, freezes that subscription's resume cursor, and reports `delta_unmergeable` once through the subscription's error callback. Later `delta`, `resume` and `settled` frames on the subscription are ignored (no publish, no cursor advance) until a `data` frame or a resubscribe clears the freeze. A `data` frame clears it only once its payload decodes. A resubscribe replays from the frozen cursor, so the dropped change is sent again. An identity change evicts the cached base, the cursor and the freeze together, so the new identity starts cold. The reference re-snapshots instead of freezing.
 
 ⁸ **`chunk` is not handled.** A streaming-query chunk carries a durable `seq`/`generation`
 resume watermark (`protocol/README.md` §5.2). It reaches the default arm of every port's frame
 switch and is ignored. No port sends `stream`, so no chunk arrives to drop; the gap is that a
-deployment using streaming queries has no non-JS client for them.
+deployment using streaming queries has no non-JS client for them. The wire `stream` client is a
+follow-up change, outside the row-delta follow-up.
 
 ⁹ **A write refused for its credential (`TOKEN_EXPIRED`, `UNAUTHENTICATED`,
 `UNAUTHORIZED`) is held in all eight, and every replay reads the token current
@@ -550,7 +551,7 @@ fed by the same frame. The reference catches per callback too.
 missing poster is a configuration gap, not a verdict on the write. A lone write
 was rejected and a batch re-queued before.
 
-**Go's `Stream`** closes its channel under the same lock every send holds, so a
+**Go's `Watch`** closes its channel under the same lock every send holds, so a
 frame racing an unsubscribe or `Close()` can no longer send on a closed channel
 (a data race, and a panic when it lost); `hardening_test.go` catches it under
 the `-race` that `run-all.sh` always passes.

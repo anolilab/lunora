@@ -4,7 +4,7 @@ A **protocol-conformant** Ruby client for a Lunora deployment, implementing the
 transport specified in [`protocol/README.md`](../../protocol/README.md):
 
 - `query` / `mutation` / `action` round-trips over `POST /_lunora/rpc`.
-- Live `subscribe` — and `stream`, which hands back an `Enumerator` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+- Live `subscribe` — and `watch`, which hands back an `Enumerator` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
   `settled` frames.
 - `subscribe_shape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
   replication path.
@@ -151,7 +151,7 @@ a cold `shape_subscribe` so the server re-seeds it.
 parsed JSON response — or the raw text when it is not JSON. A body that is not a
 JSON object raises `Lunora::ApiError` `INTERNAL`, never a `NoMethodError`.
 
-`client.close` rejects every queued write and ends every `stream` enumerator
+`client.close` rejects every queued write and ends every `watch` enumerator
 once it has yielded what it already received. The client's `inspect` (and so
 `p`/`pp`) never shows the auth token.
 

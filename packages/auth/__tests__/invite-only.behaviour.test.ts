@@ -1,3 +1,4 @@
+import { runWithEndpointContext } from "@better-auth/core/context";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { anonymous } from "better-auth/plugins";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,6 +57,10 @@ describe("inviteOnly", () => {
 
     const invitationRow = (email: string): Record<string, unknown> | undefined =>
         database["signUpInvitation"]?.find((row) => (row as { email: string }).email === email) as Record<string, unknown> | undefined;
+
+    /** Run `create` the way a real route does: inside better-auth's endpoint context, whose `path` the gate reads. */
+    const insideEndpoint = async <T>(path: string, create: () => Promise<T>): Promise<T> =>
+        runWithEndpointContext({ context: await auth.$context, path }, create);
 
     beforeEach(() => {
         // Every instance below runs password sign-up without verification unless the
@@ -308,6 +313,7 @@ describe("inviteOnly", () => {
      * same `createWithHooks`, so this is the spec that keeps the claim honest
      * across an upstream bump.
      */
+    // Runs without an endpoint context, which the gate treats as trusted server code; the real-callback cases live in the describe below.
     it("gates an OAuth callback minting a new account", async () => {
         expect.assertions(2);
 
@@ -328,6 +334,76 @@ describe("inviteOnly", () => {
                 { accountId: "gh-2", providerId: "github" },
             ),
         ).resolves.toBeDefined();
+    });
+
+    describe("non-password sign-up of an invited address", () => {
+        it("refuses an OAuth account whose provider did not verify the address", async () => {
+            expect.assertions(3);
+
+            await invite("ada@example.com");
+
+            const context = await auth.$context;
+
+            await expect(
+                insideEndpoint("/callback/:id", async () =>
+                    context.internalAdapter.createOAuthUser(
+                        { email: "ada@example.com", emailVerified: false, name: "Ada" },
+                        { accountId: "li-1", providerId: "linear" },
+                    ),
+                ),
+            ).rejects.toThrow(/invite-only/);
+
+            expect(database["user"]).toHaveLength(0);
+            expect(invitationRow("ada@example.com")?.["acceptedAt"]).not.toBeInstanceOf(Date);
+        });
+
+        it("refuses an SSO account without a trusted verified claim", async () => {
+            expect.assertions(1);
+
+            await invite("ada@example.com");
+
+            const context = await auth.$context;
+
+            await expect(
+                insideEndpoint("/sso/callback/:providerId", async () =>
+                    context.internalAdapter.createOAuthUser(
+                        { email: "ada@example.com", emailVerified: false, name: "Ada" },
+                        { accountId: "okta-1", providerId: "okta" },
+                    ),
+                ),
+            ).rejects.toThrow(/invite-only/);
+        });
+
+        it("admits an OAuth account whose provider verified the address", async () => {
+            expect.assertions(2);
+
+            await invite("ada@example.com");
+
+            const context = await auth.$context;
+
+            await expect(
+                insideEndpoint("/callback/:id", async () =>
+                    context.internalAdapter.createOAuthUser(
+                        { email: "ada@example.com", emailVerified: true, name: "Ada" },
+                        { accountId: "gh-3", providerId: "github" },
+                    ),
+                ),
+            ).resolves.toBeDefined();
+
+            expect(invitationRow("ada@example.com")?.["acceptedAt"]).toBeInstanceOf(Date);
+        });
+
+        it("admits an invited address created by the admin plugin's endpoint", async () => {
+            expect.assertions(1);
+
+            await invite("ada@example.com");
+
+            const context = await auth.$context;
+
+            await expect(
+                insideEndpoint("/admin/create-user", async () => context.internalAdapter.createUser({ email: "ada@example.com", name: "Ada" })),
+            ).resolves.toBeDefined();
+        });
     });
 
     it("stops counting users once the bootstrap window has closed", async () => {
