@@ -26,6 +26,7 @@
 import { piiRules, redact, standardRules } from "@visulima/redact";
 
 import { maskCredentials } from "../../../shared/credential-redaction";
+import { importHmacKey } from "../../../shared/hmac-key";
 import type { SqlExecutor } from "./sql-store";
 
 /** Reserved append-only table backing the Studio "Security / audit" page. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -39,12 +40,40 @@ const AUTH_AUDIT_TABLE = "__lunora_auth_audit__";
 type AuthAuditEvent =
     | "account-link"
     | "account-unlink"
+    // An operator acting on another account; the subject's id is in `detail.targetUserId`.
+    | "admin-impersonate-start"
+    | "admin-impersonate-stop"
+    | "admin-password-set" // secret-scanner:allow -- endpoint path or event name, not a credential
+    | "admin-role-change"
+    | "admin-session-revoke"
+    | "admin-user-ban"
+    | "admin-user-create"
+    | "admin-user-remove"
+    | "admin-user-unban"
+    | "admin-user-update"
+    | "api-key-create"
+    | "api-key-delete"
+    | "api-key-update"
+    | "device-approve"
+    | "device-deny"
+    | "email-change"
+    // A request that sends a confirmation link; the address changes later, under `email-verification`.
+    | "email-change-request"
     | "email-verification"
+    | "mfa-backup-codes-regenerate"
     | "mfa-disable"
     | "mfa-enable"
+    | "one-time-token-create"
+    | "passkey-add"
+    | "passkey-remove"
+    | "passkey-rename"
     | "password-change"
     | "password-reset"
+    // A request that sends a reset code or link. The change itself is recorded by the reset event.
+    | "password-reset-request"
+    | "phone-verification"
     | "session-revoke"
+    | "session-switch"
     | "sign-in"
     // A sign-in-family endpoint that only DISPATCHES (mints a provider
     // redirect URL, or sends a magic-link email) — nobody is authenticated
@@ -53,7 +82,13 @@ type AuthAuditEvent =
     | "sign-in-initiated"
     | "sign-out"
     | "sign-up"
+    | "sso-provider-delete"
+    | "sso-provider-register"
+    | "sso-provider-update"
     | "token-refresh"
+    | "user-delete"
+    // A deletion request that sends a confirmation link; the account is removed by `user-delete`.
+    | "user-delete-request"
     | (string & {});
 
 /** Whether the recorded operation succeeded or failed (e.g. a rejected sign-in). */
@@ -111,6 +146,12 @@ interface AppendAuthAuditEntry {
 /** Options for {@link appendAuthAuditEntry}. */
 interface AppendAuthAuditOptions {
     /**
+     * The key a failed attempt's identifiers are HMAC'd under. A failed attempt can carry text the caller typed into an
+     * identifier field, such as a pasted password, and an unkeyed digest of that would be brute-forceable.
+     */
+    hashKey?: string;
+
+    /**
      * Redact secrets/PII in the `detail` payload before persisting. Defaults to
      * `true`. Set `false` only for a trusted, pre-scrubbed payload.
      */
@@ -143,6 +184,79 @@ interface ReadAuthAuditOptions {
 
 /** Merged rule set: credential/secret scrubbing (`standardRules`) plus PII (`piiRules`) for the free-form detail payload. */
 const AUDIT_REDACT_RULES = [...standardRules, ...piiRules];
+
+/**
+ * Detail keys that carry an identifier the hooks copied from a request, allow-listed by name. Value-based redaction
+ * would replace a numeric id (a five-digit user id reads as a phone or code), so these keys skip it. Credentials and
+ * emails never reach these keys: the hooks copy only the id fields named here.
+ */
+const IDENTIFIER_DETAIL_KEYS: ReadonlySet<string> = new Set([
+    "clientId",
+    "consentId",
+    "invitationId",
+    "keyId",
+    "memberId",
+    "organizationId",
+    "providerId",
+    "resourceIdentifier",
+    "role",
+    "roleId",
+    "roleName",
+    "scimGroupId",
+    "scimUserId",
+    "targetUserId",
+    "teamId",
+]);
+
+/**
+ * An opaque identifier: no whitespace, and no `@`, `?`, `#` or `=`, which mark an email, a query, a fragment or a
+ * key-value credential. A value that fails this is not an id, so it takes the ordinary redaction below.
+ */
+const OPAQUE_IDENTIFIER = /^[^\s?#=@]{1,256}$/u;
+
+/** Marks a stored failed-attempt identifier as a digest, so it is never read back as the id the caller sent. */
+const HASHED_IDENTIFIER_PREFIX = "hmac-sha256:";
+
+const IDENTIFIER_DIGEST_CONTEXT = "lunora/auth-audit/failed-identifier";
+
+const hexOf = (buffer: ArrayBuffer): string => [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
+/**
+ * Replace the identifier values of a failed attempt with a keyed digest. Without a key the detail is left as written: the
+ * hook always supplies the auth secret, and a direct writer is trusted with what it passes. Successful rows keep their ids.
+ */
+const protectFailedIdentifiers = async (detail: Record<string, unknown>, hashKey: string | undefined): Promise<Record<string, unknown>> => {
+    if (hashKey === undefined) {
+        return detail;
+    }
+
+    // Digest under a key derived for this purpose only. The hash key is the auth secret, which also signs cookies and URLs, so
+    // a row holding its MAC of caller-chosen text would hand that caller a signature.
+    const rootKey = await importHmacKey(hashKey);
+    const key = await importHmacKey(hexOf(await crypto.subtle.sign("HMAC", rootKey, new TextEncoder().encode(IDENTIFIER_DIGEST_CONTEXT))));
+    const digests = await Promise.all(
+        Object.entries(detail)
+            .filter(([name, value]) => IDENTIFIER_DETAIL_KEYS.has(name) && typeof value === "string")
+            .map(async ([name, value]) => {
+                const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(String(value)));
+
+                return [name, HASHED_IDENTIFIER_PREFIX + hexOf(mac)] as const;
+            }),
+    );
+
+    return { ...detail, ...Object.fromEntries(digests) };
+};
+
+/** Redact the free-form detail, leaving the allow-listed identifier keys as the hooks wrote them. */
+const redactDetail = (detail: Record<string, unknown>): Record<string, unknown> => {
+    const identifiers = Object.fromEntries(
+        Object.entries(detail).filter(([key, value]) => IDENTIFIER_DETAIL_KEYS.has(key) && typeof value === "string" && OPAQUE_IDENTIFIER.test(value)),
+    );
+    const kept = new Set(Object.keys(identifiers));
+    const rest = Object.fromEntries(Object.entries(detail).filter(([key]) => !kept.has(key)));
+
+    return { ...redact(maskCredentials(rest) as Record<string, unknown>, AUDIT_REDACT_RULES), ...identifiers };
+};
 
 const DEFAULT_READ_LIMIT = 1000;
 
@@ -253,7 +367,9 @@ const appendAuthAuditEntry = async (
     let detail: Record<string, unknown> | undefined;
 
     if (entry.detail !== undefined) {
-        detail = options.redactDetail === false ? entry.detail : redact(maskCredentials(entry.detail) as Record<string, unknown>, AUDIT_REDACT_RULES);
+        const scoped = entry.outcome === "failure" ? await protectFailedIdentifiers(entry.detail, options.hashKey) : entry.detail;
+
+        detail = options.redactDetail === false ? scoped : redactDetail(scoped);
     }
 
     await executor.run(

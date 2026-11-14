@@ -53,6 +53,7 @@ interface AppendAuthAuditEntry {
 
 ```ts
 interface AppendAuthAuditOptions {
+    hashKey?: string;
     redactDetail?: boolean;
     retention?: number;
 }
@@ -328,7 +329,7 @@ interface AuthAuditEntry {
 ### `AuthAuditEvent` (type)
 
 ```ts
-type AuthAuditEvent = "account-link" | "account-unlink" | "email-verification" | "mfa-disable" | "mfa-enable" | "password-change" | "password-reset" | "session-revoke" | "sign-in" | "sign-in-initiated" | "sign-out" | "sign-up" | "token-refresh" | (string & {});
+type AuthAuditEvent = "account-link" | "account-unlink" | "admin-impersonate-start" | "admin-impersonate-stop" | "admin-password-set" | "admin-role-change" | "admin-session-revoke" | "admin-user-ban" | "admin-user-create" | "admin-user-remove" | "admin-user-unban" | "admin-user-update" | "api-key-create" | "api-key-delete" | "api-key-update" | "device-approve" | "device-deny" | "email-change" | "email-change-request" | "email-verification" | "mfa-backup-codes-regenerate" | "mfa-disable" | "mfa-enable" | "one-time-token-create" | "passkey-add" | "passkey-remove" | "passkey-rename" | "password-change" | "password-reset" | "password-reset-request" | "phone-verification" | "session-revoke" | "session-switch" | "sign-in" | "sign-in-initiated" | "sign-out" | "sign-up" | "sso-provider-delete" | "sso-provider-register" | "sso-provider-update" | "token-refresh" | "user-delete" | "user-delete-request" | (string & {});
 ```
 
 ### `AuthAuditHookConfig` (interface)
@@ -1965,6 +1966,7 @@ interface AuditHookContext {
     context?: {
         newSession?: {
             session?: {
+                impersonatedBy?: string;
                 userId?: string;
             };
             user?: {
@@ -1973,8 +1975,10 @@ interface AuditHookContext {
             };
         } | null;
         returned?: unknown;
+        secret?: string;
         session?: {
             session?: {
+                impersonatedBy?: string;
                 userId?: string;
             };
             user?: {
