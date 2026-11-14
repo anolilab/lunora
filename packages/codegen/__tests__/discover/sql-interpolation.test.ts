@@ -118,6 +118,24 @@ const DESTRUCTURED_ARG = `
     };
 `;
 
+/** Text built in place, then passed through a cast alias. */
+const CAST_ALIAS = `
+    export const run = async (ctx, raw) => {
+        const built = \`SELECT * FROM users WHERE name = '\${raw}'\`;
+        const alias = built as string;
+        return ctx.sql.query(alias);
+    };
+`;
+
+/** Fixed text destructured from an options literal whose params carry a handler argument. */
+const DESTRUCTURED_FIXED_TEXT = `
+    export const run = async (ctx, args) => {
+        const options = { params: [args.id], text: "SELECT * FROM users WHERE id = $1" };
+        const { params, text } = options;
+        return ctx.sql.query(text, params);
+    };
+`;
+
 /** A plain parameter passed straight through: the caller is not visible here, so it is left alone. */
 const PARAM_PASSTHROUGH = `
     export const run = async (ctx, q) => ctx.sql.query(q);
@@ -247,12 +265,21 @@ describe("discoverSqlInterpolation", () => {
     it.each([
         ["two const aliases", TWO_HOP_ARG],
         ["a destructure of args", DESTRUCTURED_ARG],
+        ["a cast alias of built text", CAST_ALIAS],
     ])("flags request text reached through %s", (_label, source) => {
         expect.assertions(1);
 
         writeFileSync(join(workdir, "lunora", "hop.ts"), source, "utf8");
 
         expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("does NOT flag fixed text destructured beside argument-derived params", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "options.ts"), DESTRUCTURED_FIXED_TEXT, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
     it("does NOT flag a plain parameter passed through as the text", () => {

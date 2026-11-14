@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { isArgumentDerived } from "../argument-taint";
 import type { SqlInterpolationIR } from "../ir";
-import { collectCallRows, isConstDeclaration, unwrapExpression } from "./ast";
+import { bindingKeyName, collectCallRows, isConstDeclaration, unwrapExpression } from "./ast";
 import { callSiteScopeOf } from "./attribution";
 import { isContextSurface } from "./context-root";
 
@@ -45,7 +45,8 @@ const constInitializerOf = (node: TsNode): TsNode | undefined => {
 
 /**
  * What a `const` name was bound from: the initializer of `const x = …`, or, for `const { x } = source`, the
- * `source` it was destructured from. `undefined` for anything else.
+ * `x` property when `source` is (a `const` naming) an object literal that declares it, else `source` itself.
+ * `undefined` for anything else.
  */
 const boundSourceOf = (node: TsNode): TsNode | undefined => {
     const direct = constInitializerOf(node);
@@ -57,7 +58,22 @@ const boundSourceOf = (node: TsNode): TsNode | undefined => {
     const declaration = node.getSymbol()?.getDeclarations()[0];
     const holder = Node.isBindingElement(declaration) ? declaration.getParent().getParent() : undefined;
 
-    return isConstDeclaration(holder) ? holder.getInitializer() : undefined;
+    if (!Node.isBindingElement(declaration) || !isConstDeclaration(holder)) {
+        return undefined;
+    }
+
+    const source = holder.getInitializer();
+    const unwrapped = unwrapExpression(source);
+    const literal = unwrapExpression(unwrapped !== undefined && Node.isIdentifier(unwrapped) ? constInitializerOf(unwrapped) : unwrapped);
+    // Only the property this binding reads decides it: a sibling `params: [args.id]` must not taint fixed text.
+    // A key the literal does not declare (it may come from a spread) keeps the whole source, failing toward reporting.
+    const property = Node.isObjectLiteralExpression(literal) ? literal.getProperty(bindingKeyName(declaration)) : undefined;
+
+    if (Node.isShorthandPropertyAssignment(property)) {
+        return property.getNameNode();
+    }
+
+    return Node.isPropertyAssignment(property) ? property.getInitializer() : source;
 };
 
 /**
@@ -173,7 +189,10 @@ const isRiskyText = (text: TsNode): boolean => {
             return true;
         }
 
-        current = boundSourceOf(current);
+        const next = boundSourceOf(current);
+
+        // A cast or parentheses around an intermediate alias must not end the walk before the builder.
+        current = next === undefined ? undefined : unwrapExpression(next);
     }
 
     return false;
