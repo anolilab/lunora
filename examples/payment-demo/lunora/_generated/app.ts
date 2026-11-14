@@ -250,6 +250,7 @@ class AppBuilder<Env extends object> {
         const tableSharding = new Map<string, ShardingInfo>([
             ["payment_customers", { mode: { kind: "root" } }],
             ["payment_events", { mode: { kind: "root" } }],
+            ["payment_referenceRevisions", { mode: { kind: "root" } }],
             ["payment_sessions", { mode: { kind: "root" } }],
             ["payment_subscriptions", { mode: { kind: "root" } }],
             ["payment_usageEvents", { mode: { kind: "root" } }],

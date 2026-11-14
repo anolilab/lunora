@@ -3,6 +3,7 @@ export { createBucketStorage } from "./bucket-storage";
 export { createStorage, scopeKey } from "./create-storage";
 export type { PresignedUrlParams } from "./presigned-url";
 export { buildPresignedUrl } from "./presigned-url";
+export { authorizeSignedGet } from "./signed-get-authorizer";
 export type { VerifyResult } from "./signed-url";
 export { buildSignedUrl, verifySignedUrl } from "./signed-url";
 export type {

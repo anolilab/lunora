@@ -16,6 +16,9 @@ export interface RlsProcedureIR {
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
 
+    /** 1-based start line of the declaring statement (the `export const`), without leading comments. */
+    line?: number;
+
     /**
      * Table names extracted from the `rls(policies)` array literal. Empty when the
      * policies argument is not a statically-readable array literal.

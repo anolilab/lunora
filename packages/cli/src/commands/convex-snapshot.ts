@@ -5,8 +5,8 @@
  * streaming primary path; the ZIP reader (via `adm-zip`) is the convenience
  * surface and reads entries in full.
  */
-import { createReadStream } from "node:fs";
-import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -34,6 +34,13 @@ const isConvexSystemTable = (table: string): boolean => table.startsWith("_");
 interface ConvexSnapshotTable {
     /** Absolute file path (directory) or archive-relative entry (zip). */
     file: string;
+
+    /**
+     * Device and inode of the file that was checked. Set for directory tables: the reader refuses
+     * any file it opens that is not this one, which catches a swapped parent directory and a link
+     * that `O_NOFOLLOW` cannot see (platforms without it).
+     */
+    identity?: { dev: number; ino: number };
     /** Table name (directory / archive entry name). */
     table: string;
 }
@@ -87,9 +94,39 @@ const resolveConvexSnapshot = async (path: string): Promise<ConvexSnapshot | und
     return undefined;
 };
 
-/** Enumerate `<table>/documents.jsonl` under an exploded export directory. */
+const DOCUMENTS_JSONL_RE = /documents\.jsonl$/;
+
+/**
+ * Resolve a snapshot file the reader will open, refusing one that links out of the
+ * snapshot directory, and record the identity `readSnapshotLines` checks the opened
+ * file against.
+ */
+const listedDirectoryFile = async (canonicalRoot: string, file: string, label: string): Promise<{ file: string; identity: { dev: number; ino: number } }> => {
+    const canonicalFile = await realpath(file);
+
+    if (!isInsideDirectory(canonicalRoot, canonicalFile)) {
+        throw new Error(`${label} resolves outside the snapshot directory`);
+    }
+
+    const { dev, ino } = await stat(canonicalFile);
+
+    // A swap between the containment check and the stat records the outside file's identity. Re-resolving
+    // catches a swap that is still in place; the reader's identity check covers the rest.
+    if ((await realpath(file)) !== canonicalFile) {
+        throw new Error(`${label} changed while it was being listed`);
+    }
+
+    return { file: canonicalFile, identity: { dev, ino } };
+};
+
+/**
+ * Enumerate `<table>/documents.jsonl` under an exploded export directory. The
+ * export is operator-downloaded data, so a table file that links out of it is
+ * held to the same containment rule as a `_storage` blob.
+ */
 const listDirectoryTables = async (root: string): Promise<ConvexSnapshotTable[]> => {
     const found: ConvexSnapshotTable[] = [];
+    const canonicalRoot = await realpath(root);
 
     for (const entry of await readdir(root, { withFileTypes: true })) {
         if (!entry.isDirectory()) {
@@ -102,7 +139,8 @@ const listDirectoryTables = async (root: string): Promise<ConvexSnapshotTable[]>
         const documents = await stat(file).catch(() => undefined);
 
         if (documents?.isFile()) {
-            found.push({ file, table: entry.name });
+            // eslint-disable-next-line no-await-in-loop -- ditto; the reader must open the path that was checked
+            found.push({ ...(await listedDirectoryFile(canonicalRoot, file, `table ${entry.name}: documents.jsonl`)), table: entry.name });
         }
     }
 
@@ -143,8 +181,31 @@ const listConvexSnapshotTables = async (snapshot: ConvexSnapshot): Promise<Conve
 /** Stream one table's `documents.jsonl` lines as the snapshot provides them. */
 const readSnapshotLines = async function* (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable): AsyncGenerator<string> {
     if (snapshot.kind === "directory") {
-        for await (const raw of createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: createReadStream(tableEntry.file, { encoding: "utf8" }) })) {
-            yield raw;
+        const { identity } = tableEntry;
+
+        if (identity === undefined) {
+            throw new Error(`table ${tableEntry.table}: read without being listed in this snapshot`);
+        }
+
+        // Open the listed path without following a final symlink, then check the opened file is the one
+        // that was listed. The check is what covers a swapped parent directory, which O_NOFOLLOW cannot see.
+        const handle = await open(tableEntry.file, constants.O_NOFOLLOW);
+        // Destroyed in `finally`, not left to the consumer: a consumer that stops early never ends the stream.
+        const stream = handle.createReadStream({ autoClose: false, encoding: "utf8" });
+
+        try {
+            const opened = await handle.stat();
+
+            if (opened.dev !== identity.dev || opened.ino !== identity.ino) {
+                throw new Error(`table ${tableEntry.table}: documents.jsonl changed after it was listed`);
+            }
+
+            for await (const raw of createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: stream })) {
+                yield raw;
+            }
+        } finally {
+            stream.destroy();
+            await handle.close();
         }
 
         return;
@@ -214,5 +275,44 @@ const readSnapshotStorageBlob = async (snapshot: ConvexSnapshot, blobId: string)
     return Buffer.from(blob);
 };
 
+/**
+ * List a file that sits beside a table's `documents.jsonl` (its `generated_schema.jsonl`),
+ * held to the same containment and identity rules, or `undefined` when there is none.
+ * Only a missing file means none: any other failure would skip whatever reads it, so it throws.
+ */
+const listSnapshotSidecar = async (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable, name: string): Promise<ConvexSnapshotTable | undefined> => {
+    if (snapshot.kind === "zip") {
+        const entry = tableEntry.file.replace(DOCUMENTS_JSONL_RE, name);
+
+        return snapshot.zip.getEntry(entry) === null ? undefined : { file: entry, table: tableEntry.table };
+    }
+
+    // From the listed table directory, not the resolved `documents.jsonl`: a document file linked to another
+    // name would otherwise leave the replace a no-op and read the documents themselves as the sidecar.
+    const file = join(snapshot.root, tableEntry.table, name);
+
+    const info = await stat(file).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            return undefined;
+        }
+
+        throw error;
+    });
+
+    if (info?.isFile() !== true) {
+        return undefined;
+    }
+
+    return { ...(await listedDirectoryFile(await realpath(snapshot.root), file, `table ${tableEntry.table}: ${name}`)), table: tableEntry.table };
+};
+
 export type { ConvexSnapshot, ConvexSnapshotTable };
-export { CONVEX_STORAGE_TABLE, isConvexSystemTable, listConvexSnapshotTables, readSnapshotLines, readSnapshotStorageBlob, resolveConvexSnapshot };
+export {
+    CONVEX_STORAGE_TABLE,
+    isConvexSystemTable,
+    listConvexSnapshotTables,
+    listSnapshotSidecar,
+    readSnapshotLines,
+    readSnapshotStorageBlob,
+    resolveConvexSnapshot,
+};

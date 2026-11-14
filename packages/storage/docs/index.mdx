@@ -258,6 +258,18 @@ if (!result.valid) {
 // result.key / result.method / result.contentType / result.bucketName are now trusted.
 ```
 
+A download route that serves the object through `serveStorageObject` should gate
+with `authorizeSignedGet` instead of `result.valid` alone. A valid signature also
+covers PUT upload URLs and URLs for other buckets or keys, and `authorizeSignedGet`
+rejects all three:
+
+```ts
+import { serveStorageObject } from "@lunora/server";
+import { authorizeSignedGet } from "@lunora/storage";
+
+return serveStorageObject(ctx, key, request, authorizeSignedGet(env.STORAGE_SECRET, { bucketName: "default" }));
+```
+
 Every bucket of one `.storage({ bucket, buckets })` declaration shares the same
 `publicBaseUrl` and `signingSecret`, so the bucket name is bound into the HMAC
 (and mirrored on the URL as `&bucket=`) — a URL minted for `avatars` does not

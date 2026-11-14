@@ -76,8 +76,9 @@ const PAGE_ROWS = 100;
 
 /**
  * Pages one call copies before it returns `done: false`. A page is two Durable Object
- * fetches and a call adds five, so a call stays under the 50-subrequest limit of a
- * Workers Free plan; the next call resumes.
+ * fetches. A call also makes at most seven fixed fetches outside the page loop (status,
+ * manifest, begin, pending, fingerprints, status, rescan), so 16 pages × 2 + 7 = 39 stays
+ * under the 50-subrequest limit of a Workers Free plan; the next call resumes.
  */
 const MAX_PAGES_PER_CALL = 16;
 
@@ -273,6 +274,20 @@ const readPage = (storage: DoStorageLike, table: string, after: number): { last:
         rows: rows.map(({ __lunora_rowid__: _rowid, ...row }) => row),
     };
 };
+
+/**
+ * Source: the tables that hold a row past the cursor the target has reached. One probe
+ * per table, all answered in this single fetch, so a finished table costs the copy no
+ * page of its budget.
+ */
+const pendingTables = (storage: DoStorageLike, cursors: Record<string, number>): string[] =>
+    Object.entries(cursors)
+        .filter(([table, after]) => {
+            const probe = `SELECT EXISTS (SELECT 1 FROM ${quoteIdentifier(assertKnownTable(storage, table))} WHERE rowid > ?) AS n`;
+
+            return Number(all(storage, probe, after)[0]?.["n"]) === 1;
+        })
+        .map(([table]) => table);
 
 const hasMarkers = (storage: DoStorageLike): boolean => columnNames(storage, MARKER_TABLE).length > 0;
 
@@ -642,7 +657,7 @@ const assertNotPurged = (storage: DoStorageLike): void => {
 };
 
 /** The ops served by the un-pinned object. */
-const SOURCE_OPS = new Set(["fingerprints", "manifest", "page", "purge"]);
+const SOURCE_OPS = new Set(["fingerprints", "manifest", "page", "pending", "purge"]);
 
 /**
  * Target: markers and the copy order, plus — only when asked, since it reads every
@@ -718,6 +733,9 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
             const page = readPage(storage, assertKnownTable(storage, body["table"]), Number(body["after"] ?? 0));
 
             return { last: page.last, rows: encodeWire(page.rows) };
+        }
+        case "pending": {
+            return { pending: pendingTables(storage, (body["cursors"] ?? {}) as Record<string, number>) };
         }
         case "purge": {
             const result = await purgeSource(storage, (body["expected"] ?? {}) as Record<string, string>);
@@ -829,6 +847,78 @@ const createAuthJurisdictionMove = (post: (side: MoveSide, body: Row) => Promise
         return response.json();
     };
 
+    /**
+     * The tables this call pages: every unfinished table, and each finished table that
+     * holds rows past the target's cursor. The finished ones are probed in one source
+     * fetch, so a finished table that is up to date costs no page of the budget.
+     */
+    const tablesToPage = async (begun: ReturnType<typeof beginMove>, tables: MovableTable[]): Promise<Set<string>> => {
+        const toPage = new Set<string>();
+        const cursors: Record<string, number> = {};
+
+        for (const table of tables) {
+            if (begun.done[table.name] === true) {
+                cursors[table.name] = begun.cursors[table.name] ?? 0;
+            } else {
+                toPage.add(table.name);
+            }
+        }
+
+        if (Object.keys(cursors).length > 0) {
+            const { pending } = await call<{ pending: string[] }>("source", { cursors, op: "pending" });
+
+            for (const name of pending) {
+                toPage.add(name);
+            }
+        }
+
+        return toPage;
+    };
+
+    /**
+     * Copy one table from its cursor to its end, within `pagesLeft` pages. `complete` is
+     * `false` when the budget ran out first; the next call resumes from the cursor.
+     */
+    const copyTable = async (table: MovableTable, { begun, force, pagesLeft }: { begun: ReturnType<typeof beginMove>; force: boolean; pagesLeft: number }) => {
+        const delta = { conflicts: 0, copied: 0, deleted: 0, targetRows: 0, unchanged: 0, updated: 0 };
+        let after = begun.cursors[table.name] ?? 0;
+        let pages = 0;
+
+        for (;;) {
+            if (pages >= pagesLeft) {
+                return { complete: false, delta, pages };
+            }
+
+            pages += 1;
+
+            // eslint-disable-next-line no-await-in-loop -- each page starts at the previous page's cursor
+            const page = await call<{ last?: number; rows: unknown }>("source", { after, op: "page", table: table.name });
+            const rows = decodeWire(page.rows) as Row[];
+            const final = rows.length < PAGE_ROWS;
+
+            // Only the first read may skip the write: after a full page this call wrote with `final: false`, which
+            // cleared the marker's `done`, so the empty tail still has to send the final write that restores it.
+            if (rows.length === 0 && pages === 1 && begun.done[table.name] === true) {
+                return { complete: true, delta, pages };
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- the write advances the cursor the next read starts from
+            const counts = await call<Counts>("target", { final, force, last: page.last ?? after, op: "write", rows: page.rows, table: table.name });
+
+            delta.conflicts += counts.conflicts;
+            delta.copied += counts.copied;
+            delta.deleted += counts.deleted;
+            delta.unchanged += counts.unchanged;
+            delta.updated += counts.updated;
+            delta.targetRows += counts.copied - counts.deleted;
+            after = page.last ?? after;
+
+            if (final) {
+                return { complete: true, delta, pages };
+            }
+        }
+    };
+
     return {
         copy: async (options = {}) => {
             const force = options.force === true;
@@ -837,43 +927,30 @@ const createAuthJurisdictionMove = (post: (side: MoveSide, body: Row) => Promise
             const begun = await call<ReturnType<typeof beginMove>>("target", { force, op: "begin", tables });
             const reports: AuthMoveTableReport[] = [];
             let pages = 0;
+            const toPage = await tablesToPage(begun, tables);
 
             for (const table of sortTables(tables, before.order)) {
                 const report = emptyReport(table, begun.targetRows[table.name] ?? 0);
-                let after = begun.cursors[table.name] ?? 0;
 
                 reports.push(report);
 
-                for (;;) {
-                    if (pages >= MAX_PAGES_PER_CALL) {
-                        return { done: false, tables: reports };
-                    }
+                if (!toPage.has(table.name)) {
+                    continue;
+                }
 
-                    pages += 1;
+                // eslint-disable-next-line no-await-in-loop -- tables are copied one after another, so the page budget is spent in order
+                const outcome = await copyTable(table, { begun, force, pagesLeft: MAX_PAGES_PER_CALL - pages });
 
-                    // eslint-disable-next-line no-await-in-loop -- each page starts at the previous page's cursor
-                    const page = await call<{ last?: number; rows: unknown }>("source", { after, op: "page", table: table.name });
-                    const rows = decodeWire(page.rows) as Row[];
-                    const final = rows.length < PAGE_ROWS;
+                pages += outcome.pages;
+                report.conflicts += outcome.delta.conflicts;
+                report.copied += outcome.delta.copied;
+                report.deleted += outcome.delta.deleted;
+                report.unchanged += outcome.delta.unchanged;
+                report.updated += outcome.delta.updated;
+                report.targetRows += outcome.delta.targetRows;
 
-                    if (rows.length === 0 && begun.done[table.name] === true) {
-                        break;
-                    }
-
-                    // eslint-disable-next-line no-await-in-loop -- the write advances the cursor the next read starts from
-                    const counts = await call<Counts>("target", { final, force, last: page.last ?? after, op: "write", rows: page.rows, table: table.name });
-
-                    report.conflicts += counts.conflicts;
-                    report.copied += counts.copied;
-                    report.deleted += counts.deleted;
-                    report.unchanged += counts.unchanged;
-                    report.updated += counts.updated;
-                    report.targetRows += counts.copied - counts.deleted;
-                    after = page.last ?? after;
-
-                    if (final) {
-                        break;
-                    }
+                if (!outcome.complete) {
+                    return { done: false, tables: reports };
                 }
             }
 

@@ -53,6 +53,7 @@ interface AppendAuthAuditEntry {
 
 ```ts
 interface AppendAuthAuditOptions {
+    hashKey?: string;
     redactDetail?: boolean;
     retention?: number;
 }
@@ -328,7 +329,7 @@ interface AuthAuditEntry {
 ### `AuthAuditEvent` (type)
 
 ```ts
-type AuthAuditEvent = "account-link" | "account-unlink" | "email-verification" | "mfa-disable" | "mfa-enable" | "password-change" | "password-reset" | "session-revoke" | "sign-in" | "sign-in-initiated" | "sign-out" | "sign-up" | "token-refresh" | (string & {});
+type AuthAuditEvent = "account-link" | "account-unlink" | "admin-impersonate-start" | "admin-impersonate-stop" | "admin-password-set" | "admin-role-change" | "admin-session-revoke" | "admin-user-ban" | "admin-user-create" | "admin-user-remove" | "admin-user-unban" | "admin-user-update" | "api-key-create" | "api-key-delete" | "api-key-update" | "device-approve" | "device-deny" | "email-change" | "email-change-request" | "email-verification" | "mfa-backup-codes-regenerate" | "mfa-disable" | "mfa-enable" | "oauth-client-create" | "oauth-client-delete" | "oauth-client-keys-rotate" | "oauth-client-secret-rotate" | "oauth-client-update" | "oauth-consent" | "oauth-consent-revoke" | "oauth-consent-update" | "oauth-resource-client-link" | "oauth-resource-client-unlink" | "oauth-resource-create" | "oauth-resource-delete" | "oauth-resource-update" | "oauth-token-issue" | "oauth-token-revoke" | "one-time-token-create" | "org-create" | "org-delete" | "org-invitation-accept" | "org-invitation-cancel" | "org-invitation-create" | "org-invitation-reject" | "org-member-leave" | "org-member-remove" | "org-member-role-change" | "org-role-change" | "org-switch" | "org-team-create" | "org-team-member-add" | "org-team-member-remove" | "org-team-remove" | "org-team-switch" | "org-team-update" | "org-update" | "passkey-add" | "passkey-remove" | "passkey-rename" | "password-change" | "password-reset" | "password-reset-request" | "phone-verification" | "scim-group-create" | "scim-group-delete" | "scim-group-update" | "scim-user-create" | "scim-user-delete" | "scim-user-update" | "session-revoke" | "session-switch" | "sign-in" | "sign-in-initiated" | "sign-out" | "sign-up" | "sso-provider-delete" | "sso-provider-register" | "sso-provider-update" | "token-refresh" | "user-delete" | "user-delete-request" | (string & {});
 ```
 
 ### `AuthAuditHookConfig` (interface)
@@ -1088,7 +1089,7 @@ const ensureAuthAuditTable: (executor: SqlExecutor) => Promise<void>;
 ### `eventForPath` (const)
 
 ```ts
-const eventForPath: (path: string) => AuthAuditEvent | undefined;
+const eventForPath: (path: string, method?: string, grantType?: string) => AuthAuditEvent | undefined;
 ```
 
 ### `handleAuthDiscoveryRequest` (const)
@@ -1965,6 +1966,8 @@ interface AuditHookContext {
     context?: {
         newSession?: {
             session?: {
+                activeOrganizationId?: string;
+                impersonatedBy?: string;
                 userId?: string;
             };
             user?: {
@@ -1972,9 +1975,13 @@ interface AuditHookContext {
                 id?: string;
             };
         } | null;
+        responseHeaders?: Headers;
         returned?: unknown;
+        secret?: string;
         session?: {
             session?: {
+                activeOrganizationId?: string;
+                impersonatedBy?: string;
                 userId?: string;
             };
             user?: {
@@ -1984,6 +1991,8 @@ interface AuditHookContext {
         } | null;
     };
     headers?: Headers;
+    method?: string;
+    params?: Record<string, unknown>;
     path?: string;
     request?: Request;
 }

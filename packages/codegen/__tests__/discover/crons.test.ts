@@ -51,10 +51,10 @@ describe("discover/crons", () => {
 
         // Sorted by name: "clear presence", "custom", "send digest".
         expect(result).toEqual([
-            { args: {}, cron: "*/30 * * * *", functionPath: "presence:clear", name: "clear presence" },
+            { args: {}, cron: "*/30 * * * *", functionPath: "presence:clear", file: "crons", line: 5, name: "clear presence" },
             // A nested `api.*` path joins with `_`, matching the dispatch key.
-            { args: {}, cron: "0 * * * *", functionPath: "reports_weekly:send", name: "custom" },
-            { args: { batch: 10 }, cron: "0 9 * * *", functionPath: "email:digest", name: "send digest" },
+            { args: {}, cron: "0 * * * *", functionPath: "reports_weekly:send", file: "crons", line: 7, name: "custom" },
+            { args: { batch: 10 }, cron: "0 9 * * *", functionPath: "email:digest", file: "crons", line: 6, name: "send digest" },
         ]);
     });
 
@@ -75,7 +75,9 @@ describe("discover/crons", () => {
         `,
         );
 
-        expect(discoverCrons(newProject(), workdir)).toEqual([{ args: {}, cron: "17 * * * *", functionPath: "presence:sweep", name: "sweep sessions" }]);
+        expect(discoverCrons(newProject(), workdir)).toEqual([
+            { args: {}, cron: "17 * * * *", functionPath: "presence:sweep", file: "crons", line: 5, name: "sweep sessions" },
+        ]);
     });
 
     it("discovers cronJobs imported from the @lunora/server re-export", () => {
@@ -97,7 +99,46 @@ describe("discover/crons", () => {
 
         const result = discoverCrons(newProject(), workdir);
 
-        expect(result).toEqual([{ args: {}, cron: "0 */1 * * *", functionPath: "jobs:run", name: "heartbeat" }]);
+        expect(result).toEqual([{ args: {}, cron: "0 */1 * * *", functionPath: "jobs:run", file: "crons", line: 5, name: "heartbeat" }]);
+    });
+
+    it("points a cron registered by a returning helper at the registration, not the helper", () => {
+        expect.assertions(1);
+
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/server";
+            import { internal } from "./_generated/internal.js";
+            const crons = cronJobs();
+            function register() {
+                return crons.interval("heartbeat", { hours: 1 }, internal.jobs.run, {});
+            }
+            register();
+            export default crons;
+        `,
+        );
+
+        expect(discoverCrons(newProject(), workdir)).toMatchObject([{ line: 6, name: "heartbeat" }]);
+    });
+
+    it("points a cron registered in a one-line arrow helper at the registration, not the helper", () => {
+        expect.assertions(1);
+
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/server";
+            import { internal } from "./_generated/internal.js";
+            const crons = cronJobs();
+            const register = () =>
+                crons.interval("heartbeat", { hours: 1 }, internal.jobs.run, {});
+            register();
+            export default crons;
+        `,
+        );
+
+        expect(discoverCrons(newProject(), workdir)).toMatchObject([{ line: 6, name: "heartbeat" }]);
     });
 
     it("resolves an aliased cronJobs import", () => {
@@ -116,7 +157,7 @@ describe("discover/crons", () => {
 
         const result = discoverCrons(newProject(), workdir);
 
-        expect(result[0]).toEqual({ args: {}, cron: "0 8 * * 2", functionPath: "email:report", name: "report" });
+        expect(result[0]).toEqual({ args: {}, cron: "0 8 * * 2", functionPath: "email:report", file: "crons", line: 5, name: "report" });
     });
 
     it("supports a chained builder", () => {
@@ -215,7 +256,7 @@ describe("discover/crons", () => {
 
         const result = discoverCrons(newProject(), workdir);
 
-        expect(result).toEqual([{ args: {}, cron: "0 * * * *", functionPath: "presence:clear", name: "nightly" }]);
+        expect(result).toEqual([{ args: {}, cron: "0 * * * *", functionPath: "presence:clear", file: "crons", line: 5, name: "nightly" }]);
     });
 
     it("throws on an invalid raw cron expression", () => {
@@ -310,7 +351,7 @@ describe("discover/crons", () => {
             console.warn = originalWarn;
         }
 
-        expect(result).toEqual([{ args: {}, cron: "*/30 * * * * *", functionPath: "jobs:tick", name: "sub-minute" }]);
+        expect(result).toEqual([{ args: {}, cron: "*/30 * * * * *", functionPath: "jobs:tick", file: "crons", line: 5, name: "sub-minute" }]);
         expect(warnings.some((message) => message.includes("6-field (seconds-leading) cron expression"))).toBe(true);
     });
 
@@ -398,6 +439,8 @@ describe("discover/crons", () => {
             {
                 args: { region: "eu" },
                 cron: "0 9 * * *",
+                file: "crons",
+                line: 5,
                 name: "nightly digest",
                 workflow: { className: "DigestPipelineWorkflow", exportName: "digestPipeline" },
             },
@@ -429,7 +472,14 @@ describe("discover/crons", () => {
         const workflows = discoverWorkflows(project, workdir);
 
         expect(discoverCrons(project, workdir, workflows)).toEqual([
-            { args: {}, cron: "0 9 * * *", name: "nightly digest", workflow: { className: "DigestPipelineWorkflow", exportName: "digestPipeline" } },
+            {
+                args: {},
+                cron: "0 9 * * *",
+                file: "crons",
+                line: 5,
+                name: "nightly digest",
+                workflow: { className: "DigestPipelineWorkflow", exportName: "digestPipeline" },
+            },
         ]);
     });
 
@@ -481,6 +531,8 @@ describe("discover/crons", () => {
             {
                 args: { input: "sweep", threadKey: "cron" },
                 cron: "0 3 * * *",
+                file: "crons",
+                line: 5,
                 name: "nightly sweep",
                 workflow: { className: "SupportAgentWorkflow", exportName: "support" },
             },
@@ -532,6 +584,8 @@ describe("discover/crons", () => {
             {
                 args: { input: "sweep", threadKey: "cron" },
                 cron: "0 3 * * *",
+                file: "crons",
+                line: 5,
                 name: "nightly sweep",
                 workflow: { className: "SupportAgentWorkflow", exportName: "support" },
             },

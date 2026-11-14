@@ -1,6 +1,7 @@
 import emit from "../../finding";
 import { mightExhibit } from "../../procedure-protections";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a public procedure that runs an AI text/object generation
@@ -43,7 +44,7 @@ const aiUnboundedGenerationPublic: Lint = {
                 emit(aiUnboundedGenerationPublic, {
                     cacheKey: `ai_unbounded_generation_public:${procedure.file}:${procedure.exportName}`,
                     detail: `\`${procedure.exportName}\` (${procedure.file}) is public and runs an AI generation with no \`maxOutputTokens\` bound — an anonymous caller can drive unbounded, billable completions in a loop. Add a \`maxOutputTokens\` cap and rate-limit the entry point.`,
-                    metadata: { exportName: procedure.exportName, file: procedure.file, kind: procedure.kind },
+                    metadata: { exportName: procedure.exportName, ...declarationSiteFields(procedure), kind: procedure.kind },
                 }),
             );
     },

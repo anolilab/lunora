@@ -510,7 +510,7 @@ const CAPABILITY_ROWS = [
     {
         // Worker-signed URLs (WebCrypto), R2 S3 presigned URLs (SigV4 over the
         // caller's credentials, not the binding) and the tenant key prefixer.
-        bindingFreeExports: ["buildPresignedUrl", "buildSignedUrl", "scopeKey", "verifySignedUrl"],
+        bindingFreeExports: ["authorizeSignedGet", "buildPresignedUrl", "buildSignedUrl", "scopeKey", "verifySignedUrl"],
         contextProperty: "storage",
         key: "storage",
         moduleSpecifier: "@lunora/storage",

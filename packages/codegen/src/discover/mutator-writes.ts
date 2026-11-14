@@ -9,23 +9,25 @@ import { findObjectProperty } from "./ast";
 import { exportedNameOf } from "./attribution";
 import { isDatabaseAccessor } from "./database-calls";
 import { isDefineMutatorCallee, MUTATORS_FILENAME } from "./mutators";
+import { facadeWriteOf } from "./write-target";
+
+/** The facade `ctx.db.<table>.replace(…)` method set: the whole-row write through the table facade. */
+const FACADE_REPLACE_METHODS: ReadonlySet<string> = new Set(["replace"]);
 
 /**
- * True for a `ctx.db.replace(...)` (or bare `db.replace(...)`) call — the
- * whole-row write entry point. The receiver must be `.db` so unrelated
- * `.replace(...)` calls (e.g. `string.replace`) don't match. Mirrors
- * `discover/inserts`' `isDatabaseInsertCall`, narrowed to `replace`.
+ * True for a `ctx.db.replace(...)` (or bare `db.replace(...)`) call, or the facade
+ * `ctx.db.<table>.replace(...)` — the whole-row write entry points. The receiver must
+ * be `.db` so unrelated `.replace(...)` calls (e.g. `string.replace`) don't match.
+ * Mirrors `discover/inserts`' `isDatabaseInsertCall`, narrowed to `replace`.
  */
 const isDatabaseReplaceCall = (call: CallExpression): boolean => {
     const callee = call.getExpression();
 
-    if (!Node.isPropertyAccessExpression(callee) || callee.getName() !== "replace") {
-        return false;
+    if (Node.isPropertyAccessExpression(callee) && callee.getName() === "replace" && isDatabaseAccessor(callee.getExpression())) {
+        return true;
     }
 
-    const receiver = callee.getExpression();
-
-    return isDatabaseAccessor(receiver);
+    return facadeWriteOf(call, FACADE_REPLACE_METHODS) !== undefined;
 };
 
 /**

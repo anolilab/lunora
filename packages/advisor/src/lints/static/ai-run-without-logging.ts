@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a procedure that runs an AI generation but emits no structured event.
@@ -35,7 +36,7 @@ const aiRunWithoutLogging: Lint = {
                 emit(aiRunWithoutLogging, {
                     cacheKey: `ai_run_without_logging:${procedure.file}:${procedure.exportName}`,
                     detail: `${procedure.kind} \`${procedure.exportName}\` (${procedure.file}) runs an AI generation with no structured event, so its cost and output cannot be attributed later.`,
-                    metadata: { exportName: procedure.exportName, file: procedure.file, kind: procedure.kind },
+                    metadata: { exportName: procedure.exportName, ...declarationSiteFields(procedure), kind: procedure.kind },
                 }),
             );
     },
