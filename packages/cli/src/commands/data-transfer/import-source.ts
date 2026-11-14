@@ -23,9 +23,9 @@ const DOCUMENTS_JSONL_RE = /documents\.jsonl$/;
  * Pre-2026 Convex exports write Int64, bytes and non-finite floats as plain
  * strings, and only the table's `generated_schema.jsonl` says which string is
  * which. Whole-token matching keeps `normalfloat64` (an ordinary finite float)
- * from tripping it.
+ * from tripping it, and a token followed by `:` is a field name, not a type.
  */
-const LEGACY_LOSSY_SHAPE_RE = /(?:^|[^\w-])(?:int64|bytes|float64|NaN|-?inf|unknown)(?:$|\W)/;
+const LEGACY_LOSSY_SHAPE_RE = /(?:^|[^\w-])(?:int64|bytes|float64|NaN|-?inf|unknown)(?!\w|\??\s*:)/;
 
 /** Source text of a number that is a Float64, not an Int64: it carries a dot or an exponent. */
 const FLOAT_TEXT_RE = /[.e]/i;
@@ -125,7 +125,14 @@ const refuseLegacyLossyTable = async (snapshot: ConvexSnapshot, tableEntry: Conv
     if (snapshot.kind === "zip") {
         present = snapshot.zip.getEntry(sidecar.file) !== null;
     } else {
-        const info = await stat(sidecar.file).catch(() => undefined);
+        // Only a missing file means no sidecar: any other failure would skip the guard, so it stops the import.
+        const info = await stat(sidecar.file).catch((error: unknown) => {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                return undefined;
+            }
+
+            throw error;
+        });
 
         present = info?.isFile() === true;
     }
@@ -166,7 +173,7 @@ const refuseLegacyLossyTable = async (snapshot: ConvexSnapshot, tableEntry: Conv
 
         throw new LunoraError(
             "INTERNAL",
-            `${tableEntry.table}/generated_schema.jsonl: this table was exported in Convex's pre-2026 format, which writes Int64, bytes and NaN/Infinity values as plain strings that only this shape can decode (${shape}). lunora import would store them as strings; re-export from Convex (current exports are lossless) and import that.`,
+            `${tableEntry.table}/generated_schema.jsonl: this table was exported in Convex's pre-2026 format, which writes Int64, bytes and NaN/Infinity values as plain strings that only this shape can decode (${shape}). lunora import would store them as strings. Re-export with a current Convex, which keeps Int64 exact; bytes and NaN/Infinity values are refused in either format, so store them as strings in Convex (or drop them) before exporting.`,
         );
     }
 };

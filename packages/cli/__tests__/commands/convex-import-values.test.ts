@@ -166,6 +166,30 @@ describe("convex export value handling", () => {
         expect(rows[0]?.doc).toStrictEqual({ _id: "u1", name: "a" });
     });
 
+    it("imports a pre-2026 table with a field named after a lossy type that holds an ordinary type", async () => {
+        expect.assertions(1);
+
+        const root = writeExport(
+            "users",
+            ['{"_id":"u1","bytes":"a"}'],
+            sidecarLine("{_creationTime: normalfloat64, _id: id<users>, bytes: string, int64?: string}"),
+        );
+
+        const rows: EmittedRow[] = [];
+
+        await collect(root, rows);
+
+        expect(rows).toHaveLength(1);
+    });
+
+    it("refuses a pre-2026 table whose shape declares bytes on a field named bytes", async () => {
+        expect.assertions(1);
+
+        const root = writeExport("users", ['{"_id":"u1","bytes":"AAE="}'], sidecarLine("{_creationTime: normalfloat64, _id: id<users>, bytes: bytes}"));
+
+        await expect(collect(root, [])).rejects.toThrow(/users\/generated_schema\.jsonl/);
+    });
+
     it("imports a current export whose sidecar is the uniform marker", async () => {
         expect.assertions(2);
 
