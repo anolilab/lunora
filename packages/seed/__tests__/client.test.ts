@@ -227,6 +227,35 @@ describe("createSeedClient", () => {
         expect(seed.$ids.posts).toEqual(fresh.$ids.posts);
     });
 
+    it("does not write a call's rows back when the client resets while its persist is in flight", async () => {
+        expect.hasAssertions();
+
+        let release: () => void = () => {};
+        let persisting: () => void = () => {};
+        const started = new Promise<void>((resolve) => {
+            persisting = resolve;
+        });
+        const seed = createSeedClient<InsertModel>(schema, {
+            persist: async () => {
+                persisting();
+                await new Promise<void>((resolve) => {
+                    release = resolve;
+                });
+            },
+            seed: 1,
+        });
+
+        const pending = seed.users(3);
+
+        await started;
+        seed.$reset();
+        release();
+        await pending;
+
+        expect(seed.$ids.users ?? []).toHaveLength(0);
+        expect(seed.$store.users ?? []).toHaveLength(0);
+    });
+
     it("clears all state on $reset", async () => {
         expect.hasAssertions();
 

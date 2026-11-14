@@ -157,6 +157,8 @@ const createSeedClient = <InsertModel = Record<string, Record<string, unknown>>>
     const store: Record<string, Record<string, unknown>[]> = {};
     const idsByTable: Record<string, string[]> = {};
     const createdCount: Record<string, number> = {};
+    // Advanced by `$reset()`: a call still awaiting `persist` when the client resets must not write its rows back.
+    let generation = 0;
 
     const runSeedTable = async (table: string, spec?: SeedSpec<object>, callOptions?: SeedCallOptions<object>): Promise<Record<string, string[]>> => {
         // A fresh client run shares one mapping; reassert it per call so an
@@ -178,6 +180,7 @@ const createSeedClient = <InsertModel = Record<string, Record<string, unknown>>>
         });
 
         let created: string[] = [];
+        const startedIn = generation;
 
         for (const { rows, table: planned } of plan) {
             const ids = rows.map((row) => row._id as string);
@@ -187,6 +190,11 @@ const createSeedClient = <InsertModel = Record<string, Record<string, unknown>>>
             if (persist !== undefined) {
                 // eslint-disable-next-line no-await-in-loop -- parents must persist before children so FKs reference inserted rows
                 await persist(planned, rows);
+            }
+
+            // Reset while the insert was in flight: the rows stay in the database, but the run state starts over without them.
+            if (generation !== startedIn) {
+                continue;
             }
 
             store[planned] ??= [];
@@ -227,6 +235,8 @@ const createSeedClient = <InsertModel = Record<string, Record<string, unknown>>>
     const state = {
         $ids: idsByTable,
         $reset: (): void => {
+            generation += 1;
+
             // Clear all three run-state maps in place (the getters expose these
             // exact references, so they can't be reassigned). Deleting keys keeps
             // the maps empty rather than retaining zero-length entries; either would
