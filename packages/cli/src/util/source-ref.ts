@@ -10,6 +10,9 @@
  * their branch (e.g. `1.0.0-alpha.1` → `alpha`), stable versions to `main`, and
  * the unpublished dev version (`0.0.0`) to the `alpha` channel.
  */
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 import { LunoraError } from "@lunora/errors";
 
 import { resolveCliVersion } from "./cli-manifest";
@@ -217,6 +220,110 @@ const resolvePinnedSourceRef = async (ref: string | undefined, logger: Logger): 
     resolvePinnedRepoRef(SOURCE_REPO, resolveSourceRef(ref), logger);
 
 /**
+ * The git remote a giget source fetches from, keyed by the giget provider prefix.
+ * giget reads the repository from the first two path segments for every provider
+ * but GitLab, where a nested group makes the whole path the repository unless a
+ * `::` separates it from the subdirectory.
+ */
+const GIT_HOSTS: Readonly<Record<string, { host: () => string; nested: boolean; ownerPrefix: string }>> = {
+    bitbucket: { host: () => "https://bitbucket.org", nested: false, ownerPrefix: "" },
+    gh: { host: () => "https://github.com", nested: false, ownerPrefix: "" },
+    github: { host: () => "https://github.com", nested: false, ownerPrefix: "" },
+    // giget honours this override for its own GitLab fetch, so the pin must ask the same host.
+    gitlab: { host: () => process.env["GIGET_GITLAB_URL"] ?? "https://gitlab.com", nested: true, ownerPrefix: "" },
+    sourcehut: { host: () => "https://git.sr.ht", nested: false, ownerPrefix: "~" },
+};
+
+const PROVIDER_PREFIX = /^([a-z]+):(.+)$/u;
+const OWNER_REPO = /^[\w.-]+\/[\w.-]+/u;
+const TRAILING_SLASH = /\/$/u;
+const WHITESPACE = /\s+/u;
+
+/** The clone URL of the repository a giget `source` names, or `undefined` when it names none (an https tarball). */
+const sourceGitRemote = (source: string): string | undefined => {
+    const match = PROVIDER_PREFIX.exec(source.split("#")[0] ?? source);
+    const provider = match === null ? undefined : GIT_HOSTS[match[1] ?? ""];
+
+    if (match === null || provider === undefined) {
+        return undefined;
+    }
+
+    const path = match[2] ?? "";
+    const repo = provider.nested ? path.split("::")[0] : OWNER_REPO.exec(path)?.[0];
+
+    return repo === undefined || repo.length === 0 ? undefined : `${provider.host().replace(TRAILING_SLASH, "")}/${provider.ownerPrefix}${repo}`;
+};
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * The commit `ref` names in `remote`, read with `git ls-remote`. `ls-remote` matches
+ * patterns by trailing path components, so `alpha` would also match
+ * `refs/heads/feat/alpha`; only the exact names count, ranked the way
+ * `git rev-parse` ranks them (a tag over a branch, an annotated tag peeled to its commit).
+ */
+const lsRemoteCommit = async (remote: string, ref: string): Promise<string | undefined> => {
+    const { stdout } = await execFileAsync("git", ["ls-remote", "--", remote, `refs/tags/${ref}`, `refs/tags/${ref}^{}`, `refs/heads/${ref}`], {
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        timeout: 30_000,
+    });
+    const shas = new Map<string, string>();
+
+    for (const line of stdout.split("\n")) {
+        const [sha, name] = line.trim().split(WHITESPACE);
+
+        if (sha !== undefined && name !== undefined && COMMIT_SHA.test(sha)) {
+            shas.set(name, sha);
+        }
+    }
+
+    return shas.get(`refs/tags/${ref}^{}`) ?? shas.get(`refs/tags/${ref}`) ?? shas.get(`refs/heads/${ref}`);
+};
+
+/**
+ * Pin a ref against a custom `--source` to the commit it names in THAT repository.
+ *
+ * {@link resolvePinnedSourceRef} pins against `anolilab/lunora`, and a SHA from there
+ * may not exist in a fork; leaving the fork's branch unpinned would make the record
+ * of what was fetched name a moving target. Unlike the upstream pin this never falls
+ * back to the branch: a source that cannot be pinned is an error, since the caller
+ * asked for a record of exactly what was copied.
+ */
+const resolvePinnedCustomSourceRef = async (source: string, ref: string | undefined): Promise<string> => {
+    const resolved = resolveSourceRef(ref);
+
+    if (COMMIT_SHA.test(resolved)) {
+        return resolved;
+    }
+
+    const remote = sourceGitRemote(source);
+
+    if (remote === undefined) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `cannot pin --source ${source} to a commit: it names no git repository. Use a gh:, github:, gitlab:, bitbucket: or sourcehut: source,` +
+                " pass --ref <40-hex commit>, or copy a local checkout with --from <dir>.",
+        );
+    }
+
+    let sha: string | undefined;
+
+    try {
+        sha = await lsRemoteCommit(remote, resolved);
+    } catch (error) {
+        const detail = (error as { stderr?: string }).stderr?.trim().split("\n")[0] ?? (error as Error).message;
+
+        throw new LunoraError("INTERNAL", `could not resolve ${resolved} in ${remote} with git ls-remote: ${detail}`);
+    }
+
+    if (sha === undefined) {
+        throw new LunoraError("NOT_FOUND", `${resolved} is not a branch or tag of ${remote}.`);
+    }
+
+    return sha;
+};
+
+/**
  * The immutable git tag the release tooling cuts for the running CLI's own
  * version (`@lunora/cli@1.0.0-alpha.157`).
  *
@@ -327,9 +434,11 @@ export {
     isImmutableRef,
     resolveCliVersionRef,
     resolveDistTag,
+    resolvePinnedCustomSourceRef,
     resolvePinnedRepoRef,
     resolvePinnedSourceRef,
     resolveSourceRef,
     resolveTagVersions,
     resolveVersionRef,
+    sourceGitRemote,
 };

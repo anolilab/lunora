@@ -25,7 +25,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { resolveCliVersion } from "../../util/cli-manifest";
 import type { Logger } from "../../util/logger";
-import { resolveCliVersionRef, resolvePinnedSourceRef } from "../../util/source-ref";
+import { resolveCliVersionRef, resolvePinnedCustomSourceRef, resolvePinnedSourceRef } from "../../util/source-ref";
 import { resolveItemDirectory } from "../registry/resolve";
 import type { AddCommandOptions } from "../registry/types";
 
@@ -155,14 +155,14 @@ const carriesTransport = (directory: string, target: SdkTarget): boolean => targ
  */
 const vendorAtRef = async (
     ref: string,
-    options: { language: string; logger: Logger; outputDirectory: string; registryOptions: AddCommandOptions; target: SdkTarget },
+    options: { base: string; language: string; logger: Logger; outputDirectory: string; registryOptions: AddCommandOptions; target: SdkTarget },
 ): Promise<VendorResult | undefined> => {
-    const { language, logger, outputDirectory, registryOptions, target } = options;
-    const { cleanup, directory } = await resolveItemDirectory(language, { ...registryOptions, ref }, SDK_SOURCE_BASE);
+    const { base, language, logger, outputDirectory, registryOptions, target } = options;
+    const { cleanup, directory } = await resolveItemDirectory(language, { ...registryOptions, ref }, base);
 
     try {
         if (!carriesTransport(directory, target)) {
-            logger.warn(`${SDK_SOURCE_BASE}/${language} does not exist at ${ref}.`);
+            logger.warn(`${base}/${language} does not exist at ${ref}.`);
 
             return undefined;
         }
@@ -170,7 +170,7 @@ const vendorAtRef = async (
         return {
             files: target.vendor.flatMap((entry) => copyEntry(directory, outputDirectory, entry.from, entry.to)).toSorted((a, b) => a.localeCompare(b)),
             ref,
-            source: `${SDK_SOURCE_BASE}/${language}`,
+            source: `${base}/${language}`,
             versionMatched: ref === resolveCliVersionRef(),
         };
     } finally {
@@ -237,12 +237,18 @@ const vendorTransport = async (options: {
     // pinning. `names` is the registry command's positional list and has no
     // meaning for a transport.
     const registryOptions: AddCommandOptions = { allowUnsafeSource, logger, names: [], source };
+    const base = source ?? SDK_SOURCE_BASE;
 
     // `candidate` is optional because that is how the fallback is spelt: passing
-    // no ref is what makes `resolvePinnedSourceRef` derive the version's release
-    // BRANCH (and pin it to a SHA), which is precisely the fallback target.
-    const attempt = async (candidate: string | undefined): Promise<VendorResult | undefined> =>
-        vendorAtRef(await resolvePinnedSourceRef(candidate, logger), { language, logger, outputDirectory, registryOptions, target });
+    // no ref is what makes the resolver derive the version's release BRANCH, which
+    // is precisely the fallback target. A custom source is pinned against its own
+    // repository: a SHA from `anolilab/lunora` may not exist in the fork the
+    // transport is fetched from.
+    const attempt = async (candidate: string | undefined): Promise<VendorResult | undefined> => {
+        const resolved = source === undefined ? await resolvePinnedSourceRef(candidate, logger) : await resolvePinnedCustomSourceRef(source, candidate);
+
+        return vendorAtRef(resolved, { base, language, logger, outputDirectory, registryOptions, target });
+    };
 
     if (ref !== undefined && ref.length > 0) {
         const pinned = await attempt(ref);
