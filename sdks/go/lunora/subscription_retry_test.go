@@ -7,6 +7,7 @@ package lunora
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -346,5 +347,90 @@ func TestSubscriptionRetryHintIsClampedToMaxRetryAfter(t *testing.T) {
 	capDelay := time.Duration(MaxRetryAfterMs) * time.Millisecond
 	if due.Before(t0.Add(capDelay)) || due.After(t1.Add(capDelay)) {
 		t.Fatalf("retry due at %v, want the %v cap between %v and %v", due, capDelay, t0.Add(capDelay), t1.Add(capDelay))
+	}
+}
+
+// twoHinted returns an attached client whose sub_1 and sub_2 each hold a pending retry,
+// writing through send.
+func twoHinted(t *testing.T, send FrameSender) (*Client, time.Time) {
+	t.Helper()
+
+	client := NewClient("https://app.example", nil)
+	client.AttachSocket(send, nil)
+
+	for _, channel := range []string{"a", "b"} {
+		client.Subscribe("messages:list", map[string]any{"channel": channel}, func(any) {}, nil, "")
+	}
+
+	for _, id := range []string{"sub_1", "sub_2"} {
+		feedFrame(t, client, map[string]any{
+			"id":    id,
+			"type":  "error",
+			"error": map[string]any{"code": "SUBSCRIPTION_REFRESH_FAILED", "message": "refresh failed", "retryAfterMs": 5000},
+		})
+	}
+
+	return client, time.Now().Add(10 * time.Second)
+}
+
+func TestSubscriptionRetryFailedWriteIsReturnedAndKeepsUnsentRetriesDue(t *testing.T) {
+	failing := false
+	subscribes := 0
+	writeFailed := errors.New("socket write failed")
+
+	client, later := twoHinted(t, func(frame map[string]any) error {
+		if frame["type"] != "subscribe" {
+			return nil
+		}
+
+		if failing {
+			failing = false
+
+			return writeFailed
+		}
+
+		subscribes++
+
+		return nil
+	})
+
+	subscribes = 0
+	failing = true
+
+	if n, err := client.RetryDueSubscriptions(later); !errors.Is(err, writeFailed) || n != 0 {
+		t.Fatalf("failed write: n=%d err=%v, want 0 and the sender's error", n, err)
+	}
+
+	if n, err := client.RetryDueSubscriptions(later); err != nil || n != 2 {
+		t.Fatalf("after a failed write: n=%d err=%v, want both retries still due", n, err)
+	}
+
+	if subscribes != 2 {
+		t.Fatalf("subscribes written = %d, want 2", subscribes)
+	}
+}
+
+func TestSubscriptionRetryStopsWhenTheSocketDetachesMidBatch(t *testing.T) {
+	var client *Client
+
+	subscribes := 0
+	armed := false
+
+	client, later := twoHinted(t, func(frame map[string]any) error {
+		if frame["type"] != "subscribe" || !armed {
+			return nil
+		}
+
+		subscribes++
+		// The first write's failure path detaches the socket before the second is sent.
+		client.DetachSocket(1006, "")
+
+		return nil
+	})
+
+	armed = true
+
+	if n, _ := client.RetryDueSubscriptions(later); n != 1 || subscribes != 1 {
+		t.Fatalf("n=%d subscribes=%d, want 1 and 1: a detached socket takes no more retries", n, subscribes)
 	}
 }

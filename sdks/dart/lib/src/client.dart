@@ -826,11 +826,13 @@ class LunoraClient {
   }
 
   /// Re-subscribes every query whose retry hint has come due by [nowMs], and returns how many it
-  /// sent. [nowMs] defaults to this client's clock, the one [nextSubscriptionRetryAt] is read on.
+  /// sent. [nowMs] defaults to [retryClockMs], the clock [nextSubscriptionRetryAt] is read on.
   ///
   /// Each re-subscribe is cold: the hint asks for a fresh snapshot, so the stored resume cursor and
   /// epoch are cleared first. Nothing is sent, and nothing is due, while no socket is attached,
-  /// because detaching cancels every pending retry.
+  /// because detaching cancels every pending retry. A sender that throws stops the batch and the
+  /// retries not yet written stay due; a sender that closes, detaches or replaces the socket stops
+  /// it too.
   int retryDueSubscriptions({int? nowMs}) {
     final sender = _send;
 
@@ -839,9 +841,10 @@ class LunoraClient {
     }
 
     final now = nowMs ?? _retryClock.elapsedMilliseconds;
+    final generation = _attachGeneration;
 
     // Built before any is sent, for the reason [resendSubscriptions] gives.
-    final frames = <Map<String, Object?>>[];
+    final frames = <(String, Map<String, Object?>)>[];
 
     for (final id in List<String>.of(_pendingRetries.keys)) {
       if (_pendingRetries[id]! > now) {
@@ -858,18 +861,51 @@ class LunoraClient {
 
       entry.cursor = null;
       entry.epoch = null;
-      frames.add(buildSubscribeFrame(id, entry.functionPath, entry.args));
+      frames.add((id, buildSubscribeFrame(id, entry.functionPath, entry.args)));
     }
 
-    for (final frame in frames) {
-      sender(frame);
+    var sent = 0;
+
+    for (var index = 0; index < frames.length; index++) {
+      final (id, frame) = frames[index];
+
+      if (_closed || generation != _attachGeneration) {
+        break;
+      }
+
+      if (!_subscriptions.containsKey(id)) {
+        continue;
+      }
+
+      try {
+        sender(frame);
+      } catch (_) {
+        // Unless the socket has changed since, which cancels every retry, the frames not written stay
+        // due; a newer hint or an unsubscribe has already decided the rest.
+        if (!_closed && generation == _attachGeneration) {
+          for (final (unsent, _) in frames.skip(index)) {
+            if (_subscriptions.containsKey(unsent)) {
+              _pendingRetries.putIfAbsent(unsent, () => now);
+            }
+          }
+        }
+
+        rethrow;
+      }
+
+      sent++;
     }
 
-    return frames.length;
+    return sent;
   }
 
-  /// The earliest pending retry deadline on the clock [retryDueSubscriptions] reads, or null when no
-  /// retry is pending. A caller arms its timer for this, and re-arms after each fire.
+  /// The current reading of the clock [nextSubscriptionRetryAt] and [retryDueSubscriptions] use, in
+  /// milliseconds. A caller arms its timer for `nextSubscriptionRetryAt - retryClockMs` from now.
+  int get retryClockMs => _retryClock.elapsedMilliseconds;
+
+  /// The earliest pending retry deadline on [retryClockMs]'s clock, or null when no retry is
+  /// pending. A caller arms its timer for the difference to [retryClockMs], and re-arms after each
+  /// fire.
   int? get nextSubscriptionRetryAt {
     int? next;
 

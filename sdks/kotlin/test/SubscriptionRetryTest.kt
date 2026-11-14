@@ -5,11 +5,7 @@ private const val SECOND_NANOS = 1_000_000_000L
 private val retryQueryArgs = WireValue.Obj(listOf("channel" to WireValue.Text("general")))
 
 /** A client with `sub_1` subscribed on an open socket, holding the golden seed frame and nothing else. */
-private fun openRetrySubscribed(
-    retry: Map<*, *>,
-    sent: MutableList<Map<String, Any?>>,
-    errors: MutableList<SubscriptionError>,
-): Client {
+private fun openRetrySubscribed(retry: Map<*, *>, sent: MutableList<Map<String, Any?>>, errors: MutableList<SubscriptionError>): Client {
     val client = Client("https://app.example", null)
 
     client.attachSocket { sent.add(it) }
@@ -185,6 +181,67 @@ private fun hintIsClampedToMaxRetryAfter(retry: Map<*, *>) {
     )
 }
 
+/** An attached client whose `sub_1` and `sub_2` each hold a pending retry, writing through [sender]. */
+private fun twoHintedClient(sender: (Map<String, Any?>) -> Unit): Client {
+    val client = Client("https://app.example", null)
+
+    client.attachSocket(sender = sender)
+
+    for (channel in listOf("a", "b")) {
+        client.subscribe("messages:list", WireValue.Obj(listOf("channel" to WireValue.Text(channel))), null, null)
+    }
+
+    for (id in listOf("sub_1", "sub_2")) {
+        val error = mapOf("code" to "SUBSCRIPTION_REFRESH_FAILED", "message" to "refresh failed", "retryAfterMs" to 5000)
+
+        client.handleFrame(Json.write(mapOf("id" to id, "type" to "error", "error" to error)))
+    }
+
+    return client
+}
+
+private fun failedWriteKeepsUnsentRetriesDue() {
+    var failing = false
+    var subscribes = 0
+    val client = twoHintedClient { frame ->
+        if (frame["type"] == "subscribe") {
+            if (failing) {
+                failing = false
+                throw IllegalStateException("socket write failed")
+            }
+            subscribes++
+        }
+    }
+    val later = System.nanoTime() + 10 * SECOND_NANOS
+
+    subscribes = 0
+    failing = true
+
+    val threw = runCatching { client.retryDueSubscriptions(later) }.isFailure
+
+    check(threw, "the sender's failure must reach the caller")
+    check(client.retryDueSubscriptions(later) == 2, "both retries must stay due after a failed write")
+    check(subscribes == 2, "both retries must be written once the socket accepts them")
+}
+
+private fun detachMidBatchStopsRetries() {
+    var armed = false
+    var subscribes = 0
+    lateinit var client: Client
+
+    client = twoHintedClient { frame ->
+        if (armed && frame["type"] == "subscribe") {
+            subscribes++
+            client.detachSocket()
+        }
+    }
+    armed = true
+
+    val sent = client.retryDueSubscriptions(System.nanoTime() + 10 * SECOND_NANOS)
+
+    check(sent == 1 && subscribes == 1, "a detached socket must take no more retries, sent=$sent subscribes=$subscribes")
+}
+
 /**
  * Subscription-retry cases: a subscription error's `retryAfterMs` schedules exactly one cold
  * re-subscribe, which the caller fires through [Client.retryDueSubscriptions]. Checked against the
@@ -201,4 +258,6 @@ internal fun runSubscriptionRetryCases() {
     unsubscribeSocketChangesAndCloseCancelRetry(retry)
     shapeErrorSchedulesNothing()
     hintIsClampedToMaxRetryAfter(retry)
+    failedWriteKeepsUnsentRetriesDue()
+    detachMidBatchStopsRetries()
 }

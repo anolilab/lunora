@@ -936,33 +936,58 @@ module Lunora
     # frames were sent. +now+ is a +Lunora.monotonic_now+ reading. Each re-subscribe
     # is cold (no resume cursor), since the hint asks for a fresh snapshot. While no
     # socket is attached nothing is sent and nothing is dropped: the deadline waits
-    # for the next one.
+    # for the next one. A sender that raises stops the batch, and the retries not yet
+    # written stay due; a socket change while the batch is sent stops it too.
     def retry_due_subscriptions(now = Lunora.monotonic_now)
-      sender, frames = @mutex.synchronize do
-        sender = @send
-        next [nil, []] if sender.nil?
+      sender, generation, batch = @mutex.synchronize do
+        next [nil, nil, []] if @send.nil?
 
         due = @pending_retries.select { |_id, deadline| deadline <= now }.keys
         due.each { |id| @pending_retries.delete(id) }
-        frames = due.map do |id|
+        batch = due.filter_map do |id|
           entry = @subscriptions[id]
           next nil if entry.nil?
 
           entry[:cursor] = nil
           entry[:epoch] = nil
-          Lunora.build_subscribe_frame(id, entry[:function_path], entry[:args])
+          [id, Lunora.build_subscribe_frame(id, entry[:function_path], entry[:args])]
         end
-        [sender, frames.compact]
+        [@send, @attach_generation, batch]
       end
 
-      frames.each { |frame| sender.call(frame) }
-      frames.size
+      sent = 0
+      batch.each_with_index do |(id, frame), index|
+        current, registered = @mutex.synchronize { [@attach_generation == generation, @subscriptions.key?(id)] }
+        break unless current
+        next unless registered
+
+        begin
+          sender.call(frame)
+        rescue StandardError
+          restore_unsent_retries(batch.drop(index), generation, now)
+          raise
+        end
+        sent += 1
+      end
+      sent
     end
 
     # The monotonic deadline of the earliest pending retry, or nil when none is pending.
     def next_subscription_retry_at = @mutex.synchronize { @pending_retries.values.min }
 
     private
+
+    # Put a failed batch's unwritten retries back, unless the socket has changed since
+    # (which cancels every retry) or a newer hint or an unsubscribe has decided them.
+    def restore_unsent_retries(unsent, generation, now)
+      @mutex.synchronize do
+        next unless @attach_generation == generation
+
+        unsent.each do |(id, _frame)|
+          @pending_retries[id] = now if @subscriptions.key?(id) && !@pending_retries.key?(id)
+        end
+      end
+    end
 
     # The server's retry hint on a query error, in seconds, or nil when it sent no
     # hint this client can honour. Only a JSON number qualifies: +true+ and strings

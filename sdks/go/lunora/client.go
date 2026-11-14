@@ -169,6 +169,10 @@ type Client struct {
 	// asked for, per query subscription id. Guarded by mu; a nil map reads as empty.
 	pendingRetries map[string]time.Time
 
+	// attachGeneration changes on every attach, detach and close, so a retry batch
+	// sent outside mu can tell that the socket it captured is gone. Guarded by mu.
+	attachGeneration int
+
 	// sessionToken is the WS session credential, sent as connect.token on every
 	// socket open. It is not the RPC bearer (authToken), and it never rides a URL.
 	// See SessionToken/SetSessionToken.
@@ -481,6 +485,7 @@ func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 	// socket whose connect failed is never a refusal of the current credential.
 	c.send = nil
 	c.socketGeneration = -1
+	c.attachGeneration++
 	clear(c.pendingRetries)
 
 	if send(BuildConnectFrame(c.clientID, context, c.sessionToken, PageDeltaCapability)) != nil {
@@ -519,6 +524,7 @@ func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 func (c *Client) DetachSocket(closeCode int, reason string) {
 	c.mu.Lock()
 	c.send = nil
+	c.attachGeneration++
 	clear(c.pendingRetries)
 
 	expired := closeCode == 4001
@@ -716,6 +722,7 @@ func (c *Client) Close() {
 	c.mu.Lock()
 	c.closed = true
 	c.send = nil
+	c.attachGeneration++
 	clear(c.pendingRetries)
 	discarded := c.offline.Clear()
 
@@ -1477,10 +1484,17 @@ func (c *Client) ResendSubscriptions() error {
 }
 
 // RetryDueSubscriptions re-subscribes, cold, every query whose retry hint has come
-// due at now, and returns how many frames it sent. Nothing is sent while no socket
-// is attached, and nothing is dropped either. The caller arms its own timer for
-// [Client.NextSubscriptionRetryAt].
+// due at now, and returns how many frames it wrote. Nothing is sent while no socket is
+// attached. A failed write stops the batch and is returned, as ResendSubscriptions
+// does, so the caller can drop the socket; the retries not yet written stay due. A
+// subscription whose args cannot be encoded is skipped and its error returned. The
+// caller arms its own timer for [Client.NextSubscriptionRetryAt].
 func (c *Client) RetryDueSubscriptions(now time.Time) (int, error) {
+	type retryFrame struct {
+		id    string
+		frame map[string]any
+	}
+
 	// Built under the lock: each cold frame reads the entry the frame handler writes.
 	c.mu.Lock()
 
@@ -1491,7 +1505,10 @@ func (c *Client) RetryDueSubscriptions(now time.Time) (int, error) {
 	}
 
 	send := c.send
-	frames := make([]map[string]any, 0, len(c.pendingRetries))
+	generation := c.attachGeneration
+	batch := make([]retryFrame, 0, len(c.pendingRetries))
+
+	var buildErr error
 
 	for id, deadline := range c.pendingRetries {
 		if deadline.After(now) {
@@ -1505,28 +1522,67 @@ func (c *Client) RetryDueSubscriptions(now time.Time) (int, error) {
 			continue
 		}
 
+		frame, err := BuildSubscribeFrame(id, entry.functionPath, entry.args, "", nil, nil)
+		if err != nil {
+			if buildErr == nil {
+				buildErr = err
+			}
+
+			continue
+		}
+
 		// A retry asks for a fresh snapshot, so it carries no resume cursor.
 		entry.cursor = nil
 		entry.epoch = nil
-
-		frame, err := BuildSubscribeFrame(id, entry.functionPath, entry.args, "", nil, nil)
-		if err != nil {
-			c.mu.Unlock()
-
-			return 0, err
-		}
-
-		frames = append(frames, frame)
+		batch = append(batch, retryFrame{id: id, frame: frame})
 	}
 
 	c.mu.Unlock()
 
-	// Sent outside the lock, as Subscribe does: the FrameSender is socket I/O.
-	for _, frame := range frames {
-		_ = send(frame)
+	sent := 0
+
+	// Sent outside the lock, as Subscribe does: the FrameSender is socket I/O. Each
+	// write first checks that the socket the batch captured is still the attached one.
+	for index, retry := range batch {
+		c.mu.Lock()
+		current := c.attachGeneration == generation
+		registered := c.subscriptions[retry.id] != nil
+		c.mu.Unlock()
+
+		if !current {
+			break
+		}
+
+		if !registered {
+			continue
+		}
+
+		if err := send(retry.frame); err != nil {
+			c.mu.Lock()
+
+			// Unless the socket has changed since, which cancels every retry, the frames
+			// not written stay due; a newer hint for one of them is kept.
+			if c.attachGeneration == generation {
+				for _, unsent := range batch[index:] {
+					if _, pending := c.pendingRetries[unsent.id]; !pending && c.subscriptions[unsent.id] != nil {
+						if c.pendingRetries == nil {
+							c.pendingRetries = map[string]time.Time{}
+						}
+
+						c.pendingRetries[unsent.id] = now
+					}
+				}
+			}
+
+			c.mu.Unlock()
+
+			return sent, err
+		}
+
+		sent++
 	}
 
-	return len(frames), nil
+	return sent, buildErr
 }
 
 // NextSubscriptionRetryAt reports the earliest pending retry deadline, and false when

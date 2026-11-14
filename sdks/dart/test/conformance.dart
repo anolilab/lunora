@@ -87,6 +87,9 @@ Future<void> main() async {
   await run(caseSubscriptionRetryCancelledByUnsubscribeSocketAndClose);
   await run(caseSubscriptionRetryIgnoresShapeErrors);
   await run(caseSubscriptionRetryClampedToMaxRetryAfter);
+  await run(caseSubscriptionRetryFailedWriteKeepsUnsentRetriesDue);
+  await run(caseSubscriptionRetryDetachMidBatchStopsRetries);
+  await run(caseSubscriptionRetryDeadlineIsOnThePublicClock);
 
   // The shared golden scenarios in protocol/fixtures/offline-optimistic.json,
   // which every port asserts the same values from — the manifest names below

@@ -328,7 +328,7 @@ Swift and Dart honour it through a pulled deadline: the client records one per s
 `RetryDueSubscriptions(now)`, Swift `retryDueSubscriptions(now:)`, Dart
 `retryDueSubscriptions(nowMs:)`) sends the due re-subscribes, and `next_subscription_retry_at()`
 (Python, Ruby and Rust; Java and Kotlin `nextSubscriptionRetryAtNanos()`, Go
-`NextSubscriptionRetryAt()`, Swift and Dart `nextSubscriptionRetryAt`) says when to call it next:
+`NextSubscriptionRetryAt()`, Swift and Dart `nextSubscriptionRetryAt`, the Dart one on the clock `retryClockMs` reads) says when to call it next:
 the caller's timer, as for a flush's `retry_after_ms`. Python's `connect_and_run` arms that timer
 itself; Ruby, Go, Rust, Java, Kotlin, Swift and Dart callers arm their own.
 

@@ -1124,13 +1124,15 @@ class Client(
      * Re-subscribes every query whose retry hint has come due at [nowNanos], a `System.nanoTime()`
      * reading, and returns how many frames it sent. Nothing is sent, and nothing is dropped, while
      * no socket is attached. The caller arms its own timer for [nextSubscriptionRetryAtNanos].
+     * A sender that throws stops the batch and the retries not yet written stay due; an attach,
+     * detach or close while the batch is sent stops it too.
      */
     fun retryDueSubscriptions(nowNanos: Long = System.nanoTime()): Int {
         // Built under the lock for the same reason as resendSubscriptions: each cold frame
         // reads the entry the frame handler writes.
-        val (sender, frames) = synchronized(lock) {
+        val (sender, generation, frames) = synchronized(lock) {
             val sender = send ?: return 0
-            val frames = mutableListOf<Map<String, Any?>>()
+            val frames = mutableListOf<Pair<String, Map<String, Any?>>>()
             val pending = pendingRetries.entries.iterator()
 
             while (pending.hasNext()) {
@@ -1144,15 +1146,40 @@ class Client(
 
                 subscription.cursor = null
                 subscription.epoch = null
-                frames.add(buildSubscribeFrame(retry.key, subscription.functionPath, subscription.args))
+                frames.add(retry.key to buildSubscribeFrame(retry.key, subscription.functionPath, subscription.args))
             }
 
-            sender to frames
+            Triple(sender, attachGeneration, frames)
         }
 
-        for (frame in frames) sender(frame)
+        var sent = 0
 
-        return frames.size
+        for ((index, retry) in frames.withIndex()) {
+            val (current, registered) = synchronized(lock) { (attachGeneration == generation && !closed) to subscriptions.containsKey(retry.first) }
+
+            if (!current) break
+            if (!registered) continue
+
+            try {
+                sender(retry.second)
+            } catch (failure: RuntimeException) {
+                // Unless the socket has changed since, which cancels every retry, the frames not
+                // written stay due; a newer hint or an unsubscribe has already decided the rest.
+                synchronized(lock) {
+                    if (attachGeneration == generation && !closed) {
+                        for ((id, _) in frames.subList(index, frames.size)) {
+                            if (subscriptions.containsKey(id)) pendingRetries.putIfAbsent(id, nowNanos)
+                        }
+                    }
+                }
+
+                throw failure
+            }
+
+            sent++
+        }
+
+        return sent
     }
 
     /** The earliest pending retry deadline in `System.nanoTime()` terms, or null when none is pending. */

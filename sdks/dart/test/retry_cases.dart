@@ -191,3 +191,83 @@ void caseSubscriptionRetryClampedToMaxRetryAfter() {
   // this instant, and a clamped one (60000 + a few ms) is not.
   equals(client.retryDueSubscriptions(nowMs: 3599999), 1, 'a 3600000 ms hint must be clamped to maxRetryAfterMs');
 }
+
+/// An attached client whose `sub_1` and `sub_2` each hold a pending retry, writing through [sender].
+LunoraClient _twoHinted(LunoraFrameSender sender) {
+  final client = LunoraClient(url: 'https://app.example')..attachSocket(sender);
+
+  for (final channel in <String>['a', 'b']) {
+    client.subscribe('messages:list', args: <String, Object?>{'channel': channel});
+  }
+
+  for (final id in <String>['sub_1', 'sub_2']) {
+    client.handleFrame(jsonEncode(<String, Object?>{..._hintWithDelay(5000), 'id': id}));
+  }
+
+  return client;
+}
+
+/// A sender that throws stops the batch, and the retries it never wrote stay due.
+void caseSubscriptionRetryFailedWriteKeepsUnsentRetriesDue() {
+  var failing = false;
+  var subscribes = 0;
+  final client = _twoHinted((frame) {
+    if (frame['type'] != 'subscribe') {
+      return;
+    }
+
+    if (failing) {
+      failing = false;
+
+      throw StateError('socket write failed');
+    }
+
+    subscribes++;
+  });
+  final later = client.retryClockMs + 10000;
+
+  subscribes = 0;
+  failing = true;
+
+  var threw = false;
+
+  try {
+    client.retryDueSubscriptions(nowMs: later);
+  } on StateError {
+    threw = true;
+  }
+
+  check(threw, "the sender's failure must reach the caller");
+  check(client.retryDueSubscriptions(nowMs: later) == 2, 'both retries must stay due after a failed write');
+  check(subscribes == 2, 'both retries must be written once the socket accepts them');
+}
+
+/// A sender that detaches the socket stops the batch: the rest would go to a socket that is gone.
+void caseSubscriptionRetryDetachMidBatchStopsRetries() {
+  var armed = false;
+  var subscribes = 0;
+  late final LunoraClient client;
+
+  client = _twoHinted((frame) {
+    if (armed && frame['type'] == 'subscribe') {
+      subscribes++;
+      client.detachSocket();
+    }
+  });
+  armed = true;
+
+  final sent = client.retryDueSubscriptions(nowMs: client.retryClockMs + 10000);
+
+  check(sent == 1 && subscribes == 1, 'a detached socket must take no more retries, sent=$sent subscribes=$subscribes');
+}
+
+/// The deadline is read on a clock the caller can see, so a timer armed for the difference fires at the hint.
+void caseSubscriptionRetryDeadlineIsOnThePublicClock() {
+  final retry = _retryGoldens();
+  final sent = <Map<String, Object?>>[];
+  final client = _hinted(retry, sent);
+  final due = client.nextSubscriptionRetryAt!;
+  final wait = due - client.retryClockMs;
+
+  check(wait > 4000 && wait <= 5000, 'the wait to the deadline must be the hint, got $wait');
+}

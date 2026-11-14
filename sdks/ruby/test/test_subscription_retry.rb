@@ -20,14 +20,15 @@ class TestSubscriptionRetry < Minitest::Test
 
   # A client with one open socket and one query subscription, sub_1, that has
   # received its seed. The sent list is cleared so only later frames show up in it.
+  # The third element is sub_1's unsubscribe handle.
   def subscribed_client(on_error = nil)
     client = Lunora::Client.new("https://app.example", client_id: "client-test")
     sent = []
     client.attach_socket(->(frame) { sent << frame })
-    client.subscribe("messages:list", { "channel" => "general" }, ->(_value) {}, on_error)
+    unsubscribe = client.subscribe("messages:list", { "channel" => "general" }, ->(_value) {}, on_error)
     client.handle_frame(JSON.generate(retry_fixture["seedFrame"]))
     sent.clear
-    [client, sent]
+    [client, sent, unsubscribe]
   end
 
   # The same client with the hint already applied, so a pending retry exists.
@@ -110,8 +111,7 @@ class TestSubscriptionRetry < Minitest::Test
   end
 
   def test_an_unsubscribe_cancels_the_pending_retry
-    client, = subscribed_client
-    unsubscribe = client.subscribe("messages:list", {}, ->(_value) {})
+    client, _sent, unsubscribe = subscribed_client
     client.handle_frame(JSON.generate(retry_fixture["hintFrame"]))
     refute_nil client.next_subscription_retry_at
 
@@ -168,5 +168,57 @@ class TestSubscriptionRetry < Minitest::Test
     refute_nil deadline
     assert_operator deadline, :<=, t2 + 60, "the clamp caps the delay at MAX_RETRY_AFTER_MS"
     assert_operator deadline, :>=, t1 + 60
+  end
+
+  # Two query subscriptions, sub_1 and sub_2, each holding a pending retry, writing
+  # through +sender+. Returns the client and a time by which both are due.
+  def two_hinted_client(sender)
+    client = Lunora::Client.new("https://app.example", client_id: "client-test")
+    client.attach_socket(sender)
+    %w[a b].each { |channel| client.subscribe("messages:list", { "channel" => channel }, ->(_value) {}) }
+    %w[sub_1 sub_2].each do |id|
+      hint = { "id" => id, "type" => "error",
+               "error" => { "code" => "SUBSCRIPTION_REFRESH_FAILED", "message" => "refresh failed", "retryAfterMs" => 5000 } }
+      client.handle_frame(JSON.generate(hint))
+    end
+    [client, Lunora.monotonic_now + 10]
+  end
+
+  def test_a_failed_write_keeps_the_unsent_retries_due
+    failing = false
+    subscribes = 0
+    client, later = two_hinted_client(lambda do |frame|
+      next unless frame["type"] == "subscribe"
+
+      if failing
+        failing = false
+        raise IOError, "socket write failed"
+      end
+      subscribes += 1
+    end)
+
+    subscribes = 0
+    failing = true
+    assert_raises(IOError) { client.retry_due_subscriptions(later) }
+
+    assert_equal 2, client.retry_due_subscriptions(later), "both retries stay due after a failed write"
+    assert_equal 2, subscribes
+  end
+
+  def test_a_detach_mid_batch_stops_the_retries
+    client = nil
+    armed = false
+    subscribes = 0
+    client, later = two_hinted_client(lambda do |frame|
+      next unless armed && frame["type"] == "subscribe"
+
+      subscribes += 1
+      client.detach_socket
+    end)
+
+    armed = true
+
+    assert_equal 1, client.retry_due_subscriptions(later)
+    assert_equal 1, subscribes, "a detached socket takes no more retries"
   end
 end
